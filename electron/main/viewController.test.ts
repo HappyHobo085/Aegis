@@ -240,3 +240,79 @@ describe('ViewController bounds & visibility', () => {
     expect(h.getLastWc()!.close).toHaveBeenCalled();
   });
 });
+
+describe('ViewController history & recovery (Task 11)', () => {
+  function makeOptsLocal() {
+    return {
+      contentPreloadPath: '/tmp/contentPreload.js',
+      onState: vi.fn(),
+      onFailed: vi.fn(),
+      onCrashed: vi.fn(),
+    };
+  }
+
+  it('back() goes back only when canGoBack() is true', () => {
+    const vc = new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    (wc.navigationHistory.canGoBack as any).mockReturnValue(false);
+    vc.back();
+    expect(wc.navigationHistory.goBack).not.toHaveBeenCalled();
+
+    (wc.navigationHistory.canGoBack as any).mockReturnValue(true);
+    vc.back();
+    expect(wc.navigationHistory.goBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('forward() goes forward only when canGoForward() is true', () => {
+    const vc = new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    (wc.navigationHistory.canGoForward as any).mockReturnValue(false);
+    vc.forward();
+    expect(wc.navigationHistory.goForward).not.toHaveBeenCalled();
+
+    (wc.navigationHistory.canGoForward as any).mockReturnValue(true);
+    vc.forward();
+    expect(wc.navigationHistory.goForward).toHaveBeenCalledTimes(1);
+  });
+
+  it('getState() surfaces canGoBack/canGoForward from navigationHistory', () => {
+    const vc = new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    (wc.navigationHistory.canGoBack as any).mockReturnValue(true);
+    (wc.navigationHistory.canGoForward as any).mockReturnValue(true);
+    const s = vc.getState();
+    expect(s.canGoBack).toBe(true);
+    expect(s.canGoForward).toBe(true);
+  });
+
+  it('reloadOrStop() stops when loading, reloads when idle', () => {
+    const vc = new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    wc._loading = true;
+    vc.reloadOrStop();
+    expect(wc.stop).toHaveBeenCalledTimes(1);
+    expect(wc.reload).not.toHaveBeenCalled();
+
+    wc._loading = false;
+    vc.reloadOrStop();
+    expect(wc.reload).toHaveBeenCalledTimes(1);
+  });
+
+  it('reloadOrStop() recovery: re-shows content on the next did-start-loading and clears crashed', () => {
+    const opts = makeOptsLocal();
+    const vc = new ViewController(opts);
+    const wc = h.getLastWc()!;
+
+    // simulate a prior crash hiding the content
+    vc.setVisible(false);
+    (vc as any).crashed = true;
+    expect(vc.isContentVisible()).toBe(false);
+
+    wc._loading = false;
+    vc.reloadOrStop(); // sets pendingShowOnStart + clears crashed
+    expect(vc.getState().crashed).toBe(false);
+
+    wc._emit('did-start-loading'); // recovery re-show
+    expect(vc.isContentVisible()).toBe(true);
+  });
+});

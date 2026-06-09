@@ -139,7 +139,7 @@ export class ViewController {
   reloadOrStop(): void {
     this.crashed = false;
     this.pendingShowOnStart = true;
-    if (this.wc().isLoading()) this.wc().stop();
+    if (this.loading || this.wc().isLoading()) this.wc().stop();
     else this.wc().reload();
   }
 
