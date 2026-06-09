@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import { BaseWindow, WebContentsView } from 'electron';
-import { CHROME_TOP_HEIGHT } from './constants';
+import { CHROME_TOP_HEIGHT, isAppUrl } from './constants';
 
 /**
  * Creates the BaseWindow and the chrome (privileged React shell) WebContentsView.
@@ -24,8 +24,11 @@ export function createMainWindow(): { win: BaseWindow; chromeView: WebContentsVi
 
   const chromeWc = chromeView.webContents;
 
-  // NOTE: chrome-renderer lockdown (setWindowOpenHandler + will-navigate guard)
-  // is added in Task 4, which writes its failing test first.
+  // Chrome-renderer lockdown: deny all popups and allow navigation only to the app bundle.
+  chromeWc.setWindowOpenHandler(() => ({ action: 'deny' }));
+  chromeWc.on('will-navigate', (event, url) => {
+    if (!isAppUrl(url)) event.preventDefault();
+  });
 
   if (process.env.ELECTRON_RENDERER_URL) {
     chromeWc.loadURL(process.env.ELECTRON_RENDERER_URL);
