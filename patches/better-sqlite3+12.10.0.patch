@@ -1,0 +1,45 @@
+diff --git a/src/better_sqlite3.cpp b/src/better_sqlite3.cpp
+index a1b2c3d..e4f5a6b 100644
+--- a/src/better_sqlite3.cpp
++++ b/src/better_sqlite3.cpp
+@@ -57,7 +57,11 @@
+
+ 	// Initialize addon instance.
+ 	Addon* addon = new Addon(isolate);
++	#if defined(V8_MAJOR_VERSION) && V8_MAJOR_VERSION >= 14
++	v8::Local<v8::External> data = v8::External::New(isolate, addon, v8::kExternalPointerTypeTagDefault);
++	#else
+ 	v8::Local<v8::External> data = v8::External::New(isolate, addon);
++	#endif
+ 	node::AddEnvironmentCleanupHook(isolate, Addon::Cleanup, addon);
+
+ 	// Create and export native-backed classes and functions.
+diff --git a/src/util/macros.cpp b/src/util/macros.cpp
+index b2c3d4e..f5a6b7c 100644
+--- a/src/util/macros.cpp
++++ b/src/util/macros.cpp
+@@ -27,7 +27,11 @@
+ #define EasyIsolate v8::Isolate* isolate = v8::Isolate::GetCurrent()
+ #define OnlyIsolate info.GetIsolate()
+ #define OnlyContext isolate->GetCurrentContext()
++#if defined(V8_MAJOR_VERSION) && V8_MAJOR_VERSION >= 14
++#define OnlyAddon static_cast<Addon*>(info.Data().As<v8::External>()->Value(v8::kExternalPointerTypeTagDefault))
++#else
+ #define OnlyAddon static_cast<Addon*>(info.Data().As<v8::External>()->Value())
++#endif
+ #define UseIsolate v8::Isolate* isolate = OnlyIsolate
+ #define UseContext v8::Local<v8::Context> ctx = OnlyContext
+ #define UseAddon Addon* addon = OnlyAddon
+diff --git a/src/util/helpers.cpp b/src/util/helpers.cpp
+index c3d4e5f..a6b7c8d 100644
+--- a/src/util/helpers.cpp
++++ b/src/util/helpers.cpp
+@@ -89,7 +89,7 @@
+ 	recv->InstanceTemplate()->SetNativeDataProperty(
+ 		InternalizedFromLatin1(isolate, name),
+ 		func,
+-		0,
++		nullptr,
+ 		data
+ 	);
+ }

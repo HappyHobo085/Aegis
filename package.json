@@ -5,6 +5,7 @@
   "private": true,
   "main": "out/main/index.js",
   "scripts": {
+    "prepare": "patch-package",
     "predev": "npm run rebuild:electron",
     "dev": "electron-vite dev",
     "prebuild": "npm run rebuild:electron",
@@ -34,6 +35,8 @@
     "electron": "^42.3.3",
     "electron-vite": "^5.0.0",
     "jsdom": "^25.0.0",
+    "node-gyp": "^12.4.0",
+    "patch-package": "^8.0.1",
     "react": "^19",
     "react-dom": "^19",
     "typescript": "^5.7.0",
