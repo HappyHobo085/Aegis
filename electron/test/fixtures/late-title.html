@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>start</title>
+  </head>
+  <body>
+    <main id="content" style="min-height: 200px">late title</main>
+    <script>
+      // Burst of same-URL title changes; the ViewController debounce (400 ms)
+      // must coalesce these into a single trailing nav.state emit.
+      let n = 0;
+      const burst = setInterval(function () {
+        n += 1;
+        document.title = 'burst-' + n;
+        if (n >= 5) {
+          clearInterval(burst);
+          document.title = 'final-title';
+        }
+      }, 20);
+    </script>
+  </body>
+</html>

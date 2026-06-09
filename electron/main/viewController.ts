@@ -32,6 +32,10 @@ export class ViewController {
   private pendingShowOnStart = false;
   private loading = false;
 
+  // last successfully committed URL (used by getState() instead of wc.getURL() after a
+  // failed navigation, so cert/load failures do not adopt the attempted URL in the state).
+  private lastCommittedUrl = '';
+
   // title debounce state
   private titleTimer: ReturnType<typeof setTimeout> | null = null;
   private pendingTitle: string | null = null;
@@ -77,13 +81,15 @@ export class ViewController {
       this.emitState();
     });
 
-    wc.on('did-navigate', () => {
+    wc.on('did-navigate', (_event: unknown, url: string) => {
+      this.lastCommittedUrl = url;
       this.flushTitle();
       this.emitState();
     });
 
-    wc.on('did-navigate-in-page', (_event: unknown, _url: string, isMainFrame: boolean) => {
+    wc.on('did-navigate-in-page', (_event: unknown, url: string, isMainFrame: boolean) => {
       if (!isMainFrame) return;
+      this.lastCommittedUrl = url;
       this.emitState();
     });
 
@@ -223,9 +229,15 @@ export class ViewController {
 
   getState(): NavState {
     const wc = this.wc();
+    // Use lastCommittedUrl when available so that failed navigations (cert/load
+    // errors) do not adopt the attempted URL in the reported state — the state
+    // URL should reflect the last *successfully committed* page, not the failed
+    // navigation target. Fall back to wc.getURL() only on the very first load
+    // before any commit has been recorded.
+    const url = this.lastCommittedUrl || wc.getURL();
     return {
       viewId: this.id,
-      url: wc.getURL(),
+      url,
       title: this.pendingTitle ?? wc.getTitle(),
       canGoBack: wc.navigationHistory.canGoBack(),
       canGoForward: wc.navigationHistory.canGoForward(),
