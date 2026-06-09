@@ -53,6 +53,7 @@ export class ViewController {
     });
 
     this.wireNavEvents();
+    this.wireSecurity();
   }
 
   private wc() {
@@ -120,6 +121,37 @@ export class ViewController {
         });
       },
     );
+  }
+
+  private wireSecurity(): void {
+    const wc = this.wc();
+    const ses = wc.session;
+
+    // Permissions: deny-by-default via BOTH handlers.
+    ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+    ses.setPermissionCheckHandler(() => false);
+
+    // Downloads floor: cancel by default.
+    ses.on('will-download', (event) => {
+      event.preventDefault();
+    });
+
+    // Popup policy (§5): deny popunders; route a legitimate, allowed-scheme
+    // new-window in-place; otherwise deny.
+    wc.setWindowOpenHandler((details) => {
+      if (
+        details.disposition === 'background-tab' ||
+        details.disposition === 'save-to-disk' ||
+        details.disposition === 'other'
+      ) {
+        return { action: 'deny' };
+      }
+      if (isAllowedNavigationUrl(details.url)) {
+        this.wc().loadURL(details.url);
+        return { action: 'deny' };
+      }
+      return { action: 'deny' };
+    });
   }
 
   private scheduleTitle(title: string): void {

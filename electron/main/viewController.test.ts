@@ -400,3 +400,70 @@ describe('ViewController navigation gate & failures (Task 12)', () => {
     expect(vc.isContentVisible()).toBe(true);
   });
 });
+
+describe('ViewController content-session security (Task 13)', () => {
+  function makeOptsLocal() {
+    return {
+      contentPreloadPath: '/tmp/contentPreload.js',
+      onState: vi.fn(),
+      onFailed: vi.fn(),
+      onCrashed: vi.fn(),
+    };
+  }
+
+  it('registers both permission handlers that deny', () => {
+    new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    expect(wc.session.setPermissionRequestHandler).toHaveBeenCalledTimes(1);
+    expect(wc.session.setPermissionCheckHandler).toHaveBeenCalledTimes(1);
+
+    // request handler denies via callback(false)
+    const reqHandler = (wc.session.setPermissionRequestHandler as any).mock.calls[0][0];
+    const cb = vi.fn();
+    reqHandler(wc, 'geolocation', cb);
+    expect(cb).toHaveBeenCalledWith(false);
+
+    // check handler returns false
+    const checkHandler = (wc.session.setPermissionCheckHandler as any).mock.calls[0][0];
+    expect(checkHandler()).toBe(false);
+  });
+
+  it('cancels downloads via will-download preventDefault', () => {
+    new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    const onCalls = (wc.session.on as any).mock.calls;
+    const willDownload = onCalls.find((c: any[]) => c[0] === 'will-download');
+    expect(willDownload).toBeDefined();
+    const ev = { preventDefault: vi.fn() };
+    willDownload[1](ev);
+    expect(ev.preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it('setWindowOpenHandler denies popunder dispositions', () => {
+    new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    const handler = (wc.setWindowOpenHandler as any).mock.calls[0][0];
+    for (const disposition of ['background-tab', 'save-to-disk', 'other']) {
+      expect(handler({ url: 'https://ok.test/', disposition })).toEqual({ action: 'deny' });
+    }
+    expect(wc.loadURL).not.toHaveBeenCalled();
+  });
+
+  it('setWindowOpenHandler routes an allowed foreground new-window in-place then denies', () => {
+    new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    const handler = (wc.setWindowOpenHandler as any).mock.calls[0][0];
+    const res = handler({ url: 'https://ok.test/page', disposition: 'foreground-tab' });
+    expect(res).toEqual({ action: 'deny' });
+    expect(wc.loadURL).toHaveBeenCalledWith('https://ok.test/page');
+  });
+
+  it('setWindowOpenHandler denies an allowed-disposition but disallowed-scheme url without loading', () => {
+    new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    const handler = (wc.setWindowOpenHandler as any).mock.calls[0][0];
+    const res = handler({ url: 'javascript:alert(1)', disposition: 'new-window' });
+    expect(res).toEqual({ action: 'deny' });
+    expect(wc.loadURL).not.toHaveBeenCalled();
+  });
+});
