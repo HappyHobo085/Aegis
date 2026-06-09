@@ -316,3 +316,87 @@ describe('ViewController history & recovery (Task 11)', () => {
     expect(vc.isContentVisible()).toBe(true);
   });
 });
+
+describe('ViewController navigation gate & failures (Task 12)', () => {
+  function makeOptsLocal() {
+    return {
+      contentPreloadPath: '/tmp/contentPreload.js',
+      onState: vi.fn(),
+      onFailed: vi.fn(),
+      onCrashed: vi.fn(),
+    };
+  }
+
+  function makeEvent() {
+    return { preventDefault: vi.fn() };
+  }
+
+  it('will-navigate to a disallowed scheme is prevented', () => {
+    new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    const ev = makeEvent();
+    wc._emit('will-navigate', ev, 'file:///etc/passwd');
+    expect(ev.preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it('will-navigate to an allowed scheme is not prevented', () => {
+    new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    const ev = makeEvent();
+    wc._emit('will-navigate', ev, 'https://ok.test/');
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it('will-redirect to a disallowed scheme is prevented', () => {
+    new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    const ev = makeEvent();
+    wc._emit('will-redirect', ev, 'javascript:alert(1)');
+    expect(ev.preventDefault).toHaveBeenCalledTimes(1);
+  });
+
+  it('did-fail-load (main frame, load error) emits onFailed kind:load and hides content', () => {
+    const opts = makeOptsLocal();
+    const vc = new ViewController(opts);
+    const wc = h.getLastWc()!;
+    // errorCode -105 (NAME_NOT_RESOLVED) is a load error
+    wc._emit('did-fail-load', {}, -105, 'ERR_NAME_NOT_RESOLVED', 'https://bad.test/', true);
+    expect(opts.onFailed).toHaveBeenCalledTimes(1);
+    const f = opts.onFailed.mock.calls[0][0];
+    expect(f).toMatchObject({
+      viewId: 1,
+      errorCode: -105,
+      errorDescription: 'ERR_NAME_NOT_RESOLVED',
+      validatedURL: 'https://bad.test/',
+      kind: 'load',
+    });
+    expect(vc.isContentVisible()).toBe(false);
+  });
+
+  it('did-fail-load with a cert-range errorCode emits kind:cert', () => {
+    const opts = makeOptsLocal();
+    new ViewController(opts);
+    const wc = h.getLastWc()!;
+    // -202 (ERR_CERT_AUTHORITY_INVALID): -200 >= code > -300 => cert
+    wc._emit('did-fail-load', {}, -202, 'ERR_CERT_AUTHORITY_INVALID', 'https://self.test/', true);
+    expect(opts.onFailed.mock.calls[0][0].kind).toBe('cert');
+  });
+
+  it('did-fail-load on a sub-frame does NOT emit onFailed and does NOT hide', () => {
+    const opts = makeOptsLocal();
+    const vc = new ViewController(opts);
+    const wc = h.getLastWc()!;
+    wc._emit('did-fail-load', {}, -105, 'ERR', 'https://bad.test/iframe', false);
+    expect(opts.onFailed).not.toHaveBeenCalled();
+    expect(vc.isContentVisible()).toBe(true);
+  });
+
+  it('did-fail-load with errorCode -3 (ERR_ABORTED) is ignored', () => {
+    const opts = makeOptsLocal();
+    const vc = new ViewController(opts);
+    const wc = h.getLastWc()!;
+    wc._emit('did-fail-load', {}, -3, 'ERR_ABORTED', 'https://x.test/', true);
+    expect(opts.onFailed).not.toHaveBeenCalled();
+    expect(vc.isContentVisible()).toBe(true);
+  });
+});

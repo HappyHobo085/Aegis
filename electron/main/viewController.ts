@@ -89,6 +89,37 @@ export class ViewController {
     wc.on('page-title-updated', (_event: unknown, title: string) => {
       this.scheduleTitle(title);
     });
+
+    const gate = (event: { preventDefault: () => void }, url: string) => {
+      if (!isAllowedNavigationUrl(url)) event.preventDefault();
+    };
+    wc.on('will-navigate', gate);
+    wc.on('will-redirect', gate);
+
+    wc.on(
+      'did-fail-load',
+      (
+        _event: unknown,
+        errorCode: number,
+        errorDescription: string,
+        validatedURL: string,
+        isMainFrame: boolean,
+      ) => {
+        if (!isMainFrame) return;
+        // ERR_ABORTED (-3): user/stop-initiated, not a real failure.
+        if (errorCode === -3) return;
+        const kind: NavFailed['kind'] =
+          errorCode <= -200 && errorCode > -300 ? 'cert' : 'load';
+        this.setVisible(false); // main owns the hide for failures
+        this.opts.onFailed({
+          viewId: this.id,
+          errorCode,
+          errorDescription,
+          validatedURL,
+          kind,
+        });
+      },
+    );
   }
 
   private scheduleTitle(title: string): void {
