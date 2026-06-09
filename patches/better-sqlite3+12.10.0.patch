@@ -1,9 +1,9 @@
-diff --git a/src/better_sqlite3.cpp b/src/better_sqlite3.cpp
-index a1b2c3d..e4f5a6b 100644
---- a/src/better_sqlite3.cpp
-+++ b/src/better_sqlite3.cpp
-@@ -57,7 +57,11 @@
-
+diff --git a/node_modules/better-sqlite3/src/better_sqlite3.cpp b/node_modules/better-sqlite3/src/better_sqlite3.cpp
+index 13f054a..9544b62 100644
+--- a/node_modules/better-sqlite3/src/better_sqlite3.cpp
++++ b/node_modules/better-sqlite3/src/better_sqlite3.cpp
+@@ -57,7 +57,11 @@ NODE_MODULE_INIT(/* exports, context */) {
+ 
  	// Initialize addon instance.
  	Addon* addon = new Addon(isolate);
 +	#if defined(V8_MAJOR_VERSION) && V8_MAJOR_VERSION >= 14
@@ -12,12 +12,25 @@ index a1b2c3d..e4f5a6b 100644
  	v8::Local<v8::External> data = v8::External::New(isolate, addon);
 +	#endif
  	node::AddEnvironmentCleanupHook(isolate, Addon::Cleanup, addon);
-
+ 
  	// Create and export native-backed classes and functions.
-diff --git a/src/util/macros.cpp b/src/util/macros.cpp
-index b2c3d4e..f5a6b7c 100644
---- a/src/util/macros.cpp
-+++ b/src/util/macros.cpp
+diff --git a/node_modules/better-sqlite3/src/util/helpers.cpp b/node_modules/better-sqlite3/src/util/helpers.cpp
+index f777152..db7fd9f 100644
+--- a/node_modules/better-sqlite3/src/util/helpers.cpp
++++ b/node_modules/better-sqlite3/src/util/helpers.cpp
+@@ -89,7 +89,7 @@ void SetPrototypeGetter(
+ 	recv->InstanceTemplate()->SetNativeDataProperty(
+ 		InternalizedFromLatin1(isolate, name),
+ 		func,
+-		0,
++		nullptr,
+ 		data
+ 	);
+ }
+diff --git a/node_modules/better-sqlite3/src/util/macros.cpp b/node_modules/better-sqlite3/src/util/macros.cpp
+index e75d537..a3f36ed 100644
+--- a/node_modules/better-sqlite3/src/util/macros.cpp
++++ b/node_modules/better-sqlite3/src/util/macros.cpp
 @@ -27,7 +27,11 @@
  #define EasyIsolate v8::Isolate* isolate = v8::Isolate::GetCurrent()
  #define OnlyIsolate info.GetIsolate()
@@ -30,16 +43,3 @@ index b2c3d4e..f5a6b7c 100644
  #define UseIsolate v8::Isolate* isolate = OnlyIsolate
  #define UseContext v8::Local<v8::Context> ctx = OnlyContext
  #define UseAddon Addon* addon = OnlyAddon
-diff --git a/src/util/helpers.cpp b/src/util/helpers.cpp
-index c3d4e5f..a6b7c8d 100644
---- a/src/util/helpers.cpp
-+++ b/src/util/helpers.cpp
-@@ -89,7 +89,7 @@
- 	recv->InstanceTemplate()->SetNativeDataProperty(
- 		InternalizedFromLatin1(isolate, name),
- 		func,
--		0,
-+		nullptr,
- 		data
- 	);
- }
