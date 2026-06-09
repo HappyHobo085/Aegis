@@ -37,7 +37,11 @@ export class SettingsRepo {
     const rows = this.selectAll.all() as Array<{ key: string; value: string }>;
     const stored: Partial<Settings> = {};
     for (const { key, value } of rows) {
-      (stored as Record<string, unknown>)[key] = JSON.parse(value);
+      try {
+        (stored as Record<string, unknown>)[key] = JSON.parse(value);
+      } catch {
+        // Corrupt row: skip it; DEFAULT_SETTINGS provides the fallback value.
+      }
     }
     return { ...DEFAULT_SETTINGS, ...stored };
   }
@@ -46,6 +50,7 @@ export class SettingsRepo {
   set(partial: Partial<Settings>): Settings {
     const writeAll = this.db.transaction((entries: Array<[string, unknown]>) => {
       for (const [key, value] of entries) {
+        if (value === undefined) continue; // never persist undefined
         this.upsert.run({ key, value: JSON.stringify(value) });
       }
     });

@@ -75,5 +75,26 @@ describe('settingsRepo', () => {
       repo.set({ searchEngines: engines });
       expect(repo.get().searchEngines).toEqual(engines);
     });
+
+    it('falsy values override defaults (not a truthiness merge)', () => {
+      repo.set({ hideChromeByDefault: true });
+      expect(repo.get().hideChromeByDefault).toBe(true);
+      repo.set({ hideChromeByDefault: false });
+      expect(repo.get().hideChromeByDefault).toBe(false);
+    });
+
+    it('undefined values in partial are not persisted', () => {
+      expect(() => repo.set({ siteName: undefined })).not.toThrow();
+      expect(repo.get().siteName).toBe(DEFAULT_SETTINGS.siteName);
+    });
+  });
+
+  describe('get (corrupt rows)', () => {
+    it('skips corrupt rows and falls back to DEFAULT_SETTINGS for that key', () => {
+      db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run('siteName', 'not json{');
+      const freshRepo = new SettingsRepo(db);
+      expect(() => freshRepo.get()).not.toThrow();
+      expect(freshRepo.get().siteName).toBe(DEFAULT_SETTINGS.siteName);
+    });
   });
 });
