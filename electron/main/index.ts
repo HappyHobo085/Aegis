@@ -1,4 +1,4 @@
-import { app } from 'electron';
+import { app, dialog } from 'electron';
 import { join } from 'node:path';
 import type { NavState } from '../../shared/types';
 import { createMainWindow, layout } from './window';
@@ -78,7 +78,14 @@ function boot(): void {
   });
 }
 
-app.whenReady().then(boot);
+app.whenReady().then(() => {
+  try {
+    boot();
+  } catch (err) {
+    dialog.showErrorBox('Aegis failed to start', String(err instanceof Error ? err.stack ?? err.message : err));
+    app.quit();
+  }
+});
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
