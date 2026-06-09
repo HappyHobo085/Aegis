@@ -12,6 +12,7 @@ type Listener = (toasts: ToastItem[]) => void;
 let toasts: ToastItem[] = [];
 let nextId = 1;
 const listeners = new Set<Listener>();
+const dismissTimers = new Map<number, ReturnType<typeof setTimeout>>();
 
 function emit(): void {
   for (const listener of listeners) {
@@ -31,10 +32,12 @@ function push(kind: ToastKind, message: string): void {
   const item: ToastItem = { id: nextId++, kind, message };
   toasts = [...toasts, item];
   emit();
-  setTimeout(() => {
+  const handle = setTimeout(() => {
+    dismissTimers.delete(item.id);
     toasts = toasts.filter((t) => t.id !== item.id);
     emit();
   }, 4000);
+  dismissTimers.set(item.id, handle);
 }
 
 export const toast = {
@@ -51,6 +54,10 @@ export const toast = {
 
 /** Test-only: clear all toasts and listeners state. */
 export function __resetToasts(): void {
+  for (const handle of dismissTimers.values()) {
+    clearTimeout(handle);
+  }
+  dismissTimers.clear();
   toasts = [];
   nextId = 1;
   emit();

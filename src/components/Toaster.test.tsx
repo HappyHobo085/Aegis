@@ -26,4 +26,12 @@ describe('Toaster', () => {
     act(() => toast.error('Boom'));
     await waitFor(() => expect(screen.getByText('Boom')).toBeInTheDocument());
   });
+
+  it('shows an info toast when toast.info is called', async () => {
+    render(<Toaster />);
+    act(() => toast.info('FYI'));
+    await waitFor(() => expect(screen.getByText('FYI')).toBeInTheDocument());
+    const toastEl = screen.getByText('FYI').closest('.toast');
+    expect(toastEl).toHaveClass('toast--info');
+  });
 });

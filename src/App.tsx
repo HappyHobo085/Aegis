@@ -9,6 +9,7 @@ import { Toolbar } from './components/Toolbar';
 import { ErrorOverlay } from './components/ErrorOverlay';
 import { SkipLink } from './components/SkipLink';
 import { Toaster } from './components/Toaster';
+import { ConfirmDialog } from './components/ConfirmDialog';
 import { WelcomeHint } from './components/WelcomeHint';
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
@@ -77,6 +78,7 @@ export function App() {
       />
       <WelcomeHint />
       <Toaster />
+      <ConfirmDialog />
     </div>
   );
 }
