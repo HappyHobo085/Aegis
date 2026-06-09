@@ -121,6 +121,21 @@ export class ViewController {
         });
       },
     );
+
+    wc.on(
+      'render-process-gone',
+      (_event: unknown, details: { reason: string }) => {
+        this.crashed = true;
+        this.setVisible(false);
+        this.opts.onCrashed({ viewId: this.id, reason: details.reason });
+      },
+    );
+
+    wc.on('unresponsive', () => {
+      this.crashed = true;
+      this.setVisible(false);
+      this.opts.onCrashed({ viewId: this.id, reason: 'unresponsive' });
+    });
   }
 
   private wireSecurity(): void {

@@ -467,3 +467,50 @@ describe('ViewController content-session security (Task 13)', () => {
     expect(wc.loadURL).not.toHaveBeenCalled();
   });
 });
+
+describe('ViewController crash & hang (Task 14)', () => {
+  function makeOptsLocal() {
+    return {
+      contentPreloadPath: '/tmp/contentPreload.js',
+      onState: vi.fn(),
+      onFailed: vi.fn(),
+      onCrashed: vi.fn(),
+    };
+  }
+
+  it('render-process-gone emits onCrashed, sets crashed, and hides content', () => {
+    const opts = makeOptsLocal();
+    const vc = new ViewController(opts);
+    const wc = h.getLastWc()!;
+    wc._emit('render-process-gone', {}, { reason: 'crashed' });
+    expect(opts.onCrashed).toHaveBeenCalledTimes(1);
+    expect(opts.onCrashed.mock.calls[0][0]).toMatchObject({ viewId: 1, reason: 'crashed' });
+    expect(vc.getState().crashed).toBe(true);
+    expect(vc.isContentVisible()).toBe(false);
+  });
+
+  it('unresponsive emits onCrashed and hides content', () => {
+    const opts = makeOptsLocal();
+    const vc = new ViewController(opts);
+    const wc = h.getLastWc()!;
+    wc._emit('unresponsive');
+    expect(opts.onCrashed).toHaveBeenCalledTimes(1);
+    expect(opts.onCrashed.mock.calls[0][0]).toMatchObject({ viewId: 1, reason: 'unresponsive' });
+    expect(vc.isContentVisible()).toBe(false);
+  });
+
+  it('reloadOrStop after a crash clears the crashed flag (recovery)', () => {
+    const opts = makeOptsLocal();
+    const vc = new ViewController(opts);
+    const wc = h.getLastWc()!;
+    wc._emit('render-process-gone', {}, { reason: 'crashed' });
+    expect(vc.getState().crashed).toBe(true);
+
+    wc._loading = false;
+    vc.reloadOrStop();
+    expect(vc.getState().crashed).toBe(false);
+
+    wc._emit('did-start-loading');
+    expect(vc.isContentVisible()).toBe(true);
+  });
+});
