@@ -1,0 +1,4 @@
+appId: com.aegis.browser
+productName: Aegis
+asarUnpack:
+  - "**/node_modules/better-sqlite3/**"
