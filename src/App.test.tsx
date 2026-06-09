@@ -27,6 +27,7 @@ const reloadOrStop = vi.fn(async () => {});
 const setContentVisible = vi.fn(async () => {});
 let failedCb: ((f: NavFailed) => void) | undefined;
 let crashedCb: ((c: NavCrashed) => void) | undefined;
+let stateCb: ((s: NavState) => void) | undefined;
 
 vi.mock('./lib/ipcClient', () => ({
   aegis: {
@@ -37,7 +38,10 @@ vi.mock('./lib/ipcClient', () => ({
       reloadOrStop: (...a: any[]) => reloadOrStop(...a),
       home: vi.fn(async () => {}),
       getState: vi.fn(async () => baseState),
-      onState: () => () => {},
+      onState: (cb: (s: NavState) => void) => {
+        stateCb = cb;
+        return () => {};
+      },
       onFailed: (cb: (f: NavFailed) => void) => {
         failedCb = cb;
         return () => {};
@@ -58,6 +62,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   failedCb = undefined;
   crashedCb = undefined;
+  stateCb = undefined;
 });
 
 describe('App', () => {
@@ -101,8 +106,12 @@ describe('App', () => {
   it('shows the overlay on nav.crashed and clears it on a fresh nav.state', async () => {
     render(<App />);
     await waitFor(() => expect(crashedCb).toBeTypeOf('function'));
+    // SET: crash fires the overlay
     act(() => crashedCb!({ viewId: PRIMARY_VIEW_ID, reason: 'oom' }));
     expect(screen.getByRole('alert')).toBeInTheDocument();
+    // CLEAR: a fresh nav state with isLoading:true and no crash removes the overlay
+    act(() => stateCb!({ ...baseState, isLoading: true, crashed: false }));
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
   it('does NOT call setContentVisible for the error/crash overlay', async () => {

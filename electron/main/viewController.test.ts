@@ -399,6 +399,19 @@ describe('ViewController navigation gate & failures (Task 12)', () => {
     expect(opts.onFailed).not.toHaveBeenCalled();
     expect(vc.isContentVisible()).toBe(true);
   });
+
+  it('getState().url stays at the last committed URL after a failed load (url-poisoning fix)', () => {
+    const opts = makeOptsLocal();
+    const vc = new ViewController(opts);
+    const wc = h.getLastWc()!;
+    wc._url = 'https://good.test/';
+    wc._emit('did-navigate', {}, 'https://good.test/');
+    expect(vc.getState().url).toBe('https://good.test/');
+    // failed nav: did-navigate is NOT emitted, only did-fail-load
+    wc._url = 'https://evil-cert.test/';
+    wc._emit('did-fail-load', {}, -202, 'ERR_CERT_AUTHORITY_INVALID', 'https://evil-cert.test/', true);
+    expect(vc.getState().url).toBe('https://good.test/');
+  });
 });
 
 describe('ViewController content-session security (Task 13)', () => {

@@ -16,7 +16,7 @@ export function registerGuardedHandlers(
   for (const [channel, handler] of Object.entries(handlers)) {
     ipcMain.handle(channel, (event: IpcMainInvokeEvent, ...args: any[]) => {
       if (event.sender.id !== chromeWebContentsId) {
-        throw new Error(`Rejected ${channel}: unauthorized sender id ${event.sender.id}`);
+        throw new Error(`Unauthorized IPC sender for channel ${channel}`);
       }
       return handler(...args);
     });

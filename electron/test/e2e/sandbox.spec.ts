@@ -3,7 +3,7 @@ import { test, expect, _electron, type ElectronApplication } from '@playwright/t
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { IPC, PRIMARY_VIEW_ID } from '../../../shared/types';
+import { IPC } from '../../../shared/types';
 
 let app: ElectronApplication;
 let userDataDir: string;
@@ -94,7 +94,7 @@ test('file:// navigation is blocked by the scheme gate', async () => {
   await app.evaluate(() => {
     (globalThis as any).__aegisTest.primary.navigate('file:///etc/passwd');
   });
-  // Give the (rejected) navigation a beat; the gate must keep the URL unchanged.
+  // The scheme gate returns early synchronously; no settle wait is needed.
   const after = await app.evaluate(() =>
     (globalThis as any).__aegisTest.primary.getState().url,
   );
@@ -116,7 +116,7 @@ test('javascript: navigation is blocked by the scheme gate', async () => {
   expect(after.startsWith('javascript:')).toBe(false);
 });
 
-test('privileged IPC invoked from the content view is rejected by the guard', async () => {
+test('content view cannot reach ipcRenderer to invoke privileged IPC (sandbox blocks require; guard is the backstop, unit-tested in T15)', async () => {
   const channel = IPC.settingsGet; // a sender-validated handler registered in T19
   const result = await app.evaluate(
     async ({ ipcMain }, args) => {
