@@ -7,6 +7,11 @@ import { applyTheme } from './lib/theme';
 import { useNav } from './hooks/useNav';
 import { Toolbar } from './components/Toolbar';
 import { ErrorOverlay } from './components/ErrorOverlay';
+import { SkipLink } from './components/SkipLink';
+import { Toaster } from './components/Toaster';
+import { WelcomeHint } from './components/WelcomeHint';
+
+const CONTENT_ANCHOR_ID = 'content-anchor';
 
 export function App() {
   const nav = useNav(PRIMARY_VIEW_ID);
@@ -54,6 +59,7 @@ export function App() {
 
   return (
     <div className="app">
+      <SkipLink targetId={CONTENT_ANCHOR_ID} />
       <Toolbar
         state={nav.state}
         navigate={nav.navigate}
@@ -62,12 +68,15 @@ export function App() {
         reloadOrStop={nav.reloadOrStop}
         home={nav.home}
       />
+      <div id={CONTENT_ANCHOR_ID} className="content-anchor" tabIndex={-1} />
       <ErrorOverlay
         failed={failed}
         crashed={crashed}
         onRetry={handleRetry}
         onHome={handleHome}
       />
+      <WelcomeHint />
+      <Toaster />
     </div>
   );
 }
