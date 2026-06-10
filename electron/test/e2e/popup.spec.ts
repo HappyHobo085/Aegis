@@ -87,8 +87,9 @@ test('an allowed-scheme window.open opens no real popup window (gate always deni
     // Deterministic, disposition-INDEPENDENT guarantee: the setWindowOpenHandler always
     // returns {action:'deny'}, so NO real popup window is ever created — windows().length
     // is unchanged regardless of the disposition Electron assigned. (Whether the view also
-    // routes the URL in-place is a foreground-disposition behavior covered by the Task-1
-    // windowOpen.test.ts unit test; not asserted here to keep this hermetic.) Poll briefly
+    // routes the URL in-place is a foreground-disposition behavior: the pure decision is
+    // unit-tested in windowOpen.test.ts and the wc.loadURL wiring in viewController.test.ts;
+    // not asserted here to keep this hermetic.) Poll briefly
     // to let the async open attempt be processed, then assert the count is still the baseline.
     await expect.poll(async () => app.windows().length, { timeout: 5000 }).toBe(baseline);
     expect(app.windows().length).toBe(baseline);
