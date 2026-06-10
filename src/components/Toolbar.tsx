@@ -1,4 +1,5 @@
 // src/components/Toolbar.tsx
+import type { ReactNode } from 'react';
 import type { AdblockState, NavState } from '../../shared/types';
 import { NavControls } from './NavControls';
 import { AddressBar } from './AddressBar';
@@ -20,6 +21,8 @@ export interface ToolbarProps {
   reloadOrStop(): void;
   home(): void;
   adblock: ToolbarAdblockProps;
+  /** Optional toolbar slot for the saved-list bookmark button (Phase 3). */
+  bookmark?: ReactNode;
 }
 
 export function Toolbar({
@@ -30,6 +33,7 @@ export function Toolbar({
   reloadOrStop,
   home,
   adblock,
+  bookmark,
 }: ToolbarProps) {
   return (
     <div className="toolbar">
@@ -48,6 +52,7 @@ export function Toolbar({
         setEnabled={adblock.setEnabled}
         toggleAllowlist={adblock.toggleAllowlist}
       />
+      {bookmark}
     </div>
   );
 }

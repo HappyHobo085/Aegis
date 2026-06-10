@@ -25,6 +25,7 @@ const baseSettings: Settings = {
 
 const reloadOrStop = vi.fn(async () => {});
 const setContentVisible = vi.fn(async () => {});
+const setContentInset = vi.fn(async () => {});
 let failedCb: ((f: NavFailed) => void) | undefined;
 let crashedCb: ((c: NavCrashed) => void) | undefined;
 let stateCb: ((s: NavState) => void) | undefined;
@@ -51,7 +52,10 @@ vi.mock('./lib/ipcClient', () => ({
         return () => {};
       },
     },
-    view: { setContentVisible: (...a: any[]) => setContentVisible(...a) },
+    view: {
+      setContentVisible: (...a: any[]) => setContentVisible(...a),
+      setContentInset: (...a: any[]) => setContentInset(...a),
+    },
     settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
     adblock: {
       getState: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
@@ -60,6 +64,29 @@ vi.mock('./lib/ipcClient', () => ({
       onBlockedCount: vi.fn().mockReturnValue(() => {}),
     },
     lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
+    favorites: {
+      list: vi.fn().mockResolvedValue([]),
+      add: vi.fn().mockResolvedValue([]),
+      update: vi.fn().mockResolvedValue([]),
+      remove: vi.fn().mockResolvedValue([]),
+      reorder: vi.fn().mockResolvedValue([]),
+      renameTag: vi.fn().mockResolvedValue([]),
+      deleteTag: vi.fn().mockResolvedValue([]),
+      tagUnion: vi.fn().mockResolvedValue([]),
+    },
+    history: {
+      list: vi.fn().mockResolvedValue([]),
+      search: vi.fn().mockResolvedValue([]),
+      remove: vi.fn().mockResolvedValue(undefined),
+      clear: vi.fn().mockResolvedValue(undefined),
+      onChanged: vi.fn().mockReturnValue(() => {}),
+    },
+    saved: {
+      list: vi.fn().mockResolvedValue([]),
+      add: vi.fn().mockResolvedValue([]),
+      remove: vi.fn().mockResolvedValue([]),
+      has: vi.fn().mockResolvedValue(false),
+    },
   },
 }));
 
@@ -113,10 +140,8 @@ describe('App', () => {
   it('shows the overlay on nav.crashed and clears it on a fresh nav.state', async () => {
     render(<App />);
     await waitFor(() => expect(crashedCb).toBeTypeOf('function'));
-    // SET: crash fires the overlay
     act(() => crashedCb!({ viewId: PRIMARY_VIEW_ID, reason: 'oom' }));
     expect(screen.getByRole('alert')).toBeInTheDocument();
-    // CLEAR: a fresh nav state with isLoading:true and no crash removes the overlay
     act(() => stateCb!({ ...baseState, isLoading: true, crashed: false }));
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
@@ -140,6 +165,30 @@ describe('App', () => {
     render(<App />);
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /ad blocking/i })).toBeInTheDocument(),
+    );
+  });
+
+  it('mounts the favorites bar and the sidebar toggle', async () => {
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /toggle sidebar/i })).toBeInTheDocument(),
+    );
+    expect(screen.getByRole('complementary', { name: /sidebar/i })).toBeInTheDocument();
+  });
+
+  it('reports the content inset on mount (favorites bar always-on, sidebar closed)', async () => {
+    render(<App />);
+    await waitFor(() => expect(setContentInset).toHaveBeenCalled());
+    expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 96, left: 0 });
+  });
+
+  it('toggling the sidebar re-reports the inset with the sidebar width on the left', async () => {
+    render(<App />);
+    await waitFor(() => expect(setContentInset).toHaveBeenCalled());
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(screen.getByRole('button', { name: /toggle sidebar/i }));
+    await waitFor(() =>
+      expect(setContentInset).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, { top: 96, left: 280 }),
     );
   });
 });

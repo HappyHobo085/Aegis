@@ -86,4 +86,15 @@ describe('Toolbar', () => {
     await userEvent.click(screen.getByRole('switch', { name: /ad blocking/i }));
     expect(h.adblock.setEnabled).toHaveBeenCalledWith(false);
   });
+
+  it('renders the optional bookmark slot when provided', () => {
+    render(
+      <Toolbar
+        state={state}
+        {...handlers()}
+        bookmark={<button type="button">Save page</button>}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /save page/i })).toBeInTheDocument();
+  });
 });
