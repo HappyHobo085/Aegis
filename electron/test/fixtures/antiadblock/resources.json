@@ -1,0 +1,17 @@
+{
+  "scriptlets": [
+    {
+      "name": "aegis-set-false.js",
+      "aliases": ["aegis-set-false"],
+      "body": "function(){ Object.defineProperty(window, 'adblockDetected', { get: function(){ return false; }, set: function(){}, configurable: true }); }",
+      "dependencies": []
+    },
+    {
+      "name": "aegis-no-bait.js",
+      "aliases": ["aegis-no-bait"],
+      "body": "function(){ Object.defineProperty(window, 'aegisBait', { get: function(){ return undefined; }, configurable: true }); }",
+      "dependencies": []
+    }
+  ],
+  "redirects": []
+}

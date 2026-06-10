@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aegis anti-adblock: set-constant detector</title>
+    <style>
+      #wall { display: none; width: 100%; height: 400px; background: #111; color: #fff; }
+      #content { display: none; width: 400px; height: 200px; background: #0a0; }
+    </style>
+  </head>
+  <body>
+    <div id="wall">Please disable your ad blocker to continue.</div>
+    <div id="content">Primary article content.</div>
+    <script>
+      // Page default: it BELIEVES an ad blocker is present (true). The aegis-set-false
+      // scriptlet (injected main-world at document_start) redefines adblockDetected to
+      // always read false, so this detector keeps content visible and the wall hidden.
+      // Re-checkable: re-evaluated every animation frame (defeats any residual race).
+      try {
+        if (!('adblockDetected' in window)) {
+          window.adblockDetected = true;
+        }
+      } catch (_e) {
+        /* already defined by the scriptlet (non-writable get) — ignore */
+      }
+      var wall = document.getElementById('wall');
+      var content = document.getElementById('content');
+      function evaluate() {
+        if (window.adblockDetected) {
+          wall.style.display = 'block';
+          content.style.display = 'none';
+        } else {
+          wall.style.display = 'none';
+          content.style.display = 'block';
+        }
+        requestAnimationFrame(evaluate);
+      }
+      requestAnimationFrame(evaluate);
+    </script>
+  </body>
+</html>

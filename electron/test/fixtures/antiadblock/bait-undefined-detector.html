@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aegis anti-adblock: bait-undefined detector</title>
+    <style>
+      #wall { display: none; width: 100%; height: 400px; background: #111; color: #fff; }
+      #content { display: none; width: 400px; height: 200px; background: #0a0; }
+    </style>
+  </head>
+  <body>
+    <div id="wall">Please disable your ad blocker to continue.</div>
+    <div id="content">Primary article content.</div>
+    <script>
+      // Page would set a bait global it later reads to detect tampering. The
+      // aegis-no-bait scriptlet (main-world, document_start) defines window.aegisBait
+      // as a getter returning undefined, so this page's own assignment is swallowed and
+      // the read is undefined -> the wall never appears.
+      try {
+        window.aegisBait = { live: true };
+      } catch (_e) {
+        /* getter-only property defined by the scriptlet — assignment ignored */
+      }
+      var wall = document.getElementById('wall');
+      var content = document.getElementById('content');
+      function evaluate() {
+        // Detector logic: if the bait survived (truthy), it concludes no tampering and
+        // shows the wall. With the scriptlet, aegisBait reads undefined -> content shown.
+        if (window.aegisBait) {
+          wall.style.display = 'block';
+          content.style.display = 'none';
+        } else {
+          wall.style.display = 'none';
+          content.style.display = 'block';
+        }
+        requestAnimationFrame(evaluate);
+      }
+      requestAnimationFrame(evaluate);
+    </script>
+  </body>
+</html>
