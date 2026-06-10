@@ -12,6 +12,7 @@ function makeRepo() {
     defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
     searchEngines: [],
     hideChromeByDefault: false,
+    downloadDir: '',
   } as Settings;
   return {
     get: vi.fn((): Settings => current),

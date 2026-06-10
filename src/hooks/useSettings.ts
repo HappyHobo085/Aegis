@@ -11,6 +11,7 @@ const emptySettings: Settings = {
   defaultSearchTemplate: '',
   searchEngines: [],
   hideChromeByDefault: false,
+  downloadDir: '',
 };
 
 export function useSettings(): {

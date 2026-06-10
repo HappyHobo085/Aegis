@@ -29,6 +29,7 @@ const baseSettings: Settings = {
   defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
   searchEngines: [{ id: 'ddg', name: 'DuckDuckGo', template: 'https://duckduckgo.com/?q=%s' }],
   hideChromeByDefault: false,
+  downloadDir: '',
 };
 
 beforeEach(() => {

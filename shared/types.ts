@@ -56,6 +56,26 @@ export const IPC = {
   evtNavCrashed: 'nav.crashed',
   evtAdblockBlockedCount: 'adblock.blockedCount',
   evtHistoryChanged: 'history.changed',
+  // downloads (Phase 5, chrome -> main)
+  downloadsList: 'downloads.list',
+  downloadsRemove: 'downloads.remove',
+  downloadsClear: 'downloads.clear',
+  downloadsOpenFile: 'downloads.openFile',
+  downloadsShowInFolder: 'downloads.showInFolder',
+  downloadsCancel: 'downloads.cancel',
+  // permissions (Phase 5, chrome <-> main)
+  permissionsList: 'permissions.list',
+  permissionsRemove: 'permissions.remove',
+  permissionsClear: 'permissions.clear',
+  permissionsResolve: 'permissions.resolve',
+  // data export/import (Phase 5, chrome -> main)
+  dataExport: 'data.export',
+  dataImport: 'data.import',
+  // element picker (Phase 5, chrome -> main)
+  pickerStart: 'picker.start',
+  // events (Phase 5, main -> chrome renderer)
+  evtDownloadsChanged: 'downloads.changed',
+  evtPermissionsPrompt: 'permissions.prompt',
 } as const;
 
 export interface NavState {
@@ -101,6 +121,28 @@ export interface SavedItem {
   title: string;
   savedAt: number;
 }
+// ---- downloads / permissions data model (Phase 5) ----
+export interface DownloadEntry {
+  id: number;
+  url: string;
+  filename: string;
+  savePath: string;
+  state: 'progressing' | 'completed' | 'cancelled' | 'interrupted';
+  receivedBytes: number;
+  totalBytes: number; // 0 when unknown
+  startedAt: number;
+}
+export interface SitePermission {
+  origin: string;
+  permission: string;
+  decision: 'allow' | 'deny';
+}
+export interface PermissionPrompt {
+  requestId: number;
+  origin: string;
+  permission: string;
+}
+export type ImportMode = 'merge' | 'replace';
 export interface ContentInset {
   top: number;
   left: number;
@@ -154,6 +196,7 @@ export interface Settings {
   defaultSearchTemplate: string; // e.g. https://duckduckgo.com/?q=%s
   searchEngines: SearchEngine[]; // seeded; not editable until Phase 4
   hideChromeByDefault: boolean;
+  downloadDir: string; // '' → main resolves to app.getPath('downloads')
 }
 
 /** Exposed on window.aegis by chromePreload via contextBridge. */
@@ -220,6 +263,29 @@ export interface AegisApi {
   customFilters: {
     get(): Promise<string>;
     set(text: string): Promise<string>;
+  };
+  downloads: {
+    list(): Promise<DownloadEntry[]>;
+    remove(id: number): Promise<DownloadEntry[]>;
+    clear(): Promise<DownloadEntry[]>;
+    openFile(id: number): Promise<void>;
+    showInFolder(id: number): Promise<void>;
+    cancel(id: number): Promise<void>;
+    onChanged(cb: () => void): () => void;
+  };
+  permissions: {
+    list(): Promise<SitePermission[]>;
+    remove(origin: string, permission: string): Promise<SitePermission[]>;
+    clear(): Promise<SitePermission[]>;
+    resolve(requestId: number, decision: 'allow' | 'deny'): Promise<void>;
+    onPrompt(cb: (p: PermissionPrompt) => void): () => void;
+  };
+  data: {
+    export(): Promise<{ ok: boolean; path?: string }>;
+    import(mode: ImportMode): Promise<{ ok: boolean; counts?: unknown }>;
+  };
+  picker: {
+    start(): Promise<{ ok: boolean; rule?: string }>;
   };
 }
 

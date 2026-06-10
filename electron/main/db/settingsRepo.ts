@@ -13,6 +13,7 @@ export const DEFAULT_SETTINGS: Settings = {
     { id: 'bing', name: 'Bing', template: 'https://www.bing.com/search?q=%s' },
   ],
   hideChromeByDefault: false,
+  downloadDir: '',
 };
 
 /**

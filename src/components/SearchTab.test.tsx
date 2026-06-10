@@ -17,6 +17,7 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
   searchEngines: engines,
   hideChromeByDefault: false,
+  downloadDir: '',
   ...over,
 });
 

@@ -11,6 +11,11 @@ import type {
   ContentInset,
   Subscription,
   AegisApi,
+  DownloadEntry,
+  SitePermission,
+  PermissionPrompt,
+  ImportMode,
+  Settings,
 } from './types';
 
 describe('shared/types', () => {
@@ -140,5 +145,110 @@ describe('shared/types — Phase 4 additions', () => {
     const cfShape: Record<keyof CustomFiltersApi, true> = { get: true, set: true };
     expect(Object.keys(subsShape).sort()).toEqual(['add', 'list', 'remove', 'setEnabled']);
     expect(Object.keys(cfShape).sort()).toEqual(['get', 'set']);
+  });
+});
+
+describe('shared/types — Phase 5 additions', () => {
+  it('exposes the downloads IPC channel constants (incl. the changed event)', () => {
+    expect(IPC.downloadsList).toBe('downloads.list');
+    expect(IPC.downloadsRemove).toBe('downloads.remove');
+    expect(IPC.downloadsClear).toBe('downloads.clear');
+    expect(IPC.downloadsOpenFile).toBe('downloads.openFile');
+    expect(IPC.downloadsShowInFolder).toBe('downloads.showInFolder');
+    expect(IPC.downloadsCancel).toBe('downloads.cancel');
+    expect(IPC.evtDownloadsChanged).toBe('downloads.changed');
+  });
+
+  it('exposes the permissions IPC channel constants (incl. the prompt event)', () => {
+    expect(IPC.permissionsList).toBe('permissions.list');
+    expect(IPC.permissionsRemove).toBe('permissions.remove');
+    expect(IPC.permissionsClear).toBe('permissions.clear');
+    expect(IPC.permissionsResolve).toBe('permissions.resolve');
+    expect(IPC.evtPermissionsPrompt).toBe('permissions.prompt');
+  });
+
+  it('exposes the data + picker IPC channel constants', () => {
+    expect(IPC.dataExport).toBe('data.export');
+    expect(IPC.dataImport).toBe('data.import');
+    expect(IPC.pickerStart).toBe('picker.start');
+  });
+
+  it('admits the Phase-5 data-model shapes', () => {
+    const dl: DownloadEntry = {
+      id: 1,
+      url: 'https://a.test/f.zip',
+      filename: 'f.zip',
+      savePath: '/home/u/Downloads/f.zip',
+      state: 'progressing',
+      receivedBytes: 10,
+      totalBytes: 100,
+      startedAt: 1234,
+    };
+    expect(dl.state).toBe('progressing');
+
+    const perm: SitePermission = {
+      origin: 'https://a.test',
+      permission: 'geolocation',
+      decision: 'allow',
+    };
+    expect(perm.decision).toBe('allow');
+
+    const prompt: PermissionPrompt = {
+      requestId: 7,
+      origin: 'https://a.test',
+      permission: 'notifications',
+    };
+    expect(prompt.requestId).toBe(7);
+
+    const mode: ImportMode = 'replace';
+    expect(mode).toBe('replace');
+  });
+
+  it('adds downloadDir to Settings', () => {
+    const partial: Partial<Settings> = { downloadDir: '/tmp/dl' };
+    expect(partial.downloadDir).toBe('/tmp/dl');
+  });
+
+  it('types the Phase-5 AegisApi members (compile-only shape check)', () => {
+    type DownloadsApi = AegisApi['downloads'];
+    type PermissionsApi = AegisApi['permissions'];
+    type DataApi = AegisApi['data'];
+    type PickerApi = AegisApi['picker'];
+    const downloadsShape: Record<keyof DownloadsApi, true> = {
+      list: true,
+      remove: true,
+      clear: true,
+      openFile: true,
+      showInFolder: true,
+      cancel: true,
+      onChanged: true,
+    };
+    const permissionsShape: Record<keyof PermissionsApi, true> = {
+      list: true,
+      remove: true,
+      clear: true,
+      resolve: true,
+      onPrompt: true,
+    };
+    const dataShape: Record<keyof DataApi, true> = { export: true, import: true };
+    const pickerShape: Record<keyof PickerApi, true> = { start: true };
+    expect(Object.keys(downloadsShape).sort()).toEqual([
+      'cancel',
+      'clear',
+      'list',
+      'onChanged',
+      'openFile',
+      'remove',
+      'showInFolder',
+    ]);
+    expect(Object.keys(permissionsShape).sort()).toEqual([
+      'clear',
+      'list',
+      'onPrompt',
+      'remove',
+      'resolve',
+    ]);
+    expect(Object.keys(dataShape).sort()).toEqual(['export', 'import']);
+    expect(Object.keys(pickerShape)).toEqual(['start']);
   });
 });

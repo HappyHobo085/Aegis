@@ -50,6 +50,7 @@ const baseSettings: Settings = {
   defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
   searchEngines: [],
   hideChromeByDefault: false,
+  downloadDir: '',
 };
 
 beforeEach(() => {
