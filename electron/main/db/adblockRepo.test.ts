@@ -67,4 +67,43 @@ describe('adblockRepo', () => {
       expect(repo.isAllowlisted('example.com')).toBe(false);
     });
   });
+
+  describe('removeAllowlist', () => {
+    it('removes a single host, returning the new allowlist', () => {
+      repo.toggleAllowlist('a.com');
+      repo.toggleAllowlist('b.com');
+      const next = repo.removeAllowlist('a.com');
+      expect(next).toEqual(['b.com']);
+      expect(repo.getState().allowlistedHosts).toEqual(['b.com']);
+    });
+
+    it('removing an absent host is a no-op', () => {
+      repo.toggleAllowlist('a.com');
+      const next = repo.removeAllowlist('not-there.com');
+      expect(next).toEqual(['a.com']);
+    });
+
+    it('persists across repo instances on the same db', () => {
+      repo.toggleAllowlist('a.com');
+      repo.toggleAllowlist('b.com');
+      repo.removeAllowlist('a.com');
+      const repo2 = new AdblockRepo(db);
+      expect(repo2.getState().allowlistedHosts).toEqual(['b.com']);
+    });
+  });
+
+  describe('clearAllowlist', () => {
+    it('empties the allowlist, returning []', () => {
+      repo.toggleAllowlist('a.com');
+      repo.toggleAllowlist('b.com');
+      const next = repo.clearAllowlist();
+      expect(next).toEqual([]);
+      expect(repo.getState().allowlistedHosts).toEqual([]);
+    });
+
+    it('clearing an already-empty allowlist is a no-op', () => {
+      const next = repo.clearAllowlist();
+      expect(next).toEqual([]);
+    });
+  });
 });

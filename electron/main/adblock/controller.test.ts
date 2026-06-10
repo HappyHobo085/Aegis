@@ -71,6 +71,14 @@ function makeRepo(initial: { enabled: boolean; allowlistedHosts: string[] }) {
       hosts = hosts.includes(host) ? hosts.filter((h) => h !== host) : [...hosts, host];
       return [...hosts];
     }),
+    removeAllowlist: vi.fn((host: string) => {
+      hosts = hosts.filter((h) => h !== host);
+      return [...hosts];
+    }),
+    clearAllowlist: vi.fn(() => {
+      hosts = [];
+      return [...hosts];
+    }),
   };
 }
 
@@ -285,5 +293,58 @@ describe('AdblockController engine swap', () => {
     expect(oldBlocker.disableBlockingInSession).not.toHaveBeenCalled();
     expect(counter.detach).toHaveBeenCalledWith(oldBlocker);
     expect(counter.attach).toHaveBeenCalledWith(newBlocker);
+  });
+});
+
+describe('AdblockController removeAllowlist / clearAllowlist (deferred reconcile)', () => {
+  it('removeAllowlist persists via repo and returns the new AdblockState', () => {
+    const counter = makeCounter({ session: 4 });
+    const { controller, repo } = build({
+      counter,
+      repo: makeRepo({ enabled: true, allowlistedHosts: ['a.com', 'b.com'] }),
+    });
+    const state = controller.removeAllowlist('a.com');
+    expect(repo.removeAllowlist).toHaveBeenCalledWith('a.com');
+    expect(state).toEqual({ enabled: true, allowlistedHosts: ['b.com'], sessionBlocked: 4 });
+  });
+
+  it('clearAllowlist persists via repo and returns the new AdblockState', () => {
+    const counter = makeCounter({ session: 6 });
+    const { controller, repo } = build({
+      counter,
+      repo: makeRepo({ enabled: true, allowlistedHosts: ['a.com', 'b.com'] }),
+    });
+    const state = controller.clearAllowlist();
+    expect(repo.clearAllowlist).toHaveBeenCalled();
+    expect(state).toEqual({ enabled: true, allowlistedHosts: [], sessionBlocked: 6 });
+  });
+
+  it('removeAllowlist does NOT change session blocking until the next navigation', () => {
+    const { controller, blocker, session } = build({
+      repo: makeRepo({ enabled: true, allowlistedHosts: ['example.com'] }),
+    });
+    controller.primeFor('https://example.com/'); // allowlisted => blocking stays OFF
+    expect(blocker.isBlockingEnabled(session)).toBe(false);
+    controller.removeAllowlist('example.com'); // persisted, not reconciled directly
+    expect(blocker.enableBlockingInSession).not.toHaveBeenCalled();
+    expect(blocker.isBlockingEnabled(session)).toBe(false);
+    // next nav to the now-un-allowlisted host re-enables blocking
+    (controller as any).reconcile('https://example.com/');
+    expect(blocker.enableBlockingInSession).toHaveBeenCalledWith(session);
+    expect(blocker.isBlockingEnabled(session)).toBe(true);
+  });
+
+  it('clearAllowlist does NOT change session blocking until the next navigation', () => {
+    const { controller, blocker, session } = build({
+      repo: makeRepo({ enabled: true, allowlistedHosts: ['example.com'] }),
+    });
+    controller.primeFor('https://example.com/'); // allowlisted => blocking OFF
+    expect(blocker.isBlockingEnabled(session)).toBe(false);
+    controller.clearAllowlist();
+    expect(blocker.enableBlockingInSession).not.toHaveBeenCalled();
+    expect(blocker.isBlockingEnabled(session)).toBe(false);
+    (controller as any).reconcile('https://example.com/');
+    expect(blocker.enableBlockingInSession).toHaveBeenCalledWith(session);
+    expect(blocker.isBlockingEnabled(session)).toBe(true);
   });
 });

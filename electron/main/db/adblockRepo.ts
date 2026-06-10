@@ -52,4 +52,18 @@ export class AdblockRepo {
     this.setAllowlistStmt.run({ allowlist: JSON.stringify(next) });
     return next;
   }
+
+  /** Unconditionally remove `host` from the allowlist. Returns the new array. */
+  removeAllowlist(host: string): string[] {
+    const next = this.getState().allowlistedHosts.filter((h) => h !== host);
+    this.setAllowlistStmt.run({ allowlist: JSON.stringify(next) });
+    return next;
+  }
+
+  /** Remove every host from the allowlist. Returns the (empty) new array. */
+  clearAllowlist(): string[] {
+    const next: string[] = [];
+    this.setAllowlistStmt.run({ allowlist: JSON.stringify(next) });
+    return next;
+  }
 }

@@ -60,6 +60,24 @@ export class AdblockController {
     return this.getState();
   }
 
+  /**
+   * Remove `host` from the allowlist (DB-only). Re-blocking on `host` is deferred
+   * to the next main-frame navigation's reconcile, consistent with toggleAllowlist.
+   */
+  removeAllowlist(host: string): AdblockState {
+    this.opts.repo.removeAllowlist(host);
+    return this.getState();
+  }
+
+  /**
+   * Clear the entire allowlist (DB-only). Re-blocking on previously-allowlisted
+   * hosts is deferred to their next navigation's reconcile (no direct reconcile).
+   */
+  clearAllowlist(): AdblockState {
+    this.opts.repo.clearAllowlist();
+    return this.getState();
+  }
+
   getState(): AdblockState {
     const { enabled, allowlistedHosts } = this.opts.repo.getState();
     return { enabled, allowlistedHosts, sessionBlocked: this.opts.counter.snapshot().session };
