@@ -9,6 +9,8 @@ const setEnabled = vi.fn();
 const toggleAllowlist = vi.fn();
 const onBlockedCount = vi.fn();
 const updateNow = vi.fn();
+const removeAllowlist = vi.fn();
+const clearAllowlist = vi.fn();
 
 vi.mock('../lib/ipcClient', () => ({
   aegis: {
@@ -17,6 +19,8 @@ vi.mock('../lib/ipcClient', () => ({
       setEnabled: (...a: any[]) => setEnabled(...a),
       toggleAllowlist: (...a: any[]) => toggleAllowlist(...a),
       onBlockedCount: (cb: (c: BlockedCount) => void) => onBlockedCount(cb),
+      removeAllowlist: (...a: any[]) => removeAllowlist(...a),
+      clearAllowlist: (...a: any[]) => clearAllowlist(...a),
     },
     lists: { updateNow: (...a: any[]) => updateNow(...a) },
   },
@@ -37,6 +41,8 @@ beforeEach(() => {
   toggleAllowlist.mockResolvedValue({ ...baseState, allowlistedHosts: ['example.com'] });
   onBlockedCount.mockReturnValue(() => {});
   updateNow.mockResolvedValue({ perSource: [], lastUpdated: 123 } as ListUpdateResult);
+  removeAllowlist.mockResolvedValue({ ...baseState, allowlistedHosts: [] });
+  clearAllowlist.mockResolvedValue({ ...baseState, allowlistedHosts: [] });
 });
 
 describe('useAdblock', () => {
@@ -124,5 +130,23 @@ describe('useAdblock', () => {
     await waitFor(() => expect(onBlockedCount).toHaveBeenCalled());
     unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
+  });
+
+  it('removeAllowlist calls aegis with the host and syncs returned state', async () => {
+    removeAllowlist.mockResolvedValue({ ...baseState, allowlistedHosts: ['kept.com'] });
+    const { result } = renderHook(() => useAdblock(PRIMARY_VIEW_ID, 'https://example.com/'));
+    await waitFor(() => expect(result.current.state.enabled).toBe(true));
+    await act(async () => result.current.removeAllowlist('drop.com'));
+    expect(removeAllowlist).toHaveBeenCalledWith('drop.com');
+    expect(result.current.state.allowlistedHosts).toEqual(['kept.com']);
+  });
+
+  it('clearAllowlist calls aegis and syncs returned (emptied) state', async () => {
+    clearAllowlist.mockResolvedValue({ ...baseState, allowlistedHosts: [] });
+    const { result } = renderHook(() => useAdblock(PRIMARY_VIEW_ID, 'https://example.com/'));
+    await waitFor(() => expect(result.current.state.enabled).toBe(true));
+    await act(async () => result.current.clearAllowlist());
+    expect(clearAllowlist).toHaveBeenCalledTimes(1);
+    expect(result.current.state.allowlistedHosts).toEqual([]);
   });
 });

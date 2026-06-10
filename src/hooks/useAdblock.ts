@@ -27,6 +27,8 @@ export function useAdblock(
   page: number;
   setEnabled(enabled: boolean): void;
   toggleAllowlist(): void;
+  removeAllowlist(host: string): void;
+  clearAllowlist(): void;
   updateNow(): Promise<ListUpdateResult>;
 } {
   const [state, setState] = useState<AdblockState>(emptyState);
@@ -65,9 +67,17 @@ export function useAdblock(
     void aegis.adblock.toggleAllowlist(host).then((s) => setState(s));
   }, []);
 
+  const removeAllowlist = useCallback((host: string) => {
+    void aegis.adblock.removeAllowlist(host).then((s) => setState(s));
+  }, []);
+
+  const clearAllowlist = useCallback(() => {
+    void aegis.adblock.clearAllowlist().then((s) => setState(s));
+  }, []);
+
   const updateNow = useCallback((): Promise<ListUpdateResult> => {
     return aegis.lists.updateNow();
   }, []);
 
-  return { state, page, setEnabled, toggleAllowlist, updateNow };
+  return { state, page, setEnabled, toggleAllowlist, removeAllowlist, clearAllowlist, updateNow };
 }
