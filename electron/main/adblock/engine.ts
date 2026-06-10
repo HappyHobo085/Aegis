@@ -1,6 +1,7 @@
 // electron/main/adblock/engine.ts
 import { createHash } from 'node:crypto';
 import { ElectronBlocker, adsAndTrackingLists } from '@ghostery/adblocker-electron';
+import { writeFileAtomicBytes, readBytesSafe } from '../../lib/atomicFile';
 
 /**
  * Single source for the default `$redirect` resources (ublock-origin resources.json).
@@ -43,4 +44,44 @@ export function buildEngine(listTexts: string[], resources: string | null): Elec
     engine.updateResources(resources, checksum);
   }
   return engine;
+}
+
+/**
+ * Serialize `blocker` to `cachePath` atomically (temp-write + rename). Used to
+ * write the user cache after a build/refresh so subsequent runs take the fast
+ * deserialize path.
+ */
+export function serializeEngine(blocker: ElectronBlocker, cachePath: string): void {
+  writeFileAtomicBytes(cachePath, blocker.serialize());
+}
+
+/**
+ * Internal: read a serialized engine blob and deserialize it. Returns null on a
+ * missing file or any deserialize error (corrupt blob or serialization-version
+ * mismatch — `ElectronBlocker.deserialize` throws), so callers fall through to
+ * the next load source instead of breaking.
+ */
+function loadEngineFromFile(filePath: string): ElectronBlocker | null {
+  const bytes = readBytesSafe(filePath);
+  if (bytes === null) return null;
+  try {
+    return ElectronBlocker.deserialize(new Uint8Array(bytes));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Load the user-cache engine (`engine.bin` in app data). Null on miss/mismatch.
+ */
+export function loadCachedEngine(cachePath: string): ElectronBlocker | null {
+  return loadEngineFromFile(cachePath);
+}
+
+/**
+ * Load the bundled snapshot engine shipped in app resources. Null on
+ * miss/mismatch (e.g. snapshot not regenerated after an engine-version bump).
+ */
+export function loadSnapshotEngine(snapshotPath: string): ElectronBlocker | null {
+  return loadEngineFromFile(snapshotPath);
 }

@@ -1,8 +1,18 @@
 // electron/main/adblock/engine.test.ts
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Request, ElectronBlocker } from '@ghostery/adblocker-electron';
 import { createHash } from 'node:crypto';
-import { buildEngine, DEFAULT_LIST_URLS, RESOURCES_URL } from './engine';
+import {
+  buildEngine,
+  loadCachedEngine,
+  loadSnapshotEngine,
+  serializeEngine,
+  DEFAULT_LIST_URLS,
+  RESOURCES_URL,
+} from './engine';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 describe('engine buildEngine', () => {
   it('builds an engine from inline list text that blocks a matching URL', () => {
@@ -89,5 +99,63 @@ describe('engine buildEngine', () => {
   it('exposes an HTTPS resources URL', () => {
     expect(RESOURCES_URL.startsWith('https://')).toBe(true);
     expect(RESOURCES_URL).toContain('resources.json');
+  });
+});
+
+describe('engine serialize/load round-trip', () => {
+  let dir: string;
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aegis-engine-'));
+  });
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('serializeEngine writes a blob that loadCachedEngine deserializes (round-trip blocks the same URL)', () => {
+    const cachePath = join(dir, 'engine.bin');
+    const original = buildEngine(['||ads.example.com^'], null);
+    serializeEngine(original, cachePath);
+
+    const loaded = loadCachedEngine(cachePath);
+    expect(loaded).not.toBeNull();
+    const { match } = (loaded as NonNullable<typeof loaded>).match(
+      Request.fromRawDetails({
+        type: 'script',
+        url: 'https://ads.example.com/tag.js',
+        sourceUrl: 'https://pub.test/',
+      }),
+    );
+    expect(match).toBe(true);
+  });
+
+  it('loadCachedEngine returns null when the cache file is missing', () => {
+    expect(loadCachedEngine(join(dir, 'nope.bin'))).toBeNull();
+  });
+
+  it('loadCachedEngine returns null on a corrupt blob (deserialize mismatch)', () => {
+    const cachePath = join(dir, 'corrupt.bin');
+    writeFileSync(cachePath, Buffer.from([0, 1, 2, 3, 4, 5, 6, 7]));
+    expect(loadCachedEngine(cachePath)).toBeNull();
+  });
+
+  it('loadSnapshotEngine round-trips a serialized blob the same way', () => {
+    const snapPath = join(dir, 'engine-seed.bin');
+    const original = buildEngine(['||tracker.example^'], null);
+    serializeEngine(original, snapPath);
+
+    const loaded = loadSnapshotEngine(snapPath);
+    expect(loaded).not.toBeNull();
+    const { match } = (loaded as NonNullable<typeof loaded>).match(
+      Request.fromRawDetails({
+        type: 'script',
+        url: 'https://tracker.example/t.js',
+        sourceUrl: 'https://pub.test/',
+      }),
+    );
+    expect(match).toBe(true);
+  });
+
+  it('loadSnapshotEngine returns null when the snapshot is missing', () => {
+    expect(loadSnapshotEngine(join(dir, 'absent.bin'))).toBeNull();
   });
 });
