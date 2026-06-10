@@ -54,5 +54,12 @@ export function runMigrations(db: Database.Database): void {
       title     TEXT    NOT NULL DEFAULT '',
       visitedAt INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS saved_list (
+      id      INTEGER PRIMARY KEY AUTOINCREMENT,
+      url     TEXT    NOT NULL,
+      title   TEXT    NOT NULL DEFAULT '',
+      savedAt INTEGER NOT NULL
+    );
   `);
 }
