@@ -47,5 +47,12 @@ export function runMigrations(db: Database.Database): void {
       tags     TEXT    NOT NULL DEFAULT '[]',
       position INTEGER NOT NULL DEFAULT 0
     );
+
+    CREATE TABLE IF NOT EXISTS history (
+      id        INTEGER PRIMARY KEY AUTOINCREMENT,
+      url       TEXT    NOT NULL,
+      title     TEXT    NOT NULL DEFAULT '',
+      visitedAt INTEGER NOT NULL
+    );
   `);
 }

@@ -119,5 +119,26 @@ describe('sqlite', () => {
       expect(cols).toHaveProperty('position');
       expect(cols.id).toBe(1); // id is the primary key
     });
+
+    it('creates the history table with the expected columns', () => {
+      db = openDb(':memory:');
+      runMigrations(db);
+      const tbl = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='history'")
+        .get() as { name: string } | undefined;
+      expect(tbl?.name).toBe('history');
+      const cols = (db.prepare('PRAGMA table_info(history)').all() as Array<{
+        name: string;
+        pk: number;
+      }>).reduce<Record<string, number>>((acc, c) => {
+        acc[c.name] = c.pk;
+        return acc;
+      }, {});
+      expect(cols).toHaveProperty('id');
+      expect(cols).toHaveProperty('url');
+      expect(cols).toHaveProperty('title');
+      expect(cols).toHaveProperty('visitedAt');
+      expect(cols.id).toBe(1); // id is the primary key
+    });
   });
 });
