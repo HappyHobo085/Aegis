@@ -481,6 +481,32 @@ describe('ViewController content-session security (Task 13)', () => {
   });
 });
 
+describe('ViewController content getters (Phase 1)', () => {
+  function makeOptsLocal() {
+    return {
+      contentPreloadPath: '/tmp/contentPreload.js',
+      onState: vi.fn(),
+      onFailed: vi.fn(),
+      onCrashed: vi.fn(),
+    };
+  }
+
+  it('contentWebContents returns the content WebContents (stable identity)', () => {
+    const vc = new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    expect(vc.contentWebContents).toBe(wc);
+    // stable across calls
+    expect(vc.contentWebContents).toBe(vc.contentWebContents);
+  });
+
+  it('contentSession returns the content WebContents session (stable identity)', () => {
+    const vc = new ViewController(makeOptsLocal());
+    const wc = h.getLastWc()!;
+    expect(vc.contentSession).toBe(wc.session);
+    expect(vc.contentSession).toBe(vc.contentSession);
+  });
+});
+
 describe('ViewController crash & hang (Task 14)', () => {
   function makeOptsLocal() {
     return {

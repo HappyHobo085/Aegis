@@ -64,6 +64,16 @@ export class ViewController {
     return this.view.webContents;
   }
 
+  /** The content WebContents the adblock engine/counter binds to. */
+  get contentWebContents(): Electron.WebContents {
+    return this.view.webContents;
+  }
+
+  /** The content session ('persist:content') the adblock engine enables blocking on. */
+  get contentSession(): Electron.Session {
+    return this.view.webContents.session;
+  }
+
   private wireNavEvents(): void {
     const wc = this.wc();
 
