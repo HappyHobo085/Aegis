@@ -67,5 +67,16 @@ export function runMigrations(db: Database.Database): void {
       text TEXT    NOT NULL DEFAULT ''
     );
     INSERT OR IGNORE INTO custom_filters (id, text) VALUES (1, '');
+
+    CREATE TABLE IF NOT EXISTS downloads (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      url           TEXT    NOT NULL,
+      filename      TEXT    NOT NULL,
+      savePath      TEXT    NOT NULL,
+      state         TEXT    NOT NULL,
+      receivedBytes INTEGER NOT NULL DEFAULT 0,
+      totalBytes    INTEGER NOT NULL DEFAULT 0,
+      startedAt     INTEGER NOT NULL
+    );
   `);
 }
