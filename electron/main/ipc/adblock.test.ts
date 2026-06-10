@@ -12,16 +12,27 @@ function makeController(state: AdblockState) {
       allowlistedHosts: [...state.allowlistedHosts, host],
     })),
     getState: vi.fn((): AdblockState => state),
+    removeAllowlist: vi.fn((host: string): AdblockState => ({
+      ...state,
+      allowlistedHosts: state.allowlistedHosts.filter((h) => h !== host),
+    })),
+    clearAllowlist: vi.fn((): AdblockState => ({ ...state, allowlistedHosts: [] })),
   };
 }
 
 describe('buildAdblockHandlers', () => {
   const base: AdblockState = { enabled: true, allowlistedHosts: [], sessionBlocked: 5 };
 
-  it('registers exactly the three adblock channels', () => {
+  it('registers exactly the five adblock channels', () => {
     const handlers = buildAdblockHandlers(makeController(base) as any);
     expect(Object.keys(handlers).sort()).toEqual(
-      [IPC.adblockSetEnabled, IPC.adblockToggleAllowlist, IPC.adblockGetState].sort(),
+      [
+        IPC.adblockSetEnabled,
+        IPC.adblockToggleAllowlist,
+        IPC.adblockGetState,
+        IPC.adblockRemoveAllowlist,
+        IPC.adblockClearAllowlist,
+      ].sort(),
     );
   });
 
@@ -47,5 +58,23 @@ describe('buildAdblockHandlers', () => {
     const result = handlers[IPC.adblockGetState]();
     expect(c.getState).toHaveBeenCalledTimes(1);
     expect(result).toEqual(base);
+  });
+
+  it('adblockRemoveAllowlist forwards the host and returns the new state', () => {
+    const seeded: AdblockState = { enabled: true, allowlistedHosts: ['a.test', 'b.test'], sessionBlocked: 5 };
+    const c = makeController(seeded);
+    const handlers = buildAdblockHandlers(c as any);
+    const result = handlers[IPC.adblockRemoveAllowlist]('a.test');
+    expect(c.removeAllowlist).toHaveBeenCalledWith('a.test');
+    expect(result.allowlistedHosts).toEqual(['b.test']);
+  });
+
+  it('adblockClearAllowlist clears and returns the new state', () => {
+    const seeded: AdblockState = { enabled: true, allowlistedHosts: ['a.test'], sessionBlocked: 5 };
+    const c = makeController(seeded);
+    const handlers = buildAdblockHandlers(c as any);
+    const result = handlers[IPC.adblockClearAllowlist]();
+    expect(c.clearAllowlist).toHaveBeenCalledTimes(1);
+    expect(result.allowlistedHosts).toEqual([]);
   });
 });
