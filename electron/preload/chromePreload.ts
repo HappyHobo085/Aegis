@@ -1,7 +1,10 @@
 // electron/preload/chromePreload.ts
 import { contextBridge, ipcRenderer } from 'electron';
 import { IPC } from '../../shared/types';
-import type { AegisApi, ViewId, NavState, NavFailed, NavCrashed, Settings } from '../../shared/types';
+import type {
+  AegisApi, ViewId, NavState, NavFailed, NavCrashed, Settings,
+  AdblockState, BlockedCount, ListUpdateResult,
+} from '../../shared/types';
 
 /** Subscribes cb to an event channel; returns an unsubscriber. */
 function subscribe<T>(channel: string, cb: (payload: T) => void): () => void {
@@ -29,6 +32,18 @@ const api: AegisApi = {
   settings: {
     get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
     set: (partial: Partial<Settings>): Promise<Settings> => ipcRenderer.invoke(IPC.settingsSet, partial),
+  },
+  adblock: {
+    setEnabled: (enabled: boolean): Promise<AdblockState> =>
+      ipcRenderer.invoke(IPC.adblockSetEnabled, enabled),
+    toggleAllowlist: (host: string): Promise<AdblockState> =>
+      ipcRenderer.invoke(IPC.adblockToggleAllowlist, host),
+    getState: (): Promise<AdblockState> => ipcRenderer.invoke(IPC.adblockGetState),
+    onBlockedCount: (cb: (c: BlockedCount) => void) =>
+      subscribe<BlockedCount>(IPC.evtAdblockBlockedCount, cb),
+  },
+  lists: {
+    updateNow: (): Promise<ListUpdateResult> => ipcRenderer.invoke(IPC.listsUpdateNow),
   },
 };
 
