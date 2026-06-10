@@ -3,17 +3,26 @@ import { join } from 'node:path';
 import type { NavState, ListUpdateResult, BlockedCount } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { createMainWindow, layout } from './window';
+import { CHROME_TOP_HEIGHT } from './constants';
 import { ViewController } from './viewController';
 import { openDb, runMigrations } from './db/sqlite';
 import { SettingsRepo } from './db/settingsRepo';
 import { AdblockRepo } from './db/adblockRepo';
 import { SubsRepo } from './db/subsRepo';
+import { FavoritesRepo } from './db/favoritesRepo';
+import { HistoryRepo } from './db/historyRepo';
+import { SavedRepo } from './db/savedRepo';
+import { HistoryRecorder } from './historyRecorder';
 import { readLastSession, writeLastSession } from './session';
 import { registerGuardedHandlers } from './ipc/guard';
 import { buildNavHandlers, buildViewEventForwarders } from './ipc/nav';
 import { buildSettingsHandlers } from './ipc/settings';
 import { buildAdblockHandlers } from './ipc/adblock';
 import { buildListsHandlers } from './ipc/lists';
+import { buildFavoritesHandlers } from './ipc/favorites';
+import { buildHistoryHandlers } from './ipc/history';
+import { buildSavedHandlers } from './ipc/saved';
+import { buildViewLayoutHandlers } from './ipc/viewLayout';
 import { ElectronBlocker } from '@ghostery/adblocker-electron';
 import {
   buildEngine,
@@ -59,6 +68,9 @@ function boot(): void {
   const adblockRepo = new AdblockRepo(db);
   const subsRepo = new SubsRepo(db);
   subsRepo.seedDefaults(DEFAULT_LIST_URLS);
+  const favoritesRepo = new FavoritesRepo(db);
+  const historyRepo = new HistoryRepo(db);
+  const savedRepo = new SavedRepo(db);
 
   // Window + chrome (window.ts owns the BaseWindow + chromeView ONLY).
   const { win, chromeView } = createMainWindow();
@@ -88,8 +100,25 @@ function boot(): void {
 
   // Compose: chrome added first by window.ts; index.ts adds the content view over it.
   win.contentView.addChildView(vc.view);
-  layout(win, chromeView, vc.view);
-  win.on('resize', () => layout(win, chromeView, vc.view));
+
+  // Content inset: the renderer reports { top, left } via view.setContentInset; main
+  // holds the latest inset and re-applies it on resize (default top=56,left=0 until
+  // the renderer reports — avoids a boot race).
+  let contentInset = { top: CHROME_TOP_HEIGHT, left: 0 };
+  const setContentInset = (top: number, left: number): void => {
+    contentInset = { top, left };
+    layout(win, chromeView, vc.view, contentInset);
+  };
+  layout(win, chromeView, vc.view, contentInset);
+  win.on('resize', () => layout(win, chromeView, vc.view, contentInset));
+
+  // History recording: main-side, on the content WebContents' nav/title events.
+  // onChanged pushes history.changed so an open renderer history panel refreshes.
+  new HistoryRecorder({
+    wc: vc.contentWebContents,
+    repo: historyRepo,
+    onChanged: fwd.onHistoryChanged,
+  });
 
   // ---- Adblock subsystem (after ViewController, BEFORE the first navigate) ----
   const cachePath = join(userData, 'engine.bin');
@@ -176,6 +205,10 @@ function boot(): void {
     ...buildSettingsHandlers(settingsRepo),
     ...buildAdblockHandlers(controller),
     ...buildListsHandlers(updateNow),
+    ...buildFavoritesHandlers(favoritesRepo),
+    ...buildHistoryHandlers(historyRepo),
+    ...buildSavedHandlers(savedRepo),
+    ...buildViewLayoutHandlers(setContentInset),
   });
 
   // Test-only registry (never in production paths).
@@ -193,6 +226,7 @@ function boot(): void {
         getState: () => controller.getState(),
         updateNow,
       },
+      places: { favoritesRepo, historyRepo, savedRepo, setContentInset },
     };
   }
 
