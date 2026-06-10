@@ -23,5 +23,12 @@ export function runMigrations(db: Database.Database): void {
       key   TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS adblock_config (
+      id        INTEGER PRIMARY KEY CHECK (id = 1),
+      enabled   INTEGER NOT NULL DEFAULT 1,
+      allowlist TEXT    NOT NULL DEFAULT '[]'
+    );
+    INSERT OR IGNORE INTO adblock_config (id, enabled, allowlist) VALUES (1, 1, '[]');
   `);
 }

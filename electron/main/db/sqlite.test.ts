@@ -58,5 +58,19 @@ describe('sqlite', () => {
         | undefined;
       expect(row?.value).toBe('"Aegis"');
     });
+
+    it('creates the adblock_config table with a seeded singleton row', () => {
+      db = openDb(':memory:');
+      runMigrations(db);
+      const tbl = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='adblock_config'")
+        .get() as { name: string } | undefined;
+      expect(tbl?.name).toBe('adblock_config');
+      const row = db.prepare('SELECT enabled, allowlist FROM adblock_config WHERE id = 1').get() as
+        | { enabled: number; allowlist: string }
+        | undefined;
+      expect(row?.enabled).toBe(1);
+      expect(JSON.parse(row!.allowlist)).toEqual([]);
+    });
   });
 });
