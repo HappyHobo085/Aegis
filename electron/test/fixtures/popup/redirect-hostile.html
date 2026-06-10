@@ -1,0 +1,15 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>aegis-redirect-hostile</title></head>
+<body>
+  <h1 id="content">redirect-hostile fixture content</h1>
+  <script>
+    // Top-frame navigation to a disallowed scheme. isAllowedNavigationUrl('aegis-bad://x')
+    // is false, so the will-navigate/will-redirect gate calls preventDefault -> the
+    // content view never leaves this fixture.
+    (function () {
+      window.location.href = 'aegis-bad://hostile';
+    })();
+  </script>
+</body>
+</html>
