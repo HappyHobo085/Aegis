@@ -30,6 +30,37 @@ function copySeedPlugin() {
   };
 }
 
+/**
+ * Inject a build-mode-aware Content-Security-Policy <meta> into the CHROME renderer
+ * document only (the privileged React UI). Production/build = strict; dev/serve =
+ * relaxed so Vite HMR (inline bootstrap script, eval, the ws: socket) works. The
+ * static <meta> was removed from src/index.html so this is the single source. The
+ * VISITED content view intentionally gets NO app CSP (correct browser behavior).
+ *
+ * dev vs build is discriminated by the transformIndexHtml context: ctx.server is
+ * present only under `vite dev`/serve, absent during a production build.
+ */
+const CSP_PROD =
+  "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+  "img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; " +
+  "base-uri 'none'; frame-src 'none'; form-action 'none'";
+const CSP_DEV =
+  "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; " +
+  "style-src 'self' 'unsafe-inline'; img-src 'self' data:; " +
+  "connect-src 'self' ws:; font-src 'self'; object-src 'none'";
+
+function cspPlugin() {
+  return {
+    name: 'aegis-chrome-csp',
+    transformIndexHtml(html: string, ctx: { server?: unknown }) {
+      const content = ctx && ctx.server ? CSP_DEV : CSP_PROD;
+      const meta = `<meta http-equiv="Content-Security-Policy" content="${content}" />`;
+      // Inject right after the <head> open tag.
+      return html.replace(/<head>/, `<head>\n    ${meta}`);
+    },
+  };
+}
+
 export default defineConfig({
   main: {
     plugins: [copySeedPlugin()],
@@ -57,7 +88,7 @@ export default defineConfig({
   },
   renderer: {
     root: resolve(__dirname, 'src'),
-    plugins: [react()],
+    plugins: [react(), cspPlugin()],
     build: {
       rollupOptions: {
         input: resolve(__dirname, 'src/index.html'),
