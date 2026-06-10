@@ -53,17 +53,20 @@ const h = vi.hoisted(() => {
     };
   }
   let last: ReturnType<typeof makeWebContents> | null = null;
+  let lastOpts: any = null;
   class WebContentsView {
     webContents = makeWebContents();
     setBounds = vi.fn();
     setVisible = vi.fn();
-    constructor() {
+    constructor(opts?: any) {
       last = this.webContents;
+      lastOpts = opts;
     }
   }
   return {
     WebContentsView,
     getLastWc: () => last,
+    getLastOpts: () => lastOpts,
   };
 });
 
@@ -126,6 +129,18 @@ describe('ViewController construction & basics', () => {
       isLoading: true,
       crashed: false,
     });
+  });
+
+  it('sets content webPreferences: autoplay gated + plugins enabled (PDF) + locked sandbox', () => {
+    new ViewController(makeOpts());
+    const prefs = h.getLastOpts()!.webPreferences;
+    expect(prefs.autoplayPolicy).toBe('document-user-activation-required');
+    expect(prefs.plugins).toBe(true);
+    expect(prefs.sandbox).toBe(true);
+    expect(prefs.contextIsolation).toBe(true);
+    expect(prefs.nodeIntegration).toBe(false);
+    expect(prefs.webSecurity).toBe(true);
+    expect(prefs.partition).toBe('persist:content');
   });
 });
 
@@ -441,15 +456,12 @@ describe('ViewController content-session security (Task 13)', () => {
     expect(checkHandler()).toBe(false);
   });
 
-  it('cancels downloads via will-download preventDefault', () => {
+  it('does NOT register a will-download floor (downloads are wired in boot, Task 12)', () => {
     new ViewController(makeOptsLocal());
     const wc = h.getLastWc()!;
     const onCalls = (wc.session.on as any).mock.calls;
     const willDownload = onCalls.find((c: any[]) => c[0] === 'will-download');
-    expect(willDownload).toBeDefined();
-    const ev = { preventDefault: vi.fn() };
-    willDownload[1](ev);
-    expect(ev.preventDefault).toHaveBeenCalledTimes(1);
+    expect(willDownload).toBeUndefined();
   });
 
   it('setWindowOpenHandler denies popunder dispositions', () => {

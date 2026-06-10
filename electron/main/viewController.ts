@@ -54,6 +54,10 @@ export class ViewController {
         nodeIntegration: false,
         webSecurity: true,
         partition: 'persist:content',
+        // Phase 5: block autoplay-with-sound until a user gesture; enable
+        // Chromium's PDF plugin so application/pdf renders inline in the view.
+        autoplayPolicy: 'document-user-activation-required',
+        plugins: true,
       },
     });
 
@@ -159,14 +163,11 @@ export class ViewController {
     const wc = this.wc();
     const ses = wc.session;
 
-    // Permissions: deny-by-default via BOTH handlers.
+    // Permissions: deny-by-default via BOTH handlers. wirePermissions() (Phase 5,
+    // boot) RE-SETS both on the content session (last-set wins); this stays as the
+    // safe default before that runs.
     ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
     ses.setPermissionCheckHandler(() => false);
-
-    // Downloads floor: cancel by default.
-    ses.on('will-download', (event) => {
-      event.preventDefault();
-    });
 
     // Popup policy (§5): deny popunders; route a legitimate, allowed-scheme
     // new-window in-place; otherwise deny. Policy lives in ./windowOpen (pure,
