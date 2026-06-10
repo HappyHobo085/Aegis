@@ -97,5 +97,27 @@ describe('sqlite', () => {
       expect(cols).toHaveProperty('hash');
       expect(cols.listId).toBe(1); // listId is the primary key
     });
+
+    it('creates the favorites table with the expected columns', () => {
+      db = openDb(':memory:');
+      runMigrations(db);
+      const tbl = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='favorites'")
+        .get() as { name: string } | undefined;
+      expect(tbl?.name).toBe('favorites');
+      const cols = (db.prepare('PRAGMA table_info(favorites)').all() as Array<{
+        name: string;
+        pk: number;
+      }>).reduce<Record<string, number>>((acc, c) => {
+        acc[c.name] = c.pk;
+        return acc;
+      }, {});
+      expect(cols).toHaveProperty('id');
+      expect(cols).toHaveProperty('name');
+      expect(cols).toHaveProperty('url');
+      expect(cols).toHaveProperty('tags');
+      expect(cols).toHaveProperty('position');
+      expect(cols.id).toBe(1); // id is the primary key
+    });
   });
 });
