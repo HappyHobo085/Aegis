@@ -25,15 +25,20 @@ export function buildNavHandlers(
 }
 
 /**
- * Builds the main->chrome event forwarders that ViewController invokes. Each
- * forwarder sends the matching push-event channel on the chrome WebContents.
+ * Builds the main->chrome event forwarders that ViewController invokes (onState/
+ * onFailed/onCrashed), plus onHistoryChanged which the HistoryRecorder's onChanged
+ * is wired to in boot so an open history panel can refresh. Each forwarder sends the
+ * matching push-event channel on the chrome WebContents.
  */
 export function buildViewEventForwarders(
   chromeWc: Electron.WebContents,
-): Pick<ViewControllerOpts, 'onState' | 'onFailed' | 'onCrashed'> {
+): Pick<ViewControllerOpts, 'onState' | 'onFailed' | 'onCrashed'> & {
+  onHistoryChanged: () => void;
+} {
   return {
     onState: (s: NavState) => chromeWc.send(IPC.evtNavState, s),
     onFailed: (f: NavFailed) => chromeWc.send(IPC.evtNavFailed, f),
     onCrashed: (c: NavCrashed) => chromeWc.send(IPC.evtNavCrashed, c),
+    onHistoryChanged: () => chromeWc.send(IPC.evtHistoryChanged),
   };
 }

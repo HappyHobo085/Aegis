@@ -97,3 +97,14 @@ describe('buildViewEventForwarders', () => {
     expect(send).toHaveBeenCalledWith(IPC.evtNavCrashed, c);
   });
 });
+
+describe('buildViewEventForwarders — history.changed', () => {
+  it('exposes onHistoryChanged that sends IPC.evtHistoryChanged with no payload', () => {
+    const send = vi.fn();
+    const chromeWc = { send } as unknown as Electron.WebContents;
+    const fwd = buildViewEventForwarders(chromeWc);
+    expect(typeof fwd.onHistoryChanged).toBe('function');
+    fwd.onHistoryChanged();
+    expect(send).toHaveBeenCalledWith(IPC.evtHistoryChanged);
+  });
+});

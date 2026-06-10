@@ -41,21 +41,25 @@ export function createMainWindow(): { win: BaseWindow; chromeView: WebContentsVi
 
 /**
  * Positions the chrome view over the whole window and, if given, the content
- * view below the top chrome band. Call on window resize.
+ * view inset by `inset` (default { top: CHROME_TOP_HEIGHT, left: 0 } until the
+ * renderer reports its computed inset — avoids a boot race). The renderer owns
+ * chrome layout and reports the inset via view.setContentInset; index.ts holds
+ * the latest inset and re-applies it on resize. Call on window resize.
  */
 export function layout(
   win: BaseWindow,
   chromeView: WebContentsView,
   contentView?: WebContentsView,
+  inset: { top: number; left: number } = { top: CHROME_TOP_HEIGHT, left: 0 },
 ): void {
   const { width, height } = win.getContentBounds();
   chromeView.setBounds({ x: 0, y: 0, width, height });
   if (contentView) {
     contentView.setBounds({
-      x: 0,
-      y: CHROME_TOP_HEIGHT,
-      width,
-      height: height - CHROME_TOP_HEIGHT,
+      x: inset.left,
+      y: inset.top,
+      width: width - inset.left,
+      height: height - inset.top,
     });
   }
 }
