@@ -18,11 +18,16 @@ test.beforeAll(async () => {
   // Wait until the content view exists and has settled on an initial document.
   await expect
     .poll(
-      async () =>
-        app.evaluate(() => {
-          const reg = (globalThis as any).__aegisTest;
-          return reg?.primary ? reg.primary.getState().url : '';
-        }),
+      async () => {
+        try {
+          return await app.evaluate(() => {
+            const reg = (globalThis as any).__aegisTest;
+            return reg?.primary ? reg.primary.getState().url : '';
+          });
+        } catch {
+          return ''; // transient startup race (context not ready) — let expect.poll retry
+        }
+      },
       { timeout: 15000 },
     )
     .not.toEqual('');

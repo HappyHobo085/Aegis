@@ -24,13 +24,18 @@ test('boots with a content view that loads the home URL and reports state', asyn
   // Wait for the primary ViewController to exist and finish its first load.
   await expect
     .poll(
-      async () =>
-        app.evaluate(() => {
-          const t = (globalThis as any).__aegisTest;
-          if (!t || !t.primary) return null;
-          const s = t.primary.getState();
-          return s.url;
-        }),
+      async () => {
+        try {
+          return await app.evaluate(() => {
+            const t = (globalThis as any).__aegisTest;
+            if (!t || !t.primary) return null;
+            const s = t.primary.getState();
+            return s.url;
+          });
+        } catch {
+          return ''; // transient startup race (context not ready) — let expect.poll retry
+        }
+      },
       { timeout: 30_000 },
     )
     .toBe('about:blank'); // AEGIS_HOME_URL override; hermetic (no live network)
