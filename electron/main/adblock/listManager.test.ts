@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { fetchSource, fetchAll } from './listManager';
+import { fetchSource, fetchAll, RefreshScheduler } from './listManager';
 
 /** Build a Response whose body streams `chunks` (Uint8Array) one at a time. */
 function streamingResponse(
@@ -206,5 +206,99 @@ describe('listManager fetchAll', () => {
 
     expect(result.sources[0].ok).toBe(true);
     expect(result.resources).toBeNull();
+  });
+});
+
+describe('listManager RefreshScheduler', () => {
+  /** A controllable fake timer: capture scheduled callbacks; fire on demand. */
+  function makeFakeTimer() {
+    let nextId = 1;
+    const handles = new Map<number, { fn: () => void; ms: number }>();
+    const setTimer = (fn: () => void, ms: number) => {
+      const id = nextId++;
+      handles.set(id, { fn, ms });
+      return id;
+    };
+    const clearTimer = (id: number) => {
+      handles.delete(id);
+    };
+    const fireAll = () => {
+      // fire a snapshot so re-scheduling inside a tick does not loop forever here
+      const snapshot = [...handles.values()];
+      for (const h of snapshot) h.fn();
+    };
+    return { setTimer, clearTimer, fireAll, handles };
+  }
+
+  it('start() schedules a tick but does NOT fire immediately', () => {
+    let ticks = 0;
+    const t = makeFakeTimer();
+    const sched = new RefreshScheduler({
+      intervalMs: 1000,
+      onTick: async () => {
+        ticks++;
+      },
+      setTimer: t.setTimer,
+      clearTimer: t.clearTimer,
+    });
+    sched.start();
+    expect(ticks).toBe(0); // no immediate tick
+    expect(t.handles.size).toBe(1); // one timer scheduled
+  });
+
+  it('fires onTick when the scheduled timer elapses and re-schedules', async () => {
+    let ticks = 0;
+    const t = makeFakeTimer();
+    const sched = new RefreshScheduler({
+      intervalMs: 1000,
+      onTick: async () => {
+        ticks++;
+      },
+      setTimer: t.setTimer,
+      clearTimer: t.clearTimer,
+    });
+    sched.start();
+    t.fireAll();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(ticks).toBe(1);
+    // a fresh timer was scheduled for the next interval
+    expect(t.handles.size).toBeGreaterThanOrEqual(1);
+  });
+
+  it('triggerNow() runs onTick once immediately without scheduling/disturbing the timer', async () => {
+    let ticks = 0;
+    const t = makeFakeTimer();
+    const sched = new RefreshScheduler({
+      intervalMs: 1000,
+      onTick: async () => {
+        ticks++;
+      },
+      setTimer: t.setTimer,
+      clearTimer: t.clearTimer,
+    });
+    sched.start();
+    const sizeBefore = t.handles.size;
+    await sched.triggerNow();
+    expect(ticks).toBe(1); // exactly one extra tick
+    expect(t.handles.size).toBe(sizeBefore); // schedule untouched (no double-fire)
+  });
+
+  it('stop() clears the scheduled timer so no further ticks fire', () => {
+    let ticks = 0;
+    const t = makeFakeTimer();
+    const sched = new RefreshScheduler({
+      intervalMs: 1000,
+      onTick: async () => {
+        ticks++;
+      },
+      setTimer: t.setTimer,
+      clearTimer: t.clearTimer,
+    });
+    sched.start();
+    sched.stop();
+    expect(t.handles.size).toBe(0);
+    t.fireAll();
+    expect(ticks).toBe(0);
   });
 });

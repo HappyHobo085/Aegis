@@ -145,3 +145,64 @@ export async function fetchAll(
 
   return { sources, resources };
 }
+
+type TimerHandle = unknown;
+
+/**
+ * Repeating refresh scheduler with an injectable timer (so tests use a fake
+ * clock and CI never hits the wall). `start()` schedules the FIRST tick one
+ * interval out (no immediate fire); each tick re-schedules the next. `stop()`
+ * cancels the pending timer. `triggerNow()` runs `onTick` once immediately
+ * WITHOUT touching the schedule — the manual "update now" path must not
+ * double-fire the periodic tick.
+ */
+export class RefreshScheduler {
+  private readonly intervalMs: number;
+  private readonly onTick: () => Promise<void>;
+  private readonly setTimer: (fn: () => void, ms: number) => TimerHandle;
+  private readonly clearTimer: (h: TimerHandle) => void;
+  private handle: TimerHandle | null = null;
+  private running = false;
+
+  constructor(deps: {
+    intervalMs: number;
+    onTick: () => Promise<void>;
+    setTimer?: (fn: () => void, ms: number) => TimerHandle;
+    clearTimer?: (h: TimerHandle) => void;
+  }) {
+    this.intervalMs = deps.intervalMs;
+    this.onTick = deps.onTick;
+    this.setTimer =
+      deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms) as unknown as TimerHandle);
+    this.clearTimer =
+      deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>));
+  }
+
+  start(): void {
+    this.running = true;
+    this.schedule();
+  }
+
+  stop(): void {
+    this.running = false;
+    if (this.handle !== null) {
+      this.clearTimer(this.handle);
+      this.handle = null;
+    }
+  }
+
+  /** Run onTick once now without disturbing the periodic schedule. */
+  async triggerNow(): Promise<void> {
+    await this.onTick();
+  }
+
+  private schedule(): void {
+    if (!this.running) return;
+    this.handle = this.setTimer(() => {
+      // fire the tick, then re-schedule the next interval
+      void this.onTick().finally(() => {
+        if (this.running) this.schedule();
+      });
+    }, this.intervalMs);
+  }
+}
