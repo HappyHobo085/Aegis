@@ -11,11 +11,11 @@ export const RESOURCES_URL =
   'https://raw.githubusercontent.com/ghostery/adblocker/master/packages/adblocker/assets/ublock-origin/resources.json';
 
 /**
- * Derive a stable, persistable list id from a default source URL. The id is the
+ * Derive a stable, persistable list id from a source URL. The id is the
  * filename (sans extension), used as the PK in `filter_subscriptions` and as the
- * per-list raw-cache filename.
+ * per-list raw-cache filename. Exported for the subscriptions repo (custom adds).
  */
-function listIdFromUrl(url: string): string {
+export function listIdFromUrl(url: string): string {
   const last = url.split('/').filter(Boolean).pop() ?? url;
   return last.replace(/\.txt$/i, '');
 }

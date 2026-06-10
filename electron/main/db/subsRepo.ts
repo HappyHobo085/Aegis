@@ -1,5 +1,6 @@
 // electron/main/db/subsRepo.ts
 import type Database from 'better-sqlite3';
+import { listIdFromUrl } from '../adblock/engine';
 
 export interface Subscription {
   listId: string;
@@ -20,6 +21,8 @@ export class SubsRepo {
   private readonly selectAll: Database.Statement;
   private readonly insertIgnore: Database.Statement;
   private readonly updateMetaStmt: Database.Statement;
+  private readonly setEnabledStmt: Database.Statement;
+  private readonly deleteStmt: Database.Statement;
 
   constructor(private readonly db: Database.Database) {
     this.selectAll = db.prepare(
@@ -31,6 +34,10 @@ export class SubsRepo {
     this.updateMetaStmt = db.prepare(
       'UPDATE filter_subscriptions SET lastUpdated = @lastUpdated, etag = @etag, hash = @hash WHERE listId = @listId',
     );
+    this.setEnabledStmt = db.prepare(
+      'UPDATE filter_subscriptions SET enabled = @enabled WHERE listId = @listId',
+    );
+    this.deleteStmt = db.prepare('DELETE FROM filter_subscriptions WHERE listId = @listId');
   }
 
   /** Idempotently seed the default subscriptions (enabled, null metadata). */
@@ -69,5 +76,27 @@ export class SubsRepo {
       etag: meta.etag,
       hash: meta.hash,
     });
+  }
+
+  /** Enable or disable a single subscription by listId. */
+  setEnabled(listId: string, enabled: boolean): void {
+    this.setEnabledStmt.run({ listId, enabled: enabled ? 1 : 0 });
+  }
+
+  /**
+   * Add a custom subscription. The listId is derived from the url's filename;
+   * INSERT OR IGNORE so re-adding an existing list never clobbers its metadata.
+   * Returns the full subscription set after the insert.
+   */
+  add(url: string): Subscription[] {
+    const listId = listIdFromUrl(url);
+    this.insertIgnore.run({ listId, url });
+    return this.all();
+  }
+
+  /** Remove a subscription by listId. No-op if absent. Returns the new set. */
+  remove(listId: string): Subscription[] {
+    this.deleteStmt.run({ listId });
+    return this.all();
   }
 }
