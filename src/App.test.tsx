@@ -53,6 +53,13 @@ vi.mock('./lib/ipcClient', () => ({
     },
     view: { setContentVisible: (...a: any[]) => setContentVisible(...a) },
     settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
+    adblock: {
+      getState: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      setEnabled: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      toggleAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      onBlockedCount: vi.fn().mockReturnValue(() => {}),
+    },
+    lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
   },
 }));
 
@@ -127,5 +134,12 @@ describe('App', () => {
       }),
     );
     expect(setContentVisible).not.toHaveBeenCalled();
+  });
+
+  it('renders the AdblockShield in the toolbar', async () => {
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /ad blocking/i })).toBeInTheDocument(),
+    );
   });
 });

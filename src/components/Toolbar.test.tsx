@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
-import type { NavState } from '../../shared/types';
+import type { NavState, AdblockState } from '../../shared/types';
 import { Toolbar } from './Toolbar';
 
 const state: NavState = {
@@ -16,12 +16,25 @@ const state: NavState = {
   crashed: false,
 };
 
+const adblockState: AdblockState = {
+  enabled: true,
+  allowlistedHosts: [],
+  sessionBlocked: 0,
+};
+
 const handlers = () => ({
   navigate: vi.fn(),
   back: vi.fn(),
   forward: vi.fn(),
   reloadOrStop: vi.fn(),
   home: vi.fn(),
+  adblock: {
+    state: adblockState,
+    page: 5,
+    host: 'example.com',
+    setEnabled: vi.fn(),
+    toggleAllowlist: vi.fn(),
+  },
 });
 
 describe('Toolbar', () => {
@@ -59,5 +72,18 @@ describe('Toolbar', () => {
   it('shows a Stop affordance while loading', () => {
     render(<Toolbar state={{ ...state, isLoading: true }} {...handlers()} />);
     expect(screen.getByRole('button', { name: /stop/i })).toBeInTheDocument();
+  });
+
+  it('mounts the AdblockShield showing the per-page blocked count', () => {
+    render(<Toolbar state={state} {...handlers()} />);
+    expect(screen.getByRole('button', { name: /ad blocking/i })).toHaveTextContent('5');
+  });
+
+  it('opens the shield popover and toggles ad blocking', async () => {
+    const h = handlers();
+    render(<Toolbar state={state} {...h} />);
+    await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    await userEvent.click(screen.getByRole('switch', { name: /ad blocking/i }));
+    expect(h.adblock.setEnabled).toHaveBeenCalledWith(false);
   });
 });

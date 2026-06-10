@@ -5,6 +5,7 @@ import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
 import { useNav } from './hooks/useNav';
+import { useAdblock } from './hooks/useAdblock';
 import { Toolbar } from './components/Toolbar';
 import { ErrorOverlay } from './components/ErrorOverlay';
 import { SkipLink } from './components/SkipLink';
@@ -14,8 +15,19 @@ import { WelcomeHint } from './components/WelcomeHint';
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
 
+/** Returns the hostname of `url`, or null when `url` has no parseable host. */
+function hostOf(url: string): string | null {
+  try {
+    const h = new URL(url).hostname;
+    return h.length > 0 ? h : null;
+  } catch {
+    return null;
+  }
+}
+
 export function App() {
   const nav = useNav(PRIMARY_VIEW_ID);
+  const adblock = useAdblock(PRIMARY_VIEW_ID, nav.state.url);
   const [failed, setFailed] = useState<NavFailed | null>(null);
   const [crashed, setCrashed] = useState<NavCrashed | null>(null);
 
@@ -68,6 +80,13 @@ export function App() {
         forward={nav.forward}
         reloadOrStop={nav.reloadOrStop}
         home={nav.home}
+        adblock={{
+          state: adblock.state,
+          page: adblock.page,
+          host: hostOf(nav.state.url),
+          setEnabled: adblock.setEnabled,
+          toggleAllowlist: adblock.toggleAllowlist,
+        }}
       />
       <div id={CONTENT_ANCHOR_ID} className="content-anchor" tabIndex={-1} />
       <ErrorOverlay
