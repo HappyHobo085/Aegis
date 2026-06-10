@@ -9,6 +9,7 @@ import { openDb, runMigrations } from './db/sqlite';
 import { SettingsRepo } from './db/settingsRepo';
 import { AdblockRepo } from './db/adblockRepo';
 import { SubsRepo } from './db/subsRepo';
+import { CustomFiltersRepo } from './db/customFiltersRepo';
 import { FavoritesRepo } from './db/favoritesRepo';
 import { HistoryRepo } from './db/historyRepo';
 import { SavedRepo } from './db/savedRepo';
@@ -22,6 +23,8 @@ import { buildListsHandlers } from './ipc/lists';
 import { buildFavoritesHandlers } from './ipc/favorites';
 import { buildHistoryHandlers } from './ipc/history';
 import { buildSavedHandlers } from './ipc/saved';
+import { buildSubsHandlers } from './ipc/subs';
+import { buildCustomFiltersHandlers } from './ipc/customFilters';
 import { buildViewLayoutHandlers } from './ipc/viewLayout';
 import { ElectronBlocker } from '@ghostery/adblocker-electron';
 import {
@@ -32,7 +35,9 @@ import {
   DEFAULT_LIST_URLS,
   RESOURCES_URL,
 } from './adblock/engine';
+import { resolveRefreshSubs, assembleEngineTexts } from './adblock/refreshHelpers';
 import { fetchAll, RefreshScheduler } from './adblock/listManager';
+import { readFileSafe } from '../lib/atomicFile';
 import { BlockedCounter } from './adblock/blockedCounter';
 import { AdblockController } from './adblock/controller';
 
@@ -68,6 +73,7 @@ function boot(): void {
   const adblockRepo = new AdblockRepo(db);
   const subsRepo = new SubsRepo(db);
   subsRepo.seedDefaults(DEFAULT_LIST_URLS);
+  const customFiltersRepo = new CustomFiltersRepo(db);
   const favoritesRepo = new FavoritesRepo(db);
   const historyRepo = new HistoryRepo(db);
   const savedRepo = new SavedRepo(db);
@@ -170,13 +176,20 @@ function boot(): void {
   // Privileged IPC, sender-validated against the chrome WebContents id.
   // updateNow is the ONE canonical refresh (never triggerNow) — defined below.
   const refreshFetch = OFFLINE ? () => Promise.reject(new Error('offline')) : globalThis.fetch;
-  const refreshSubs = LIST_BASE
-    ? DEFAULT_LIST_URLS.map((s) => ({ listId: s.listId, url: `${LIST_BASE}/${s.listId}.txt` }))
-    : DEFAULT_LIST_URLS;
   const refreshResourcesUrl = LIST_BASE ? `${LIST_BASE}/resources.json` : RESOURCES_URL;
 
+  /**
+   * Fetch-rebuild path (network). Sources the ENABLED subscription rows live from
+   * subsRepo.all() (this is what finally reads filter_subscriptions.enabled — the
+   * wiring gap) via resolveRefreshSubs, applying the LIST_BASE per-row override for
+   * e2e. Builds the engine from the fetched list texts + the user's custom-filters
+   * blob (assembleEngineTexts), swaps it in on the next nav, persists the cache, and
+   * records per-source refresh metadata. Used by lists.updateNow, the 24h scheduler,
+   * the boot kick, and subs.add (a new list must be fetched).
+   */
   async function runRefresh(): Promise<ListUpdateResult> {
     const lastUpdated = Date.now();
+    const refreshSubs = resolveRefreshSubs(subsRepo.all(), LIST_BASE);
     const { sources, resources } = await fetchAll(refreshSubs, {
       cacheDir: listsCacheDir,
       timeoutMs: FETCH_TIMEOUT_MS,
@@ -186,7 +199,8 @@ function boot(): void {
     });
     const usable = sources.filter((s) => s.ok && s.text.length > 0);
     if (usable.length > 0) {
-      const engine = buildEngine(usable.map((s) => s.text), resources);
+      const texts = assembleEngineTexts(usable.map((s) => s.text), customFiltersRepo.get());
+      const engine = buildEngine(texts, resources);
       controller.setPendingBlocker(engine);
       serializeEngine(engine, cachePath);
       for (const s of usable) {
@@ -198,6 +212,28 @@ function boot(): void {
       lastUpdated,
     };
   }
+
+  /**
+   * Cache-rebuild path (NO network). Reads the on-disk raw cache for each ENABLED
+   * subscription (lists/<listId>.txt), skipping missing/empty files, appends the
+   * user's custom-filters blob (assembleEngineTexts), rebuilds the engine, swaps it
+   * in on the next nav, and re-serializes the cache. Used by subs.setEnabled,
+   * subs.remove, and customFilters.set — none of which need a re-fetch. On a fresh
+   * profile with no caches yet this yields a near-empty engine; the active engine
+   * (cache/snapshot) stays until a successful runRefresh (documented caveat §2.1).
+   */
+  function rebuildEngineFromCache(): void {
+    const listTexts: string[] = [];
+    for (const sub of subsRepo.all()) {
+      if (!sub.enabled) continue;
+      const text = readFileSafe(join(listsCacheDir, `${sub.listId}.txt`));
+      if (text !== null && text.length > 0) listTexts.push(text);
+    }
+    const texts = assembleEngineTexts(listTexts, customFiltersRepo.get());
+    const engine = buildEngine(texts, null);
+    controller.setPendingBlocker(engine);
+    serializeEngine(engine, cachePath);
+  }
   const updateNow = (): Promise<ListUpdateResult> => runRefresh();
 
   registerGuardedHandlers(chromeWc.id, {
@@ -205,6 +241,8 @@ function boot(): void {
     ...buildSettingsHandlers(settingsRepo),
     ...buildAdblockHandlers(controller),
     ...buildListsHandlers(updateNow),
+    ...buildSubsHandlers(subsRepo, { rebuildFromCache: rebuildEngineFromCache, refresh: updateNow }),
+    ...buildCustomFiltersHandlers(customFiltersRepo, { rebuildFromCache: rebuildEngineFromCache }),
     ...buildFavoritesHandlers(favoritesRepo),
     ...buildHistoryHandlers(historyRepo),
     ...buildSavedHandlers(savedRepo),
@@ -227,6 +265,14 @@ function boot(): void {
         updateNow,
       },
       places: { favoritesRepo, historyRepo, savedRepo, setContentInset },
+      phase4: {
+        settingsRepo,
+        subsRepo,
+        customFiltersRepo,
+        rebuildFromCache: rebuildEngineFromCache,
+        updateNow,
+        navHome: () => vc.navigate(settingsRepo.get().homeUrl),
+      },
     };
   }
 
