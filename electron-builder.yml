@@ -2,3 +2,5 @@ appId: com.aegis.browser
 productName: Aegis
 asarUnpack:
   - "**/node_modules/better-sqlite3/**"
+  - "**/node_modules/@ghostery/adblocker-electron/**"
+  - "**/node_modules/@ghostery/adblocker-electron-preload/**"

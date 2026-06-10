@@ -19,6 +19,8 @@
     "rebuild:node": "npm rebuild better-sqlite3"
   },
   "dependencies": {
+    "@ghostery/adblocker-electron": "2.18.0",
+    "@ghostery/adblocker-electron-preload": "2.18.0",
     "better-sqlite3": "^12.10.0"
   },
   "devDependencies": {
