@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aegis cosmetic sentinel fixture</title>
+    <style>
+      /* Baseline so an UN-hidden sentinel is a visible 300x250 block (the thing we hide). */
+      .aegis-ad-sentinel,
+      .aegis-ad-sentinel-host {
+        width: 300px;
+        height: 250px;
+        background: #c00;
+      }
+      #content-marker {
+        width: 400px;
+        height: 80px;
+        background: #0a0;
+      }
+    </style>
+    <script>
+      // ---- Report-only no-flash instrumentation (never gates the test) ----
+      // First paint timestamp (DOMHighResTimeStamp), if the browser reports one.
+      window.__aegisFirstPaint = null;
+      window.__aegisSentinelHiddenAt = null;
+      try {
+        const po = new PerformanceObserver((list) => {
+          for (const entry of list.getEntries()) {
+            if (window.__aegisFirstPaint === null) {
+              window.__aegisFirstPaint = entry.startTime;
+            }
+          }
+        });
+        po.observe({ type: 'paint', buffered: true });
+      } catch (_e) {
+        /* paint timing unavailable in this environment — leave null */
+      }
+      // Record the moment the engine's user-CSS first collapses the generic sentinel.
+      (function watchHide() {
+        const tick = function () {
+          const el = document.querySelector('.aegis-ad-sentinel');
+          if (
+            window.__aegisSentinelHiddenAt === null &&
+            el &&
+            getComputedStyle(el).display === 'none'
+          ) {
+            window.__aegisSentinelHiddenAt = performance.now();
+            return; // stop polling once captured
+          }
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      })();
+    </script>
+  </head>
+  <body>
+    <!-- Generic cosmetic rule target: ##.aegis-ad-sentinel -->
+    <div class="aegis-ad-sentinel">generic ad</div>
+    <!-- Per-host cosmetic rule target: 127.0.0.1##.aegis-ad-sentinel-host -->
+    <div class="aegis-ad-sentinel-host">per-host ad</div>
+    <!-- Non-ad content; must remain visible (no rule matches it). -->
+    <div id="content-marker">real content</div>
+  </body>
+</html>
