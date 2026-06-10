@@ -61,5 +61,11 @@ export function runMigrations(db: Database.Database): void {
       title   TEXT    NOT NULL DEFAULT '',
       savedAt INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS custom_filters (
+      id   INTEGER PRIMARY KEY CHECK (id = 1),
+      text TEXT    NOT NULL DEFAULT ''
+    );
+    INSERT OR IGNORE INTO custom_filters (id, text) VALUES (1, '');
   `);
 }
