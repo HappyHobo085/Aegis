@@ -1,12 +1,16 @@
 // electron/lib/atomicFile.ts
-import { writeFileSync, renameSync, readFileSync } from 'node:fs';
+import { writeFileSync, renameSync, readFileSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
 
 /**
  * Atomically write `data` to `filePath`: write to a pid-suffixed temp file in
  * the same directory, then rename over the target (rename is atomic on the same
  * filesystem). Avoids a torn/partial file if the process dies mid-write.
+ * Creates the parent directory if it does not exist (e.g. a fresh profile's
+ * lists/ cache dir), so callers never have to pre-create it.
  */
 export function writeFileAtomic(filePath: string, data: string): void {
+  mkdirSync(dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.tmp-${process.pid}`;
   writeFileSync(tmpPath, data, 'utf8');
   renameSync(tmpPath, filePath);
@@ -30,6 +34,7 @@ export function readFileSafe(filePath: string): string | null {
  * `writeFileAtomic`, but without a UTF-8 encoding.
  */
 export function writeFileAtomicBytes(filePath: string, data: Uint8Array): void {
+  mkdirSync(dirname(filePath), { recursive: true });
   const tmpPath = `${filePath}.tmp-${process.pid}`;
   writeFileSync(tmpPath, data);
   renameSync(tmpPath, filePath);
