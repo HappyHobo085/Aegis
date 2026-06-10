@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Ad Page Fixture</title>
+  </head>
+  <body>
+    <main id="content" style="min-height: 200px">ad-page root</main>
+    <!-- Sub-resource the seeded test filter (/ads/banner.js^) must block.
+         When blocked, the script never runs and window.__adLoaded stays false. -->
+    <script>
+      window.__adLoaded = false;
+    </script>
+    <script src="/ads/banner.js"></script>
+  </body>
+</html>
