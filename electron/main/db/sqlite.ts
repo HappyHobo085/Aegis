@@ -30,5 +30,14 @@ export function runMigrations(db: Database.Database): void {
       allowlist TEXT    NOT NULL DEFAULT '[]'
     );
     INSERT OR IGNORE INTO adblock_config (id, enabled, allowlist) VALUES (1, 1, '[]');
+
+    CREATE TABLE IF NOT EXISTS filter_subscriptions (
+      listId      TEXT PRIMARY KEY,
+      url         TEXT    NOT NULL,
+      enabled     INTEGER NOT NULL DEFAULT 1,
+      lastUpdated INTEGER,
+      etag        TEXT,
+      hash        TEXT
+    );
   `);
 }

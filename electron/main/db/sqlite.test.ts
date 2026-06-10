@@ -72,5 +72,30 @@ describe('sqlite', () => {
       expect(row?.enabled).toBe(1);
       expect(JSON.parse(row!.allowlist)).toEqual([]);
     });
+
+    it('creates the filter_subscriptions table with the expected columns', () => {
+      db = openDb(':memory:');
+      runMigrations(db);
+      const tbl = db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type='table' AND name='filter_subscriptions'",
+        )
+        .get() as { name: string } | undefined;
+      expect(tbl?.name).toBe('filter_subscriptions');
+      const cols = (db.prepare('PRAGMA table_info(filter_subscriptions)').all() as Array<{
+        name: string;
+        pk: number;
+      }>).reduce<Record<string, number>>((acc, c) => {
+        acc[c.name] = c.pk;
+        return acc;
+      }, {});
+      expect(cols).toHaveProperty('listId');
+      expect(cols).toHaveProperty('url');
+      expect(cols).toHaveProperty('enabled');
+      expect(cols).toHaveProperty('lastUpdated');
+      expect(cols).toHaveProperty('etag');
+      expect(cols).toHaveProperty('hash');
+      expect(cols.listId).toBe(1); // listId is the primary key
+    });
   });
 });
