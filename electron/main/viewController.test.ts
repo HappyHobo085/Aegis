@@ -456,7 +456,7 @@ describe('ViewController content-session security (Task 13)', () => {
     new ViewController(makeOptsLocal());
     const wc = h.getLastWc()!;
     const handler = (wc.setWindowOpenHandler as any).mock.calls[0][0];
-    for (const disposition of ['background-tab', 'save-to-disk', 'other']) {
+    for (const disposition of ['background-tab', 'other']) {
       expect(handler({ url: 'https://ok.test/', disposition })).toEqual({ action: 'deny' });
     }
     expect(wc.loadURL).not.toHaveBeenCalled();

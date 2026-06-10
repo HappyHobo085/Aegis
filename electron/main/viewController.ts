@@ -3,6 +3,7 @@ import { WebContentsView } from 'electron';
 import type { NavState, NavFailed, NavCrashed, ViewId } from '../../shared/types';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
 import { isAllowedNavigationUrl } from '../lib/schemes';
+import { decideWindowOpen } from './windowOpen';
 
 const TITLE_DEBOUNCE_MS = 400;
 
@@ -168,19 +169,11 @@ export class ViewController {
     });
 
     // Popup policy (§5): deny popunders; route a legitimate, allowed-scheme
-    // new-window in-place; otherwise deny.
+    // new-window in-place; otherwise deny. Policy lives in ./windowOpen (pure,
+    // unit-tested). HandlerDetails has no user-gesture bit → disposition+scheme only.
     wc.setWindowOpenHandler((details) => {
-      if (
-        details.disposition === 'background-tab' ||
-        details.disposition === 'save-to-disk' ||
-        details.disposition === 'other'
-      ) {
-        return { action: 'deny' };
-      }
-      if (isAllowedNavigationUrl(details.url)) {
-        this.wc().loadURL(details.url);
-        return { action: 'deny' };
-      }
+      const decision = decideWindowOpen(details);
+      if ('loadInPlace' in decision) this.wc().loadURL(decision.loadInPlace);
       return { action: 'deny' };
     });
   }
