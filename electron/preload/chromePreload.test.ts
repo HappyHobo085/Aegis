@@ -1,7 +1,7 @@
 // electron/preload/chromePreload.test.ts
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { IPC, PRIMARY_VIEW_ID } from '../../shared/types';
-import type { AegisApi, NavState, BlockedCount } from '../../shared/types';
+import type { AegisApi, NavState, BlockedCount, Subscription } from '../../shared/types';
 
 // Capture the bridged API object and the registered ipcRenderer.on listeners.
 const h = vi.hoisted(() => ({
@@ -335,5 +335,99 @@ describe('chromePreload favorites + history + saved + inset (Phase 3)', () => {
     const api = h.exposed.aegis as AegisApi;
     await api.view.setContentInset(PRIMARY_VIEW_ID, { top: 96, left: 280 });
     expect(h.invoke).toHaveBeenCalledWith(IPC.viewSetContentInset, PRIMARY_VIEW_ID, { top: 96, left: 280 });
+  });
+});
+
+describe('chromePreload subs + customFilters + allowlist (Phase 4)', () => {
+  beforeEach(() => {
+    h.exposed = {};
+    h.invoke = vi.fn(async () => undefined);
+    h.listeners = new Map();
+    h.removed = [];
+    vi.resetModules();
+  });
+
+  it('exposes the subs and customFilters namespaces + the adblock allowlist methods', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    expect(typeof api.subs.list).toBe('function');
+    expect(typeof api.subs.setEnabled).toBe('function');
+    expect(typeof api.subs.add).toBe('function');
+    expect(typeof api.subs.remove).toBe('function');
+    expect(typeof api.customFilters.get).toBe('function');
+    expect(typeof api.customFilters.set).toBe('function');
+    expect(typeof api.adblock.removeAllowlist).toBe('function');
+    expect(typeof api.adblock.clearAllowlist).toBe('function');
+  });
+
+  it('subs.list invokes IPC.subsList and returns the resolved subscriptions', async () => {
+    const subs: Subscription[] = [
+      { listId: 'easylist', url: 'https://e.test/easylist.txt', enabled: true, lastUpdated: null, etag: null, hash: null },
+    ];
+    h.invoke = vi.fn(async () => subs);
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const out = await api.subs.list();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.subsList);
+    expect(out).toEqual(subs);
+  });
+
+  it('subs.setEnabled invokes IPC.subsSetEnabled with (listId, enabled)', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.subs.setEnabled('easylist', false);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.subsSetEnabled, 'easylist', false);
+  });
+
+  it('subs.add invokes IPC.subsAdd with the url', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.subs.add('https://new.test/list.txt');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.subsAdd, 'https://new.test/list.txt');
+  });
+
+  it('subs.remove invokes IPC.subsRemove with the listId', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.subs.remove('easylist');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.subsRemove, 'easylist');
+  });
+
+  it('customFilters.get invokes IPC.customFiltersGet and returns the resolved text', async () => {
+    h.invoke = vi.fn(async () => 'x.com##.ad');
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const out = await api.customFilters.get();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.customFiltersGet);
+    expect(out).toBe('x.com##.ad');
+  });
+
+  it('customFilters.set invokes IPC.customFiltersSet with the text and returns the stored text', async () => {
+    h.invoke = vi.fn(async () => '||ads.test^');
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const out = await api.customFilters.set('||ads.test^');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.customFiltersSet, '||ads.test^');
+    expect(out).toBe('||ads.test^');
+  });
+
+  it('adblock.removeAllowlist invokes IPC.adblockRemoveAllowlist with the host', async () => {
+    const state = { enabled: true, allowlistedHosts: [], sessionBlocked: 1 };
+    h.invoke = vi.fn(async () => state);
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const out = await api.adblock.removeAllowlist('a.test');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.adblockRemoveAllowlist, 'a.test');
+    expect(out).toEqual(state);
+  });
+
+  it('adblock.clearAllowlist invokes IPC.adblockClearAllowlist and returns the resolved state', async () => {
+    const state = { enabled: true, allowlistedHosts: [], sessionBlocked: 1 };
+    h.invoke = vi.fn(async () => state);
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const out = await api.adblock.clearAllowlist();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.adblockClearAllowlist);
+    expect(out).toEqual(state);
   });
 });

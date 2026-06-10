@@ -4,7 +4,7 @@ import { IPC } from '../../shared/types';
 import type {
   AegisApi, ViewId, NavState, NavFailed, NavCrashed, Settings,
   AdblockState, BlockedCount, ListUpdateResult,
-  Favorite, HistoryEntry, SavedItem, ContentInset,
+  Favorite, HistoryEntry, SavedItem, ContentInset, Subscription,
 } from '../../shared/types';
 
 /** Subscribes cb to an event channel; returns an unsubscriber. */
@@ -42,11 +42,25 @@ const api: AegisApi = {
     toggleAllowlist: (host: string): Promise<AdblockState> =>
       ipcRenderer.invoke(IPC.adblockToggleAllowlist, host),
     getState: (): Promise<AdblockState> => ipcRenderer.invoke(IPC.adblockGetState),
+    removeAllowlist: (host: string): Promise<AdblockState> =>
+      ipcRenderer.invoke(IPC.adblockRemoveAllowlist, host),
+    clearAllowlist: (): Promise<AdblockState> => ipcRenderer.invoke(IPC.adblockClearAllowlist),
     onBlockedCount: (cb: (c: BlockedCount) => void) =>
       subscribe<BlockedCount>(IPC.evtAdblockBlockedCount, cb),
   },
   lists: {
     updateNow: (): Promise<ListUpdateResult> => ipcRenderer.invoke(IPC.listsUpdateNow),
+  },
+  subs: {
+    list: (): Promise<Subscription[]> => ipcRenderer.invoke(IPC.subsList),
+    setEnabled: (listId: string, enabled: boolean): Promise<Subscription[]> =>
+      ipcRenderer.invoke(IPC.subsSetEnabled, listId, enabled),
+    add: (url: string): Promise<Subscription[]> => ipcRenderer.invoke(IPC.subsAdd, url),
+    remove: (listId: string): Promise<Subscription[]> => ipcRenderer.invoke(IPC.subsRemove, listId),
+  },
+  customFilters: {
+    get: (): Promise<string> => ipcRenderer.invoke(IPC.customFiltersGet),
+    set: (text: string): Promise<string> => ipcRenderer.invoke(IPC.customFiltersSet, text),
   },
   favorites: {
     list: (): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesList),
