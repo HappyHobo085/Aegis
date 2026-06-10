@@ -9,7 +9,7 @@ import type { ViewId, BlockedCount } from '../../../shared/types';
  */
 interface CountingBlocker {
   on(event: string, listener: (...args: unknown[]) => void): unknown;
-  removeListener(event: string, listener: (...args: unknown[]) => void): unknown;
+  unsubscribe(event: string, listener: (...args: unknown[]) => void): void;
 }
 
 /**
@@ -40,8 +40,8 @@ export class BlockedCounter {
 
   /** Remove the listeners (used when swapping to a new engine). */
   detach(blocker: CountingBlocker): void {
-    blocker.removeListener('request-blocked', this.onEvent);
-    blocker.removeListener('request-redirected', this.onEvent);
+    blocker.unsubscribe('request-blocked', this.onEvent);
+    blocker.unsubscribe('request-redirected', this.onEvent);
   }
 
   /** Reset the per-page count to 0; the session total is untouched. */

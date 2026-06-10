@@ -1,17 +1,38 @@
 // electron/main/adblock/blockedCounter.test.ts
 import { describe, it, expect } from 'vitest';
-import { EventEmitter } from 'node:events';
 import { BlockedCounter } from './blockedCounter';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
 
 /**
- * Structural stand-in for ElectronBlocker's counting surface: the core engine
- * is an EventEmitter that emits 'request-blocked' / 'request-redirected' from
- * match(). BlockedCounter only uses `on` / `removeListener`, so a plain
- * EventEmitter is a faithful fake.
+ * Minimal fake that mirrors the @ghostery/adblocker custom EventEmitter API:
+ *   on(event, cb)          — subscribe
+ *   unsubscribe(event, cb) — unsubscribe  (the real engine has no removeListener)
+ *   emit(event, ...args)   — fire listeners
+ *
+ * Using node:events.EventEmitter was intentionally avoided: it lacks
+ * `unsubscribe` and would re-mask the removeListener bug this test is meant
+ * to catch.
  */
 function makeFakeBlocker() {
-  return new EventEmitter();
+  const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
+
+  return {
+    on(event: string, cb: (...args: unknown[]) => void): void {
+      const list = listeners.get(event) ?? [];
+      list.push(cb);
+      listeners.set(event, list);
+    },
+    unsubscribe(event: string, cb: (...args: unknown[]) => void): void {
+      const list = listeners.get(event);
+      if (list) {
+        listeners.set(event, list.filter((fn) => fn !== cb));
+      }
+    },
+    emit(event: string, ...args: unknown[]): void {
+      const list = listeners.get(event) ?? [];
+      for (const fn of [...list]) fn(...args);
+    },
+  };
 }
 
 const PRIMARY = PRIMARY_VIEW_ID; // ViewId is `number` (=== 1)
