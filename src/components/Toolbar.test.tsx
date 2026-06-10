@@ -97,4 +97,15 @@ describe('Toolbar', () => {
     );
     expect(screen.getByRole('button', { name: /save page/i })).toBeInTheDocument();
   });
+
+  it('renders the optional gear slot when provided', () => {
+    render(
+      <Toolbar
+        state={state}
+        {...handlers()}
+        gear={<button type="button">Open settings</button>}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument();
+  });
 });

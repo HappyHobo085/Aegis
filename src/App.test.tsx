@@ -57,10 +57,22 @@ vi.mock('./lib/ipcClient', () => ({
       setContentInset: (...a: any[]) => setContentInset(...a),
     },
     settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
+    subs: {
+      list: vi.fn(async () => []),
+      setEnabled: vi.fn(async () => []),
+      add: vi.fn(async () => []),
+      remove: vi.fn(async () => []),
+    },
+    customFilters: {
+      get: vi.fn(async () => ''),
+      set: vi.fn(async () => ''),
+    },
     adblock: {
       getState: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
       setEnabled: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
       toggleAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      removeAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      clearAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
       onBlockedCount: vi.fn().mockReturnValue(() => {}),
     },
     lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
@@ -190,5 +202,23 @@ describe('App', () => {
     await waitFor(() =>
       expect(setContentInset).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, { top: 96, left: 280 }),
     );
+  });
+
+  it('opens the Settings modal from the toolbar gear button', async () => {
+    render(<App />);
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(await screen.findByRole('button', { name: /open settings/i }));
+    expect(screen.getByRole('dialog', { name: /settings/i })).toBeInTheDocument();
+  });
+
+  it('does not mount the Settings modal until the gear is clicked', async () => {
+    render(<App />);
+    await waitFor(() => expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument());
+    expect(screen.queryByRole('dialog', { name: /settings/i })).not.toBeInTheDocument();
+  });
+
+  it('reflects the configured siteName in the document title', async () => {
+    render(<App />);
+    await waitFor(() => expect(document.title).toBe('Aegis'));
   });
 });

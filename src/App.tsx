@@ -9,6 +9,9 @@ import { useAdblock } from './hooks/useAdblock';
 import { useFavorites } from './hooks/useFavorites';
 import { useHistory } from './hooks/useHistory';
 import { useSaved } from './hooks/useSaved';
+import { useSettings } from './hooks/useSettings';
+import { useSubscriptions } from './hooks/useSubscriptions';
+import { useCustomFilters } from './hooks/useCustomFilters';
 import { useContentInset } from './hooks/useContentInset';
 import { Toolbar } from './components/Toolbar';
 import { BookmarkButton } from './components/BookmarkButton';
@@ -22,6 +25,13 @@ import { SkipLink } from './components/SkipLink';
 import { Toaster } from './components/Toaster';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { WelcomeHint } from './components/WelcomeHint';
+import { SettingsModal } from './components/SettingsModal';
+import { AppearanceTab } from './components/AppearanceTab';
+import { SearchTab } from './components/SearchTab';
+import { HomeTab } from './components/HomeTab';
+import { FilterListsTab } from './components/FilterListsTab';
+import { MyFiltersTab } from './components/MyFiltersTab';
+import { AllowlistTab } from './components/AllowlistTab';
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
 
@@ -41,9 +51,13 @@ export function App() {
   const favorites = useFavorites(nav.state.url);
   const history = useHistory();
   const saved = useSaved(nav.state.url);
+  const settings = useSettings();
+  const subscriptions = useSubscriptions();
+  const customFilters = useCustomFilters();
   const [failed, setFailed] = useState<NavFailed | null>(null);
   const [crashed, setCrashed] = useState<NavCrashed | null>(null);
   const [managerOpen, setManagerOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
   // Favorites bar is always-on in Phase 3; only the sidebar toggles the inset.
@@ -52,6 +66,12 @@ export function App() {
   useEffect(() => {
     void aegis.settings.get().then((s) => applyTheme(s));
   }, []);
+
+  // Make `siteName` functional: reflect it as the document title. `useSettings`
+  // also sets it on every update; this effect covers the initial load + edits.
+  useEffect(() => {
+    document.title = settings.settings.siteName;
+  }, [settings.settings.siteName]);
 
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {
@@ -113,6 +133,16 @@ export function App() {
             onUnsave={() => void saved.removeCurrent()}
           />
         }
+        gear={
+          <button
+            type="button"
+            className="toolbar__gear"
+            aria-label="Open settings"
+            onClick={() => setSettingsOpen(true)}
+          >
+            {'⚙'}
+          </button>
+        }
       />
       <FavoritesBar
         favorites={favorites.favorites}
@@ -161,6 +191,31 @@ export function App() {
           remove={favorites.remove}
           renameTag={favorites.renameTag}
           deleteTag={favorites.deleteTag}
+        />
+      )}
+      {settingsOpen && (
+        <SettingsModal
+          onClose={() => setSettingsOpen(false)}
+          appearance={<AppearanceTab settings={settings.settings} update={settings.update} />}
+          search={<SearchTab settings={settings.settings} update={settings.update} />}
+          home={<HomeTab settings={settings.settings} update={settings.update} />}
+          filterLists={
+            <FilterListsTab
+              subs={subscriptions.subs}
+              setEnabled={subscriptions.setEnabled}
+              add={subscriptions.add}
+              remove={subscriptions.remove}
+              updateNow={subscriptions.updateNow}
+            />
+          }
+          myFilters={<MyFiltersTab text={customFilters.text} save={customFilters.save} />}
+          allowlist={
+            <AllowlistTab
+              hosts={adblock.state.allowlistedHosts}
+              removeAllowlist={adblock.removeAllowlist}
+              clearAllowlist={adblock.clearAllowlist}
+            />
+          }
         />
       )}
       <WelcomeHint />
