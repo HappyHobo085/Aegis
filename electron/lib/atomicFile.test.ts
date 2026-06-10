@@ -3,7 +3,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, rmSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { writeFileAtomic, readFileSafe } from './atomicFile';
+import {
+  writeFileAtomic,
+  readFileSafe,
+  writeFileAtomicBytes,
+  readBytesSafe,
+} from './atomicFile';
 
 describe('atomicFile', () => {
   let dir: string;
@@ -61,6 +66,63 @@ describe('atomicFile', () => {
     it('returns null when the path is a directory (read error)', () => {
       // reading a directory as a file throws EISDIR -> null
       expect(readFileSafe(dir)).toBeNull();
+    });
+  });
+});
+
+describe('atomicFile bytes', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'aegis-atomic-bytes-'));
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  describe('writeFileAtomicBytes', () => {
+    it('round-trips arbitrary binary bytes', () => {
+      const target = join(dir, 'engine.bin');
+      const data = new Uint8Array([0, 1, 2, 253, 254, 255, 0, 128]);
+      writeFileAtomicBytes(target, data);
+      const back = readBytesSafe(target);
+      expect(back).not.toBeNull();
+      expect(Array.from(back as Buffer)).toEqual(Array.from(data));
+    });
+
+    it('overwrites an existing binary file', () => {
+      const target = join(dir, 'engine.bin');
+      writeFileAtomicBytes(target, new Uint8Array([1, 1, 1]));
+      writeFileAtomicBytes(target, new Uint8Array([9, 8, 7, 6]));
+      expect(Array.from(readBytesSafe(target) as Buffer)).toEqual([9, 8, 7, 6]);
+    });
+
+    it('leaves no temp file behind after a successful write', () => {
+      const target = join(dir, 'engine.bin');
+      writeFileAtomicBytes(target, new Uint8Array([42]));
+      const leftovers = readdirSync(dir).filter((name) => name.includes('.tmp-'));
+      expect(leftovers).toEqual([]);
+    });
+  });
+
+  describe('readBytesSafe', () => {
+    it('returns a Buffer when the file exists', () => {
+      const target = join(dir, 'present.bin');
+      writeFileSync(target, Buffer.from([5, 6, 7]));
+      const back = readBytesSafe(target);
+      expect(Buffer.isBuffer(back)).toBe(true);
+      expect(Array.from(back as Buffer)).toEqual([5, 6, 7]);
+    });
+
+    it('returns null when the file does not exist (ENOENT)', () => {
+      const target = join(dir, 'missing.bin');
+      expect(existsSync(target)).toBe(false);
+      expect(readBytesSafe(target)).toBeNull();
+    });
+
+    it('returns null when the path is a directory (read error)', () => {
+      expect(readBytesSafe(dir)).toBeNull();
     });
   });
 });

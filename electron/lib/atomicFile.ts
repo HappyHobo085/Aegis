@@ -23,3 +23,26 @@ export function readFileSafe(filePath: string): string | null {
     return null;
   }
 }
+
+/**
+ * Atomically write raw bytes (e.g. a serialized adblock engine blob) to
+ * `filePath` using the same temp-write + rename crash-safe pattern as
+ * `writeFileAtomic`, but without a UTF-8 encoding.
+ */
+export function writeFileAtomicBytes(filePath: string, data: Uint8Array): void {
+  const tmpPath = `${filePath}.tmp-${process.pid}`;
+  writeFileSync(tmpPath, data);
+  renameSync(tmpPath, filePath);
+}
+
+/**
+ * Read `filePath` as raw bytes. Returns a Buffer on success, or null on ENOENT
+ * or any read error (e.g. EISDIR), mirroring `readFileSafe` for binary blobs.
+ */
+export function readBytesSafe(filePath: string): Buffer | null {
+  try {
+    return readFileSync(filePath);
+  } catch {
+    return null;
+  }
+}
