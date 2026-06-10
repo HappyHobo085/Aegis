@@ -11,6 +11,7 @@ const MIME: Record<string, string> = {
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
+  '.txt': 'text/plain; charset=utf-8',
 };
 
 async function serveFile(
@@ -20,7 +21,11 @@ async function serveFile(
   const urlPath = decodeURIComponent((req.url ?? '/').split('?')[0]);
   // Strip any leading slash, normalize, and reject path traversal.
   const rel = normalize(urlPath).replace(/^(\.\.[/\\])+/, '').replace(/^[/\\]+/, '');
-  const filePath = join(FIXTURE_ROOT, rel || 'index.html');
+  // Adblock e2e: alias every lists/<id>.txt to the single canonical fixture list so the
+  // boot's DEFAULT_LIST_URLS -> `${base}/<listId>.txt` mapping resolves for all listIds.
+  const resolvedRel =
+    /^lists\/[^/]+\.txt$/.test(rel) ? 'lists/easylist.txt' : (rel || 'index.html');
+  const filePath = join(FIXTURE_ROOT, resolvedRel);
   if (!filePath.startsWith(FIXTURE_ROOT)) {
     res.statusCode = 403;
     res.end('forbidden');

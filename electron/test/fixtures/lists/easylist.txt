@@ -1,0 +1,3 @@
+! Title: Aegis e2e fixture list
+! Blocks the ONLINE-fixture ad B sub-resource for the engine-swap test.
+/ads/tracker.js^
