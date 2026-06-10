@@ -78,5 +78,12 @@ export function runMigrations(db: Database.Database): void {
       totalBytes    INTEGER NOT NULL DEFAULT 0,
       startedAt     INTEGER NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS site_permissions (
+      origin     TEXT NOT NULL,
+      permission TEXT NOT NULL,
+      decision   TEXT NOT NULL,
+      PRIMARY KEY (origin, permission)
+    );
   `);
 }
