@@ -10,6 +10,7 @@
     "dev": "electron-vite dev",
     "prebuild": "npm run rebuild:electron",
     "build": "electron-vite build",
+    "generate-seed": "node scripts/generate-seed.mjs",
     "preview": "electron-vite preview",
     "pretest": "npm run rebuild:node",
     "test": "vitest run",
