@@ -1,6 +1,9 @@
 // electron/main/adblock/listManager.test.ts
-import { describe, it, expect } from 'vitest';
-import { fetchSource } from './listManager';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fetchSource, fetchAll } from './listManager';
 
 /** Build a Response whose body streams `chunks` (Uint8Array) one at a time. */
 function streamingResponse(
@@ -91,5 +94,117 @@ describe('listManager fetchSource', () => {
         fetchImpl,
       }),
     ).rejects.toThrow();
+  });
+});
+
+describe('listManager fetchAll', () => {
+  let cacheDir: string;
+  beforeEach(() => {
+    cacheDir = mkdtempSync(join(tmpdir(), 'aegis-lists-'));
+  });
+  afterEach(() => {
+    rmSync(cacheDir, { recursive: true, force: true });
+  });
+
+  const okFetch = (bodyByUrl: Record<string, string>): typeof fetch =>
+    (async (url: string) => {
+      const body = bodyByUrl[url];
+      if (body === undefined) return new Response('not found', { status: 404 });
+      return new Response(body, { status: 200, headers: { etag: `etag-${body.length}` } });
+    }) as unknown as typeof fetch;
+
+  it('fetches each source, writes its raw cache, and returns ok with hash + etag', async () => {
+    const subs = [
+      { listId: 'easylist', url: 'https://lists.test/easylist.txt' },
+      { listId: 'easyprivacy', url: 'https://lists.test/easyprivacy.txt' },
+    ];
+    const fetchImpl = okFetch({
+      'https://lists.test/easylist.txt': '||ads.example^',
+      'https://lists.test/easyprivacy.txt': '||track.example^',
+      'https://lists.test/resources.json': '{"scriptlets":[],"redirects":[]}',
+    });
+
+    const result = await fetchAll(subs, {
+      cacheDir,
+      timeoutMs: 1000,
+      maxBytes: 1_000_000,
+      resourcesUrl: 'https://lists.test/resources.json',
+      fetchImpl,
+    });
+
+    expect(result.sources.map((s) => s.listId).sort()).toEqual(['easylist', 'easyprivacy']);
+    for (const s of result.sources) {
+      expect(s.ok).toBe(true);
+      expect(s.text.length).toBeGreaterThan(0);
+      expect(s.hash.length).toBeGreaterThan(0);
+      expect(s.etag).toMatch(/^etag-/);
+      expect(existsSync(join(cacheDir, `${s.listId}.txt`))).toBe(true);
+    }
+    expect(result.resources).toBe('{"scriptlets":[],"redirects":[]}');
+  });
+
+  it('falls back to the cached copy when a source fetch fails', async () => {
+    const subs = [{ listId: 'easylist', url: 'https://lists.test/easylist.txt' }];
+    // Pre-seed the cache as the last-known-good copy.
+    writeFileSync(join(cacheDir, 'easylist.txt'), '||cached.example^');
+
+    const failingFetch = (async () =>
+      new Response('boom', { status: 500 })) as unknown as typeof fetch;
+
+    const result = await fetchAll(subs, {
+      cacheDir,
+      timeoutMs: 1000,
+      maxBytes: 1_000_000,
+      resourcesUrl: 'https://lists.test/resources.json',
+      fetchImpl: failingFetch,
+    });
+
+    expect(result.sources).toHaveLength(1);
+    const s = result.sources[0];
+    expect(s.ok).toBe(false);
+    expect(s.error).toBeTruthy();
+    expect(s.text).toBe('||cached.example^');
+    expect(s.hash.length).toBeGreaterThan(0);
+  });
+
+  it('marks a source not-ok with empty text when fetch fails and no cache exists', async () => {
+    const subs = [{ listId: 'novel', url: 'https://lists.test/novel.txt' }];
+    const failingFetch = (async () => {
+      throw new Error('network down');
+    }) as unknown as typeof fetch;
+
+    const result = await fetchAll(subs, {
+      cacheDir,
+      timeoutMs: 1000,
+      maxBytes: 1_000_000,
+      resourcesUrl: 'https://lists.test/resources.json',
+      fetchImpl: failingFetch,
+    });
+
+    const s = result.sources[0];
+    expect(s.ok).toBe(false);
+    expect(s.text).toBe('');
+    expect(s.error).toBeTruthy();
+  });
+
+  it('returns resources=null (best-effort) when the resources fetch fails', async () => {
+    const subs = [{ listId: 'easylist', url: 'https://lists.test/easylist.txt' }];
+    const fetchImpl = (async (url: string) => {
+      if (url === 'https://lists.test/easylist.txt') {
+        return new Response('||ads.example^', { status: 200 });
+      }
+      return new Response('no resources', { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const result = await fetchAll(subs, {
+      cacheDir,
+      timeoutMs: 1000,
+      maxBytes: 1_000_000,
+      resourcesUrl: 'https://lists.test/resources.json',
+      fetchImpl,
+    });
+
+    expect(result.sources[0].ok).toBe(true);
+    expect(result.resources).toBeNull();
   });
 });

@@ -1,4 +1,7 @@
 // electron/main/adblock/listManager.ts
+import { createHash } from 'node:crypto';
+import { join } from 'node:path';
+import { writeFileAtomic, readFileSafe } from '../../lib/atomicFile';
 
 export interface FetchedSource {
   listId: string;
@@ -71,4 +74,74 @@ export async function fetchSource(
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** sha1 hex of list text — used as the per-source content hash in metadata. */
+function hashText(text: string): string {
+  return createHash('sha1').update(text).digest('hex');
+}
+
+/**
+ * Fetch every subscription source. Per source: try `fetchSource`; on success
+ * write the raw cache atomically and record ok + hash + etag; on failure fall
+ * back to the on-disk cache (last-known-good) marked not-ok with the error, or
+ * empty/not-ok if no cache exists. Resources are best-effort: a failure yields
+ * `resources: null` (the engine still builds from list text).
+ */
+export async function fetchAll(
+  subs: { listId: string; url: string }[],
+  opts: {
+    cacheDir: string;
+    timeoutMs: number;
+    maxBytes: number;
+    resourcesUrl: string;
+    fetchImpl?: typeof fetch;
+  },
+): Promise<FetchAllResult> {
+  const sources: FetchedSource[] = [];
+  for (const sub of subs) {
+    const cachePath = join(opts.cacheDir, `${sub.listId}.txt`);
+    try {
+      const { text, etag } = await fetchSource(sub.url, {
+        timeoutMs: opts.timeoutMs,
+        maxBytes: opts.maxBytes,
+        fetchImpl: opts.fetchImpl,
+      });
+      writeFileAtomic(cachePath, text);
+      sources.push({
+        listId: sub.listId,
+        url: sub.url,
+        ok: true,
+        text,
+        etag,
+        hash: hashText(text),
+      });
+    } catch (err) {
+      const cached = readFileSafe(cachePath);
+      const text = cached ?? '';
+      sources.push({
+        listId: sub.listId,
+        url: sub.url,
+        ok: false,
+        text,
+        etag: null,
+        hash: text.length > 0 ? hashText(text) : '',
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  let resources: string | null = null;
+  try {
+    const { text } = await fetchSource(opts.resourcesUrl, {
+      timeoutMs: opts.timeoutMs,
+      maxBytes: opts.maxBytes,
+      fetchImpl: opts.fetchImpl,
+    });
+    resources = text;
+  } catch {
+    resources = null;
+  }
+
+  return { sources, resources };
 }
