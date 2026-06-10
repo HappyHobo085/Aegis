@@ -29,6 +29,11 @@ export async function fetchSource(
   url: string,
   opts: { timeoutMs: number; maxBytes: number; fetchImpl?: typeof fetch },
 ): Promise<{ text: string; etag: string | null }> {
+  const parsed = new URL(url);
+  const isLoopback = ['127.0.0.1', 'localhost', '::1', '[::1]'].includes(parsed.hostname);
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback)) {
+    throw new Error(`Refusing non-HTTPS list URL: ${url}`);
+  }
   const doFetch = opts.fetchImpl ?? fetch;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), opts.timeoutMs);

@@ -95,6 +95,48 @@ describe('listManager fetchSource', () => {
       }),
     ).rejects.toThrow();
   });
+
+  it('rejects http:// non-loopback URLs WITHOUT calling fetchImpl', async () => {
+    let fetchCalled = false;
+    const fetchImpl = (async () => {
+      fetchCalled = true;
+      return new Response('should not reach here', { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await expect(
+      fetchSource('http://example.com/list.txt', {
+        timeoutMs: 1000,
+        maxBytes: 1_000_000,
+        fetchImpl,
+      }),
+    ).rejects.toThrow(/Refusing non-HTTPS list URL/);
+    expect(fetchCalled).toBe(false);
+  });
+
+  it('allows https:// URLs (non-loopback)', async () => {
+    const fetchImpl = (async () =>
+      streamingResponse([enc('||ads.example^')], { etag: 'etag-ok' })) as unknown as typeof fetch;
+
+    const result = await fetchSource('https://example.com/list.txt', {
+      timeoutMs: 1000,
+      maxBytes: 1_000_000,
+      fetchImpl,
+    });
+    expect(result.text).toBe('||ads.example^');
+    expect(result.etag).toBe('etag-ok');
+  });
+
+  it('allows http:// for loopback hosts (127.0.0.1)', async () => {
+    const fetchImpl = (async () =>
+      streamingResponse([enc('||loopback.example^')])) as unknown as typeof fetch;
+
+    const result = await fetchSource('http://127.0.0.1:1234/x.txt', {
+      timeoutMs: 1000,
+      maxBytes: 1_000_000,
+      fetchImpl,
+    });
+    expect(result.text).toBe('||loopback.example^');
+  });
 });
 
 describe('listManager fetchAll', () => {
