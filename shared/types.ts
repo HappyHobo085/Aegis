@@ -39,6 +39,17 @@ export const IPC = {
   savedAdd: 'saved.add',
   savedRemove: 'saved.remove',
   savedHas: 'saved.has',
+  // subscriptions (chrome -> main, Phase 4)
+  subsList: 'subs.list',
+  subsSetEnabled: 'subs.setEnabled',
+  subsAdd: 'subs.add',
+  subsRemove: 'subs.remove',
+  // custom filters (chrome -> main, Phase 4)
+  customFiltersGet: 'customFilters.get',
+  customFiltersSet: 'customFilters.set',
+  // allowlist management (chrome -> main, Phase 4)
+  adblockRemoveAllowlist: 'adblock.removeAllowlist',
+  adblockClearAllowlist: 'adblock.clearAllowlist',
   // events (main -> chrome renderer)
   evtNavState: 'nav.state',
   evtNavFailed: 'nav.failed',
@@ -116,6 +127,20 @@ export interface ListUpdateResult {
   lastUpdated: number; // epoch ms of this refresh attempt
 }
 
+/**
+ * One filter-list subscription row. Canonical shape lives in
+ * `electron/main/db/subsRepo.ts`; re-declared here so the preload + renderer can
+ * type the `subs.*` IPC surface without importing main-process modules.
+ */
+export interface Subscription {
+  listId: string;
+  url: string;
+  enabled: boolean;
+  lastUpdated: number | null;
+  etag: string | null;
+  hash: string | null;
+}
+
 export interface SearchEngine {
   id: string;
   name: string;
@@ -178,11 +203,23 @@ export interface AegisApi {
   adblock: {
     setEnabled(enabled: boolean): Promise<AdblockState>;
     toggleAllowlist(host: string): Promise<AdblockState>;
+    removeAllowlist(host: string): Promise<AdblockState>;
+    clearAllowlist(): Promise<AdblockState>;
     getState(): Promise<AdblockState>;
     onBlockedCount(cb: (c: BlockedCount) => void): () => void;
   };
   lists: {
     updateNow(): Promise<ListUpdateResult>;
+  };
+  subs: {
+    list(): Promise<Subscription[]>;
+    setEnabled(listId: string, enabled: boolean): Promise<Subscription[]>;
+    add(url: string): Promise<Subscription[]>;
+    remove(listId: string): Promise<Subscription[]>;
+  };
+  customFilters: {
+    get(): Promise<string>;
+    set(text: string): Promise<string>;
   };
 }
 

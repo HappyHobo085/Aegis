@@ -9,6 +9,8 @@ import type {
   HistoryEntry,
   SavedItem,
   ContentInset,
+  Subscription,
+  AegisApi,
 } from './types';
 
 describe('shared/types', () => {
@@ -92,5 +94,51 @@ describe('shared/types — Phase 3 additions', () => {
 
     const inset: ContentInset = { top: 96, left: 280 };
     expect(inset).toEqual({ top: 96, left: 280 });
+  });
+});
+
+describe('shared/types — Phase 4 additions', () => {
+  it('exposes the subscriptions IPC channel constants', () => {
+    expect(IPC.subsList).toBe('subs.list');
+    expect(IPC.subsSetEnabled).toBe('subs.setEnabled');
+    expect(IPC.subsAdd).toBe('subs.add');
+    expect(IPC.subsRemove).toBe('subs.remove');
+  });
+
+  it('exposes the custom-filters IPC channel constants', () => {
+    expect(IPC.customFiltersGet).toBe('customFilters.get');
+    expect(IPC.customFiltersSet).toBe('customFilters.set');
+  });
+
+  it('exposes the allowlist remove/clear IPC channel constants', () => {
+    expect(IPC.adblockRemoveAllowlist).toBe('adblock.removeAllowlist');
+    expect(IPC.adblockClearAllowlist).toBe('adblock.clearAllowlist');
+  });
+
+  it('re-exports the Subscription shape', () => {
+    const sub: Subscription = {
+      listId: 'easylist',
+      url: 'https://example.test/easylist.txt',
+      enabled: true,
+      lastUpdated: 123,
+      etag: null,
+      hash: 'abc',
+    };
+    expect(sub.listId).toBe('easylist');
+    expect(sub.enabled).toBe(true);
+  });
+
+  it('types the Phase-4 AegisApi members (compile-only shape check)', () => {
+    type SubsApi = AegisApi['subs'];
+    type CustomFiltersApi = AegisApi['customFilters'];
+    const subsShape: Record<keyof SubsApi, true> = {
+      list: true,
+      setEnabled: true,
+      add: true,
+      remove: true,
+    };
+    const cfShape: Record<keyof CustomFiltersApi, true> = { get: true, set: true };
+    expect(Object.keys(subsShape).sort()).toEqual(['add', 'list', 'remove', 'setEnabled']);
+    expect(Object.keys(cfShape).sort()).toEqual(['get', 'set']);
   });
 });
