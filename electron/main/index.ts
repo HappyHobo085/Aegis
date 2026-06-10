@@ -31,6 +31,19 @@ const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 30_000;
 const FETCH_MAX_BYTES = 16 * 1024 * 1024;
 
+/**
+ * Split a multi-line filter blob (AEGIS_ADBLOCK_TEST_FILTER) into trimmed, non-empty
+ * filter rules. A single-line value yields a 1-element array. Used by the e2e boot
+ * hook so cosmetic (`##…`) + scriptlet (`##+js(…)`) + network rules can be supplied
+ * together as one newline-delimited env var.
+ */
+function splitNonEmptyLines(blob: string): string[] {
+  return blob
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+}
+
 /** Resolve the data dir: AEGIS_USER_DATA override (e2e isolation) or app userData. */
 function resolveUserData(): string {
   return process.env.AEGIS_USER_DATA ?? app.getPath('userData');
@@ -85,6 +98,7 @@ function boot(): void {
 
   // E2E determinism hooks.
   const TEST_FILTER = process.env.AEGIS_ADBLOCK_TEST_FILTER;
+  const TEST_RESOURCES = process.env.AEGIS_ADBLOCK_TEST_RESOURCES || null;
   const OFFLINE = process.env.AEGIS_ADBLOCK_OFFLINE === '1';
   const LIST_BASE = process.env.AEGIS_ADBLOCK_LIST_BASE;
 
@@ -93,7 +107,9 @@ function boot(): void {
   let initialBlocker: ElectronBlocker;
   let engineSource: 'filter' | 'cache' | 'snapshot' | 'built';
   if (TEST_FILTER) {
-    initialBlocker = buildEngine([TEST_FILTER], null);
+    // Multi-line filter set (network + cosmetic `##…` + scriptlet `##+js(…)` rules);
+    // TEST_RESOURCES supplies the custom scriptlet resources.json so `##+js(...)` resolve.
+    initialBlocker = buildEngine(splitNonEmptyLines(TEST_FILTER), TEST_RESOURCES);
     engineSource = 'filter';
   } else {
     const cached = loadCachedEngine(cachePath);
