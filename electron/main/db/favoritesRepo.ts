@@ -36,6 +36,7 @@ export class FavoritesRepo {
   private readonly deleteStmt: Database.Statement;
   private readonly setPositionStmt: Database.Statement;
   private readonly setTagsStmt: Database.Statement;
+  private readonly clearStmt: Database.Statement;
 
   constructor(private readonly db: Database.Database) {
     this.selectAll = db.prepare(
@@ -54,6 +55,7 @@ export class FavoritesRepo {
     this.deleteStmt = db.prepare('DELETE FROM favorites WHERE id = @id');
     this.setPositionStmt = db.prepare('UPDATE favorites SET position = @position WHERE id = @id');
     this.setTagsStmt = db.prepare('UPDATE favorites SET tags = @tags WHERE id = @id');
+    this.clearStmt = db.prepare('DELETE FROM favorites');
   }
 
   private toFavorite(row: FavoriteRow): Favorite {
@@ -140,5 +142,10 @@ export class FavoritesRepo {
     });
     run();
     return this.list();
+  }
+
+  /** Remove every favorite (used by replace-import). */
+  clear(): void {
+    this.clearStmt.run();
   }
 }

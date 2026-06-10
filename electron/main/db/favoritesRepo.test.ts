@@ -152,4 +152,26 @@ describe('favoritesRepo', () => {
     const repo2 = new FavoritesRepo(db);
     expect(repo2.list()[0]).toMatchObject({ name: 'A', tags: ['x'] });
   });
+
+  describe('clear', () => {
+    it('removes every favorite (replace-import support)', () => {
+      repo.add({ name: 'A', url: 'https://a.test/', tags: [] });
+      repo.add({ name: 'B', url: 'https://b.test/', tags: [] });
+      repo.clear();
+      expect(repo.list()).toEqual([]);
+    });
+
+    it('is a no-op on an already-empty table', () => {
+      repo.clear();
+      expect(repo.list()).toEqual([]);
+    });
+
+    it('lets a freshly-added favorite start again at position 0 after clear', () => {
+      repo.add({ name: 'A', url: 'https://a.test/', tags: [] });
+      repo.clear();
+      const list = repo.add({ name: 'C', url: 'https://c.test/', tags: [] });
+      expect(list).toHaveLength(1);
+      expect(list[0].position).toBe(0);
+    });
+  });
 });

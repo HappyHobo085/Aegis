@@ -67,4 +67,19 @@ describe('savedRepo', () => {
     const repo2 = new SavedRepo(db);
     expect(repo2.has('https://a.test/')).toBe(true);
   });
+
+  describe('clear', () => {
+    it('removes every saved item (replace-import support)', () => {
+      repo.add({ url: 'https://a.test/', title: 'A' }, () => 1000);
+      repo.add({ url: 'https://b.test/', title: 'B' }, () => 2000);
+      repo.clear();
+      expect(repo.list()).toEqual([]);
+      expect(repo.has('https://a.test/')).toBe(false);
+    });
+
+    it('is a no-op on an already-empty table', () => {
+      repo.clear();
+      expect(repo.list()).toEqual([]);
+    });
+  });
 });

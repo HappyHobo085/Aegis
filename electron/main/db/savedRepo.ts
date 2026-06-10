@@ -13,6 +13,7 @@ export class SavedRepo {
   private readonly insertStmt: Database.Statement;
   private readonly deleteStmt: Database.Statement;
   private readonly hasStmt: Database.Statement;
+  private readonly clearStmt: Database.Statement;
 
   constructor(private readonly db: Database.Database) {
     this.selectAll = db.prepare(
@@ -23,6 +24,7 @@ export class SavedRepo {
     );
     this.deleteStmt = db.prepare('DELETE FROM saved_list WHERE id = @id');
     this.hasStmt = db.prepare('SELECT 1 FROM saved_list WHERE url = @url LIMIT 1');
+    this.clearStmt = db.prepare('DELETE FROM saved_list');
   }
 
   /** All saved items, newest first. */
@@ -45,5 +47,10 @@ export class SavedRepo {
   /** True iff some saved item has this url. */
   has(url: string): boolean {
     return this.hasStmt.get({ url }) !== undefined;
+  }
+
+  /** Remove every saved item (used by replace-import). */
+  clear(): void {
+    this.clearStmt.run();
   }
 }
