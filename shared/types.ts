@@ -14,10 +14,16 @@ export const IPC = {
   viewSetContentVisible: 'view.setContentVisible',
   settingsGet: 'settings.get',
   settingsSet: 'settings.set',
+  // adblock + lists (chrome -> main)
+  adblockSetEnabled: 'adblock.setEnabled',
+  adblockToggleAllowlist: 'adblock.toggleAllowlist',
+  adblockGetState: 'adblock.getState',
+  listsUpdateNow: 'lists.updateNow',
   // events (main -> chrome renderer)
   evtNavState: 'nav.state',
   evtNavFailed: 'nav.failed',
   evtNavCrashed: 'nav.crashed',
+  evtAdblockBlockedCount: 'adblock.blockedCount',
 } as const;
 
 export interface NavState {
@@ -41,6 +47,27 @@ export interface NavFailed {
 export interface NavCrashed {
   viewId: ViewId;
   reason: string;
+}
+
+// ---- adblock data model ----
+export interface AdblockState {
+  enabled: boolean; // global on/off
+  allowlistedHosts: string[]; // hosts where blocking is suppressed
+  sessionBlocked: number; // monotonic session total
+}
+export interface BlockedCount {
+  viewId: ViewId;
+  page: number; // resets each top-frame, non-same-document navigation
+  session: number; // monotonic
+}
+export interface ListSourceResult {
+  listId: string;
+  ok: boolean;
+  error?: string;
+}
+export interface ListUpdateResult {
+  perSource: ListSourceResult[];
+  lastUpdated: number; // epoch ms of this refresh attempt
 }
 
 export interface SearchEngine {
@@ -77,6 +104,15 @@ export interface AegisApi {
   settings: {
     get(): Promise<Settings>;
     set(partial: Partial<Settings>): Promise<Settings>;
+  };
+  adblock: {
+    setEnabled(enabled: boolean): Promise<AdblockState>;
+    toggleAllowlist(host: string): Promise<AdblockState>;
+    getState(): Promise<AdblockState>;
+    onBlockedCount(cb: (c: BlockedCount) => void): () => void;
+  };
+  lists: {
+    updateNow(): Promise<ListUpdateResult>;
   };
 }
 
