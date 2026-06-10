@@ -48,6 +48,16 @@ describe('atomicFile', () => {
       // only the final file should remain
       expect(readdirSync(dir)).toEqual(['data.json']);
     });
+
+    it('creates a missing parent directory tree before writing (regression: 7f90219)', () => {
+      // The fix added mkdirSync(dirname(path), {recursive:true}); without it,
+      // writing into a not-yet-existing subdir (e.g. <userData>/lists/) fails ENOENT.
+      const target = join(dir, 'sub', 'nested', 'f.txt');
+      expect(existsSync(join(dir, 'sub'))).toBe(false);
+      writeFileAtomic(target, 'created-with-parents');
+      expect(existsSync(target)).toBe(true);
+      expect(readFileSafe(target)).toBe('created-with-parents');
+    });
   });
 
   describe('readFileSafe', () => {
@@ -103,6 +113,17 @@ describe('atomicFile bytes', () => {
       writeFileAtomicBytes(target, new Uint8Array([42]));
       const leftovers = readdirSync(dir).filter((name) => name.includes('.tmp-'));
       expect(leftovers).toEqual([]);
+    });
+
+    it('creates a missing parent directory tree before writing (regression: 7f90219)', () => {
+      // Mirrors the writeFileAtomic case for the binary path used by the engine
+      // blob cache; without the mkdirSync, writing into <userData>/lists/ ENOENTs.
+      const target = join(dir, 'sub', 'nested', 'f.bin');
+      expect(existsSync(join(dir, 'sub'))).toBe(false);
+      const data = new Uint8Array([10, 20, 30, 255]);
+      writeFileAtomicBytes(target, data);
+      expect(existsSync(target)).toBe(true);
+      expect(Array.from(readBytesSafe(target) as Buffer)).toEqual(Array.from(data));
     });
   });
 
