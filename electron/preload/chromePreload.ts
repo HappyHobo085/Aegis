@@ -4,6 +4,7 @@ import { IPC } from '../../shared/types';
 import type {
   AegisApi, ViewId, NavState, NavFailed, NavCrashed, Settings,
   AdblockState, BlockedCount, ListUpdateResult,
+  Favorite, HistoryEntry, SavedItem, ContentInset,
 } from '../../shared/types';
 
 /** Subscribes cb to an event channel; returns an unsubscriber. */
@@ -28,6 +29,8 @@ const api: AegisApi = {
   view: {
     setContentVisible: (viewId: ViewId, visible: boolean) =>
       ipcRenderer.invoke(IPC.viewSetContentVisible, viewId, visible),
+    setContentInset: (viewId: ViewId, inset: ContentInset) =>
+      ipcRenderer.invoke(IPC.viewSetContentInset, viewId, inset),
   },
   settings: {
     get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
@@ -44,6 +47,36 @@ const api: AegisApi = {
   },
   lists: {
     updateNow: (): Promise<ListUpdateResult> => ipcRenderer.invoke(IPC.listsUpdateNow),
+  },
+  favorites: {
+    list: (): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesList),
+    add: (input: { name: string; url: string; tags: string[] }): Promise<Favorite[]> =>
+      ipcRenderer.invoke(IPC.favoritesAdd, input),
+    update: (
+      id: number,
+      partial: { name?: string; url?: string; tags?: string[] },
+    ): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesUpdate, id, partial),
+    remove: (id: number): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesRemove, id),
+    reorder: (ids: number[]): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesReorder, ids),
+    renameTag: (oldT: string, newT: string): Promise<Favorite[]> =>
+      ipcRenderer.invoke(IPC.favoritesRenameTag, oldT, newT),
+    deleteTag: (tag: string): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesDeleteTag, tag),
+    tagUnion: (): Promise<string[]> => ipcRenderer.invoke(IPC.favoritesTagUnion),
+  },
+  history: {
+    list: (opts?: { limit?: number; offset?: number }): Promise<HistoryEntry[]> =>
+      ipcRenderer.invoke(IPC.historyList, opts),
+    search: (q: string): Promise<HistoryEntry[]> => ipcRenderer.invoke(IPC.historySearch, q),
+    remove: (id: number): Promise<void> => ipcRenderer.invoke(IPC.historyRemove, id),
+    clear: (): Promise<void> => ipcRenderer.invoke(IPC.historyClear),
+    onChanged: (cb: () => void) => subscribe<unknown>(IPC.evtHistoryChanged, () => cb()),
+  },
+  saved: {
+    list: (): Promise<SavedItem[]> => ipcRenderer.invoke(IPC.savedList),
+    add: (input: { url: string; title: string }): Promise<SavedItem[]> =>
+      ipcRenderer.invoke(IPC.savedAdd, input),
+    remove: (id: number): Promise<SavedItem[]> => ipcRenderer.invoke(IPC.savedRemove, id),
+    has: (url: string): Promise<boolean> => ipcRenderer.invoke(IPC.savedHas, url),
   },
 };
 

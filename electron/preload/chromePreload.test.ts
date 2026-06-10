@@ -189,3 +189,151 @@ describe('chromePreload adblock + lists (Phase 1)', () => {
     expect(h.removed).toEqual([{ channel: IPC.evtAdblockBlockedCount, fn: registered }]);
   });
 });
+
+describe('chromePreload favorites + history + saved + inset (Phase 3)', () => {
+  beforeEach(() => {
+    h.exposed = {};
+    h.invoke = vi.fn(async () => undefined);
+    h.listeners = new Map();
+    h.removed = [];
+    vi.resetModules();
+  });
+
+  it('exposes favorites, history, and saved namespaces + view.setContentInset', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    expect(typeof api.favorites.list).toBe('function');
+    expect(typeof api.favorites.add).toBe('function');
+    expect(typeof api.favorites.update).toBe('function');
+    expect(typeof api.favorites.remove).toBe('function');
+    expect(typeof api.favorites.reorder).toBe('function');
+    expect(typeof api.favorites.renameTag).toBe('function');
+    expect(typeof api.favorites.deleteTag).toBe('function');
+    expect(typeof api.favorites.tagUnion).toBe('function');
+    expect(typeof api.history.list).toBe('function');
+    expect(typeof api.history.search).toBe('function');
+    expect(typeof api.history.remove).toBe('function');
+    expect(typeof api.history.clear).toBe('function');
+    expect(typeof api.history.onChanged).toBe('function');
+    expect(typeof api.saved.list).toBe('function');
+    expect(typeof api.saved.add).toBe('function');
+    expect(typeof api.saved.remove).toBe('function');
+    expect(typeof api.saved.has).toBe('function');
+    expect(typeof api.view.setContentInset).toBe('function');
+  });
+
+  it('favorites.add invokes IPC.favoritesAdd with the input', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const input = { name: 'A', url: 'https://a.test/', tags: ['x'] };
+    await api.favorites.add(input);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesAdd, input);
+  });
+
+  it('favorites.update invokes IPC.favoritesUpdate with (id, partial)', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.favorites.update(7, { name: 'R' });
+    expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesUpdate, 7, { name: 'R' });
+  });
+
+  it('favorites.reorder invokes IPC.favoritesReorder with the id array', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.favorites.reorder([3, 1, 2]);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesReorder, [3, 1, 2]);
+  });
+
+  it('favorites.renameTag and deleteTag invoke their channels with args', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.favorites.renameTag('old', 'new');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesRenameTag, 'old', 'new');
+    await api.favorites.deleteTag('old');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesDeleteTag, 'old');
+  });
+
+  it('favorites.tagUnion invokes IPC.favoritesTagUnion and returns the resolved set', async () => {
+    h.invoke = vi.fn(async () => ['a', 'b']);
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const result = await api.favorites.tagUnion();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesTagUnion);
+    expect(result).toEqual(['a', 'b']);
+  });
+
+  it('history.list invokes IPC.historyList with opts', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.history.list({ limit: 50 });
+    expect(h.invoke).toHaveBeenCalledWith(IPC.historyList, { limit: 50 });
+  });
+
+  it('history.search invokes IPC.historySearch with the query', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.history.search('q');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.historySearch, 'q');
+  });
+
+  it('history.remove and clear invoke their channels', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.history.remove(9);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.historyRemove, 9);
+    await api.history.clear();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.historyClear);
+  });
+
+  it('history.onChanged registers on IPC.evtHistoryChanged and delivers (no payload)', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const cb = vi.fn();
+    api.history.onChanged(cb);
+    const arr = h.listeners.get(IPC.evtHistoryChanged)!;
+    expect(arr).toHaveLength(1);
+    arr[0]({}, undefined);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('history.onChanged returns an unsubscriber that removes the listener', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const cb = vi.fn();
+    const off = api.history.onChanged(cb);
+    const registered = h.listeners.get(IPC.evtHistoryChanged)![0];
+    off();
+    expect(h.removed).toEqual([{ channel: IPC.evtHistoryChanged, fn: registered }]);
+  });
+
+  it('saved.add invokes IPC.savedAdd with the input', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const input = { url: 'https://a.test/', title: 'A' };
+    await api.saved.add(input);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.savedAdd, input);
+  });
+
+  it('saved.has invokes IPC.savedHas with the url and returns the boolean', async () => {
+    h.invoke = vi.fn(async () => true);
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const result = await api.saved.has('https://a.test/');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.savedHas, 'https://a.test/');
+    expect(result).toBe(true);
+  });
+
+  it('saved.remove invokes IPC.savedRemove with the id', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.saved.remove(4);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.savedRemove, 4);
+  });
+
+  it('view.setContentInset invokes IPC.viewSetContentInset with (viewId, inset)', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.view.setContentInset(PRIMARY_VIEW_ID, { top: 96, left: 280 });
+    expect(h.invoke).toHaveBeenCalledWith(IPC.viewSetContentInset, PRIMARY_VIEW_ID, { top: 96, left: 280 });
+  });
+});
