@@ -313,6 +313,12 @@ function boot(): void {
       phase5: {
         downloadsRepo,
         permissionsRepo,
+        // Test-only handle to the real picker.start() flow (the IIFE injection +
+        // customFiltersRepo append + rebuildFromCache), so e2e can drive it headlessly.
+        pickerStart: () =>
+          buildPickerHandlers({ vc, customFiltersRepo, rebuildFromCache: rebuildEngineFromCache })[
+            IPC.pickerStart
+          ](),
       },
     };
   }

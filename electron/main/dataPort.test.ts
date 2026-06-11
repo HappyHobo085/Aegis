@@ -88,4 +88,31 @@ describe('planImport', () => {
     });
     expect(planImport(p, existing, 'merge').counts).toEqual({ favorites: 1, history: 1, saved: 0 });
   });
+
+  // C5 (accepted behavior): planImport does NOT collapse adjacent same-url history
+  // rows — it carries them through verbatim (replace) so the import apply path can
+  // call record(entry, ()=>visitedAt) for each. The COLLAPSE is a documented,
+  // accepted downstream behavior of HistoryRepo.record (it bumps the most-recent
+  // row's visitedAt instead of inserting a fresh duplicate; proven in historyRepo.test).
+  // So adjacent duplicate-url export rows collapse to one history row on import.
+  it('replace plan carries adjacent duplicate-url history rows through verbatim (collapse is record() at insert time — C5)', () => {
+    const empty = { favorites: [], saved: [], historyUrls: new Set<string>() };
+    const p = payload({
+      history: [
+        hist('https://dup.test/', 1000),
+        hist('https://dup.test/', 2000), // adjacent same url as the previous row
+        hist('https://other.test/', 3000),
+      ],
+    });
+    const plan = planImport(p, empty, 'replace');
+    // The plan layer keeps both adjacent same-url rows (no dedup here)...
+    expect(plan.history.map((h) => h.url)).toEqual([
+      'https://dup.test/',
+      'https://dup.test/',
+      'https://other.test/',
+    ]);
+    expect(plan.counts.history).toBe(3);
+    // ...the documented collapse happens when these are fed to HistoryRepo.record in
+    // order: the two adjacent https://dup.test/ rows yield a single history row.
+  });
 });
