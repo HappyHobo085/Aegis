@@ -13,12 +13,13 @@ export interface NavControlsProps {
 export function NavControls({ state, back, forward, reloadOrStop, home }: NavControlsProps) {
   return (
     <div className="nav-controls">
-      <button type="button" aria-label="Back" disabled={!state.canGoBack} onClick={back}>
+      <button type="button" aria-label="Back" title="Back" disabled={!state.canGoBack} onClick={back}>
         <ArrowLeft size={18} aria-hidden="true" />
       </button>
       <button
         type="button"
         aria-label="Forward"
+        title="Forward"
         disabled={!state.canGoForward}
         onClick={forward}
       >
@@ -27,6 +28,7 @@ export function NavControls({ state, back, forward, reloadOrStop, home }: NavCon
       <button
         type="button"
         aria-label={state.isLoading ? 'Stop' : 'Reload'}
+        title={state.isLoading ? 'Stop' : 'Reload'}
         onClick={reloadOrStop}
       >
         {state.isLoading ? (
@@ -35,7 +37,7 @@ export function NavControls({ state, back, forward, reloadOrStop, home }: NavCon
           <RotateCw size={18} aria-hidden="true" />
         )}
       </button>
-      <button type="button" aria-label="Home" onClick={home}>
+      <button type="button" aria-label="Home" title="Home" onClick={home}>
         <House size={18} aria-hidden="true" />
       </button>
       {state.isLoading && (

@@ -16,6 +16,7 @@ export function BookmarkButton({ saved, canSave, onSave, onUnsave }: BookmarkBut
       type="button"
       className="bookmark-button"
       aria-label={label}
+      title={label}
       aria-pressed={saved}
       disabled={!canSave}
       onClick={() => (saved ? onUnsave() : onSave())}

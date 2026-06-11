@@ -24,6 +24,7 @@ export function PickerButton() {
       type="button"
       className="toolbar__picker"
       aria-label="Pick element to hide"
+      title="Pick element to hide"
       disabled={busy}
       onClick={() => void handlePick()}
     >

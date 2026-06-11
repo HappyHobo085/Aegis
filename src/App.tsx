@@ -177,6 +177,7 @@ export function App() {
             type="button"
             className="toolbar__gear"
             aria-label="Open settings"
+            title="Settings"
             onClick={() => setSettingsOpen(true)}
           >
             <Settings size={18} aria-hidden="true" />
@@ -187,6 +188,7 @@ export function App() {
             type="button"
             className="toolbar__sidebar-toggle"
             aria-label="Toggle sidebar"
+            title="Toggle sidebar"
             aria-expanded={sidebarOpen}
             onClick={() => setSidebarOpen((v) => !v)}
           >

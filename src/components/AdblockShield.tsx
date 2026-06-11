@@ -82,6 +82,7 @@ export function AdblockShield(props: AdblockShieldProps) {
         type="button"
         className="adblock-shield__button"
         aria-label="Ad blocking"
+        title="Ad blocking"
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}

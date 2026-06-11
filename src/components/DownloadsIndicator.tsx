@@ -16,6 +16,7 @@ export function DownloadsIndicator({ activeCount, onOpen }: DownloadsIndicatorPr
       type="button"
       className="toolbar__downloads"
       aria-label={label}
+      title={label}
       onClick={onOpen}
     >
       <Download size={18} aria-hidden="true" />
