@@ -1,5 +1,6 @@
 // src/components/AdblockShield.tsx
 import { useId, useState } from 'react';
+import { Shield, ShieldOff } from 'lucide-react';
 import type { AdblockState } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
 
@@ -68,6 +69,13 @@ function Popover({
 export function AdblockShield(props: AdblockShieldProps) {
   const [open, setOpen] = useState(false);
 
+  // Blocking is effectively active for this host only when the global toggle is
+  // on AND the host isn't allowlisted.
+  const allowlisted =
+    props.host !== null && props.state.allowlistedHosts.includes(props.host);
+  const blockingActive = props.state.enabled && !allowlisted;
+  const ShieldIcon = blockingActive ? Shield : ShieldOff;
+
   return (
     <div className="adblock-shield">
       <button
@@ -79,7 +87,7 @@ export function AdblockShield(props: AdblockShieldProps) {
         onClick={() => setOpen((v) => !v)}
       >
         <span aria-hidden="true" className="adblock-shield__icon">
-          {'\u{1F6E1}'}
+          <ShieldIcon size={18} aria-hidden="true" />
         </span>
         <span className="adblock-shield__badge">{props.page}</span>
       </button>

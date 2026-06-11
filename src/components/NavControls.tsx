@@ -1,4 +1,5 @@
 // src/components/NavControls.tsx
+import { ArrowLeft, ArrowRight, RotateCw, X, House } from 'lucide-react';
 import type { NavState } from '../../shared/types';
 
 export interface NavControlsProps {
@@ -13,7 +14,7 @@ export function NavControls({ state, back, forward, reloadOrStop, home }: NavCon
   return (
     <div className="nav-controls">
       <button type="button" aria-label="Back" disabled={!state.canGoBack} onClick={back}>
-        &#8592;
+        <ArrowLeft size={18} aria-hidden="true" />
       </button>
       <button
         type="button"
@@ -21,17 +22,21 @@ export function NavControls({ state, back, forward, reloadOrStop, home }: NavCon
         disabled={!state.canGoForward}
         onClick={forward}
       >
-        &#8594;
+        <ArrowRight size={18} aria-hidden="true" />
       </button>
       <button
         type="button"
         aria-label={state.isLoading ? 'Stop' : 'Reload'}
         onClick={reloadOrStop}
       >
-        {state.isLoading ? '✕' : '↻'}
+        {state.isLoading ? (
+          <X size={18} aria-hidden="true" />
+        ) : (
+          <RotateCw size={18} aria-hidden="true" />
+        )}
       </button>
       <button type="button" aria-label="Home" onClick={home}>
-        &#8962;
+        <House size={18} aria-hidden="true" />
       </button>
       {state.isLoading && (
         <span className="loading-indicator" role="status" aria-label="Loading">

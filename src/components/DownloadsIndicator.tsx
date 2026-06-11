@@ -1,4 +1,6 @@
 // src/components/DownloadsIndicator.tsx
+import { Download } from 'lucide-react';
+
 export interface DownloadsIndicatorProps {
   /** Number of downloads currently in the `progressing` state. */
   activeCount: number;
@@ -16,7 +18,7 @@ export function DownloadsIndicator({ activeCount, onOpen }: DownloadsIndicatorPr
       aria-label={label}
       onClick={onOpen}
     >
-      <span aria-hidden="true">{'⬇'}</span>
+      <Download size={18} aria-hidden="true" />
       {activeCount > 0 && (
         <span className="toolbar__downloads-badge" aria-hidden="true">
           {activeCount}

@@ -1,5 +1,6 @@
 // src/App.tsx
 import { useEffect, useState } from 'react';
+import { Settings, PanelRight } from 'lucide-react';
 import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
@@ -178,7 +179,7 @@ export function App() {
             aria-label="Open settings"
             onClick={() => setSettingsOpen(true)}
           >
-            {'⚙'}
+            <Settings size={18} aria-hidden="true" />
           </button>
         }
         menu={
@@ -189,7 +190,7 @@ export function App() {
             aria-expanded={sidebarOpen}
             onClick={() => setSidebarOpen((v) => !v)}
           >
-            {'☰'}
+            <PanelRight size={18} aria-hidden="true" />
           </button>
         }
       />

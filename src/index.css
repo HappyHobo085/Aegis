@@ -198,6 +198,13 @@ input {
   flex-shrink: 0;
 }
 
+/* lucide SVGs default to inline display, which leaves a baseline gap inside the
+   flex-centered icon buttons. Force block so they center cleanly. */
+.toolbar svg,
+.nav-controls svg {
+  display: block;
+}
+
 .nav-controls button:hover:not(:disabled),
 .toolbar__gear:hover:not(:disabled),
 .toolbar__picker:hover:not(:disabled),

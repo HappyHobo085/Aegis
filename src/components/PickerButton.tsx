@@ -1,5 +1,6 @@
 // src/components/PickerButton.tsx
 import { useState } from 'react';
+import { SquareMousePointer } from 'lucide-react';
 import { aegis } from '../lib/ipcClient';
 import { toast } from '../lib/toast';
 
@@ -26,7 +27,7 @@ export function PickerButton() {
       disabled={busy}
       onClick={() => void handlePick()}
     >
-      <span aria-hidden="true">{'🎯'}</span>
+      <SquareMousePointer size={18} aria-hidden="true" />
     </button>
   );
 }

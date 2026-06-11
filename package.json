@@ -22,7 +22,8 @@
   "dependencies": {
     "@ghostery/adblocker-electron": "2.18.0",
     "@ghostery/adblocker-electron-preload": "2.18.0",
-    "better-sqlite3": "^12.10.0"
+    "better-sqlite3": "^12.10.0",
+    "lucide-react": "^0.477.0"
   },
   "devDependencies": {
     "@electron/rebuild": "^4.0.4",
