@@ -6,16 +6,23 @@ import { aegis } from '../lib/ipcClient';
 export interface UseSaved {
   items: SavedItem[];
   isCurrentSaved: boolean;
-  add(input: { url: string; title: string }): Promise<void>;
+  tagUnion: string[];
+  activeTags: string[];
+  setActiveTags(tags: string[]): void;
+  add(input: { url: string; title: string; tags?: string[] }): Promise<void>;
   addCurrent(title: string): Promise<void>;
   removeCurrent(): Promise<void>;
   remove(id: number): Promise<void>;
-  update(id: number, title: string): Promise<void>;
+  update(id: number, partial: { title?: string; tags?: string[] }): Promise<void>;
+  renameTag(oldT: string, newT: string): Promise<void>;
+  deleteTag(tag: string): Promise<void>;
 }
 
 export function useSaved(currentUrl: string): UseSaved {
   const [items, setItems] = useState<SavedItem[]>([]);
   const [isCurrentSaved, setIsCurrentSaved] = useState<boolean>(false);
+  const [tagUnion, setTagUnion] = useState<string[]>([]);
+  const [activeTags, setActiveTags] = useState<string[]>([]);
 
   // Read currentUrl + items at call time without re-binding callbacks on every
   // url/list change (mirrors useAdblock's urlRef pattern).
@@ -29,15 +36,28 @@ export function useSaved(currentUrl: string): UseSaved {
     setIsCurrentSaved(saved);
   }, []);
 
+  const refreshTagUnion = useCallback(async (): Promise<void> => {
+    setTagUnion(await aegis.saved.tagUnion());
+  }, []);
+
   useEffect(() => {
     let active = true;
     void aegis.saved.list().then((list) => {
       if (active) setItems(list);
     });
+    void aegis.saved.tagUnion().then((union) => {
+      if (active) setTagUnion(union);
+    });
     return () => {
       active = false;
     };
   }, []);
+
+  // Drop any active filter tag that no longer exists (e.g. after delete/rename or
+  // removing the last item carrying it). Pure updater — StrictMode-safe.
+  useEffect(() => {
+    setActiveTags((prev) => prev.filter((t) => tagUnion.includes(t)));
+  }, [tagUnion]);
 
   // Re-query the fill-in state whenever the current url changes.
   useEffect(() => {
@@ -51,27 +71,30 @@ export function useSaved(currentUrl: string): UseSaved {
   }, [currentUrl]);
 
   const add = useCallback(
-    async (input: { url: string; title: string }): Promise<void> => {
+    async (input: { url: string; title: string; tags?: string[] }): Promise<void> => {
       setItems(await aegis.saved.add(input));
       await refreshHas();
+      await refreshTagUnion();
     },
-    [refreshHas],
+    [refreshHas, refreshTagUnion],
   );
 
   const addCurrent = useCallback(
     async (title: string): Promise<void> => {
       setItems(await aegis.saved.add({ url: urlRef.current, title }));
       await refreshHas();
+      await refreshTagUnion();
     },
-    [refreshHas],
+    [refreshHas, refreshTagUnion],
   );
 
   const remove = useCallback(
     async (id: number): Promise<void> => {
       setItems(await aegis.saved.remove(id));
       await refreshHas();
+      await refreshTagUnion();
     },
-    [refreshHas],
+    [refreshHas, refreshTagUnion],
   );
 
   const removeCurrent = useCallback(async (): Promise<void> => {
@@ -79,11 +102,50 @@ export function useSaved(currentUrl: string): UseSaved {
     if (!match) return;
     setItems(await aegis.saved.remove(match.id));
     await refreshHas();
-  }, [refreshHas]);
+    await refreshTagUnion();
+  }, [refreshHas, refreshTagUnion]);
 
-  const update = useCallback(async (id: number, title: string): Promise<void> => {
-    setItems(await aegis.saved.update(id, { title }));
-  }, []);
+  const update = useCallback(
+    async (id: number, partial: { title?: string; tags?: string[] }): Promise<void> => {
+      setItems(await aegis.saved.update(id, partial));
+      await refreshTagUnion();
+    },
+    [refreshTagUnion],
+  );
 
-  return { items, isCurrentSaved, add, addCurrent, removeCurrent, remove, update };
+  const renameTag = useCallback(
+    async (oldT: string, newT: string): Promise<void> => {
+      setItems(await aegis.saved.renameTag(oldT, newT));
+      // Keep an active filter pointing at the renamed tag (otherwise the tagUnion
+      // prune below would silently drop the user's selection). Pure updater.
+      setActiveTags((prev) =>
+        prev.includes(oldT) ? [...new Set(prev.map((t) => (t === oldT ? newT : t)))] : prev,
+      );
+      await refreshTagUnion();
+    },
+    [refreshTagUnion],
+  );
+
+  const deleteTag = useCallback(
+    async (tag: string): Promise<void> => {
+      setItems(await aegis.saved.deleteTag(tag));
+      await refreshTagUnion();
+    },
+    [refreshTagUnion],
+  );
+
+  return {
+    items,
+    isCurrentSaved,
+    tagUnion,
+    activeTags,
+    setActiveTags,
+    add,
+    addCurrent,
+    removeCurrent,
+    remove,
+    update,
+    renameTag,
+    deleteTag,
+  };
 }

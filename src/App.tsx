@@ -235,9 +235,6 @@ export function App() {
       />
       <FavoritesBar
         favorites={favorites.favorites}
-        tagUnion={favorites.tagUnion}
-        activeTags={favorites.activeTags}
-        setActiveTags={favorites.setActiveTags}
         onOpenFavorite={(url) => void nav.navigate(url)}
         onOpenManager={() => setManagerOpen(true)}
       />
@@ -258,9 +255,14 @@ export function App() {
         saved={
           <SavedPanel
             items={saved.items}
+            tagUnion={saved.tagUnion}
+            activeTags={saved.activeTags}
+            setActiveTags={saved.setActiveTags}
             add={(input) => void saved.add(input)}
             remove={(id) => void saved.remove(id)}
-            update={(id, title) => void saved.update(id, title)}
+            update={(id, partial) => void saved.update(id, partial)}
+            renameTag={(oldT, newT) => void saved.renameTag(oldT, newT)}
+            deleteTag={(tag) => void saved.deleteTag(tag)}
             onOpen={(url) => void nav.navigate(url)}
           />
         }
@@ -286,13 +288,10 @@ export function App() {
       {managerOpen && (
         <FavoritesManager
           favorites={favorites.favorites}
-          tagUnion={favorites.tagUnion}
           onClose={() => setManagerOpen(false)}
           add={favorites.add}
           update={favorites.update}
           remove={favorites.remove}
-          renameTag={favorites.renameTag}
-          deleteTag={favorites.deleteTag}
         />
       )}
       {settingsOpen && (

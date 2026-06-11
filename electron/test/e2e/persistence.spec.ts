@@ -44,7 +44,7 @@ async function launchApp(
 
 function favAdd(
   app: ElectronApplication,
-  input: { name: string; url: string; tags: string[] },
+  input: { name: string; url: string },
 ): Promise<Favorite[]> {
   return app.evaluate(
     (_e, i) => (globalThis as any).__aegisTest.places.favoritesRepo.add(i),
@@ -60,7 +60,7 @@ function favList(app: ElectronApplication): Promise<Favorite[]> {
 
 function savedAdd(
   app: ElectronApplication,
-  input: { url: string; title: string },
+  input: { url: string; title: string; tags?: string[] },
 ): Promise<SavedItem[]> {
   return app.evaluate(
     (_e, i) => (globalThis as any).__aegisTest.places.savedRepo.add(i),
@@ -83,19 +83,19 @@ function historyList(app: ElectronApplication): Promise<HistoryEntry[]> {
   return app.evaluate(() => (globalThis as any).__aegisTest.places.historyRepo.list());
 }
 
-test('favorites (with tags) + history + saved-list survive an app restart — the Phase-3 exit', async () => {
+test('favorites + history + saved-list (with tags) survive an app restart — the Phase-3 exit', async () => {
   // ONE userData dir reused across two launches (§9.3).
   const dir = mkdtempSync(join(tmpdir(), 'aegis-e2e-persist-'));
   const favUrl = `${fixtures.baseUrl}/spa.html`;
   const savedUrl = `${fixtures.baseUrl}/late-title.html`;
 
-  // app1: seed a favorite (with tags) + a saved item, then close cleanly so the
+  // app1: seed a favorite + a saved item (with tags), then close cleanly so the
   // first process releases the DB before app2 opens it (better-sqlite3 writes are
   // synchronous + WAL-durable; the await close() guarantees the release).
   const app1 = await launchApp(dir, { AEGIS_HOME_URL: 'about:blank' });
   try {
-    await favAdd(app1, { name: 'Persisted Fav', url: favUrl, tags: ['keep', 'me'] });
-    await savedAdd(app1, { url: savedUrl, title: 'Persisted Saved' });
+    await favAdd(app1, { name: 'Persisted Fav', url: favUrl });
+    await savedAdd(app1, { url: savedUrl, title: 'Persisted Saved', tags: ['keep', 'me'] });
     // Sanity within app1.
     expect((await favList(app1)).map((f) => f.name)).toEqual(['Persisted Fav']);
     expect((await savedList(app1)).map((s) => s.title)).toEqual(['Persisted Saved']);
@@ -117,12 +117,13 @@ test('favorites (with tags) + history + saved-list survive an app restart — th
       .toEqual(['Persisted Fav']);
     const fav = (await favList(app2))[0];
     expect(fav.url).toBe(favUrl);
-    expect(fav.tags).toEqual(['keep', 'me']); // tags persisted as JSON, re-parsed
 
     await expect
       .poll(async () => (await savedList(app2)).map((s) => s.title), { timeout: 15000 })
       .toEqual(['Persisted Saved']);
-    expect((await savedList(app2))[0].url).toBe(savedUrl);
+    const savedItem = (await savedList(app2))[0];
+    expect(savedItem.url).toBe(savedUrl);
+    expect(savedItem.tags).toEqual(['keep', 'me']); // tags persisted as JSON, re-parsed
 
     // History (auto-recorded in app1) also survives the restart (spec §11.5).
     await expect

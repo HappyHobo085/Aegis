@@ -1,26 +1,15 @@
 // src/components/FavoritesBar.tsx
 import { SlidersHorizontal } from 'lucide-react';
 import type { Favorite } from '../../shared/types';
-import { TagFilter } from './TagFilter';
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 
 export interface FavoritesBarProps {
   favorites: Favorite[];
-  tagUnion: string[];
-  activeTags: string[];
-  setActiveTags(tags: string[]): void;
   onOpenFavorite(url: string): void;
   onOpenManager(): void;
 }
 
-export function FavoritesBar({
-  favorites,
-  tagUnion,
-  activeTags,
-  setActiveTags,
-  onOpenFavorite,
-  onOpenManager,
-}: FavoritesBarProps) {
+export function FavoritesBar({ favorites, onOpenFavorite, onOpenManager }: FavoritesBarProps) {
   const barRef = useHorizontalWheel<HTMLElement>();
   return (
     <nav ref={barRef} className="favorites-bar" aria-label="Favorites">
@@ -37,7 +26,6 @@ export function FavoritesBar({
           </button>
         ))}
       </div>
-      <TagFilter tagUnion={tagUnion} activeTags={activeTags} setActiveTags={setActiveTags} />
       <button
         type="button"
         className="favorites-bar__manage"

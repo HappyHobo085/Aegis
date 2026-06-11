@@ -1258,6 +1258,141 @@ textarea::placeholder {
   display: block;
 }
 
+/* Per-item tag chips (display only) */
+.saved-panel__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 2px;
+}
+
+.saved-panel__chip {
+  padding: 1px 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+/* Inline editor: title input + tags + actions stacked across the full row */
+.saved-panel__editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.saved-panel__edit-actions {
+  display: flex;
+  gap: 6px;
+}
+
+/* The editor Save/Cancel are text buttons — override the icon-button footprint. */
+.saved-panel__edit-actions .saved-panel__save,
+.saved-panel__edit-actions .saved-panel__cancel {
+  flex: 1;
+  width: auto;
+  height: auto;
+  padding: 5px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.saved-panel__edit-actions .saved-panel__save {
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.saved-panel__edit-actions .saved-panel__save:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.saved-panel__edit-actions .saved-panel__cancel {
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--fg-muted);
+}
+
+.saved-panel__edit-actions .saved-panel__cancel:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* Manage-tags disclosure (rename / delete across all saved items) */
+.saved-panel__manage {
+  margin-top: 4px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.saved-panel__manage-summary {
+  cursor: pointer;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+  padding: 4px 0;
+}
+
+.saved-panel__manage-summary:hover {
+  color: var(--fg);
+}
+
+.saved-panel__manage-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.saved-panel__manage-body select,
+.saved-panel__manage-body input {
+  padding: 6px 10px;
+  border-radius: var(--radius-2);
+  border: 1px solid var(--border-2);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.saved-panel__manage-body select:focus,
+.saved-panel__manage-body select:focus-visible,
+.saved-panel__manage-body input:focus,
+.saved-panel__manage-body input:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.saved-panel__manage-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.saved-panel__manage-actions button {
+  flex: 1;
+  padding: 5px 10px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.saved-panel__manage-actions button:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+.saved-panel__manage-actions button:disabled {
+  opacity: 0.5;
+}
+
 /* ─── Downloads panel ────────────────────────────────────────────── */
 
 .downloads-panel {

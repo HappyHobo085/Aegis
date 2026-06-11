@@ -87,9 +87,6 @@ vi.mock('./lib/ipcClient', () => ({
       update: vi.fn().mockResolvedValue([]),
       remove: vi.fn().mockResolvedValue([]),
       reorder: vi.fn().mockResolvedValue([]),
-      renameTag: vi.fn().mockResolvedValue([]),
-      deleteTag: vi.fn().mockResolvedValue([]),
-      tagUnion: vi.fn().mockResolvedValue([]),
     },
     history: {
       list: vi.fn().mockResolvedValue([]),
@@ -103,6 +100,10 @@ vi.mock('./lib/ipcClient', () => ({
       add: vi.fn().mockResolvedValue([]),
       remove: vi.fn().mockResolvedValue([]),
       has: vi.fn().mockResolvedValue(false),
+      update: vi.fn().mockResolvedValue([]),
+      renameTag: vi.fn().mockResolvedValue([]),
+      deleteTag: vi.fn().mockResolvedValue([]),
+      tagUnion: vi.fn().mockResolvedValue([]),
     },
     downloads: {
       list: vi.fn().mockResolvedValue([]),

@@ -1,33 +1,83 @@
 // src/components/SavedPanel.tsx
 import { useId, useState } from 'react';
-import { Bookmark, Check, Pencil, Plus, X } from 'lucide-react';
+import { Bookmark, Pencil, Plus, X } from 'lucide-react';
 import type { SavedItem } from '../../shared/types';
 import { normalizeSavedUrl } from '../lib/addressParse';
+import { TagInput } from './TagInput';
+import { TagFilter } from './TagFilter';
 
 export interface SavedPanelProps {
   items: SavedItem[];
-  add(input: { url: string; title: string }): void;
+  tagUnion: string[];
+  activeTags: string[];
+  setActiveTags(tags: string[]): void;
+  add(input: { url: string; title: string; tags: string[] }): void;
   remove(id: number): Promise<SavedItem[]> | void;
-  update(id: number, title: string): void;
+  update(id: number, partial: { title?: string; tags?: string[] }): void;
+  renameTag(oldT: string, newT: string): void;
+  deleteTag(tag: string): void;
   onOpen(url: string): void;
 }
 
-export function SavedPanel({ items, add, remove, update, onOpen }: SavedPanelProps) {
+export function SavedPanel({
+  items,
+  tagUnion,
+  activeTags,
+  setActiveTags,
+  add,
+  remove,
+  update,
+  renameTag,
+  deleteTag,
+  onOpen,
+}: SavedPanelProps) {
   const searchId = useId();
   const [query, setQuery] = useState('');
+
+  // Inline edit (title + tags).
   const [editingId, setEditingId] = useState<number | null>(null);
-  const [draft, setDraft] = useState('');
+  const [draftTitle, setDraftTitle] = useState('');
+  const [draftTags, setDraftTags] = useState<string[]>([]);
 
   // Manual add-entry form.
   const [adding, setAdding] = useState(false);
   const [urlDraft, setUrlDraft] = useState('');
   const [titleDraft, setTitleDraft] = useState('');
+  const [addTags, setAddTags] = useState<string[]>([]);
   const [addError, setAddError] = useState<string | null>(null);
+
+  // Manage-tags controls.
+  const [tagToManage, setTagToManage] = useState('');
+  const [renameTo, setRenameTo] = useState('');
+
+  const q = query.trim().toLowerCase();
+  const filtered = items.filter((i) => {
+    const matchesSearch =
+      q.length === 0 || i.title.toLowerCase().includes(q) || i.url.toLowerCase().includes(q);
+    const matchesTags = activeTags.every((t) => i.tags.includes(t));
+    return matchesSearch && matchesTags;
+  });
+
+  const startEdit = (item: SavedItem): void => {
+    setEditingId(item.id);
+    setDraftTitle(item.title);
+    setDraftTags(item.tags);
+  };
+
+  const cancelEdit = (): void => {
+    setEditingId(null);
+  };
+
+  const saveEdit = (id: number): void => {
+    update(id, { title: draftTitle.trim(), tags: draftTags });
+    setEditingId(null);
+  };
 
   const openAdd = (): void => {
     setAdding(true);
     setUrlDraft('');
     setTitleDraft('');
+    setAddTags([]);
     setAddError(null);
   };
 
@@ -42,31 +92,9 @@ export function SavedPanel({ items, add, remove, update, onOpen }: SavedPanelPro
       setAddError(result.reason);
       return;
     }
-    add({ url: result.url, title: titleDraft.trim() });
+    add({ url: result.url, title: titleDraft.trim(), tags: addTags });
     setAdding(false);
     setAddError(null);
-  };
-
-  const q = query.trim().toLowerCase();
-  const filtered =
-    q.length === 0
-      ? items
-      : items.filter(
-          (i) => i.title.toLowerCase().includes(q) || i.url.toLowerCase().includes(q),
-        );
-
-  const startEdit = (item: SavedItem): void => {
-    setEditingId(item.id);
-    setDraft(item.title);
-  };
-
-  const cancelEdit = (): void => {
-    setEditingId(null);
-  };
-
-  const saveEdit = (id: number): void => {
-    update(id, draft.trim());
-    setEditingId(null);
   };
 
   return (
@@ -110,6 +138,7 @@ export function SavedPanel({ items, add, remove, update, onOpen }: SavedPanelPro
               }
             }}
           />
+          <TagInput tags={addTags} suggestions={tagUnion} onChange={setAddTags} />
           {addError && (
             <div className="saved-panel__add-error" role="alert">
               {addError}
@@ -158,6 +187,12 @@ export function SavedPanel({ items, add, remove, update, onOpen }: SavedPanelPro
           />
         </form>
       )}
+      <TagFilter
+        tagUnion={tagUnion}
+        activeTags={activeTags}
+        setActiveTags={setActiveTags}
+        label="Filter saved by tag"
+      />
       {items.length === 0 ? (
         <div className="saved-panel__empty">
           <Bookmark size={32} aria-hidden="true" />
@@ -174,71 +209,133 @@ export function SavedPanel({ items, add, remove, update, onOpen }: SavedPanelPro
             return (
               <li key={item.id} className="saved-panel__row">
                 {isEditing ? (
-                  <input
-                    className="saved-panel__edit-input"
-                    aria-label="Edit title"
-                    value={draft}
-                    autoFocus
-                    onChange={(e) => setDraft(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') {
-                        e.preventDefault();
-                        saveEdit(item.id);
-                      } else if (e.key === 'Escape') {
-                        e.preventDefault();
-                        cancelEdit();
-                      }
-                    }}
-                    onBlur={cancelEdit}
-                  />
+                  <div className="saved-panel__editor">
+                    <input
+                      className="saved-panel__edit-input"
+                      aria-label="Edit title"
+                      value={draftTitle}
+                      autoFocus
+                      onChange={(e) => setDraftTitle(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          saveEdit(item.id);
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          cancelEdit();
+                        }
+                      }}
+                    />
+                    <TagInput tags={draftTags} suggestions={tagUnion} onChange={setDraftTags} />
+                    <div className="saved-panel__edit-actions">
+                      <button
+                        type="button"
+                        className="saved-panel__save"
+                        onClick={() => saveEdit(item.id)}
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        className="saved-panel__cancel"
+                        onClick={cancelEdit}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
                 ) : (
-                  <button
-                    type="button"
-                    className="saved-panel__open"
-                    aria-label={`Open ${item.url}`}
-                    onClick={() => onOpen(item.url)}
-                  >
-                    <span className="saved-panel__title">{label}</span>
-                    <span className="saved-panel__url">{item.url}</span>
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      className="saved-panel__open"
+                      aria-label={`Open ${item.url}`}
+                      onClick={() => onOpen(item.url)}
+                    >
+                      <span className="saved-panel__title">{label}</span>
+                      <span className="saved-panel__url">{item.url}</span>
+                      {item.tags.length > 0 && (
+                        <span className="saved-panel__chips">
+                          {item.tags.map((t) => (
+                            <span key={t} className="saved-panel__chip">
+                              {t}
+                            </span>
+                          ))}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      className="saved-panel__edit"
+                      aria-label={`Edit ${label}`}
+                      title="Edit title and tags"
+                      onClick={() => startEdit(item)}
+                    >
+                      <Pencil size={14} aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      className="saved-panel__remove"
+                      aria-label={`Remove ${label}`}
+                      onClick={() => void remove(item.id)}
+                    >
+                      <X size={14} aria-hidden="true" />
+                    </button>
+                  </>
                 )}
-                {isEditing ? (
-                  <button
-                    type="button"
-                    className="saved-panel__save"
-                    aria-label="Save title"
-                    title="Save title"
-                    // onMouseDown so the click registers before the input's onBlur cancels.
-                    onMouseDown={(e) => {
-                      e.preventDefault();
-                      saveEdit(item.id);
-                    }}
-                  >
-                    <Check size={14} aria-hidden="true" />
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    className="saved-panel__edit"
-                    aria-label="Edit title"
-                    title="Edit title"
-                    onClick={() => startEdit(item)}
-                  >
-                    <Pencil size={14} aria-hidden="true" />
-                  </button>
-                )}
-                <button
-                  type="button"
-                  className="saved-panel__remove"
-                  aria-label={`Remove ${label}`}
-                  onClick={() => void remove(item.id)}
-                >
-                  <X size={14} aria-hidden="true" />
-                </button>
               </li>
             );
           })}
         </ul>
+      )}
+      {tagUnion.length > 0 && (
+        <details className="saved-panel__manage">
+          <summary className="saved-panel__manage-summary">Manage tags</summary>
+          <div className="saved-panel__manage-body" role="group" aria-label="Manage tags">
+            <select
+              aria-label="Tag to manage"
+              value={tagToManage}
+              onChange={(e) => setTagToManage(e.target.value)}
+            >
+              <option value="">Select a tag</option>
+              {tagUnion.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+            <input
+              type="text"
+              aria-label="Rename tag to"
+              placeholder="New tag name"
+              value={renameTo}
+              onChange={(e) => setRenameTo(e.target.value)}
+            />
+            <div className="saved-panel__manage-actions">
+              <button
+                type="button"
+                disabled={tagToManage.length === 0 || renameTo.trim().length === 0}
+                onClick={() => {
+                  renameTag(tagToManage, renameTo.trim());
+                  setRenameTo('');
+                  setTagToManage('');
+                }}
+              >
+                Rename tag
+              </button>
+              <button
+                type="button"
+                disabled={tagToManage.length === 0}
+                onClick={() => {
+                  deleteTag(tagToManage);
+                  setTagToManage('');
+                }}
+              >
+                Delete tag
+              </button>
+            </div>
+          </div>
+        </details>
       )}
     </div>
   );

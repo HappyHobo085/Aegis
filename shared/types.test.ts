@@ -63,9 +63,12 @@ describe('shared/types — Phase 3 additions', () => {
     expect(IPC.favoritesUpdate).toBe('favorites.update');
     expect(IPC.favoritesRemove).toBe('favorites.remove');
     expect(IPC.favoritesReorder).toBe('favorites.reorder');
-    expect(IPC.favoritesRenameTag).toBe('favorites.renameTag');
-    expect(IPC.favoritesDeleteTag).toBe('favorites.deleteTag');
-    expect(IPC.favoritesTagUnion).toBe('favorites.tagUnion');
+  });
+
+  it('no longer exposes favorites tag IPC channel constants', () => {
+    expect('favoritesRenameTag' in IPC).toBe(false);
+    expect('favoritesDeleteTag' in IPC).toBe(false);
+    expect('favoritesTagUnion' in IPC).toBe(false);
   });
 
   it('exposes the history IPC channel constants (incl. the changed event)', () => {
@@ -76,11 +79,15 @@ describe('shared/types — Phase 3 additions', () => {
     expect(IPC.evtHistoryChanged).toBe('history.changed');
   });
 
-  it('exposes the saved-list IPC channel constants', () => {
+  it('exposes the saved-list + tag IPC channel constants', () => {
     expect(IPC.savedList).toBe('saved.list');
     expect(IPC.savedAdd).toBe('saved.add');
     expect(IPC.savedRemove).toBe('saved.remove');
     expect(IPC.savedHas).toBe('saved.has');
+    expect(IPC.savedUpdate).toBe('saved.update');
+    expect(IPC.savedRenameTag).toBe('saved.renameTag');
+    expect(IPC.savedDeleteTag).toBe('saved.deleteTag');
+    expect(IPC.savedTagUnion).toBe('saved.tagUnion');
   });
 
   it('exposes the view.setContentInset channel constant', () => {
@@ -88,17 +95,60 @@ describe('shared/types — Phase 3 additions', () => {
   });
 
   it('admits the Phase-3 data-model shapes', () => {
-    const fav: Favorite = { id: 1, name: 'Example', url: 'https://example.com/', tags: ['news'], position: 0 };
-    expect(fav.tags).toEqual(['news']);
+    const fav: Favorite = { id: 1, name: 'Example', url: 'https://example.com/', position: 0 };
+    expect(fav.position).toBe(0);
 
     const entry: HistoryEntry = { id: 2, url: 'https://a.test/', title: 'A', visitedAt: 1234 };
     expect(entry.visitedAt).toBe(1234);
 
-    const saved: SavedItem = { id: 3, url: 'https://b.test/', title: 'B', savedAt: 5678 };
+    const saved: SavedItem = { id: 3, url: 'https://b.test/', title: 'B', tags: ['news'], savedAt: 5678 };
+    expect(saved.tags).toEqual(['news']);
     expect(saved.savedAt).toBe(5678);
 
     const inset: ContentInset = { top: 96, left: 280 };
     expect(inset).toEqual({ top: 96, left: 280 });
+  });
+
+  it('types the favorites AegisApi members without tag methods (compile-only shape check)', () => {
+    type FavoritesApi = AegisApi['favorites'];
+    const favoritesShape: Record<keyof FavoritesApi, true> = {
+      list: true,
+      add: true,
+      update: true,
+      remove: true,
+      reorder: true,
+    };
+    expect(Object.keys(favoritesShape).sort()).toEqual([
+      'add',
+      'list',
+      'remove',
+      'reorder',
+      'update',
+    ]);
+  });
+
+  it('types the saved AegisApi members incl. tag methods (compile-only shape check)', () => {
+    type SavedApi = AegisApi['saved'];
+    const savedShape: Record<keyof SavedApi, true> = {
+      list: true,
+      add: true,
+      remove: true,
+      has: true,
+      update: true,
+      renameTag: true,
+      deleteTag: true,
+      tagUnion: true,
+    };
+    expect(Object.keys(savedShape).sort()).toEqual([
+      'add',
+      'deleteTag',
+      'has',
+      'list',
+      'remove',
+      'renameTag',
+      'tagUnion',
+      'update',
+    ]);
   });
 });
 

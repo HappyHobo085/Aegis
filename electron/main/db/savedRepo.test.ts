@@ -77,6 +77,16 @@ describe('savedRepo', () => {
       expect(list[0]).toMatchObject({ id, url: 'https://a.test/', title: 'New Title', savedAt: 1000 });
     });
 
+    it('patches title and/or tags and leaves unspecified fields intact', () => {
+      const id = repo.add({ url: 'https://a.test/', title: 'A', tags: ['x'] }, () => 1000)[0].id;
+      // Update title only — tags unchanged.
+      let item = repo.update(id, { title: 'A2' })[0];
+      expect(item).toMatchObject({ url: 'https://a.test/', title: 'A2', tags: ['x'] });
+      // Update tags only — title unchanged.
+      item = repo.update(id, { tags: ['y', 'z'] })[0];
+      expect(item).toMatchObject({ url: 'https://a.test/', title: 'A2', tags: ['y', 'z'] });
+    });
+
     it('is a no-op for a non-existent id (returns list unchanged)', () => {
       repo.add({ url: 'https://a.test/', title: 'A' }, () => 1000);
       const before = repo.list();
@@ -84,6 +94,74 @@ describe('savedRepo', () => {
       expect(list).toHaveLength(1);
       expect(list[0].title).toBe('A');
       expect(list).toEqual(before);
+    });
+  });
+
+  describe('tags', () => {
+    it('defaults tags to an empty array when none are provided', () => {
+      const list = repo.add({ url: 'https://a.test/', title: 'A' }, () => 1000);
+      expect(list[0].tags).toEqual([]);
+    });
+
+    it('persists tags as JSON and round-trips them', () => {
+      repo.add({ url: 'https://a.test/', title: 'A', tags: ['x', 'y'] }, () => 1000);
+      expect(repo.list()[0].tags).toEqual(['x', 'y']);
+    });
+
+    it('falls back to [] for a corrupt tags column', () => {
+      repo.add({ url: 'https://a.test/', title: 'A', tags: ['x'] }, () => 1000);
+      const id = repo.list()[0].id;
+      db.prepare('UPDATE saved_list SET tags = ? WHERE id = ?').run('not json', id);
+      expect(repo.list()[0].tags).toEqual([]);
+    });
+
+    describe('tagUnion', () => {
+      it('returns the distinct sorted union of all tags', () => {
+        repo.add({ url: 'https://a.test/', title: 'A', tags: ['news', 'tech'] }, () => 1000);
+        repo.add({ url: 'https://b.test/', title: 'B', tags: ['tech', 'fun'] }, () => 2000);
+        expect(repo.tagUnion()).toEqual(['fun', 'news', 'tech']);
+      });
+
+      it('is empty when no saved item has tags', () => {
+        repo.add({ url: 'https://a.test/', title: 'A', tags: [] }, () => 1000);
+        expect(repo.tagUnion()).toEqual([]);
+      });
+    });
+
+    describe('renameTag', () => {
+      it('renames the tag in every saved item that has it', () => {
+        repo.add({ url: 'https://a.test/', title: 'A', tags: ['news', 'tech'] }, () => 1000);
+        repo.add({ url: 'https://b.test/', title: 'B', tags: ['tech'] }, () => 2000);
+        repo.add({ url: 'https://c.test/', title: 'C', tags: ['fun'] }, () => 3000);
+        const list = repo.renameTag('tech', 'technology');
+        const byUrl = Object.fromEntries(list.map((s) => [s.url, s.tags]));
+        expect(byUrl['https://a.test/']).toEqual(['news', 'technology']);
+        expect(byUrl['https://b.test/']).toEqual(['technology']);
+        expect(byUrl['https://c.test/']).toEqual(['fun']);
+      });
+
+      it('does not duplicate when the new tag already exists on a row', () => {
+        repo.add({ url: 'https://a.test/', title: 'A', tags: ['old', 'new'] }, () => 1000);
+        const list = repo.renameTag('old', 'new');
+        expect(list[0].tags).toEqual(['new']);
+      });
+    });
+
+    describe('deleteTag', () => {
+      it('removes the tag from every saved item that has it', () => {
+        repo.add({ url: 'https://a.test/', title: 'A', tags: ['news', 'tech'] }, () => 1000);
+        repo.add({ url: 'https://b.test/', title: 'B', tags: ['tech'] }, () => 2000);
+        const list = repo.deleteTag('tech');
+        const byUrl = Object.fromEntries(list.map((s) => [s.url, s.tags]));
+        expect(byUrl['https://a.test/']).toEqual(['news']);
+        expect(byUrl['https://b.test/']).toEqual([]);
+      });
+    });
+
+    it('persists tags across repo instances on the same db', () => {
+      repo.add({ url: 'https://a.test/', title: 'A', tags: ['x'] }, () => 1000);
+      const repo2 = new SavedRepo(db);
+      expect(repo2.list()[0]).toMatchObject({ url: 'https://a.test/', tags: ['x'] });
     });
   });
 

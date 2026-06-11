@@ -115,8 +115,8 @@ describe('sqlite', () => {
       expect(cols).toHaveProperty('id');
       expect(cols).toHaveProperty('name');
       expect(cols).toHaveProperty('url');
-      expect(cols).toHaveProperty('tags');
       expect(cols).toHaveProperty('position');
+      expect(cols).not.toHaveProperty('tags'); // tagging moved to saved_list
       expect(cols.id).toBe(1); // id is the primary key
     });
 
@@ -158,8 +158,60 @@ describe('sqlite', () => {
       expect(cols).toHaveProperty('id');
       expect(cols).toHaveProperty('url');
       expect(cols).toHaveProperty('title');
+      expect(cols).toHaveProperty('tags'); // tagging moved here from favorites
       expect(cols).toHaveProperty('savedAt');
       expect(cols.id).toBe(1); // id is the primary key
+    });
+
+    it('seeds saved_list.tags to an empty JSON array by default', () => {
+      db = openDb(':memory:');
+      runMigrations(db);
+      db.prepare('INSERT INTO saved_list (url, savedAt) VALUES (?, ?)').run(
+        'https://example.com',
+        Date.now(),
+      );
+      const row = db.prepare('SELECT tags FROM saved_list').get() as { tags: string };
+      expect(JSON.parse(row.tags)).toEqual([]);
+    });
+
+    it('adds the saved_list.tags column to a pre-existing (old-shaped) DB', () => {
+      db = openDb(':memory:');
+      // Simulate an old profile whose saved_list predates the tags column.
+      db.exec(`
+        CREATE TABLE saved_list (
+          id      INTEGER PRIMARY KEY AUTOINCREMENT,
+          url     TEXT    NOT NULL,
+          title   TEXT    NOT NULL DEFAULT '',
+          savedAt INTEGER NOT NULL
+        );
+      `);
+      db.prepare('INSERT INTO saved_list (url, savedAt) VALUES (?, ?)').run(
+        'https://old.example',
+        123,
+      );
+
+      const colsBefore = (db.prepare('PRAGMA table_info(saved_list)').all() as Array<{
+        name: string;
+      }>).map((c) => c.name);
+      expect(colsBefore).not.toContain('tags');
+
+      runMigrations(db);
+
+      const colsAfter = (db.prepare('PRAGMA table_info(saved_list)').all() as Array<{
+        name: string;
+      }>).map((c) => c.name);
+      expect(colsAfter).toContain('tags');
+
+      // Existing row gets the default empty-array tags, data preserved.
+      const row = db.prepare('SELECT url, tags FROM saved_list').get() as {
+        url: string;
+        tags: string;
+      };
+      expect(row.url).toBe('https://old.example');
+      expect(JSON.parse(row.tags)).toEqual([]);
+
+      // The ALTER migration is idempotent — running again does not throw.
+      expect(() => runMigrations(db!)).not.toThrow();
     });
   });
 });

@@ -69,18 +69,14 @@ const api: AegisApi = {
   },
   favorites: {
     list: (): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesList),
-    add: (input: { name: string; url: string; tags: string[] }): Promise<Favorite[]> =>
+    add: (input: { name: string; url: string }): Promise<Favorite[]> =>
       ipcRenderer.invoke(IPC.favoritesAdd, input),
     update: (
       id: number,
-      partial: { name?: string; url?: string; tags?: string[] },
+      partial: { name?: string; url?: string },
     ): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesUpdate, id, partial),
     remove: (id: number): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesRemove, id),
     reorder: (ids: number[]): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesReorder, ids),
-    renameTag: (oldT: string, newT: string): Promise<Favorite[]> =>
-      ipcRenderer.invoke(IPC.favoritesRenameTag, oldT, newT),
-    deleteTag: (tag: string): Promise<Favorite[]> => ipcRenderer.invoke(IPC.favoritesDeleteTag, tag),
-    tagUnion: (): Promise<string[]> => ipcRenderer.invoke(IPC.favoritesTagUnion),
   },
   history: {
     list: (opts?: { limit?: number; offset?: number }): Promise<HistoryEntry[]> =>
@@ -92,12 +88,16 @@ const api: AegisApi = {
   },
   saved: {
     list: (): Promise<SavedItem[]> => ipcRenderer.invoke(IPC.savedList),
-    add: (input: { url: string; title: string }): Promise<SavedItem[]> =>
+    add: (input: { url: string; title: string; tags?: string[] }): Promise<SavedItem[]> =>
       ipcRenderer.invoke(IPC.savedAdd, input),
     remove: (id: number): Promise<SavedItem[]> => ipcRenderer.invoke(IPC.savedRemove, id),
     has: (url: string): Promise<boolean> => ipcRenderer.invoke(IPC.savedHas, url),
-    update: (id: number, partial: { title: string }): Promise<SavedItem[]> =>
+    update: (id: number, partial: { title?: string; tags?: string[] }): Promise<SavedItem[]> =>
       ipcRenderer.invoke(IPC.savedUpdate, id, partial),
+    renameTag: (oldT: string, newT: string): Promise<SavedItem[]> =>
+      ipcRenderer.invoke(IPC.savedRenameTag, oldT, newT),
+    deleteTag: (tag: string): Promise<SavedItem[]> => ipcRenderer.invoke(IPC.savedDeleteTag, tag),
+    tagUnion: (): Promise<string[]> => ipcRenderer.invoke(IPC.savedTagUnion),
   },
   downloads: {
     list: (): Promise<DownloadEntry[]> => ipcRenderer.invoke(IPC.downloadsList),

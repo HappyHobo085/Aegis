@@ -28,20 +28,20 @@ export const IPC = {
   favoritesUpdate: 'favorites.update',
   favoritesRemove: 'favorites.remove',
   favoritesReorder: 'favorites.reorder',
-  favoritesRenameTag: 'favorites.renameTag',
-  favoritesDeleteTag: 'favorites.deleteTag',
-  favoritesTagUnion: 'favorites.tagUnion',
   // history (chrome -> main)
   historyList: 'history.list',
   historySearch: 'history.search',
   historyRemove: 'history.remove',
   historyClear: 'history.clear',
-  // saved list (chrome -> main)
+  // saved list + tags (chrome -> main)
   savedList: 'saved.list',
   savedAdd: 'saved.add',
   savedRemove: 'saved.remove',
   savedHas: 'saved.has',
   savedUpdate: 'saved.update',
+  savedRenameTag: 'saved.renameTag',
+  savedDeleteTag: 'saved.deleteTag',
+  savedTagUnion: 'saved.tagUnion',
   // subscriptions (chrome -> main, Phase 4)
   subsList: 'subs.list',
   subsSetEnabled: 'subs.setEnabled',
@@ -109,7 +109,6 @@ export interface Favorite {
   id: number;
   name: string;
   url: string;
-  tags: string[];
   position: number;
 }
 export interface HistoryEntry {
@@ -122,6 +121,7 @@ export interface SavedItem {
   id: number;
   url: string;
   title: string;
+  tags: string[];
   savedAt: number;
 }
 // ---- downloads / permissions data model (Phase 5) ----
@@ -223,13 +223,10 @@ export interface AegisApi {
   };
   favorites: {
     list(): Promise<Favorite[]>;
-    add(input: { name: string; url: string; tags: string[] }): Promise<Favorite[]>;
-    update(id: number, partial: { name?: string; url?: string; tags?: string[] }): Promise<Favorite[]>;
+    add(input: { name: string; url: string }): Promise<Favorite[]>;
+    update(id: number, partial: { name?: string; url?: string }): Promise<Favorite[]>;
     remove(id: number): Promise<Favorite[]>;
     reorder(ids: number[]): Promise<Favorite[]>;
-    renameTag(oldT: string, newT: string): Promise<Favorite[]>;
-    deleteTag(tag: string): Promise<Favorite[]>;
-    tagUnion(): Promise<string[]>;
   };
   history: {
     list(opts?: { limit?: number; offset?: number }): Promise<HistoryEntry[]>;
@@ -240,10 +237,13 @@ export interface AegisApi {
   };
   saved: {
     list(): Promise<SavedItem[]>;
-    add(input: { url: string; title: string }): Promise<SavedItem[]>;
+    add(input: { url: string; title: string; tags?: string[] }): Promise<SavedItem[]>;
     remove(id: number): Promise<SavedItem[]>;
     has(url: string): Promise<boolean>;
-    update(id: number, partial: { title: string }): Promise<SavedItem[]>;
+    update(id: number, partial: { title?: string; tags?: string[] }): Promise<SavedItem[]>;
+    renameTag(oldT: string, newT: string): Promise<SavedItem[]>;
+    deleteTag(tag: string): Promise<SavedItem[]>;
+    tagUnion(): Promise<string[]>;
   };
   settings: {
     get(): Promise<Settings>;

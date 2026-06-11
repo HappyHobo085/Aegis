@@ -90,8 +90,10 @@ export function buildDataHandlers(
             savedRepo.clear();
             historyRepo.clear();
           }
-          for (const f of plan.favorites) favoritesRepo.add({ name: f.name, url: f.url, tags: f.tags });
-          for (const s of plan.saved) savedRepo.add({ url: s.url, title: s.title });
+          for (const f of plan.favorites) favoritesRepo.add({ name: f.name, url: f.url });
+          // Tolerate older exports that predate saved-item tags (default to []).
+          for (const s of plan.saved)
+            savedRepo.add({ url: s.url, title: s.title, tags: Array.isArray(s.tags) ? s.tags : [] });
           for (const h of plan.history) historyRepo.record({ url: h.url, title: h.title }, () => h.visitedAt);
           settingsRepo.set(plan.settings);
         })();

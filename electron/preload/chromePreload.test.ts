@@ -207,9 +207,6 @@ describe('chromePreload favorites + history + saved + inset (Phase 3)', () => {
     expect(typeof api.favorites.update).toBe('function');
     expect(typeof api.favorites.remove).toBe('function');
     expect(typeof api.favorites.reorder).toBe('function');
-    expect(typeof api.favorites.renameTag).toBe('function');
-    expect(typeof api.favorites.deleteTag).toBe('function');
-    expect(typeof api.favorites.tagUnion).toBe('function');
     expect(typeof api.history.list).toBe('function');
     expect(typeof api.history.search).toBe('function');
     expect(typeof api.history.remove).toBe('function');
@@ -219,13 +216,17 @@ describe('chromePreload favorites + history + saved + inset (Phase 3)', () => {
     expect(typeof api.saved.add).toBe('function');
     expect(typeof api.saved.remove).toBe('function');
     expect(typeof api.saved.has).toBe('function');
+    expect(typeof api.saved.update).toBe('function');
+    expect(typeof api.saved.renameTag).toBe('function');
+    expect(typeof api.saved.deleteTag).toBe('function');
+    expect(typeof api.saved.tagUnion).toBe('function');
     expect(typeof api.view.setContentInset).toBe('function');
   });
 
   it('favorites.add invokes IPC.favoritesAdd with the input', async () => {
     await import('./chromePreload');
     const api = h.exposed.aegis as AegisApi;
-    const input = { name: 'A', url: 'https://a.test/', tags: ['x'] };
+    const input = { name: 'A', url: 'https://a.test/' };
     await api.favorites.add(input);
     expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesAdd, input);
   });
@@ -242,24 +243,6 @@ describe('chromePreload favorites + history + saved + inset (Phase 3)', () => {
     const api = h.exposed.aegis as AegisApi;
     await api.favorites.reorder([3, 1, 2]);
     expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesReorder, [3, 1, 2]);
-  });
-
-  it('favorites.renameTag and deleteTag invoke their channels with args', async () => {
-    await import('./chromePreload');
-    const api = h.exposed.aegis as AegisApi;
-    await api.favorites.renameTag('old', 'new');
-    expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesRenameTag, 'old', 'new');
-    await api.favorites.deleteTag('old');
-    expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesDeleteTag, 'old');
-  });
-
-  it('favorites.tagUnion invokes IPC.favoritesTagUnion and returns the resolved set', async () => {
-    h.invoke = vi.fn(async () => ['a', 'b']);
-    await import('./chromePreload');
-    const api = h.exposed.aegis as AegisApi;
-    const result = await api.favorites.tagUnion();
-    expect(h.invoke).toHaveBeenCalledWith(IPC.favoritesTagUnion);
-    expect(result).toEqual(['a', 'b']);
   });
 
   it('history.list invokes IPC.historyList with opts', async () => {
@@ -312,6 +295,39 @@ describe('chromePreload favorites + history + saved + inset (Phase 3)', () => {
     const input = { url: 'https://a.test/', title: 'A' };
     await api.saved.add(input);
     expect(h.invoke).toHaveBeenCalledWith(IPC.savedAdd, input);
+  });
+
+  it('saved.add forwards tags in the input', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const input = { url: 'https://a.test/', title: 'A', tags: ['x', 'y'] };
+    await api.saved.add(input);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.savedAdd, input);
+  });
+
+  it('saved.update invokes IPC.savedUpdate with (id, partial) including tags', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.saved.update(7, { title: 'R', tags: ['x'] });
+    expect(h.invoke).toHaveBeenCalledWith(IPC.savedUpdate, 7, { title: 'R', tags: ['x'] });
+  });
+
+  it('saved.renameTag and deleteTag invoke their channels with args', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.saved.renameTag('old', 'new');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.savedRenameTag, 'old', 'new');
+    await api.saved.deleteTag('old');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.savedDeleteTag, 'old');
+  });
+
+  it('saved.tagUnion invokes IPC.savedTagUnion and returns the resolved set', async () => {
+    h.invoke = vi.fn(async () => ['a', 'b']);
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const result = await api.saved.tagUnion();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.savedTagUnion);
+    expect(result).toEqual(['a', 'b']);
   });
 
   it('saved.has invokes IPC.savedHas with the url and returns the boolean', async () => {

@@ -55,7 +55,7 @@ function navigate(app: ElectronApplication, url: string): Promise<void> {
 /** Drive the constructed FavoritesRepo inside the booted app (§9.1). */
 function favAdd(
   app: ElectronApplication,
-  input: { name: string; url: string; tags: string[] },
+  input: { name: string; url: string },
 ): Promise<Favorite[]> {
   return app.evaluate(
     (_e, i) => (globalThis as any).__aegisTest.places.favoritesRepo.add(i),
@@ -69,63 +69,19 @@ function favList(app: ElectronApplication): Promise<Favorite[]> {
   );
 }
 
-function favTagUnion(app: ElectronApplication): Promise<string[]> {
-  return app.evaluate(() =>
-    (globalThis as any).__aegisTest.places.favoritesRepo.tagUnion(),
-  );
-}
-
-function favRenameTag(
-  app: ElectronApplication,
-  oldT: string,
-  newT: string,
-): Promise<Favorite[]> {
-  return app.evaluate(
-    (_e, args) =>
-      (globalThis as any).__aegisTest.places.favoritesRepo.renameTag(
-        args.oldT,
-        args.newT,
-      ),
-    { oldT, newT },
-  );
-}
-
-function favDeleteTag(app: ElectronApplication, tag: string): Promise<Favorite[]> {
-  return app.evaluate(
-    (_e, t) => (globalThis as any).__aegisTest.places.favoritesRepo.deleteTag(t),
-    tag,
-  );
-}
-
-test('favorites add → list/tagUnion reflect tags; renameTag/deleteTag span all rows', async () => {
+test('favorites add → list reflects insertion order and ascending positions', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aegis-e2e-fav-'));
   const app = await launchApp(dir, { AEGIS_HOME_URL: 'about:blank' });
   try {
     const aUrl = `${fixtures.baseUrl}/spa.html`;
     const bUrl = `${fixtures.baseUrl}/late-title.html`;
 
-    // Add two favorites with overlapping + distinct tags.
-    let list = await favAdd(app, { name: 'Alpha', url: aUrl, tags: ['news', 'work'] });
+    let list = await favAdd(app, { name: 'Alpha', url: aUrl });
     expect(list.map((f) => f.name)).toEqual(['Alpha']);
-    list = await favAdd(app, { name: 'Beta', url: bUrl, tags: ['work', 'fun'] });
+    list = await favAdd(app, { name: 'Beta', url: bUrl });
     // Ordered by position (insertion order): Alpha first, Beta second.
     expect(list.map((f) => f.name)).toEqual(['Alpha', 'Beta']);
     expect(list[0].position).toBeLessThan(list[1].position);
-
-    // tagUnion is the distinct, sorted set across all rows.
-    expect(await favTagUnion(app)).toEqual(['fun', 'news', 'work']);
-
-    // Global rename: 'work' → 'job' updates BOTH favorites.
-    const renamed = await favRenameTag(app, 'work', 'job');
-    expect(renamed.find((f) => f.name === 'Alpha')!.tags).toEqual(['news', 'job']);
-    expect(renamed.find((f) => f.name === 'Beta')!.tags).toEqual(['job', 'fun']);
-    expect(await favTagUnion(app)).toEqual(['fun', 'job', 'news']);
-
-    // Global delete: 'job' is removed from EVERY favorite.
-    const afterDelete = await favDeleteTag(app, 'job');
-    expect(afterDelete.find((f) => f.name === 'Alpha')!.tags).toEqual(['news']);
-    expect(afterDelete.find((f) => f.name === 'Beta')!.tags).toEqual(['fun']);
-    expect(await favTagUnion(app)).toEqual(['fun', 'news']);
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });
@@ -137,7 +93,7 @@ test('opening a favorite navigates the content view to its URL (chip → navigat
   const app = await launchApp(dir, { AEGIS_HOME_URL: 'about:blank' });
   try {
     const favUrl = `${fixtures.baseUrl}/spa.html`;
-    await favAdd(app, { name: 'Alpha', url: favUrl, tags: ['news'] });
+    await favAdd(app, { name: 'Alpha', url: favUrl });
 
     // FavoritesBar's chip onOpenFavorite === nav.navigate (component-tested);
     // here we prove the booted app navigates the content view to a favorite URL.

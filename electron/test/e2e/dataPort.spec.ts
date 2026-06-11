@@ -74,10 +74,10 @@ function applyReplace(app: ElectronApplication, payload: ExportPayload): Promise
     places.savedRepo.clear();
     places.historyRepo.clear();
     for (const f of p.favorites) {
-      places.favoritesRepo.add({ name: f.name, url: f.url, tags: f.tags });
+      places.favoritesRepo.add({ name: f.name, url: f.url });
     }
     for (const s of p.saved) {
-      places.savedRepo.add({ url: s.url, title: s.title });
+      places.savedRepo.add({ url: s.url, title: s.title, tags: s.tags });
     }
     for (const h of p.history) {
       // record(e, ()=>e.visitedAt) preserves the original timestamp on import.
@@ -94,11 +94,11 @@ function applyMerge(app: ElectronApplication, payload: ExportPayload): Promise<v
     const phase4 = (globalThis as any).__aegisTest.phase4;
     const favUrls = new Set(places.favoritesRepo.list().map((f: any) => f.url));
     for (const f of p.favorites) {
-      if (!favUrls.has(f.url)) places.favoritesRepo.add({ name: f.name, url: f.url, tags: f.tags });
+      if (!favUrls.has(f.url)) places.favoritesRepo.add({ name: f.name, url: f.url });
     }
     const savedUrls = new Set(places.savedRepo.list().map((s: any) => s.url));
     for (const s of p.saved) {
-      if (!savedUrls.has(s.url)) places.savedRepo.add({ url: s.url, title: s.title });
+      if (!savedUrls.has(s.url)) places.savedRepo.add({ url: s.url, title: s.title, tags: s.tags });
     }
     const histUrls = new Set(places.historyRepo.list({ limit: 100000 }).map((h: any) => h.url));
     for (const h of p.history) {
@@ -132,11 +132,12 @@ test('export → REPLACE import round-trips favorites/saved/history/settings int
   let payload: ExportPayload;
   try {
     await src.evaluate(
-      (_e, u) => (globalThis as any).__aegisTest.places.favoritesRepo.add({ name: 'Fav A', url: u, tags: ['x'] }),
+      (_e, u) => (globalThis as any).__aegisTest.places.favoritesRepo.add({ name: 'Fav A', url: u }),
       favUrl,
     );
     await src.evaluate(
-      (_e, u) => (globalThis as any).__aegisTest.places.savedRepo.add({ url: u, title: 'Saved A' }),
+      (_e, u) =>
+        (globalThis as any).__aegisTest.places.savedRepo.add({ url: u, title: 'Saved A', tags: ['x'] }),
       savedUrl,
     );
     await src.evaluate(
@@ -157,7 +158,7 @@ test('export → REPLACE import round-trips favorites/saved/history/settings int
   const dst = await launchApp(dstDir, { AEGIS_HOME_URL: 'about:blank' });
   try {
     await dst.evaluate(
-      (_e, u) => (globalThis as any).__aegisTest.places.favoritesRepo.add({ name: 'Stale', url: u, tags: [] }),
+      (_e, u) => (globalThis as any).__aegisTest.places.favoritesRepo.add({ name: 'Stale', url: u }),
       `${fixtures.baseUrl}/stale.html`,
     );
     await applyReplace(dst, payload);
@@ -165,8 +166,9 @@ test('export → REPLACE import round-trips favorites/saved/history/settings int
     // REPLACE wiped the stale row; only the imported one remains.
     const favs = await favList(dst);
     expect(favs.map((f) => f.url)).toEqual([favUrl]);
-    expect(favs[0].tags).toEqual(['x']);
-    expect((await savedList(dst)).map((s) => s.url)).toEqual([savedUrl]);
+    const dstSaved = await savedList(dst);
+    expect(dstSaved.map((s) => s.url)).toEqual([savedUrl]);
+    expect(dstSaved[0].tags).toEqual(['x']); // saved tags round-trip through export/import
     expect((await historyList(dst)).some((h) => h.url === favUrl)).toBe(true);
     expect((await settingsGet(dst)).downloadDir).toBe('/tmp/aegis-imported');
   } finally {
@@ -184,15 +186,15 @@ test('MERGE import keeps existing rows and only adds non-duplicate urls', async 
   try {
     // Seed an existing favorite that the payload also contains (dup) + one only in the app.
     await app.evaluate(
-      (_e, u) => (globalThis as any).__aegisTest.places.favoritesRepo.add({ name: 'Existing', url: u, tags: [] }),
+      (_e, u) => (globalThis as any).__aegisTest.places.favoritesRepo.add({ name: 'Existing', url: u }),
       existingUrl,
     );
     const current = await settingsGet(app);
     const payload: ExportPayload = {
       version: 1,
       favorites: [
-        { id: 999, name: 'Existing dup', url: existingUrl, tags: ['dup'] },
-        { id: 1000, name: 'Brand New', url: newUrl, tags: ['new'] },
+        { id: 999, name: 'Existing dup', url: existingUrl, position: 0 },
+        { id: 1000, name: 'Brand New', url: newUrl, position: 1 },
       ] as Favorite[],
       history: [],
       saved: [],

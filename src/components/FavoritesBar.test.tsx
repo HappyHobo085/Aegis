@@ -9,7 +9,6 @@ const fav = (over: Partial<Favorite> = {}): Favorite => ({
   id: 1,
   name: 'Example',
   url: 'https://example.com/',
-  tags: ['news'],
   position: 0,
   ...over,
 });
@@ -19,9 +18,6 @@ const props = (over: Partial<React.ComponentProps<typeof FavoritesBar>> = {}) =>
     fav({ id: 1, name: 'Alpha', url: 'https://alpha.example/' }),
     fav({ id: 2, name: 'Beta', url: 'https://beta.example/' }),
   ],
-  tagUnion: ['dev', 'news'],
-  activeTags: [] as string[],
-  setActiveTags: vi.fn(),
   onOpenFavorite: vi.fn(),
   onOpenManager: vi.fn(),
   ...over,
@@ -46,19 +42,6 @@ describe('FavoritesBar', () => {
     render(<FavoritesBar {...p} />);
     await userEvent.click(screen.getByRole('button', { name: /manage favorites/i }));
     expect(p.onOpenManager).toHaveBeenCalledTimes(1);
-  });
-
-  it('renders the TagFilter internally (chips from the union)', () => {
-    render(<FavoritesBar {...props()} />);
-    expect(screen.getByRole('button', { name: /filter by tag dev/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /filter by tag news/i })).toBeInTheDocument();
-  });
-
-  it('clicking a tag chip delegates to setActiveTags', async () => {
-    const p = props();
-    render(<FavoritesBar {...p} />);
-    await userEvent.click(screen.getByRole('button', { name: /filter by tag dev/i }));
-    expect(p.setActiveTags).toHaveBeenCalledWith(['dev']);
   });
 
   it('uses a labelled toolbar/navigation landmark for the bar', () => {

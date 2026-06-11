@@ -44,7 +44,6 @@ export function runMigrations(db: Database.Database): void {
       id       INTEGER PRIMARY KEY AUTOINCREMENT,
       name     TEXT    NOT NULL,
       url      TEXT    NOT NULL,
-      tags     TEXT    NOT NULL DEFAULT '[]',
       position INTEGER NOT NULL DEFAULT 0
     );
 
@@ -59,6 +58,7 @@ export function runMigrations(db: Database.Database): void {
       id      INTEGER PRIMARY KEY AUTOINCREMENT,
       url     TEXT    NOT NULL,
       title   TEXT    NOT NULL DEFAULT '',
+      tags    TEXT    NOT NULL DEFAULT '[]',
       savedAt INTEGER NOT NULL
     );
 
@@ -86,4 +86,12 @@ export function runMigrations(db: Database.Database): void {
       PRIMARY KEY (origin, permission)
     );
   `);
+
+  // Additive column migration: tagging moved from favorites to saved_list. The
+  // CREATE above only adds saved_list.tags on a fresh DB, so an existing profile
+  // needs an ALTER. Idempotent — guarded by a column-existence check.
+  const savedCols = db.prepare('PRAGMA table_info(saved_list)').all() as Array<{ name: string }>;
+  if (!savedCols.some((c) => c.name === 'tags')) {
+    db.exec("ALTER TABLE saved_list ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'");
+  }
 }

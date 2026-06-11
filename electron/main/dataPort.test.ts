@@ -9,9 +9,9 @@ const settings: Settings = {
   defaultSearchTemplate: 'https://d/?q=%s', searchEngines: [], hideChromeByDefault: false,
   downloadDir: '',
 };
-const fav = (url: string): Favorite => ({ id: 1, name: 'n', url, tags: [], position: 0 });
+const fav = (url: string): Favorite => ({ id: 1, name: 'n', url, position: 0 });
 const hist = (url: string, visitedAt: number): HistoryEntry => ({ id: 1, url, title: 't', visitedAt });
-const saved = (url: string): SavedItem => ({ id: 1, url, title: 't', savedAt: 5 });
+const saved = (url: string): SavedItem => ({ id: 1, url, title: 't', tags: [], savedAt: 5 });
 
 function payload(over: Partial<ExportPayload> = {}): ExportPayload {
   return { version: 1, favorites: [], history: [], saved: [], settings, ...over };

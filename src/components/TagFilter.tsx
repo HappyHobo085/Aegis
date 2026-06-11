@@ -3,9 +3,15 @@ export interface TagFilterProps {
   tagUnion: string[];
   activeTags: string[];
   setActiveTags(tags: string[]): void;
+  label?: string;
 }
 
-export function TagFilter({ tagUnion, activeTags, setActiveTags }: TagFilterProps) {
+export function TagFilter({
+  tagUnion,
+  activeTags,
+  setActiveTags,
+  label = 'Filter by tag',
+}: TagFilterProps) {
   if (tagUnion.length === 0) return null;
 
   const toggle = (tag: string): void => {
@@ -17,7 +23,7 @@ export function TagFilter({ tagUnion, activeTags, setActiveTags }: TagFilterProp
   };
 
   return (
-    <div className="tag-filter" role="group" aria-label="Filter favorites by tag">
+    <div className="tag-filter" role="group" aria-label={label}>
       {tagUnion.map((tag) => {
         const active = activeTags.includes(tag);
         return (

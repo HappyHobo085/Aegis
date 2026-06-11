@@ -1,6 +1,6 @@
 // src/components/FavoritesManager.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Favorite } from '../../shared/types';
 import { FavoritesManager } from './FavoritesManager';
@@ -9,23 +9,19 @@ const fav = (over: Partial<Favorite> = {}): Favorite => ({
   id: 1,
   name: 'Alpha',
   url: 'https://alpha.example/',
-  tags: ['news'],
   position: 0,
   ...over,
 });
 
 const props = (over: Partial<React.ComponentProps<typeof FavoritesManager>> = {}) => ({
   favorites: [
-    fav({ id: 1, name: 'Alpha', url: 'https://alpha.example/', tags: ['news'] }),
-    fav({ id: 2, name: 'Beta', url: 'https://beta.example/', tags: ['dev'] }),
+    fav({ id: 1, name: 'Alpha', url: 'https://alpha.example/' }),
+    fav({ id: 2, name: 'Beta', url: 'https://beta.example/' }),
   ],
-  tagUnion: ['dev', 'news'],
   onClose: vi.fn(),
   add: vi.fn(async () => {}),
   update: vi.fn(async () => {}),
   remove: vi.fn(async () => {}),
-  renameTag: vi.fn(async () => {}),
-  deleteTag: vi.fn(async () => {}),
   ...over,
 });
 
@@ -53,7 +49,7 @@ describe('FavoritesManager', () => {
     await userEvent.type(screen.getByRole('textbox', { name: /new favorite name/i }), 'Gamma');
     await userEvent.type(screen.getByRole('textbox', { name: /new favorite url/i }), 'https://gamma.example/');
     await userEvent.click(screen.getByRole('button', { name: /^add favorite$/i }));
-    expect(p.add).toHaveBeenCalledWith({ name: 'Gamma', url: 'https://gamma.example/', tags: [] });
+    expect(p.add).toHaveBeenCalledWith({ name: 'Gamma', url: 'https://gamma.example/' });
   });
 
   it('removes a favorite via its row Remove button', async () => {
@@ -70,26 +66,7 @@ describe('FavoritesManager', () => {
     await userEvent.clear(nameField);
     await userEvent.type(nameField, 'Alpha 2');
     await userEvent.click(screen.getByRole('button', { name: /save favorite alpha/i }));
-    expect(p.update).toHaveBeenCalledWith(1, { name: 'Alpha 2', url: 'https://alpha.example/', tags: ['news'] });
-  });
-
-  it('renames a tag globally via the tag-management controls', async () => {
-    const p = props();
-    render(<FavoritesManager {...p} />);
-    const section = screen.getByRole('group', { name: /manage tags/i });
-    await userEvent.selectOptions(within(section).getByRole('combobox', { name: /tag to manage/i }), 'dev');
-    await userEvent.type(within(section).getByRole('textbox', { name: /rename tag to/i }), 'engineering');
-    await userEvent.click(within(section).getByRole('button', { name: /^rename tag$/i }));
-    expect(p.renameTag).toHaveBeenCalledWith('dev', 'engineering');
-  });
-
-  it('deletes a tag globally via the tag-management controls', async () => {
-    const p = props();
-    render(<FavoritesManager {...p} />);
-    const section = screen.getByRole('group', { name: /manage tags/i });
-    await userEvent.selectOptions(within(section).getByRole('combobox', { name: /tag to manage/i }), 'news');
-    await userEvent.click(within(section).getByRole('button', { name: /^delete tag$/i }));
-    expect(p.deleteTag).toHaveBeenCalledWith('news');
+    expect(p.update).toHaveBeenCalledWith(1, { name: 'Alpha 2', url: 'https://alpha.example/' });
   });
 
   it('closes on Escape and on the Close button', async () => {
