@@ -2,6 +2,7 @@
   "name": "aegis",
   "version": "0.0.0",
   "description": "Aegis — an Electron ad-blocking browser shell",
+  "author": "HappyHobo085",
   "private": true,
   "main": "out/main/index.js",
   "build": {
@@ -25,7 +26,15 @@
       "target": [
         "AppImage"
       ],
-      "category": "Network"
+      "category": "Network",
+      "icon": "build/icon.png",
+      "synopsis": "Ad-blocking browser",
+      "desktop": {
+        "entry": {
+          "Name": "Aegis"
+        }
+      },
+      "syncDesktopName": true
     }
   },
   "scripts": {
