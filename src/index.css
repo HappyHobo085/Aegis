@@ -644,6 +644,11 @@ textarea::placeholder {
   align-items: center;
   gap: 4px;
   overflow-x: auto;
+  /* Take the head's remaining width and allow shrinking below content width
+     (min-width:0 overrides the flex default) so the strip scrolls INTERNALLY
+     when its tabs overflow, instead of growing and overflowing the panel. */
+  flex: 1;
+  min-width: 0;
   /* hide scrollbar but keep scroll */
   scrollbar-width: none;
 }
