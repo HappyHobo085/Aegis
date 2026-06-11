@@ -552,3 +552,526 @@ input {
   color: var(--fg);
   outline: none;
 }
+
+/* ─── Sidebar overlay ────────────────────────────────────────────── */
+
+/* Scrim: dims the content region only (toolbar + favbar = 96px sit above) */
+.sidebar__scrim {
+  position: fixed;
+  top: 96px; /* TOOLBAR_H(56) + FAVBAR_H(40) */
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 9000;
+  animation: scrim-fade-in 0.2s ease;
+}
+
+/* Panel: fixed right overlay, slides in from the right */
+.sidebar__panel {
+  position: fixed;
+  top: 96px; /* TOOLBAR_H(56) + FAVBAR_H(40) */
+  right: 0;
+  bottom: 0;
+  width: 280px; /* SIDEBAR_W */
+  background: var(--bg-elevated);
+  border-left: 1px solid var(--border);
+  box-shadow: var(--shadow-modal);
+  z-index: 9001;
+  display: flex;
+  flex-direction: column;
+  animation: sidebar-in 0.25s ease;
+  /* Override base .sidebar rules if any */
+  margin: 0;
+  padding: 0;
+}
+
+/* Header row: tabs + close button */
+.sidebar__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 15px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* Tab list row */
+.sidebar__tabs {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* Individual tab button — underline style */
+.sidebar__tab {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--fg-muted);
+  font-weight: 600;
+  font-size: 13px;
+  padding: 6px 10px;
+  cursor: pointer;
+  line-height: 1.4;
+  /* Reset base button hover border so only our bottom border shows */
+}
+
+.sidebar__tab:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+  border-bottom-color: var(--border-2);
+  color: var(--fg);
+}
+
+.sidebar__tab[aria-selected="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--accent-color);
+}
+
+.sidebar__tab[aria-selected="true"]:hover:not(:disabled) {
+  border-bottom-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* Close (×) icon button */
+.sidebar__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.sidebar__close:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: transparent;
+  color: var(--fg);
+}
+
+/* Scrollable content area */
+.sidebar__content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+/* ─── History panel ──────────────────────────────────────────────── */
+
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Search form — pill input layout */
+.history-panel__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Visually hide the label (accessible) */
+.history-panel__search-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Search input — pill style */
+.history-panel__search input {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-2);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.history-panel__search input:focus,
+.history-panel__search input:focus-visible {
+  border-color: var(--accent-color);
+  outline: none;
+}
+
+/* Search submit button */
+.history-panel__search button[type="submit"] {
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.history-panel__search button[type="submit"]:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* Clear all button */
+.history-panel__clear {
+  align-self: flex-start;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.history-panel__clear:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Empty state */
+.history-panel__empty {
+  margin: 0;
+  padding: 16px 0;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+/* Row list — reset */
+.history-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Card row */
+.history-panel__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  background: var(--bg-input);
+  border-radius: var(--radius-3);
+  border: 1px solid transparent;
+  padding: 10px 12px;
+  transition: border-color 0.15s;
+}
+
+.history-panel__row:hover {
+  border-color: var(--accent-color);
+}
+
+/* Open button — fills most of the row width */
+.history-panel__open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  text-align: left;
+  min-width: 0;
+}
+
+.history-panel__open:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* Title */
+.history-panel__title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* URL line */
+.history-panel__url {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Timestamp */
+.history-panel__time {
+  font-size: 11px;
+  color: var(--fg-muted);
+}
+
+/* Remove (×) button */
+.history-panel__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-1);
+  color: var(--fg-muted);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.history-panel__remove:hover:not(:disabled) {
+  background: rgba(255, 93, 93, 0.12);
+  border-color: transparent;
+  color: var(--danger);
+}
+
+/* ─── Saved panel ────────────────────────────────────────────────── */
+
+.saved-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Empty state */
+.saved-panel__empty {
+  margin: 0;
+  padding: 16px 0;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+/* Row list — reset */
+.saved-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Card row */
+.saved-panel__row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  background: var(--bg-input);
+  border-radius: var(--radius-3);
+  border: 1px solid transparent;
+  padding: 10px 12px;
+  transition: border-color 0.15s;
+}
+
+.saved-panel__row:hover {
+  border-color: var(--accent-color);
+}
+
+/* Open button */
+.saved-panel__open {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 0;
+  text-align: left;
+  min-width: 0;
+}
+
+.saved-panel__open:hover:not(:disabled) {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* Title */
+.saved-panel__title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* URL line */
+.saved-panel__url {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Remove (×) button */
+.saved-panel__remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-1);
+  color: var(--fg-muted);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.saved-panel__remove:hover:not(:disabled) {
+  background: rgba(255, 93, 93, 0.12);
+  border-color: transparent;
+  color: var(--danger);
+}
+
+/* ─── Downloads panel ────────────────────────────────────────────── */
+
+.downloads-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Clear all button */
+.downloads-panel__clear {
+  align-self: flex-start;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.downloads-panel__clear:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Empty state */
+.downloads-panel__empty {
+  margin: 0;
+  padding: 16px 0;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+/* Row list — reset */
+.downloads-panel__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* Card row */
+.downloads-panel__row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-input);
+  border-radius: var(--radius-3);
+  border: 1px solid transparent;
+  padding: 10px 12px;
+  transition: border-color 0.15s;
+}
+
+.downloads-panel__row:hover {
+  border-color: var(--accent-color);
+}
+
+/* Filename — primary label */
+.downloads-panel__filename {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* URL */
+.downloads-panel__url {
+  font-size: 11px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* State badge */
+.downloads-panel__state {
+  font-size: 12px;
+  color: var(--fg-muted);
+  text-transform: capitalize;
+}
+
+/* Progress bar track */
+.downloads-panel__progress {
+  height: 4px;
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+/* Progress fill — width set via inline style; must NOT override it */
+.downloads-panel__progress-fill {
+  height: 100%;
+  border-radius: var(--radius-pill);
+  background: var(--accent-color);
+  /* width is set inline: style={{ width: `${pct}%` }} — do not set here */
+}
+
+/* Actions row */
+.downloads-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+}
+
+/* Buttons inside the actions row (Open file, Show in folder, Cancel, ×) */
+.downloads-panel__actions button {
+  padding: 3px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.downloads-panel__actions button:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
