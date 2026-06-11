@@ -3,14 +3,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SavedItem } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 
-export function useSaved(currentUrl: string): {
+export interface UseSaved {
   items: SavedItem[];
   isCurrentSaved: boolean;
   add(input: { url: string; title: string }): Promise<void>;
   addCurrent(title: string): Promise<void>;
   removeCurrent(): Promise<void>;
   remove(id: number): Promise<void>;
-} {
+  update(id: number, title: string): Promise<void>;
+}
+
+export function useSaved(currentUrl: string): UseSaved {
   const [items, setItems] = useState<SavedItem[]>([]);
   const [isCurrentSaved, setIsCurrentSaved] = useState<boolean>(false);
 
@@ -78,5 +81,9 @@ export function useSaved(currentUrl: string): {
     await refreshHas();
   }, [refreshHas]);
 
-  return { items, isCurrentSaved, add, addCurrent, removeCurrent, remove };
+  const update = useCallback(async (id: number, title: string): Promise<void> => {
+    setItems(await aegis.saved.update(id, { title }));
+  }, []);
+
+  return { items, isCurrentSaved, add, addCurrent, removeCurrent, remove, update };
 }

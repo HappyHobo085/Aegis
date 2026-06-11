@@ -68,6 +68,25 @@ describe('savedRepo', () => {
     expect(repo2.has('https://a.test/')).toBe(true);
   });
 
+  describe('update', () => {
+    it('updates the title of an existing item and returns the updated list', () => {
+      repo.add({ url: 'https://a.test/', title: 'Old Title' }, () => 1000);
+      const id = repo.list()[0].id;
+      const list = repo.update(id, { title: 'New Title' });
+      expect(list).toHaveLength(1);
+      expect(list[0]).toMatchObject({ id, url: 'https://a.test/', title: 'New Title', savedAt: 1000 });
+    });
+
+    it('is a no-op for a non-existent id (returns list unchanged)', () => {
+      repo.add({ url: 'https://a.test/', title: 'A' }, () => 1000);
+      const before = repo.list();
+      const list = repo.update(9999, { title: 'Ghost' });
+      expect(list).toHaveLength(1);
+      expect(list[0].title).toBe('A');
+      expect(list).toEqual(before);
+    });
+  });
+
   describe('clear', () => {
     it('removes every saved item (replace-import support)', () => {
       repo.add({ url: 'https://a.test/', title: 'A' }, () => 1000);

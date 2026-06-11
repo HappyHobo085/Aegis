@@ -16,5 +16,6 @@ export function buildSavedHandlers(
     [IPC.savedAdd]: (input: { url: string; title: string }): SavedItem[] => repo.add(input),
     [IPC.savedRemove]: (id: number): SavedItem[] => repo.remove(id),
     [IPC.savedHas]: (url: string): boolean => repo.has(url),
+    [IPC.savedUpdate]: (id: number, partial: { title: string }): SavedItem[] => repo.update(id, partial),
   };
 }

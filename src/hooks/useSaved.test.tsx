@@ -7,6 +7,7 @@ const list = vi.fn();
 const add = vi.fn();
 const remove = vi.fn();
 const has = vi.fn();
+const update = vi.fn();
 
 vi.mock('../lib/ipcClient', () => ({
   aegis: {
@@ -15,6 +16,7 @@ vi.mock('../lib/ipcClient', () => ({
       add: (...a: any[]) => add(...a),
       remove: (...a: any[]) => remove(...a),
       has: (...a: any[]) => has(...a),
+      update: (...a: any[]) => update(...a),
     },
   },
 }));
@@ -40,6 +42,7 @@ beforeEach(() => {
   has.mockResolvedValue(false);
   add.mockResolvedValue(seed);
   remove.mockResolvedValue([seed[1]]);
+  update.mockResolvedValue(seed);
 });
 
 describe('useSaved', () => {
@@ -127,5 +130,20 @@ describe('useSaved', () => {
     });
     expect(remove).toHaveBeenCalledWith(2);
     expect(result.current.items.map((i) => i.id)).toEqual([1]);
+  });
+
+  it('update(id, title) calls aegis.saved.update and refreshes items', async () => {
+    const updated: SavedItem[] = [
+      item({ id: 1, url: 'https://example.com/', title: 'Renamed', savedAt: 2000 }),
+      seed[1],
+    ];
+    update.mockResolvedValue(updated);
+    const { result } = renderHook(() => useSaved('https://example.com/'));
+    await waitFor(() => expect(result.current.items).toHaveLength(2));
+    await act(async () => {
+      await result.current.update(1, 'Renamed');
+    });
+    expect(update).toHaveBeenCalledWith(1, { title: 'Renamed' });
+    expect(result.current.items[0].title).toBe('Renamed');
   });
 });

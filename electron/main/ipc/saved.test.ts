@@ -15,14 +15,15 @@ function makeRepo() {
     add: vi.fn((): SavedItem[] => list),
     remove: vi.fn((): SavedItem[] => list),
     has: vi.fn((url: string): boolean => url === 'https://a.test/'),
+    update: vi.fn((): SavedItem[] => list),
   };
 }
 
 describe('buildSavedHandlers', () => {
-  it('registers exactly the four saved channels', () => {
+  it('registers exactly the five saved channels', () => {
     const handlers = buildSavedHandlers(makeRepo() as any);
     expect(Object.keys(handlers).sort()).toEqual(
-      [IPC.savedList, IPC.savedAdd, IPC.savedRemove, IPC.savedHas].sort(),
+      [IPC.savedList, IPC.savedAdd, IPC.savedRemove, IPC.savedHas, IPC.savedUpdate].sort(),
     );
   });
 
@@ -57,5 +58,14 @@ describe('buildSavedHandlers', () => {
     expect(handlers[IPC.savedHas]('https://a.test/')).toBe(true);
     expect(handlers[IPC.savedHas]('https://missing.test/')).toBe(false);
     expect(repo.has).toHaveBeenCalledWith('https://missing.test/');
+  });
+
+  it('savedUpdate forwards id + partial and returns the list', () => {
+    const repo = makeRepo();
+    const handlers = buildSavedHandlers(repo as any);
+    const partial = { title: 'Updated Title' };
+    const result = handlers[IPC.savedUpdate](1, partial);
+    expect(repo.update).toHaveBeenCalledWith(1, partial);
+    expect(result).toEqual(repo.list());
   });
 });

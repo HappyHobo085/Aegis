@@ -14,6 +14,7 @@ export class SavedRepo {
   private readonly deleteStmt: Database.Statement;
   private readonly hasStmt: Database.Statement;
   private readonly clearStmt: Database.Statement;
+  private readonly updateStmt: Database.Statement;
 
   constructor(private readonly db: Database.Database) {
     this.selectAll = db.prepare(
@@ -25,6 +26,7 @@ export class SavedRepo {
     this.deleteStmt = db.prepare('DELETE FROM saved_list WHERE id = @id');
     this.hasStmt = db.prepare('SELECT 1 FROM saved_list WHERE url = @url LIMIT 1');
     this.clearStmt = db.prepare('DELETE FROM saved_list');
+    this.updateStmt = db.prepare('UPDATE saved_list SET title = @title WHERE id = @id');
   }
 
   /** All saved items, newest first. */
@@ -47,6 +49,12 @@ export class SavedRepo {
   /** True iff some saved item has this url. */
   has(url: string): boolean {
     return this.hasStmt.get({ url }) !== undefined;
+  }
+
+  /** Update the title of one saved item. Returns the full list (unchanged if id not found). */
+  update(id: number, partial: { title: string }): SavedItem[] {
+    this.updateStmt.run({ id, title: partial.title });
+    return this.list();
   }
 
   /** Remove every saved item (used by replace-import). */

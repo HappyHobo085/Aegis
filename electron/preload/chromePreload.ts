@@ -96,6 +96,8 @@ const api: AegisApi = {
       ipcRenderer.invoke(IPC.savedAdd, input),
     remove: (id: number): Promise<SavedItem[]> => ipcRenderer.invoke(IPC.savedRemove, id),
     has: (url: string): Promise<boolean> => ipcRenderer.invoke(IPC.savedHas, url),
+    update: (id: number, partial: { title: string }): Promise<SavedItem[]> =>
+      ipcRenderer.invoke(IPC.savedUpdate, id, partial),
   },
   downloads: {
     list: (): Promise<DownloadEntry[]> => ipcRenderer.invoke(IPC.downloadsList),

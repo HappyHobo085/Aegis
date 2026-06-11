@@ -41,6 +41,7 @@ export const IPC = {
   savedAdd: 'saved.add',
   savedRemove: 'saved.remove',
   savedHas: 'saved.has',
+  savedUpdate: 'saved.update',
   // subscriptions (chrome -> main, Phase 4)
   subsList: 'subs.list',
   subsSetEnabled: 'subs.setEnabled',
@@ -242,6 +243,7 @@ export interface AegisApi {
     add(input: { url: string; title: string }): Promise<SavedItem[]>;
     remove(id: number): Promise<SavedItem[]>;
     has(url: string): Promise<boolean>;
+    update(id: number, partial: { title: string }): Promise<SavedItem[]>;
   };
   settings: {
     get(): Promise<Settings>;
