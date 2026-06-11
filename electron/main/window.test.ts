@@ -1,6 +1,6 @@
 // electron/main/window.test.ts
 import { describe, it, expect, vi } from 'vitest';
-import { layout } from './window';
+import { layout, FULLSCREEN_CORNER } from './window';
 import { CHROME_TOP_HEIGHT } from './constants';
 
 /** A fake BaseWindow exposing only getContentBounds. */
@@ -44,7 +44,7 @@ describe('layout', () => {
     const win = makeWin(1000, 800);
     const chrome = makeView();
     const content = makeView();
-    layout(win, chrome, content, { top: 96, left: 280 });
+    layout(win, chrome, content, { inset: { top: 96, left: 280 } });
     expect(content.setBounds).toHaveBeenCalledWith({
       x: 280,
       y: 96,
@@ -53,6 +53,22 @@ describe('layout', () => {
     });
     // Chrome stays full-window regardless of the inset.
     expect(chrome.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 1000, height: 800 });
+  });
+
+  it('fullscreen: content fills the window and chrome shrinks to the top-right corner', () => {
+    const win = makeWin(1000, 800);
+    const chrome = makeView();
+    const content = makeView();
+    layout(win, chrome, content, { fullscreen: true });
+    // Content fills the whole window.
+    expect(content.setBounds).toHaveBeenCalledWith({ x: 0, y: 0, width: 1000, height: 800 });
+    // Chrome is a small top-right corner that holds the exit button.
+    expect(chrome.setBounds).toHaveBeenCalledWith({
+      x: 1000 - FULLSCREEN_CORNER,
+      y: 0,
+      width: FULLSCREEN_CORNER,
+      height: FULLSCREEN_CORNER,
+    });
   });
 
   it('does not touch the content view when none is given', () => {
