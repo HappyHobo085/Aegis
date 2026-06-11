@@ -338,6 +338,126 @@ describe('chromePreload favorites + history + saved + inset (Phase 3)', () => {
   });
 });
 
+describe('chromePreload downloads + permissions + data + picker (Phase 5)', () => {
+  beforeEach(() => {
+    h.exposed = {};
+    h.invoke = vi.fn(async () => undefined);
+    h.listeners = new Map();
+    h.removed = [];
+    vi.resetModules();
+  });
+
+  it('exposes the four Phase-5 namespaces', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    expect(typeof api.downloads.list).toBe('function');
+    expect(typeof api.downloads.remove).toBe('function');
+    expect(typeof api.downloads.clear).toBe('function');
+    expect(typeof api.downloads.openFile).toBe('function');
+    expect(typeof api.downloads.showInFolder).toBe('function');
+    expect(typeof api.downloads.cancel).toBe('function');
+    expect(typeof api.downloads.onChanged).toBe('function');
+    expect(typeof api.permissions.list).toBe('function');
+    expect(typeof api.permissions.remove).toBe('function');
+    expect(typeof api.permissions.clear).toBe('function');
+    expect(typeof api.permissions.resolve).toBe('function');
+    expect(typeof api.permissions.onPrompt).toBe('function');
+    expect(typeof api.data.export).toBe('function');
+    expect(typeof api.data.import).toBe('function');
+    expect(typeof api.picker.start).toBe('function');
+  });
+
+  it('downloads.list invokes IPC.downloadsList and returns the resolved list', async () => {
+    const rows = [{ id: 1, url: 'https://d/', filename: 'f', savePath: '/d/f', state: 'completed', receivedBytes: 1, totalBytes: 1, startedAt: 0 }];
+    h.invoke = vi.fn(async () => rows);
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const out = await api.downloads.list();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.downloadsList);
+    expect(out).toEqual(rows);
+  });
+
+  it('downloads.remove/clear/openFile/showInFolder/cancel invoke their channels with args', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.downloads.remove(3);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.downloadsRemove, 3);
+    await api.downloads.clear();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.downloadsClear);
+    await api.downloads.openFile(3);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.downloadsOpenFile, 3);
+    await api.downloads.showInFolder(3);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.downloadsShowInFolder, 3);
+    await api.downloads.cancel(3);
+    expect(h.invoke).toHaveBeenCalledWith(IPC.downloadsCancel, 3);
+  });
+
+  it('downloads.onChanged registers on IPC.evtDownloadsChanged and delivers (no payload)', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const cb = vi.fn();
+    api.downloads.onChanged(cb);
+    const arr = h.listeners.get(IPC.evtDownloadsChanged)!;
+    expect(arr).toHaveLength(1);
+    arr[0]({}, undefined);
+    expect(cb).toHaveBeenCalledTimes(1);
+  });
+
+  it('downloads.onChanged returns an unsubscriber that removes the listener', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const cb = vi.fn();
+    const off = api.downloads.onChanged(cb);
+    const registered = h.listeners.get(IPC.evtDownloadsChanged)![0];
+    off();
+    expect(h.removed).toEqual([{ channel: IPC.evtDownloadsChanged, fn: registered }]);
+  });
+
+  it('permissions.list/remove/clear/resolve invoke their channels with args', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.permissions.list();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.permissionsList);
+    await api.permissions.remove('https://x', 'media');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.permissionsRemove, 'https://x', 'media');
+    await api.permissions.clear();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.permissionsClear);
+    await api.permissions.resolve(7, 'allow');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.permissionsResolve, 7, 'allow');
+  });
+
+  it('permissions.onPrompt registers on IPC.evtPermissionsPrompt and delivers the payload', async () => {
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const cb = vi.fn();
+    api.permissions.onPrompt(cb);
+    const arr = h.listeners.get(IPC.evtPermissionsPrompt)!;
+    expect(arr).toHaveLength(1);
+    const payload = { requestId: 5, origin: 'https://y', permission: 'geolocation' };
+    arr[0]({}, payload);
+    expect(cb).toHaveBeenCalledWith(payload);
+  });
+
+  it('data.export and data.import invoke their channels', async () => {
+    h.invoke = vi.fn(async () => ({ ok: true }));
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    await api.data.export();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.dataExport);
+    await api.data.import('replace');
+    expect(h.invoke).toHaveBeenCalledWith(IPC.dataImport, 'replace');
+  });
+
+  it('picker.start invokes IPC.pickerStart and returns the resolved result', async () => {
+    h.invoke = vi.fn(async () => ({ ok: true, rule: 'x.com##.ad' }));
+    await import('./chromePreload');
+    const api = h.exposed.aegis as AegisApi;
+    const out = await api.picker.start();
+    expect(h.invoke).toHaveBeenCalledWith(IPC.pickerStart);
+    expect(out).toEqual({ ok: true, rule: 'x.com##.ad' });
+  });
+});
+
 describe('chromePreload subs + customFilters + allowlist (Phase 4)', () => {
   beforeEach(() => {
     h.exposed = {};

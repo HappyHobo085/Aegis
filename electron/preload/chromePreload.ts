@@ -5,6 +5,7 @@ import type {
   AegisApi, ViewId, NavState, NavFailed, NavCrashed, Settings,
   AdblockState, BlockedCount, ListUpdateResult,
   Favorite, HistoryEntry, SavedItem, ContentInset, Subscription,
+  DownloadEntry, SitePermission, PermissionPrompt, ImportMode,
 } from '../../shared/types';
 
 /** Subscribes cb to an event channel; returns an unsubscriber. */
@@ -91,6 +92,33 @@ const api: AegisApi = {
       ipcRenderer.invoke(IPC.savedAdd, input),
     remove: (id: number): Promise<SavedItem[]> => ipcRenderer.invoke(IPC.savedRemove, id),
     has: (url: string): Promise<boolean> => ipcRenderer.invoke(IPC.savedHas, url),
+  },
+  downloads: {
+    list: (): Promise<DownloadEntry[]> => ipcRenderer.invoke(IPC.downloadsList),
+    remove: (id: number): Promise<DownloadEntry[]> => ipcRenderer.invoke(IPC.downloadsRemove, id),
+    clear: (): Promise<DownloadEntry[]> => ipcRenderer.invoke(IPC.downloadsClear),
+    openFile: (id: number): Promise<void> => ipcRenderer.invoke(IPC.downloadsOpenFile, id),
+    showInFolder: (id: number): Promise<void> => ipcRenderer.invoke(IPC.downloadsShowInFolder, id),
+    cancel: (id: number): Promise<void> => ipcRenderer.invoke(IPC.downloadsCancel, id),
+    onChanged: (cb: () => void) => subscribe<unknown>(IPC.evtDownloadsChanged, () => cb()),
+  },
+  permissions: {
+    list: (): Promise<SitePermission[]> => ipcRenderer.invoke(IPC.permissionsList),
+    remove: (origin: string, permission: string): Promise<SitePermission[]> =>
+      ipcRenderer.invoke(IPC.permissionsRemove, origin, permission),
+    clear: (): Promise<SitePermission[]> => ipcRenderer.invoke(IPC.permissionsClear),
+    resolve: (requestId: number, decision: 'allow' | 'deny'): Promise<void> =>
+      ipcRenderer.invoke(IPC.permissionsResolve, requestId, decision),
+    onPrompt: (cb: (p: PermissionPrompt) => void) =>
+      subscribe<PermissionPrompt>(IPC.evtPermissionsPrompt, cb),
+  },
+  data: {
+    export: (): Promise<{ ok: boolean; path?: string }> => ipcRenderer.invoke(IPC.dataExport),
+    import: (mode: ImportMode): Promise<{ ok: boolean; counts?: any }> =>
+      ipcRenderer.invoke(IPC.dataImport, mode),
+  },
+  picker: {
+    start: (): Promise<{ ok: boolean; rule?: string }> => ipcRenderer.invoke(IPC.pickerStart),
   },
 };
 
