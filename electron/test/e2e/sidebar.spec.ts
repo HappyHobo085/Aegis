@@ -4,11 +4,11 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-// Mirror src/lib/layout.ts (Task 14): the renderer computes the inset from these
-// constants and the e2e asserts the resulting content WebContentsView bounds.
+// Mirror src/lib/layout.ts: the renderer reports a constant top inset (toolbar +
+// always-on favbar). The sidebar is a RIGHT OVERLAY (z-order swap), so opening it
+// never insets the content view — only the top inset applies (§6 / §8.5).
 const TOOLBAR_H = 56;
 const FAVBAR_H = 40;
-const SIDEBAR_W = 280;
 const TOP_INSET = TOOLBAR_H + FAVBAR_H; // 96, favbar always-on (§8.5)
 
 async function launchApp(
@@ -46,17 +46,17 @@ function contentBounds(app: ElectronApplication): Promise<Bounds> {
   );
 }
 
-/** Drive the boot-side inset closure directly (§8.5 / §9.1). */
-function setContentInset(
-  app: ElectronApplication,
-  top: number,
-  left: number,
-): Promise<void> {
+/** Drive the overlay z-order swap directly (Task-3 seam: places.setSidebarOpen). */
+function setSidebarOpen(app: ElectronApplication, open: boolean): Promise<void> {
   return app.evaluate(
-    (_e, args) =>
-      (globalThis as any).__aegisTest.places.setContentInset(args.top, args.left),
-    { top, left },
+    (_e, o) => (globalThis as any).__aegisTest.places.setSidebarOpen(o),
+    open,
   );
+}
+
+/** Read whether the transparent chrome view is the top child (overlay active). */
+function isChromeOnTop(app: ElectronApplication): Promise<boolean> {
+  return app.evaluate(() => (globalThis as any).__aegisTest.view.isChromeOnTop());
 }
 
 test('content top inset is TOOLBAR_H+FAVBAR_H on boot (favorites bar always-on)', async () => {
@@ -67,7 +67,7 @@ test('content top inset is TOOLBAR_H+FAVBAR_H on boot (favorites bar always-on)'
     await expect
       .poll(async () => (await contentBounds(app)).y, { timeout: 15000 })
       .toBe(TOP_INSET);
-    // Sidebar closed on boot → left bound at 0.
+    // Sidebar is an overlay → content left bound stays at 0 regardless of state.
     expect((await contentBounds(app)).x).toBe(0);
   } finally {
     await app.close();
@@ -75,8 +75,8 @@ test('content top inset is TOOLBAR_H+FAVBAR_H on boot (favorites bar always-on)'
   }
 });
 
-test('opening the sidebar insets content left by SIDEBAR_W; closing restores it', async () => {
-  const dir = mkdtempSync(join(tmpdir(), 'aegis-e2e-sidebar-toggle-'));
+test('opening the sidebar overlays content (z-swap) and does NOT inset it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'aegis-e2e-sidebar-overlay-'));
   const app = await launchApp(dir, { AEGIS_HOME_URL: 'about:blank' });
   try {
     await expect
@@ -84,23 +84,21 @@ test('opening the sidebar insets content left by SIDEBAR_W; closing restores it'
       .toBe(TOP_INSET);
     const closed = await contentBounds(app);
     expect(closed.x).toBe(0);
+    // Closed: content view is the top child (normal browsing), chrome is below.
+    expect(await isChromeOnTop(app)).toBe(false);
 
-    // Open the sidebar (useContentInset reports left = SIDEBAR_W).
-    await setContentInset(app, TOP_INSET, SIDEBAR_W);
-    await expect
-      .poll(async () => (await contentBounds(app)).x, { timeout: 15000 })
-      .toBe(SIDEBAR_W);
+    // Open the sidebar → chrome (transparent, painting scrim + right panel) swaps to top.
+    await setSidebarOpen(app, true);
+    await expect.poll(() => isChromeOnTop(app), { timeout: 15000 }).toBe(true);
+    // The overlay must NOT move/resize the content view: bounds unchanged.
     const open = await contentBounds(app);
-    // Content shifts right by SIDEBAR_W and narrows by the same amount; top unchanged.
-    expect(open.x).toBe(SIDEBAR_W);
-    expect(open.width).toBe(closed.width - SIDEBAR_W);
+    expect(open.x).toBe(0);
+    expect(open.width).toBe(closed.width);
     expect(open.y).toBe(TOP_INSET);
 
-    // Close the sidebar → left inset restored to 0, full width back.
-    await setContentInset(app, TOP_INSET, 0);
-    await expect
-      .poll(async () => (await contentBounds(app)).x, { timeout: 15000 })
-      .toBe(0);
+    // Close the sidebar → content view swaps back to top; bounds still unchanged.
+    await setSidebarOpen(app, false);
+    await expect.poll(() => isChromeOnTop(app), { timeout: 15000 }).toBe(false);
     const reclosed = await contentBounds(app);
     expect(reclosed.x).toBe(0);
     expect(reclosed.width).toBe(closed.width);
@@ -111,7 +109,7 @@ test('opening the sidebar insets content left by SIDEBAR_W; closing restores it'
   }
 });
 
-test('a window resize keeps the active inset (top/left preserved, width tracks the window)', async () => {
+test('a window resize preserves the top inset with no content inset on open', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'aegis-e2e-sidebar-resize-'));
   const app = await launchApp(dir, { AEGIS_HOME_URL: 'about:blank' });
   try {
@@ -119,11 +117,10 @@ test('a window resize keeps the active inset (top/left preserved, width tracks t
       .poll(async () => (await contentBounds(app)).y, { timeout: 15000 })
       .toBe(TOP_INSET);
 
-    // Open the sidebar, then resize the window: the stored inset must re-apply.
-    await setContentInset(app, TOP_INSET, SIDEBAR_W);
-    await expect
-      .poll(async () => (await contentBounds(app)).x, { timeout: 15000 })
-      .toBe(SIDEBAR_W);
+    // Open the sidebar (overlay), then resize the window: the content view must
+    // re-apply the top inset and remain full width (the overlay never insets it).
+    await setSidebarOpen(app, true);
+    await expect.poll(() => isChromeOnTop(app), { timeout: 15000 }).toBe(true);
 
     await app.evaluate(({ BaseWindow }) => {
       const win = BaseWindow.getAllWindows()[0];
@@ -131,17 +128,18 @@ test('a window resize keeps the active inset (top/left preserved, width tracks t
       win.setSize(w - 120, h - 80);
     });
 
-    // After resize the inset is preserved: x still SIDEBAR_W, y still TOP_INSET,
-    // width = newWindowWidth - SIDEBAR_W (content tracks the narrower window).
+    // After resize: y still TOP_INSET, x still 0, width tracks the FULL window
+    // (content is NOT inset by the overlay).
+    const winW = await app.evaluate(({ BaseWindow }) =>
+      BaseWindow.getAllWindows()[0].getContentBounds().width,
+    );
     await expect
-      .poll(async () => (await contentBounds(app)).x, { timeout: 15000 })
-      .toBe(SIDEBAR_W);
+      .poll(async () => (await contentBounds(app)).width, { timeout: 15000 })
+      .toBe(winW);
     const after = await contentBounds(app);
     expect(after.y).toBe(TOP_INSET);
-    const winW = await app.evaluate(({ BaseWindow }) => {
-      return BaseWindow.getAllWindows()[0].getContentBounds().width;
-    });
-    expect(after.width).toBe(winW - SIDEBAR_W);
+    expect(after.x).toBe(0);
+    expect(after.width).toBe(winW);
   } finally {
     await app.close();
     rmSync(dir, { recursive: true, force: true });
