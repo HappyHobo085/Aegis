@@ -372,3 +372,183 @@ input {
   color: var(--fg-muted);
   font-style: italic;
 }
+
+/* ─── Favorites bar ──────────────────────────────────────────────── */
+
+.favorites-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 12px;
+  background: rgba(0, 0, 0, 0.35);
+  overflow-x: auto;
+  /* hide scrollbar but keep scroll */
+  scrollbar-width: none;
+}
+
+.favorites-bar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Inner chip group — keeps chips in a row without wrapping */
+.favorites-bar__chips {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+/* Individual favorite pill button */
+.favorites-bar__chip {
+  padding: 4px 10px;
+  background: var(--bg-input);
+  border-radius: var(--radius-4);
+  border: 1px solid transparent;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+  /* Override base button rule */
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.favorites-bar__chip:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* Manage button — subtle pill, slightly bolder weight */
+.favorites-bar__manage {
+  padding: 4px 10px;
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-4);
+  border: 1px solid transparent;
+  color: var(--fg-muted);
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.favorites-bar__manage:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* ─── Tag filter ─────────────────────────────────────────────────── */
+
+.tag-filter {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+/* Tag chip — pill; active state via aria-pressed="true" */
+.tag-filter__chip {
+  padding: 3px 10px;
+  background: var(--bg-input);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.tag-filter__chip:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* Active / selected tag chip — accent fill */
+.tag-filter__chip[aria-pressed="true"] {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #fff;
+  font-weight: 600;
+}
+
+.tag-filter__chip[aria-pressed="true"]:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: #fff;
+}
+
+/* ─── Tag input ──────────────────────────────────────────────────── */
+
+.tag-input {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 4px 8px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  min-height: 32px;
+}
+
+.tag-input:focus-within {
+  border-color: var(--accent-color);
+}
+
+/* Chip list (ul) — reset list styling, lay out inline */
+.tag-input__chips {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+/* Individual chip (li) — pill with a remove button */
+.tag-input__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 6px 2px 8px;
+  background: var(--bg-input);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+/* Remove button inside chip */
+.tag-input__chip button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  width: 16px;
+  height: 16px;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.tag-input__chip button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: transparent;
+  color: var(--fg);
+}
+
+/* Text input inside the tag-input wrapper */
+.tag-input input {
+  flex: 1;
+  min-width: 80px;
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 13px;
+  color: var(--fg);
+  outline: none;
+}
