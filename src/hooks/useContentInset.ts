@@ -1,17 +1,18 @@
 import { useEffect } from 'react';
 import type { ViewId } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
-import { TOOLBAR_H, FAVBAR_H, SIDEBAR_W } from '../lib/layout';
+import { TOOLBAR_H, FAVBAR_H } from '../lib/layout';
 
 /**
- * Reports the content-view inset to main whenever the sidebar toggles (and once
- * on mount). The favorites bar is always-on in Phase 3, so the top inset is a
- * constant TOOLBAR_H + FAVBAR_H; the sidebar toggles only the left inset.
+ * Top inset is constant (toolbar + always-on favbar). The sidebar is a right
+ * overlay, so it never insets content — it drives a native z-order swap via
+ * `view.setSidebarOpen` (chrome-on-top when open, content-on-top when closed).
  */
 export function useContentInset(viewId: ViewId, { sidebarOpen }: { sidebarOpen: boolean }): void {
   useEffect(() => {
-    const top = TOOLBAR_H + FAVBAR_H;
-    const left = sidebarOpen ? SIDEBAR_W : 0;
-    void aegis.view.setContentInset(viewId, { top, left });
+    void aegis.view.setContentInset(viewId, { top: TOOLBAR_H + FAVBAR_H, left: 0 });
+  }, [viewId]);
+  useEffect(() => {
+    void aegis.view.setSidebarOpen(viewId, sidebarOpen);
   }, [viewId, sidebarOpen]);
 }

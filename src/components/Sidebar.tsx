@@ -6,13 +6,13 @@ type Tab = 'history' | 'saved' | 'downloads';
 
 export interface SidebarProps {
   open: boolean;
-  onToggle(): void;
+  onClose(): void;
   history: ReactNode;
   saved: ReactNode;
   downloads: ReactNode;
 }
 
-export function Sidebar({ open, onToggle, history, saved, downloads }: SidebarProps) {
+export function Sidebar({ open, onClose, history, saved, downloads }: SidebarProps) {
   const [tab, setTab] = useState<Tab>('history');
   const historyTabId = useId();
   const savedTabId = useId();
@@ -43,19 +43,13 @@ export function Sidebar({ open, onToggle, history, saved, downloads }: SidebarPr
   };
   const order: Tab[] = ['history', 'saved', 'downloads'];
 
+  if (!open) return null;
+
   return (
-    <aside className="sidebar" aria-label="Sidebar">
-      <button
-        type="button"
-        className="sidebar__toggle"
-        aria-label="Toggle sidebar"
-        aria-expanded={open}
-        onClick={onToggle}
-      >
-        {'☰'}
-      </button>
-      {open && (
-        <div className="sidebar__body">
+    <>
+      <div className="sidebar__scrim" onClick={onClose} aria-hidden="true" />
+      <aside className="sidebar sidebar__panel" aria-label="Sidebar">
+        <div className="sidebar__head">
           <div className="sidebar__tabs" role="tablist" aria-label="Sidebar panels">
             {order.map((t) => (
               <button
@@ -72,11 +66,24 @@ export function Sidebar({ open, onToggle, history, saved, downloads }: SidebarPr
               </button>
             ))}
           </div>
-          <div role="tabpanel" id={panelIds[tab]} aria-labelledby={tabIds[tab]}>
-            {panels[tab]}
-          </div>
+          <button
+            type="button"
+            className="sidebar__close"
+            aria-label="Close sidebar"
+            onClick={onClose}
+          >
+            {'×'}
+          </button>
         </div>
-      )}
-    </aside>
+        <div
+          role="tabpanel"
+          id={panelIds[tab]}
+          aria-labelledby={tabIds[tab]}
+          className="sidebar__content"
+        >
+          {panels[tab]}
+        </div>
+      </aside>
+    </>
   );
 }

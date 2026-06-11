@@ -167,6 +167,17 @@ export function App() {
             {'⚙'}
           </button>
         }
+        menu={
+          <button
+            type="button"
+            className="toolbar__sidebar-toggle"
+            aria-label="Toggle sidebar"
+            aria-expanded={sidebarOpen}
+            onClick={() => setSidebarOpen((v) => !v)}
+          >
+            {'☰'}
+          </button>
+        }
       />
       <FavoritesBar
         favorites={favorites.favorites}
@@ -178,7 +189,7 @@ export function App() {
       />
       <Sidebar
         open={sidebarOpen}
-        onToggle={() => setSidebarOpen((v) => !v)}
+        onClose={() => setSidebarOpen(false)}
         history={
           <HistoryPanel
             entries={history.entries}

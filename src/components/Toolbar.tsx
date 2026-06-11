@@ -27,6 +27,8 @@ export interface ToolbarProps {
   gear?: ReactNode;
   /** Optional toolbar slot for the downloads indicator (Phase 5). */
   downloads?: ReactNode;
+  /** Optional right-side toolbar slot for the sidebar toggle (restyle). */
+  menu?: ReactNode;
 }
 
 export function Toolbar({
@@ -40,6 +42,7 @@ export function Toolbar({
   bookmark,
   gear,
   downloads,
+  menu,
 }: ToolbarProps) {
   return (
     <div className="toolbar">
@@ -61,6 +64,7 @@ export function Toolbar({
       {bookmark}
       {downloads}
       {gear}
+      {menu}
     </div>
   );
 }

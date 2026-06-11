@@ -119,4 +119,15 @@ describe('Toolbar', () => {
     );
     expect(screen.getByRole('button', { name: /^downloads$/i })).toBeInTheDocument();
   });
+
+  it('renders the optional menu slot when provided', () => {
+    render(
+      <Toolbar
+        state={state}
+        {...handlers()}
+        menu={<button type="button">Toggle sidebar</button>}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /toggle sidebar/i })).toBeInTheDocument();
+  });
 });

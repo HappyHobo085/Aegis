@@ -7,7 +7,7 @@ import { Sidebar } from './Sidebar';
 function props(overrides: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
   return {
     open: true,
-    onToggle: vi.fn(),
+    onClose: vi.fn(),
     history: <div data-testid="history-slot">history</div>,
     saved: <div data-testid="saved-slot">saved</div>,
     downloads: <div data-testid="downloads-slot">downloads</div>,
@@ -16,22 +16,40 @@ function props(overrides: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
 }
 
 describe('Sidebar', () => {
-  it('renders a toggle button reflecting the open state via aria-expanded', () => {
-    render(<Sidebar {...props({ open: false })} />);
-    expect(screen.getByRole('button', { name: /sidebar/i })).toHaveAttribute('aria-expanded', 'false');
-  });
-
-  it('clicking the toggle calls onToggle', async () => {
-    const p = props();
-    render(<Sidebar {...p} />);
-    await userEvent.click(screen.getByRole('button', { name: /sidebar/i }));
-    expect(p.onToggle).toHaveBeenCalledTimes(1);
-  });
-
-  it('does NOT render the panel body when closed', () => {
-    render(<Sidebar {...props({ open: false })} />);
+  it('renders nothing when closed (no panel, no scrim, no tabs)', () => {
+    const { container } = render(<Sidebar {...props({ open: false })} />);
+    expect(container).toBeEmptyDOMElement();
     expect(screen.queryByTestId('history-slot')).not.toBeInTheDocument();
     expect(screen.queryByRole('tablist')).not.toBeInTheDocument();
+    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+  });
+
+  it('renders the scrim and the right panel when open', () => {
+    const { container } = render(<Sidebar {...props()} />);
+    expect(container.querySelector('.sidebar__scrim')).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: /sidebar/i })).toHaveClass(
+      'sidebar__panel',
+    );
+  });
+
+  it('clicking the scrim calls onClose', async () => {
+    const p = props();
+    const { container } = render(<Sidebar {...p} />);
+    const scrim = container.querySelector('.sidebar__scrim') as HTMLElement;
+    await userEvent.click(scrim);
+    expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicking the close button calls onClose', async () => {
+    const p = props();
+    render(<Sidebar {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /close sidebar/i }));
+    expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT render an internal toggle button', () => {
+    render(<Sidebar {...props()} />);
+    expect(screen.queryByRole('button', { name: /toggle sidebar/i })).not.toBeInTheDocument();
   });
 
   it('shows the History tab panel by default when open', () => {

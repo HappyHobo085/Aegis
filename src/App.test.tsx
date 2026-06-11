@@ -27,6 +27,7 @@ const baseSettings: Settings = {
 const reloadOrStop = vi.fn(async () => {});
 const setContentVisible = vi.fn(async () => {});
 const setContentInset = vi.fn(async () => {});
+const setSidebarOpen = vi.fn(async () => {});
 let failedCb: ((f: NavFailed) => void) | undefined;
 let crashedCb: ((c: NavCrashed) => void) | undefined;
 let stateCb: ((s: NavState) => void) | undefined;
@@ -56,6 +57,7 @@ vi.mock('./lib/ipcClient', () => ({
     view: {
       setContentVisible: (...a: any[]) => setContentVisible(...a),
       setContentInset: (...a: any[]) => setContentInset(...a),
+      setSidebarOpen: (...a: any[]) => setSidebarOpen(...a),
     },
     settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
     subs: {
@@ -204,27 +206,37 @@ describe('App', () => {
     );
   });
 
-  it('mounts the favorites bar and the sidebar toggle', async () => {
+  it('mounts the sidebar toggle in the toolbar and hides the sidebar overlay by default', async () => {
     render(<App />);
     await waitFor(() =>
       expect(screen.getByRole('button', { name: /toggle sidebar/i })).toBeInTheDocument(),
     );
+    // Overlay model: the sidebar panel is not rendered until opened.
+    expect(screen.queryByRole('complementary', { name: /sidebar/i })).not.toBeInTheDocument();
+  });
+
+  it('clicking the toolbar toggle opens the sidebar overlay', async () => {
+    render(<App />);
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(await screen.findByRole('button', { name: /toggle sidebar/i }));
     expect(screen.getByRole('complementary', { name: /sidebar/i })).toBeInTheDocument();
   });
 
-  it('reports the content inset on mount (favorites bar always-on, sidebar closed)', async () => {
+  it('reports the constant top inset on mount (favorites bar always-on, no left inset)', async () => {
     render(<App />);
     await waitFor(() => expect(setContentInset).toHaveBeenCalled());
     expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 96, left: 0 });
   });
 
-  it('toggling the sidebar re-reports the inset with the sidebar width on the left', async () => {
+  it('drives view.setSidebarOpen on mount (closed) and on toggle (open)', async () => {
     render(<App />);
-    await waitFor(() => expect(setContentInset).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(setSidebarOpen).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false),
+    );
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(screen.getByRole('button', { name: /toggle sidebar/i }));
     await waitFor(() =>
-      expect(setContentInset).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, { top: 96, left: 280 }),
+      expect(setSidebarOpen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
     );
   });
 
