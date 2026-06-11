@@ -25,6 +25,7 @@ export function DownloadsTab({ settings, update }: DownloadsTabProps) {
       <input
         id="downloads-tab-dir"
         type="text"
+        placeholder="e.g. /home/you/Downloads"
         value={dir}
         onChange={(e) => setDir(e.target.value)}
       />

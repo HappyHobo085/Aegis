@@ -64,18 +64,21 @@ export function SearchTab({ settings, update }: SearchTabProps) {
         <input
           type="text"
           aria-label="Engine id"
+          placeholder="ddg"
           value={newId}
           onChange={(e) => setNewId(e.target.value)}
         />
         <input
           type="text"
           aria-label="Engine name"
+          placeholder="DuckDuckGo"
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
         />
         <input
           type="text"
           aria-label="Engine template"
+          placeholder="https://duckduckgo.com/?q=%s"
           value={newTemplate}
           onChange={(e) => setNewTemplate(e.target.value)}
         />

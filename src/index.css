@@ -78,6 +78,16 @@ input {
   border-radius: 6px;
 }
 
+::placeholder {
+  color: var(--fg-muted);
+  opacity: 1;
+}
+
+textarea::placeholder {
+  color: var(--fg-muted);
+  opacity: 1;
+}
+
 /* ─── App shell ─────────────────────────────────────────────────── */
 
 .app {

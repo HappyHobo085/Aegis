@@ -45,6 +45,7 @@ export function TagInput({ tags, suggestions, onChange }: TagInputProps) {
       <input
         type="text"
         aria-label="Add tag"
+        placeholder="Add a tag…"
         list={listId}
         value={draft}
         autoComplete="off"

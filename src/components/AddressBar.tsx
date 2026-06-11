@@ -24,6 +24,7 @@ export function AddressBar({ url, onSubmit }: AddressBarProps) {
       <input
         type="text"
         aria-label="Address"
+        placeholder="Search or enter a website  ·  e.g. example.com"
         value={value}
         spellCheck={false}
         autoComplete="off"

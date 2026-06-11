@@ -37,12 +37,14 @@ function FavoriteRow({
       <input
         type="text"
         aria-label={`Name for ${favorite.name}`}
+        placeholder="Hacker News"
         value={name}
         onChange={(e) => setName(e.target.value)}
       />
       <input
         type="text"
         aria-label={`URL for ${favorite.name}`}
+        placeholder="https://news.ycombinator.com"
         value={url}
         onChange={(e) => setUrl(e.target.value)}
       />
@@ -121,12 +123,14 @@ export function FavoritesManager({
         <input
           type="text"
           aria-label="New favorite name"
+          placeholder="Hacker News"
           value={newName}
           onChange={(e) => setNewName(e.target.value)}
         />
         <input
           type="text"
           aria-label="New favorite URL"
+          placeholder="https://news.ycombinator.com"
           value={newUrl}
           onChange={(e) => setNewUrl(e.target.value)}
         />
@@ -152,6 +156,7 @@ export function FavoritesManager({
         <input
           type="text"
           aria-label="Rename tag to"
+          placeholder="New tag name"
           value={renameTo}
           onChange={(e) => setRenameTo(e.target.value)}
         />

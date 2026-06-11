@@ -66,6 +66,7 @@ export function FilterListsTab({ subs, setEnabled, add, remove, updateNow }: Fil
         <input
           type="text"
           aria-label="List URL"
+          placeholder="https://easylist.to/easylist/easylist.txt"
           value={newUrl}
           onChange={(e) => setNewUrl(e.target.value)}
         />

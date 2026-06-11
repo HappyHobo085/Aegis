@@ -46,6 +46,7 @@ export function HistoryPanel({
           type="search"
           role="searchbox"
           aria-label="Search history"
+          placeholder="Search history…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />

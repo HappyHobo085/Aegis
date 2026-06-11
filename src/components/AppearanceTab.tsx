@@ -28,6 +28,7 @@ export function AppearanceTab({ settings, update }: AppearanceTabProps) {
           id="appearance-tab-site-name"
           type="text"
           aria-label="Site name"
+          placeholder="Aegis"
           value={siteName}
           onChange={(e) => setSiteName(e.target.value)}
         />

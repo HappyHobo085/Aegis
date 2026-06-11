@@ -17,6 +17,7 @@ export function HomeTab({ settings, update }: HomeTabProps) {
         id="home-tab-url"
         type="text"
         aria-label="Home URL"
+        placeholder="https://duckduckgo.com"
         value={homeUrl}
         onChange={(e) => setHomeUrl(e.target.value)}
       />
