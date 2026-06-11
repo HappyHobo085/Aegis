@@ -162,3 +162,213 @@ input {
     transform: none;
   }
 }
+
+/* ─── Toolbar ────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: var(--chrome-top-height);
+  padding: 0 12px;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ─── Icon buttons (shared) ──────────────────────────────────────── */
+
+/* Selects all toolbar icon buttons, overriding the base button primitives
+   (which add a border and bg-elevated background). */
+.nav-controls button,
+.toolbar__gear,
+.toolbar__picker,
+.toolbar__sidebar-toggle,
+.bookmark-button,
+.toolbar__downloads {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--radius-2);
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  flex-shrink: 0;
+}
+
+.nav-controls button:hover:not(:disabled),
+.toolbar__gear:hover:not(:disabled),
+.toolbar__picker:hover:not(:disabled),
+.toolbar__sidebar-toggle:hover:not(:disabled),
+.bookmark-button:hover:not(:disabled),
+.toolbar__downloads:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+  border-color: transparent;
+}
+
+/* Bookmark saved/active state */
+.bookmark-button[aria-pressed="true"] {
+  color: var(--accent-color);
+}
+
+.bookmark-button[aria-pressed="true"]:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.15);
+  color: var(--accent-color);
+}
+
+/* ─── Address bar ────────────────────────────────────────────────── */
+
+/* .address-bar is the <form> wrapper; the <input> inside gets the pill style */
+.address-bar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.address-bar input {
+  flex: 1;
+  padding: 8px 14px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-2);
+  background: var(--bg-input);
+  color: #fff;
+  min-width: 0;
+  width: 100%;
+}
+
+.address-bar input:focus,
+.address-bar input:focus-visible {
+  border-color: var(--accent-color);
+  outline: none;
+}
+
+/* ─── Downloads badge ────────────────────────────────────────────── */
+
+/* Wrapper button is already styled by the icon-button rule above;
+   position the badge relative to it */
+.toolbar__downloads {
+  position: relative;
+}
+
+.toolbar__downloads-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border-radius: var(--radius-pill);
+  font-size: 11px;
+  line-height: 1;
+  padding: 1px 4px;
+  pointer-events: none;
+}
+
+/* ─── Adblock shield ─────────────────────────────────────────────── */
+
+.adblock-shield {
+  position: relative;
+  flex-shrink: 0;
+}
+
+/* Trigger button — inherits icon-button rule via explicit selector above */
+.adblock-shield__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 3px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border-radius: var(--radius-2);
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+}
+
+.adblock-shield__button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+  border-color: transparent;
+}
+
+.adblock-shield__icon {
+  font-size: 16px;
+  line-height: 1;
+}
+
+/* Badge on the trigger button (blocked-count pill) */
+.adblock-shield__badge {
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border-radius: var(--radius-pill);
+  padding: 1px 4px;
+  line-height: 1;
+  min-width: 14px;
+  text-align: center;
+}
+
+/* Popover card */
+.adblock-shield__popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 220px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  box-shadow: var(--shadow-modal);
+  padding: 12px 14px;
+  z-index: 5000;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Row inside popover (flex row for label + control pairs) */
+.adblock-shield__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.adblock-shield__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg);
+}
+
+/* Toggle switch label wrapper */
+.adblock-shield__switch {
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+/* Divider */
+.adblock-shield__divider {
+  border: none;
+  border-top: 1px solid var(--border-2);
+  margin: 0;
+}
+
+/* Count lines inside the popover */
+.adblock-shield__count {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
+/* Hint line */
+.adblock-shield__hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--fg-muted);
+  font-style: italic;
+}
