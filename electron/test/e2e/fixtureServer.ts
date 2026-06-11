@@ -12,6 +12,7 @@ const MIME: Record<string, string> = {
   '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
   '.txt': 'text/plain; charset=utf-8',
+  '.bin': 'application/octet-stream',
 };
 
 async function serveFile(

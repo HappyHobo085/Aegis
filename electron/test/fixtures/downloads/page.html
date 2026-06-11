@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Aegis downloads fixture</title>
+  </head>
+  <body>
+    <main id="content">downloads fixture root</main>
+    <!-- The download attribute forces a save (rather than navigate) so the SESSION
+         will-download event fires; href is same-origin relative to the fixture server. -->
+    <a id="dl" href="/downloads/big.bin" download="big.bin">download me</a>
+    <script>
+      // e2e clicks this from the main world to fire will-download.
+      window.__aegisClickDownload = function () {
+        document.getElementById('dl').click();
+      };
+    </script>
+  </body>
+</html>
