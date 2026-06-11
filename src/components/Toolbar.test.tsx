@@ -108,4 +108,15 @@ describe('Toolbar', () => {
     );
     expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument();
   });
+
+  it('renders the optional downloads slot when provided', () => {
+    render(
+      <Toolbar
+        state={state}
+        {...handlers()}
+        downloads={<button type="button">Downloads</button>}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /^downloads$/i })).toBeInTheDocument();
+  });
 });

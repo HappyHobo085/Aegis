@@ -25,6 +25,8 @@ export interface ToolbarProps {
   bookmark?: ReactNode;
   /** Optional toolbar slot for the Settings gear button (Phase 4). */
   gear?: ReactNode;
+  /** Optional toolbar slot for the downloads indicator (Phase 5). */
+  downloads?: ReactNode;
 }
 
 export function Toolbar({
@@ -37,6 +39,7 @@ export function Toolbar({
   adblock,
   bookmark,
   gear,
+  downloads,
 }: ToolbarProps) {
   return (
     <div className="toolbar">
@@ -56,6 +59,7 @@ export function Toolbar({
         toggleAllowlist={adblock.toggleAllowlist}
       />
       {bookmark}
+      {downloads}
       {gear}
     </div>
   );
