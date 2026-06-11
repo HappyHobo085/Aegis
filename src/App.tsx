@@ -12,18 +12,24 @@ import { useSaved } from './hooks/useSaved';
 import { useSettings } from './hooks/useSettings';
 import { useSubscriptions } from './hooks/useSubscriptions';
 import { useCustomFilters } from './hooks/useCustomFilters';
+import { useDownloads } from './hooks/useDownloads';
+import { usePermissions } from './hooks/usePermissions';
 import { useContentInset } from './hooks/useContentInset';
 import { Toolbar } from './components/Toolbar';
 import { BookmarkButton } from './components/BookmarkButton';
+import { DownloadsIndicator } from './components/DownloadsIndicator';
+import { PickerButton } from './components/PickerButton';
 import { FavoritesBar } from './components/FavoritesBar';
 import { FavoritesManager } from './components/FavoritesManager';
 import { Sidebar } from './components/Sidebar';
 import { HistoryPanel } from './components/HistoryPanel';
 import { SavedPanel } from './components/SavedPanel';
+import { DownloadsPanel } from './components/DownloadsPanel';
 import { ErrorOverlay } from './components/ErrorOverlay';
 import { SkipLink } from './components/SkipLink';
 import { Toaster } from './components/Toaster';
 import { ConfirmDialog } from './components/ConfirmDialog';
+import { PermissionPromptDialog } from './components/PermissionPromptDialog';
 import { WelcomeHint } from './components/WelcomeHint';
 import { SettingsModal } from './components/SettingsModal';
 import { AppearanceTab } from './components/AppearanceTab';
@@ -32,6 +38,9 @@ import { HomeTab } from './components/HomeTab';
 import { FilterListsTab } from './components/FilterListsTab';
 import { MyFiltersTab } from './components/MyFiltersTab';
 import { AllowlistTab } from './components/AllowlistTab';
+import { DownloadsTab } from './components/DownloadsTab';
+import { SitePermissionsTab } from './components/SitePermissionsTab';
+import { DataTab } from './components/DataTab';
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
 
@@ -54,6 +63,8 @@ export function App() {
   const settings = useSettings();
   const subscriptions = useSubscriptions();
   const customFilters = useCustomFilters();
+  const downloads = useDownloads();
+  const permissions = usePermissions();
   const [failed, setFailed] = useState<NavFailed | null>(null);
   const [crashed, setCrashed] = useState<NavCrashed | null>(null);
   const [managerOpen, setManagerOpen] = useState(false);
@@ -108,6 +119,10 @@ export function App() {
     nav.home();
   };
 
+  const activeDownloads = downloads.downloads.filter(
+    (d) => d.state === 'progressing',
+  ).length;
+
   return (
     <div className="app">
       <SkipLink targetId={CONTENT_ANCHOR_ID} />
@@ -132,6 +147,15 @@ export function App() {
             onSave={() => void saved.addCurrent(nav.state.title)}
             onUnsave={() => void saved.removeCurrent()}
           />
+        }
+        downloads={
+          <>
+            <PickerButton />
+            <DownloadsIndicator
+              activeCount={activeDownloads}
+              onOpen={() => setSidebarOpen(true)}
+            />
+          </>
         }
         gear={
           <button
@@ -171,6 +195,16 @@ export function App() {
             items={saved.items}
             remove={(id) => void saved.remove(id)}
             onOpen={(url) => void nav.navigate(url)}
+          />
+        }
+        downloads={
+          <DownloadsPanel
+            downloads={downloads.downloads}
+            remove={(id) => void downloads.remove(id)}
+            clear={() => void downloads.clear()}
+            openFile={(id) => void downloads.openFile(id)}
+            showInFolder={(id) => void downloads.showInFolder(id)}
+            cancel={(id) => void downloads.cancel(id)}
           />
         }
       />
@@ -216,6 +250,26 @@ export function App() {
               clearAllowlist={adblock.clearAllowlist}
             />
           }
+          downloads={<DownloadsTab settings={settings.settings} update={settings.update} />}
+          sitePermissions={
+            <SitePermissionsTab
+              permissions={permissions.permissions}
+              remove={permissions.remove}
+              clear={permissions.clear}
+            />
+          }
+          data={
+            <DataTab
+              onExport={() => aegis.data.export()}
+              onImport={(mode) => aegis.data.import(mode)}
+            />
+          }
+        />
+      )}
+      {permissions.prompt && (
+        <PermissionPromptDialog
+          prompt={permissions.prompt}
+          onResolve={(_requestId, decision) => void permissions.resolve(decision)}
         />
       )}
       <WelcomeHint />

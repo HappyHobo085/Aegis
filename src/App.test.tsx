@@ -100,6 +100,29 @@ vi.mock('./lib/ipcClient', () => ({
       remove: vi.fn().mockResolvedValue([]),
       has: vi.fn().mockResolvedValue(false),
     },
+    downloads: {
+      list: vi.fn().mockResolvedValue([]),
+      remove: vi.fn().mockResolvedValue([]),
+      clear: vi.fn().mockResolvedValue([]),
+      openFile: vi.fn().mockResolvedValue(undefined),
+      showInFolder: vi.fn().mockResolvedValue(undefined),
+      cancel: vi.fn().mockResolvedValue(undefined),
+      onChanged: vi.fn().mockReturnValue(() => {}),
+    },
+    permissions: {
+      list: vi.fn().mockResolvedValue([]),
+      remove: vi.fn().mockResolvedValue([]),
+      clear: vi.fn().mockResolvedValue([]),
+      resolve: vi.fn().mockResolvedValue(undefined),
+      onPrompt: vi.fn().mockReturnValue(() => {}),
+    },
+    data: {
+      export: vi.fn().mockResolvedValue({ ok: false }),
+      import: vi.fn().mockResolvedValue({ ok: false }),
+    },
+    picker: {
+      start: vi.fn().mockResolvedValue({ ok: false }),
+    },
   },
 }));
 
@@ -221,5 +244,62 @@ describe('App', () => {
   it('reflects the configured siteName in the document title', async () => {
     render(<App />);
     await waitFor(() => expect(document.title).toBe('Aegis'));
+  });
+
+  it('mounts the toolbar downloads indicator', async () => {
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /downloads/i })).toBeInTheDocument(),
+    );
+  });
+
+  it('mounts the element-picker action button', async () => {
+    render(<App />);
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /pick element to hide/i })).toBeInTheDocument(),
+    );
+  });
+
+  it('exposes a Downloads sidebar tab when the sidebar is open', async () => {
+    render(<App />);
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(await screen.findByRole('button', { name: /toggle sidebar/i }));
+    expect(screen.getByRole('tab', { name: /downloads/i })).toBeInTheDocument();
+  });
+
+  it('clicking the downloads indicator opens the sidebar', async () => {
+    render(<App />);
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(await screen.findByRole('button', { name: /downloads/i }));
+    expect(screen.getByRole('tab', { name: /downloads/i })).toBeInTheDocument();
+  });
+
+  it('mounts the Downloads, Site permissions and Data Settings tabs', async () => {
+    render(<App />);
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(await screen.findByRole('button', { name: /open settings/i }));
+    expect(screen.getByRole('tab', { name: /^downloads$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /site permissions/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^data$/i })).toBeInTheDocument();
+  });
+
+  it('shows the permission-prompt dialog when usePermissions surfaces an active prompt', async () => {
+    const { aegis } = await import('./lib/ipcClient');
+    let promptCb: ((p: import('../shared/types').PermissionPrompt) => void) | undefined;
+    (aegis.permissions.onPrompt as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: (p: import('../shared/types').PermissionPrompt) => void) => {
+        promptCb = cb;
+        return () => {};
+      },
+    );
+    render(<App />);
+    await waitFor(() => expect(promptCb).toBeTypeOf('function'));
+    act(() =>
+      promptCb!({ requestId: 1, origin: 'https://example.com', permission: 'geolocation' }),
+    );
+    expect(screen.getByRole('dialog', { name: undefined })).toBeInTheDocument();
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+    expect(aegis.permissions.resolve).toHaveBeenCalledWith(1, 'allow');
   });
 });

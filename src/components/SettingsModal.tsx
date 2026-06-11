@@ -9,7 +9,10 @@ type SettingsTab =
   | 'home'
   | 'filterLists'
   | 'myFilters'
-  | 'allowlist';
+  | 'allowlist'
+  | 'downloads'
+  | 'sitePermissions'
+  | 'data';
 
 const TAB_LABELS: Record<SettingsTab, string> = {
   appearance: 'Appearance',
@@ -18,6 +21,9 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   filterLists: 'Filter Lists',
   myFilters: 'My Filters',
   allowlist: 'Allowlist',
+  downloads: 'Downloads',
+  sitePermissions: 'Site permissions',
+  data: 'Data',
 };
 
 const TAB_ORDER: SettingsTab[] = [
@@ -27,6 +33,9 @@ const TAB_ORDER: SettingsTab[] = [
   'filterLists',
   'myFilters',
   'allowlist',
+  'downloads',
+  'sitePermissions',
+  'data',
 ];
 
 export interface SettingsModalProps {
@@ -37,6 +46,9 @@ export interface SettingsModalProps {
   filterLists: ReactNode;
   myFilters: ReactNode;
   allowlist: ReactNode;
+  downloads: ReactNode;
+  sitePermissions: ReactNode;
+  data: ReactNode;
 }
 
 export function SettingsModal({
@@ -47,6 +59,9 @@ export function SettingsModal({
   filterLists,
   myFilters,
   allowlist,
+  downloads,
+  sitePermissions,
+  data,
 }: SettingsModalProps) {
   const titleId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
@@ -59,6 +74,9 @@ export function SettingsModal({
   const filterListsTabId = useId();
   const myFiltersTabId = useId();
   const allowlistTabId = useId();
+  const downloadsTabId = useId();
+  const sitePermissionsTabId = useId();
+  const dataTabId = useId();
   const panelId = useId();
 
   const tabIds: Record<SettingsTab, string> = {
@@ -68,6 +86,9 @@ export function SettingsModal({
     filterLists: filterListsTabId,
     myFilters: myFiltersTabId,
     allowlist: allowlistTabId,
+    downloads: downloadsTabId,
+    sitePermissions: sitePermissionsTabId,
+    data: dataTabId,
   };
 
   const panels: Record<SettingsTab, ReactNode> = {
@@ -77,6 +98,9 @@ export function SettingsModal({
     filterLists,
     myFilters,
     allowlist,
+    downloads,
+    sitePermissions,
+    data,
   };
 
   return (

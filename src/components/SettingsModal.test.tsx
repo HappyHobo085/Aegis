@@ -11,6 +11,9 @@ const panels = () => ({
   filterLists: <div data-testid="panel-filterLists">FILTER LISTS</div>,
   myFilters: <div data-testid="panel-myFilters">MY FILTERS</div>,
   allowlist: <div data-testid="panel-allowlist">ALLOWLIST</div>,
+  downloads: <div data-testid="panel-downloads">DOWNLOADS</div>,
+  sitePermissions: <div data-testid="panel-sitePermissions">SITE PERMISSIONS</div>,
+  data: <div data-testid="panel-data">DATA</div>,
 });
 
 const props = (over: Partial<React.ComponentProps<typeof SettingsModal>> = {}) => ({
@@ -27,11 +30,21 @@ describe('SettingsModal', () => {
     expect(dialog).toHaveAccessibleName(/settings/i);
   });
 
-  it('renders a tablist with the six tabs', () => {
+  it('renders a tablist with all nine tabs', () => {
     render(<SettingsModal {...props()} />);
     const tablist = screen.getByRole('tablist', { name: /settings sections/i });
     expect(tablist).toBeInTheDocument();
-    for (const name of [/appearance/i, /search/i, /^home$/i, /filter lists/i, /my filters/i, /allowlist/i]) {
+    for (const name of [
+      /appearance/i,
+      /search/i,
+      /^home$/i,
+      /filter lists/i,
+      /my filters/i,
+      /allowlist/i,
+      /^downloads$/i,
+      /site permissions/i,
+      /^data$/i,
+    ]) {
       expect(screen.getByRole('tab', { name })).toBeInTheDocument();
     }
   });
