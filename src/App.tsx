@@ -25,7 +25,7 @@ import { FavoritesManager } from './components/FavoritesManager';
 import { Sidebar } from './components/Sidebar';
 import { HistoryPanel } from './components/HistoryPanel';
 import { SavedPanel } from './components/SavedPanel';
-import { DownloadsPanel } from './components/DownloadsPanel';
+import { DownloadsModal } from './components/DownloadsModal';
 import { ErrorOverlay } from './components/ErrorOverlay';
 import { SkipLink } from './components/SkipLink';
 import { Toaster } from './components/Toaster';
@@ -71,6 +71,7 @@ export function App() {
   const [managerOpen, setManagerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
 
   // Favorites bar is always-on (constant top inset); overlays never inset content.
@@ -81,6 +82,7 @@ export function App() {
   // view on top of the content view so it paints over the page.
   const chromeOverlayActive =
     sidebarOpen ||
+    downloadsOpen ||
     settingsOpen ||
     managerOpen ||
     permissions.prompt !== null ||
@@ -192,7 +194,7 @@ export function App() {
             <PickerButton />
             <DownloadsIndicator
               activeCount={activeDownloads}
-              onOpen={() => setSidebarOpen(true)}
+              onOpen={() => setDownloadsOpen(true)}
             />
           </>
         }
@@ -261,16 +263,6 @@ export function App() {
             onOpen={(url) => void nav.navigate(url)}
           />
         }
-        downloads={
-          <DownloadsPanel
-            downloads={downloads.downloads}
-            remove={(id) => void downloads.remove(id)}
-            clear={() => void downloads.clear()}
-            openFile={(id) => void downloads.openFile(id)}
-            showInFolder={(id) => void downloads.showInFolder(id)}
-            cancel={(id) => void downloads.cancel(id)}
-          />
-        }
       />
       <div id={CONTENT_ANCHOR_ID} className="content-anchor" tabIndex={-1} />
       <ErrorOverlay
@@ -279,6 +271,17 @@ export function App() {
         onRetry={handleRetry}
         onHome={handleHome}
       />
+      {downloadsOpen && (
+        <DownloadsModal
+          onClose={() => setDownloadsOpen(false)}
+          downloads={downloads.downloads}
+          remove={(id) => void downloads.remove(id)}
+          clear={() => void downloads.clear()}
+          openFile={(id) => void downloads.openFile(id)}
+          showInFolder={(id) => void downloads.showInFolder(id)}
+          cancel={(id) => void downloads.cancel(id)}
+        />
+      )}
       {managerOpen && (
         <FavoritesManager
           favorites={favorites.favorites}

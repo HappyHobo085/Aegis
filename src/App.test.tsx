@@ -319,18 +319,32 @@ describe('App', () => {
     );
   });
 
-  it('exposes a Downloads sidebar tab when the sidebar is open', async () => {
+  it('the sidebar no longer exposes a Downloads tab', async () => {
     render(<App />);
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(await screen.findByRole('button', { name: /toggle sidebar/i }));
-    expect(screen.getByRole('tab', { name: /downloads/i })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: /sidebar/i })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /downloads/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /history/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /saved/i })).toBeInTheDocument();
   });
 
-  it('clicking the downloads indicator opens the sidebar', async () => {
+  it('clicking the downloads indicator opens the Downloads modal, not the sidebar', async () => {
     render(<App />);
     const { default: userEvent } = await import('@testing-library/user-event');
-    await userEvent.click(await screen.findByRole('button', { name: /downloads/i }));
-    expect(screen.getByRole('tab', { name: /downloads/i })).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: /^downloads$/i }));
+    expect(screen.getByRole('dialog', { name: /downloads/i })).toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: /sidebar/i })).not.toBeInTheDocument();
+  });
+
+  it('brings chrome on top when the Downloads modal opens', async () => {
+    render(<App />);
+    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(await screen.findByRole('button', { name: /^downloads$/i }));
+    await waitFor(() =>
+      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+    );
   });
 
   it('mounts the Downloads, Site permissions and Data Settings tabs', async () => {

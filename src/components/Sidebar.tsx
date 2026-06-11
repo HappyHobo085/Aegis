@@ -1,55 +1,47 @@
 // src/components/Sidebar.tsx
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Bookmark, Download, History, X } from 'lucide-react';
+import { Bookmark, History, X } from 'lucide-react';
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 
-type Tab = 'history' | 'saved' | 'downloads';
+type Tab = 'history' | 'saved';
 
 export interface SidebarProps {
   open: boolean;
   onClose(): void;
   history: ReactNode;
   saved: ReactNode;
-  downloads: ReactNode;
 }
 
-export function Sidebar({ open, onClose, history, saved, downloads }: SidebarProps) {
+export function Sidebar({ open, onClose, history, saved }: SidebarProps) {
   const [tab, setTab] = useState<Tab>('history');
   const tabsRef = useHorizontalWheel<HTMLDivElement>();
   const historyTabId = useId();
   const savedTabId = useId();
-  const downloadsTabId = useId();
   const historyPanelId = useId();
   const savedPanelId = useId();
-  const downloadsPanelId = useId();
 
   const tabIds: Record<Tab, string> = {
     history: historyTabId,
     saved: savedTabId,
-    downloads: downloadsTabId,
   };
   const panelIds: Record<Tab, string> = {
     history: historyPanelId,
     saved: savedPanelId,
-    downloads: downloadsPanelId,
   };
   const labels: Record<Tab, string> = {
     history: 'History',
     saved: 'Saved',
-    downloads: 'Downloads',
   };
   const tabIcons: Record<Tab, ReactNode> = {
     history: <History size={14} aria-hidden="true" />,
     saved: <Bookmark size={14} aria-hidden="true" />,
-    downloads: <Download size={14} aria-hidden="true" />,
   };
   const panels: Record<Tab, ReactNode> = {
     history,
     saved,
-    downloads,
   };
-  const order: Tab[] = ['history', 'saved', 'downloads'];
+  const order: Tab[] = ['history', 'saved'];
 
   if (!open) return null;
 

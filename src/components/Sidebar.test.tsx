@@ -10,7 +10,6 @@ function props(overrides: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
     onClose: vi.fn(),
     history: <div data-testid="history-slot">history</div>,
     saved: <div data-testid="saved-slot">saved</div>,
-    downloads: <div data-testid="downloads-slot">downloads</div>,
     ...overrides,
   };
 }
@@ -77,17 +76,12 @@ describe('Sidebar', () => {
     expect(screen.getByRole('complementary', { name: /sidebar/i })).toBeInTheDocument();
   });
 
-  it('exposes a Downloads tab and switches to its panel', async () => {
-    render(
-      <Sidebar
-        {...props({ downloads: <div data-testid="downloads-slot">downloads</div> })}
-      />,
-    );
-    expect(screen.getByRole('tab', { name: /downloads/i })).toHaveAttribute('aria-selected', 'false');
-    await userEvent.click(screen.getByRole('tab', { name: /downloads/i }));
-    expect(screen.getByTestId('downloads-slot')).toBeInTheDocument();
-    expect(screen.queryByTestId('history-slot')).not.toBeInTheDocument();
-    expect(screen.queryByTestId('saved-slot')).not.toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: /downloads/i })).toHaveAttribute('aria-selected', 'true');
+  it('exposes exactly two tabs (History, Saved) and no Downloads tab', () => {
+    render(<Sidebar {...props()} />);
+    const tabs = screen.getAllByRole('tab');
+    expect(tabs).toHaveLength(2);
+    expect(screen.getByRole('tab', { name: /history/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /saved/i })).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: /downloads/i })).not.toBeInTheDocument();
   });
 });
