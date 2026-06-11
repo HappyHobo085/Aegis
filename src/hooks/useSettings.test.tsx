@@ -25,7 +25,7 @@ import { useSettings } from './useSettings';
 const baseSettings: Settings = {
   siteName: 'Aegis',
   homeUrl: 'https://duckduckgo.com/',
-  primaryColor: '#7c5cff',
+  primaryColor: '#3b82f6',
   defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
   searchEngines: [{ id: 'ddg', name: 'DuckDuckGo', template: 'https://duckduckgo.com/?q=%s' }],
   hideChromeByDefault: false,
@@ -44,7 +44,7 @@ describe('useSettings', () => {
     const { result } = renderHook(() => useSettings());
     await waitFor(() => expect(result.current.settings.siteName).toBe('Aegis'));
     expect(get).toHaveBeenCalledTimes(1);
-    expect(result.current.settings.primaryColor).toBe('#7c5cff');
+    expect(result.current.settings.primaryColor).toBe('#3b82f6');
   });
 
   it('sets document.title from siteName on mount', async () => {

@@ -5,7 +5,7 @@ import type { Settings } from '../../../shared/types';
 export const DEFAULT_SETTINGS: Settings = {
   siteName: 'Aegis',
   homeUrl: 'https://duckduckgo.com/',
-  primaryColor: '#7c5cff',
+  primaryColor: '#3b82f6',
   defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
   searchEngines: [
     { id: 'ddg', name: 'DuckDuckGo', template: 'https://duckduckgo.com/?q=%s' },

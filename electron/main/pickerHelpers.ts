@@ -77,7 +77,7 @@ export const PICKER_IIFE = `(() => new Promise((resolve) => {
   if (prev) prev.remove();
   const overlay = document.createElement('div');
   overlay.id = '__aegis_picker_overlay__';
-  overlay.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;border:2px solid #7c5cff;background:rgba(124,92,255,0.2);top:0;left:0;width:0;height:0;';
+  overlay.style.cssText = 'position:fixed;z-index:2147483647;pointer-events:none;border:2px solid #3b82f6;background:rgba(59,130,246,0.2);top:0;left:0;width:0;height:0;';
   document.documentElement.appendChild(overlay);
   function nthOfType(el) {
     let i = 1, sib = el.previousElementSibling;

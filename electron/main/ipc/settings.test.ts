@@ -8,7 +8,7 @@ function makeRepo() {
   const current = {
     siteName: 'Aegis',
     homeUrl: 'https://duckduckgo.com/',
-    primaryColor: '#7c5cff',
+    primaryColor: '#3b82f6',
     defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
     searchEngines: [],
     hideChromeByDefault: false,

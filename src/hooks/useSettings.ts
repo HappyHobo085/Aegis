@@ -7,7 +7,7 @@ import { applyTheme } from '../lib/theme';
 const emptySettings: Settings = {
   siteName: '',
   homeUrl: '',
-  primaryColor: '#7c5cff',
+  primaryColor: '#3b82f6',
   defaultSearchTemplate: '',
   searchEngines: [],
   hideChromeByDefault: false,
