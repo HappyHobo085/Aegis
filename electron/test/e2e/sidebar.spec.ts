@@ -46,10 +46,10 @@ function contentBounds(app: ElectronApplication): Promise<Bounds> {
   );
 }
 
-/** Drive the overlay z-order swap directly (Task-3 seam: places.setSidebarOpen). */
+/** Drive the overlay z-order swap directly (Task-3 seam: places.setChromeOverlay). */
 function setSidebarOpen(app: ElectronApplication, open: boolean): Promise<void> {
   return app.evaluate(
-    (_e, o) => (globalThis as any).__aegisTest.places.setSidebarOpen(o),
+    (_e, o) => (globalThis as any).__aegisTest.places.setChromeOverlay(o),
     open,
   );
 }

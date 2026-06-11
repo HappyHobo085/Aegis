@@ -32,8 +32,8 @@ const api: AegisApi = {
       ipcRenderer.invoke(IPC.viewSetContentVisible, viewId, visible),
     setContentInset: (viewId: ViewId, inset: ContentInset) =>
       ipcRenderer.invoke(IPC.viewSetContentInset, viewId, inset),
-    setSidebarOpen: (viewId: ViewId, open: boolean) =>
-      ipcRenderer.invoke(IPC.viewSetSidebarOpen, viewId, open),
+    setChromeOverlay: (viewId: ViewId, active: boolean) =>
+      ipcRenderer.invoke(IPC.viewSetChromeOverlay, viewId, active),
   },
   settings: {
     get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),

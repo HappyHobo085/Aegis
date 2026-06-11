@@ -27,7 +27,7 @@ const baseSettings: Settings = {
 const reloadOrStop = vi.fn(async () => {});
 const setContentVisible = vi.fn(async () => {});
 const setContentInset = vi.fn(async () => {});
-const setSidebarOpen = vi.fn(async () => {});
+const setChromeOverlay = vi.fn(async () => {});
 let failedCb: ((f: NavFailed) => void) | undefined;
 let crashedCb: ((c: NavCrashed) => void) | undefined;
 let stateCb: ((s: NavState) => void) | undefined;
@@ -57,7 +57,7 @@ vi.mock('./lib/ipcClient', () => ({
     view: {
       setContentVisible: (...a: any[]) => setContentVisible(...a),
       setContentInset: (...a: any[]) => setContentInset(...a),
-      setSidebarOpen: (...a: any[]) => setSidebarOpen(...a),
+      setChromeOverlay: (...a: any[]) => setChromeOverlay(...a),
     },
     settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
     subs: {
@@ -228,15 +228,60 @@ describe('App', () => {
     expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 96, left: 0 });
   });
 
-  it('drives view.setSidebarOpen on mount (closed) and on toggle (open)', async () => {
+  it('drives view.setChromeOverlay false on mount (no overlay active)', async () => {
     render(<App />);
     await waitFor(() =>
-      expect(setSidebarOpen).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false),
+      expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false),
     );
+  });
+
+  it('brings chrome on top when the sidebar opens', async () => {
+    render(<App />);
+    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(screen.getByRole('button', { name: /toggle sidebar/i }));
     await waitFor(() =>
-      expect(setSidebarOpen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+    );
+  });
+
+  it('brings chrome on top when the Settings modal opens', async () => {
+    render(<App />);
+    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(screen.getByRole('button', { name: /open settings/i }));
+    await waitFor(() =>
+      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+    );
+  });
+
+  it('brings chrome on top when the favorites manager opens', async () => {
+    render(<App />);
+    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(await screen.findByRole('button', { name: /manage favorites/i }));
+    await waitFor(() =>
+      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+    );
+  });
+
+  it('brings chrome on top when a permission prompt appears', async () => {
+    const { aegis } = await import('./lib/ipcClient');
+    let promptCb: ((p: import('../shared/types').PermissionPrompt) => void) | undefined;
+    (aegis.permissions.onPrompt as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: (p: import('../shared/types').PermissionPrompt) => void) => {
+        promptCb = cb;
+        return () => {};
+      },
+    );
+    render(<App />);
+    await waitFor(() => expect(promptCb).toBeTypeOf('function'));
+    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
+    act(() =>
+      promptCb!({ requestId: 1, origin: 'https://example.com', permission: 'geolocation' }),
+    );
+    await waitFor(() =>
+      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
     );
   });
 

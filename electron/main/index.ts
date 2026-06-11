@@ -128,15 +128,17 @@ function boot(): void {
   layout(win, chromeView, vc.view, contentInset);
   win.on('resize', () => layout(win, chromeView, vc.view, contentInset));
 
-  // Sidebar overlay: chrome (transparent) on top when open (scrim + right panel paint
-  // over the content view); content view on top when closed (normal browsing). Bounds
-  // never change for the sidebar — only the top inset applies (left always 0).
+  // Chrome overlays: chrome (transparent) on top when any full-window overlay is
+  // active (sidebar, settings modal, favorites manager, permission prompt, error/
+  // crash screen) so its scrim + panels paint over the content view; content view
+  // on top otherwise (normal browsing). Bounds never change for an overlay — only
+  // the top inset applies (left always 0).
   const bringToTop = (v: Electron.WebContentsView): void => {
     win.contentView.removeChildView(v);
     win.contentView.addChildView(v);
   };
-  const setSidebarOpen = (open: boolean): void => {
-    bringToTop(open ? chromeView : vc.view);
+  const setChromeOverlay = (active: boolean): void => {
+    bringToTop(active ? chromeView : vc.view);
   };
 
   // History recording: main-side, on the content WebContents' nav/title events.
@@ -290,7 +292,7 @@ function boot(): void {
     ...buildFavoritesHandlers(favoritesRepo),
     ...buildHistoryHandlers(historyRepo),
     ...buildSavedHandlers(savedRepo),
-    ...buildViewLayoutHandlers(setContentInset, setSidebarOpen),
+    ...buildViewLayoutHandlers(setContentInset, setChromeOverlay),
     ...buildDownloadsHandlers(downloadsRepo, { liveItems: liveDownloads }),
     ...buildPermissionsHandlers(permissionsRepo, { resolvePrompt: promptBridge.resolvePrompt }),
     ...buildDataHandlers({ favoritesRepo, historyRepo, savedRepo, settingsRepo, db }, win),
@@ -312,7 +314,7 @@ function boot(): void {
         getState: () => controller.getState(),
         updateNow,
       },
-      places: { favoritesRepo, historyRepo, savedRepo, setContentInset, setSidebarOpen },
+      places: { favoritesRepo, historyRepo, savedRepo, setContentInset, setChromeOverlay },
       view: {
         isChromeOnTop: () => win.contentView.children.at(-1) === chromeView,
         // Sample a single pixel's alpha byte from the chrome view's painted output.

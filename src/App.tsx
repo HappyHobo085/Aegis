@@ -71,8 +71,22 @@ export function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
-  // Favorites bar is always-on in Phase 3; only the sidebar toggles the inset.
-  useContentInset(PRIMARY_VIEW_ID, { sidebarOpen });
+  // Favorites bar is always-on (constant top inset); overlays never inset content.
+  useContentInset(PRIMARY_VIEW_ID);
+
+  // Any full-window chrome overlay (sidebar, settings, favorites manager,
+  // permission prompt, error/crash screen) must bring the transparent chrome
+  // view on top of the content view so it paints over the page.
+  const chromeOverlayActive =
+    sidebarOpen ||
+    settingsOpen ||
+    managerOpen ||
+    permissions.prompt !== null ||
+    failed !== null ||
+    crashed !== null;
+  useEffect(() => {
+    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, chromeOverlayActive);
+  }, [chromeOverlayActive]);
 
   useEffect(() => {
     void aegis.settings.get().then((s) => applyTheme(s));

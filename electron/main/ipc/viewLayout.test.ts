@@ -4,9 +4,9 @@ import { IPC, PRIMARY_VIEW_ID } from '../../../shared/types';
 import { buildViewLayoutHandlers } from './viewLayout';
 
 describe('buildViewLayoutHandlers', () => {
-  it('registers exactly the view.setContentInset + view.setSidebarOpen channels', () => {
+  it('registers exactly the view.setContentInset + view.setChromeOverlay channels', () => {
     const handlers = buildViewLayoutHandlers(vi.fn(), vi.fn());
-    expect(Object.keys(handlers)).toEqual([IPC.viewSetContentInset, IPC.viewSetSidebarOpen]);
+    expect(Object.keys(handlers)).toEqual([IPC.viewSetContentInset, IPC.viewSetChromeOverlay]);
   });
 
   it('forwards (inset.top, inset.left) to setContentInset', () => {
@@ -23,12 +23,12 @@ describe('buildViewLayoutHandlers', () => {
     expect(setContentInset).toHaveBeenCalledWith(56, 0);
   });
 
-  it('forwards the open boolean to setSidebarOpen', () => {
-    const setSidebarOpen = vi.fn();
-    const handlers = buildViewLayoutHandlers(vi.fn(), setSidebarOpen);
-    handlers[IPC.viewSetSidebarOpen](PRIMARY_VIEW_ID, true);
-    expect(setSidebarOpen).toHaveBeenCalledWith(true);
-    handlers[IPC.viewSetSidebarOpen](PRIMARY_VIEW_ID, false);
-    expect(setSidebarOpen).toHaveBeenCalledWith(false);
+  it('forwards the active boolean to setChromeOverlay', () => {
+    const setChromeOverlay = vi.fn();
+    const handlers = buildViewLayoutHandlers(vi.fn(), setChromeOverlay);
+    handlers[IPC.viewSetChromeOverlay](PRIMARY_VIEW_ID, true);
+    expect(setChromeOverlay).toHaveBeenCalledWith(true);
+    handlers[IPC.viewSetChromeOverlay](PRIMARY_VIEW_ID, false);
+    expect(setChromeOverlay).toHaveBeenCalledWith(false);
   });
 });
