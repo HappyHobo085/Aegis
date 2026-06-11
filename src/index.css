@@ -1,14 +1,27 @@
 /* src/index.css */
 :root {
-  --accent-color: #4f8cff;
-  --bg: #1b1d22;
-  --bg-elevated: #24272e;
-  --bg-input: #2c3039;
-  --fg: #e6e8ee;
-  --fg-muted: #9aa0ad;
-  --border: #353a44;
-  --danger: #ff5d5d;
-  --chrome-top-height: 56px;
+  /* re-based to UW palette (names kept so theme wiring is untouched) */
+  --accent-color: #3b82f6;     /* was #4f8cff (CSS fallback); blue-500 brand */
+  --bg: #121212;               /* app base / scrollbar track */
+  --bg-elevated: #1f1f1f;      /* header, sidebar, modals, toasts */
+  --bg-input: #2a2a2a;         /* inputs, cards/list rows, chips, hover */
+  --fg: #e0e0e0;               /* primary text */
+  --fg-muted: #888;            /* muted text, icons, placeholders */
+  --border: #333;              /* default borders */
+  --danger: #ff5d5d;           /* keep Aegis danger token name */
+  --chrome-top-height: 56px;   /* unchanged */
+
+  /* new tokens */
+  --border-2: #444;            /* secondary border: search field, dividers, scrollbar hover */
+  --success: #22c55e;          /* toast success only */
+  --text-on-accent: #ffffff;   /* text on accent-filled buttons */
+  --radius-1: 4px;
+  --radius-2: 6px;
+  --radius-3: 8px;
+  --radius-4: 12px;
+  --radius-pill: 999px;
+  --shadow-modal: 0 10px 25px rgba(0, 0, 0, 0.5);
+  --shadow-float: 0 6px 24px rgba(0, 0, 0, 0.4);
 }
 
 * {
@@ -25,7 +38,7 @@ body,
 }
 
 body {
-  background: var(--bg);
+  background: transparent;
   color: var(--fg);
   font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   font-size: 14px;
