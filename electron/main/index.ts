@@ -26,6 +26,14 @@ import { buildSavedHandlers } from './ipc/saved';
 import { buildSubsHandlers } from './ipc/subs';
 import { buildCustomFiltersHandlers } from './ipc/customFilters';
 import { buildViewLayoutHandlers } from './ipc/viewLayout';
+import { DownloadsRepo } from './db/downloadsRepo';
+import { PermissionsRepo } from './db/permissionsRepo';
+import { wireDownloads } from './downloads';
+import { wirePermissions } from './permissions';
+import { buildDownloadsHandlers } from './ipc/downloads';
+import { buildPermissionsHandlers, buildPromptBridge } from './ipc/permissions';
+import { buildDataHandlers } from './ipc/data';
+import { buildPickerHandlers } from './ipc/picker';
 import { ElectronBlocker } from '@ghostery/adblocker-electron';
 import {
   buildEngine,
@@ -77,6 +85,8 @@ function boot(): void {
   const favoritesRepo = new FavoritesRepo(db);
   const historyRepo = new HistoryRepo(db);
   const savedRepo = new SavedRepo(db);
+  const downloadsRepo = new DownloadsRepo(db);
+  const permissionsRepo = new PermissionsRepo(db);
 
   // Window + chrome (window.ts owns the BaseWindow + chromeView ONLY).
   const { win, chromeView } = createMainWindow();
@@ -125,6 +135,29 @@ function boot(): void {
     repo: historyRepo,
     onChanged: fwd.onHistoryChanged,
   });
+
+  // ---- Downloads pipeline (content session) ----
+  const liveDownloads = new Map<number, Electron.DownloadItem>();
+  const onDownloadsChanged = (): void => chromeWc.send(IPC.evtDownloadsChanged);
+  wireDownloads(vc.contentSession, {
+    downloadsRepo,
+    settingsRepo,
+    onChanged: onDownloadsChanged,
+    liveItems: liveDownloads,
+  });
+
+  // ---- Remembered site-permissions (re-sets both content-session handlers) ----
+  const promptBridge = buildPromptBridge((payload) =>
+    chromeWc.send(IPC.evtPermissionsPrompt, payload),
+  );
+  wirePermissions(vc.contentSession, {
+    permissionsRepo,
+    prompt: promptBridge.prompt,
+  });
+
+  // ---- HTML5 fullscreen (content view drives the BaseWindow) ----
+  vc.contentWebContents.on('enter-html-full-screen', () => win.setFullScreen(true));
+  vc.contentWebContents.on('leave-html-full-screen', () => win.setFullScreen(false));
 
   // ---- Adblock subsystem (after ViewController, BEFORE the first navigate) ----
   const cachePath = join(userData, 'engine.bin');
@@ -247,6 +280,10 @@ function boot(): void {
     ...buildHistoryHandlers(historyRepo),
     ...buildSavedHandlers(savedRepo),
     ...buildViewLayoutHandlers(setContentInset),
+    ...buildDownloadsHandlers(downloadsRepo, { liveItems: liveDownloads }),
+    ...buildPermissionsHandlers(permissionsRepo, { resolvePrompt: promptBridge.resolvePrompt }),
+    ...buildDataHandlers({ favoritesRepo, historyRepo, savedRepo, settingsRepo }, win),
+    ...buildPickerHandlers({ vc, customFiltersRepo, rebuildFromCache: rebuildEngineFromCache }),
   });
 
   // Test-only registry (never in production paths).
@@ -272,6 +309,10 @@ function boot(): void {
         rebuildFromCache: rebuildEngineFromCache,
         updateNow,
         navHome: () => vc.navigate(settingsRepo.get().homeUrl),
+      },
+      phase5: {
+        downloadsRepo,
+        permissionsRepo,
       },
     };
   }
