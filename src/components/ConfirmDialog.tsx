@@ -20,6 +20,7 @@ function Dialog({
   const dialogRef = useDialog<HTMLDivElement>(() => onResolve(false));
 
   return (
+    <div className="confirm-dialog__scrim">
     <div
       ref={dialogRef}
       role="dialog"
@@ -38,6 +39,7 @@ function Dialog({
           Cancel
         </button>
       </div>
+    </div>
     </div>
   );
 }

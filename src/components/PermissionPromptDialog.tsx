@@ -14,6 +14,7 @@ export function PermissionPromptDialog({ prompt, onResolve }: PermissionPromptDi
   const dialogRef = useDialog<HTMLDivElement>(() => onResolve(prompt.requestId, 'deny'));
 
   return (
+    <div className="permission-prompt__scrim">
     <div
       ref={dialogRef}
       role="dialog"
@@ -32,6 +33,7 @@ export function PermissionPromptDialog({ prompt, onResolve }: PermissionPromptDi
           Block
         </button>
       </div>
+    </div>
     </div>
   );
 }

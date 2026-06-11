@@ -93,6 +93,7 @@ export function FavoritesManager({
   };
 
   return (
+    <div className="favorites-manager__scrim">
     <div
       ref={dialogRef}
       role="dialog"
@@ -175,6 +176,7 @@ export function FavoritesManager({
           Delete tag
         </button>
       </div>
+    </div>
     </div>
   );
 }
