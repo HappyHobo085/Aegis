@@ -282,7 +282,7 @@ function boot(): void {
     ...buildViewLayoutHandlers(setContentInset),
     ...buildDownloadsHandlers(downloadsRepo, { liveItems: liveDownloads }),
     ...buildPermissionsHandlers(permissionsRepo, { resolvePrompt: promptBridge.resolvePrompt }),
-    ...buildDataHandlers({ favoritesRepo, historyRepo, savedRepo, settingsRepo }, win),
+    ...buildDataHandlers({ favoritesRepo, historyRepo, savedRepo, settingsRepo, db }, win),
     ...buildPickerHandlers({ vc, customFiltersRepo, rebuildFromCache: rebuildEngineFromCache }),
   });
 

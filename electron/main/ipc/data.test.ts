@@ -51,6 +51,10 @@ function makeRepos(over: any = {}) {
       ...over.savedRepo,
     },
     settingsRepo: { get: vi.fn(() => settings), set: vi.fn() },
+    // Fake better-sqlite3 handle: db.transaction(fn) returns a callable that
+    // runs fn synchronously (mirrors better-sqlite3 semantics; a throw inside
+    // propagates so the handler's try/catch can return {ok:false,error}).
+    db: { transaction: (fn: (...a: any[]) => any) => (...a: any[]) => fn(...a) },
   };
 }
 

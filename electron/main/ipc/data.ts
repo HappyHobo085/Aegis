@@ -1,6 +1,7 @@
 // electron/main/ipc/data.ts
 import { dialog } from 'electron';
 import { writeFile, readFile } from 'node:fs/promises';
+import type Database from 'better-sqlite3';
 import { IPC } from '../../../shared/types';
 import type { ImportMode } from '../../../shared/types';
 import type { FavoritesRepo } from '../db/favoritesRepo';
@@ -15,6 +16,9 @@ export interface DataRepos {
   historyRepo: HistoryRepo;
   savedRepo: SavedRepo;
   settingsRepo: SettingsRepo;
+  /** Shared better-sqlite3 handle, used to apply an import atomically so a
+   *  malformed row cannot leave the user's data partially wiped. */
+  db: Database.Database;
 }
 
 const JSON_FILTER = [{ name: 'JSON', extensions: ['json'] }];
@@ -29,7 +33,7 @@ export function buildDataHandlers(
   repos: DataRepos,
   win: Electron.BaseWindow,
 ): Record<string, (...a: any[]) => any> {
-  const { favoritesRepo, historyRepo, savedRepo, settingsRepo } = repos;
+  const { favoritesRepo, historyRepo, savedRepo, settingsRepo, db } = repos;
 
   return {
     [IPC.dataExport]: async (): Promise<{ ok: boolean; path?: string }> => {
@@ -74,15 +78,26 @@ export function buildDataHandlers(
       };
       const plan = planImport(valid.payload, existing, mode);
 
-      if (plan.replace) {
-        favoritesRepo.clear();
-        savedRepo.clear();
-        historyRepo.clear();
+      // Apply the whole plan in ONE synchronous better-sqlite3 transaction so a
+      // malformed row throwing mid-loop rolls back the replace-mode clear()s
+      // instead of leaving the user's data wiped and only partially restored.
+      // All repo ops below are synchronous prepared statements (transaction-safe);
+      // the awaited dialog/file reads happened above, outside the transaction.
+      try {
+        db.transaction(() => {
+          if (plan.replace) {
+            favoritesRepo.clear();
+            savedRepo.clear();
+            historyRepo.clear();
+          }
+          for (const f of plan.favorites) favoritesRepo.add({ name: f.name, url: f.url, tags: f.tags });
+          for (const s of plan.saved) savedRepo.add({ url: s.url, title: s.title });
+          for (const h of plan.history) historyRepo.record({ url: h.url, title: h.title }, () => h.visitedAt);
+          settingsRepo.set(plan.settings);
+        })();
+      } catch (e) {
+        return { ok: false, error: String(e) };
       }
-      for (const f of plan.favorites) favoritesRepo.add({ name: f.name, url: f.url, tags: f.tags });
-      for (const s of plan.saved) savedRepo.add({ url: s.url, title: s.title });
-      for (const h of plan.history) historyRepo.record({ url: h.url, title: h.title }, () => h.visitedAt);
-      settingsRepo.set(plan.settings);
 
       return { ok: true, counts: plan.counts };
     },
