@@ -1040,7 +1040,7 @@ input {
 .downloads-panel__progress {
   height: 4px;
   border-radius: var(--radius-pill);
-  background: var(--bg);
+  background: var(--bg-input);
   overflow: hidden;
 }
 
@@ -1074,4 +1074,11 @@ input {
 .downloads-panel__actions button:hover:not(:disabled) {
   border-color: var(--accent-color);
   color: var(--fg);
+}
+
+/* Destructive actions — Cancel and Remove use danger hover */
+.downloads-panel__cancel:hover:not(:disabled),
+.downloads-panel__remove:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
 }

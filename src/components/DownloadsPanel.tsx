@@ -90,6 +90,7 @@ export function DownloadsPanel({
                   {d.state === 'progressing' && (
                     <button
                       type="button"
+                      className="downloads-panel__cancel"
                       aria-label={`Cancel ${d.filename}`}
                       onClick={() => void cancel(d.id)}
                     >
@@ -98,6 +99,7 @@ export function DownloadsPanel({
                   )}
                   <button
                     type="button"
+                    className="downloads-panel__remove"
                     aria-label={`Remove ${d.filename}`}
                     onClick={() => void remove(d.id)}
                   >
