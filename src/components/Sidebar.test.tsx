@@ -10,6 +10,7 @@ function props(overrides: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
     onToggle: vi.fn(),
     history: <div data-testid="history-slot">history</div>,
     saved: <div data-testid="saved-slot">saved</div>,
+    downloads: <div data-testid="downloads-slot">downloads</div>,
     ...overrides,
   };
 }
@@ -56,5 +57,19 @@ describe('Sidebar', () => {
   it('the open sidebar region is labelled for assistive tech', () => {
     render(<Sidebar {...props()} />);
     expect(screen.getByRole('complementary', { name: /sidebar/i })).toBeInTheDocument();
+  });
+
+  it('exposes a Downloads tab and switches to its panel', async () => {
+    render(
+      <Sidebar
+        {...props({ downloads: <div data-testid="downloads-slot">downloads</div> })}
+      />,
+    );
+    expect(screen.getByRole('tab', { name: /downloads/i })).toHaveAttribute('aria-selected', 'false');
+    await userEvent.click(screen.getByRole('tab', { name: /downloads/i }));
+    expect(screen.getByTestId('downloads-slot')).toBeInTheDocument();
+    expect(screen.queryByTestId('history-slot')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('saved-slot')).not.toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /downloads/i })).toHaveAttribute('aria-selected', 'true');
   });
 });
