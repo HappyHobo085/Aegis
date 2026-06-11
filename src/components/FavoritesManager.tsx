@@ -1,5 +1,6 @@
 // src/components/FavoritesManager.tsx
 import { useId, useState } from 'react';
+import { Trash2, X } from 'lucide-react';
 import type { Favorite } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
 import { TagInput } from './TagInput';
@@ -58,7 +59,7 @@ function FavoriteRow({
         aria-label={`Remove favorite ${favorite.name}`}
         onClick={() => void remove(favorite.id)}
       >
-        Remove
+        <Trash2 size={14} aria-hidden="true" />
       </button>
     </li>
   );
@@ -105,8 +106,8 @@ export function FavoritesManager({
         <h2 id={titleId} className="favorites-manager__title">
           Manage favorites
         </h2>
-        <button type="button" onClick={onClose}>
-          Close
+        <button type="button" aria-label="Close" onClick={onClose}>
+          <X size={18} aria-hidden="true" />
         </button>
       </div>
 

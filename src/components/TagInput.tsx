@@ -1,5 +1,6 @@
 // src/components/TagInput.tsx
 import { useId, useState } from 'react';
+import { X } from 'lucide-react';
 
 export interface TagInputProps {
   tags: string[];
@@ -36,7 +37,7 @@ export function TagInput({ tags, suggestions, onChange }: TagInputProps) {
               aria-label={`Remove tag ${tag}`}
               onClick={() => removeTag(tag)}
             >
-              {'×'}
+              <X size={12} aria-hidden="true" />
             </button>
           </li>
         ))}

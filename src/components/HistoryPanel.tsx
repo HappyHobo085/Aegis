@@ -1,5 +1,6 @@
 // src/components/HistoryPanel.tsx
 import { useId } from 'react';
+import { Trash2, X } from 'lucide-react';
 import type { HistoryEntry } from '../../shared/types';
 import { confirm } from '../lib/toast';
 
@@ -59,6 +60,7 @@ export function HistoryPanel({
         disabled={entries.length === 0}
         onClick={() => void handleClear()}
       >
+        <Trash2 size={14} aria-hidden="true" />
         Clear all
       </button>
       {entries.length === 0 ? (
@@ -87,7 +89,7 @@ export function HistoryPanel({
                   aria-label={`Remove ${label}`}
                   onClick={() => void remove(entry.id)}
                 >
-                  &times;
+                  <X size={14} aria-hidden="true" />
                 </button>
               </li>
             );

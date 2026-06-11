@@ -1,4 +1,5 @@
 // src/components/FavoritesBar.tsx
+import { SlidersHorizontal } from 'lucide-react';
 import type { Favorite } from '../../shared/types';
 import { TagFilter } from './TagFilter';
 
@@ -41,7 +42,7 @@ export function FavoritesBar({
         aria-label="Manage favorites"
         onClick={onOpenManager}
       >
-        {'☰'}
+        <SlidersHorizontal size={16} aria-hidden="true" />
       </button>
     </nav>
   );

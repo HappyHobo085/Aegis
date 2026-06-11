@@ -1,6 +1,7 @@
 // src/components/SettingsModal.tsx
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
+import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
 
 type SettingsTab =
@@ -116,8 +117,13 @@ export function SettingsModal({
           <h2 id={titleId} className="settings-modal__title">
             Settings
           </h2>
-          <button type="button" className="settings-modal__close" onClick={onClose}>
-            Close
+          <button
+            type="button"
+            className="settings-modal__close"
+            aria-label="Close"
+            onClick={onClose}
+          >
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
 

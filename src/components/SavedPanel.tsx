@@ -1,4 +1,5 @@
 // src/components/SavedPanel.tsx
+import { X } from 'lucide-react';
 import type { SavedItem } from '../../shared/types';
 
 export interface SavedPanelProps {
@@ -33,7 +34,7 @@ export function SavedPanel({ items, remove, onOpen }: SavedPanelProps) {
                   aria-label={`Remove ${label}`}
                   onClick={() => void remove(item.id)}
                 >
-                  &times;
+                  <X size={14} aria-hidden="true" />
                 </button>
               </li>
             );

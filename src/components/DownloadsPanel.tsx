@@ -1,4 +1,5 @@
 // src/components/DownloadsPanel.tsx
+import { FileText, Folder, Trash2, X } from 'lucide-react';
 import type { DownloadEntry } from '../../shared/types';
 import { confirm } from '../lib/toast';
 
@@ -40,6 +41,7 @@ export function DownloadsPanel({
         disabled={downloads.length === 0}
         onClick={() => void handleClear()}
       >
+        <Trash2 size={14} aria-hidden="true" />
         Clear all
       </button>
       {downloads.length === 0 ? (
@@ -76,6 +78,7 @@ export function DownloadsPanel({
                         aria-label={`Open file ${d.filename}`}
                         onClick={() => void openFile(d.id)}
                       >
+                        <FileText size={14} aria-hidden="true" />
                         Open file
                       </button>
                       <button
@@ -83,6 +86,7 @@ export function DownloadsPanel({
                         aria-label={`Show ${d.filename} in folder`}
                         onClick={() => void showInFolder(d.id)}
                       >
+                        <Folder size={14} aria-hidden="true" />
                         Show in folder
                       </button>
                     </>
@@ -94,6 +98,7 @@ export function DownloadsPanel({
                       aria-label={`Cancel ${d.filename}`}
                       onClick={() => void cancel(d.id)}
                     >
+                      <X size={14} aria-hidden="true" />
                       Cancel
                     </button>
                   )}
@@ -103,7 +108,7 @@ export function DownloadsPanel({
                     aria-label={`Remove ${d.filename}`}
                     onClick={() => void remove(d.id)}
                   >
-                    &times;
+                    <Trash2 size={14} aria-hidden="true" />
                   </button>
                 </div>
               </li>

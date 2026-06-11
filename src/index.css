@@ -201,8 +201,33 @@ input {
 /* lucide SVGs default to inline display, which leaves a baseline gap inside the
    flex-centered icon buttons. Force block so they center cleanly. */
 .toolbar svg,
-.nav-controls svg {
+.nav-controls svg,
+.sidebar__close svg,
+.settings-modal__close svg,
+.favorites-bar__manage svg,
+.history-panel__remove svg,
+.saved-panel__remove svg,
+.downloads-panel__remove svg,
+.tag-input__chip button svg,
+.favorites-manager__header > button svg,
+.favorites-manager__row button[aria-label^="Remove favorite"] svg {
   display: block;
+}
+
+/* Icon + text labels in panel/dialog action buttons sit inline with a gap. */
+.history-panel__clear,
+.downloads-panel__clear,
+.downloads-panel__actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Favorites-bar manage button: center its single icon. */
+.favorites-bar__manage {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .nav-controls button:hover:not(:disabled),
@@ -612,6 +637,9 @@ input {
 
 /* Individual tab button — underline style */
 .sidebar__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;

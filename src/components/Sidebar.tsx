@@ -1,6 +1,7 @@
 // src/components/Sidebar.tsx
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
+import { Bookmark, Download, History, X } from 'lucide-react';
 
 type Tab = 'history' | 'saved' | 'downloads';
 
@@ -36,6 +37,11 @@ export function Sidebar({ open, onClose, history, saved, downloads }: SidebarPro
     saved: 'Saved',
     downloads: 'Downloads',
   };
+  const tabIcons: Record<Tab, ReactNode> = {
+    history: <History size={14} aria-hidden="true" />,
+    saved: <Bookmark size={14} aria-hidden="true" />,
+    downloads: <Download size={14} aria-hidden="true" />,
+  };
   const panels: Record<Tab, ReactNode> = {
     history,
     saved,
@@ -62,6 +68,7 @@ export function Sidebar({ open, onClose, history, saved, downloads }: SidebarPro
                 className="sidebar__tab"
                 onClick={() => setTab(t)}
               >
+                {tabIcons[t]}
                 {labels[t]}
               </button>
             ))}
@@ -72,7 +79,7 @@ export function Sidebar({ open, onClose, history, saved, downloads }: SidebarPro
             aria-label="Close sidebar"
             onClick={onClose}
           >
-            {'×'}
+            <X size={18} aria-hidden="true" />
           </button>
         </div>
         <div
