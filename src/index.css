@@ -643,6 +643,13 @@ textarea::placeholder {
   display: flex;
   align-items: center;
   gap: 4px;
+  overflow-x: auto;
+  /* hide scrollbar but keep scroll */
+  scrollbar-width: none;
+}
+
+.sidebar__tabs::-webkit-scrollbar {
+  display: none;
 }
 
 /* Individual tab button — underline style */
@@ -650,6 +657,7 @@ textarea::placeholder {
   display: inline-flex;
   align-items: center;
   gap: 6px;
+  flex-shrink: 0;
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;

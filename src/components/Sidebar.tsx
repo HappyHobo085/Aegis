@@ -2,6 +2,7 @@
 import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Bookmark, Download, History, X } from 'lucide-react';
+import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 
 type Tab = 'history' | 'saved' | 'downloads';
 
@@ -15,6 +16,7 @@ export interface SidebarProps {
 
 export function Sidebar({ open, onClose, history, saved, downloads }: SidebarProps) {
   const [tab, setTab] = useState<Tab>('history');
+  const tabsRef = useHorizontalWheel<HTMLDivElement>();
   const historyTabId = useId();
   const savedTabId = useId();
   const downloadsTabId = useId();
@@ -56,7 +58,7 @@ export function Sidebar({ open, onClose, history, saved, downloads }: SidebarPro
       <div className="sidebar__scrim" onClick={onClose} aria-hidden="true" />
       <aside className="sidebar sidebar__panel" aria-label="Sidebar">
         <div className="sidebar__head">
-          <div className="sidebar__tabs" role="tablist" aria-label="Sidebar panels">
+          <div ref={tabsRef} className="sidebar__tabs" role="tablist" aria-label="Sidebar panels">
             {order.map((t) => (
               <button
                 key={t}

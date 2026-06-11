@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
+import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 
 type SettingsTab =
   | 'appearance'
@@ -66,6 +67,7 @@ export function SettingsModal({
 }: SettingsModalProps) {
   const titleId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
+  const tabsRef = useHorizontalWheel<HTMLDivElement>();
   const [tab, setTab] = useState<SettingsTab>('appearance');
 
   // Stable id pairs (tab control id + panel id) per section, for aria wiring.
@@ -128,7 +130,12 @@ export function SettingsModal({
         </div>
 
         <div className="settings-modal__body">
-          <div className="settings-modal__tabs" role="tablist" aria-label="Settings sections">
+          <div
+            ref={tabsRef}
+            className="settings-modal__tabs"
+            role="tablist"
+            aria-label="Settings sections"
+          >
             {TAB_ORDER.map((t) => (
               <button
                 key={t}
