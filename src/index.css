@@ -193,6 +193,7 @@ textarea::placeholder {
 .toolbar__gear,
 .toolbar__picker,
 .toolbar__sidebar-toggle,
+.toolbar__fullscreen,
 .bookmark-button,
 .toolbar__downloads {
   display: inline-flex;
@@ -244,11 +245,36 @@ textarea::placeholder {
 .toolbar__gear:hover:not(:disabled),
 .toolbar__picker:hover:not(:disabled),
 .toolbar__sidebar-toggle:hover:not(:disabled),
+.toolbar__fullscreen:hover:not(:disabled),
 .bookmark-button:hover:not(:disabled),
 .toolbar__downloads:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.08);
   color: var(--fg);
   border-color: transparent;
+}
+
+/* Fullscreen exit affordance: a small circular button pinned to the top-right
+   corner (where main keeps the 44x44 chrome view). Visible over page content. */
+.fullscreen-exit {
+  position: fixed;
+  top: 4px;
+  right: 4px;
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-float);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+.fullscreen-exit:hover {
+  background: var(--bg-input);
+  color: #fff;
 }
 
 /* Bookmark saved/active state */

@@ -25,6 +25,8 @@ export interface ToolbarProps {
   bookmark?: ReactNode;
   /** Optional toolbar slot for the Settings gear button (Phase 4). */
   gear?: ReactNode;
+  /** Optional toolbar slot for the enter-fullscreen button. */
+  fullscreen?: ReactNode;
   /** Optional toolbar slot for the downloads indicator (Phase 5). */
   downloads?: ReactNode;
   /** Optional right-side toolbar slot for the sidebar toggle (restyle). */
@@ -41,6 +43,7 @@ export function Toolbar({
   adblock,
   bookmark,
   gear,
+  fullscreen,
   downloads,
   menu,
 }: ToolbarProps) {
@@ -63,6 +66,7 @@ export function Toolbar({
       />
       {bookmark}
       {downloads}
+      {fullscreen}
       {gear}
       {menu}
     </div>

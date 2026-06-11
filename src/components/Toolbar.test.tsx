@@ -120,6 +120,17 @@ describe('Toolbar', () => {
     expect(screen.getByRole('button', { name: /^downloads$/i })).toBeInTheDocument();
   });
 
+  it('renders the optional fullscreen slot when provided', () => {
+    render(
+      <Toolbar
+        state={state}
+        {...handlers()}
+        fullscreen={<button type="button">Enter fullscreen</button>}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /enter fullscreen/i })).toBeInTheDocument();
+  });
+
   it('renders the optional menu slot when provided', () => {
     render(
       <Toolbar

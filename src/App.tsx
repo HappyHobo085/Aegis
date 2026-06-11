@@ -1,6 +1,6 @@
 // src/App.tsx
 import { useEffect, useState } from 'react';
-import { Settings, PanelRight } from 'lucide-react';
+import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
 import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
@@ -71,6 +71,7 @@ export function App() {
   const [managerOpen, setManagerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
   // Favorites bar is always-on (constant top inset); overlays never inset content.
   useContentInset(PRIMARY_VIEW_ID);
@@ -88,6 +89,12 @@ export function App() {
   useEffect(() => {
     void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, chromeOverlayActive);
   }, [chromeOverlayActive]);
+
+  // Fullscreen: main shrinks chrome to a top-right corner and fills the window
+  // with content. Renderer reflects the toggle below (after all hooks).
+  useEffect(() => {
+    void aegis.view.setFullscreen(PRIMARY_VIEW_ID, fullscreen);
+  }, [fullscreen]);
 
   useEffect(() => {
     void aegis.settings.get().then((s) => applyTheme(s));
@@ -138,6 +145,23 @@ export function App() {
     (d) => d.state === 'progressing',
   ).length;
 
+  // Fullscreen render: ALL hooks above must run on every render (rule of hooks).
+  // In fullscreen the chrome is shrunk to a top-right corner by main; render only
+  // the exit affordance there. The component stays mounted, so state persists.
+  if (fullscreen) {
+    return (
+      <button
+        type="button"
+        className="fullscreen-exit"
+        aria-label="Exit fullscreen"
+        title="Exit fullscreen"
+        onClick={() => setFullscreen(false)}
+      >
+        <Minimize2 size={18} aria-hidden="true" />
+      </button>
+    );
+  }
+
   return (
     <div className="app">
       <SkipLink targetId={CONTENT_ANCHOR_ID} />
@@ -181,6 +205,17 @@ export function App() {
             onClick={() => setSettingsOpen(true)}
           >
             <Settings size={18} aria-hidden="true" />
+          </button>
+        }
+        fullscreen={
+          <button
+            type="button"
+            className="toolbar__fullscreen"
+            aria-label="Enter fullscreen"
+            title="Fullscreen"
+            onClick={() => setFullscreen(true)}
+          >
+            <Maximize2 size={18} aria-hidden="true" />
           </button>
         }
         menu={

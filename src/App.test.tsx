@@ -28,6 +28,7 @@ const reloadOrStop = vi.fn(async () => {});
 const setContentVisible = vi.fn(async () => {});
 const setContentInset = vi.fn(async () => {});
 const setChromeOverlay = vi.fn(async () => {});
+const setFullscreen = vi.fn(async () => {});
 let failedCb: ((f: NavFailed) => void) | undefined;
 let crashedCb: ((c: NavCrashed) => void) | undefined;
 let stateCb: ((s: NavState) => void) | undefined;
@@ -58,6 +59,7 @@ vi.mock('./lib/ipcClient', () => ({
       setContentVisible: (...a: any[]) => setContentVisible(...a),
       setContentInset: (...a: any[]) => setContentInset(...a),
       setChromeOverlay: (...a: any[]) => setChromeOverlay(...a),
+      setFullscreen: (...a: any[]) => setFullscreen(...a),
     },
     settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
     subs: {
@@ -358,5 +360,42 @@ describe('App', () => {
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(screen.getByRole('button', { name: /^allow$/i }));
     expect(aegis.permissions.resolve).toHaveBeenCalledWith(1, 'allow');
+  });
+
+  it('drives view.setFullscreen false on mount', async () => {
+    render(<App />);
+    await waitFor(() =>
+      expect(setFullscreen).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false),
+    );
+  });
+
+  it('entering fullscreen hides the chrome and shows the corner exit button; exiting restores it', async () => {
+    render(<App />);
+    const { default: userEvent } = await import('@testing-library/user-event');
+
+    // Normal chrome is present.
+    const enter = await screen.findByRole('button', { name: /enter fullscreen/i });
+    expect(screen.getByRole('textbox', { name: /address/i })).toBeInTheDocument();
+
+    // Enter fullscreen.
+    await userEvent.click(enter);
+    await waitFor(() =>
+      expect(setFullscreen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+    );
+
+    // Chrome (toolbar/favbar) is gone; only the corner exit button renders.
+    expect(screen.queryByRole('textbox', { name: /address/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /enter fullscreen/i })).not.toBeInTheDocument();
+    const exit = screen.getByRole('button', { name: /exit fullscreen/i });
+    expect(exit).toBeInTheDocument();
+
+    // Exit fullscreen restores the normal chrome.
+    await userEvent.click(exit);
+    await waitFor(() =>
+      expect(setFullscreen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, false),
+    );
+    expect(screen.getByRole('textbox', { name: /address/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /enter fullscreen/i })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /exit fullscreen/i })).not.toBeInTheDocument();
   });
 });
