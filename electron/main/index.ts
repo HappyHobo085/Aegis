@@ -128,6 +128,17 @@ function boot(): void {
   layout(win, chromeView, vc.view, contentInset);
   win.on('resize', () => layout(win, chromeView, vc.view, contentInset));
 
+  // Sidebar overlay: chrome (transparent) on top when open (scrim + right panel paint
+  // over the content view); content view on top when closed (normal browsing). Bounds
+  // never change for the sidebar — only the top inset applies (left always 0).
+  const bringToTop = (v: Electron.WebContentsView): void => {
+    win.contentView.removeChildView(v);
+    win.contentView.addChildView(v);
+  };
+  const setSidebarOpen = (open: boolean): void => {
+    bringToTop(open ? chromeView : vc.view);
+  };
+
   // History recording: main-side, on the content WebContents' nav/title events.
   // onChanged pushes history.changed so an open renderer history panel refreshes.
   new HistoryRecorder({
@@ -279,7 +290,7 @@ function boot(): void {
     ...buildFavoritesHandlers(favoritesRepo),
     ...buildHistoryHandlers(historyRepo),
     ...buildSavedHandlers(savedRepo),
-    ...buildViewLayoutHandlers(setContentInset),
+    ...buildViewLayoutHandlers(setContentInset, setSidebarOpen),
     ...buildDownloadsHandlers(downloadsRepo, { liveItems: liveDownloads }),
     ...buildPermissionsHandlers(permissionsRepo, { resolvePrompt: promptBridge.resolvePrompt }),
     ...buildDataHandlers({ favoritesRepo, historyRepo, savedRepo, settingsRepo, db }, win),
@@ -301,7 +312,19 @@ function boot(): void {
         getState: () => controller.getState(),
         updateNow,
       },
-      places: { favoritesRepo, historyRepo, savedRepo, setContentInset },
+      places: { favoritesRepo, historyRepo, savedRepo, setContentInset, setSidebarOpen },
+      view: {
+        isChromeOnTop: () => win.contentView.children.at(-1) === chromeView,
+        // Sample a single pixel's alpha byte from the chrome view's painted output.
+        // capturePage returns a NativeImage; toBitmap() is BGRA, so index 3 is alpha.
+        // In the content region (below the top inset) the transparent chrome paints
+        // nothing → alpha ~0 (content composites through).
+        sampleChromeAlpha: async (x: number, y: number) => {
+          const img = await chromeView.webContents.capturePage({ x, y, width: 1, height: 1 });
+          const bm = img.toBitmap();
+          return bm[3];
+        },
+      },
       phase4: {
         settingsRepo,
         subsRepo,

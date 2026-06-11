@@ -13,6 +13,7 @@ export const IPC = {
   navGetState: 'nav.getState',
   viewSetContentVisible: 'view.setContentVisible',
   viewSetContentInset: 'view.setContentInset',
+  viewSetSidebarOpen: 'view.setSidebarOpen',
   settingsGet: 'settings.get',
   settingsSet: 'settings.set',
   // adblock + lists (chrome -> main)
@@ -215,6 +216,7 @@ export interface AegisApi {
   view: {
     setContentVisible(viewId: ViewId, visible: boolean): Promise<void>;
     setContentInset(viewId: ViewId, inset: ContentInset): Promise<void>;
+    setSidebarOpen(viewId: ViewId, open: boolean): Promise<void>;
   };
   favorites: {
     list(): Promise<Favorite[]>;

@@ -19,6 +19,11 @@ export function createMainWindow(): { win: BaseWindow; chromeView: WebContentsVi
     },
   });
 
+  // Transparent chrome: the content region of the chrome view paints nothing, so
+  // when the chrome view is moved on top for the sidebar overlay the content view
+  // composites through (toolbar/favbar/sidebar/scrim paint their own bg). See §4.
+  chromeView.setBackgroundColor('#00000000');
+
   // Add chrome first so it sits beneath the (later-added) content view.
   win.contentView.addChildView(chromeView);
 
