@@ -44,27 +44,35 @@ export function createMainWindow(): { win: BaseWindow; chromeView: WebContentsVi
   return { win, chromeView };
 }
 
+export const FULLSCREEN_CORNER = 44; // px — top-right region that holds the exit button
+
 /**
- * Positions the chrome view over the whole window and, if given, the content
- * view inset by `inset` (default { top: CHROME_TOP_HEIGHT, left: 0 } until the
- * renderer reports its computed inset — avoids a boot race). The renderer owns
- * chrome layout and reports the inset via view.setContentInset; index.ts holds
- * the latest inset and re-applies it on resize. Call on window resize.
+ * Positions the chrome view and, if given, the content view. Two modes:
+ *  - normal: chrome fills the window; the content view is inset by `inset`
+ *    (default { top: CHROME_TOP_HEIGHT, left: 0 } until the renderer reports
+ *    its computed inset — avoids a boot race). The renderer owns chrome layout
+ *    and reports the inset via view.setContentInset; index.ts holds the latest
+ *    inset and re-applies it on resize.
+ *  - fullscreen: the chrome view shrinks to a small top-right corner (holds the
+ *    exit button); the content view fills the whole window.
+ * Call on window resize via relayout().
  */
 export function layout(
   win: BaseWindow,
   chromeView: WebContentsView,
   contentView?: WebContentsView,
-  inset: { top: number; left: number } = { top: CHROME_TOP_HEIGHT, left: 0 },
+  opts: { inset?: { top: number; left: number }; fullscreen?: boolean } = {},
 ): void {
+  const { inset = { top: CHROME_TOP_HEIGHT, left: 0 }, fullscreen = false } = opts;
   const { width, height } = win.getContentBounds();
-  chromeView.setBounds({ x: 0, y: 0, width, height });
-  if (contentView) {
-    contentView.setBounds({
-      x: inset.left,
-      y: inset.top,
-      width: width - inset.left,
-      height: height - inset.top,
-    });
+  if (fullscreen) {
+    // Chrome shrinks to a small top-right corner (holds the exit button); content fills the window.
+    chromeView.setBounds({ x: Math.max(0, width - FULLSCREEN_CORNER), y: 0, width: FULLSCREEN_CORNER, height: FULLSCREEN_CORNER });
+    if (contentView) contentView.setBounds({ x: 0, y: 0, width, height });
+  } else {
+    chromeView.setBounds({ x: 0, y: 0, width, height });
+    if (contentView) {
+      contentView.setBounds({ x: inset.left, y: inset.top, width: width - inset.left, height: height - inset.top });
+    }
   }
 }

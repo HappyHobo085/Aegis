@@ -15,14 +15,21 @@ import type { ViewId, ContentInset } from '../../../shared/types';
  * view.setChromeOverlay, and the handler forwards the boolean to
  * setChromeOverlay, which performs the chrome/content z-order swap in main
  * (chrome on top when active so the overlay paints over the content view).
+ *
+ * Fullscreen: the renderer reports the fullscreen toggle via view.setFullscreen,
+ * and the handler forwards the boolean to setFullscreen, which shrinks the chrome
+ * view to a top-right corner (kept on top for the exit button) and expands the
+ * content view to fill the window in main.
  */
 export function buildViewLayoutHandlers(
   setContentInset: (top: number, left: number) => void,
   setChromeOverlay: (active: boolean) => void,
+  setFullscreen: (on: boolean) => void,
 ): Record<string, (...a: any[]) => any> {
   return {
     [IPC.viewSetContentInset]: (_viewId: ViewId, inset: ContentInset) =>
       setContentInset(inset.top, inset.left),
     [IPC.viewSetChromeOverlay]: (_viewId: ViewId, active: boolean) => setChromeOverlay(active),
+    [IPC.viewSetFullscreen]: (_viewId: ViewId, on: boolean) => setFullscreen(on),
   };
 }

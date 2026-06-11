@@ -117,29 +117,42 @@ function boot(): void {
   // Compose: chrome added first by window.ts; index.ts adds the content view over it.
   win.contentView.addChildView(vc.view);
 
-  // Content inset: the renderer reports { top, left } via view.setContentInset; main
-  // holds the latest inset and re-applies it on resize (default top=56,left=0 until
-  // the renderer reports — avoids a boot race).
-  let contentInset = { top: CHROME_TOP_HEIGHT, left: 0 };
-  const setContentInset = (top: number, left: number): void => {
-    contentInset = { top, left };
-    layout(win, chromeView, vc.view, contentInset);
-  };
-  layout(win, chromeView, vc.view, contentInset);
-  win.on('resize', () => layout(win, chromeView, vc.view, contentInset));
-
-  // Chrome overlays: chrome (transparent) on top when any full-window overlay is
-  // active (sidebar, settings modal, favorites manager, permission prompt, error/
-  // crash screen) so its scrim + panels paint over the content view; content view
-  // on top otherwise (normal browsing). Bounds never change for an overlay — only
-  // the top inset applies (left always 0).
+  // Consolidated content/chrome layout state. The renderer reports the content
+  // inset { top, left } via view.setContentInset; chrome-overlay activity via
+  // view.setChromeOverlay; and the fullscreen toggle via view.setFullscreen.
+  // Main holds the latest state and drives a single relayout()/applyZOrder():
+  //  - relayout(): positions chrome + content (normal inset, or fullscreen with
+  //    chrome shrunk to a top-right corner + content full-window).
+  //  - applyZOrder(): chrome (transparent) on top when fullscreen (so the corner
+  //    exit button is clickable over content) OR when a full-window overlay is
+  //    active (sidebar, settings modal, favorites manager, permission prompt,
+  //    error/crash screen) so its scrim + panels paint over the content view;
+  //    content view on top otherwise (normal browsing).
+  // (default inset top=56,left=0 until the renderer reports — avoids a boot race.)
   const bringToTop = (v: Electron.WebContentsView): void => {
     win.contentView.removeChildView(v);
     win.contentView.addChildView(v);
   };
-  const setChromeOverlay = (active: boolean): void => {
-    bringToTop(active ? chromeView : vc.view);
+  let contentInset = { top: CHROME_TOP_HEIGHT, left: 0 };
+  let fullscreen = false;
+  let chromeOnTop = false;
+  const relayout = (): void => layout(win, chromeView, vc.view, { inset: contentInset, fullscreen });
+  const applyZOrder = (): void => bringToTop(fullscreen || chromeOnTop ? chromeView : vc.view);
+  const setContentInset = (top: number, left: number): void => {
+    contentInset = { top, left };
+    relayout();
   };
+  const setChromeOverlay = (active: boolean): void => {
+    chromeOnTop = active;
+    applyZOrder();
+  };
+  const setFullscreen = (on: boolean): void => {
+    fullscreen = on;
+    relayout();
+    applyZOrder();
+  };
+  relayout();
+  win.on('resize', relayout);
 
   // History recording: main-side, on the content WebContents' nav/title events.
   // onChanged pushes history.changed so an open renderer history panel refreshes.
@@ -292,7 +305,7 @@ function boot(): void {
     ...buildFavoritesHandlers(favoritesRepo),
     ...buildHistoryHandlers(historyRepo),
     ...buildSavedHandlers(savedRepo),
-    ...buildViewLayoutHandlers(setContentInset, setChromeOverlay),
+    ...buildViewLayoutHandlers(setContentInset, setChromeOverlay, setFullscreen),
     ...buildDownloadsHandlers(downloadsRepo, { liveItems: liveDownloads }),
     ...buildPermissionsHandlers(permissionsRepo, { resolvePrompt: promptBridge.resolvePrompt }),
     ...buildDataHandlers({ favoritesRepo, historyRepo, savedRepo, settingsRepo, db }, win),
@@ -314,9 +327,10 @@ function boot(): void {
         getState: () => controller.getState(),
         updateNow,
       },
-      places: { favoritesRepo, historyRepo, savedRepo, setContentInset, setChromeOverlay },
+      places: { favoritesRepo, historyRepo, savedRepo, setContentInset, setChromeOverlay, setFullscreen },
       view: {
         isChromeOnTop: () => win.contentView.children.at(-1) === chromeView,
+        chromeBounds: () => chromeView.getBounds(),
         // Sample a single pixel's alpha byte from the chrome view's painted output.
         // capturePage returns a NativeImage; toBitmap() is BGRA, so index 3 is alpha.
         // In the content region (below the top inset) the transparent chrome paints

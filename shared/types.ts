@@ -14,6 +14,7 @@ export const IPC = {
   viewSetContentVisible: 'view.setContentVisible',
   viewSetContentInset: 'view.setContentInset',
   viewSetChromeOverlay: 'view.setChromeOverlay',
+  viewSetFullscreen: 'view.setFullscreen',
   settingsGet: 'settings.get',
   settingsSet: 'settings.set',
   // adblock + lists (chrome -> main)
@@ -217,6 +218,7 @@ export interface AegisApi {
     setContentVisible(viewId: ViewId, visible: boolean): Promise<void>;
     setContentInset(viewId: ViewId, inset: ContentInset): Promise<void>;
     setChromeOverlay(viewId: ViewId, active: boolean): Promise<void>;
+    setFullscreen(viewId: ViewId, on: boolean): Promise<void>;
   };
   favorites: {
     list(): Promise<Favorite[]>;

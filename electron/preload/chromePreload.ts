@@ -34,6 +34,8 @@ const api: AegisApi = {
       ipcRenderer.invoke(IPC.viewSetContentInset, viewId, inset),
     setChromeOverlay: (viewId: ViewId, active: boolean) =>
       ipcRenderer.invoke(IPC.viewSetChromeOverlay, viewId, active),
+    setFullscreen: (viewId: ViewId, on: boolean) =>
+      ipcRenderer.invoke(IPC.viewSetFullscreen, viewId, on),
   },
   settings: {
     get: (): Promise<Settings> => ipcRenderer.invoke(IPC.settingsGet),
