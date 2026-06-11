@@ -937,8 +937,52 @@ textarea::placeholder {
   gap: 8px;
 }
 
+/* Search */
+.saved-panel__search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Visually hide the label (accessible) */
+.saved-panel__search-label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* Search input — pill style */
+.saved-panel__search input {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-2);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.saved-panel__search input:focus,
+.saved-panel__search input:focus-visible {
+  border-color: var(--accent-color);
+  outline: none;
+}
+
 /* Empty state */
 .saved-panel__empty {
+  margin: 0;
+  padding: 16px 0;
+  text-align: center;
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+
+/* No-match state (search returned nothing) */
+.saved-panel__nomatch {
   margin: 0;
   padding: 16px 0;
   text-align: center;
@@ -1033,6 +1077,59 @@ textarea::placeholder {
   background: rgba(255, 93, 93, 0.12);
   border-color: transparent;
   color: var(--danger);
+}
+
+/* Inline edit input — fills the row like the open button */
+.saved-panel__edit-input {
+  flex: 1;
+  padding: 4px 8px;
+  border-radius: var(--radius-2);
+  border: 1px solid var(--accent-color);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: 14px;
+  font-weight: 600;
+  min-width: 0;
+}
+
+.saved-panel__edit-input:focus,
+.saved-panel__edit-input:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+/* Edit (pencil) + Save (check) buttons — match the remove button footprint */
+.saved-panel__edit,
+.saved-panel__save {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--radius-1);
+  color: var(--fg-muted);
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.saved-panel__edit:hover:not(:disabled) {
+  background: var(--bg-hover, rgba(127, 127, 127, 0.12));
+  border-color: transparent;
+  color: var(--fg);
+}
+
+.saved-panel__save:hover:not(:disabled) {
+  background: rgba(64, 192, 128, 0.16);
+  border-color: transparent;
+  color: var(--accent-color);
+}
+
+.saved-panel__edit svg,
+.saved-panel__save svg {
+  display: block;
 }
 
 /* ─── Downloads panel ────────────────────────────────────────────── */
