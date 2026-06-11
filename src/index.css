@@ -972,6 +972,100 @@ textarea::placeholder {
   outline: none;
 }
 
+/* Manual add — toggle button */
+.saved-panel__add-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  border-radius: var(--radius-2);
+  border: 1px dashed var(--border-2);
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.saved-panel__add-toggle:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+.saved-panel__add-toggle svg {
+  display: block;
+}
+
+/* Manual add — form */
+.saved-panel__add {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  border-radius: var(--radius-3);
+  border: 1px solid var(--accent-color);
+  background: var(--bg-input);
+}
+
+.saved-panel__add-url,
+.saved-panel__add-title {
+  padding: 6px 10px;
+  border-radius: var(--radius-2);
+  border: 1px solid var(--border-2);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-size: 13px;
+  min-width: 0;
+}
+
+.saved-panel__add-url:focus,
+.saved-panel__add-url:focus-visible,
+.saved-panel__add-title:focus,
+.saved-panel__add-title:focus-visible {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.saved-panel__add-error {
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.saved-panel__add-actions {
+  display: flex;
+  gap: 6px;
+}
+
+.saved-panel__add-save,
+.saved-panel__add-cancel {
+  flex: 1;
+  padding: 6px 12px;
+  border-radius: var(--radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.saved-panel__add-save {
+  border: 1px solid var(--accent-color);
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.saved-panel__add-save:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.saved-panel__add-cancel {
+  border: 1px solid var(--border-2);
+  background: transparent;
+  color: var(--fg-muted);
+}
+
+.saved-panel__add-cancel:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
 /* Empty state */
 .saved-panel__empty {
   margin: 0;

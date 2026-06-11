@@ -1,6 +1,6 @@
 // src/lib/addressParse.test.ts
 import { describe, it, expect } from 'vitest';
-import { addressParse } from './addressParse';
+import { addressParse, normalizeSavedUrl } from './addressParse';
 
 const ctx = (overrides: Partial<{ currentUrl: string; searchTemplate: string }> = {}) => ({
   currentUrl: 'https://example.com/',
@@ -81,5 +81,61 @@ describe('addressParse', () => {
       kind: 'navigate',
       url: 'https://duckduckgo.com/?q=',
     });
+  });
+});
+
+describe('normalizeSavedUrl', () => {
+  it('accepts a full https URL as-is', () => {
+    expect(normalizeSavedUrl('https://news.example.org/path?x=1')).toEqual({
+      ok: true,
+      url: 'https://news.example.org/path?x=1',
+    });
+  });
+
+  it('accepts a full http URL as-is', () => {
+    expect(normalizeSavedUrl('http://insecure.example.org/')).toEqual({
+      ok: true,
+      url: 'http://insecure.example.org/',
+    });
+  });
+
+  it('trims surrounding whitespace before normalising', () => {
+    expect(normalizeSavedUrl('  example.com  ')).toEqual({
+      ok: true,
+      url: 'https://example.com',
+    });
+  });
+
+  it('prepends https:// to a schemeless host', () => {
+    expect(normalizeSavedUrl('example.com')).toEqual({
+      ok: true,
+      url: 'https://example.com',
+    });
+  });
+
+  it('prepends https:// to a schemeless host with a path', () => {
+    expect(normalizeSavedUrl('example.com/some/path')).toEqual({
+      ok: true,
+      url: 'https://example.com/some/path',
+    });
+  });
+
+  it('rejects empty input', () => {
+    expect(normalizeSavedUrl('   ')).toEqual({ ok: false, reason: 'Enter a URL.' });
+  });
+
+  it('rejects a disallowed scheme such as file:', () => {
+    const r = normalizeSavedUrl('file:///etc/passwd');
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects a disallowed scheme such as javascript:', () => {
+    const r = normalizeSavedUrl('javascript:alert(1)');
+    expect(r.ok).toBe(false);
+  });
+
+  it('rejects a bare term that is not a host', () => {
+    const r = normalizeSavedUrl('hello world');
+    expect(r.ok).toBe(false);
   });
 });

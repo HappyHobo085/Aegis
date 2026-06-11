@@ -1,20 +1,51 @@
 // src/components/SavedPanel.tsx
 import { useId, useState } from 'react';
-import { Bookmark, Check, Pencil, X } from 'lucide-react';
+import { Bookmark, Check, Pencil, Plus, X } from 'lucide-react';
 import type { SavedItem } from '../../shared/types';
+import { normalizeSavedUrl } from '../lib/addressParse';
 
 export interface SavedPanelProps {
   items: SavedItem[];
+  add(input: { url: string; title: string }): void;
   remove(id: number): Promise<SavedItem[]> | void;
   update(id: number, title: string): void;
   onOpen(url: string): void;
 }
 
-export function SavedPanel({ items, remove, update, onOpen }: SavedPanelProps) {
+export function SavedPanel({ items, add, remove, update, onOpen }: SavedPanelProps) {
   const searchId = useId();
   const [query, setQuery] = useState('');
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draft, setDraft] = useState('');
+
+  // Manual add-entry form.
+  const [adding, setAdding] = useState(false);
+  const [urlDraft, setUrlDraft] = useState('');
+  const [titleDraft, setTitleDraft] = useState('');
+  const [addError, setAddError] = useState<string | null>(null);
+
+  const openAdd = (): void => {
+    setAdding(true);
+    setUrlDraft('');
+    setTitleDraft('');
+    setAddError(null);
+  };
+
+  const cancelAdd = (): void => {
+    setAdding(false);
+    setAddError(null);
+  };
+
+  const submitAdd = (): void => {
+    const result = normalizeSavedUrl(urlDraft);
+    if (!result.ok) {
+      setAddError(result.reason);
+      return;
+    }
+    add({ url: result.url, title: titleDraft.trim() });
+    setAdding(false);
+    setAddError(null);
+  };
 
   const q = query.trim().toLowerCase();
   const filtered =
@@ -40,6 +71,73 @@ export function SavedPanel({ items, remove, update, onOpen }: SavedPanelProps) {
 
   return (
     <div className="saved-panel" role="group" aria-label="Saved">
+      {adding ? (
+        <form
+          className="saved-panel__add"
+          aria-label="Add a saved page"
+          onSubmit={(e) => {
+            e.preventDefault();
+            submitAdd();
+          }}
+        >
+          <input
+            className="saved-panel__add-url"
+            aria-label="URL to save"
+            placeholder="example.com"
+            value={urlDraft}
+            autoFocus
+            onChange={(e) => {
+              setUrlDraft(e.target.value);
+              if (addError) setAddError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelAdd();
+              }
+            }}
+          />
+          <input
+            className="saved-panel__add-title"
+            aria-label="Title (optional)"
+            placeholder="Title (optional)"
+            value={titleDraft}
+            onChange={(e) => setTitleDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                cancelAdd();
+              }
+            }}
+          />
+          {addError && (
+            <div className="saved-panel__add-error" role="alert">
+              {addError}
+            </div>
+          )}
+          <div className="saved-panel__add-actions">
+            <button type="submit" className="saved-panel__add-save">
+              Save
+            </button>
+            <button
+              type="button"
+              className="saved-panel__add-cancel"
+              onClick={cancelAdd}
+            >
+              Cancel
+            </button>
+          </div>
+        </form>
+      ) : (
+        <button
+          type="button"
+          className="saved-panel__add-toggle"
+          onClick={openAdd}
+        >
+          <Plus size={14} aria-hidden="true" />
+          <span>Add a page</span>
+        </button>
+      )}
       {items.length > 0 && (
         <form
           className="saved-panel__search"

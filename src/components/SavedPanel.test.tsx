@@ -14,6 +14,7 @@ const items: SavedItem[] = [
 function props() {
   return {
     items,
+    add: vi.fn(),
     remove: vi.fn(async () => [] as SavedItem[]),
     update: vi.fn(),
     onOpen: vi.fn(),
@@ -90,6 +91,68 @@ describe('SavedPanel', () => {
       await userEvent.type(screen.getByRole('searchbox', { name: /search saved/i }), 'zzz-nope');
       expect(screen.getByText(/no matches/i)).toBeInTheDocument();
       expect(screen.queryByText('Docs')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('manual add', () => {
+    it('shows the add form when the "Add a page" button is clicked', async () => {
+      render(<SavedPanel {...props()} />);
+      await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
+      expect(screen.getByRole('textbox', { name: /url to save/i })).toBeInTheDocument();
+    });
+
+    it('offers the add affordance even when the list is empty', () => {
+      render(<SavedPanel {...props()} items={[]} />);
+      expect(screen.getByRole('button', { name: /add a page/i })).toBeInTheDocument();
+    });
+
+    it('saving a schemeless host calls add with https:// prepended and the title', async () => {
+      const p = props();
+      render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
+      await userEvent.type(screen.getByRole('textbox', { name: /url to save/i }), 'example.com');
+      await userEvent.type(screen.getByRole('textbox', { name: /title \(optional\)/i }), 'My Site');
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      expect(p.add).toHaveBeenCalledWith({ url: 'https://example.com', title: 'My Site' });
+    });
+
+    it('saves with an empty title when none is given', async () => {
+      const p = props();
+      render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
+      await userEvent.type(screen.getByRole('textbox', { name: /url to save/i }), 'https://docs.example/{Enter}');
+      expect(p.add).toHaveBeenCalledWith({ url: 'https://docs.example/', title: '' });
+    });
+
+    it('shows an inline error and does not call add for an invalid URL', async () => {
+      const p = props();
+      render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
+      await userEvent.type(screen.getByRole('textbox', { name: /url to save/i }), 'not a url');
+      await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
+      expect(p.add).not.toHaveBeenCalled();
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      // The form stays open so the user can correct the input.
+      expect(screen.getByRole('textbox', { name: /url to save/i })).toBeInTheDocument();
+    });
+
+    it('clicking Cancel closes the form without calling add', async () => {
+      const p = props();
+      render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
+      await userEvent.click(screen.getByRole('button', { name: /cancel/i }));
+      expect(p.add).not.toHaveBeenCalled();
+      expect(screen.queryByRole('textbox', { name: /url to save/i })).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /add a page/i })).toBeInTheDocument();
+    });
+
+    it('pressing Escape in the URL field cancels the form', async () => {
+      const p = props();
+      render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
+      await userEvent.type(screen.getByRole('textbox', { name: /url to save/i }), 'example.com{Escape}');
+      expect(p.add).not.toHaveBeenCalled();
+      expect(screen.queryByRole('textbox', { name: /url to save/i })).not.toBeInTheDocument();
     });
   });
 

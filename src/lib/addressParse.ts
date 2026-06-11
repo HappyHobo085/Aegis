@@ -45,3 +45,37 @@ export function addressParse(
     url: ctx.searchTemplate.replace('%s', encodeURIComponent(trimmed)),
   };
 }
+
+export type NormalizeSavedUrlResult =
+  | { ok: true; url: string }
+  | { ok: false; reason: string };
+
+/**
+ * Normalises free-typed input into a saveable URL. Unlike addressParse, there is
+ * no search fallback — a saved entry must be an actual address. A schemeless host
+ * gets https:// prepended; anything that doesn't resolve to an allowed http(s)
+ * URL is rejected with a human-readable reason.
+ */
+export function normalizeSavedUrl(raw: string): NormalizeSavedUrlResult {
+  const trimmed = raw.trim();
+
+  if (trimmed.length === 0) {
+    return { ok: false, reason: 'Enter a URL.' };
+  }
+
+  if (hasScheme(trimmed)) {
+    if (isAllowedNavigationUrl(trimmed)) {
+      return { ok: true, url: trimmed };
+    }
+    return { ok: false, reason: 'Only http and https addresses can be saved.' };
+  }
+
+  if (looksLikeHost(trimmed)) {
+    const candidate = `https://${trimmed}`;
+    if (isAllowedNavigationUrl(candidate)) {
+      return { ok: true, url: candidate };
+    }
+  }
+
+  return { ok: false, reason: 'Enter a valid URL (e.g. example.com).' };
+}

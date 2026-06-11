@@ -258,6 +258,7 @@ export function App() {
         saved={
           <SavedPanel
             items={saved.items}
+            add={(input) => void saved.add(input)}
             remove={(id) => void saved.remove(id)}
             update={(id, title) => void saved.update(id, title)}
             onOpen={(url) => void nav.navigate(url)}
