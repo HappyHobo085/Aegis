@@ -1,5 +1,6 @@
 // src/components/ConfirmDialog.test.tsx
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { StrictMode } from 'react';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -99,6 +100,45 @@ describe('ConfirmDialog', () => {
     // Dialog is now gone; no second resolution should happen
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(calls).toHaveLength(1);
+  });
+
+  // Regression: under React StrictMode (dev), state updaters are double-invoked to
+  // surface impurity. The resolve/close updater must be PURE (no side effects that
+  // change its return across invocations), or the dialog fails to close in dev.
+  it('clicking OK closes the dialog under StrictMode (dev double-invoke)', async () => {
+    render(
+      <StrictMode>
+        <ConfirmDialog />
+      </StrictMode>,
+    );
+    let result: boolean | undefined;
+    act(() => {
+      void confirm('Clear all history?').then((v) => {
+        result = v;
+      });
+    });
+    await screen.findByRole('dialog');
+    await userEvent.click(screen.getByRole('button', { name: /^ok$/i }));
+    expect(result).toBe(true);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('clicking Cancel closes the dialog under StrictMode (dev double-invoke)', async () => {
+    render(
+      <StrictMode>
+        <ConfirmDialog />
+      </StrictMode>,
+    );
+    let result: boolean | undefined;
+    act(() => {
+      void confirm('Clear all history?').then((v) => {
+        result = v;
+      });
+    });
+    await screen.findByRole('dialog');
+    await userEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
+    expect(result).toBe(false);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('dialog has accessible role, aria-modal, and aria-describedby on the message', async () => {
