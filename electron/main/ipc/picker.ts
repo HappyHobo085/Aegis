@@ -2,7 +2,7 @@
 import { IPC } from '../../../shared/types';
 import type { ViewController } from '../viewController';
 import type { CustomFiltersRepo } from '../db/customFiltersRepo';
-import { appendCosmeticRule, PICKER_IIFE } from '../pickerHelpers';
+import { appendCosmeticRule, isSafeSelector, PICKER_IIFE } from '../pickerHelpers';
 
 /** Host of a URL (no scheme/port), or '' when there is no usable host. */
 function hostOf(url: string): string {
@@ -34,6 +34,10 @@ export function buildPickerHandlers(deps: PickerDeps): Record<string, (...a: any
       if (!host) return { ok: false };
       const selector: string | null = await vc.contentWebContents.executeJavaScript(PICKER_IIFE, true);
       if (!selector) return { ok: false };
+      // The selector comes from JS run in the attacker-controlled content page;
+      // reject any selector with line terminators/control chars so it cannot
+      // break out of the single `host##selector` line and inject extra rules.
+      if (!isSafeSelector(selector)) return { ok: false };
       const rule = `${host}##${selector}`;
       customFiltersRepo.set(appendCosmeticRule(customFiltersRepo.get(), host, selector));
       rebuildFromCache();

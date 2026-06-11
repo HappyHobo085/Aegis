@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 // electron/main/pickerHelpers.test.ts
 import { describe, it, expect } from 'vitest';
-import { appendCosmeticRule, computeSelector, PICKER_IIFE } from './pickerHelpers';
+import { appendCosmeticRule, computeSelector, isSafeSelector, PICKER_IIFE } from './pickerHelpers';
 
 describe('appendCosmeticRule', () => {
   it('builds host##selector and appends on a fresh blob', () => {
@@ -16,6 +16,36 @@ describe('appendCosmeticRule', () => {
 
   it('does not add an extra blank line when the existing blob already ends with one', () => {
     expect(appendCosmeticRule('||a.test^\n', 'x.com', '.b')).toBe('||a.test^\nx.com##.b');
+  });
+});
+
+describe('isSafeSelector (main-side trust boundary)', () => {
+  it('accepts a normal #id selector', () => {
+    expect(isSafeSelector('#hero')).toBe(true);
+  });
+
+  it('accepts a normal .class selector', () => {
+    expect(isSafeSelector('.promo')).toBe(true);
+  });
+
+  it('accepts a normal nth-of-type parent-path selector', () => {
+    expect(isSafeSelector('div:nth-of-type(2) > ul > li:nth-of-type(2)')).toBe(true);
+  });
+
+  it('rejects a selector containing a newline (filter-rule injection)', () => {
+    expect(isSafeSelector('#x\n@@||evil^$document')).toBe(false);
+  });
+
+  it('rejects a selector containing a carriage return', () => {
+    expect(isSafeSelector('#x\r@@||evil^$document')).toBe(false);
+  });
+
+  it('rejects a selector containing a tab', () => {
+    expect(isSafeSelector('#x\t.y')).toBe(false);
+  });
+
+  it('rejects an empty string', () => {
+    expect(isSafeSelector('')).toBe(false);
   });
 });
 

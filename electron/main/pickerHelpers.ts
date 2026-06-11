@@ -8,6 +8,19 @@
  * into the sandboxed content WebContents via executeJavaScript(code, true).
  */
 
+/** A picker selector is only safe to persist as a cosmetic rule if it is
+ *  non-empty and contains no line terminators or control characters that
+ *  could break out of the single `host##selector` line and inject extra
+ *  filter rules. Legitimate selectors (#id, .class, tag:nth-of-type(n) > ...)
+ *  contain none of these. The selector is returned by JS running in the
+ *  attacker-controlled content page, so this is the main-side trust boundary. */
+export function isSafeSelector(selector: string): boolean {
+  if (!selector) return false;
+  // C0 controls (incl. CR/LF/TAB), DEL, C1 controls, and Unicode line/paragraph separators.
+  // eslint-disable-next-line no-control-regex
+  return !/[\x00-\x1F\x7F-\x9F\u2028\u2029]/.test(selector);
+}
+
 /** Append `${host}##${selector}` to the existing my-filters blob. */
 export function appendCosmeticRule(existing: string, host: string, selector: string): string {
   const rule = `${host}##${selector}`;
