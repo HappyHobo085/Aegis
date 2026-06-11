@@ -654,6 +654,36 @@ textarea::placeholder {
   padding: 0;
 }
 
+/* Drag-to-resize handle on the panel's left edge. Transparent until hovered/dragged;
+   the panel's existing border-left provides the resting visual line. */
+.sidebar__resize {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 6px;
+  height: 100%;
+  cursor: col-resize;
+  touch-action: none;
+  background: transparent;
+  z-index: 2;
+}
+
+.sidebar__resize:hover,
+.sidebar__panel--dragging .sidebar__resize {
+  background: var(--accent-color);
+}
+
+.sidebar__resize:focus-visible {
+  outline: none;
+  background: var(--accent-color);
+}
+
+/* While dragging, suppress the slide-in animation and text selection. */
+.sidebar__panel--dragging {
+  animation: none;
+  user-select: none;
+}
+
 /* Header row: tabs + close button */
 .sidebar__head {
   display: flex;
@@ -885,9 +915,10 @@ textarea::placeholder {
   font-weight: 600;
   font-size: 14px;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Wrap long titles onto multiple lines instead of truncating; break very long
+     unbroken strings too so nothing is hidden. */
+  white-space: normal;
+  overflow-wrap: anywhere;
   max-width: 100%;
 }
 
@@ -1135,9 +1166,10 @@ textarea::placeholder {
   font-weight: 600;
   font-size: 14px;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  /* Wrap long titles onto multiple lines instead of truncating; break very long
+     unbroken strings too so nothing is hidden. */
+  white-space: normal;
+  overflow-wrap: anywhere;
   max-width: 100%;
 }
 

@@ -1,8 +1,13 @@
 // src/components/Sidebar.test.tsx
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { Sidebar } from './Sidebar';
+
+beforeEach(() => {
+  // The width is persisted to localStorage; isolate each test.
+  localStorage.clear();
+});
 
 function props(overrides: Partial<React.ComponentProps<typeof Sidebar>> = {}) {
   return {
@@ -83,5 +88,46 @@ describe('Sidebar', () => {
     expect(screen.getByRole('tab', { name: /history/i })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: /saved/i })).toBeInTheDocument();
     expect(screen.queryByRole('tab', { name: /downloads/i })).not.toBeInTheDocument();
+  });
+
+  describe('resize', () => {
+    const panel = () => screen.getByRole('complementary', { name: /sidebar/i });
+    const handle = () => screen.getByRole('separator', { name: /resize sidebar/i });
+
+    it('renders a vertical resize separator and opens at the default width', () => {
+      render(<Sidebar {...props()} />);
+      expect(handle()).toHaveAttribute('aria-orientation', 'vertical');
+      expect(panel()).toHaveStyle({ width: '280px' });
+      expect(handle()).toHaveAttribute('aria-valuenow', '280');
+    });
+
+    it('ArrowLeft widens and ArrowRight narrows the sidebar', async () => {
+      render(<Sidebar {...props()} />);
+      handle().focus();
+      await userEvent.keyboard('{ArrowLeft}');
+      expect(panel()).toHaveStyle({ width: '304px' });
+      await userEvent.keyboard('{ArrowRight}{ArrowRight}');
+      expect(panel()).toHaveStyle({ width: '256px' });
+    });
+
+    it('clamps to the minimum width when narrowed past it', async () => {
+      render(<Sidebar {...props()} />);
+      handle().focus();
+      for (let i = 0; i < 10; i++) await userEvent.keyboard('{ArrowRight}');
+      expect(panel()).toHaveStyle({ width: '240px' });
+    });
+
+    it('remembers the width across re-opens via localStorage', () => {
+      localStorage.setItem('aegis.sidebarWidth', '420');
+      render(<Sidebar {...props()} />);
+      expect(panel()).toHaveStyle({ width: '420px' });
+    });
+
+    it('persists a resized width to localStorage', async () => {
+      render(<Sidebar {...props()} />);
+      handle().focus();
+      await userEvent.keyboard('{ArrowLeft}');
+      expect(localStorage.getItem('aegis.sidebarWidth')).toBe('304');
+    });
   });
 });
