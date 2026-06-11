@@ -111,39 +111,41 @@ export function SettingsModal({
       aria-labelledby={titleId}
       className="settings-modal"
     >
-      <div className="settings-modal__header">
-        <h2 id={titleId} className="settings-modal__title">
-          Settings
-        </h2>
-        <button type="button" onClick={onClose}>
-          Close
-        </button>
-      </div>
-
-      <div className="settings-modal__body">
-        <div className="settings-modal__tabs" role="tablist" aria-label="Settings sections">
-          {TAB_ORDER.map((t) => (
-            <button
-              key={t}
-              type="button"
-              role="tab"
-              id={tabIds[t]}
-              aria-controls={panelId}
-              aria-selected={tab === t}
-              className="settings-modal__tab"
-              onClick={() => setTab(t)}
-            >
-              {TAB_LABELS[t]}
-            </button>
-          ))}
+      <div className="settings-modal__content">
+        <div className="settings-modal__header">
+          <h2 id={titleId} className="settings-modal__title">
+            Settings
+          </h2>
+          <button type="button" className="settings-modal__close" onClick={onClose}>
+            Close
+          </button>
         </div>
-        <div
-          role="tabpanel"
-          id={panelId}
-          aria-labelledby={tabIds[tab]}
-          className="settings-modal__panel"
-        >
-          {panels[tab]}
+
+        <div className="settings-modal__body">
+          <div className="settings-modal__tabs" role="tablist" aria-label="Settings sections">
+            {TAB_ORDER.map((t) => (
+              <button
+                key={t}
+                type="button"
+                role="tab"
+                id={tabIds[t]}
+                aria-controls={panelId}
+                aria-selected={tab === t}
+                className="settings-modal__tab"
+                onClick={() => setTab(t)}
+              >
+                {TAB_LABELS[t]}
+              </button>
+            ))}
+          </div>
+          <div
+            role="tabpanel"
+            id={panelId}
+            aria-labelledby={tabIds[tab]}
+            className="settings-modal__panel"
+          >
+            {panels[tab]}
+          </div>
         </div>
       </div>
     </div>
