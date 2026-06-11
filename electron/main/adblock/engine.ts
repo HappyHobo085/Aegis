@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import { ElectronBlocker, adsAndTrackingLists } from '@ghostery/adblocker-electron';
 import { writeFileAtomicBytes, readBytesSafe } from '../../lib/atomicFile';
+import { EXTRA_LIST_URLS } from './extraLists.mjs';
 
 /**
  * Single source for the default `$redirect` resources (ublock-origin resources.json).
@@ -21,13 +22,18 @@ export function listIdFromUrl(url: string): string {
 }
 
 /**
- * The default list URL set, derived from the engine's own `adsAndTrackingLists`
- * constant so the seed and runtime always agree on sources. Each entry pairs a
- * stable `listId` (for persistence/caching) with its HTTPS source `url`.
+ * The default list URL set: the library's own `adsAndTrackingLists` (listIds
+ * derived from the URL) PLUS the curated `EXTRA_LIST_URLS` (uBlock filters/
+ * badware/resource-abuse/privacy + AdGuard Base + Peter Lowe's — stable hand-
+ * picked listIds). The seed and runtime always agree on this exact source set
+ * because both this constant and `generate-seed.mjs` read `EXTRA_LIST_URLS`
+ * from the shared `./extraLists.mjs`. Each entry pairs a stable `listId` (for
+ * persistence/caching) with its HTTPS source `url`.
  */
-export const DEFAULT_LIST_URLS: { listId: string; url: string }[] = adsAndTrackingLists.map(
-  (url) => ({ listId: listIdFromUrl(url), url }),
-);
+export const DEFAULT_LIST_URLS: { listId: string; url: string }[] = [
+  ...adsAndTrackingLists.map((url) => ({ listId: listIdFromUrl(url), url })),
+  ...EXTRA_LIST_URLS,
+];
 
 /**
  * Build a runtime `ElectronBlocker` from already-fetched list text (NOT via
