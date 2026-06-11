@@ -2653,3 +2653,158 @@ textarea::placeholder {
   pointer-events: none;
   user-select: none;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   TASK 4: Depth · Transitions · Focus · Type hierarchy
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── Depth: toolbar elevation ───────────────────────────────────── */
+
+/* Give the toolbar a perceptible lift above the page content without
+   changing its height or layout — z-index is already established
+   elsewhere, this purely adds visual depth. */
+.toolbar {
+  box-shadow: 0 1px 0 var(--border), 0 4px 12px rgba(0, 0, 0, 0.28);
+  /* Elevate above the favorites bar so shadow renders on top of it */
+  position: relative;
+  z-index: 100;
+}
+
+/* ─── Depth: list/setting row hover bg lift ──────────────────────── */
+
+/* In addition to the accent border already on :hover, lift the bg
+   slightly so the row pops without flashing. */
+.history-panel__row:hover,
+.saved-panel__row:hover,
+.downloads-panel__row:hover,
+.search-tab__row:hover,
+.filter-lists-tab__row:hover,
+.allowlist-tab__row:hover,
+.site-permissions-tab__row:hover,
+.favorites-manager__row:hover {
+  background: color-mix(in srgb, var(--bg-input) 80%, var(--accent-color) 4%);
+}
+
+/* ─── Transitions: interactive elements ──────────────────────────── */
+
+/* Applies a fast, consistent transition to all interactive elements
+   so hover/focus changes animate smoothly rather than snapping. */
+button,
+input,
+select,
+textarea,
+.tag-filter__chip,
+.favorites-bar__chip,
+.favorites-bar__manage,
+.tag-input__chip,
+.sidebar__tab,
+.settings-modal__tab,
+.history-panel__row,
+.saved-panel__row,
+.downloads-panel__row,
+.search-tab__row,
+.filter-lists-tab__row,
+.allowlist-tab__row,
+.site-permissions-tab__row,
+.favorites-manager__row {
+  transition: background-color .15s ease, border-color .15s ease,
+              color .15s ease, box-shadow .15s ease, transform .05s ease;
+}
+
+/* Active press-down feedback on buttons (not on inputs/textarea) */
+button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+/* ─── Focus: refined outline + soft glow ring ────────────────────── */
+
+/* Replace the bare outline with a 2px stroke + a soft accent ring.
+   outline-offset keeps the ring outside the element border so it never
+   clips — containers may clip it if overflow:hidden, but the outline
+   itself still shows (per CSS spec). */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 30%, transparent);
+}
+
+/* Pill address bar gets the same glow (its focus rule suppresses outline
+   and fires outline:none — keep that, apply only the glow ring). */
+.address-bar input:focus,
+.address-bar input:focus-visible {
+  border-color: var(--accent-color);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 28%, transparent);
+}
+
+/* Settings/history search inputs: same treatment, no duplicate outline */
+.appearance-tab input[type="text"]:focus,
+.search-tab input[type="text"]:focus,
+.home-tab input[type="text"]:focus,
+.filter-lists-tab input[type="text"]:focus,
+.my-filters-tab input[type="text"]:focus,
+.allowlist-tab input[type="text"]:focus,
+.downloads-tab input[type="text"]:focus,
+.site-permissions-tab input[type="text"]:focus,
+.data-tab input[type="text"]:focus,
+.search-tab__add input[type="text"]:focus,
+.filter-lists-tab__add input[type="text"]:focus,
+.history-panel__search input:focus,
+.history-panel__search input:focus-visible,
+.my-filters-tab__textarea:focus {
+  border-color: var(--accent-color);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 28%, transparent);
+}
+
+/* Tag-input focus-within glow */
+.tag-input:focus-within {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 28%, transparent);
+}
+
+/* FavoritesManager select */
+.favorites-manager__tags select:focus {
+  border-color: var(--accent-color);
+  outline: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 28%, transparent);
+}
+
+/* ─── Type hierarchy refinements ─────────────────────────────────── */
+
+/* Modal / dialog / section titles: slightly larger, tighter tracking */
+.settings-modal__title,
+.favorites-manager__title {
+  font-size: 19px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+/* Body-copy line heights for readability */
+.permission-prompt__message,
+.confirm-dialog__message,
+.error-overlay__body {
+  line-height: 1.5;
+}
+
+/* Secondary / muted labels consistent at --fg-muted */
+.downloads-tab__hint,
+.adblock-shield__count,
+.adblock-shield__hint,
+.my-filters-tab__count,
+.data-tab__mode legend {
+  color: var(--fg-muted);
+}
+
+/* Welcome hint body copy: comfortable line-height */
+.welcome-hint p {
+  line-height: 1.5;
+}
+
+/* Error overlay body already 1.6 — nudge the heading tracking */
+.error-overlay__heading {
+  letter-spacing: -0.015em;
+}
