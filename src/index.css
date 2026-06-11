@@ -2008,3 +2008,615 @@ input {
   filter: brightness(1.12);
   border-color: transparent;
 }
+
+/* ─── Favorites Manager modal ────────────────────────────────────── */
+
+/* The outer .favorites-manager div is the dialog card itself (no separate scrim
+   element in the JSX). Use the same centered-card pattern as the other dialogs:
+   position:fixed + inset:0 + margin:auto + height:fit-content centers it in
+   the viewport. A ::before pseudo supplies the backdrop scrim. */
+.favorites-manager {
+  position: fixed;
+  inset: 0;
+  z-index: 11000;
+  margin: auto;
+  max-width: 640px;
+  max-height: 80vh;
+  width: 90%;
+  height: fit-content;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  overflow-y: auto;
+  padding: 0;
+  /* Card */
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  box-shadow: var(--shadow-modal);
+  animation: scrim-fade-in 0.2s ease;
+}
+
+/* Dark scrim behind the card */
+.favorites-manager::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.85);
+  z-index: -1;
+}
+
+/* Header row: title + close button */
+.favorites-manager__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* Modal title */
+.favorites-manager__title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+/* Close button inside header */
+.favorites-manager__header > button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.favorites-manager__header > button:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* Favorites list — reset */
+.favorites-manager__list {
+  list-style: none;
+  margin: 0;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Individual favorite row — card row */
+.favorites-manager__row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  background: var(--bg-input);
+  border-radius: var(--radius-3);
+  border: 1px solid transparent;
+  padding: 10px 12px;
+  transition: border-color 0.15s;
+}
+
+.favorites-manager__row:hover {
+  border-color: var(--accent-color);
+}
+
+/* Favorite name label in the row */
+.favorites-manager__row-name {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--fg);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+
+/* Inputs inside a row — inherit the global input style, constrained */
+.favorites-manager__row input[type="text"] {
+  flex: 1;
+  min-width: 80px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+/* Save button — accent filled */
+.favorites-manager__row button[aria-label*="Save"] {
+  padding: 5px 12px;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-2);
+  font-weight: 600;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.favorites-manager__row button[aria-label*="Save"]:hover:not(:disabled) {
+  background: var(--accent-color);
+  filter: brightness(1.12);
+  border-color: transparent;
+}
+
+/* Remove button — danger */
+.favorites-manager__row button[aria-label*="Remove"] {
+  padding: 5px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.favorites-manager__row button[aria-label*="Remove"]:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* Add favorite section */
+.favorites-manager__add {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 0 16px 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.favorites-manager__add input[type="text"] {
+  flex: 1;
+  min-width: 80px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+/* Add favorite submit button — accent filled */
+.favorites-manager__add > button {
+  padding: 7px 16px;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-2);
+  font-weight: 600;
+  font-size: 14px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.favorites-manager__add > button:hover:not(:disabled) {
+  background: var(--accent-color);
+  filter: brightness(1.12);
+  border-color: transparent;
+}
+
+/* Tag management section */
+.favorites-manager__tags {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 16px;
+}
+
+/* Select inside tag management */
+.favorites-manager__tags select {
+  padding: 6px 10px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 13px;
+  flex: 1;
+  min-width: 80px;
+}
+
+.favorites-manager__tags select:focus {
+  border-color: var(--accent-color);
+  outline: none;
+}
+
+.favorites-manager__tags input[type="text"] {
+  flex: 1;
+  min-width: 80px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+/* Rename tag button — bordered */
+.favorites-manager__tags button:first-of-type {
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.favorites-manager__tags button:first-of-type:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* Delete tag button — danger */
+.favorites-manager__tags button:last-of-type {
+  padding: 6px 12px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.favorites-manager__tags button:last-of-type:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ─── Permission prompt dialog ───────────────────────────────────── */
+
+/* Outer .permission-prompt div is the dialog card; styled as scrim+card
+   (same pattern as .favorites-manager above). */
+.permission-prompt {
+  position: fixed;
+  inset: 0;
+  z-index: 11100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: scrim-fade-in 0.2s ease;
+  /* Card styles */
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  box-shadow: var(--shadow-modal);
+  max-width: 400px;
+  max-height: 80vh;
+  width: 90%;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  /* Center within viewport via margin:auto trick when in a fixed scrim */
+  margin: auto;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: fit-content;
+}
+
+/* Message text */
+.permission-prompt__message {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg);
+  line-height: 1.5;
+}
+
+/* Actions row — Allow + Block buttons */
+.permission-prompt__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+/* Allow — accent filled (primary action) */
+.permission-prompt__actions button:first-child {
+  padding: 8px 18px;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-2);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.permission-prompt__actions button:first-child:hover:not(:disabled) {
+  background: var(--accent-color);
+  filter: brightness(1.12);
+  border-color: transparent;
+}
+
+/* Block — bordered, danger on hover */
+.permission-prompt__actions button:last-child {
+  padding: 8px 18px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 14px;
+}
+
+.permission-prompt__actions button:last-child:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ─── Confirm dialog ─────────────────────────────────────────────── */
+
+/* Same scrim+card pattern. The outer .confirm-dialog div is the dialog card. */
+.confirm-dialog {
+  position: fixed;
+  inset: 0;
+  z-index: 11200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: scrim-fade-in 0.2s ease;
+  /* Card */
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  box-shadow: var(--shadow-modal);
+  max-width: 380px;
+  max-height: 80vh;
+  width: 90%;
+  flex-direction: column;
+  gap: 16px;
+  padding: 24px;
+  /* Center within viewport */
+  margin: auto;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: fit-content;
+}
+
+/* Message text */
+.confirm-dialog__message {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg);
+  line-height: 1.5;
+}
+
+/* Actions row — OK + Cancel */
+.confirm-dialog__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+/* OK — accent filled (primary action) */
+.confirm-dialog__actions button:first-child {
+  padding: 8px 18px;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-2);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.confirm-dialog__actions button:first-child:hover:not(:disabled) {
+  background: var(--accent-color);
+  filter: brightness(1.12);
+  border-color: transparent;
+}
+
+/* Cancel — bordered */
+.confirm-dialog__actions button:last-child {
+  padding: 8px 18px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 14px;
+}
+
+.confirm-dialog__actions button:last-child:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* ─── Error overlay ──────────────────────────────────────────────── */
+
+/* Outer .error-overlay acts as the full-screen scrim */
+.error-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 11500;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: scrim-fade-in 0.2s ease;
+}
+
+/* Inner card — centered */
+.error-overlay__panel {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  box-shadow: var(--shadow-modal);
+  max-width: 480px;
+  width: 90%;
+  padding: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Prominent heading */
+.error-overlay__heading {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--fg);
+}
+
+/* Body text */
+.error-overlay__body {
+  margin: 0;
+  font-size: 14px;
+  color: var(--fg-muted);
+  line-height: 1.6;
+}
+
+/* Technical detail — mono, muted */
+.error-overlay__detail {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  font-family: 'Menlo', 'Consolas', 'Courier New', monospace;
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Actions — Retry + Home */
+.error-overlay__actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+}
+
+/* Retry / primary — accent filled */
+.error-overlay__actions button:first-child {
+  padding: 9px 20px;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-2);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.error-overlay__actions button:first-child:hover:not(:disabled) {
+  background: var(--accent-color);
+  filter: brightness(1.12);
+  border-color: transparent;
+}
+
+/* Home — bordered secondary */
+.error-overlay__actions button:last-child {
+  padding: 9px 20px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  color: var(--fg-muted);
+  font-size: 14px;
+}
+
+.error-overlay__actions button:last-child:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+/* ─── Toaster ────────────────────────────────────────────────────── */
+
+/* Container — fixed bottom-right */
+.toaster {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 10020;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+
+/* Individual toast item */
+.toast {
+  pointer-events: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  box-shadow: var(--shadow-float);
+  padding: 10px 14px;
+  font-size: 14px;
+  color: var(--fg);
+  max-width: 320px;
+  animation: toast-in 0.2s ease;
+  /* Left accent border — color overridden per type below */
+  border-left: 3px solid var(--accent-color);
+}
+
+/* Toast type variants — Toaster.tsx renders className={`toast toast--${t.kind}`}
+   where kind is 'success' | 'error' | 'info' (from ToastItem in toast.ts) */
+.toast--success {
+  border-left-color: var(--success);
+}
+
+.toast--error {
+  border-left-color: var(--danger);
+}
+
+.toast--info {
+  border-left-color: var(--accent-color);
+}
+
+/* ─── Welcome hint ───────────────────────────────────────────────── */
+
+/* Fixed bottom-left floating card with accent left border */
+.welcome-hint {
+  position: fixed;
+  bottom: 16px;
+  left: 16px;
+  z-index: 10020;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-color);
+  border-radius: var(--radius-3);
+  box-shadow: var(--shadow-float);
+  padding: 12px 16px;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: toast-in 0.2s ease;
+}
+
+.welcome-hint p {
+  margin: 0;
+  font-size: 13px;
+  color: var(--fg-muted);
+  line-height: 1.5;
+}
+
+/* "Got it" dismiss button */
+.welcome-hint button {
+  align-self: flex-start;
+  padding: 5px 12px;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-2);
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.welcome-hint button:hover:not(:disabled) {
+  background: var(--accent-color);
+  filter: brightness(1.12);
+  border-color: transparent;
+}
+
+/* ─── Loading indicator ──────────────────────────────────────────── */
+
+/* Subtle inline ellipsis spinner in NavControls */
+.loading-indicator {
+  color: var(--fg-muted);
+  font-size: 13px;
+  opacity: 0.6;
+  pointer-events: none;
+  user-select: none;
+}
