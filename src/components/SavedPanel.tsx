@@ -1,5 +1,5 @@
 // src/components/SavedPanel.tsx
-import { X } from 'lucide-react';
+import { Bookmark, X } from 'lucide-react';
 import type { SavedItem } from '../../shared/types';
 
 export interface SavedPanelProps {
@@ -12,7 +12,11 @@ export function SavedPanel({ items, remove, onOpen }: SavedPanelProps) {
   return (
     <div className="saved-panel" role="group" aria-label="Saved">
       {items.length === 0 ? (
-        <p className="saved-panel__empty">Nothing saved yet.</p>
+        <div className="saved-panel__empty">
+          <Bookmark size={32} aria-hidden="true" />
+          <span>Nothing saved yet.</span>
+          <span className="saved-panel__empty-hint">Save the current page with the bookmark button.</span>
+        </div>
       ) : (
         <ul className="saved-panel__list">
           {items.map((item) => {

@@ -1,5 +1,5 @@
 // src/components/DownloadsPanel.tsx
-import { FileText, Folder, Trash2, X } from 'lucide-react';
+import { FileText, Folder, Inbox, Trash2, X } from 'lucide-react';
 import type { DownloadEntry } from '../../shared/types';
 import { confirm } from '../lib/toast';
 
@@ -45,7 +45,11 @@ export function DownloadsPanel({
         Clear all
       </button>
       {downloads.length === 0 ? (
-        <p className="downloads-panel__empty">No downloads yet.</p>
+        <div className="downloads-panel__empty">
+          <Inbox size={32} aria-hidden="true" />
+          <span>No downloads yet.</span>
+          <span className="downloads-panel__empty-hint">Downloaded files will show up here.</span>
+        </div>
       ) : (
         <ul className="downloads-panel__list">
           {downloads.map((d) => {

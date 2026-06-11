@@ -2808,3 +2808,105 @@ a:focus-visible {
 .error-overlay__heading {
   letter-spacing: -0.015em;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   TASK 5: Polished empty states + accent flair
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* ─── Empty states: sidebar panels ──────────────────────────────── */
+
+/* Shared layout for all three panel empty states.
+   Override the earlier per-panel __empty rules (those set margin/padding
+   on the <p> element; now it's a <div>, so these take effect cleanly). */
+.history-panel__empty,
+.saved-panel__empty,
+.downloads-panel__empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: var(--fg-muted);
+  text-align: center;
+  /* Reset margin from the old <p> rule */
+  margin: 0;
+}
+
+/* Large icon: muted opacity so it reads as decorative, not functional */
+.history-panel__empty svg,
+.saved-panel__empty svg,
+.downloads-panel__empty svg {
+  opacity: .5;
+}
+
+/* Hint line: smaller, slightly more transparent */
+.history-panel__empty-hint,
+.saved-panel__empty-hint,
+.downloads-panel__empty-hint {
+  font-size: 12px;
+  opacity: .8;
+}
+
+/* ─── Accent flair: gradient on primary/accent-filled buttons ────── */
+
+/* All buttons that currently use background:var(--accent-color) as their
+   base fill get a subtle top-to-bottom gradient (slightly lighter at top,
+   full accent at bottom) plus a soft accent glow on hover.
+   This replaces the flat fill without changing any dimensions or layout. */
+.appearance-tab__field button,
+.search-tab__add button,
+.home-tab button,
+.filter-lists-tab__actions button,
+.filter-lists-tab__add button,
+.my-filters-tab__footer button,
+.downloads-tab__actions button:first-child,
+.data-tab__export button,
+.data-tab__import button,
+.favorites-manager__add > button,
+.favorites-manager__row button[aria-label*="Save"],
+.permission-prompt__actions button:first-child,
+.confirm-dialog__actions button:first-child,
+.error-overlay__actions button:first-child,
+.welcome-hint button {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-color) 92%, white 8%),
+    var(--accent-color)
+  );
+  border: none;
+}
+
+/* Soft accent box-shadow glow on hover — replaces the flat brightness filter
+   with something that feels more physical. Keep the filter for colour accuracy
+   and add the shadow on top. */
+.appearance-tab__field button:hover:not(:disabled),
+.search-tab__add button:hover:not(:disabled),
+.home-tab button:hover:not(:disabled),
+.filter-lists-tab__actions button:hover:not(:disabled),
+.filter-lists-tab__add button:hover:not(:disabled),
+.my-filters-tab__footer button:hover:not(:disabled),
+.downloads-tab__actions button:first-child:hover:not(:disabled),
+.data-tab__export button:hover:not(:disabled),
+.data-tab__import button:hover:not(:disabled),
+.favorites-manager__add > button:hover:not(:disabled),
+.favorites-manager__row button[aria-label*="Save"]:hover:not(:disabled),
+.permission-prompt__actions button:first-child:hover:not(:disabled),
+.confirm-dialog__actions button:first-child:hover:not(:disabled),
+.error-overlay__actions button:first-child:hover:not(:disabled),
+.welcome-hint button:hover:not(:disabled) {
+  box-shadow: 0 2px 10px color-mix(in srgb, var(--accent-color) 35%, transparent);
+}
+
+/* ─── Active tab: crisp 2px accent underline, full-fg label ─────── */
+
+/* Sidebar active tab */
+.sidebar__tab[aria-selected="true"] {
+  color: var(--fg);
+  border-bottom: 2px solid var(--accent-color);
+}
+
+/* Settings modal active tab */
+.settings-modal__tab[aria-selected="true"] {
+  color: var(--fg);
+  border-bottom: 2px solid var(--accent-color);
+}

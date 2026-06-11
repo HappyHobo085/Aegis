@@ -1,6 +1,6 @@
 // src/components/HistoryPanel.tsx
 import { useId } from 'react';
-import { Trash2, X } from 'lucide-react';
+import { Clock, Trash2, X } from 'lucide-react';
 import type { HistoryEntry } from '../../shared/types';
 import { confirm } from '../lib/toast';
 
@@ -65,7 +65,11 @@ export function HistoryPanel({
         Clear all
       </button>
       {entries.length === 0 ? (
-        <p className="history-panel__empty">No history yet.</p>
+        <div className="history-panel__empty">
+          <Clock size={32} aria-hidden="true" />
+          <span>No history yet.</span>
+          <span className="history-panel__empty-hint">Pages you visit will appear here.</span>
+        </div>
       ) : (
         <ul className="history-panel__list">
           {entries.map((entry) => {
