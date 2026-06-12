@@ -123,10 +123,11 @@ target + notarization; full subresource HTTPS upgrade. These are documented as a
   existing test gate. (`@ghostery/*` stays exact-pinned per the policy — group separately / allow only
   deliberate bumps.)
 - **"Electron majors-behind" CI check:** a small script (`scripts/check-electron-current.mjs`) comparing
-  the installed Electron major to the latest stable on the npm registry; **warn**, and **fail** when a
-  security release behind — the policy's manual step, automated.
-- **`npm audit` gate:** CI step `npm audit --audit-level=high` with an allowlist escape hatch for
-  accepted advisories.
+  the installed Electron major to the latest stable on the npm registry; **warn** when behind but still
+  within Electron's 3-major security-support window, and **fail** when it falls outside that window (no
+  longer receiving security backports) — the policy's manual step, automated.
+- **`npm audit` gate:** a CI step that blocks on high/critical advisories (`npm audit --json`, parsed)
+  with an allowlist escape hatch (`.audit-allowlist.json`) for accepted advisories.
 - **SECURITY.md:** disclosure contact + enable GitHub private vulnerability reporting — the codeable
   proxy for the Tier-3 org items.
 
@@ -214,8 +215,9 @@ target + notarization; full subresource HTTPS upgrade. These are documented as a
    ads on first run (bundled seed), and `@electron/fuses read` confirms RunAsNode/inspect/NODE_OPTIONS
    off + OnlyLoadAppFromAsar + ASAR integrity (where the OS supports it) + cookie encryption. Electron
    is exact-pinned; signing is wired and flips on when a cert secret is supplied.
-2. **Phase 2:** Dependabot opens grouped npm PRs that run the gate; CI fails when Electron is a security
-   release behind; `npm audit` gate runs; `SECURITY.md` + private vuln reporting exist.
+2. **Phase 2:** Dependabot opens grouped npm PRs that run the gate; CI **warns** when Electron is behind
+   but still security-supported and **fails** when it falls outside Electron's 3-major security-support
+   window; `npm audit` gate runs; `SECURITY.md` + private vuln reporting exist.
 3. **Phase 3:** top-level `http` navigations upgrade to `https`; an https failure shows an interstitial
    with a remembered per-site "continue to HTTP"; a known-malicious top-level navigation is blocked with
    a warning interstitial and its subresources are network-blocked.
