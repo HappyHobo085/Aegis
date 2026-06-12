@@ -128,6 +128,12 @@ vi.mock('./lib/ipcClient', () => ({
     picker: {
       start: vi.fn().mockResolvedValue({ ok: false }),
     },
+    update: {
+      getState: vi.fn().mockResolvedValue({ status: 'idle', version: null, percent: 0, error: null }),
+      checkNow: vi.fn().mockResolvedValue(undefined),
+      restartToInstall: vi.fn().mockResolvedValue(undefined),
+      onState: vi.fn().mockReturnValue(() => {}),
+    },
   },
 }));
 

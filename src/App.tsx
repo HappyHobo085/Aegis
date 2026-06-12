@@ -16,10 +16,12 @@ import { useCustomFilters } from './hooks/useCustomFilters';
 import { useDownloads } from './hooks/useDownloads';
 import { usePermissions } from './hooks/usePermissions';
 import { useContentInset } from './hooks/useContentInset';
+import { useUpdate } from './hooks/useUpdate';
 import { Toolbar } from './components/Toolbar';
 import { BookmarkButton } from './components/BookmarkButton';
 import { DownloadsIndicator } from './components/DownloadsIndicator';
 import { PickerButton } from './components/PickerButton';
+import { UpdateIndicator } from './components/UpdateIndicator';
 import { FavoritesBar } from './components/FavoritesBar';
 import { FavoritesManager } from './components/FavoritesManager';
 import { Sidebar } from './components/Sidebar';
@@ -73,6 +75,7 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const update = useUpdate();
 
   // Favorites bar is always-on (constant top inset); overlays never inset content.
   useContentInset(PRIMARY_VIEW_ID);
@@ -191,6 +194,7 @@ export function App() {
         }
         downloads={
           <>
+            <UpdateIndicator state={update.state} onRestart={() => void update.restartToInstall()} />
             <PickerButton />
             <DownloadsIndicator
               activeCount={activeDownloads}
