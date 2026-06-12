@@ -24,12 +24,21 @@ export const BLOCKING_SEVERITIES = ['high', 'critical'];
 export function collectBlockingAdvisories(auditJson) {
   const out = new Map();
   const vulns = (auditJson && auditJson.vulnerabilities) || {};
+  let unidentified = 0;
   for (const pkg of Object.values(vulns)) {
     const via = (pkg && pkg.via) || [];
     for (const entry of via) {
       if (!entry || typeof entry !== 'object') continue; // string => transitive pointer
       if (!BLOCKING_SEVERITIES.includes(entry.severity)) continue;
-      const key = entry.source != null ? `src:${entry.source}` : `url:${entry.url}`;
+      // Identify by `source` (npm advisory id), then `url`; an advisory with
+      // neither is unidentifiable (and un-allowlistable) -> give it a unique key
+      // so two such advisories are never silently deduped into one.
+      const key =
+        entry.source != null
+          ? `src:${entry.source}`
+          : entry.url != null
+            ? `url:${entry.url}`
+            : `anon:${unidentified++}`;
       if (!out.has(key)) {
         out.set(key, {
           source: entry.source,

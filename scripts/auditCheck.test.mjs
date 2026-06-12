@@ -68,6 +68,16 @@ describe('collectBlockingAdvisories', () => {
   it('returns [] for a clean report', () => {
     expect(collectBlockingAdvisories({ vulnerabilities: {}, metadata: {} })).toEqual([]);
   });
+
+  it('keeps multiple unidentifiable advisories (no source, no url) instead of deduping them away', () => {
+    const report = {
+      vulnerabilities: {
+        a: { name: 'a', severity: 'high', via: [{ severity: 'high', name: 'a', title: 'one' }] },
+        b: { name: 'b', severity: 'critical', via: [{ severity: 'critical', name: 'b', title: 'two' }] },
+      },
+    };
+    expect(collectBlockingAdvisories(report).length).toBe(2);
+  });
 });
 
 describe('isAllowlisted', () => {
