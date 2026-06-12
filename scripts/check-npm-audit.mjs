@@ -46,14 +46,14 @@ function main() {
   if (allowed.length) {
     console.log(`[check-npm-audit] ${allowed.length} allowlisted advisory(ies) ignored:`);
     for (const a of allowed) {
-      console.log(`  - ALLOWED ${a.severity} ${a.name} (source ${a.source}) ${a.url || ''}`);
+      console.log(`  - ALLOWED ${a.severity} ${a.name} (source ${a.source ?? 'n/a'}) ${a.url || ''}`);
     }
   }
 
   if (blocking.length) {
     console.error(`[check-npm-audit] ${blocking.length} blocking high/critical advisory(ies):`);
     for (const a of blocking) {
-      console.error(`  - ${String(a.severity).toUpperCase()} ${a.name} (source ${a.source}) ${a.title || ''} ${a.url || ''}`);
+      console.error(`  - ${String(a.severity).toUpperCase()} ${a.name} (source ${a.source ?? 'n/a'}) ${a.title || ''} ${a.url || ''}`);
     }
     console.error('Fix them, or add the `source`/`url` to .audit-allowlist.json with justification.');
     process.exitCode = 1;
