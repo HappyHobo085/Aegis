@@ -68,6 +68,7 @@ export default defineConfig({
       rollupOptions: {
         input: resolve(__dirname, 'electron/main/index.ts'),
         external: [
+          'electron-updater',
           'better-sqlite3',
           '@ghostery/adblocker-electron',
           // resolved at runtime by adblocker-electron via require.resolve — must stay external + unpacked

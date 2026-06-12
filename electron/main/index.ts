@@ -48,8 +48,12 @@ import { fetchAll, RefreshScheduler } from './adblock/listManager';
 import { readFileSafe } from '../lib/atomicFile';
 import { BlockedCounter } from './adblock/blockedCounter';
 import { AdblockController } from './adblock/controller';
+import { autoUpdater } from 'electron-updater';
+import { UpdateController, type UpdaterLike } from './update/UpdateController';
+import { buildUpdateHandlers } from './ipc/update';
 
 const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
+const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 const FETCH_TIMEOUT_MS = 30_000;
 const FETCH_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -91,6 +95,12 @@ function boot(): void {
   // Window + chrome (window.ts owns the BaseWindow + chromeView ONLY).
   const { win, chromeView } = createMainWindow();
   const chromeWc = chromeView.webContents;
+
+  // Auto-update: wrap electron-updater's autoUpdater; push state to chrome.
+  const updateController = new UpdateController({
+    updater: autoUpdater as unknown as UpdaterLike,
+    onState: (s) => chromeWc.send(IPC.evtUpdateState, s),
+  });
 
   // Main->chrome event forwarders.
   const fwd = buildViewEventForwarders(chromeWc);
@@ -300,6 +310,7 @@ function boot(): void {
     ...buildSettingsHandlers(settingsRepo),
     ...buildAdblockHandlers(controller),
     ...buildListsHandlers(updateNow),
+    ...buildUpdateHandlers(updateController),
     ...buildSubsHandlers(subsRepo, { rebuildFromCache: rebuildEngineFromCache, refresh: updateNow }),
     ...buildCustomFiltersHandlers(customFiltersRepo, { rebuildFromCache: rebuildEngineFromCache }),
     ...buildFavoritesHandlers(favoritesRepo),
@@ -386,6 +397,13 @@ function boot(): void {
     runRefresh().catch((err) => console.error('[adblock] background refresh failed', err));
   }
   scheduler.start();
+
+  // Auto-update checks run in packaged builds only (no feed in dev/e2e).
+  if (app.isPackaged) {
+    void updateController.checkNow();
+    const updateTimer = setInterval(() => void updateController.checkNow(), UPDATE_CHECK_INTERVAL_MS);
+    win.on('closed', () => clearInterval(updateTimer));
+  }
 
   // Lifecycle cleanup: WebContentsView does not auto-destroy on BaseWindow close.
   win.on('closed', () => {
