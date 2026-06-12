@@ -2768,72 +2768,6 @@ textarea::placeholder {
   border-color: transparent;
 }
 
-/* Tag management section */
-.favorites-manager__tags {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 16px;
-}
-
-/* Select inside tag management */
-.favorites-manager__tags select {
-  padding: 6px 10px;
-  background: var(--bg-input);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-  color: var(--fg);
-  font-family: inherit;
-  font-size: 13px;
-  flex: 1;
-  min-width: 80px;
-}
-
-.favorites-manager__tags select:focus {
-  border-color: var(--accent-color);
-  outline: none;
-}
-
-.favorites-manager__tags input[type="text"] {
-  flex: 1;
-  min-width: 80px;
-  padding: 6px 10px;
-  font-size: 13px;
-}
-
-/* Rename tag button — bordered */
-.favorites-manager__tags button:first-of-type {
-  padding: 6px 12px;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-  color: var(--fg-muted);
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.favorites-manager__tags button:first-of-type:hover:not(:disabled) {
-  border-color: var(--accent-color);
-  color: var(--fg);
-}
-
-/* Delete tag button — danger */
-.favorites-manager__tags button:last-of-type {
-  padding: 6px 12px;
-  background: transparent;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-2);
-  color: var(--fg-muted);
-  font-size: 13px;
-  white-space: nowrap;
-}
-
-.favorites-manager__tags button:last-of-type:hover:not(:disabled) {
-  border-color: var(--danger);
-  color: var(--danger);
-}
-
 /* ─── Permission prompt dialog ───────────────────────────────────── */
 
 /* Outer scrim — full-viewport backdrop that centers the card */
@@ -3296,13 +3230,6 @@ a:focus-visible {
 /* Tag-input focus-within glow */
 .tag-input:focus-within {
   border-color: var(--accent-color);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 28%, transparent);
-}
-
-/* FavoritesManager select */
-.favorites-manager__tags select:focus {
-  border-color: var(--accent-color);
-  outline: none;
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-color) 28%, transparent);
 }
 
