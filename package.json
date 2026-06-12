@@ -1,8 +1,12 @@
 {
   "name": "aegis",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Aegis — an Electron ad-blocking browser shell",
   "author": "HappyHobo085",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/HappyHobo085/Aegis.git"
+  },
   "private": true,
   "main": "out/main/index.js",
   "build": {
@@ -83,7 +87,7 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^42.3.3",
+    "electron": "42.4.0",
     "electron-builder": "^26.15.2",
     "electron-vite": "^5.0.0",
     "jsdom": "^25.0.0",
