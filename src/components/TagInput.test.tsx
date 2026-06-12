@@ -21,7 +21,7 @@ describe('TagInput', () => {
   it('typing a tag and pressing Enter adds it via onChange', async () => {
     const p = props();
     render(<TagInput {...p} />);
-    const input = screen.getByRole('combobox', { name: /add tag/i });
+    const input = screen.getByRole('textbox', { name: /add tag/i });
     await userEvent.type(input, 'dev{Enter}');
     expect(p.onChange).toHaveBeenCalledWith(['news', 'dev']);
   });
@@ -29,7 +29,7 @@ describe('TagInput', () => {
   it('does not add a duplicate tag', async () => {
     const p = props();
     render(<TagInput {...p} />);
-    const input = screen.getByRole('combobox', { name: /add tag/i });
+    const input = screen.getByRole('textbox', { name: /add tag/i });
     await userEvent.type(input, 'news{Enter}');
     expect(p.onChange).not.toHaveBeenCalled();
   });
@@ -37,7 +37,7 @@ describe('TagInput', () => {
   it('trims whitespace and ignores an empty entry', async () => {
     const p = props();
     render(<TagInput {...p} />);
-    const input = screen.getByRole('combobox', { name: /add tag/i });
+    const input = screen.getByRole('textbox', { name: /add tag/i });
     await userEvent.type(input, '   {Enter}');
     expect(p.onChange).not.toHaveBeenCalled();
     await userEvent.type(input, '  design  {Enter}');
@@ -51,13 +51,38 @@ describe('TagInput', () => {
     expect(p.onChange).toHaveBeenCalledWith(['news']);
   });
 
-  it('offers autocomplete suggestions via a datalist (excluding already-added tags)', () => {
+  it('offers in-DOM suggestion buttons, excluding already-added tags', () => {
     render(<TagInput {...props()} />);
-    const input = screen.getByRole('combobox', { name: /add tag/i });
-    const listId = input.getAttribute('list');
-    expect(listId).toBeTruthy();
-    const datalist = document.getElementById(listId!) as HTMLDataListElement;
-    const options = within(datalist).queryAllByRole('option', { hidden: true }).map((o) => o.getAttribute('value'));
-    expect(options).toEqual(['dev', 'design']);
+    const group = screen.getByRole('group', { name: /tag suggestions/i });
+    const labels = within(group)
+      .getAllByRole('button')
+      .map((b) => b.textContent);
+    expect(labels).toEqual(['dev', 'design']);
+  });
+
+  it('clicking a suggestion adds that tag via onChange', async () => {
+    const p = props();
+    render(<TagInput {...p} />);
+    const group = screen.getByRole('group', { name: /tag suggestions/i });
+    await userEvent.click(within(group).getByRole('button', { name: 'design' }));
+    expect(p.onChange).toHaveBeenCalledWith(['news', 'design']);
+  });
+
+  it('narrows suggestions by what has been typed', async () => {
+    render(<TagInput {...props({ tags: [] })} />);
+    const input = screen.getByRole('textbox', { name: /add tag/i });
+    await userEvent.type(input, 'de');
+    const group = screen.getByRole('group', { name: /tag suggestions/i });
+    const labels = within(group)
+      .getAllByRole('button')
+      .map((b) => b.textContent);
+    expect(labels).toEqual(['dev', 'design']);
+  });
+
+  it('hides the suggestion group when nothing matches', async () => {
+    render(<TagInput {...props({ tags: [] })} />);
+    const input = screen.getByRole('textbox', { name: /add tag/i });
+    await userEvent.type(input, 'zzz');
+    expect(screen.queryByRole('group', { name: /tag suggestions/i })).not.toBeInTheDocument();
   });
 });

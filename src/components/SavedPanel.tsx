@@ -1,5 +1,5 @@
 // src/components/SavedPanel.tsx
-import { useId, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { Bookmark, Pencil, Plus, X } from 'lucide-react';
 import type { SavedItem } from '../../shared/types';
 import { normalizeSavedUrl } from '../lib/addressParse';
@@ -49,6 +49,14 @@ export function SavedPanel({
   // Manage-tags controls.
   const [tagToManage, setTagToManage] = useState('');
   const [renameTo, setRenameTo] = useState('');
+
+  // Drop the managed-tag selection if it leaves tagUnion via any path (e.g. the
+  // last item carrying it is edited/removed), so Rename/Delete don't stay enabled
+  // for a tag that no longer exists. Pure updater — StrictMode-safe. Mirrors the
+  // activeTags prune in useSaved.
+  useEffect(() => {
+    setTagToManage((prev) => (tagUnion.includes(prev) ? prev : ''));
+  }, [tagUnion]);
 
   const q = query.trim().toLowerCase();
   const filtered = items.filter((i) => {
@@ -292,18 +300,23 @@ export function SavedPanel({
         <details className="saved-panel__manage">
           <summary className="saved-panel__manage-summary">Manage tags</summary>
           <div className="saved-panel__manage-body" role="group" aria-label="Manage tags">
-            <select
+            <div
+              className="saved-panel__manage-tags"
+              role="group"
               aria-label="Tag to manage"
-              value={tagToManage}
-              onChange={(e) => setTagToManage(e.target.value)}
             >
-              <option value="">Select a tag</option>
               {tagUnion.map((t) => (
-                <option key={t} value={t}>
+                <button
+                  key={t}
+                  type="button"
+                  className="saved-panel__manage-chip"
+                  aria-pressed={tagToManage === t}
+                  onClick={() => setTagToManage(tagToManage === t ? '' : t)}
+                >
                   {t}
-                </option>
+                </button>
               ))}
-            </select>
+            </div>
             <input
               type="text"
               aria-label="Rename tag to"

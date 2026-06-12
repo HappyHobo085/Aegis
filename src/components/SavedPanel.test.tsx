@@ -154,7 +154,7 @@ describe('SavedPanel', () => {
     it('the add form has a tag input', async () => {
       render(<SavedPanel {...props()} />);
       await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
-      expect(screen.getByRole('combobox', { name: /add tag/i })).toBeInTheDocument();
+      expect(screen.getByRole('textbox', { name: /add tag/i })).toBeInTheDocument();
     });
 
     it('saving a schemeless host calls add with https:// prepended, the title and tags', async () => {
@@ -172,7 +172,7 @@ describe('SavedPanel', () => {
       render(<SavedPanel {...p} />);
       await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
       await userEvent.type(screen.getByRole('textbox', { name: /url to save/i }), 'example.com');
-      await userEvent.type(screen.getByRole('combobox', { name: /add tag/i }), 'fresh{Enter}');
+      await userEvent.type(screen.getByRole('textbox', { name: /add tag/i }), 'fresh{Enter}');
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
       expect(p.add).toHaveBeenCalledWith({ url: 'https://example.com', title: '', tags: ['fresh'] });
     });
@@ -250,7 +250,7 @@ describe('SavedPanel', () => {
       const p = props();
       render(<SavedPanel {...p} />);
       await userEvent.click(screen.getByRole('button', { name: /^edit docs$/i }));
-      await userEvent.type(screen.getByRole('combobox', { name: /add tag/i }), 'urgent{Enter}');
+      await userEvent.type(screen.getByRole('textbox', { name: /add tag/i }), 'urgent{Enter}');
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
       expect(p.update).toHaveBeenCalledWith(2, {
         title: 'Docs',
@@ -290,7 +290,8 @@ describe('SavedPanel', () => {
       const p = props();
       render(<SavedPanel {...p} />);
       await userEvent.click(screen.getByText(/manage tags/i));
-      await userEvent.selectOptions(screen.getByRole('combobox', { name: /tag to manage/i }), 'work');
+      const picker = screen.getByRole('group', { name: /tag to manage/i });
+      await userEvent.click(within(picker).getByRole('button', { name: 'work' }));
       await userEvent.type(screen.getByRole('textbox', { name: /rename tag to/i }), 'job');
       await userEvent.click(screen.getByRole('button', { name: /rename tag/i }));
       expect(p.renameTag).toHaveBeenCalledWith('work', 'job');
@@ -300,9 +301,35 @@ describe('SavedPanel', () => {
       const p = props();
       render(<SavedPanel {...p} />);
       await userEvent.click(screen.getByText(/manage tags/i));
-      await userEvent.selectOptions(screen.getByRole('combobox', { name: /tag to manage/i }), 'work');
+      const picker = screen.getByRole('group', { name: /tag to manage/i });
+      await userEvent.click(within(picker).getByRole('button', { name: 'work' }));
       await userEvent.click(screen.getByRole('button', { name: /delete tag/i }));
       expect(p.deleteTag).toHaveBeenCalledWith('work');
+    });
+
+    it('toggles the selected tag off when clicked again (disabling the actions)', async () => {
+      const p = props();
+      render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByText(/manage tags/i));
+      const picker = screen.getByRole('group', { name: /tag to manage/i });
+      const workChip = within(picker).getByRole('button', { name: 'work' });
+      await userEvent.click(workChip);
+      expect(workChip).toHaveAttribute('aria-pressed', 'true');
+      await userEvent.click(workChip);
+      expect(workChip).toHaveAttribute('aria-pressed', 'false');
+      expect(screen.getByRole('button', { name: /delete tag/i })).toBeDisabled();
+    });
+
+    it('drops the selection (disabling the actions) when the tag leaves tagUnion', async () => {
+      const p = props();
+      const { rerender } = render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByText(/manage tags/i));
+      const picker = screen.getByRole('group', { name: /tag to manage/i });
+      await userEvent.click(within(picker).getByRole('button', { name: 'work' }));
+      expect(screen.getByRole('button', { name: /delete tag/i })).toBeEnabled();
+      // 'work' disappears from tagUnion via some other path (item edit/removal).
+      rerender(<SavedPanel {...p} tagUnion={['reading', 'reference']} />);
+      expect(screen.getByRole('button', { name: /delete tag/i })).toBeDisabled();
     });
   });
 });

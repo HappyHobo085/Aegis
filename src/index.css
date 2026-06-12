@@ -621,6 +621,37 @@ textarea::placeholder {
   outline: none;
 }
 
+/* Wrapper holding the input box + its in-DOM suggestion row */
+.tag-input-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+/* In-DOM tag suggestions (replaces a native <datalist> popup, which does not
+   render inside the transparent chrome WebContentsView) */
+.tag-input__suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.tag-input__suggestion {
+  padding: 3px 10px;
+  background: var(--bg-input);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.tag-input__suggestion:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
 /* ─── Sidebar overlay ────────────────────────────────────────────── */
 
 /* Scrim: dims the content region only (toolbar + favbar = 96px sit above) */
@@ -1349,7 +1380,6 @@ textarea::placeholder {
   padding-top: 6px;
 }
 
-.saved-panel__manage-body select,
 .saved-panel__manage-body input {
   padding: 6px 10px;
   border-radius: var(--radius-2);
@@ -1360,12 +1390,41 @@ textarea::placeholder {
   min-width: 0;
 }
 
-.saved-panel__manage-body select:focus,
-.saved-panel__manage-body select:focus-visible,
 .saved-panel__manage-body input:focus,
 .saved-panel__manage-body input:focus-visible {
   outline: none;
   border-color: var(--accent-color);
+}
+
+/* Tag selector — in-DOM chip buttons (native <select> popups don't render in
+   the transparent chrome WebContentsView; see TagFilter for the same pattern) */
+.saved-panel__manage-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.saved-panel__manage-chip {
+  padding: 3px 10px;
+  background: var(--bg-input);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+  white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.saved-panel__manage-chip:hover:not(:disabled) {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
+.saved-panel__manage-chip[aria-pressed="true"] {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: #fff;
+  font-weight: 600;
 }
 
 .saved-panel__manage-actions {
