@@ -1,0 +1,4 @@
+{
+  "_comment": "Accepted npm-audit advisories that must NOT fail CI. Add the numeric `source` id OR the advisory `url` (GHSA link) exactly as it appears in `npm audit --json`. Justify each entry in the PR that adds it, and keep this list empty unless an advisory is genuinely non-applicable or unfixable.",
+  "allow": []
+}
