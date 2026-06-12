@@ -79,6 +79,11 @@ export const IPC = {
   // events (Phase 5, main -> chrome renderer)
   evtDownloadsChanged: 'downloads.changed',
   evtPermissionsPrompt: 'permissions.prompt',
+  // auto-update (Phase S1, chrome <-> main)
+  updateGetState: 'update.getState',
+  updateCheckNow: 'update.checkNow',
+  updateRestartToInstall: 'update.restartToInstall',
+  evtUpdateState: 'update.state',
 } as const;
 
 export interface NavState {
@@ -170,6 +175,13 @@ export interface ListSourceResult {
 export interface ListUpdateResult {
   perSource: ListSourceResult[];
   lastUpdated: number; // epoch ms of this refresh attempt
+}
+
+export interface UpdateState {
+  status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+  version: string | null; // available/downloaded version, else null
+  percent: number; // download progress 0..100
+  error: string | null; // last error message, else null
 }
 
 /**
@@ -292,6 +304,12 @@ export interface AegisApi {
   };
   picker: {
     start(): Promise<{ ok: boolean; rule?: string }>;
+  };
+  update: {
+    getState(): Promise<UpdateState>;
+    checkNow(): Promise<void>;
+    restartToInstall(): Promise<void>;
+    onState(cb: (s: UpdateState) => void): () => void;
   };
 }
 
