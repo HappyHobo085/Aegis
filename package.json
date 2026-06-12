@@ -31,6 +31,7 @@
       "**/node_modules/@ghostery/**"
     ],
     "npmRebuild": false,
+    "afterPack": "build/afterPack.js",
     "linux": {
       "target": [
         "AppImage"
