@@ -11,7 +11,11 @@ export default defineConfig({
         test: {
           name: 'node',
           environment: 'node',
-          include: ['shared/**/*.test.ts', 'electron/**/*.test.ts'],
+          include: [
+            'shared/**/*.test.ts',
+            'electron/**/*.test.ts',
+            'scripts/**/*.test.mjs',
+          ],
           exclude: ['electron/test/e2e/**', 'node_modules/**', 'out/**'],
         },
       },
