@@ -5,7 +5,7 @@ import type {
   AegisApi, ViewId, NavState, NavFailed, NavCrashed, Settings,
   AdblockState, BlockedCount, ListUpdateResult,
   Favorite, HistoryEntry, SavedItem, ContentInset, Subscription,
-  DownloadEntry, SitePermission, PermissionPrompt, ImportMode,
+  DownloadEntry, SitePermission, PermissionPrompt, ImportMode, UpdateState,
 } from '../../shared/types';
 
 /** Subscribes cb to an event channel; returns an unsubscriber. */
@@ -125,6 +125,12 @@ const api: AegisApi = {
   },
   picker: {
     start: (): Promise<{ ok: boolean; rule?: string }> => ipcRenderer.invoke(IPC.pickerStart),
+  },
+  update: {
+    getState: (): Promise<UpdateState> => ipcRenderer.invoke(IPC.updateGetState),
+    checkNow: (): Promise<void> => ipcRenderer.invoke(IPC.updateCheckNow),
+    restartToInstall: (): Promise<void> => ipcRenderer.invoke(IPC.updateRestartToInstall),
+    onState: (cb: (s: UpdateState) => void) => subscribe<UpdateState>(IPC.evtUpdateState, cb),
   },
 };
 
