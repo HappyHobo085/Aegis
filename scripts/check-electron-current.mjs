@@ -18,7 +18,7 @@ function installedElectronVersion() {
 
 function latestStableElectronVersion() {
   // npm `latest` dist-tag = newest STABLE (betas live under the `beta` tag).
-  return execFileSync('npm', ['view', 'electron', 'version'], { encoding: 'utf8' }).trim();
+  return execFileSync('npm', ['view', 'electron', 'version'], { encoding: 'utf8', timeout: 15000 }).trim();
 }
 
 function main() {
@@ -35,8 +35,14 @@ function main() {
   try {
     latest = latestStableElectronVersion();
   } catch (err) {
-    // Registry unreachable — do not block CI on a network blip; warn and pass.
+    // Registry unreachable/slow — do not block CI on a network blip; warn and pass.
     console.warn('[check-electron-current] could not query npm for latest electron; skipping:', err.message);
+    return;
+  }
+
+  if (!latest) {
+    // npm exited 0 but returned nothing usable — treat as a registry blip, skip.
+    console.warn('[check-electron-current] npm returned an empty version string; skipping.');
     return;
   }
 
