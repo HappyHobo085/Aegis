@@ -17,9 +17,16 @@ on:
 permissions:
   contents: read
 
+# Supersede an in-flight run when a PR branch is re-pushed (e.g. Dependabot
+# re-syncing a grouped update) so redundant jobs don't pile up.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -28,6 +35,9 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - name: Unit tests (node + jsdom)
+        # `pretest` rebuilds better-sqlite3 for the NODE ABI (not the Electron
+        # ABI) — a prebuilt exists for Node 22, with the ubuntu toolchain as
+        # fallback; this is unrelated to the Electron-ABI build in build-windows.yml.
         run: npm test
       - name: Dependency audit gate (high/critical)
         if: ${{ !cancelled() }}
