@@ -16,11 +16,15 @@ describe('parseSemver', () => {
   it('throws on garbage', () => {
     expect(() => parseSemver('not-a-version')).toThrow();
   });
+  it('throws on an incomplete (two-segment) version', () => {
+    expect(() => parseSemver('1.2')).toThrow();
+  });
 });
 
 describe('compareSemver', () => {
   it('orders by major then minor then patch', () => {
     expect(compareSemver('42.0.0', '43.0.0')).toBe(-1);
+    expect(compareSemver('42.3.0', '42.4.0')).toBe(-1);
     expect(compareSemver('42.4.0', '42.3.9')).toBe(1);
     expect(compareSemver('42.4.0', '42.4.0')).toBe(0);
   });
@@ -35,6 +39,12 @@ describe('classifyElectronCurrency', () => {
 
   it('ok when the installed patch is ahead of the npm latest', () => {
     expect(classifyElectronCurrency('42.5.0', '42.4.0').status).toBe('ok');
+  });
+
+  it('ok when installed is a full major ahead of the npm latest', () => {
+    const r = classifyElectronCurrency('43.0.0', '42.4.0');
+    expect(r.status).toBe('ok');
+    expect(r.behindMajors).toBe(-1);
   });
 
   it('warn when a newer patch/minor exists in the same major', () => {
