@@ -12,6 +12,11 @@
   "build": {
     "appId": "com.aegis.browser",
     "productName": "Aegis",
+    "publish": {
+      "provider": "github",
+      "owner": "HappyHobo085",
+      "repo": "Aegis"
+    },
     "directories": {
       "output": "release"
     },
@@ -74,9 +79,11 @@
     "@ghostery/adblocker-electron": "2.18.0",
     "@ghostery/adblocker-electron-preload": "2.18.0",
     "better-sqlite3": "^12.10.0",
+    "electron-updater": "^6.8.9",
     "lucide-react": "^0.477.0"
   },
   "devDependencies": {
+    "@electron/fuses": "^1.8.0",
     "@electron/rebuild": "^4.0.4",
     "@playwright/test": "^1.49.0",
     "@testing-library/jest-dom": "^6.6.0",
