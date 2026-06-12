@@ -6,9 +6,9 @@ name: Build Windows
 # for that combination, and it cannot be reliably cross-compiled from Linux.
 #
 # Runs automatically on every push to main, and can also be started manually
-# from the Actions tab (or `gh workflow run build-windows.yml`) or by pushing a
-# version tag (v*). The resulting .exe is uploaded as a build artifact — nothing
-# is published to GitHub Releases (--publish never).
+# from the Actions tab (or `gh workflow run build-windows.yml`). The resulting
+# .exe is uploaded as a build artifact — nothing is published to GitHub Releases
+# (--publish never). Tagged releases (v*) are built and published by release.yml.
 
 on:
   workflow_dispatch: {}
