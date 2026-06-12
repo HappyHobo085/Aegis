@@ -30,6 +30,12 @@
       "**/node_modules/file-uri-to-path/**",
       "**/node_modules/@ghostery/**"
     ],
+    "extraResources": [
+      {
+        "from": "electron/main/adblock/seed/engine-seed.bin",
+        "to": "engine-seed.bin"
+      }
+    ],
     "npmRebuild": false,
     "afterPack": "build/afterPack.js",
     "linux": {

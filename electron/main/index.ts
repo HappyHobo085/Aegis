@@ -44,6 +44,7 @@ import {
   RESOURCES_URL,
 } from './adblock/engine';
 import { resolveRefreshSubs, assembleEngineTexts } from './adblock/refreshHelpers';
+import { resolveSeedPath } from './adblock/seedPath';
 import { fetchAll, RefreshScheduler } from './adblock/listManager';
 import { readFileSafe } from '../lib/atomicFile';
 import { BlockedCounter } from './adblock/blockedCounter';
@@ -197,7 +198,11 @@ function boot(): void {
 
   // ---- Adblock subsystem (after ViewController, BEFORE the first navigate) ----
   const cachePath = join(userData, 'engine.bin');
-  const snapshotPath = join(__dirname, 'adblock/seed/engine-seed.bin');
+  const snapshotPath = resolveSeedPath({
+    isPackaged: app.isPackaged,
+    mainDir: __dirname,
+    resourcesPath: process.resourcesPath,
+  });
   const listsCacheDir = join(userData, 'lists');
 
   // E2E determinism hooks.
