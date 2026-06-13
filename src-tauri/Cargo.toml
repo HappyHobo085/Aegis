@@ -29,6 +29,15 @@ tauri = { version = "2.11.2", features = ["unstable"] }
 tauri-plugin-log = "2"
 adblock = { version = "0.12.5", features = ["content-blocking"] }
 tauri-plugin-updater = "2.10.1"
+# Blocking HTTPS client for fetching filter-list subscriptions. reqwest is already
+# in the tree (tauri-plugin-updater pulls it); we just enable the `blocking` API.
+# TLS (rustls) comes from the updater's features via cargo feature unification, so
+# default-features stay off — avoids pulling native-tls/openssl (not present).
+# reqwest is built with `rustls-no-provider` (via tauri-plugin-updater), so every
+# TLS client looks up a process-global rustls crypto provider. We install one once
+# at startup (see run()), pulling rustls directly for aws-lc-rs::default_provider().
+reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
+rustls = "0.23"
 
 # Linux-only: reach the underlying webkit2gtk widget to work around tauri#10420
 # (multiwebview stacks vertically in wry's GtkBox instead of honoring positions).

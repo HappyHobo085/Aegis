@@ -13,6 +13,7 @@ mod nav;
 mod places;
 mod safety;
 mod settings;
+mod subs;
 mod update;
 mod view;
 
@@ -50,6 +51,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = customfilters::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = subs::dispatch(&app, &channel, &payload) {
+        return result;
+    }
     if let Some(result) = downloads::dispatch(&app, &channel, &payload) {
         return result;
     }
@@ -61,9 +65,8 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     }
 
     let v = match channel.as_str() {
-        // Still-stubbed collections (subs/permissions land next).
-        "subs.list" | "subs.setEnabled" | "subs.add" | "subs.remove"
-        | "permissions.list" | "permissions.remove" | "permissions.clear" => json!([]),
+        // Still-stubbed collections (permissions land next).
+        "permissions.list" | "permissions.remove" | "permissions.clear" => json!([]),
 
         "lists.updateNow" => json!({ "perSource": [], "lastUpdated": 0 }),
         "picker.start" => json!({ "ok": false }),
@@ -87,16 +90,18 @@ pub fn install_adblock(app: tauri::AppHandle) {
         .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/aegis"))
         .join("content-filters");
     let custom = customfilters::load(&app);
+    let subs_text = subs::enabled_text(&app);
     std::thread::spawn(move || {
         use std::hash::{Hash, Hasher};
         const EASYLIST: &str = include_str!("../resources/easylist.txt");
-        // Cache key = source hash (EasyList + the user's custom rules).
+        // Cache key = source hash (EasyList + custom rules + enabled subscriptions).
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         EASYLIST.hash(&mut hasher);
         custom.hash(&mut hasher);
+        subs_text.hash(&mut hasher);
         let marker = store_dir.join(format!("v{:x}.ready", hasher.finish()));
         let cached = marker.exists();
-        match adblock_convert::to_content_blocker_chunks(&[EASYLIST, &custom], 25_000) {
+        match adblock_convert::to_content_blocker_chunks(&[EASYLIST, &custom, &subs_text], 25_000) {
             Ok(chunks) => {
                 eprintln!("[aegis-cf] EasyList -> {} chunks (cached={cached})", chunks.len());
                 adblock_webkit::apply_filters(&app, chunks, store_dir.clone(), cached);
@@ -112,6 +117,15 @@ pub fn install_adblock(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install the process-global rustls crypto provider once, up front: reqwest is
+    // built with `rustls-no-provider` (via the updater plugin), so every TLS client
+    // — the updater's and our filter-list fetcher's — needs a provider in the global
+    // slot before it builds, or it panics ("No rustls crypto provider is configured").
+    match rustls::crypto::aws_lc_rs::default_provider().install_default() {
+        Ok(()) => eprintln!("[aegis] rustls aws-lc-rs provider installed"),
+        Err(_) => eprintln!("[aegis] rustls provider was already installed"),
+    }
+
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(view::ContentInset::default())
