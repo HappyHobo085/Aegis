@@ -12,6 +12,12 @@
 
 **API-honesty note:** Exact `tauri::webview` multi-webview method signatures vary across 2.x minor versions and MUST be confirmed against the installed crate docs (`cargo doc --open -p tauri` or docs.rs for the resolved version) before writing the Rust in Tasks 6–7. Where this plan shows Rust webview code, treat it as the intended shape to confirm, not a verbatim signature.
 
+**Execution deviations (recorded during implementation, 2026-06-13):**
+- **Seam switch = Vite alias, `ipcClient.ts` left UNTOUCHED** (Task 4 Step 3 superseded). The Tauri-only `vite.config.ts` aliases `./lib/ipcClient` → `ipcClient.tauri.ts`; `electron.vite.config.ts` and `vitest.config.ts` don't read it, so the Electron app and the 758 unit tests stay pristine. Verified: `npm run build:renderer` bundles (1654 modules), unit suite unchanged.
+- **Task 8 (Rust URL normalization) DROPPED — YAGNI.** `src/hooks/useNav.ts` already normalizes typed input via the reused `src/lib/addressParse.ts` and passes a final http(s) URL to `nav.navigate`. The Rust nav command just navigates to the given URL (with a defensive scheme check). No `src-tauri/src/url_input.rs`.
+- **No new `index.html`** (Task 2 Step 2 superseded): `src/index.html` already exists and is reused as the Vite entry.
+- **`.gitignore` unchanged**: root already ignores `dist/`; `tauri init` wrote `src-tauri/.gitignore` for `/target`.
+
 ---
 
 ## File structure

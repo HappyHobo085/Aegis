@@ -75,6 +75,11 @@
     "dist": "npm run build && electron-builder --linux AppImage",
     "dist:win": "npm run build && electron-builder --win nsis portable",
     "preview": "electron-vite preview",
+    "dev:renderer": "vite",
+    "build:renderer": "vite build",
+    "tauri": "tauri",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
     "pretest": "npm run rebuild:node",
     "test": "vitest run",
     "pretest:e2e": "npm run rebuild:electron && npm run build",
@@ -85,6 +90,7 @@
   "dependencies": {
     "@ghostery/adblocker-electron": "2.18.0",
     "@ghostery/adblocker-electron-preload": "2.18.0",
+    "@tauri-apps/api": "^2.11.0",
     "better-sqlite3": "^12.10.0",
     "electron-updater": "^6.8.9",
     "lucide-react": "^0.477.0"
@@ -93,6 +99,7 @@
     "@electron/fuses": "^1.8.0",
     "@electron/rebuild": "^4.0.4",
     "@playwright/test": "^1.49.0",
+    "@tauri-apps/cli": "^2.11.2",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.0",
