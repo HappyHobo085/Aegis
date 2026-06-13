@@ -79,7 +79,7 @@
     "build:renderer": "vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "APPIMAGE_EXTRACT_AND_RUN=1 tauri build",
+    "tauri:build": "APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 tauri build",
     "pretest": "npm run rebuild:node",
     "test": "vitest run",
     "pretest:e2e": "npm run rebuild:electron && npm run build",
