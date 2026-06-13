@@ -45,6 +45,7 @@ import { MyFiltersTab } from './components/MyFiltersTab';
 import { AllowlistTab } from './components/AllowlistTab';
 import { DownloadsTab } from './components/DownloadsTab';
 import { SitePermissionsTab } from './components/SitePermissionsTab';
+import { SecurityTab } from './components/SecurityTab';
 import { DataTab } from './components/DataTab';
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
@@ -335,6 +336,14 @@ export function App() {
               permissions={permissions.permissions}
               remove={permissions.remove}
               clear={permissions.clear}
+            />
+          }
+          security={
+            <SecurityTab
+              settings={settings.settings}
+              update={settings.update}
+              listExceptions={() => aegis.safety.listExceptions()}
+              removeException={(h) => void aegis.safety.removeException(h)}
             />
           }
           data={

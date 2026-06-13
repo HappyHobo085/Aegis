@@ -14,6 +14,7 @@ type SettingsTab =
   | 'allowlist'
   | 'downloads'
   | 'sitePermissions'
+  | 'security'
   | 'data';
 
 const TAB_LABELS: Record<SettingsTab, string> = {
@@ -25,6 +26,7 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   allowlist: 'Allowlist',
   downloads: 'Downloads',
   sitePermissions: 'Site permissions',
+  security: 'Security',
   data: 'Data',
 };
 
@@ -37,6 +39,7 @@ const TAB_ORDER: SettingsTab[] = [
   'allowlist',
   'downloads',
   'sitePermissions',
+  'security',
   'data',
 ];
 
@@ -50,6 +53,7 @@ export interface SettingsModalProps {
   allowlist: ReactNode;
   downloads: ReactNode;
   sitePermissions: ReactNode;
+  security: ReactNode;
   data: ReactNode;
 }
 
@@ -63,6 +67,7 @@ export function SettingsModal({
   allowlist,
   downloads,
   sitePermissions,
+  security,
   data,
 }: SettingsModalProps) {
   const titleId = useId();
@@ -79,6 +84,7 @@ export function SettingsModal({
   const allowlistTabId = useId();
   const downloadsTabId = useId();
   const sitePermissionsTabId = useId();
+  const securityTabId = useId();
   const dataTabId = useId();
   const panelId = useId();
 
@@ -91,6 +97,7 @@ export function SettingsModal({
     allowlist: allowlistTabId,
     downloads: downloadsTabId,
     sitePermissions: sitePermissionsTabId,
+    security: securityTabId,
     data: dataTabId,
   };
 
@@ -103,6 +110,7 @@ export function SettingsModal({
     allowlist,
     downloads,
     sitePermissions,
+    security,
     data,
   };
 
