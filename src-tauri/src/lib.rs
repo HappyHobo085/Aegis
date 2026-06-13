@@ -1,3 +1,4 @@
+mod adblock_convert;
 #[cfg(target_os = "linux")]
 mod adblock_webkit;
 #[cfg(target_os = "linux")]
