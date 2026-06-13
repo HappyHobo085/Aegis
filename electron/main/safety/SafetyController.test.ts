@@ -74,6 +74,41 @@ describe('SafetyController.handleNavFailed', () => {
   });
 });
 
+describe('SafetyController.handleNavCommitted + stale-record safety', () => {
+  it('clears the upgrade record on successful commit, preventing a later false interstitial', () => {
+    const { sc } = setup();
+    sc.navigate('http://example.com/'); // arms http -> https
+    sc.handleNavCommitted('https://example.com/'); // the upgraded URL loaded OK
+    expect(sc.handleNavFailed(failed('https://example.com/'))).toBe(false);
+    expect(sc.getState()).toBeNull();
+  });
+
+  it('ignores an unrelated committed URL (keeps the arm)', () => {
+    const { sc } = setup();
+    sc.navigate('http://example.com/');
+    sc.handleNavCommitted('https://different.com/');
+    expect(sc.handleNavFailed(failed('https://example.com/'))).toBe(true);
+  });
+
+  it('a fresh navigation clears a stale arm (no false interstitial on a later direct-https failure)', () => {
+    const { sc } = setup();
+    sc.navigate('http://a.com/'); // arms a -> https://a
+    sc.navigate('https://b.com/'); // direct https supersedes, clears the arm
+    expect(sc.handleNavFailed(failed('https://b.com/'))).toBe(false);
+    expect(sc.handleNavFailed(failed('https://a.com/'))).toBe(false);
+  });
+
+  it('a fresh navigation dismisses an active interstitial', () => {
+    const { sc, events } = setup();
+    sc.navigate('http://example.com/');
+    sc.handleNavFailed(failed('https://example.com/'));
+    expect(sc.getState()).not.toBeNull();
+    sc.navigate('https://other.com/');
+    expect(sc.getState()).toBeNull();
+    expect(events.at(-1)).toBeNull();
+  });
+});
+
 describe('SafetyController.proceed', () => {
   it('persists the host exception, dismisses, and reloads over http', () => {
     const { sc, navigateView, events, exceptions } = setup();
@@ -85,6 +120,24 @@ describe('SafetyController.proceed', () => {
     expect(navigateView).toHaveBeenCalledWith('http://example.com/');
     expect(sc.getState()).toBeNull();
     expect(events.at(-1)).toBeNull();
+  });
+
+  it('is a no-op when there is no active interstitial', () => {
+    const { sc, navigateView, exceptions } = setup();
+    sc.proceed('http://example.com/');
+    expect(navigateView).not.toHaveBeenCalled();
+    expect(exceptions.has('example.com')).toBe(false);
+  });
+
+  it('ignores a url that does not match the active interstitial', () => {
+    const { sc, navigateView, exceptions } = setup();
+    sc.navigate('http://example.com/');
+    sc.handleNavFailed(failed('https://example.com/'));
+    navigateView.mockClear();
+    sc.proceed('http://evil.com/');
+    expect(navigateView).not.toHaveBeenCalled();
+    expect(exceptions.has('evil.com')).toBe(false);
+    expect(sc.getState()).not.toBeNull();
   });
 });
 

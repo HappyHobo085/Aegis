@@ -41,8 +41,25 @@ export class SafetyController {
 
   /** Upgrade-aware navigation entry (address bar / home / first nav). */
   navigate(url: string): void {
+    // A fresh navigation supersedes any showing interstitial and any in-flight
+    // upgrade record (resolveUpgrade re-arms below if this URL is upgraded).
+    if (this.current !== null) this.dismiss();
+    this.lastUpgrade = null;
     const upgraded = this.resolveUpgrade(url);
     this.deps.navigateView(upgraded ?? url);
+  }
+
+  /**
+   * did-navigate (commit) hook. A successful commit of the upgraded https URL
+   * means the upgrade did NOT fail — disarm the record so a later, unrelated
+   * failure of the same URL (e.g. a manual reload, an expiring cert) can't raise
+   * a false HTTPS-failed interstitial. Keyed on the upgrade target because the
+   * state stream also fires on did-start-loading, before the upgraded URL commits.
+   */
+  handleNavCommitted(url: string): void {
+    if (this.lastUpgrade && url === this.lastUpgrade.to) {
+      this.lastUpgrade = null;
+    }
   }
 
   /**
@@ -66,6 +83,8 @@ export class SafetyController {
 
   /** "Continue to HTTP for this site": persist the host + reload over http. */
   proceed(url: string): void {
+    // Defense-in-depth: only act when this url matches the showing interstitial.
+    if (this.current === null || url !== this.current.url) return;
     try {
       const host = new URL(url).hostname;
       if (host) this.deps.httpExceptions.add(host);
