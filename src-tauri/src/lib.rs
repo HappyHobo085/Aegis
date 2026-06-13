@@ -4,7 +4,9 @@ mod adblock_convert;
 mod adblock_webkit;
 #[cfg(target_os = "linux")]
 mod linux_layout;
+mod jsonstore;
 mod nav;
+mod places;
 mod settings;
 mod update;
 mod view;
@@ -34,18 +36,16 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = settings::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = places::dispatch(&app, &channel, &payload) {
+        return result;
+    }
 
     let v = match channel.as_str() {
-        // Collection reads + mutations that echo the (empty) collection.
-        "favorites.list" | "favorites.add" | "favorites.update" | "favorites.remove"
-        | "favorites.reorder" | "history.list" | "history.search" | "saved.list"
-        | "saved.add" | "saved.remove" | "saved.update" | "saved.renameTag"
-        | "saved.deleteTag" | "saved.tagUnion" | "subs.list" | "subs.setEnabled"
+        // Still-stubbed collections (history/subs/downloads/permissions land next).
+        "history.list" | "history.search" | "subs.list" | "subs.setEnabled"
         | "subs.add" | "subs.remove" | "downloads.list" | "downloads.remove"
         | "downloads.clear" | "downloads.cancel" | "permissions.list"
         | "permissions.remove" | "permissions.clear" | "safety.listExceptions" => json!([]),
-
-        "saved.has" => json!(false),
 
         "customFilters.get" | "customFilters.set" => json!(""),
         "lists.updateNow" => json!({ "perSource": [], "lastUpdated": 0 }),
