@@ -73,8 +73,19 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             }
             Ok(Value::Null)
         }
-        // Full-window chrome overlay z-swap + fullscreen land in Phase 2.
-        "view.setChromeOverlay" => Ok(Value::Null),
+        // A full-window chrome overlay (settings, sidebar, downloads, safety
+        // interstitial, …) is in the chrome webview, behind the content webview.
+        // Hide the content while an overlay is active so the overlay is visible.
+        "view.setChromeOverlay" => {
+            let active = payload.get("active").and_then(Value::as_bool).unwrap_or(false);
+            #[cfg(target_os = "linux")]
+            crate::linux_layout::set_content_visible(app, !active);
+            #[cfg(not(target_os = "linux"))]
+            if let Some(w) = app.get_webview(CONTENT_LABEL) {
+                let _ = if active { w.hide() } else { w.show() };
+            }
+            Ok(Value::Null)
+        }
         "view.setFullscreen" => Ok(Value::Null),
         _ => return None,
     };

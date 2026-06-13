@@ -28,6 +28,17 @@ pub fn deny_permissions(app: &AppHandle) {
     });
 }
 
+/// Show/hide the content webview at the GTK level (Tauri's hide() doesn't act on
+/// the reparented widget). Used by view.setChromeOverlay to reveal chrome overlays.
+pub fn set_content_visible(app: &AppHandle, visible: bool) {
+    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+        return;
+    };
+    let _ = content.with_webview(move |pw| {
+        pw.inner().set_visible(visible);
+    });
+}
+
 /// Reparent (once, idempotent) into a GtkFixed and lay out the chrome (full
 /// window) and content (inset) webviews. Called for the initial layout and on
 /// every window resize, all coordinates in physical/logical px (scale handled by
@@ -55,7 +66,7 @@ pub fn layout(app: &AppHandle, left: i32, top: i32, win_w: i32, win_h: i32) {
                 f.put(child, 0, 0);
             }
             box_.pack_start(&f, true, true, 0);
-            f.show();
+            f.show_all(); // show the fixed + both webviews once (initial layout)
             f
         } else {
             eprintln!("[aegis-gtk] layout: unexpected parent {}", parent.type_().name());
@@ -74,6 +85,7 @@ pub fn layout(app: &AppHandle, left: i32, top: i32, win_w: i32, win_h: i32) {
                 fixed.move_(&child, 0, 0);
             }
         }
-        fixed.show_all();
+        // No show_all here: re-showing every layout call would override the content
+        // webview's hide (used by view.setChromeOverlay to reveal chrome overlays).
     });
 }
