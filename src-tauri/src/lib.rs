@@ -1,3 +1,4 @@
+mod adblock;
 mod adblock_convert;
 #[cfg(target_os = "linux")]
 mod adblock_webkit;
@@ -26,6 +27,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = update::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = adblock::dispatch(&app, &channel, &payload) {
+        return result;
+    }
 
     let v = match channel.as_str() {
         // Collection reads + mutations that echo the (empty) collection.
@@ -50,11 +54,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
             "httpsOnly": true
         }),
 
-        "adblock.getState" | "adblock.setEnabled" | "adblock.toggleAllowlist"
-        | "adblock.removeAllowlist" | "adblock.clearAllowlist" => json!({
-            "enabled": true, "allowlistedHosts": [], "sessionBlocked": 0
-        }),
-
         "customFilters.get" | "customFilters.set" => json!(""),
         "lists.updateNow" => json!({ "perSource": [], "lastUpdated": 0 }),
         "safety.getState" => Value::Null,
@@ -70,12 +69,45 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     Ok(v)
 }
 
+/// Convert EasyList to content-blocker JSON on a background thread and load it as
+/// WebKit content filters (cached after the first compile). Called at boot and
+/// whenever ad-blocking is re-enabled.
+#[cfg(target_os = "linux")]
+pub fn install_adblock(app: tauri::AppHandle) {
+    let store_dir = app
+        .path()
+        .app_cache_dir()
+        .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/aegis"))
+        .join("content-filters");
+    std::thread::spawn(move || {
+        use std::hash::{Hash, Hasher};
+        const EASYLIST: &str = include_str!("../resources/easylist.txt");
+        // Cache key = source hash, so list updates invalidate the cache.
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        EASYLIST.hash(&mut hasher);
+        let marker = store_dir.join(format!("v{:x}.ready", hasher.finish()));
+        let cached = marker.exists();
+        match adblock_convert::to_content_blocker_chunks(&[EASYLIST], 25_000) {
+            Ok(chunks) => {
+                eprintln!("[aegis-cf] EasyList -> {} chunks (cached={cached})", chunks.len());
+                adblock_webkit::apply_filters(&app, chunks, store_dir.clone(), cached);
+                if !cached {
+                    let _ = std::fs::create_dir_all(&store_dir);
+                    let _ = std::fs::write(&marker, b"");
+                }
+            }
+            Err(e) => eprintln!("[aegis-cf] convert failed: {e}"),
+        }
+    });
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(view::ContentInset::default())
         .manage(update::UpdateState::default())
+        .manage(adblock::AdblockState::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -100,37 +132,9 @@ pub fn run() {
             }
             view::apply_inset(app.handle());
 
-            // Ad-blocking. Linux/WebKit: convert EasyList to content-blocker JSON on
-            // a background thread (~1s), then load it as WebKit content filters.
+            // Ad-blocking (Linux/WebKit): install EasyList content filters.
             #[cfg(target_os = "linux")]
-            {
-                let handle = app.handle().clone();
-                let store_dir = app
-                    .path()
-                    .app_cache_dir()
-                    .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/aegis"))
-                    .join("content-filters");
-                std::thread::spawn(move || {
-                    use std::hash::{Hash, Hasher};
-                    const EASYLIST: &str = include_str!("../resources/easylist.txt");
-                    // Cache key = source hash, so list updates invalidate the cache.
-                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-                    EASYLIST.hash(&mut hasher);
-                    let marker = store_dir.join(format!("v{:x}.ready", hasher.finish()));
-                    let cached = marker.exists();
-                    match adblock_convert::to_content_blocker_chunks(&[EASYLIST], 25_000) {
-                        Ok(chunks) => {
-                            eprintln!("[aegis-cf] EasyList -> {} chunks (cached={cached})", chunks.len());
-                            adblock_webkit::apply_filters(&handle, chunks, store_dir.clone(), cached);
-                            if !cached {
-                                let _ = std::fs::create_dir_all(&store_dir);
-                                let _ = std::fs::write(&marker, b"");
-                            }
-                        }
-                        Err(e) => eprintln!("[aegis-cf] convert failed: {e}"),
-                    }
-                });
-            }
+            install_adblock(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![ipc])

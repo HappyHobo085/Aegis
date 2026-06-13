@@ -61,6 +61,18 @@ pub fn apply_filters(app: &AppHandle, chunks: Vec<String>, store_dir: PathBuf, c
     });
 }
 
+/// Remove all content filters from the content webview (ad-block disabled).
+pub fn remove_all(app: &AppHandle) {
+    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+        return;
+    };
+    let _ = content.with_webview(move |pw| {
+        if let Some(ucm) = pw.inner().user_content_manager() {
+            ucm.remove_all_filters();
+        }
+    });
+}
+
 /// Inject an element-hiding stylesheet (safe API), for cosmetic rules beyond what
 /// the content filter expresses.
 pub fn apply_cosmetic_css(app: &AppHandle, css: String) {
