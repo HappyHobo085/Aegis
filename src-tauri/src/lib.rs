@@ -4,6 +4,7 @@ mod adblock_convert;
 mod adblock_webkit;
 #[cfg(target_os = "linux")]
 mod linux_layout;
+mod customfilters;
 mod history;
 mod jsonstore;
 mod nav;
@@ -43,6 +44,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = history::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = customfilters::dispatch(&app, &channel, &payload) {
+        return result;
+    }
 
     let v = match channel.as_str() {
         // Still-stubbed collections (subs/downloads/permissions land next).
@@ -51,7 +55,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         | "permissions.list" | "permissions.remove" | "permissions.clear"
         | "safety.listExceptions" => json!([]),
 
-        "customFilters.get" | "customFilters.set" => json!(""),
         "lists.updateNow" => json!({ "perSource": [], "lastUpdated": 0 }),
         "safety.getState" => Value::Null,
         "data.export" => json!({ "ok": false }),
@@ -76,15 +79,17 @@ pub fn install_adblock(app: tauri::AppHandle) {
         .app_cache_dir()
         .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/aegis"))
         .join("content-filters");
+    let custom = customfilters::load(&app);
     std::thread::spawn(move || {
         use std::hash::{Hash, Hasher};
         const EASYLIST: &str = include_str!("../resources/easylist.txt");
-        // Cache key = source hash, so list updates invalidate the cache.
+        // Cache key = source hash (EasyList + the user's custom rules).
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         EASYLIST.hash(&mut hasher);
+        custom.hash(&mut hasher);
         let marker = store_dir.join(format!("v{:x}.ready", hasher.finish()));
         let cached = marker.exists();
-        match adblock_convert::to_content_blocker_chunks(&[EASYLIST], 25_000) {
+        match adblock_convert::to_content_blocker_chunks(&[EASYLIST, &custom], 25_000) {
             Ok(chunks) => {
                 eprintln!("[aegis-cf] EasyList -> {} chunks (cached={cached})", chunks.len());
                 adblock_webkit::apply_filters(&app, chunks, store_dir.clone(), cached);
