@@ -197,7 +197,7 @@ export interface UpdateState {
 export interface SafetyInterstitialPayload {
   /** The http URL the user may choose to continue to. */
   url: string;
-  reason: 'https-failed';
+  reason: 'https-failed' | 'malware';
 }
 
 /**
