@@ -55,6 +55,8 @@ import { buildUpdateHandlers } from './ipc/update';
 import { HttpExceptionsRepo } from './db/httpExceptionsRepo';
 import { SafetyController } from './safety/SafetyController';
 import { buildSafetyHandlers } from './ipc/safety';
+import { MalwareGuard } from './safety/MalwareGuard';
+import { refreshMalwareTexts, readMalwareCacheTexts } from './adblock/malwareLists';
 
 const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -135,6 +137,7 @@ function boot(): void {
     },
     onCrashed: fwd.onCrashed,
     upgradeNavigation: (url) => safety?.resolveUpgrade(url) ?? null,
+    onBlockedNavigation: (url) => safety?.checkMalicious(url) ?? false,
   });
 
   safety = new SafetyController({
@@ -145,6 +148,7 @@ function boot(): void {
     getHttpsOnly: () =>
       process.env.AEGIS_HTTPS_ONLY === '0' ? false : settingsRepo.get().httpsOnly,
     onInterstitial: (p) => chromeWc.send(IPC.evtSafetyInterstitial, p),
+    malware: malwareGuard,
   });
 
   // Compose: chrome added first by window.ts; index.ts adds the content view over it.
@@ -226,6 +230,7 @@ function boot(): void {
     resourcesPath: process.resourcesPath,
   });
   const listsCacheDir = join(userData, 'lists');
+  const malwareListsCacheDir = join(userData, 'malware-lists');
 
   // E2E determinism hooks.
   const TEST_FILTER = process.env.AEGIS_ADBLOCK_TEST_FILTER;
@@ -256,6 +261,17 @@ function boot(): void {
       engineSource = 'built';
     }
   }
+
+  // MalwareGuard: in-memory engine for top-level document checks (NEVER attached to
+  // the session — the AdblockController owns the single listener). Seed from the
+  // on-disk cache (immediate on later boots); empty on a fresh profile until the
+  // first refresh. AEGIS_MALWARE_TEST_FILTER gives e2e a deterministic rule set.
+  const MALWARE_TEST_FILTER = process.env.AEGIS_MALWARE_TEST_FILTER;
+  const malwareGuard = new MalwareGuard(
+    MALWARE_TEST_FILTER
+      ? buildEngine(splitNonEmptyLines(MALWARE_TEST_FILTER), null)
+      : buildEngine(readMalwareCacheTexts(malwareListsCacheDir), null),
+  );
 
   const counter = new BlockedCounter(vc.id);
   const onBlockedCount = (c: BlockedCount): void => chromeWc.send(IPC.evtAdblockBlockedCount, c);
@@ -294,8 +310,27 @@ function boot(): void {
       fetchImpl: refreshFetch as typeof fetch,
     });
     const usable = sources.filter((s) => s.ok && s.text.length > 0);
-    if (usable.length > 0) {
-      const texts = assembleEngineTexts(usable.map((s) => s.text), customFiltersRepo.get());
+    // Malware lists: fetch+cache (own dir), rebuild the in-memory MalwareGuard, and
+    // merge their texts into the MAIN engine so malicious SUBresources are blocked too.
+    // Skip the fetch under any deterministic/offline mode — including MALWARE_TEST_FILTER
+    // (e2e) so a background refresh can't overwrite the test engine.
+    const skipMalwareFetch = TEST_FILTER || MALWARE_TEST_FILTER || OFFLINE;
+    const malwareTexts = skipMalwareFetch
+      ? []
+      : await refreshMalwareTexts({
+          cacheDir: malwareListsCacheDir,
+          timeoutMs: FETCH_TIMEOUT_MS,
+          maxBytes: FETCH_MAX_BYTES,
+          fetchImpl: refreshFetch as typeof fetch,
+        });
+    // Only swap the in-memory guard when we actually fetched rules — never wipe the
+    // boot-loaded (cache or AEGIS_MALWARE_TEST_FILTER) engine with an empty one.
+    if (malwareTexts.length > 0) malwareGuard.setActive(buildEngine(malwareTexts, null));
+    if (usable.length > 0 || malwareTexts.length > 0) {
+      const texts = assembleEngineTexts(
+        [...usable.map((s) => s.text), ...malwareTexts],
+        customFiltersRepo.get(),
+      );
       const engine = buildEngine(texts, resources);
       controller.setPendingBlocker(engine);
       serializeEngine(engine, cachePath);
@@ -325,7 +360,9 @@ function boot(): void {
       const text = readFileSafe(join(listsCacheDir, `${sub.listId}.txt`));
       if (text !== null && text.length > 0) listTexts.push(text);
     }
-    const texts = assembleEngineTexts(listTexts, customFiltersRepo.get());
+    const malwareTexts = readMalwareCacheTexts(malwareListsCacheDir);
+    if (malwareTexts.length > 0) malwareGuard.setActive(buildEngine(malwareTexts, null));
+    const texts = assembleEngineTexts([...listTexts, ...malwareTexts], customFiltersRepo.get());
     const engine = buildEngine(texts, null);
     controller.setPendingBlocker(engine);
     serializeEngine(engine, cachePath);
