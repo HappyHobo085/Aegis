@@ -18,9 +18,12 @@ export function call<T = void>(channel: string, payload?: Record<string, unknown
  * though Tauri's `listen` resolves its unlisten handle asynchronously.
  */
 export function on<T>(event: string, cb: (payload: T) => void): () => void {
+  // Tauri 2 forbids '.' in event names; the Rust side (emit_event) emits the same
+  // names with '.'→':'. Translate here so listen() registers and events arrive.
+  const tauriEvent = event.replace(/\./g, ':');
   let unlisten: UnlistenFn | null = null;
   let cancelled = false;
-  void listen<T>(event, (e) => cb(e.payload)).then((u) => {
+  void listen<T>(tauriEvent, (e) => cb(e.payload)).then((u) => {
     if (cancelled) u();
     else unlisten = u;
   });

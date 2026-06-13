@@ -120,7 +120,8 @@ pub fn install_handler(app: &AppHandle) {
                         p.borrow_mut()
                             .insert(id, (req.clone(), origin.clone(), permission.clone()));
                     });
-                    let _ = app.emit(
+                    crate::emit_event(
+                        &app,
                         "permissions.prompt",
                         json!({ "requestId": id, "origin": origin, "permission": permission }),
                     );

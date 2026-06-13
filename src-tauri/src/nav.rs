@@ -32,7 +32,7 @@ fn is_local_host(url: &Url) -> bool {
 /// Emit a `nav.state` for the chrome address bar. canGoBack/Forward are
 /// best-effort in Phase 0 (no Tauri history API); refined in Phase 2.
 fn emit_state(app: &AppHandle, url: &str, loading: bool) {
-    let _ = app.emit(
+    let _ = crate::emit_event(app, 
         "nav.state",
         json!({
             "viewId": 1,

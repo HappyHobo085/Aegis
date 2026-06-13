@@ -48,7 +48,7 @@ pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf) {
         "startedAt": jsonstore::now_ms()
     }));
     let _ = jsonstore::save(app, "downloads", &items);
-    let _ = app.emit("downloads.changed", Value::Null);
+    let _ = crate::emit_event(app, "downloads.changed", Value::Null);
 }
 
 /// On DownloadEvent::Finished: mark the newest progressing entry completed/interrupted.
@@ -66,7 +66,7 @@ pub fn on_finished(app: &AppHandle, success: bool) {
         }
     }
     let _ = jsonstore::save(app, "downloads", &items);
-    let _ = app.emit("downloads.changed", Value::Null);
+    let _ = crate::emit_event(app, "downloads.changed", Value::Null);
 }
 
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {

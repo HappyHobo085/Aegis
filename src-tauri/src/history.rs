@@ -29,7 +29,7 @@ pub fn record(app: &AppHandle, url: &str, title: &str) {
         items.drain(0..len - MAX_ENTRIES);
     }
     let _ = jsonstore::save(app, "history", &items);
-    let _ = app.emit("history.changed", Value::Null);
+    let _ = crate::emit_event(app, "history.changed", Value::Null);
 }
 
 /// Fill in the title of the most-recent history entry for `url`. WebKit sets the
@@ -49,7 +49,7 @@ pub fn update_title(app: &AppHandle, url: &str, title: &str) {
     if items[i].get("title").and_then(Value::as_str) != Some(title) {
         items[i]["title"] = json!(title);
         let _ = jsonstore::save(app, "history", &items);
-        let _ = app.emit("history.changed", Value::Null);
+        let _ = crate::emit_event(app, "history.changed", Value::Null);
     }
 }
 
@@ -99,13 +99,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             let id = payload.get("id").and_then(Value::as_i64);
             items.retain(|it| it.get("id").and_then(Value::as_i64) != id);
             let _ = jsonstore::save(app, "history", &items);
-            let _ = app.emit("history.changed", Value::Null);
+            let _ = crate::emit_event(app, "history.changed", Value::Null);
             Some(Ok(Value::Null))
         }
         "history.clear" => {
             let empty: [Value; 0] = [];
             let _ = jsonstore::save(app, "history", &empty);
-            let _ = app.emit("history.changed", Value::Null);
+            let _ = crate::emit_event(app, "history.changed", Value::Null);
             Some(Ok(Value::Null))
         }
         _ => None,

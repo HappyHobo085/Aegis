@@ -59,7 +59,7 @@ pub fn raise(app: &AppHandle, url: &str) {
     if let Some(s) = app.try_state::<SafetyState>() {
         *s.interstitial.lock().unwrap() = payload.clone();
     }
-    let _ = app.emit("safety.interstitial", payload);
+    let _ = crate::emit_event(app, "safety.interstitial", payload);
 
     let app2 = app.clone();
     let _ = app.run_on_main_thread(move || {
@@ -89,7 +89,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     s.exceptions.lock().unwrap().insert(host.to_lowercase());
                     *s.interstitial.lock().unwrap() = Value::Null;
                 }
-                let _ = app.emit("safety.interstitial", Value::Null);
+                let _ = crate::emit_event(app, "safety.interstitial", Value::Null);
                 if let Some(w) = app.get_webview(CONTENT_LABEL) {
                     let _ = w.navigate(u);
                 }

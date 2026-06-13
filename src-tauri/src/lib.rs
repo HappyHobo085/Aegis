@@ -20,7 +20,15 @@ mod update;
 mod view;
 
 use serde_json::Value;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
+
+/// Emit a frontend event. Tauri 2 forbids `.` in event names, but our shared
+/// `IPC.evt*` names use dots (Electron's IPC allows them); translate `.`→`:` so
+/// the JS listener (which applies the same translation in tauriInvoke.ts) receives
+/// it. Without this, every `listen()` is rejected and no rust→renderer event fires.
+pub fn emit_event<S: serde::Serialize + Clone>(app: &tauri::AppHandle, name: &str, payload: S) {
+    let _ = app.emit(&name.replace('.', ":"), payload);
+}
 
 /// Single IPC entry point. The renderer calls `invoke('ipc', {channel, payload})`
 /// with a channel name (the strings in shared/types.ts `IPC`). `nav.*` and `view.*`

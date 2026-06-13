@@ -110,7 +110,7 @@ fn fetch_in_background(app: AppHandle, list_id: String, url: String) {
             }
             let _ = jsonstore::save(&app, "subs", &items);
             reinstall_adblock(&app);
-            let _ = app.emit("subs.changed", Value::Null);
+            crate::emit_event(&app, "subs.changed", Value::Null);
         }
         Err(e) => eprintln!("[aegis-subs] fetch {list_id} failed: {e}"),
     });
@@ -182,7 +182,7 @@ pub fn update_all(app: &AppHandle) -> Value {
     let _ = jsonstore::save(app, "subs", &items);
     if !hashes.is_empty() {
         reinstall_adblock(app);
-        let _ = app.emit("subs.changed", Value::Null);
+        let _ = crate::emit_event(app, "subs.changed", Value::Null);
     }
     json!({ "perSource": per_source, "lastUpdated": now })
 }
