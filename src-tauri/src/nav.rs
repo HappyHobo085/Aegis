@@ -64,6 +64,12 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
             // Fires for every navigation (programmatic, link clicks, redirects).
             emit_state(&app_nav, url.as_str(), true);
 
+            // Malicious-site guard: block known-malware hosts.
+            if crate::safety::is_blocked(&app_nav, url) {
+                crate::safety::raise(&app_nav, url.as_str());
+                return false;
+            }
+
             // HTTPS-Only: upgrade http -> https (unless localhost, or the setting is
             // off — the escape hatch for http-only sites). Re-navigate on the main
             // thread AFTER this callback returns, to avoid re-entrancy.

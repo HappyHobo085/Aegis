@@ -11,6 +11,7 @@ mod history;
 mod jsonstore;
 mod nav;
 mod places;
+mod safety;
 mod settings;
 mod update;
 mod view;
@@ -55,15 +56,16 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = data::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = safety::dispatch(&app, &channel, &payload) {
+        return result;
+    }
 
     let v = match channel.as_str() {
         // Still-stubbed collections (subs/permissions land next).
         "subs.list" | "subs.setEnabled" | "subs.add" | "subs.remove"
-        | "permissions.list" | "permissions.remove" | "permissions.clear"
-        | "safety.listExceptions" => json!([]),
+        | "permissions.list" | "permissions.remove" | "permissions.clear" => json!([]),
 
         "lists.updateNow" => json!({ "perSource": [], "lastUpdated": 0 }),
-        "safety.getState" => Value::Null,
         "picker.start" => json!({ "ok": false }),
 
         // Fire-and-forget actions (history.remove/clear, permissions.resolve,
@@ -115,6 +117,7 @@ pub fn run() {
         .manage(view::ContentInset::default())
         .manage(update::UpdateState::default())
         .manage(adblock::AdblockState::default())
+        .manage(safety::SafetyState::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
