@@ -140,7 +140,10 @@ function boot(): void {
   safety = new SafetyController({
     navigateView: (u) => vc.navigate(u),
     httpExceptions: httpExceptionsRepo,
-    getHttpsOnly: () => settingsRepo.get().httpsOnly,
+    // e2e override (mirrors AEGIS_HOME_URL / AEGIS_ADBLOCK_OFFLINE): nav-mechanics
+    // tests boot to http-only fixtures and opt out of the HTTPS upgrade.
+    getHttpsOnly: () =>
+      process.env.AEGIS_HTTPS_ONLY === '0' ? false : settingsRepo.get().httpsOnly,
     onInterstitial: (p) => chromeWc.send(IPC.evtSafetyInterstitial, p),
   });
 

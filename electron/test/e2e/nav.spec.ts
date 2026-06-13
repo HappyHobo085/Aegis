@@ -129,7 +129,9 @@ test('back/forward enablement flips across a back/forward sequence', async () =>
   const b = `${fixtures.baseUrl}/late-title.html`;
   // Boot directly to `a` so it is the very first (and only) loadURL — no prior
   // history entry, so canGoBack must be false after the initial boot load.
-  const app = await launchApp(dir, { AEGIS_HOME_URL: a });
+  // httpsOnly OFF: this test boots to an http-only fixture and verifies
+  // back/forward mechanics, not the HTTPS upgrade (covered by httpsOnly.spec.ts).
+  const app = await launchApp(dir, { AEGIS_HOME_URL: a, AEGIS_HTTPS_ONLY: '0' });
   try {
     // The app has already navigated to `a` on boot; wait for it to settle.
     await expect
@@ -266,7 +268,9 @@ test('session restore reopens the last URL on relaunch', async () => {
   }
 
   // Relaunch with the SAME userData dir → session.json must restore lastUrl.
-  const app2 = await launchApp(dir);
+  // httpsOnly OFF so the restored http fixture URL isn't upgraded on boot
+  // (HTTPS-Only is covered by httpsOnly.spec.ts).
+  const app2 = await launchApp(dir, { AEGIS_HTTPS_ONLY: '0' });
   try {
     await expect
       .poll(async () => (await state(app2)).url, { timeout: 15000 })
