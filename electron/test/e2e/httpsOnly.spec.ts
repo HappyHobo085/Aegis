@@ -1,4 +1,4 @@
-// electron/test/e2e/httpsOnly.e2e.ts
+// electron/test/e2e/httpsOnly.spec.ts
 //
 // e2e coverage for HTTPS-Only: upgrade attempt, interstitial, proceed, persistence.
 //

@@ -139,6 +139,15 @@ describe('SafetyController.proceed', () => {
     expect(exceptions.has('evil.com')).toBe(false);
     expect(sc.getState()).not.toBeNull();
   });
+
+  it('persists the normalized (trailing-dot-stripped) host so the exception matches next time', () => {
+    const { sc, exceptions } = setup();
+    sc.navigate('http://example.com./'); // upgradeUrl normalizes the host -> https://example.com/
+    sc.handleNavFailed(failed('https://example.com/'));
+    sc.proceed('http://example.com./');
+    expect(exceptions.has('example.com')).toBe(true);
+    expect(exceptions.has('example.com.')).toBe(false);
+  });
 });
 
 describe('SafetyController.resolveUpgrade (gate hook)', () => {

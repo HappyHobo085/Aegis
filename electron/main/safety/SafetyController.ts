@@ -1,6 +1,6 @@
 // electron/main/safety/SafetyController.ts
 import type { NavFailed, SafetyInterstitialPayload } from '../../../shared/types';
-import { upgradeUrl } from './httpsUpgrade';
+import { upgradeUrl, normalizeHost } from './httpsUpgrade';
 
 export interface HttpExceptionsLike {
   has(host: string): boolean;
@@ -86,7 +86,7 @@ export class SafetyController {
     // Defense-in-depth: only act when this url matches the showing interstitial.
     if (this.current === null || url !== this.current.url) return;
     try {
-      const host = new URL(url).hostname;
+      const host = normalizeHost(new URL(url).hostname);
       if (host) this.deps.httpExceptions.add(host);
     } catch {
       /* malformed url — skip persistence, still attempt the load */

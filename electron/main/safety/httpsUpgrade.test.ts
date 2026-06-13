@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { upgradeUrl } from './httpsUpgrade';
+import { upgradeUrl, normalizeHost } from './httpsUpgrade';
 
 const never = () => false;
 
@@ -53,5 +53,14 @@ describe('upgradeUrl', () => {
     expect(upgradeUrl('http://user@example.com/x', { httpsOnly: true, isException: never })).toBe(
       'https://user@example.com/x',
     );
+  });
+});
+
+describe('normalizeHost', () => {
+  it('strips a single trailing FQDN dot', () => {
+    expect(normalizeHost('example.com.')).toBe('example.com');
+  });
+  it('leaves a normal host unchanged', () => {
+    expect(normalizeHost('example.com')).toBe('example.com');
   });
 });

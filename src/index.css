@@ -3376,7 +3376,9 @@ a:focus-visible {
 .interstitial {
   position: fixed;
   inset: 0;
-  z-index: 1000;
+  /* Above the toast/notification layer (10020) so nothing routine paints over a
+     security warning. */
+  z-index: 10100;
   display: flex;
   align-items: center;
   justify-content: center;

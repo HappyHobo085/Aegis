@@ -5,6 +5,16 @@
 // Only plain `http:` is upgraded; scheme is the only thing changed (path, query,
 // hash, and any non-default port are preserved).
 
+/**
+ * Normalise a host for consistent comparison/persistence: strip a single
+ * trailing FQDN dot (`example.com.` and `example.com` are the same host). Shared
+ * by upgradeUrl and SafetyController.proceed so the upgrade decision and the
+ * persisted exception key never drift apart.
+ */
+export function normalizeHost(host: string): string {
+  return host.endsWith('.') ? host.slice(0, -1) : host;
+}
+
 export function upgradeUrl(
   rawUrl: string,
   opts: { httpsOnly: boolean; isException: (host: string) => boolean },
@@ -16,9 +26,8 @@ export function upgradeUrl(
   } catch {
     return null;
   }
-  // Normalise a trailing FQDN dot so the exception predicate and the upgraded
-  // URL are consistent (`example.com.` and `example.com` are the same host).
-  if (u.hostname.endsWith('.')) u.hostname = u.hostname.slice(0, -1);
+  // Normalise so the exception predicate and the upgraded URL are consistent.
+  u.hostname = normalizeHost(u.hostname);
   if (u.protocol !== 'http:') return null;
   if (opts.isException(u.hostname)) return null;
   u.protocol = 'https:';
