@@ -96,6 +96,28 @@ pub fn run() {
                 });
             }
             view::apply_inset(app.handle());
+
+            // Ad-blocking. Linux/WebKit: convert EasyList to content-blocker JSON on
+            // a background thread (~1s), then load it as WebKit content filters.
+            #[cfg(target_os = "linux")]
+            {
+                let handle = app.handle().clone();
+                let store_dir = app
+                    .path()
+                    .app_cache_dir()
+                    .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/aegis"))
+                    .join("content-filters");
+                std::thread::spawn(move || {
+                    const EASYLIST: &str = include_str!("../resources/easylist.txt");
+                    match adblock_convert::to_content_blocker_chunks(&[EASYLIST], 25_000) {
+                        Ok(chunks) => {
+                            eprintln!("[aegis-cf] EasyList -> {} filter chunks", chunks.len());
+                            adblock_webkit::apply_filters(&handle, chunks, store_dir);
+                        }
+                        Err(e) => eprintln!("[aegis-cf] convert failed: {e}"),
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![ipc])

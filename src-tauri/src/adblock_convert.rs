@@ -2,30 +2,50 @@
 //! content-blocker JSON, for the WebKit ad-block tier (Linux/macOS/iOS). Uses the
 //! `adblock` crate's built-in `content_blocking` converter (Brave's engine), so we
 //! ship one filter-list source and target both the Chromium engine and WebKit.
+//! The converted rules include cosmetic `css-display-none` actions, so a single
+//! content filter handles network blocking AND element hiding.
 #![allow(dead_code)]
 use adblock::lists::{FilterSet, ParseOptions};
 
-/// Parse filter-list text (one rule per line, across all `filter_lists`) and return
-/// WebKit content-blocker JSON (the array WebKit's `UserContentFilterStore` expects)
-/// plus the count of converted rules. Rules the content-blocker format can't express
-/// (e.g. `$redirect`, full-regex) are dropped by the converter.
-pub fn to_content_blocker_json(filter_lists: &[&str]) -> Result<(String, usize), String> {
+/// Convert filter-list text into WebKit content-blocker JSON, split into chunks of
+/// at most `max_per_chunk` rules each (WebKit caps a single filter near ~50k rules;
+/// each chunk is loaded as its own content filter). Returns one JSON array string
+/// per chunk. Rules the content-blocker format can't express are dropped.
+pub fn to_content_blocker_chunks(
+    filter_lists: &[&str],
+    max_per_chunk: usize,
+) -> Result<Vec<String>, String> {
     // `into_content_blocking` requires debug mode (it reads each rule's raw text).
     let mut set = FilterSet::new(true);
     for list in filter_lists {
         set.add_filters(list.lines(), ParseOptions::default());
     }
-    let (cb_rules, _used) = set
+    let (rules, _used) = set
         .into_content_blocking()
         .map_err(|_| "into_content_blocking failed".to_string())?;
-    let count = cb_rules.len();
-    let json = serde_json::to_string(&cb_rules).map_err(|e| e.to_string())?;
+    let mut chunks = Vec::new();
+    for chunk in rules.chunks(max_per_chunk.max(1)) {
+        chunks.push(serde_json::to_string(chunk).map_err(|e| e.to_string())?);
+    }
+    Ok(chunks)
+}
+
+/// Single-chunk convenience (used by tests): returns (json, rule_count).
+pub fn to_content_blocker_json(filter_lists: &[&str]) -> Result<(String, usize), String> {
+    let chunks = to_content_blocker_chunks(filter_lists, usize::MAX)?;
+    let json = chunks.into_iter().next().unwrap_or_else(|| "[]".to_string());
+    // count = number of array elements; cheap parse-free count via the converter
+    let mut set = FilterSet::new(true);
+    for list in filter_lists {
+        set.add_filters(list.lines(), ParseOptions::default());
+    }
+    let count = set.into_content_blocking().map(|(r, _)| r.len()).unwrap_or(0);
     Ok((json, count))
 }
 
 #[cfg(test)]
 mod tests {
-    use super::to_content_blocker_json;
+    use super::{to_content_blocker_chunks, to_content_blocker_json};
 
     #[test]
     fn converts_a_network_rule_to_a_block_action() {
@@ -40,5 +60,19 @@ mod tests {
         let (json, count) = to_content_blocker_json(&[""]).unwrap();
         assert_eq!(count, 0);
         assert_eq!(json, "[]");
+    }
+
+    #[test]
+    fn chunks_respect_the_max_size() {
+        let rules = (0..50)
+            .map(|i| format!("||ads{i}.example.com^"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let chunks = to_content_blocker_chunks(&[&rules], 10).unwrap();
+        assert!(chunks.len() >= 5, "expected several chunks, got {}", chunks.len());
+        // each chunk is a valid JSON array
+        for c in &chunks {
+            assert!(c.starts_with('[') && c.ends_with(']'));
+        }
     }
 }
