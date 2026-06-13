@@ -121,6 +121,15 @@ pub fn install_adblock(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // webkit2gtk's DMABUF renderer paints a blank/white window on many Linux GPU
+    // drivers (common on Wayland, Nvidia, and VMs). Disable it before GTK/WebKit
+    // initializes so the app renders out of the box — no env var needed at launch.
+    // Set only if the user hasn't overridden it. Must run before any WebView spawns.
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    }
+
     // Install the process-global rustls crypto provider once, up front: reqwest is
     // built with `rustls-no-provider` (via the updater plugin), so every TLS client
     // — the updater's and our filter-list fetcher's — needs a provider in the global
