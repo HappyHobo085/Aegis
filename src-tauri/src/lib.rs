@@ -1,4 +1,6 @@
 #[cfg(target_os = "linux")]
+mod adblock_webkit;
+#[cfg(target_os = "linux")]
 mod linux_layout;
 mod nav;
 mod view;

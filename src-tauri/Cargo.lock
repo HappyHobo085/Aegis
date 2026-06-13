@@ -115,6 +115,8 @@ name = "app"
 version = "0.1.0"
 dependencies = [
  "adblock",
+ "gio",
+ "glib",
  "gtk",
  "log",
  "serde",
