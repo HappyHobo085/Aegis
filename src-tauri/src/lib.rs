@@ -10,6 +10,7 @@ mod downloads;
 mod history;
 mod jsonstore;
 mod nav;
+mod picker;
 mod places;
 mod safety;
 mod settings;
@@ -54,6 +55,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = subs::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = picker::dispatch(&app, &channel, &payload) {
+        return result;
+    }
     if let Some(result) = downloads::dispatch(&app, &channel, &payload) {
         return result;
     }
@@ -69,7 +73,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         "permissions.list" | "permissions.remove" | "permissions.clear" => json!([]),
 
         "lists.updateNow" => subs::update_all(&app),
-        "picker.start" => json!({ "ok": false }),
 
         // Fire-and-forget actions (history.remove/clear, permissions.resolve,
         // downloads.openFile/showInFolder, update.*, safety.proceed/removeException)
@@ -160,7 +163,8 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             linux_layout::deny_permissions(app.handle());
 
-            // Fill history entries' titles as WebKit reports them (Linux).
+            // Fill history entries' titles as WebKit reports them (Linux); also
+            // routes the element picker's title sentinel to picker::on_picked.
             #[cfg(target_os = "linux")]
             linux_layout::connect_title(app.handle());
 

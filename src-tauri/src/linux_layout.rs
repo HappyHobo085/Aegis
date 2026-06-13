@@ -38,8 +38,14 @@ pub fn connect_title(app: &AppHandle) {
     let app = app.clone();
     let _ = content.with_webview(move |pw| {
         pw.inner().connect_title_notify(move |wv| {
-            let url = wv.uri().map(|s| s.to_string()).unwrap_or_default();
             let title = wv.title().map(|s| s.to_string()).unwrap_or_default();
+            // The element picker signals a picked selector via a title sentinel
+            // (off the native IPC surface); route it instead of recording it.
+            if let Some(payload) = title.strip_prefix(crate::picker::SENTINEL) {
+                crate::picker::on_picked(&app, payload);
+                return;
+            }
+            let url = wv.uri().map(|s| s.to_string()).unwrap_or_default();
             crate::history::update_title(&app, &url, &title);
         });
     });
