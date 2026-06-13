@@ -108,11 +108,21 @@ pub fn run() {
                     .unwrap_or_else(|_| std::path::PathBuf::from("/tmp/aegis"))
                     .join("content-filters");
                 std::thread::spawn(move || {
+                    use std::hash::{Hash, Hasher};
                     const EASYLIST: &str = include_str!("../resources/easylist.txt");
+                    // Cache key = source hash, so list updates invalidate the cache.
+                    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                    EASYLIST.hash(&mut hasher);
+                    let marker = store_dir.join(format!("v{:x}.ready", hasher.finish()));
+                    let cached = marker.exists();
                     match adblock_convert::to_content_blocker_chunks(&[EASYLIST], 25_000) {
                         Ok(chunks) => {
-                            eprintln!("[aegis-cf] EasyList -> {} filter chunks", chunks.len());
-                            adblock_webkit::apply_filters(&handle, chunks, store_dir);
+                            eprintln!("[aegis-cf] EasyList -> {} chunks (cached={cached})", chunks.len());
+                            adblock_webkit::apply_filters(&handle, chunks, store_dir.clone(), cached);
+                            if !cached {
+                                let _ = std::fs::create_dir_all(&store_dir);
+                                let _ = std::fs::write(&marker, b"");
+                            }
                         }
                         Err(e) => eprintln!("[aegis-cf] convert failed: {e}"),
                     }
