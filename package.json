@@ -109,7 +109,7 @@
     "patch-package": "^8.0.1",
     "react": "^19",
     "react-dom": "^19",
-    "typescript": "^5.7.0",
+    "typescript": "^6.0.3",
     "vitest": "^4.1.8"
   }
 }
