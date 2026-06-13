@@ -1,9 +1,11 @@
 // electron/main/downloadsHelpers.ts
+import { isAbsolute, resolve } from 'node:path';
 
 /**
  * Pure download-path helpers (unit-tested). uniquifyFilename avoids clobbering an
  * existing file by inserting " (n)" before the extension; resolveDownloadDir picks
- * the configured dir or the OS default. No fs/electron deps so they test under Node.
+ * the configured dir or the OS default. Uses node:path (a Node builtin, not fs/electron)
+ * so they still test under Node.
  */
 
 /** Split a full path into [dir-with-trailing-slash, base, ext-with-dot]. */
@@ -34,8 +36,16 @@ export function uniquifyFilename(fullPath: string, exists: (p: string) => boolea
   return candidate;
 }
 
-/** The configured download dir (trimmed) if set, else the OS Downloads dir. */
+/**
+ * The configured download dir if it's a safe absolute path, else the OS Downloads
+ * dir. Rejects non-absolute dirs (would resolve against an unpredictable cwd) and
+ * any `..`-bearing input (path traversal) — a crafted `downloadDir` setting must
+ * not be able to write files outside an explicit absolute location.
+ */
 export function resolveDownloadDir(settingDir: string, osDir: string): string {
   const trimmed = settingDir.trim();
-  return trimmed.length > 0 ? trimmed : osDir;
+  if (trimmed.length === 0) return osDir;
+  const hasTraversal = trimmed.split(/[\\/]+/).includes('..');
+  if (!isAbsolute(trimmed) || hasTraversal) return osDir;
+  return resolve(trimmed);
 }

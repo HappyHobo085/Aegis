@@ -46,3 +46,29 @@ describe('resolveDownloadDir', () => {
     expect(resolveDownloadDir('   ', '/home/u/Downloads')).toBe('/home/u/Downloads');
   });
 });
+
+describe('resolveDownloadDir (path validation)', () => {
+  const OS = '/home/user/Downloads';
+
+  it('returns the OS dir when the setting is empty', () => {
+    expect(resolveDownloadDir('', OS)).toBe(OS);
+    expect(resolveDownloadDir('   ', OS)).toBe(OS);
+  });
+
+  it('returns a valid absolute dir (normalized)', () => {
+    expect(resolveDownloadDir('/srv/dl', OS)).toBe('/srv/dl');
+    expect(resolveDownloadDir('/srv/dl/', OS)).toBe('/srv/dl');
+    expect(resolveDownloadDir('/srv//dl', OS)).toBe('/srv/dl');
+  });
+
+  it('rejects a relative dir (falls back to OS)', () => {
+    expect(resolveDownloadDir('relative/dir', OS)).toBe(OS);
+    expect(resolveDownloadDir('./dl', OS)).toBe(OS);
+  });
+
+  it('rejects a traversal (..-bearing) dir (falls back to OS)', () => {
+    expect(resolveDownloadDir('../etc', OS)).toBe(OS);
+    expect(resolveDownloadDir('/home/user/../../etc', OS)).toBe(OS);
+    expect(resolveDownloadDir('/a/../b', OS)).toBe(OS);
+  });
+});
