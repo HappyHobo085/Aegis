@@ -59,8 +59,12 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
             true
         })
         .on_page_load(move |_webview, payload| {
-            let loading = matches!(payload.event(), tauri::webview::PageLoadEvent::Started);
+            let event = payload.event();
+            let loading = matches!(event, tauri::webview::PageLoadEvent::Started);
             emit_state(&app_load, payload.url().as_str(), loading);
+            if matches!(event, tauri::webview::PageLoadEvent::Finished) {
+                crate::history::record(&app_load, payload.url().as_str(), "");
+            }
         });
 
     window.add_child(
