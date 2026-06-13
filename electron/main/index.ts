@@ -205,9 +205,13 @@ function boot(): void {
   // ---- Fingerprint/leak hardening (content view) ----
   //  - WebRTC: only the default public interface, so pages can't enumerate LAN/local IPs.
   //  - UA: a mainstream Chrome string (derived from the bundled Chromium) instead of
-  //    advertising "Electron/Aegis".
+  //    advertising "Electron/Aegis". Set on BOTH the webContents (drives the
+  //    JS-visible navigator.userAgent / Blink override) AND the session (drives the
+  //    request-header UA) — session.setUserAgent alone does NOT change navigator.userAgent.
+  const contentUserAgent = chromeUserAgent(process.platform, process.versions.chrome);
   vc.contentWebContents.setWebRTCIPHandlingPolicy('default_public_interface_only');
-  vc.contentSession.setUserAgent(chromeUserAgent(process.platform, process.versions.chrome));
+  vc.contentWebContents.setUserAgent(contentUserAgent);
+  vc.contentSession.setUserAgent(contentUserAgent);
 
   // ---- Downloads pipeline (content session) ----
   const liveDownloads = new Map<number, Electron.DownloadItem>();
