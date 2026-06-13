@@ -85,16 +85,24 @@ time, so the Electron app keeps working until Tauri reaches parity.
 | `downloads.ts`, `permissions.ts`, `historyRecorder.ts`, `windowOpen.ts` | Rust modules | downloads UX, remembered permissions, history, popup policy |
 | `electron-builder` config | Tauri bundler (`tauri.conf.json`) | per-OS installers + updater artifacts |
 
-## 5. Ad-blocking strategy (platform tiers)
+## 5. Ad-blocking strategy (by webview ENGINE — corrected 2026-06-13)
 
-| Platform | Network blocking | Cosmetic | Tier |
+**Correction:** ad-block capability is set by the webview ENGINE, not desktop-vs-mobile. WebKit
+(Linux, macOS, iOS) exposes **no request-interception API for external content** — verified
+empirically (a fixture's 5 subresources all fetched, 0 seen by `on_web_resource_request`) and in
+wry source (`on_web_resource_request` is wired via `register_uri_scheme` = custom-scheme only).
+So WebKit must use **declarative content filters**. Only Chromium-based webviews intercept requests.
+
+| Engine / platforms | Network blocking | Cosmetic | Tier |
 |---|---|---|---|
-| **Desktop** (Win/Mac/Linux) | `adblock` crate via `on_web_resource_request` | inject CSS + scriptlets from `adblock` | **Full** |
-| **Android** | `adblock` crate via WebView `shouldInterceptRequest` | inject CSS + scriptlets | **Full-ish** |
-| **iOS** | filter lists → `WKContentRuleList` JSON (declarative, multi-list to beat per-list caps) | inject CSS via user scripts | **Capped** (declarative only) |
+| **Chromium** — Windows (WebView2), Android | `adblock` crate request interception (WebView2 `WebResourceRequested` / Android `shouldInterceptRequest`) | inject CSS + scriptlets | **Full** |
+| **WebKit** — Linux (webkit2gtk), macOS + iOS (WKWebView) | filter lists → content-blocker JSON loaded as a WebKit content filter (webkit2gtk `UserContentFilterStore` via **`webkit2gtk-sys` FFI** — the safe binding stubs `add_filter`; `WKContentRuleList` on Apple) | inject CSS (+ best-effort scriptlets) via the user content manager | **Capped** (declarative; Safari-content-blocker class) |
 
-The `adblock` crate is the single source of truth for filter lists; iOS gets a **converter** step
-(filter syntax → content-blocker JSON). Cosmetic CSS/scriptlets can be injected on all three.
+A **converter** (adblock filter syntax → content-blocker JSON) feeds the WebKit tier; the `adblock`
+crate feeds the Chromium tier. **User-accepted trade-off (2026-06-13):** capped blocking on
+Linux/macOS/iOS, full on Windows/Android — chosen to keep one codebase across all devices.
+Feasibility is proven (GNOME Web/Epiphany ad-blocks via webkit2gtk content filters); the work is
+the `webkit2gtk-sys` FFI plumbing (async `save` → `add_filter`).
 
 ## 6. Auto-update strategy
 

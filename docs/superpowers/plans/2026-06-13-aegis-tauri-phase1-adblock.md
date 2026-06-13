@@ -2,6 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans. Steps use checkbox (`- [ ]`) syntax.
 
+> **⚠️ PARTIALLY SUPERSEDED (2026-06-13).** Phase 1's go/no-go ran and found that
+> `on_web_resource_request` does NOT intercept external content on WebKit (Linux/macOS/iOS) — it's
+> custom-scheme-only (wry `register_uri_scheme`). So Tasks 1/4 (the `adblock`-crate request-matching
+> path) apply ONLY to **Chromium** webviews (Windows/WebView2, Android). On **WebKit** the network tier
+> is **declarative WebKit content filters** (webkit2gtk `UserContentFilterStore` via `webkit2gtk-sys`
+> FFI; `WKContentRuleList` on Apple), fed by a filter-syntax→content-blocker-JSON **converter**. The
+> cosmetic tasks (CSS/scriptlet injection via the user content manager) still apply on WebKit. A
+> revised WebKit-first Phase 1 plan supersedes Tasks 4–5's interception steps. See design §5.
+
 **Goal:** Block ads on the Tauri content webview — network blocking + cosmetic CSS/scriptlet injection — using Brave's `adblock` crate. This phase **proves the whole Tauri bet**: if Tauri can't reliably intercept a content webview's subresource requests, we escalate to the fallback (keep Electron for desktop).
 
 **Architecture:** A Rust `AdblockEngine` wraps `adblock::Engine`, loaded from a shipped *serialized* seed (`engine-seed.bin`) with a raw-list fallback. The content webview's `on_web_resource_request` maps each request to an `adblock::Request` and calls `check_network_request`; matches are aborted. On each top-frame navigation, `url_cosmetic_resources(url)` yields hiding selectors + scriptlets, injected via `webview.eval()`. Blocks are counted and pushed to the chrome via the existing `adblock.blockedCount` event + AdblockShield UI.
