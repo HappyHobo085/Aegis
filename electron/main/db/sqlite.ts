@@ -85,6 +85,11 @@ export function runMigrations(db: Database.Database): void {
       decision   TEXT NOT NULL,
       PRIMARY KEY (origin, permission)
     );
+
+    CREATE TABLE IF NOT EXISTS http_exceptions (
+      host      TEXT PRIMARY KEY,
+      createdAt INTEGER NOT NULL
+    );
   `);
 
   // Additive column migration: tagging moved from favorites to saved_list. The
