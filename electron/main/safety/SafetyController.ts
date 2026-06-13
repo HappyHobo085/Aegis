@@ -69,14 +69,8 @@ export class SafetyController {
     if (this.current !== null) this.dismiss();
     this.lastUpgrade = null;
     if (this.checkMalicious(url)) return; // malware -> interstitial, do not navigate
-    // If the host has a session malware bypass, skip the https upgrade so the user
-    // reaches the site they chose to load (upgrading to https could re-fail differently).
-    let bypassedHost: string | null = null;
-    try { bypassedHost = normalizeHost(new URL(url).hostname); } catch { /* ignore */ }
-    if (bypassedHost && this.malwareBypass.has(bypassedHost)) {
-      this.deps.navigateView(url);
-      return;
-    }
+    // Malware bypass and the HTTPS upgrade are orthogonal: a bypassed host still
+    // gets https-if-available (a genuine https failure then raises its own interstitial).
     const upgraded = this.resolveUpgrade(url);
     this.deps.navigateView(upgraded ?? url);
   }

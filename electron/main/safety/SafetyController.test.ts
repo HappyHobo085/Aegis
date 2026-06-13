@@ -200,8 +200,10 @@ describe('SafetyController malware', () => {
     expect(sc.getState()).toBeNull();
     expect(exceptions.has('evil.example')).toBe(false); // NOT persisted
     navigateView.mockClear();
-    sc.navigate('http://evil.example/'); // bypass now in effect
-    expect(navigateView).toHaveBeenCalledWith('http://evil.example/');
+    // Bypass now in effect: the host is allowed past the malware check. The https
+    // upgrade is orthogonal, so the URL is still upgraded (httpsOnly default on).
+    sc.navigate('http://evil.example/');
+    expect(navigateView).toHaveBeenCalledWith('https://evil.example/');
     expect(sc.getState()).toBeNull();
   });
 
