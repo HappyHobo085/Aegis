@@ -3370,3 +3370,55 @@ a:focus-visible {
   color: var(--fg);
   border-bottom: 2px solid var(--accent-color);
 }
+
+/* ─── HTTPS-failed interstitial overlay ─────────────────────────── */
+
+.interstitial {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: #0b0f17;
+}
+.interstitial__panel {
+  max-width: 560px;
+  background: #111827;
+  border: 1px solid #1f2937;
+  border-radius: 12px;
+  padding: 28px 32px;
+  color: #e5e7eb;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+}
+.interstitial__title {
+  margin: 0 0 12px;
+  font-size: 20px;
+  font-weight: 600;
+  color: #f9fafb;
+}
+.interstitial__body {
+  margin: 0 0 24px;
+  line-height: 1.55;
+  font-size: 14px;
+  color: #cbd5e1;
+}
+.interstitial__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+}
+.interstitial__continue {
+  background: transparent;
+  color: #93a4bd;
+  border: 1px solid #334155;
+  border-radius: 8px;
+  padding: 9px 16px;
+  font-size: 13px;
+  cursor: pointer;
+}
+.interstitial__continue:hover {
+  color: #e5e7eb;
+  border-color: #475569;
+}

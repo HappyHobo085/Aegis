@@ -134,6 +134,13 @@ vi.mock('./lib/ipcClient', () => ({
       restartToInstall: vi.fn().mockResolvedValue(undefined),
       onState: vi.fn().mockReturnValue(() => {}),
     },
+    safety: {
+      getState: vi.fn().mockResolvedValue(null),
+      proceed: vi.fn(),
+      listExceptions: vi.fn().mockResolvedValue([]),
+      removeException: vi.fn(),
+      onInterstitial: vi.fn(() => () => {}),
+    },
   },
 }));
 

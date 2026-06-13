@@ -17,11 +17,13 @@ import { useDownloads } from './hooks/useDownloads';
 import { usePermissions } from './hooks/usePermissions';
 import { useContentInset } from './hooks/useContentInset';
 import { useUpdate } from './hooks/useUpdate';
+import { useSafety } from './hooks/useSafety';
 import { Toolbar } from './components/Toolbar';
 import { BookmarkButton } from './components/BookmarkButton';
 import { DownloadsIndicator } from './components/DownloadsIndicator';
 import { PickerButton } from './components/PickerButton';
 import { UpdateIndicator } from './components/UpdateIndicator';
+import { SafetyInterstitial } from './components/SafetyInterstitial';
 import { FavoritesBar } from './components/FavoritesBar';
 import { FavoritesManager } from './components/FavoritesManager';
 import { Sidebar } from './components/Sidebar';
@@ -76,6 +78,7 @@ export function App() {
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const update = useUpdate();
+  const safety = useSafety();
 
   // Favorites bar is always-on (constant top inset); overlays never inset content.
   useContentInset(PRIMARY_VIEW_ID);
@@ -90,7 +93,8 @@ export function App() {
     managerOpen ||
     permissions.prompt !== null ||
     failed !== null ||
-    crashed !== null;
+    crashed !== null ||
+    safety.interstitial !== null;
   useEffect(() => {
     void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, chromeOverlayActive);
   }, [chromeOverlayActive]);
@@ -277,6 +281,10 @@ export function App() {
         crashed={crashed}
         onRetry={handleRetry}
         onHome={handleHome}
+      />
+      <SafetyInterstitial
+        interstitial={safety.interstitial}
+        onProceed={(u) => void safety.proceed(u)}
       />
       {downloadsOpen && (
         <DownloadsModal
