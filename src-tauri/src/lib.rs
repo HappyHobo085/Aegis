@@ -5,6 +5,7 @@ mod adblock_webkit;
 #[cfg(target_os = "linux")]
 mod linux_layout;
 mod nav;
+mod settings;
 mod update;
 mod view;
 
@@ -30,6 +31,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = adblock::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = settings::dispatch(&app, &channel, &payload) {
+        return result;
+    }
 
     let v = match channel.as_str() {
         // Collection reads + mutations that echo the (empty) collection.
@@ -42,17 +46,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         | "permissions.remove" | "permissions.clear" | "safety.listExceptions" => json!([]),
 
         "saved.has" => json!(false),
-
-        "settings.get" | "settings.set" => json!({
-            "siteName": "Aegis",
-            "homeUrl": "about:blank",
-            "primaryColor": "#3b82f6",
-            "defaultSearchTemplate": "https://duckduckgo.com/?q=%s",
-            "searchEngines": [],
-            "hideChromeByDefault": false,
-            "downloadDir": "",
-            "httpsOnly": true
-        }),
 
         "customFilters.get" | "customFilters.set" => json!(""),
         "lists.updateNow" => json!({ "perSource": [], "lastUpdated": 0 }),
