@@ -92,9 +92,16 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
         .on_page_load(move |_webview, payload| {
             let event = payload.event();
             let loading = matches!(event, tauri::webview::PageLoadEvent::Started);
-            emit_state(&app_load, payload.url().as_str(), loading);
+            let u = payload.url();
+            let u = u.as_str();
+            emit_state(&app_load, u, loading);
+            // Hide the content webview at the blank home so the chrome's Home tab
+            // shows; show it for any real page as soon as it starts loading (so a
+            // slow page doesn't leave the home showing).
+            #[cfg(target_os = "linux")]
+            crate::linux_layout::set_content_visible(&app_load, !u.starts_with("about:"));
             if matches!(event, tauri::webview::PageLoadEvent::Finished) {
-                crate::history::record(&app_load, payload.url().as_str(), "");
+                crate::history::record(&app_load, u, "");
             }
         })
         .on_download(move |_webview, event| {
