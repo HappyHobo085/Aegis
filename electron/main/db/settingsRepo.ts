@@ -14,6 +14,7 @@ export const DEFAULT_SETTINGS: Settings = {
   ],
   hideChromeByDefault: false,
   downloadDir: '',
+  httpsOnly: true,
 };
 
 /**

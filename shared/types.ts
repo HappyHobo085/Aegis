@@ -212,6 +212,7 @@ export interface Settings {
   searchEngines: SearchEngine[]; // seeded; not editable until Phase 4
   hideChromeByDefault: boolean;
   downloadDir: string; // '' → main resolves to app.getPath('downloads')
+  httpsOnly: boolean;
 }
 
 /** Exposed on window.aegis by chromePreload via contextBridge. */

@@ -89,6 +89,19 @@ describe('settingsRepo', () => {
     });
   });
 
+  describe('httpsOnly', () => {
+    it('defaults httpsOnly to true', () => {
+      const repo = new SettingsRepo(db);
+      expect(repo.get().httpsOnly).toBe(true);
+    });
+
+    it('round-trips httpsOnly=false', () => {
+      const repo = new SettingsRepo(db);
+      repo.set({ httpsOnly: false });
+      expect(repo.get().httpsOnly).toBe(false);
+    });
+  });
+
   describe('get (corrupt rows)', () => {
     it('skips corrupt rows and falls back to DEFAULT_SETTINGS for that key', () => {
       db.prepare("INSERT INTO settings (key, value) VALUES (?, ?)").run('siteName', 'not json{');
