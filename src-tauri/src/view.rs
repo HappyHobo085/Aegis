@@ -15,6 +15,10 @@ use crate::nav::{CONTENT_LABEL, DEFAULT_INSET_TOP};
 /// Default sidebar panel width (matches `.sidebar__panel` in index.css).
 const SIDEBAR_WIDTH: f64 = 280.0;
 
+/// Top strip kept clear in fullscreen so the chrome's floating exit button
+/// (`.fullscreen-exit`: top 4px + 36px tall) stays visible above the content.
+const FULLSCREEN_TOP: f64 = 44.0;
+
 /// Content-webview layout state. Managed by Tauri state so the resize handler and
 /// the view.* handlers agree.
 #[derive(Clone, Copy)]
@@ -75,7 +79,7 @@ fn apply_visibility(app: &AppHandle, lay: Layout) {
 pub fn apply_inset(app: &AppHandle) {
     let lay = layout_of(app);
     let (left, top, right) = if lay.fullscreen {
-        (0.0, 0.0, 0.0)
+        (0.0, FULLSCREEN_TOP, 0.0)
     } else {
         (lay.left, lay.top, lay.right)
     };

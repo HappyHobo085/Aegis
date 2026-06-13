@@ -5,6 +5,7 @@ import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
+import { subscribeConfirmOpen } from './lib/toast';
 import { useNav } from './hooks/useNav';
 import { useAdblock } from './hooks/useAdblock';
 import { useFavorites } from './hooks/useFavorites';
@@ -78,8 +79,13 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const update = useUpdate();
   const safety = useSafety();
+
+  // A confirm dialog (e.g. "Clear all history") is a full-window overlay; track it
+  // so the content webview hides behind it (else it renders behind the page).
+  useEffect(() => subscribeConfirmOpen(setConfirmOpen), []);
 
   // Favorites bar is always-on (constant top inset); overlays never inset content.
   useContentInset(PRIMARY_VIEW_ID);
@@ -94,6 +100,7 @@ export function App() {
     downloadsOpen ||
     settingsOpen ||
     managerOpen ||
+    confirmOpen ||
     permissions.prompt !== null ||
     failed !== null ||
     crashed !== null ||
