@@ -124,6 +124,69 @@ fn url_of(items: &[Value], list_id: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Re-fetch every ENABLED subscription, refresh its cache + stamp, re-install the
+/// engine once, and return a `ListUpdateResult` (per-source ok/error + timestamp).
+/// Fetches run concurrently so wall-time is the slowest single list. Backs
+/// `lists.updateNow`.
+pub fn update_all(app: &AppHandle) -> Value {
+    let now = jsonstore::now_ms();
+    let enabled: Vec<(String, String)> = jsonstore::load(app, "subs")
+        .iter()
+        .filter(|it| it.get("enabled").and_then(Value::as_bool).unwrap_or(false))
+        .filter_map(|it| {
+            Some((
+                it.get("listId").and_then(Value::as_str)?.to_string(),
+                it.get("url").and_then(Value::as_str)?.to_string(),
+            ))
+        })
+        .collect();
+
+    // Fetch all enabled lists concurrently; cache each success, return its hash.
+    let handles: Vec<_> = enabled
+        .into_iter()
+        .map(|(id, url)| {
+            let app = app.clone();
+            std::thread::spawn(move || {
+                let res = fetch_text(url).map(|text| {
+                    let _ = std::fs::write(cache_path(&app, &id), &text);
+                    hash_text(&text)
+                });
+                (id, res)
+            })
+        })
+        .collect();
+
+    let mut per_source = Vec::new();
+    let mut hashes: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for h in handles {
+        if let Ok((id, res)) = h.join() {
+            match res {
+                Ok(hash) => {
+                    hashes.insert(id.clone(), hash);
+                    per_source.push(json!({ "listId": id, "ok": true }));
+                }
+                Err(e) => per_source.push(json!({ "listId": id, "ok": false, "error": e })),
+            }
+        }
+    }
+
+    // Stamp the rows we refreshed, then rebuild the engine if anything changed.
+    let mut items = jsonstore::load(app, "subs");
+    for it in items.iter_mut() {
+        let id = it.get("listId").and_then(Value::as_str).map(str::to_string);
+        if let Some(hash) = id.and_then(|id| hashes.get(&id)) {
+            it["lastUpdated"] = json!(now);
+            it["hash"] = json!(hash);
+        }
+    }
+    let _ = jsonstore::save(app, "subs", &items);
+    if !hashes.is_empty() {
+        reinstall_adblock(app);
+        let _ = app.emit("subs.changed", Value::Null);
+    }
+    json!({ "perSource": per_source, "lastUpdated": now })
+}
+
 /// Handle `subs.*`. Returns `None` if not a subs channel.
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {

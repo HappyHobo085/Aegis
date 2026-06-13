@@ -68,7 +68,7 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         // Still-stubbed collections (permissions land next).
         "permissions.list" | "permissions.remove" | "permissions.clear" => json!([]),
 
-        "lists.updateNow" => json!({ "perSource": [], "lastUpdated": 0 }),
+        "lists.updateNow" => subs::update_all(&app),
         "picker.start" => json!({ "ok": false }),
 
         // Fire-and-forget actions (history.remove/clear, permissions.resolve,
