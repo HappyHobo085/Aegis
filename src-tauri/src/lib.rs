@@ -10,6 +10,7 @@ mod downloads;
 mod history;
 mod jsonstore;
 mod nav;
+mod permissions;
 mod picker;
 mod places;
 mod safety;
@@ -18,7 +19,7 @@ mod subs;
 mod update;
 mod view;
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use tauri::Manager;
 
 /// Single IPC entry point. The renderer calls `invoke('ipc', {channel, payload})`
@@ -58,6 +59,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = picker::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = permissions::dispatch(&app, &channel, &payload) {
+        return result;
+    }
     if let Some(result) = downloads::dispatch(&app, &channel, &payload) {
         return result;
     }
@@ -69,9 +73,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     }
 
     let v = match channel.as_str() {
-        // Still-stubbed collections (permissions land next).
-        "permissions.list" | "permissions.remove" | "permissions.clear" => json!([]),
-
         "lists.updateNow" => subs::update_all(&app),
 
         // Fire-and-forget actions (history.remove/clear, permissions.resolve,
@@ -159,9 +160,10 @@ pub fn run() {
             }
             view::apply_inset(app.handle());
 
-            // Deny content-webview permission requests by default (Linux).
+            // Content-webview permission requests: prompt (remembered per origin),
+            // deny unrecognized types (Linux).
             #[cfg(target_os = "linux")]
-            linux_layout::deny_permissions(app.handle());
+            permissions::install_handler(app.handle());
 
             // Fill history entries' titles as WebKit reports them (Linux); also
             // routes the element picker's title sentinel to picker::on_picked.
