@@ -1,3 +1,5 @@
+#[cfg(target_os = "linux")]
+mod linux_layout;
 mod nav;
 mod view;
 

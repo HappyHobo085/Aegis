@@ -27,3 +27,10 @@ log = "0.4"
 # a personal browser. See tauri PR #8280.
 tauri = { version = "2.11.2", features = ["unstable"] }
 tauri-plugin-log = "2"
+
+# Linux-only: reach the underlying webkit2gtk widget to work around tauri#10420
+# (multiwebview stacks vertically in wry's GtkBox instead of honoring positions).
+# Versions match wry 0.55.1's resolved deps so the types are compatible.
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk = "0.18"
+webkit2gtk = "2.0"

@@ -23,8 +23,7 @@ pub fn apply_inset(app: &AppHandle) {
         .try_state::<ContentInset>()
         .map(|s| *s.0.lock().unwrap())
         .unwrap_or((0.0, DEFAULT_INSET_TOP));
-    let (Some(window), Some(content)) = (app.get_window("main"), app.get_webview(CONTENT_LABEL))
-    else {
+    let Some(window) = app.get_window("main") else {
         return;
     };
     let Ok(inner) = window.inner_size() else {
@@ -32,12 +31,27 @@ pub fn apply_inset(app: &AppHandle) {
     };
     let scale = window.scale_factor().unwrap_or(1.0);
     let logical = inner.to_logical::<f64>(scale);
-    let w = (logical.width - left).max(0.0);
-    let h = (logical.height - top).max(0.0);
-    let _ = content.set_bounds(tauri::Rect {
-        position: tauri::LogicalPosition::new(left, top).into(),
-        size: tauri::LogicalSize::new(w, h).into(),
-    });
+
+    // Linux: wry's GtkBox ignores set_bounds (tauri#10420). Position the webviews
+    // ourselves via the GtkFixed workaround. Other platforms: set_bounds works.
+    #[cfg(target_os = "linux")]
+    crate::linux_layout::layout(
+        app,
+        left as i32,
+        top as i32,
+        logical.width as i32,
+        logical.height as i32,
+    );
+
+    #[cfg(not(target_os = "linux"))]
+    if let Some(content) = app.get_webview(CONTENT_LABEL) {
+        let w = (logical.width - left).max(0.0);
+        let h = (logical.height - top).max(0.0);
+        let _ = content.set_bounds(tauri::Rect {
+            position: tauri::LogicalPosition::new(left, top).into(),
+            size: tauri::LogicalSize::new(w, h).into(),
+        });
+    }
 }
 
 /// Handle `view.*` channels. Returns `None` if not a view channel.

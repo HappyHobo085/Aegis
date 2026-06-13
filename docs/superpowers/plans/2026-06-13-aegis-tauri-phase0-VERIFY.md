@@ -16,7 +16,21 @@
 
 The architectural bet is **proven**: the reused React UI runs on Tauri at runtime, the `AegisApi`-over-`invoke`/`listen` seam works, and a real content webview navigates external pages driven by the actual command path.
 
-## BLOCKER FOUND — Tauri multiwebview positioning is broken on Linux
+## BLOCKER — Tauri multiwebview broken on Linux — ✅ RESOLVED (GtkFixed workaround)
+
+**Resolution (2026-06-13):** implemented `src-tauri/src/linux_layout.rs`. On Linux we reach the
+webkit2gtk widgets via `webview.with_webview(...)`, reparent both (chrome + content) out of wry's
+vertical `GtkBox` into a `gtk::Fixed`, and position them ourselves (`fixed.move_` + `set_size_request`),
+re-running on every resize. `view::apply_inset` uses this path on Linux and keeps `set_bounds` for
+Windows/macOS. **Verified by screenshot:** the content webview now fills the full area below the
+chrome (a marker page's `(0,0)` lands at the 96px inset; example.com renders correctly positioned —
+it looks like a real browser). The decision (user-approved) was option A, the GTK workaround.
+
+Caveat: this manipulates wry's internal widget tree (version-coupled to wry 0.55 / gtk 0.18); revisit
+if Tauri upgrades or if upstream fixes #10420. A Phase-2 item: hide the content webview at
+`about:blank` so the chrome's Home tab shows at startup (currently the blank content covers it).
+
+### Original finding (kept for the record)
 
 **Symptom:** the content webview does not honor its `set_bounds(0,96,1280,704)`. Diagnosed with a
 full-viewport marker page: the content webview's `(0,0)` renders at screen `y≈408`, height `≈392`
