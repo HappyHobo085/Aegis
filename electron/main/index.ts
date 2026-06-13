@@ -314,9 +314,11 @@ function boot(): void {
     const usable = sources.filter((s) => s.ok && s.text.length > 0);
     // Malware lists: fetch+cache (own dir), rebuild the in-memory MalwareGuard, and
     // merge their texts into the MAIN engine so malicious SUBresources are blocked too.
-    // Skip the fetch under any deterministic/offline mode — including MALWARE_TEST_FILTER
-    // (e2e) so a background refresh can't overwrite the test engine.
-    const skipMalwareFetch = TEST_FILTER || MALWARE_TEST_FILTER || OFFLINE;
+    // Skip the fetch under any deterministic/offline/e2e mode so it never hits the real
+    // URLhaus/Phishing-Army endpoints in tests: MALWARE_TEST_FILTER seeds the guard
+    // directly; LIST_BASE means the ad lists are redirected to a fixture (the hardcoded
+    // malware URLs can't be), so a real malware fetch there would be non-deterministic.
+    const skipMalwareFetch = TEST_FILTER || MALWARE_TEST_FILTER || OFFLINE || !!LIST_BASE;
     const malwareTexts = skipMalwareFetch
       ? []
       : await refreshMalwareTexts({
