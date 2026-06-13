@@ -55,6 +55,7 @@ export const IPC = {
   adblockClearAllowlist: 'adblock.clearAllowlist',
   // events (main -> chrome renderer)
   evtNavState: 'nav.state',
+  evtViewFullscreen: 'view.fullscreen',
   evtNavFailed: 'nav.failed',
   evtNavCrashed: 'nav.crashed',
   evtAdblockBlockedCount: 'adblock.blockedCount',
@@ -249,6 +250,9 @@ export interface AegisApi {
     setContentInset(viewId: ViewId, inset: ContentInset): Promise<void>;
     setChromeOverlay(viewId: ViewId, active: boolean): Promise<void>;
     setFullscreen(viewId: ViewId, on: boolean): Promise<void>;
+    /** Backend-driven fullscreen change (e.g. Esc exits on Tauri). Optional:
+     * Electron's chrome owns its own fullscreen exit, so it may not emit this. */
+    onFullscreen?(cb: (state: { on: boolean }) => void): () => void;
   };
   favorites: {
     list(): Promise<Favorite[]>;

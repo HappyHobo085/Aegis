@@ -188,6 +188,10 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             linux_layout::connect_title(app.handle());
 
+            // Exit fullscreen on Esc from the content webview (Linux).
+            #[cfg(target_os = "linux")]
+            linux_layout::connect_fullscreen_exit(app.handle());
+
             // Ad-blocking (Linux/WebKit): install EasyList content filters.
             #[cfg(target_os = "linux")]
             install_adblock(app.handle().clone());

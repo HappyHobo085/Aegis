@@ -2,7 +2,7 @@
 // child of the "main" window, positioned below the chrome by `view.rs`. nav.*
 // channels drive it; navigation events are pushed to the chrome as `nav.state`.
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, Url, WebviewUrl};
+use tauri::{AppHandle, Manager, Url, WebviewUrl};
 
 pub const CONTENT_LABEL: &str = "content";
 /// Default top inset = TOOLBAR_H(56) + FAVBAR_H(40); refined by `view.setContentInset`.

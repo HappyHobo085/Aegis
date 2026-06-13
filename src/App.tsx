@@ -106,6 +106,12 @@ export function App() {
     void aegis.view.setFullscreen(PRIMARY_VIEW_ID, fullscreen);
   }, [fullscreen]);
 
+  // The backend may exit fullscreen itself (Tauri: Esc in the content webview,
+  // which covers the chrome's exit button); sync the React state when it does.
+  useEffect(() => {
+    return aegis.view.onFullscreen?.((s) => setFullscreen(s.on));
+  }, []);
+
   useEffect(() => {
     void aegis.settings.get().then((s) => applyTheme(s));
   }, []);

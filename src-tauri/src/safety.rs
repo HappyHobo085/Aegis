@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager, Url};
+use tauri::{AppHandle, Manager, Url};
 
 use crate::nav::CONTENT_LABEL;
 

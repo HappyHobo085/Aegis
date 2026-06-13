@@ -7,21 +7,26 @@ use tauri::{AppHandle, Manager};
 
 use crate::nav::{CONTENT_LABEL, DEFAULT_INSET_TOP};
 
-/// Current content inset (left, top) in logical px. Managed by Tauri state so the
-/// resize handler and `setContentInset` agree.
-pub struct ContentInset(pub Mutex<(f64, f64)>);
+/// Current content inset (left, top) in logical px + a fullscreen flag. Managed by
+/// Tauri state so the resize handler, `setContentInset`, and `setFullscreen` agree.
+/// In fullscreen the content fills the whole window (inset ignored).
+pub struct ContentInset(pub Mutex<(f64, f64, bool)>);
 
 impl Default for ContentInset {
     fn default() -> Self {
-        ContentInset(Mutex::new((0.0, DEFAULT_INSET_TOP)))
+        ContentInset(Mutex::new((0.0, DEFAULT_INSET_TOP, false)))
     }
 }
 
-/// Resize/reposition the content webview to fill the window below the stored inset.
+/// Resize/reposition the content webview to fill the window below the stored inset
+/// (or the whole window in fullscreen).
 pub fn apply_inset(app: &AppHandle) {
     let (left, top) = app
         .try_state::<ContentInset>()
-        .map(|s| *s.0.lock().unwrap())
+        .map(|s| {
+            let (l, t, fs) = *s.0.lock().unwrap();
+            if fs { (0.0, 0.0) } else { (l, t) }
+        })
         .unwrap_or((0.0, DEFAULT_INSET_TOP));
     let Some(window) = app.get_window("main") else {
         return;
@@ -61,7 +66,9 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             let top = payload.pointer("/inset/top").and_then(Value::as_f64).unwrap_or(0.0);
             let left = payload.pointer("/inset/left").and_then(Value::as_f64).unwrap_or(0.0);
             if let Some(state) = app.try_state::<ContentInset>() {
-                *state.0.lock().unwrap() = (left, top);
+                let mut g = state.0.lock().unwrap();
+                g.0 = left;
+                g.1 = top;
             }
             apply_inset(app);
             Ok(Value::Null)
@@ -86,7 +93,22 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             }
             Ok(Value::Null)
         }
-        "view.setFullscreen" => Ok(Value::Null),
+        // Fullscreen: the chrome renders only a small exit affordance and the
+        // content fills the whole window. Store the flag and re-layout; the content
+        // webview is on top, so the exit is via Esc (handled in the chrome).
+        "view.setFullscreen" => {
+            let on = payload.get("on").and_then(Value::as_bool).unwrap_or(false);
+            if let Some(state) = app.try_state::<ContentInset>() {
+                state.0.lock().unwrap().2 = on;
+            }
+            // In fullscreen the content must be visible (no overlay hides it).
+            #[cfg(target_os = "linux")]
+            if on {
+                crate::linux_layout::set_content_visible(app, true);
+            }
+            apply_inset(app);
+            Ok(Value::Null)
+        }
         _ => return None,
     };
     Some(res)

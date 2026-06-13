@@ -11,8 +11,6 @@
 //! threads.
 use serde_json::{json, Value};
 use tauri::AppHandle;
-#[cfg(target_os = "linux")]
-use tauri::Emitter;
 
 use crate::jsonstore;
 

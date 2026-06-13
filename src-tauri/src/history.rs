@@ -2,7 +2,7 @@
 //! from the content webview's page-load (see nav.rs). list/search return newest
 //! first; the collection is capped to keep the file bounded.
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter};
+use tauri::AppHandle;
 
 use crate::jsonstore;
 

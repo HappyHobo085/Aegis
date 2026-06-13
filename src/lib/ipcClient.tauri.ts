@@ -47,6 +47,7 @@ export const aegis: AegisApi = {
     setContentInset: (viewId, inset) => call(IPC.viewSetContentInset, { viewId, inset }),
     setChromeOverlay: (viewId, active) => call(IPC.viewSetChromeOverlay, { viewId, active }),
     setFullscreen: (viewId, on) => call(IPC.viewSetFullscreen, { viewId, on }),
+    onFullscreen: (cb) => on<{ on: boolean }>(IPC.evtViewFullscreen, cb),
   },
   favorites: {
     list: () => call<Favorite[]>(IPC.favoritesList),
@@ -125,7 +126,14 @@ export const aegis: AegisApi = {
       const selected = await open({ multiple: false, directory: false, filters: BACKUP_FILTERS });
       const path = typeof selected === 'string' ? selected : null;
       if (!path) return { ok: false };
-      return call<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode, path });
+      const result = await call<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode, path });
+      // Make the import live immediately — favorites/saved/settings hooks only fetch
+      // on mount, so reload the chrome to re-read everything (no app restart). Delay
+      // briefly so the success toast is visible first.
+      if (result && result.ok) {
+        setTimeout(() => window.location.reload(), 700);
+      }
+      return result;
     },
   },
   picker: {

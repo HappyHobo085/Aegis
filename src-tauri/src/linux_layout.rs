@@ -35,6 +35,34 @@ pub fn connect_title(app: &AppHandle) {
     });
 }
 
+/// Exit fullscreen on Esc pressed in the content webview. In fullscreen the content
+/// fills the window and covers the chrome's exit button, so Esc (which the focused
+/// content webview receives) is the exit. Only acts while fullscreen; otherwise the
+/// key passes through to the page.
+pub fn connect_fullscreen_exit(app: &AppHandle) {
+    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+        return;
+    };
+    let app = app.clone();
+    let _ = content.with_webview(move |pw| {
+        pw.inner().connect_key_press_event(move |_w, ev| {
+            if ev.keyval() == gtk::gdk::keys::constants::Escape {
+                if let Some(s) = app.try_state::<crate::view::ContentInset>() {
+                    let mut g = s.0.lock().unwrap();
+                    if g.2 {
+                        g.2 = false;
+                        drop(g);
+                        crate::view::apply_inset(&app);
+                        crate::emit_event(&app, "view.fullscreen", serde_json::json!({ "on": false }));
+                        return glib::Propagation::Stop;
+                    }
+                }
+            }
+            glib::Propagation::Proceed
+        });
+    });
+}
+
 /// Show/hide the content webview at the GTK level (Tauri's hide() doesn't act on
 /// the reparented widget). Used by view.setChromeOverlay to reveal chrome overlays.
 pub fn set_content_visible(app: &AppHandle, visible: bool) {

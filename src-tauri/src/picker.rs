@@ -12,7 +12,7 @@
 use serde_json::{json, Value};
 use tauri::AppHandle;
 #[cfg(target_os = "linux")]
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 /// Sentinel prefix a picked selector's JSON is wrapped in (via document.title).
 pub const SENTINEL: &str = "AEGISPICK:";

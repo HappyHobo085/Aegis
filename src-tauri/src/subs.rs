@@ -7,7 +7,7 @@
 //! cache, stamps `lastUpdated`/`hash`, and re-installs the engine. `enabled_text`
 //! concatenates the cached text of every enabled subscription for install_adblock.
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 
 use crate::jsonstore;
 

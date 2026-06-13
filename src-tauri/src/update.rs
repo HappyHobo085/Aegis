@@ -5,7 +5,7 @@
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Manager};
 use tauri_plugin_updater::UpdaterExt;
 
 /// Last-known update state, mirrored to the chrome via the `update.state` event.
