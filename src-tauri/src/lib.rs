@@ -5,6 +5,7 @@ mod adblock_webkit;
 #[cfg(target_os = "linux")]
 mod linux_layout;
 mod customfilters;
+mod data;
 mod downloads;
 mod history;
 mod jsonstore;
@@ -51,6 +52,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = downloads::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = data::dispatch(&app, &channel, &payload) {
+        return result;
+    }
 
     let v = match channel.as_str() {
         // Still-stubbed collections (subs/permissions land next).
@@ -60,8 +64,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
 
         "lists.updateNow" => json!({ "perSource": [], "lastUpdated": 0 }),
         "safety.getState" => Value::Null,
-        "data.export" => json!({ "ok": false }),
-        "data.import" => json!({ "ok": false }),
         "picker.start" => json!({ "ok": false }),
 
         // Fire-and-forget actions (history.remove/clear, permissions.resolve,

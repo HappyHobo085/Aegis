@@ -20,6 +20,16 @@ pub fn load(app: &AppHandle) -> String {
         .unwrap_or_default()
 }
 
+/// Overwrite the custom filters file (for data import).
+pub fn write(app: &AppHandle, text: &str) {
+    if let Some(p) = path(app) {
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(p, text);
+    }
+}
+
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {
         "customFilters.get" => Some(Ok(json!(load(app)))),

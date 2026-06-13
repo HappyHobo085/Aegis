@@ -28,6 +28,21 @@ fn defaults() -> Value {
     })
 }
 
+/// The full settings object (for data export).
+pub fn all(app: &AppHandle) -> Value {
+    load(app)
+}
+
+/// Overwrite the settings file (for data import).
+pub fn write(app: &AppHandle, value: &Value) {
+    if let Some(p) = store_path(app) {
+        if let Some(d) = p.parent() {
+            let _ = std::fs::create_dir_all(d);
+        }
+        let _ = std::fs::write(p, serde_json::to_string_pretty(value).unwrap_or_default());
+    }
+}
+
 /// Configured download directory ("" = use the OS Downloads dir).
 pub fn download_dir(app: &AppHandle) -> String {
     load(app)
