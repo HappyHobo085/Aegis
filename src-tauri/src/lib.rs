@@ -1,12 +1,23 @@
-use serde_json::{json, Value};
+mod nav;
+mod view;
 
-/// Phase-0 IPC dispatcher. The renderer reaches the backend through a single
-/// `ipc` command carrying a channel name (the strings in shared/types.ts `IPC`)
-/// plus a payload. Phase 0 returns safe defaults for reads and null/Ok for
-/// actions so the reused React UI renders without errors; real per-namespace
-/// backends (SQLite, adblock, safety, …) replace these arms in Phases 2–3.
+use serde_json::{json, Value};
+use tauri::Manager;
+
+/// Single IPC entry point. The renderer calls `invoke('ipc', {channel, payload})`
+/// with a channel name (the strings in shared/types.ts `IPC`). `nav.*` and `view.*`
+/// are handled live against the content webview; the remaining data namespaces
+/// return Phase-0 defaults so the reused React UI renders. Real SQLite/adblock/
+/// safety backends replace those arms in Phases 2–3.
 #[tauri::command]
-fn ipc(channel: String, _payload: Value) -> Result<Value, String> {
+fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, String> {
+    if let Some(result) = nav::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = view::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+
     let v = match channel.as_str() {
         // Collection reads + mutations that echo the (empty) collection.
         "favorites.list" | "favorites.add" | "favorites.update" | "favorites.remove"
@@ -44,14 +55,10 @@ fn ipc(channel: String, _payload: Value) -> Result<Value, String> {
         "data.export" => json!({ "ok": false }),
         "data.import" => json!({ "ok": false }),
         "picker.start" => json!({ "ok": false }),
-        "nav.getState" => json!({
-            "viewId": 1, "url": "about:blank", "title": "", "canGoBack": false,
-            "canGoForward": false, "isLoading": false, "crashed": false
-        }),
 
-        // Fire-and-forget actions (nav.*, view.*, history.remove/clear,
-        // downloads.openFile/showInFolder, permissions.resolve, update.*,
-        // safety.proceed/removeException, …) resolve to null (Promise<void>).
+        // Fire-and-forget actions (history.remove/clear, permissions.resolve,
+        // downloads.openFile/showInFolder, update.*, safety.proceed/removeException)
+        // resolve to null (Promise<void>).
         _ => Value::Null,
     };
     Ok(v)
@@ -60,6 +67,7 @@ fn ipc(channel: String, _payload: Value) -> Result<Value, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(view::ContentInset::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -68,6 +76,21 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // Add the content webview (the browsed page) below the chrome.
+            nav::spawn_content(app.handle())?;
+
+            // Tauri child-webview auto-resize is incomplete; recompute bounds on
+            // window resize so the content view keeps filling the area below the chrome.
+            if let Some(window) = app.get_window("main") {
+                let handle = app.handle().clone();
+                window.on_window_event(move |event| {
+                    if let tauri::WindowEvent::Resized(_) = event {
+                        view::apply_inset(&handle);
+                    }
+                });
+            }
+            view::apply_inset(app.handle());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![ipc])
