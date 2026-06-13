@@ -28,17 +28,23 @@ function makeRepo(homeUrl: string) {
   return { get: vi.fn(() => settings) };
 }
 
+function makeSafety() {
+  return { navigate: vi.fn() };
+}
+
 describe('buildNavHandlers', () => {
-  it('navNavigate forwards (viewId,url) to vc.navigate(url)', () => {
+  it('navNavigate forwards (viewId,url) to safety.navigate(url)', () => {
     const vc = makeVc();
-    const handlers = buildNavHandlers(vc as any, makeRepo('https://home/') as any);
+    const safety = makeSafety();
+    const handlers = buildNavHandlers(vc as any, makeRepo('https://home/') as any, safety as any);
     handlers[IPC.navNavigate](PRIMARY_VIEW_ID, 'https://example.com/');
-    expect(vc.navigate).toHaveBeenCalledWith('https://example.com/');
+    expect(safety.navigate).toHaveBeenCalledWith('https://example.com/');
   });
 
   it('navBack / navForward / navReloadOrStop call the matching vc method', () => {
     const vc = makeVc();
-    const handlers = buildNavHandlers(vc as any, makeRepo('https://home/') as any);
+    const safety = makeSafety();
+    const handlers = buildNavHandlers(vc as any, makeRepo('https://home/') as any, safety as any);
     handlers[IPC.navBack](PRIMARY_VIEW_ID);
     handlers[IPC.navForward](PRIMARY_VIEW_ID);
     handlers[IPC.navReloadOrStop](PRIMARY_VIEW_ID);
@@ -47,18 +53,20 @@ describe('buildNavHandlers', () => {
     expect(vc.reloadOrStop).toHaveBeenCalledTimes(1);
   });
 
-  it('navHome reads homeUrl from the repo at call time and navigates it', () => {
+  it('navHome reads homeUrl from the repo at call time and navigates via safety', () => {
     const vc = makeVc();
+    const safety = makeSafety();
     const repo = makeRepo('https://duck.example/');
-    const handlers = buildNavHandlers(vc as any, repo as any);
+    const handlers = buildNavHandlers(vc as any, repo as any, safety as any);
     handlers[IPC.navHome](PRIMARY_VIEW_ID);
     expect(repo.get).toHaveBeenCalled();
-    expect(vc.navigate).toHaveBeenCalledWith('https://duck.example/');
+    expect(safety.navigate).toHaveBeenCalledWith('https://duck.example/');
   });
 
   it('navGetState returns vc.getState()', () => {
     const vc = makeVc();
-    const handlers = buildNavHandlers(vc as any, makeRepo('https://home/') as any);
+    const safety = makeSafety();
+    const handlers = buildNavHandlers(vc as any, makeRepo('https://home/') as any, safety as any);
     const state = handlers[IPC.navGetState](PRIMARY_VIEW_ID);
     expect(state.url).toBe('https://example.com/');
     expect(vc.getState).toHaveBeenCalledTimes(1);
@@ -66,7 +74,8 @@ describe('buildNavHandlers', () => {
 
   it('viewSetContentVisible forwards (viewId,visible) to vc.setVisible(visible)', () => {
     const vc = makeVc();
-    const handlers = buildNavHandlers(vc as any, makeRepo('https://home/') as any);
+    const safety = makeSafety();
+    const handlers = buildNavHandlers(vc as any, makeRepo('https://home/') as any, safety as any);
     handlers[IPC.viewSetContentVisible](PRIMARY_VIEW_ID, false);
     expect(vc.setVisible).toHaveBeenCalledWith(false);
   });

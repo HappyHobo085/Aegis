@@ -52,6 +52,9 @@ import { AdblockController } from './adblock/controller';
 import { autoUpdater } from 'electron-updater';
 import { UpdateController, type UpdaterLike } from './update/UpdateController';
 import { buildUpdateHandlers } from './ipc/update';
+import { HttpExceptionsRepo } from './db/httpExceptionsRepo';
+import { SafetyController } from './safety/SafetyController';
+import { buildSafetyHandlers } from './ipc/safety';
 
 const REFRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const UPDATE_CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -92,6 +95,7 @@ function boot(): void {
   const savedRepo = new SavedRepo(db);
   const downloadsRepo = new DownloadsRepo(db);
   const permissionsRepo = new PermissionsRepo(db);
+  const httpExceptionsRepo = new HttpExceptionsRepo(db);
 
   // Window + chrome (window.ts owns the BaseWindow + chromeView ONLY).
   const { win, chromeView } = createMainWindow();
@@ -106,10 +110,14 @@ function boot(): void {
   // Main->chrome event forwarders.
   const fwd = buildViewEventForwarders(chromeWc);
 
+  // Forward-declared so onState and vc can reference it; assigned after vc is built.
+  let safety: SafetyController | undefined;
+
   // onState wrapper: forward to chrome AND persist last session when the URL changes.
   let lastPersistedUrl: string | null = null;
   const onState = (s: NavState): void => {
     fwd.onState(s);
+    safety?.handleNavCommitted(s.url);
     if (s.url && s.url !== lastPersistedUrl) {
       lastPersistedUrl = s.url;
       writeLastSession(userData, { url: s.url, title: s.title });
@@ -121,8 +129,19 @@ function boot(): void {
   const vc = new ViewController({
     contentPreloadPath,
     onState,
-    onFailed: fwd.onFailed,
+    onFailed: (f) => {
+      if (safety?.handleNavFailed(f)) return; // upgraded-URL failure -> interstitial, suppress error page
+      fwd.onFailed(f);
+    },
     onCrashed: fwd.onCrashed,
+    upgradeNavigation: (url) => safety?.resolveUpgrade(url) ?? null,
+  });
+
+  safety = new SafetyController({
+    navigateView: (u) => vc.navigate(u),
+    httpExceptions: httpExceptionsRepo,
+    getHttpsOnly: () => settingsRepo.get().httpsOnly,
+    onInterstitial: (p) => chromeWc.send(IPC.evtSafetyInterstitial, p),
   });
 
   // Compose: chrome added first by window.ts; index.ts adds the content view over it.
@@ -311,7 +330,8 @@ function boot(): void {
   const updateNow = (): Promise<ListUpdateResult> => runRefresh();
 
   registerGuardedHandlers(chromeWc.id, {
-    ...buildNavHandlers(vc, settingsRepo),
+    ...buildNavHandlers(vc, settingsRepo, safety),
+    ...buildSafetyHandlers(safety),
     ...buildSettingsHandlers(settingsRepo),
     ...buildAdblockHandlers(controller),
     ...buildListsHandlers(updateNow),
@@ -386,7 +406,7 @@ function boot(): void {
 
   // Prime blocking for the first nav BEFORE navigating (engine-readiness gating).
   controller.primeFor(firstUrl);
-  vc.navigate(firstUrl);
+  safety!.navigate(firstUrl);
 
   // ---- Background refresh + 24h scheduler (AFTER navigate; non-blocking) ----
   // Skip the automatic first-run kick under deterministic e2e (offline / test filter);

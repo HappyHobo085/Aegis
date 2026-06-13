@@ -3,6 +3,7 @@ import { IPC } from '../../../shared/types';
 import type { NavState, NavFailed, NavCrashed, ViewId } from '../../../shared/types';
 import type { ViewController, ViewControllerOpts } from '../viewController';
 import type { SettingsRepo } from '../db/settingsRepo';
+import type { SafetyController } from '../safety/SafetyController';
 
 /**
  * Builds the nav/view IPC handler map (channel -> handler). Handlers receive the
@@ -12,13 +13,14 @@ import type { SettingsRepo } from '../db/settingsRepo';
 export function buildNavHandlers(
   vc: ViewController,
   settingsRepo: SettingsRepo,
+  safety: SafetyController,
 ): Record<string, (...a: any[]) => any> {
   return {
-    [IPC.navNavigate]: (_viewId: ViewId, url: string) => vc.navigate(url),
+    [IPC.navNavigate]: (_viewId: ViewId, url: string) => safety.navigate(url),
     [IPC.navBack]: (_viewId: ViewId) => vc.back(),
     [IPC.navForward]: (_viewId: ViewId) => vc.forward(),
     [IPC.navReloadOrStop]: (_viewId: ViewId) => vc.reloadOrStop(),
-    [IPC.navHome]: (_viewId: ViewId) => vc.navigate(settingsRepo.get().homeUrl),
+    [IPC.navHome]: (_viewId: ViewId) => safety.navigate(settingsRepo.get().homeUrl),
     [IPC.navGetState]: (_viewId: ViewId): NavState => vc.getState(),
     [IPC.viewSetContentVisible]: (_viewId: ViewId, visible: boolean) => vc.setVisible(visible),
   };
