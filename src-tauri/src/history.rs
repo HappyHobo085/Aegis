@@ -32,6 +32,27 @@ pub fn record(app: &AppHandle, url: &str, title: &str) {
     let _ = app.emit("history.changed", Value::Null);
 }
 
+/// Fill in the title of the most-recent history entry for `url`. WebKit sets the
+/// page title after the load finishes, so the URL-only visit recorded at page-load
+/// (see nav.rs) gets its title here when the title-changed signal fires.
+pub fn update_title(app: &AppHandle, url: &str, title: &str) {
+    if url.is_empty() || title.is_empty() || url.starts_with("about:") || url.starts_with("data:") {
+        return;
+    }
+    let mut items = jsonstore::load(app, "history");
+    let Some(i) = items
+        .iter()
+        .rposition(|it| it.get("url").and_then(Value::as_str) == Some(url))
+    else {
+        return;
+    };
+    if items[i].get("title").and_then(Value::as_str) != Some(title) {
+        items[i]["title"] = json!(title);
+        let _ = jsonstore::save(app, "history", &items);
+        let _ = app.emit("history.changed", Value::Null);
+    }
+}
+
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {
         "history.list" => {

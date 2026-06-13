@@ -28,6 +28,23 @@ pub fn deny_permissions(app: &AppHandle) {
     });
 }
 
+/// Record page titles into history as WebKit makes them available. The visit is
+/// recorded URL-only at page-load (nav.rs); the title arrives slightly later via
+/// the WebView's "title" property, so we fill it in on the title-changed signal.
+pub fn connect_title(app: &AppHandle) {
+    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+        return;
+    };
+    let app = app.clone();
+    let _ = content.with_webview(move |pw| {
+        pw.inner().connect_title_notify(move |wv| {
+            let url = wv.uri().map(|s| s.to_string()).unwrap_or_default();
+            let title = wv.title().map(|s| s.to_string()).unwrap_or_default();
+            crate::history::update_title(&app, &url, &title);
+        });
+    });
+}
+
 /// Show/hide the content webview at the GTK level (Tauri's hide() doesn't act on
 /// the reparented widget). Used by view.setChromeOverlay to reveal chrome overlays.
 pub fn set_content_visible(app: &AppHandle, visible: bool) {

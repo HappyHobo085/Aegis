@@ -160,6 +160,10 @@ pub fn run() {
             #[cfg(target_os = "linux")]
             linux_layout::deny_permissions(app.handle());
 
+            // Fill history entries' titles as WebKit reports them (Linux).
+            #[cfg(target_os = "linux")]
+            linux_layout::connect_title(app.handle());
+
             // Ad-blocking (Linux/WebKit): install EasyList content filters.
             #[cfg(target_os = "linux")]
             install_adblock(app.handle().clone());
