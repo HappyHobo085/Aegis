@@ -14,6 +14,7 @@ export const IPC = {
   viewSetContentVisible: 'view.setContentVisible',
   viewSetContentInset: 'view.setContentInset',
   viewSetChromeOverlay: 'view.setChromeOverlay',
+  viewSetSidebar: 'view.setSidebar',
   viewSetFullscreen: 'view.setFullscreen',
   settingsGet: 'settings.get',
   settingsSet: 'settings.set',
@@ -249,6 +250,10 @@ export interface AegisApi {
     setContentVisible(viewId: ViewId, visible: boolean): Promise<void>;
     setContentInset(viewId: ViewId, inset: ContentInset): Promise<void>;
     setChromeOverlay(viewId: ViewId, active: boolean): Promise<void>;
+    /** The sidebar is a right panel: inset the content from the right (page stays
+     * visible) rather than hiding it. Optional — Electron composes its sidebar via
+     * the chrome overlay, so it may not implement this. */
+    setSidebar?(viewId: ViewId, active: boolean): Promise<void>;
     setFullscreen(viewId: ViewId, on: boolean): Promise<void>;
     /** Backend-driven fullscreen change (e.g. Esc exits on Tauri). Optional:
      * Electron's chrome owns its own fullscreen exit, so it may not emit this. */

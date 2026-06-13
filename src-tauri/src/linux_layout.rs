@@ -49,8 +49,8 @@ pub fn connect_fullscreen_exit(app: &AppHandle) {
             if ev.keyval() == gtk::gdk::keys::constants::Escape {
                 if let Some(s) = app.try_state::<crate::view::ContentInset>() {
                     let mut g = s.0.lock().unwrap();
-                    if g.2 {
-                        g.2 = false;
+                    if g.fullscreen {
+                        g.fullscreen = false;
                         drop(g);
                         crate::view::apply_inset(&app);
                         crate::emit_event(&app, "view.fullscreen", serde_json::json!({ "on": false }));
@@ -78,7 +78,7 @@ pub fn set_content_visible(app: &AppHandle, visible: bool) {
 /// window) and content (inset) webviews. Called for the initial layout and on
 /// every window resize, all coordinates in physical/logical px (scale handled by
 /// the caller — GTK here is at the window's device scale).
-pub fn layout(app: &AppHandle, left: i32, top: i32, win_w: i32, win_h: i32) {
+pub fn layout(app: &AppHandle, left: i32, top: i32, right: i32, win_w: i32, win_h: i32) {
     let Some(content) = app.get_webview(CONTENT_LABEL) else {
         return;
     };
@@ -108,7 +108,7 @@ pub fn layout(app: &AppHandle, left: i32, top: i32, win_w: i32, win_h: i32) {
             return;
         };
 
-        let cw = (win_w - left).max(0);
+        let cw = (win_w - left - right).max(0);
         let ch = (win_h - top).max(0);
         for child in fixed.children() {
             if child.as_ptr() == content_widget.as_ptr() {

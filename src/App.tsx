@@ -84,11 +84,13 @@ export function App() {
   // Favorites bar is always-on (constant top inset); overlays never inset content.
   useContentInset(PRIMARY_VIEW_ID);
 
-  // Any full-window chrome overlay (sidebar, settings, favorites manager,
-  // permission prompt, error/crash screen) must bring the transparent chrome
-  // view on top of the content view so it paints over the page.
-  const chromeOverlayActive =
-    sidebarOpen ||
+  // Full-window chrome overlays (settings, favorites manager, permission prompt,
+  // error/crash, downloads, safety) must bring the chrome over the content. The
+  // sidebar is a partial right panel handled separately (setSidebar) so the page
+  // stays visible beside it; on Electron the sidebar still rides the chrome overlay
+  // (the union below preserves the original setChromeOverlay calls), and setSidebar
+  // is a Tauri-only no-op there.
+  const fullOverlayActive =
     downloadsOpen ||
     settingsOpen ||
     managerOpen ||
@@ -97,8 +99,12 @@ export function App() {
     crashed !== null ||
     safety.interstitial !== null;
   useEffect(() => {
-    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, chromeOverlayActive);
-  }, [chromeOverlayActive]);
+    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, fullOverlayActive || sidebarOpen);
+  }, [fullOverlayActive, sidebarOpen]);
+  useEffect(() => {
+    // Inset the content for the sidebar only when no full overlay is covering it.
+    void aegis.view.setSidebar?.(PRIMARY_VIEW_ID, sidebarOpen && !fullOverlayActive);
+  }, [sidebarOpen, fullOverlayActive]);
 
   // Fullscreen: main shrinks chrome to a top-right corner and fills the window
   // with content. Renderer reflects the toggle below (after all hooks).
