@@ -57,6 +57,7 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
 
     let app_nav = app.clone();
     let app_load = app.clone();
+    let app_dl = app.clone();
     let builder = tauri::webview::WebviewBuilder::new(CONTENT_LABEL, WebviewUrl::External(blank()))
         .user_agent(CONTENT_UA)
         .on_navigation(move |url| {
@@ -89,6 +90,18 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
             if matches!(event, tauri::webview::PageLoadEvent::Finished) {
                 crate::history::record(&app_load, payload.url().as_str(), "");
             }
+        })
+        .on_download(move |_webview, event| {
+            match event {
+                tauri::webview::DownloadEvent::Requested { url, destination } => {
+                    crate::downloads::on_requested(&app_dl, url.as_str(), destination);
+                }
+                tauri::webview::DownloadEvent::Finished { success, .. } => {
+                    crate::downloads::on_finished(&app_dl, success);
+                }
+                _ => {}
+            }
+            true
         });
 
     window.add_child(

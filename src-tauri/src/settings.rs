@@ -28,6 +28,15 @@ fn defaults() -> Value {
     })
 }
 
+/// Configured download directory ("" = use the OS Downloads dir).
+pub fn download_dir(app: &AppHandle) -> String {
+    load(app)
+        .get("downloadDir")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string()
+}
+
 /// Whether HTTPS-Only upgrading is on (default true).
 pub fn https_only(app: &AppHandle) -> bool {
     load(app)
