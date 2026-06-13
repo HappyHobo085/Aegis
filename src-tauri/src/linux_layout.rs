@@ -8,8 +8,25 @@
 // Hierarchy after:   GtkApplicationWindow → GtkBox → GtkFixed → [chrome@(0,0), content@(left,top)]
 use gtk::prelude::*;
 use tauri::{AppHandle, Manager};
+use webkit2gtk::{PermissionRequestExt, WebViewExt};
 
 use crate::nav::CONTENT_LABEL;
+
+/// Deny all content-webview permission requests (geolocation, camera, mic,
+/// notifications, …) by default, so sites can't grab sensitive capabilities
+/// without an explicit allow flow (a remembered-permission prompt is a follow-up).
+/// Mirrors the Electron app's deny-by-default.
+pub fn deny_permissions(app: &AppHandle) {
+    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+        return;
+    };
+    let _ = content.with_webview(|pw| {
+        pw.inner().connect_permission_request(|_, request| {
+            request.deny();
+            true
+        });
+    });
+}
 
 /// Reparent (once, idempotent) into a GtkFixed and lay out the chrome (full
 /// window) and content (inset) webviews. Called for the initial layout and on

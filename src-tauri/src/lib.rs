@@ -142,6 +142,10 @@ pub fn run() {
             }
             view::apply_inset(app.handle());
 
+            // Deny content-webview permission requests by default (Linux).
+            #[cfg(target_os = "linux")]
+            linux_layout::deny_permissions(app.handle());
+
             // Ad-blocking (Linux/WebKit): install EasyList content filters.
             #[cfg(target_os = "linux")]
             install_adblock(app.handle().clone());
