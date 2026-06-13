@@ -27,6 +27,7 @@ log = "0.4"
 # a personal browser. See tauri PR #8280.
 tauri = { version = "2.11.2", features = ["unstable"] }
 tauri-plugin-log = "2"
+tauri-plugin-dialog = "2"
 adblock = { version = "0.12.5", features = ["content-blocking"] }
 tauri-plugin-updater = "2.10.1"
 # Blocking HTTPS client for fetching filter-list subscriptions. reqwest is already

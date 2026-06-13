@@ -10,14 +10,21 @@ use crate::jsonstore;
 
 const STORES: &[&str] = &["favorites", "saved", "history", "downloads"];
 
-fn export_file(app: &AppHandle) -> PathBuf {
+/// Target file for export/import: the path the user chose in the file dialog
+/// (passed by the Tauri client), else the default backup in the Downloads dir.
+fn export_file(app: &AppHandle, payload: &Value) -> PathBuf {
+    if let Some(p) = payload.get("path").and_then(Value::as_str) {
+        if !p.is_empty() {
+            return PathBuf::from(p);
+        }
+    }
     app.path()
         .download_dir()
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
         .join("aegis-export.json")
 }
 
-pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Result<Value, String>> {
+pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {
         "data.export" => {
             let mut bundle = Map::new();
@@ -28,7 +35,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
             }
             bundle.insert("customFilters".into(), json!(crate::customfilters::load(app)));
 
-            let path = export_file(app);
+            let path = export_file(app, payload);
             let txt = serde_json::to_string_pretty(&Value::Object(bundle)).unwrap_or_default();
             match std::fs::write(&path, txt) {
                 Ok(()) => Some(Ok(json!({ "ok": true, "path": path.to_string_lossy() }))),
@@ -37,7 +44,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
         }
 
         "data.import" => {
-            let path = export_file(app);
+            let path = export_file(app, payload);
             let Ok(txt) = std::fs::read_to_string(&path) else {
                 return Some(Ok(json!({ "ok": false })));
             };

@@ -141,6 +141,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_dialog::init())
         .manage(view::ContentInset::default())
         .manage(update::UpdateState::default())
         .manage(adblock::AdblockState::default())

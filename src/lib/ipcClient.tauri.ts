@@ -25,7 +25,10 @@ import type {
   SafetyInterstitialPayload,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { call, on } from './tauriInvoke';
+
+const BACKUP_FILTERS = [{ name: 'Aegis backup', extensions: ['json'] }];
 
 export const aegis: AegisApi = {
   nav: {
@@ -111,8 +114,19 @@ export const aegis: AegisApi = {
     onPrompt: (cb) => on<PermissionPrompt>(IPC.evtPermissionsPrompt, cb),
   },
   data: {
-    export: () => call<{ ok: boolean; path?: string }>(IPC.dataExport),
-    import: (mode) => call<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode }),
+    // Show a native save dialog, then write the backup to the chosen path.
+    export: async () => {
+      const path = await save({ defaultPath: 'aegis-export.json', filters: BACKUP_FILTERS });
+      if (!path) return { ok: false };
+      return call<{ ok: boolean; path?: string }>(IPC.dataExport, { path });
+    },
+    // Show a native open dialog, then restore from the chosen backup file.
+    import: async (mode) => {
+      const selected = await open({ multiple: false, directory: false, filters: BACKUP_FILTERS });
+      const path = typeof selected === 'string' ? selected : null;
+      if (!path) return { ok: false };
+      return call<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode, path });
+    },
   },
   picker: {
     start: () => call<{ ok: boolean; rule?: string }>(IPC.pickerStart),
