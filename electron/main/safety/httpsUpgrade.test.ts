@@ -42,4 +42,16 @@ describe('upgradeUrl', () => {
       'https://example.com:8080/x',
     );
   });
+
+  it('normalises a trailing-dot hostname before the exception check', () => {
+    const isException = (h: string) => h === 'example.com';
+    expect(upgradeUrl('http://example.com./', { httpsOnly: true, isException })).toBeNull();
+  });
+
+  it('decides on the real host (not userinfo) for credentialed URLs', () => {
+    // hostname is example.com, not the userinfo part — no @-host confusion.
+    expect(upgradeUrl('http://user@example.com/x', { httpsOnly: true, isException: never })).toBe(
+      'https://user@example.com/x',
+    );
+  });
 });

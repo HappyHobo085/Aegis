@@ -16,6 +16,9 @@ export function upgradeUrl(
   } catch {
     return null;
   }
+  // Normalise a trailing FQDN dot so the exception predicate and the upgraded
+  // URL are consistent (`example.com.` and `example.com` are the same host).
+  if (u.hostname.endsWith('.')) u.hostname = u.hostname.slice(0, -1);
   if (u.protocol !== 'http:') return null;
   if (opts.isException(u.hostname)) return null;
   u.protocol = 'https:';
