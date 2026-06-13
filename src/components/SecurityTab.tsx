@@ -57,6 +57,11 @@ export function SecurityTab({
           ))}
         </ul>
       )}
+      <h3>Malicious-site protection</h3>
+      <p>
+        On &mdash; known malware and phishing sites are blocked with a warning. This protection is always
+        active and can&apos;t be turned off.
+      </p>
     </div>
   );
 }

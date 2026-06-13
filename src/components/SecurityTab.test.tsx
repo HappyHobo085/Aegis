@@ -22,6 +22,14 @@ describe('SecurityTab', () => {
     expect(update).toHaveBeenCalledWith({ httpsOnly: false });
   });
 
+  it('shows malicious-site protection as on (always)', () => {
+    render(
+      <SecurityTab settings={baseSettings} update={vi.fn()} listExceptions={async () => []} removeException={vi.fn()} />,
+    );
+    expect(screen.getByText(/malicious-site protection/i)).toBeInTheDocument();
+    expect(screen.getByText(/\bon\b/i)).toBeInTheDocument();
+  });
+
   it('lists exceptions and removes one', async () => {
     const removeException = vi.fn();
     render(
