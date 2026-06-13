@@ -55,6 +55,7 @@ import { buildUpdateHandlers } from './ipc/update';
 import { HttpExceptionsRepo } from './db/httpExceptionsRepo';
 import { SafetyController } from './safety/SafetyController';
 import { buildSafetyHandlers } from './ipc/safety';
+import { chromeUserAgent } from './userAgent';
 import { MalwareGuard } from './safety/MalwareGuard';
 import { refreshMalwareTexts, readMalwareCacheTexts } from './adblock/malwareLists';
 
@@ -200,6 +201,13 @@ function boot(): void {
     repo: historyRepo,
     onChanged: fwd.onHistoryChanged,
   });
+
+  // ---- Fingerprint/leak hardening (content view) ----
+  //  - WebRTC: only the default public interface, so pages can't enumerate LAN/local IPs.
+  //  - UA: a mainstream Chrome string (derived from the bundled Chromium) instead of
+  //    advertising "Electron/Aegis".
+  vc.contentWebContents.setWebRTCIPHandlingPolicy('default_public_interface_only');
+  vc.contentSession.setUserAgent(chromeUserAgent(process.platform, process.versions.chrome));
 
   // ---- Downloads pipeline (content session) ----
   const liveDownloads = new Map<number, Electron.DownloadItem>();
