@@ -373,8 +373,9 @@ The core browser-shell mechanic. **Confirm the multi-webview API against install
 
 - [ ] **Step 1: Confirm the Tauri 2.x multi-webview API**
 
-Run: `cd src-tauri && source "$HOME/.cargo/env" && cargo doc -p tauri --no-deps && cd ..`
-Read the `tauri::webview` module (`WebviewWindow`, `Webview`, `WebviewBuilder`, child-webview creation, `.navigate()`, `.eval()`, `on_web_resource_request`). Record the exact constructors used below.
+Verified against docs (2026-06-13): multi-webview needs the **`unstable`** cargo feature (already added to Cargo.toml). The method is `window.add_child(webview_builder, LogicalPosition, LogicalSize)`. `Webview` exposes `navigate(url)`, `url()`, `reload()`, `show()`, `hide()`, `set_position(..)`, `set_size(..)`. Build a content webview with `tauri::webview::WebviewBuilder::new(label, WebviewUrl::External(url))`, which also offers `.on_navigation(..)` and `.on_web_resource_request(..)` (the latter is Phase 1's adblock hook).
+
+Still confirm exact signatures locally (post-webkit): `cd src-tauri && source "$HOME/.cargo/env" && cargo doc -p tauri --no-deps --features unstable`, then read the `tauri::webview` module.
 
 - [ ] **Step 2: Create the content webview as a child of the main window**
 
