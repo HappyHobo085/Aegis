@@ -15,7 +15,7 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.2" }
+tauri-build = { version = "2.6.2", features = [] }
 
 [dependencies]
 serde_json = "1.0"
@@ -28,6 +28,7 @@ log = "0.4"
 tauri = { version = "2.11.2", features = ["unstable"] }
 tauri-plugin-log = "2"
 adblock = { version = "0.12.5", features = ["content-blocking"] }
+tauri-plugin-updater = "2.10.1"
 
 # Linux-only: reach the underlying webkit2gtk widget to work around tauri#10420
 # (multiwebview stacks vertically in wry's GtkBox instead of honoring positions).

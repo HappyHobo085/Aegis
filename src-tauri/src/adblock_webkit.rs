@@ -17,7 +17,7 @@
 // Mechanism proven (a content filter blocks a target URL; verified 2026-06-13).
 #![allow(dead_code)]
 use std::ffi::CString;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use glib::translate::ToGlibPtr;
 use tauri::{AppHandle, Manager};

@@ -4,6 +4,7 @@ mod adblock_webkit;
 #[cfg(target_os = "linux")]
 mod linux_layout;
 mod nav;
+mod update;
 mod view;
 
 use serde_json::{json, Value};
@@ -20,6 +21,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         return result;
     }
     if let Some(result) = view::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = update::dispatch(&app, &channel, &payload) {
         return result;
     }
 
@@ -53,9 +57,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
 
         "customFilters.get" | "customFilters.set" => json!(""),
         "lists.updateNow" => json!({ "perSource": [], "lastUpdated": 0 }),
-        "update.getState" => json!({
-            "status": "idle", "version": null, "percent": 0, "error": null
-        }),
         "safety.getState" => Value::Null,
         "data.export" => json!({ "ok": false }),
         "data.import" => json!({ "ok": false }),
@@ -72,7 +73,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(view::ContentInset::default())
+        .manage(update::UpdateState::default())
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
