@@ -6,6 +6,7 @@ import type {
   AdblockState, BlockedCount, ListUpdateResult,
   Favorite, HistoryEntry, SavedItem, ContentInset, Subscription,
   DownloadEntry, SitePermission, PermissionPrompt, ImportMode, UpdateState,
+  SafetyInterstitialPayload,
 } from '../../shared/types';
 
 /** Subscribes cb to an event channel; returns an unsubscriber. */
@@ -131,6 +132,14 @@ const api: AegisApi = {
     checkNow: (): Promise<void> => ipcRenderer.invoke(IPC.updateCheckNow),
     restartToInstall: (): Promise<void> => ipcRenderer.invoke(IPC.updateRestartToInstall),
     onState: (cb: (s: UpdateState) => void) => subscribe<UpdateState>(IPC.evtUpdateState, cb),
+  },
+  safety: {
+    getState: (): Promise<SafetyInterstitialPayload | null> => ipcRenderer.invoke(IPC.safetyGetState),
+    proceed: (url: string): Promise<void> => ipcRenderer.invoke(IPC.safetyProceed, url),
+    listExceptions: (): Promise<string[]> => ipcRenderer.invoke(IPC.safetyListExceptions),
+    removeException: (host: string): Promise<void> => ipcRenderer.invoke(IPC.safetyRemoveException, host),
+    onInterstitial: (cb: (p: SafetyInterstitialPayload | null) => void) =>
+      subscribe<SafetyInterstitialPayload | null>(IPC.evtSafetyInterstitial, cb),
   },
 };
 
