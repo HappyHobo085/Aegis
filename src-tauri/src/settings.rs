@@ -28,6 +28,14 @@ fn defaults() -> Value {
     })
 }
 
+/// Whether HTTPS-Only upgrading is on (default true).
+pub fn https_only(app: &AppHandle) -> bool {
+    load(app)
+        .get("httpsOnly")
+        .and_then(Value::as_bool)
+        .unwrap_or(true)
+}
+
 /// Defaults overlaid with any persisted values.
 fn load(app: &AppHandle) -> Value {
     let mut s = defaults();

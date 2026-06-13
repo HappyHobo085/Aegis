@@ -22,6 +22,13 @@ fn blank() -> Url {
     Url::parse("about:blank").expect("about:blank is a valid URL")
 }
 
+fn is_local_host(url: &Url) -> bool {
+    matches!(
+        url.host_str(),
+        Some("localhost") | Some("127.0.0.1") | Some("::1")
+    )
+}
+
 /// Emit a `nav.state` for the chrome address bar. canGoBack/Forward are
 /// best-effort in Phase 0 (no Tauri history API); refined in Phase 2.
 fn emit_state(app: &AppHandle, url: &str, loading: bool) {
@@ -54,8 +61,25 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
         .user_agent(CONTENT_UA)
         .on_navigation(move |url| {
             // Fires for every navigation (programmatic, link clicks, redirects).
-            // The HTTPS-Only / malware gate lands in Phase 3; Phase 0 allows all.
             emit_state(&app_nav, url.as_str(), true);
+
+            // HTTPS-Only: upgrade http -> https (unless localhost, or the setting is
+            // off — the escape hatch for http-only sites). Re-navigate on the main
+            // thread AFTER this callback returns, to avoid re-entrancy.
+            if url.scheme() == "http"
+                && !is_local_host(url)
+                && crate::settings::https_only(&app_nav)
+            {
+                let https = url.as_str().replacen("http://", "https://", 1);
+                let app_main = app_nav.clone();
+                let _ = app_nav.run_on_main_thread(move || {
+                    if let (Some(w), Ok(u)) = (app_main.get_webview(CONTENT_LABEL), Url::parse(&https))
+                    {
+                        let _ = w.navigate(u);
+                    }
+                });
+                return false; // cancel the http navigation; https replaces it
+            }
             true
         })
         .on_page_load(move |_webview, payload| {
