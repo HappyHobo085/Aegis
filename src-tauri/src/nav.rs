@@ -8,6 +8,16 @@ pub const CONTENT_LABEL: &str = "content";
 /// Default top inset = TOOLBAR_H(56) + FAVBAR_H(40); refined by `view.setContentInset`.
 pub const DEFAULT_INSET_TOP: f64 = 96.0;
 
+/// Present a mainstream Chrome user-agent to browsed sites (anti-fingerprint /
+/// fewer "unsupported browser" walls) instead of the default WebKitGTK string,
+/// mirroring the Electron app. Platform-specific so the OS token is honest.
+#[cfg(target_os = "macos")]
+const CONTENT_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+#[cfg(target_os = "windows")]
+const CONTENT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+const CONTENT_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+
 fn blank() -> Url {
     Url::parse("about:blank").expect("about:blank is a valid URL")
 }
@@ -41,6 +51,7 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
     let app_nav = app.clone();
     let app_load = app.clone();
     let builder = tauri::webview::WebviewBuilder::new(CONTENT_LABEL, WebviewUrl::External(blank()))
+        .user_agent(CONTENT_UA)
         .on_navigation(move |url| {
             // Fires for every navigation (programmatic, link clicks, redirects).
             // The HTTPS-Only / malware gate lands in Phase 3; Phase 0 allows all.
