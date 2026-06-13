@@ -3424,3 +3424,12 @@ a:focus-visible {
   color: #e5e7eb;
   border-color: #475569;
 }
+.interstitial--malware {
+  background: #1a0b0b;
+}
+.interstitial--malware .interstitial__panel {
+  border-color: #7f1d1d;
+}
+.interstitial--malware .interstitial__title {
+  color: #fca5a5;
+}

@@ -21,4 +21,18 @@ describe('SafetyInterstitial', () => {
     await userEvent.click(screen.getByRole('button', { name: /continue to http/i }));
     expect(onProceed).toHaveBeenCalledWith('http://example.com/x');
   });
+
+  it('renders the malware variant with a danger heading + Continue anyway', async () => {
+    const onProceed = vi.fn();
+    render(
+      <SafetyInterstitial
+        interstitial={{ url: 'http://evil.example/', reason: 'malware' }}
+        onProceed={onProceed}
+      />,
+    );
+    expect(screen.getByText(/dangerous|malicious|deceptive/i)).toBeInTheDocument();
+    expect(screen.getByText(/evil\.example/)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /continue anyway/i }));
+    expect(onProceed).toHaveBeenCalledWith('http://evil.example/');
+  });
 });
