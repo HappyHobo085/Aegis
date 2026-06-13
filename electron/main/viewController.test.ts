@@ -370,6 +370,52 @@ describe('ViewController navigation gate & failures (Task 12)', () => {
     expect(ev.preventDefault).toHaveBeenCalledTimes(1);
   });
 
+  it('upgradeNavigation hook: http nav is intercepted, https form is loaded', () => {
+    const upgradeNavigation = vi.fn((url: string) =>
+      url.startsWith('http:') ? url.replace('http:', 'https:') : null,
+    );
+    new ViewController({ ...makeOptsLocal(), upgradeNavigation });
+    const wc = h.getLastWc()!;
+    const ev = makeEvent();
+    wc._emit('will-navigate', ev, 'http://example.com/page');
+    expect(ev.preventDefault).toHaveBeenCalledTimes(1);
+    expect(wc.loadURL).toHaveBeenCalledWith('https://example.com/page');
+  });
+
+  it('upgradeNavigation hook: https nav is not intercepted (hook returns null)', () => {
+    const upgradeNavigation = vi.fn((_url: string) => null);
+    new ViewController({ ...makeOptsLocal(), upgradeNavigation });
+    const wc = h.getLastWc()!;
+    const ev = makeEvent();
+    wc._emit('will-navigate', ev, 'https://already-secure.test/');
+    expect(ev.preventDefault).not.toHaveBeenCalled();
+    expect(wc.loadURL).not.toHaveBeenCalled();
+  });
+
+  it('upgradeNavigation hook: disallowed scheme is still blocked even if hook is present', () => {
+    const upgradeNavigation = vi.fn((_url: string) => 'https://hacked.test/');
+    new ViewController({ ...makeOptsLocal(), upgradeNavigation });
+    const wc = h.getLastWc()!;
+    const ev = makeEvent();
+    wc._emit('will-navigate', ev, 'file:///etc/passwd');
+    expect(ev.preventDefault).toHaveBeenCalledTimes(1);
+    // hook must NOT be called for blocked schemes
+    expect(upgradeNavigation).not.toHaveBeenCalled();
+    expect(wc.loadURL).not.toHaveBeenCalled();
+  });
+
+  it('upgradeNavigation hook on will-redirect: http redirect is upgraded to https', () => {
+    const upgradeNavigation = vi.fn((url: string) =>
+      url.startsWith('http:') ? url.replace('http:', 'https:') : null,
+    );
+    new ViewController({ ...makeOptsLocal(), upgradeNavigation });
+    const wc = h.getLastWc()!;
+    const ev = makeEvent();
+    wc._emit('will-redirect', ev, 'http://redirect.test/dest');
+    expect(ev.preventDefault).toHaveBeenCalledTimes(1);
+    expect(wc.loadURL).toHaveBeenCalledWith('https://redirect.test/dest');
+  });
+
   it('did-fail-load (main frame, load error) emits onFailed kind:load and hides content', () => {
     const opts = makeOptsLocal();
     const vc = new ViewController(opts);

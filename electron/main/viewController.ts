@@ -12,6 +12,8 @@ export interface ViewControllerOpts {
   onState: (s: NavState) => void;
   onFailed: (f: NavFailed) => void;
   onCrashed: (c: NavCrashed) => void;
+  /** HTTPS-Only hook: given a navigation URL, return the https URL to load instead, or null to allow as-is. */
+  upgradeNavigation?: (url: string) => string | null;
 }
 
 /** Optional test-only injection: timer for the title debounce. */
@@ -113,7 +115,15 @@ export class ViewController {
     });
 
     const gate = (event: { preventDefault: () => void }, url: string) => {
-      if (!isAllowedNavigationUrl(url)) event.preventDefault();
+      if (!isAllowedNavigationUrl(url)) {
+        event.preventDefault();
+        return;
+      }
+      const upgraded = this.opts.upgradeNavigation?.(url) ?? null;
+      if (upgraded && upgraded !== url) {
+        event.preventDefault();
+        this.wc().loadURL(upgraded);
+      }
     };
     wc.on('will-navigate', gate);
     wc.on('will-redirect', gate);
