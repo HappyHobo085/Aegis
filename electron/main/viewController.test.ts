@@ -416,6 +416,31 @@ describe('ViewController navigation gate & failures (Task 12)', () => {
     expect(wc.loadURL).toHaveBeenCalledWith('https://redirect.test/dest');
   });
 
+  it('onBlockedNavigation returns true: will-navigate is prevented and upgradeNavigation is NOT consulted', () => {
+    const onBlockedNavigation = vi.fn(() => true);
+    const upgradeNavigation = vi.fn((_url: string) => 'https://should-not-load.test/');
+    new ViewController({ ...makeOptsLocal(), onBlockedNavigation, upgradeNavigation });
+    const wc = h.getLastWc()!;
+    const ev = makeEvent();
+    wc._emit('will-navigate', ev, 'https://malware.test/evil');
+    expect(ev.preventDefault).toHaveBeenCalledTimes(1);
+    expect(wc.loadURL).not.toHaveBeenCalled();
+    expect(upgradeNavigation).not.toHaveBeenCalled();
+  });
+
+  it('onBlockedNavigation returns false: will-navigate falls through to upgrade path normally', () => {
+    const onBlockedNavigation = vi.fn(() => false);
+    const upgradeNavigation = vi.fn((url: string) =>
+      url.startsWith('http:') ? url.replace('http:', 'https:') : null,
+    );
+    new ViewController({ ...makeOptsLocal(), onBlockedNavigation, upgradeNavigation });
+    const wc = h.getLastWc()!;
+    const ev = makeEvent();
+    wc._emit('will-navigate', ev, 'http://example.com/page');
+    expect(ev.preventDefault).toHaveBeenCalledTimes(1);
+    expect(wc.loadURL).toHaveBeenCalledWith('https://example.com/page');
+  });
+
   it('did-fail-load (main frame, load error) emits onFailed kind:load and hides content', () => {
     const opts = makeOptsLocal();
     const vc = new ViewController(opts);

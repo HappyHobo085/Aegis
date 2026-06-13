@@ -14,6 +14,8 @@ export interface ViewControllerOpts {
   onCrashed: (c: NavCrashed) => void;
   /** HTTPS-Only hook: given a navigation URL, return the https URL to load instead, or null to allow as-is. */
   upgradeNavigation?: (url: string) => string | null;
+  /** Malware gate: return true to BLOCK this navigation (the hook raises its own interstitial). */
+  onBlockedNavigation?: (url: string) => boolean;
 }
 
 /** Optional test-only injection: timer for the title debounce. */
@@ -116,6 +118,10 @@ export class ViewController {
 
     const gate = (event: { preventDefault: () => void }, url: string) => {
       if (!isAllowedNavigationUrl(url)) {
+        event.preventDefault();
+        return;
+      }
+      if (this.opts.onBlockedNavigation?.(url)) {
         event.preventDefault();
         return;
       }
