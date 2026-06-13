@@ -84,6 +84,12 @@ export const IPC = {
   updateCheckNow: 'update.checkNow',
   updateRestartToInstall: 'update.restartToInstall',
   evtUpdateState: 'update.state',
+  // safety interstitial (Phase 3a, chrome <-> main)
+  safetyGetState: 'safety.getState',
+  safetyProceed: 'safety.proceed',
+  safetyListExceptions: 'safety.listExceptions',
+  safetyRemoveException: 'safety.removeException',
+  evtSafetyInterstitial: 'safety.interstitial',
 } as const;
 
 export interface NavState {
@@ -182,6 +188,16 @@ export interface UpdateState {
   version: string | null; // available/downloaded version, else null
   percent: number; // download progress 0..100
   error: string | null; // last error message, else null
+}
+
+/**
+ * A full-window safety interstitial shown over the content view. `reason` is
+ * extensible — Phase 3a uses only 'https-failed'; Phase 3b adds 'malware'.
+ */
+export interface SafetyInterstitialPayload {
+  /** The http URL the user may choose to continue to. */
+  url: string;
+  reason: 'https-failed';
 }
 
 /**
@@ -311,6 +327,13 @@ export interface AegisApi {
     checkNow(): Promise<void>;
     restartToInstall(): Promise<void>;
     onState(cb: (s: UpdateState) => void): () => void;
+  };
+  safety: {
+    getState(): Promise<SafetyInterstitialPayload | null>;
+    proceed(url: string): Promise<void>;
+    listExceptions(): Promise<string[]>;
+    removeException(host: string): Promise<void>;
+    onInterstitial(cb: (p: SafetyInterstitialPayload | null) => void): () => void;
   };
 }
 
