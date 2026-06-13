@@ -3,8 +3,9 @@ import type { NavFailed, SafetyInterstitialPayload } from '../../../shared/types
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import { SafetyController } from './SafetyController';
 
-function setup(opts?: { httpsOnly?: boolean; exceptions?: Set<string> }) {
+function setup(opts?: { httpsOnly?: boolean; exceptions?: Set<string>; malicious?: Set<string> }) {
   const exceptions = opts?.exceptions ?? new Set<string>();
+  const malicious = opts?.malicious ?? new Set<string>();
   const navigateView = vi.fn();
   const events: (SafetyInterstitialPayload | null)[] = [];
   const sc = new SafetyController({
@@ -17,6 +18,11 @@ function setup(opts?: { httpsOnly?: boolean; exceptions?: Set<string> }) {
     },
     getHttpsOnly: () => opts?.httpsOnly ?? true,
     onInterstitial: (p) => events.push(p),
+    malware: {
+      isMalicious: (url) => {
+        try { return malicious.has(new URL(url).hostname); } catch { return false; }
+      },
+    },
   });
   return { sc, navigateView, events, exceptions };
 }
@@ -167,5 +173,41 @@ describe('SafetyController exception management', () => {
     expect(sc.listExceptions().sort()).toEqual(['a.com', 'b.com']);
     sc.removeException('a.com');
     expect(exceptions.has('a.com')).toBe(false);
+  });
+});
+
+describe('SafetyController malware', () => {
+  it('navigate() raises a malware interstitial and does NOT navigate a malicious host', () => {
+    const { sc, navigateView, events } = setup({ malicious: new Set(['evil.example']) });
+    sc.navigate('http://evil.example/');
+    expect(navigateView).not.toHaveBeenCalled();
+    expect(sc.getState()).toEqual({ url: 'http://evil.example/', reason: 'malware' });
+    expect(events.at(-1)).toEqual({ url: 'http://evil.example/', reason: 'malware' });
+  });
+
+  it('checkMalicious returns false (no interstitial) for a clean host', () => {
+    const { sc } = setup({ malicious: new Set(['evil.example']) });
+    expect(sc.checkMalicious('https://good.example/')).toBe(false);
+    expect(sc.getState()).toBeNull();
+  });
+
+  it('proceed on a malware interstitial adds a SESSION bypass (not persisted) and reloads', () => {
+    const { sc, navigateView, exceptions } = setup({ malicious: new Set(['evil.example']) });
+    sc.navigate('http://evil.example/');
+    navigateView.mockClear();
+    sc.proceed('http://evil.example/');
+    expect(navigateView).toHaveBeenCalledWith('http://evil.example/');
+    expect(sc.getState()).toBeNull();
+    expect(exceptions.has('evil.example')).toBe(false); // NOT persisted
+    navigateView.mockClear();
+    sc.navigate('http://evil.example/'); // bypass now in effect
+    expect(navigateView).toHaveBeenCalledWith('http://evil.example/');
+    expect(sc.getState()).toBeNull();
+  });
+
+  it('malware takes priority over the https upgrade (no upgrade attempted)', () => {
+    const { sc, navigateView } = setup({ malicious: new Set(['evil.example']) });
+    sc.navigate('http://evil.example/');
+    expect(navigateView).not.toHaveBeenCalled();
   });
 });

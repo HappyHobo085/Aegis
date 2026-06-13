@@ -9,12 +9,17 @@ export interface HttpExceptionsLike {
   list(): string[];
 }
 
+export interface MalwareLike {
+  isMalicious(url: string): boolean;
+}
+
 export interface SafetyControllerDeps {
   /** Load a URL in the content view (ViewController.navigate). */
   navigateView: (url: string) => void;
   httpExceptions: HttpExceptionsLike;
   getHttpsOnly: () => boolean;
   onInterstitial: (p: SafetyInterstitialPayload | null) => void;
+  malware: MalwareLike;
 }
 
 /**
@@ -26,6 +31,7 @@ export interface SafetyControllerDeps {
 export class SafetyController {
   private current: SafetyInterstitialPayload | null = null;
   private lastUpgrade: { from: string; to: string } | null = null;
+  private readonly malwareBypass = new Set<string>(); // session-only "continue anyway" hosts
 
   constructor(private readonly deps: SafetyControllerDeps) {}
 
@@ -39,12 +45,38 @@ export class SafetyController {
     return upgraded;
   }
 
+  /**
+   * If `url` is a non-bypassed malicious host, raise the malware interstitial and
+   * return true (caller must NOT navigate). Else false. Bypass is session-only.
+   */
+  checkMalicious(url: string): boolean {
+    let host: string;
+    try {
+      host = normalizeHost(new URL(url).hostname);
+    } catch {
+      return false;
+    }
+    if (this.malwareBypass.has(host)) return false;
+    if (!this.deps.malware.isMalicious(url)) return false;
+    this.raise({ url, reason: 'malware' });
+    return true;
+  }
+
   /** Upgrade-aware navigation entry (address bar / home / first nav). */
   navigate(url: string): void {
     // A fresh navigation supersedes any showing interstitial and any in-flight
     // upgrade record (resolveUpgrade re-arms below if this URL is upgraded).
     if (this.current !== null) this.dismiss();
     this.lastUpgrade = null;
+    if (this.checkMalicious(url)) return; // malware -> interstitial, do not navigate
+    // If the host has a session malware bypass, skip the https upgrade so the user
+    // reaches the site they chose to load (upgrading to https could re-fail differently).
+    let bypassedHost: string | null = null;
+    try { bypassedHost = normalizeHost(new URL(url).hostname); } catch { /* ignore */ }
+    if (bypassedHost && this.malwareBypass.has(bypassedHost)) {
+      this.deps.navigateView(url);
+      return;
+    }
     const upgraded = this.resolveUpgrade(url);
     this.deps.navigateView(upgraded ?? url);
   }
@@ -81,13 +113,20 @@ export class SafetyController {
     return this.current;
   }
 
-  /** "Continue to HTTP for this site": persist the host + reload over http. */
+  /** "Continue anyway": for https-failed persists the host exception; for malware adds a session bypass. */
   proceed(url: string): void {
     // Defense-in-depth: only act when this url matches the showing interstitial.
     if (this.current === null || url !== this.current.url) return;
+    const reason = this.current.reason;
     try {
       const host = normalizeHost(new URL(url).hostname);
-      if (host) this.deps.httpExceptions.add(host);
+      if (host) {
+        if (reason === 'malware') {
+          this.malwareBypass.add(host); // session-only, never persisted
+        } else {
+          this.deps.httpExceptions.add(host); // https-failed: persisted
+        }
+      }
     } catch {
       /* malformed url — skip persistence, still attempt the load */
     }
