@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Url};
 
 fn store_path(app: &AppHandle) -> Option<PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("settings.json"))
@@ -13,7 +13,6 @@ fn store_path(app: &AppHandle) -> Option<PathBuf> {
 /// Defaults matching `Settings` in shared/types.ts.
 fn defaults() -> Value {
     json!({
-        "siteName": "Aegis",
         "homeUrl": "about:blank",
         "primaryColor": "#3b82f6",
         "defaultSearchTemplate": "https://duckduckgo.com/?q=%s",
@@ -58,6 +57,19 @@ pub fn https_only(app: &AppHandle) -> bool {
         .get("httpsOnly")
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// The configured home page as a URL (default about:blank). Blank or unparseable
+/// values fall back to about:blank so Home/startup never fail to navigate.
+pub fn home_url(app: &AppHandle) -> Url {
+    let s = load(app);
+    let raw = s
+        .get("homeUrl")
+        .and_then(Value::as_str)
+        .unwrap_or("about:blank")
+        .trim();
+    let target = if raw.is_empty() { "about:blank" } else { raw };
+    Url::parse(target).unwrap_or_else(|_| Url::parse("about:blank").expect("about:blank is valid"))
 }
 
 /// Defaults overlaid with any persisted values.

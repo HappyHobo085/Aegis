@@ -219,7 +219,6 @@ export interface SearchEngine {
 }
 
 export interface Settings {
-  siteName: string;
   homeUrl: string;
   primaryColor: string;
   defaultSearchTemplate: string; // e.g. https://duckduckgo.com/?q=%s

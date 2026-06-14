@@ -1,5 +1,8 @@
 /* src/index.css */
 :root {
+  /* Mark the UI as dark so form controls, scrollbars, and native <select> popups
+     render dark to match — not a white system-light default. */
+  color-scheme: dark;
   /* re-based to UW palette (names kept so theme wiring is untouched) */
   --accent-color: #3b82f6;     /* was #4f8cff (CSS fallback); blue-500 brand */
   --bg: #121212;               /* app base / scrollbar track */

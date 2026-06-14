@@ -11,7 +11,6 @@ const engines: SearchEngine[] = [
 ];
 
 const settings = (over: Partial<Settings> = {}): Settings => ({
-  siteName: 'Aegis',
   homeUrl: 'https://duckduckgo.com/',
   primaryColor: '#7c5cff',
   defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',

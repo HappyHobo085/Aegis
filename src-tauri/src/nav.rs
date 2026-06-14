@@ -12,15 +12,11 @@ pub const DEFAULT_INSET_TOP: f64 = 96.0;
 /// fewer "unsupported browser" walls) instead of the default WebKitGTK string,
 /// mirroring the Electron app. Platform-specific so the OS token is honest.
 #[cfg(target_os = "macos")]
-const CONTENT_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+const CONTENT_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 #[cfg(target_os = "windows")]
-const CONTENT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
+const CONTENT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-const CONTENT_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
-
-fn blank() -> Url {
-    Url::parse("about:blank").expect("about:blank is a valid URL")
-}
+const CONTENT_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 
 fn is_local_host(url: &Url) -> bool {
     matches!(
@@ -63,7 +59,10 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
     let app_nav = app.clone();
     let app_load = app.clone();
     let app_dl = app.clone();
-    let builder = tauri::webview::WebviewBuilder::new(CONTENT_LABEL, WebviewUrl::External(blank()))
+    let builder = tauri::webview::WebviewBuilder::new(
+        CONTENT_LABEL,
+        WebviewUrl::External(crate::settings::home_url(app)),
+    )
         .user_agent(CONTENT_UA)
         // Inject the ad/tracker blocker at document start into the page and all iframes.
         // On Linux this supplements the WebKit content filters; on Windows/macOS (where
@@ -183,7 +182,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
         "nav.home" => {
             if let Some(w) = content {
-                let _ = w.navigate(blank());
+                let _ = w.navigate(crate::settings::home_url(app));
             }
             Ok(Value::Null)
         }

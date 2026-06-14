@@ -132,12 +132,6 @@ export function App() {
     void aegis.settings.get().then((s) => applyTheme(s));
   }, []);
 
-  // Make `siteName` functional: reflect it as the document title. `useSettings`
-  // also sets it on every update; this effect covers the initial load + edits.
-  useEffect(() => {
-    document.title = settings.settings.siteName;
-  }, [settings.settings.siteName]);
-
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {
       if (f.viewId !== PRIMARY_VIEW_ID) return;

@@ -146,8 +146,20 @@ pub fn run() {
     // initializes so the app renders out of the box — no env var needed at launch.
     // Set only if the user hasn't overridden it. Must run before any WebView spawns.
     #[cfg(target_os = "linux")]
-    if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
-        std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+    {
+        if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        // On the proprietary NVIDIA driver, WebKit's accelerated compositing can abort
+        // the web process intermittently (a libstdc++ assertion in the EGL/GBM path) —
+        // disabling DMABUF alone doesn't fully prevent it. Fall back to unaccelerated
+        // compositing on NVIDIA only (a slight perf cost for much better stability);
+        // other GPUs keep full acceleration. Guarded so the user can still override.
+        let nvidia = std::path::Path::new("/proc/driver/nvidia").exists()
+            || std::path::Path::new("/dev/nvidia0").exists();
+        if nvidia && std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        }
     }
 
     // Install the process-global rustls crypto provider once, up front: reqwest is
@@ -189,6 +201,17 @@ pub fn run() {
                 });
             }
             view::apply_inset(app.handle());
+
+            // Linux: render native widgets (the <select> popup menus, file dialogs)
+            // in the dark variant so they match Aegis's always-dark UI instead of a
+            // white system-light theme. Sets the GTK app-wide "prefer dark" hint.
+            #[cfg(target_os = "linux")]
+            {
+                use gtk::prelude::*;
+                if let Some(gset) = gtk::Settings::default() {
+                    gset.set_gtk_application_prefer_dark_theme(true);
+                }
+            }
 
             // Content-webview permission requests: prompt (remembered per origin),
             // deny unrecognized types (Linux).

@@ -5,7 +5,6 @@ import { aegis } from '../lib/ipcClient';
 import { applyTheme } from '../lib/theme';
 
 const emptySettings: Settings = {
-  siteName: '',
   homeUrl: '',
   primaryColor: '#3b82f6',
   defaultSearchTemplate: '',
@@ -25,7 +24,6 @@ export function useSettings(): {
     void aegis.settings.get().then((s) => {
       if (!active) return;
       setSettings(s);
-      document.title = s.siteName;
     });
     return () => {
       active = false;
@@ -38,10 +36,6 @@ export function useSettings(): {
     // Theme re-applies live only when the accent color was part of this edit.
     if (partial.primaryColor !== undefined) {
       applyTheme({ primaryColor: next.primaryColor });
-    }
-    // Keep the document title in sync when the site name was part of this edit.
-    if (partial.siteName !== undefined) {
-      document.title = next.siteName;
     }
   }, []);
 

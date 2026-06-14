@@ -3,8 +3,8 @@
 // it. Overlays/sidebar/fullscreen adjust this:
 //   - a full-window chrome overlay (settings, downloads, …) HIDES the content so
 //     the overlay (behind the opaque content) shows;
-//   - the sidebar is a right panel — it INSETS the content from the right (keeping
-//     the page visible) rather than hiding it;
+//   - the History/Saved sidebar is a chrome overlay — like the others it HIDES the
+//     content (the opaque content webview would otherwise cover the panel);
 //   - fullscreen fills the whole window with content.
 use serde_json::Value;
 use std::sync::Mutex;
@@ -28,10 +28,9 @@ pub struct Layout {
     /// Right inset (the sidebar panel width when the sidebar is open).
     pub right: f64,
     pub fullscreen: bool,
-    /// A full-window chrome overlay is active (hides the content).
+    /// A full-window chrome overlay is active (hides the content). The History/Saved
+    /// sidebar rides this flag too, so the opaque content hides behind the panel.
     pub overlay: bool,
-    /// The sidebar is active (insets content from the right; content stays visible).
-    pub sidebar: bool,
 }
 
 pub struct ContentInset(pub Mutex<Layout>);
@@ -44,7 +43,6 @@ impl Default for ContentInset {
             right: 0.0,
             fullscreen: false,
             overlay: false,
-            sidebar: false,
         }))
     }
 }
@@ -58,14 +56,14 @@ fn layout_of(app: &AppHandle) -> Layout {
             right: 0.0,
             fullscreen: false,
             overlay: false,
-            sidebar: false,
         })
 }
 
-/// Hide the content only for a full-window overlay (not the sidebar, which keeps
-/// the page visible) and not in fullscreen.
+/// Hide the content for any full-window chrome overlay — settings, downloads, the
+/// History/Saved sidebar — so the chrome shows above the opaque content webview;
+/// keep it visible only in fullscreen or when nothing is overlaid.
 fn apply_visibility(app: &AppHandle, lay: Layout) {
-    let visible = lay.fullscreen || lay.sidebar || !lay.overlay;
+    let visible = lay.fullscreen || !lay.overlay;
     #[cfg(target_os = "linux")]
     crate::linux_layout::set_content_visible(app, visible);
     // Windows/macOS: Tauri's hide/show work directly. (Mobile is single-webview —
@@ -163,7 +161,6 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "view.setSidebar" => {
             let active = payload.get("active").and_then(Value::as_bool).unwrap_or(false);
             update(app, |l| {
-                l.sidebar = active;
                 l.right = if active { SIDEBAR_WIDTH } else { 0.0 };
             });
             Ok(Value::Null)
