@@ -65,6 +65,10 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
     let app_dl = app.clone();
     let builder = tauri::webview::WebviewBuilder::new(CONTENT_LABEL, WebviewUrl::External(blank()))
         .user_agent(CONTENT_UA)
+        // Inject the ad/tracker blocker at document start into the page and all iframes.
+        // On Linux this supplements the WebKit content filters; on Windows/macOS (where
+        // wry exposes no request interception) it IS the ad-block layer.
+        .initialization_script_for_all_frames(crate::adblock_inject::script())
         .on_navigation(move |url| {
             // Fires for every navigation (programmatic, link clicks, redirects).
             emit_state(&app_nav, url.as_str(), true);

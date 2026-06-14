@@ -4,6 +4,11 @@ mod adblock_convert;
 // export active) and under `cargo test` (host unit test); unused on WebKit desktop.
 #[cfg(any(target_os = "android", test))]
 mod adblock_engine;
+// Injected (document-start) ad/tracker blocker for the desktop content webview — the
+// ad-block layer on Windows/macOS (wry can't intercept their requests), verifiable on
+// Linux where it supplements the WebKit content filters.
+#[cfg(any(desktop, test))]
+mod adblock_inject;
 #[cfg(target_os = "linux")]
 mod adblock_webkit;
 #[cfg(target_os = "linux")]
