@@ -13,6 +13,8 @@ import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
 import androidx.activity.enableEdgeToEdge
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import java.io.ByteArrayInputStream
 import org.json.JSONObject
 
@@ -140,6 +142,20 @@ class MainActivity : TauriActivity() {
       content.visibility = View.GONE // hidden at home so the chrome's home screen shows
       parent.addView(content, lp)
       contentWebView = content
+      // Keep the content webview below the status bar (time/battery) and above the
+      // system navigation bar. The chrome pads its toolbar down by the same status-bar
+      // inset (env(safe-area-inset-top)), so the content starts at 96dp + that inset.
+      // Recomputed on every inset change (rotation, gesture vs 3-button nav, etc.).
+      ViewCompat.setOnApplyWindowInsetsListener(parent) { _, insets ->
+        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+        (content.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
+          p.topMargin = top + bars.top
+          p.bottomMargin = bars.bottom
+          content.layoutParams = p
+        }
+        insets
+      }
+      ViewCompat.requestApplyInsets(parent)
       // Let the React chrome (in the chrome webview) drive this content webview.
       webView.addJavascriptInterface(Bridge(), "AegisAndroid")
       // Warm the adblock engine (parses EasyList ~once) off the UI thread so the
@@ -291,6 +307,6 @@ class MainActivity : TauriActivity() {
     // Vanilla mobile Chrome UA (no "; wv" WebView marker), mirroring the desktop
     // build's Chrome UA in nav.rs. Bump the Chrome version alongside it.
     private const val CHROME_UA =
-      "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
+      "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
   }
 }
