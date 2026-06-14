@@ -265,6 +265,27 @@ impl Registry {
     }
 
     /// Reopen the most-recently-closed tab (Ctrl+Shift+T). Returns its (id, url).
+    /// Discard live, non-active, non-pinned tabs idle for >= timeout_ms.
+    /// `timeout_ms == 0` disables. Returns ids whose webviews the caller must close().
+    pub fn sweep_idle(&mut self, now_ms: u64, timeout_ms: u64) -> Vec<ViewId> {
+        if timeout_ms == 0 {
+            return Vec::new();
+        }
+        let active = self.active_id;
+        let mut victims = Vec::new();
+        for t in self.tabs.iter_mut() {
+            if t.live
+                && t.id != active
+                && !t.pinned
+                && now_ms.saturating_sub(t.last_active) >= timeout_ms
+            {
+                t.live = false;
+                victims.push(t.id);
+            }
+        }
+        victims
+    }
+
     pub fn reopen_closed(&mut self, now_ms: u64) -> Option<(ViewId, String)> {
         let c = self.closed_stack.pop()?;
         let id = self.next_id;
@@ -481,5 +502,40 @@ mod tests {
         assert_eq!(r.url_of(1), Some("https://x.test/"));
         let p = r.to_persisted();
         assert_eq!(p.tabs[0].title, "X");
+    }
+
+    #[test]
+    fn sweep_discards_idle_background_tabs_only() {
+        let mut r = reg();                                  // tab 1
+        let (b, _) = r.create(None, false, 0);              // tab 2 active, 1 backgrounded@0
+        // now = 60_000 ms, timeout = 30_000 ms -> tab 1 (idle 60s) is discarded.
+        let victims = r.sweep_idle(60_000, 30_000);
+        assert_eq!(victims, vec![1]);
+        assert!(!r.tabs_state().tabs.iter().find(|t| t.id == 1).unwrap().live);
+        assert!(r.tabs_state().tabs.iter().find(|t| t.id == b).unwrap().live); // active exempt
+    }
+
+    #[test]
+    fn sweep_exempts_active_and_pinned() {
+        let mut r = reg();                                  // tab 1 active
+        let (_b, _) = r.create(None, false, 0);              // tab 2 active, 1 backgrounded@0
+        r.set_pinned(1, true);                              // 1 pinned -> exempt
+        let victims = r.sweep_idle(999_999, 1);
+        assert!(victims.is_empty());                        // active(b) + pinned(1) both exempt
+    }
+
+    #[test]
+    fn sweep_timeout_zero_disables() {
+        let mut r = reg();
+        let _ = r.create(None, false, 0);
+        assert!(r.sweep_idle(u64::MAX, 0).is_empty());
+    }
+
+    #[test]
+    fn sweep_keeps_recently_active_tabs() {
+        let mut r = reg();                                  // tab 1
+        let (_b, _) = r.create(None, false, 50_000);        // tab 1 backgrounded@50s
+        let victims = r.sweep_idle(60_000, 30_000);         // idle only 10s < 30s
+        assert!(victims.is_empty());
     }
 }
