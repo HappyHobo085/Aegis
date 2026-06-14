@@ -30,7 +30,10 @@ const setChromeOverlay = vi.fn(async () => {});
 const setFullscreen = vi.fn(async () => {});
 let failedCb: ((f: NavFailed) => void) | undefined;
 let crashedCb: ((c: NavCrashed) => void) | undefined;
-let stateCb: ((s: NavState) => void) | undefined;
+// Multiple hooks (useNav + titles effect in App) both subscribe to onState.
+// We fan out to all registered callbacks so firing stateCb drives all of them.
+const stateCbs: Array<(s: NavState) => void> = [];
+const stateCb = (s: NavState): void => { stateCbs.forEach((cb) => cb(s)); };
 
 vi.mock('./lib/ipcClient', () => ({
   aegis: {
@@ -42,8 +45,8 @@ vi.mock('./lib/ipcClient', () => ({
       home: vi.fn(async () => {}),
       getState: vi.fn(async () => baseState),
       onState: (cb: (s: NavState) => void) => {
-        stateCb = cb;
-        return () => {};
+        stateCbs.push(cb);
+        return () => { const i = stateCbs.indexOf(cb); if (i !== -1) stateCbs.splice(i, 1); };
       },
       onFailed: (cb: (f: NavFailed) => void) => {
         failedCb = cb;
@@ -140,6 +143,16 @@ vi.mock('./lib/ipcClient', () => ({
       removeException: vi.fn(),
       onInterstitial: vi.fn(() => () => {}),
     },
+    tabs: {
+      list: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
+      create: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
+      close: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
+      activate: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
+      reorder: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
+      setPinned: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
+      reopenClosed: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
+      onState: vi.fn(() => () => {}),
+    },
   },
 }));
 
@@ -149,7 +162,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   failedCb = undefined;
   crashedCb = undefined;
-  stateCb = undefined;
+  stateCbs.length = 0;
 });
 
 describe('App', () => {
@@ -237,10 +250,11 @@ describe('App', () => {
     expect(screen.getByRole('complementary', { name: /sidebar/i })).toBeInTheDocument();
   });
 
-  it('reports the constant top inset on mount (favorites bar always-on, no left inset)', async () => {
+  it('reports the constant top inset on mount (tab strip + toolbar + favbar, no left inset)', async () => {
     render(<App />);
     await waitFor(() => expect(setContentInset).toHaveBeenCalled());
-    expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 96, left: 0 });
+    // 56 (toolbar) + 40 (favbar) + 36 (tab strip, desktop) = 132
+    expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 132, left: 0 });
   });
 
   it('drives view.setChromeOverlay false on mount (no overlay active)', async () => {

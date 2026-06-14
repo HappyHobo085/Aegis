@@ -1,7 +1,6 @@
 // src/App.tsx
 import { useEffect, useState } from 'react';
 import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
-import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
@@ -19,6 +18,7 @@ import { usePermissions } from './hooks/usePermissions';
 import { useContentInset } from './hooks/useContentInset';
 import { useUpdate } from './hooks/useUpdate';
 import { useSafety } from './hooks/useSafety';
+import { useTabs } from './hooks/useTabs';
 import { Toolbar } from './components/Toolbar';
 import { BookmarkButton } from './components/BookmarkButton';
 import { DownloadsIndicator } from './components/DownloadsIndicator';
@@ -48,6 +48,11 @@ import { DownloadsTab } from './components/DownloadsTab';
 import { SitePermissionsTab } from './components/SitePermissionsTab';
 import { SecurityTab } from './components/SecurityTab';
 import { DataTab } from './components/DataTab';
+import { TabStrip } from './components/TabStrip';
+
+const isMobile =
+  typeof document !== 'undefined' &&
+  document.documentElement.classList.contains('aegis-mobile');
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
 
@@ -62,8 +67,9 @@ function hostOf(url: string): string | null {
 }
 
 export function App() {
-  const nav = useNav(PRIMARY_VIEW_ID);
-  const adblock = useAdblock(PRIMARY_VIEW_ID, nav.state.url);
+  const tabs = useTabs();
+  const nav = useNav(tabs.activeId);
+  const adblock = useAdblock(tabs.activeId, nav.state.url);
   // The ad-block shield popover is a chrome dropdown; track it so the content webview
   // is lowered while it's open (Tauri's content view is opaque and on top).
   const [shieldOpen, setShieldOpen] = useState(false);
@@ -89,12 +95,24 @@ export function App() {
   const update = useUpdate();
   const safety = useSafety();
 
+  // Per-tab title map: fed from nav.state events so the TabStrip can show page titles.
+  const [titles, setTitles] = useState<Map<number, string>>(new Map());
+  useEffect(() => {
+    return aegis.nav.onState((s) => {
+      setTitles((m) => {
+        const next = new Map(m);
+        next.set(s.viewId, s.title || s.url);
+        return next;
+      });
+    });
+  }, []);
+
   // A confirm dialog (e.g. "Clear all history") is a full-window overlay; track it
   // so the content webview hides behind it (else it renders behind the page).
   useEffect(() => subscribeConfirmOpen(setConfirmOpen), []);
 
-  // Favorites bar is always-on (constant top inset); overlays never inset content.
-  useContentInset(PRIMARY_VIEW_ID);
+  // Favorites bar is always-on (constant top inset); tab strip adds to the inset on desktop.
+  useContentInset(tabs.activeId, !isMobile);
 
   // Full-window chrome overlays (settings, favorites manager, permission prompt,
   // error/crash, downloads, safety) must bring the chrome over the content. The
@@ -112,19 +130,19 @@ export function App() {
     crashed !== null ||
     safety.interstitial !== null;
   useEffect(() => {
-    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, fullOverlayActive || sidebarOpen || shieldOpen);
-  }, [fullOverlayActive, sidebarOpen, shieldOpen]);
+    void aegis.view.setChromeOverlay(tabs.activeId, fullOverlayActive || sidebarOpen || shieldOpen);
+  }, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen]);
   useEffect(() => {
     // Inset the content by the sidebar's actual width when it's open and no full overlay
     // is covering it — so the page stays visible beside the panel without overlapping it.
-    void aegis.view.setSidebar?.(PRIMARY_VIEW_ID, sidebarOpen && !fullOverlayActive, sidebarWidth);
-  }, [sidebarOpen, fullOverlayActive, sidebarWidth]);
+    void aegis.view.setSidebar?.(tabs.activeId, sidebarOpen && !fullOverlayActive, sidebarWidth);
+  }, [tabs.activeId, sidebarOpen, fullOverlayActive, sidebarWidth]);
 
   // Fullscreen: main shrinks chrome to a top-right corner and fills the window
   // with content. Renderer reflects the toggle below (after all hooks).
   useEffect(() => {
-    void aegis.view.setFullscreen(PRIMARY_VIEW_ID, fullscreen);
-  }, [fullscreen]);
+    void aegis.view.setFullscreen(tabs.activeId, fullscreen);
+  }, [tabs.activeId, fullscreen]);
 
   // In fullscreen the chrome shrinks to just the exit-button box; give the body a solid
   // background so that tiny webview actually paints — a transparent body can render
@@ -146,12 +164,12 @@ export function App() {
 
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {
-      if (f.viewId !== PRIMARY_VIEW_ID) return;
+      if (f.viewId !== tabs.activeId) return;
       setCrashed(null);
       setFailed(f);
     });
     const offCrashed = aegis.nav.onCrashed((c) => {
-      if (c.viewId !== PRIMARY_VIEW_ID) return;
+      if (c.viewId !== tabs.activeId) return;
       setFailed(null);
       setCrashed(c);
     });
@@ -159,7 +177,7 @@ export function App() {
       offFailed();
       offCrashed();
     };
-  }, []);
+  }, [tabs.activeId]);
 
   // Main owns content hide/show for failures and crashes. When a fresh
   // navigation reports loading state, clear any error/crash overlay. We do NOT
@@ -172,7 +190,7 @@ export function App() {
   }, [nav.state.isLoading, nav.state.crashed]);
 
   const handleRetry = (): void => {
-    void aegis.nav.reloadOrStop(PRIMARY_VIEW_ID);
+    void aegis.nav.reloadOrStop(tabs.activeId);
   };
 
   const handleHome = (): void => {
@@ -203,6 +221,18 @@ export function App() {
   return (
     <div className="app">
       <SkipLink targetId={CONTENT_ANCHOR_ID} />
+      {!isMobile && (
+        <TabStrip
+          tabs={tabs.tabs}
+          activeId={tabs.activeId}
+          titles={titles}
+          onActivate={(id) => void tabs.activate(id)}
+          onClose={(id) => void tabs.close(id)}
+          onCreate={() => void tabs.create()}
+          onReorder={(ids) => void tabs.reorder(ids)}
+          onSetPinned={(id, pinned) => void tabs.setPinned(id, pinned)}
+        />
+      )}
       <Toolbar
         state={nav.state}
         navigate={nav.navigate}
