@@ -183,6 +183,79 @@ impl Registry {
         }
         (id, url)
     }
+
+    /// Make `id` active. Returns Some(url) if its webview must be (re)spawned.
+    pub fn activate(&mut self, id: ViewId, now_ms: u64) -> Option<String> {
+        if id == self.active_id || self.idx(id).is_none() {
+            return None;
+        }
+        if let Some(i) = self.idx(self.active_id) {
+            self.tabs[i].last_active = now_ms;
+        }
+        self.active_id = id;
+        let i = self.idx(id).unwrap();
+        if self.tabs[i].live {
+            None
+        } else {
+            self.tabs[i].live = true;
+            Some(self.tabs[i].url.clone())
+        }
+    }
+
+    /// Close `id`. Pushes it onto the reopen stack and activates a neighbor.
+    pub fn close(&mut self, id: ViewId, now_ms: u64) -> CloseOutcome {
+        let Some(i) = self.idx(id) else {
+            return CloseOutcome { closed_live: false, spawn: None };
+        };
+        let t = self.tabs.remove(i);
+        self.closed_stack.push(ClosedTab {
+            url: t.url, title: t.title, position: i, pinned: t.pinned,
+        });
+        if self.tabs.is_empty() {
+            let (nid, nurl) = self.create(None, false, now_ms);
+            return CloseOutcome { closed_live: t.live, spawn: Some((nid, nurl)) };
+        }
+        if id == self.active_id {
+            let ni = i.min(self.tabs.len() - 1);
+            self.active_id = self.tabs[ni].id;
+            // No last_active update here: the active tab is exempt from the idle
+            // sweep, and a tab's last_active is (re)stamped when it STOPS being
+            // active (activate/create/reopen), so the neighbor's idle clock is
+            // already correct by the time it could ever be swept.
+            if !self.tabs[ni].live {
+                self.tabs[ni].live = true;
+                let url = self.tabs[ni].url.clone();
+                return CloseOutcome { closed_live: t.live, spawn: Some((self.active_id, url)) };
+            }
+        }
+        CloseOutcome { closed_live: t.live, spawn: None }
+    }
+
+    /// Reopen the most-recently-closed tab (Ctrl+Shift+T). Returns its (id, url).
+    pub fn reopen_closed(&mut self, now_ms: u64) -> Option<(ViewId, String)> {
+        let c = self.closed_stack.pop()?;
+        let id = self.next_id;
+        self.next_id += 1;
+        let pos = c.position.min(self.tabs.len());
+        self.tabs.insert(pos, Tab {
+            id, url: c.url.clone(), title: c.title,
+            pinned: c.pinned, live: true, last_active: now_ms,
+        });
+        if let Some(i) = self.idx(self.active_id) {
+            self.tabs[i].last_active = now_ms;
+        }
+        self.active_id = id;
+        self.resort_pinned();
+        Some((id, c.url))
+    }
+}
+
+#[cfg(test)]
+impl Registry {
+    fn discard_for_test(&mut self, id: ViewId) {
+        let i = self.idx(id).unwrap();
+        self.tabs[i].live = false;
+    }
 }
 
 #[cfg(test)]
@@ -258,5 +331,92 @@ mod tests {
     fn url_of_unknown_id_is_none() {
         let r = reg();
         assert_eq!(r.url_of(999), None);
+    }
+
+    #[test]
+    fn activate_live_tab_needs_no_spawn() {
+        let mut r = reg();
+        let (b, _) = r.create(Some("https://b.test/".into()), false, 0); // active=b
+        assert_eq!(r.activate(1, 10), None); // tab 1 still live
+        assert_eq!(r.active_id(), 1);
+        let _ = b;
+    }
+
+    #[test]
+    fn activating_discarded_tab_returns_its_url_to_spawn() {
+        let mut r = reg();                                              // tab 1 active
+        let (b, _) = r.create(Some("https://b.test/".into()), false, 0); // b active
+        r.activate(1, 5);                                              // back to tab 1; b is now a background tab
+        r.discard_for_test(b);                                         // discard the background tab b
+        let url = r.activate(b, 20);                                   // re-activate discarded b -> must respawn
+        assert_eq!(url.as_deref(), Some("https://b.test/"));
+        assert_eq!(r.active_id(), b);
+    }
+
+    #[test]
+    fn closing_active_activates_a_neighbor() {
+        let mut r = reg();          // tab 1
+        let (b, _) = r.create(None, false, 0);  // tab 2 (active)
+        let out = r.close(b, 0);
+        assert!(out.closed_live);
+        assert!(out.spawn.is_none()); // neighbor (tab 1) was already live
+        assert_eq!(r.active_id(), 1);
+        assert_eq!(r.tabs_state().tabs.len(), 1);
+    }
+
+    #[test]
+    fn closing_the_last_tab_creates_a_fresh_home_tab() {
+        let mut r = reg();
+        let out = r.close(1, 0);
+        let s = r.tabs_state();
+        assert_eq!(s.tabs.len(), 1);
+        assert!(out.spawn.is_some()); // the replacement home tab must be spawned
+        assert_eq!(out.spawn.unwrap().0, s.active_id);
+    }
+
+    #[test]
+    fn reopen_restores_the_last_closed_tab_as_active() {
+        let mut r = reg();
+        let (b, _) = r.create(Some("https://b.test/".into()), false, 0);
+        r.close(b, 0);
+        let (id, url) = r.reopen_closed(0).unwrap();
+        assert_eq!(url, "https://b.test/");
+        assert_eq!(r.active_id(), id);
+    }
+
+    #[test]
+    fn closing_a_background_tab_keeps_active_and_needs_no_spawn() {
+        let mut r = reg();                          // tab 1 active
+        let (b, _) = r.create(None, false, 0);      // b active
+        r.activate(1, 5);                           // tab 1 active; b is now a live background tab
+        let out = r.close(b, 10);
+        assert_eq!(r.active_id(), 1);               // active unchanged by closing a background tab
+        assert!(out.spawn.is_none());
+        assert!(out.closed_live);                   // b had a live webview to destroy
+        assert_eq!(r.tabs_state().tabs.len(), 1);
+    }
+
+    #[test]
+    fn activating_the_current_tab_is_a_noop() {
+        let mut r = reg();                          // tab 1 active
+        assert_eq!(r.activate(1, 5), None);
+        assert_eq!(r.active_id(), 1);
+    }
+
+    #[test]
+    fn reopen_on_empty_stack_returns_none() {
+        let mut r = reg();
+        assert!(r.reopen_closed(0).is_none());
+    }
+
+    #[test]
+    fn closing_active_respawns_a_discarded_neighbor() {
+        let mut r = reg();                          // tab 1
+        let (b, _) = r.create(None, false, 0);      // b active; tab 1 is a background tab
+        r.discard_for_test(1);                      // discard the neighbor (tab 1)
+        let out = r.close(b, 10);                   // close active b -> neighbor 1 must respawn
+        assert_eq!(r.active_id(), 1);
+        let (sid, _surl) = out.spawn.expect("discarded neighbor must be respawned");
+        assert_eq!(sid, 1);
     }
 }
