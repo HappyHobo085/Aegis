@@ -33,6 +33,17 @@ class MainActivity : TauriActivity() {
    *  shouldInterceptRequest (network thread); volatile for safe cross-thread reads. */
   @Volatile private var currentPageUrl: String = ""
 
+  // The native content WebView is shown only when a real page is loaded AND no chrome
+  // overlay (settings/sidebar/shield popover/…) is covering it. Tauri's setChromeOverlay
+  // can't reach this native view, so the chrome drives it via the bridge instead. Both
+  // flags are touched only on the UI thread.
+  private var hasPage = false
+  private var overlayHidden = false
+
+  private fun updateContentVisibility() {
+    contentWebView?.visibility = if (hasPage && !overlayHidden) View.VISIBLE else View.GONE
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
@@ -195,10 +206,9 @@ class MainActivity : TauriActivity() {
       <p>Aegis blocked <code>$safeHost</code> because it's on a known-malware list.</p>
       <p>For your safety, the page was not loaded.</p></body></html>
     """.trimIndent()
-    contentWebView?.let {
-      it.visibility = View.VISIBLE
-      it.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
-    }
+    hasPage = true
+    updateContentVisibility()
+    contentWebView?.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
     pushNavState(url, false)
   }
 
@@ -230,18 +240,28 @@ class MainActivity : TauriActivity() {
       if (url.isEmpty() || url == "about:blank") {
         // Home: hide the content webview so the chrome's home screen shows, and
         // clear the address bar (blank state).
-        c.visibility = View.GONE
+        hasPage = false
+        updateContentVisibility()
         pushNavState("about:blank", false)
       } else {
         // Apply the security policy (malware block / HTTPS-Only upgrade) before load.
         when (val target = secureUrl(url)) {
           null -> showMalwareWarning(url)
           else -> {
-            c.visibility = View.VISIBLE
+            hasPage = true
+            updateContentVisibility()
             c.loadUrl(target)
           }
         }
       }
+    }
+
+    /** Lower/raise the native content WebView when a chrome overlay opens/closes, so
+     *  the overlay (which lives in the chrome webview) isn't hidden behind it. */
+    @JavascriptInterface
+    fun setContentHidden(hidden: Boolean) = runOnUiThread {
+      overlayHidden = hidden
+      updateContentVisibility()
     }
 
     @JavascriptInterface

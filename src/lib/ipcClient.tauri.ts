@@ -37,6 +37,7 @@ interface AndroidBridge {
   back(): void;
   forward(): void;
   reload(): void;
+  setContentHidden(hidden: boolean): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -116,7 +117,16 @@ export const aegis: AegisApi = {
   view: {
     setContentVisible: (viewId, visible) => call(IPC.viewSetContentVisible, { viewId, visible }),
     setContentInset: (viewId, inset) => call(IPC.viewSetContentInset, { viewId, inset }),
-    setChromeOverlay: (viewId, active) => call(IPC.viewSetChromeOverlay, { viewId, active }),
+    setChromeOverlay: (viewId, active) => {
+      // On Android the content view is a native WebView (Rust view.rs can't reach it),
+      // so hide/show it via the bridge when a chrome overlay opens/closes.
+      const a = androidBridge();
+      if (a) {
+        a.setContentHidden(active);
+        return Promise.resolve();
+      }
+      return call(IPC.viewSetChromeOverlay, { viewId, active });
+    },
     setSidebar: (viewId, active) => call(IPC.viewSetSidebar, { viewId, active }),
     setFullscreen: (viewId, on) => call(IPC.viewSetFullscreen, { viewId, on }),
     onFullscreen: (cb) => on<{ on: boolean }>(IPC.evtViewFullscreen, cb),

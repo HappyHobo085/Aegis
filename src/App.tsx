@@ -64,6 +64,9 @@ function hostOf(url: string): string | null {
 export function App() {
   const nav = useNav(PRIMARY_VIEW_ID);
   const adblock = useAdblock(PRIMARY_VIEW_ID, nav.state.url);
+  // The ad-block shield popover is a chrome dropdown; track it so the content webview
+  // is lowered while it's open (Tauri's content view is opaque and on top).
+  const [shieldOpen, setShieldOpen] = useState(false);
   const favorites = useFavorites(nav.state.url);
   const history = useHistory();
   const saved = useSaved(nav.state.url);
@@ -106,8 +109,8 @@ export function App() {
     crashed !== null ||
     safety.interstitial !== null;
   useEffect(() => {
-    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, fullOverlayActive || sidebarOpen);
-  }, [fullOverlayActive, sidebarOpen]);
+    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, fullOverlayActive || sidebarOpen || shieldOpen);
+  }, [fullOverlayActive, sidebarOpen, shieldOpen]);
   useEffect(() => {
     // Inset the content for the sidebar only when no full overlay is covering it.
     void aegis.view.setSidebar?.(PRIMARY_VIEW_ID, sidebarOpen && !fullOverlayActive);
@@ -207,6 +210,7 @@ export function App() {
           host: hostOf(nav.state.url),
           setEnabled: adblock.setEnabled,
           toggleAllowlist: adblock.toggleAllowlist,
+          onOpenChange: setShieldOpen,
         }}
         bookmark={
           <BookmarkButton
