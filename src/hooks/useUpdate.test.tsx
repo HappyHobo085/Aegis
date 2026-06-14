@@ -41,6 +41,11 @@ describe('useUpdate', () => {
     expect(getState).toHaveBeenCalledTimes(1);
   });
 
+  it('auto-checks for updates on mount', async () => {
+    renderHook(() => useUpdate());
+    await waitFor(() => expect(checkNow).toHaveBeenCalledTimes(1));
+  });
+
   it('updates state when an onState event fires', async () => {
     let pushed: ((s: UpdateState) => void) | undefined;
     onState.mockImplementation((cb: (s: UpdateState) => void) => {

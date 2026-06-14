@@ -38,6 +38,7 @@ interface AndroidBridge {
   forward(): void;
   reload(): void;
   setContentHidden(hidden: boolean): void;
+  openExternal(url: string): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -224,7 +225,16 @@ export const aegis: AegisApi = {
   update: {
     getState: () => call<UpdateState>(IPC.updateGetState),
     checkNow: () => call(IPC.updateCheckNow),
-    restartToInstall: () => call(IPC.updateRestartToInstall),
+    // Android can't self-install via the Tauri updater; open the releases page so the
+    // user can download the new APK. Desktop restarts into the installed update.
+    restartToInstall: () => {
+      const a = androidBridge();
+      if (a) {
+        a.openExternal('https://github.com/HappyHobo085/Aegis/releases/latest');
+        return Promise.resolve();
+      }
+      return call(IPC.updateRestartToInstall);
+    },
     onState: (cb) => on<UpdateState>(IPC.evtUpdateState, cb),
   },
   safety: {

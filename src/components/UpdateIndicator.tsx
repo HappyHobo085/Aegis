@@ -9,10 +9,15 @@ export interface UpdateIndicatorProps {
 }
 
 export function UpdateIndicator({ state, onRestart }: UpdateIndicatorProps) {
-  if (state.status !== 'downloaded') {
+  // Show once an update is ready to act on: "available" (click to install — on
+  // desktop downloads+restarts, on Android opens the releases page) or "downloaded"
+  // (desktop, click to restart into it).
+  if (state.status !== 'available' && state.status !== 'downloaded') {
     return null;
   }
-  const label = state.version ? `Restart to update to ${state.version}` : 'Restart to update';
+  const ver = state.version ? ` ${state.version}` : '';
+  const label =
+    state.status === 'downloaded' ? `Restart to update${ver}` : `Update available${ver} — install`;
   return (
     <button
       type="button"

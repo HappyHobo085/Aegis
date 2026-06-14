@@ -272,6 +272,19 @@ class MainActivity : TauriActivity() {
 
     @JavascriptInterface
     fun reload() = runOnUiThread { contentWebView?.reload() }
+
+    /** Open a URL in the external browser (used to reach the releases page to install
+     *  an update — the Tauri updater is desktop-only). */
+    @JavascriptInterface
+    fun openExternal(url: String) = runOnUiThread {
+      try {
+        startActivity(
+          android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))
+            .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+      } catch (_: Throwable) {
+      }
+    }
   }
 
   companion object {
