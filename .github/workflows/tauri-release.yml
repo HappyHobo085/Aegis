@@ -32,7 +32,7 @@ jobs:
             args: ''
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Tauri's Linux build links webkit2gtk; install the apt equivalents of the
       # Fedora deps used in dev.
