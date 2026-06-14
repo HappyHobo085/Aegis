@@ -28,6 +28,7 @@ mod places;
 mod safety;
 mod settings;
 mod subs;
+mod tab_registry;
 mod update;
 mod view;
 
