@@ -120,13 +120,19 @@ fn path_of(app: &AppHandle, id: Option<i64>) -> Option<String> {
         .map(String::from)
 }
 
-/// Open a file or folder with the OS default handler.
+/// Open a file or folder with the OS default handler (desktop only — mobile has
+/// no shell command to spawn; a platform-appropriate opener is a later follow-up).
 fn open(target: &str) {
-    #[cfg(target_os = "linux")]
-    let cmd = "xdg-open";
-    #[cfg(target_os = "macos")]
-    let cmd = "open";
-    #[cfg(target_os = "windows")]
-    let cmd = "explorer";
-    let _ = std::process::Command::new(cmd).arg(target).spawn();
+    #[cfg(desktop)]
+    {
+        #[cfg(target_os = "linux")]
+        let cmd = "xdg-open";
+        #[cfg(target_os = "macos")]
+        let cmd = "open";
+        #[cfg(target_os = "windows")]
+        let cmd = "explorer";
+        let _ = std::process::Command::new(cmd).arg(target).spawn();
+    }
+    #[cfg(not(desktop))]
+    let _ = target;
 }

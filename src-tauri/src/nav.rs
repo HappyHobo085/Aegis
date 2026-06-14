@@ -48,6 +48,11 @@ fn emit_state(app: &AppHandle, url: &str, loading: bool) {
 
 /// Create the content webview as a child of the main window. Initial bounds put
 /// it below the chrome; `view::apply_inset` keeps it sized on inset/resize.
+///
+/// Desktop only: uses the `unstable` multi-webview API (`Window::add_child`), a
+/// desktop feature. Mobile (single-webview) gets its own content surface in a
+/// later phase; for now this is a no-op there so the chrome still loads.
+#[cfg(desktop)]
 pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
     let window = app
         .get_window("main")
@@ -122,6 +127,12 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
         tauri::LogicalPosition::new(0.0, DEFAULT_INSET_TOP),
         tauri::LogicalSize::new(size.width, (size.height - DEFAULT_INSET_TOP).max(0.0)),
     )?;
+    Ok(())
+}
+
+/// Mobile placeholder: no separate content webview yet (single-webview platform).
+#[cfg(mobile)]
+pub fn spawn_content(_app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 

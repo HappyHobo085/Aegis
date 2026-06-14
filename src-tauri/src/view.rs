@@ -68,7 +68,9 @@ fn apply_visibility(app: &AppHandle, lay: Layout) {
     let visible = lay.fullscreen || lay.sidebar || !lay.overlay;
     #[cfg(target_os = "linux")]
     crate::linux_layout::set_content_visible(app, visible);
-    #[cfg(not(target_os = "linux"))]
+    // Windows/macOS: Tauri's hide/show work directly. (Mobile is single-webview —
+    // there's no separate content webview to toggle.)
+    #[cfg(all(desktop, not(target_os = "linux")))]
     if let Some(w) = app.get_webview(CONTENT_LABEL) {
         let _ = if visible { w.show() } else { w.hide() };
     }
@@ -104,7 +106,7 @@ pub fn apply_inset(app: &AppHandle) {
         logical.height as i32,
     );
 
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(all(desktop, not(target_os = "linux")))]
     if let Some(content) = app.get_webview(CONTENT_LABEL) {
         let w = (logical.width - left - right).max(0.0);
         let h = (logical.height - top).max(0.0);
@@ -137,9 +139,15 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             Ok(Value::Null)
         }
         "view.setContentVisible" => {
-            let visible = payload.get("visible").and_then(Value::as_bool).unwrap_or(true);
-            if let Some(w) = app.get_webview(CONTENT_LABEL) {
-                let _ = if visible { w.show() } else { w.hide() };
+            #[cfg(desktop)]
+            {
+                let visible = payload.get("visible").and_then(Value::as_bool).unwrap_or(true);
+                #[cfg(target_os = "linux")]
+                crate::linux_layout::set_content_visible(app, visible);
+                #[cfg(not(target_os = "linux"))]
+                if let Some(w) = app.get_webview(CONTENT_LABEL) {
+                    let _ = if visible { w.show() } else { w.hide() };
+                }
             }
             Ok(Value::Null)
         }
