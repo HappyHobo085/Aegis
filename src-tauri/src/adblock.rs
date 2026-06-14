@@ -34,6 +34,19 @@ fn state_json(app: &AppHandle) -> Value {
     }
 }
 
+/// Mirror the ad-block policy (on/off + allowlist) into the Android matching engine,
+/// which honors it in `shouldInterceptRequest`. No-op on desktop, where the WebKit
+/// filters are reconfigured directly above.
+fn sync_engine(app: &AppHandle) {
+    #[cfg(target_os = "android")]
+    if let Some(s) = app.try_state::<AdblockState>() {
+        let g = s.0.lock().unwrap();
+        crate::adblock_engine::set_policy(g.enabled, &g.allowlist);
+    }
+    #[cfg(not(target_os = "android"))]
+    let _ = app;
+}
+
 /// Handle `adblock.*` channels. Returns `None` if not an adblock channel.
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {
@@ -52,6 +65,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     crate::adblock_webkit::remove_all(app);
                 }
             }
+            sync_engine(app);
             Some(Ok(state_json(app)))
         }
 
@@ -67,6 +81,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     g.allowlist.push(host);
                 }
             }
+            sync_engine(app);
             Some(Ok(state_json(app)))
         }
 
@@ -74,6 +89,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             if let Some(s) = app.try_state::<AdblockState>() {
                 s.0.lock().unwrap().allowlist.clear();
             }
+            sync_engine(app);
             Some(Ok(state_json(app)))
         }
 
