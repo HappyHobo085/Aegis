@@ -52,6 +52,28 @@ pub fn is_blocked(app: &AppHandle, url: &Url) -> bool {
     malware_hosts().contains(&host)
 }
 
+/// Whether `host` is a known-malware host in the bundled list (case-insensitive).
+/// Used by the Android content WebView's navigation/resource guard — there's no
+/// AppHandle/session-exception context there (per-site "proceed anyway" on mobile is
+/// a follow-up).
+pub fn is_malware_host(host: &str) -> bool {
+    malware_hosts().contains(&host.to_ascii_lowercase())
+}
+
+/// JNI bridge for Android's `NativeSafety.isMalwareHost`, called from the content
+/// WebView's guards (shouldOverrideUrlLoading / shouldInterceptRequest / the nav
+/// bridge). Same pattern as `adblock_engine.rs`; lives in libapp_lib.so.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeSafety_isMalwareHost(
+    mut env: jni::JNIEnv,
+    _this: jni::objects::JObject,
+    host: jni::objects::JString,
+) -> jni::sys::jboolean {
+    let host: String = env.get_string(&host).map(|s| s.into()).unwrap_or_default();
+    is_malware_host(&host) as jni::sys::jboolean
+}
+
 /// Record + surface the interstitial, and show a visible warning in the content
 /// area (deferred to avoid nav-callback re-entrancy).
 pub fn raise(app: &AppHandle, url: &str) {

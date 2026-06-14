@@ -1,6 +1,7 @@
 package com.aegis.browser
 
 import android.graphics.Bitmap
+import android.net.Uri
 import android.os.Bundle
 import android.util.Log
 import android.view.View
@@ -45,6 +46,10 @@ class MainActivity : TauriActivity() {
       val content = WebView(this)
       content.settings.javaScriptEnabled = true
       content.settings.domStorageEnabled = true
+      // Anti-fingerprint: present a vanilla mobile Chrome UA instead of the default
+      // Android System WebView string (which carries a "; wv" marker that flags it as
+      // an embedded webview), mirroring the desktop build's Chrome UA.
+      content.settings.userAgentString = CHROME_UA
       // Report navigations back to the chrome so the address bar/back/forward track
       // the current page (link clicks, redirects, form posts — not just typed URLs).
       content.webViewClient = object : WebViewClient() {
@@ -61,10 +66,10 @@ class MainActivity : TauriActivity() {
           pushNavState(url, view.progress < 100)
         }
 
-        // Ad/tracker blocking: ask the Rust `adblock` engine for a verdict on every
-        // subresource (this runs on a WebView network thread; the native call blocks
-        // briefly on the engine thread). Blocked → return an empty response so the
-        // resource never loads; allowed → null lets the WebView fetch it normally.
+        // Per-request guard (runs on a WebView network thread; native calls block
+        // briefly on their engine thread). Block malware-host subresources and
+        // ad/tracker requests with an empty response; allow the rest (null) so the
+        // WebView fetches them normally.
         override fun shouldInterceptRequest(
           view: WebView,
           request: WebResourceRequest,
@@ -72,15 +77,43 @@ class MainActivity : TauriActivity() {
           val url = request.url?.toString() ?: return null
           if (!url.startsWith("http")) return null // skip about:/data:/blob:/file:
           return try {
-            if (NativeAdblock.shouldBlock(url, currentPageUrl, requestType(url, request))) {
-              Log.i("AegisAdblock", "BLOCK $url")
-              WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
-            } else {
-              null
+            val host = request.url?.host
+            when {
+              host != null && NativeSafety.isMalwareHost(host) -> {
+                Log.i("AegisSafety", "BLOCK malware $url")
+                blockedResponse()
+              }
+              NativeAdblock.shouldBlock(url, currentPageUrl, requestType(url, request)) -> {
+                Log.i("AegisAdblock", "BLOCK $url")
+                blockedResponse()
+              }
+              else -> null
             }
           } catch (t: Throwable) {
-            Log.w("AegisAdblock", "shouldBlock failed for $url", t)
+            Log.w("AegisGuard", "intercept failed for $url", t)
             null
+          }
+        }
+
+        // Main-frame navigations the page initiates (link clicks; some redirects):
+        // block malware (→ warning page), upgrade http→https (HTTPS-Only). Typed and
+        // programmatic navigations are guarded in Bridge.navigate instead.
+        override fun shouldOverrideUrlLoading(
+          view: WebView,
+          request: WebResourceRequest,
+        ): Boolean {
+          val raw = request.url?.toString() ?: return false
+          if (!raw.startsWith("http")) return false
+          return when (val target = secureUrl(raw)) {
+            null -> {
+              showMalwareWarning(raw)
+              true
+            }
+            raw -> false // unchanged: let the WebView proceed
+            else -> {
+              view.loadUrl(target)
+              true
+            }
           }
         }
       }
@@ -127,6 +160,51 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  /** Security policy for a main-frame navigation target: returns the URL to actually
+   *  load, the same URL if it's fine, or null to BLOCK it as known malware. Upgrades
+   *  http→https (HTTPS-Only; localhost exempt — matches the desktop default-on). */
+  private fun secureUrl(raw: String): String? {
+    val uri = try {
+      Uri.parse(raw)
+    } catch (_: Throwable) {
+      return raw
+    }
+    val host = uri.host ?: return raw
+    if (NativeSafety.isMalwareHost(host)) return null
+    val localhost = host == "localhost" || host == "127.0.0.1" || host == "::1"
+    if (uri.scheme == "http" && !localhost) {
+      return "https://" + raw.substring("http://".length)
+    }
+    return raw
+  }
+
+  /** Replace the content with a malware warning (the desktop shows a richer
+   *  interstitial; a session "proceed anyway" on mobile is a follow-up). */
+  private fun showMalwareWarning(url: String) {
+    val host = (try {
+      Uri.parse(url).host
+    } catch (_: Throwable) {
+      null
+    }) ?: url
+    val safeHost = host.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    val html = """
+      <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+      <style>body{background:#1a0b0b;color:#fecaca;font-family:sans-serif;padding:24px;line-height:1.5}
+      h1{color:#fca5a5}code{color:#fcd34d;word-break:break-all}</style></head>
+      <body><h1>&#9888; Dangerous site blocked</h1>
+      <p>Aegis blocked <code>$safeHost</code> because it's on a known-malware list.</p>
+      <p>For your safety, the page was not loaded.</p></body></html>
+    """.trimIndent()
+    contentWebView?.let {
+      it.visibility = View.VISIBLE
+      it.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+    }
+    pushNavState(url, false)
+  }
+
+  private fun blockedResponse(): WebResourceResponse =
+    WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
+
   /** Push the content webview's nav state to the chrome's React state (NavState
    *  shape, viewId 1), by calling a global the Tauri client's nav.onState installs. */
   private fun pushNavState(url: String, loading: Boolean) {
@@ -155,8 +233,14 @@ class MainActivity : TauriActivity() {
         c.visibility = View.GONE
         pushNavState("about:blank", false)
       } else {
-        c.visibility = View.VISIBLE
-        c.loadUrl(url)
+        // Apply the security policy (malware block / HTTPS-Only upgrade) before load.
+        when (val target = secureUrl(url)) {
+          null -> showMalwareWarning(url)
+          else -> {
+            c.visibility = View.VISIBLE
+            c.loadUrl(target)
+          }
+        }
       }
     }
 
@@ -168,5 +252,12 @@ class MainActivity : TauriActivity() {
 
     @JavascriptInterface
     fun reload() = runOnUiThread { contentWebView?.reload() }
+  }
+
+  companion object {
+    // Vanilla mobile Chrome UA (no "; wv" WebView marker), mirroring the desktop
+    // build's Chrome UA in nav.rs. Bump the Chrome version alongside it.
+    private const val CHROME_UA =
+      "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Mobile Safari/537.36"
   }
 }
