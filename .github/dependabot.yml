@@ -1,10 +1,8 @@
 version: 2
 
 # Supply-chain currency. Grouped minor/patch npm PRs reduce noise; the CI
-# workflow (.github/workflows/ci.yml) gates every PR with the unit suite + audit
-# + Electron-currency checks. Electron and @ghostery/* are EXCLUDED from the
-# grouped updates so they arrive as individual, deliberate PRs that go through
-# the dual-ABI gate (per docs/superpowers/engine-update-policy.md).
+# workflow (.github/workflows/ci.yml) gates every PR with the unit suite + an
+# npm-audit check (high/critical advisories block merge unless allowlisted).
 updates:
   - package-ecosystem: "npm"
     directory: "/"
@@ -19,9 +17,6 @@ updates:
           - "patch"
         patterns:
           - "*"
-        exclude-patterns:
-          - "electron"
-          - "@ghostery/*"
 
   - package-ecosystem: "github-actions"
     directory: "/"
