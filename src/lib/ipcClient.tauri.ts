@@ -92,7 +92,24 @@ export const aegis: AegisApi = {
       return call(IPC.navHome, { viewId });
     },
     getState: (viewId) => call<NavState>(IPC.navGetState, { viewId }),
-    onState: (cb) => on<NavState>(IPC.evtNavState, cb),
+    onState: (cb) => {
+      // Android has no Tauri event bus on the content side; its WebViewClient pushes
+      // NavState by calling window.__aegisNavState (set up here). Support multiple
+      // subscribers so each unsubscribes cleanly.
+      if (androidBridge()) {
+        const w = window as unknown as {
+          __aegisNavStateCbs?: Set<(s: NavState) => void>;
+          __aegisNavState?: (s: NavState) => void;
+        };
+        const cbs = (w.__aegisNavStateCbs ??= new Set());
+        cbs.add(cb);
+        w.__aegisNavState = (s) => cbs.forEach((f) => f(s));
+        return () => {
+          cbs.delete(cb);
+        };
+      }
+      return on<NavState>(IPC.evtNavState, cb);
+    },
     onFailed: (cb) => on<NavFailed>(IPC.evtNavFailed, cb),
     onCrashed: (cb) => on<NavCrashed>(IPC.evtNavCrashed, cb),
   },
