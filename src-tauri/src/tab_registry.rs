@@ -231,6 +231,39 @@ impl Registry {
         CloseOutcome { closed_live: t.live, spawn: None }
     }
 
+    pub fn set_pinned(&mut self, id: ViewId, pinned: bool) {
+        if let Some(i) = self.idx(id) {
+            self.tabs[i].pinned = pinned;
+        }
+        self.resort_pinned();
+    }
+
+    /// Reorder to match `ids` (any omitted ids keep their order at the end), then
+    /// re-assert the pinned-first invariant.
+    pub fn reorder(&mut self, ids: &[ViewId]) {
+        let mut next: Vec<Tab> = Vec::with_capacity(self.tabs.len());
+        for id in ids {
+            if let Some(pos) = self.tabs.iter().position(|t| t.id == *id) {
+                next.push(self.tabs.remove(pos));
+            }
+        }
+        next.extend(self.tabs.drain(..));
+        self.tabs = next;
+        self.resort_pinned();
+    }
+
+    pub fn set_url(&mut self, id: ViewId, url: String) {
+        if let Some(i) = self.idx(id) {
+            self.tabs[i].url = url;
+        }
+    }
+
+    pub fn set_title(&mut self, id: ViewId, title: String) {
+        if let Some(i) = self.idx(id) {
+            self.tabs[i].title = title;
+        }
+    }
+
     /// Reopen the most-recently-closed tab (Ctrl+Shift+T). Returns its (id, url).
     pub fn reopen_closed(&mut self, now_ms: u64) -> Option<(ViewId, String)> {
         let c = self.closed_stack.pop()?;
@@ -418,5 +451,35 @@ mod tests {
         assert_eq!(r.active_id(), 1);
         let (sid, _surl) = out.spawn.expect("discarded neighbor must be respawned");
         assert_eq!(sid, 1);
+    }
+
+    #[test]
+    fn pinning_moves_the_tab_to_the_front() {
+        let mut r = reg();                       // tab 1
+        let (b, _) = r.create(None, false, 0);   // tab 2
+        r.set_pinned(b, true);
+        assert_eq!(r.tabs_state().tabs[0].id, b);
+        assert!(r.tabs_state().tabs[0].pinned);
+    }
+
+    #[test]
+    fn reorder_respects_given_order_but_keeps_pinned_first() {
+        let mut r = reg();                       // 1
+        let (b, _) = r.create(None, false, 0);   // 2
+        let (c, _) = r.create(None, false, 0);   // 3
+        r.set_pinned(c, true);                   // c pinned -> front
+        r.reorder(&[b, 1, c]);                   // request b,1,c; c stays pinned-first
+        let ids: Vec<ViewId> = r.tabs_state().tabs.iter().map(|t| t.id).collect();
+        assert_eq!(ids, vec![c, b, 1]);
+    }
+
+    #[test]
+    fn set_url_and_title_update_the_tab() {
+        let mut r = reg();
+        r.set_url(1, "https://x.test/".into());
+        r.set_title(1, "X".into());
+        assert_eq!(r.url_of(1), Some("https://x.test/"));
+        let p = r.to_persisted();
+        assert_eq!(p.tabs[0].title, "X");
     }
 }
