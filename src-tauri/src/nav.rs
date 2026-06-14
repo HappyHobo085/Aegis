@@ -21,8 +21,8 @@ pub fn active_webview(app: &AppHandle) -> Option<tauri::Webview> {
     app.get_webview(&active_content_label(app))
 }
 
-/// Default top inset = TOOLBAR_H(56) + FAVBAR_H(40); refined by `view.setContentInset`.
-pub const DEFAULT_INSET_TOP: f64 = 96.0;
+/// Default top inset = TOOLBAR_H(56) + FAVBAR_H(40) + TABSTRIP_H(36); refined by view.setContentInset.
+pub const DEFAULT_INSET_TOP: f64 = 132.0;
 
 /// Present a mainstream Chrome user-agent to browsed sites (anti-fingerprint /
 /// fewer "unsupported browser" walls) instead of the default WebKitGTK string,
