@@ -23,10 +23,7 @@ import type {
   SafetyInterstitialPayload,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
-import { open, save } from '@tauri-apps/plugin-dialog';
 import { call, on } from './tauriInvoke';
-
-const BACKUP_FILTERS = [{ name: 'Aegis backup', extensions: ['json'] }];
 
 /** The Kotlin content-webview bridge, injected on Android only (window.AegisAndroid).
  * On mobile there's no separate content webview on the Rust side, so nav goes here. */
@@ -126,7 +123,7 @@ export const aegis: AegisApi = {
       }
       return call(IPC.viewSetChromeOverlay, { viewId, active });
     },
-    setSidebar: (viewId, active) => call(IPC.viewSetSidebar, { viewId, active }),
+    setSidebar: (viewId, active, width) => call(IPC.viewSetSidebar, { viewId, active, width }),
     setFullscreen: (viewId, on) => call(IPC.viewSetFullscreen, { viewId, on }),
     onFullscreen: (cb) => on<{ on: boolean }>(IPC.evtViewFullscreen, cb),
   },
@@ -196,18 +193,17 @@ export const aegis: AegisApi = {
     onPrompt: (cb) => on<PermissionPrompt>(IPC.evtPermissionsPrompt, cb),
   },
   data: {
-    // Show a native save dialog, then write the backup to the chosen path.
-    export: async () => {
-      const path = await save({ defaultPath: 'aegis-export.json', filters: BACKUP_FILTERS });
-      if (!path) return { ok: false };
-      return call<{ ok: boolean; path?: string }>(IPC.dataExport, { path });
-    },
-    // Show a native open dialog, then restore from the chosen backup file.
-    import: async (mode) => {
-      const selected = await open({ multiple: false, directory: false, filters: BACKUP_FILTERS });
-      const path = typeof selected === 'string' ? selected : null;
-      if (!path) return { ok: false };
-      const result = await call<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode, path });
+    // No native save dialog (it renders in the OS's light theme, clashing with
+    // Aegis's dark UI). The backend writes the backup to the Downloads dir and
+    // returns the path, which the Data tab shows in a toast.
+    export: async () => call<{ ok: boolean; path?: string }>(IPC.dataExport, {}),
+    // No native open dialog. Import from JSON pasted into the in-app field when
+    // given; otherwise restore the last export from the Downloads dir.
+    import: async (mode, source) => {
+      const text = source?.text?.trim() ?? '';
+      const result = text
+        ? await call<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode, text })
+        : await call<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode });
       // Make the import live immediately — favorites/saved/settings hooks only fetch
       // on mount, so reload the chrome to re-read everything (no app restart). Delay
       // briefly so the success toast is visible first.

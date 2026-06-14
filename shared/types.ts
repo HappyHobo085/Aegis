@@ -248,7 +248,7 @@ export interface AegisApi {
     /** The sidebar is a right panel: inset the content from the right (page stays
      * visible) rather than hiding it. Optional — Electron composes its sidebar via
      * the chrome overlay, so it may not implement this. */
-    setSidebar?(viewId: ViewId, active: boolean): Promise<void>;
+    setSidebar?(viewId: ViewId, active: boolean, width?: number): Promise<void>;
     setFullscreen(viewId: ViewId, on: boolean): Promise<void>;
     /** Backend-driven fullscreen change (e.g. Esc exits on Tauri). Optional:
      * Electron's chrome owns its own fullscreen exit, so it may not emit this. */
@@ -321,7 +321,7 @@ export interface AegisApi {
   };
   data: {
     export(): Promise<{ ok: boolean; path?: string }>;
-    import(mode: ImportMode): Promise<{ ok: boolean; counts?: unknown }>;
+    import(mode: ImportMode, source?: { text?: string }): Promise<{ ok: boolean; counts?: unknown }>;
   };
   picker: {
     start(): Promise<{ ok: boolean; rule?: string }>;

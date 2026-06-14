@@ -279,6 +279,12 @@ textarea::placeholder {
   background: var(--bg-input);
   color: #fff;
 }
+/* In fullscreen the chrome is a tiny top-right box; the app-wide transparent body can
+   fail to paint that small webview on compositing-disabled GPUs, leaving the exit button
+   invisible. Paint a solid backing while fullscreen so the button reliably shows. */
+body.aegis-fullscreen {
+  background: var(--bg);
+}
 
 /* Bookmark saved/active state */
 .bookmark-button[aria-pressed="true"] {
@@ -2590,6 +2596,45 @@ textarea::placeholder {
   border-color: transparent;
 }
 
+/* Paste-to-import field + hints — in-app, dark (replaces the native file picker,
+   which rendered in the OS's light theme). */
+.data-tab__paste {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.data-tab__paste > span:first-child {
+  font-size: 13px;
+  color: var(--fg-muted);
+}
+
+.data-tab__paste textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  min-height: 96px;
+  padding: 8px 10px;
+  background: var(--bg-input);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.data-tab__paste textarea:focus {
+  outline: none;
+  border-color: var(--accent-color);
+}
+
+.data-tab__hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+
 /* ─── Favorites Manager modal ────────────────────────────────────── */
 
 /* Outer scrim — full-viewport backdrop that centers the card */
@@ -3448,10 +3493,16 @@ a:focus-visible {
    aligns directly under the chrome. */
 .aegis-mobile .toolbar {
   flex-wrap: wrap;
-  height: 96px;
+  box-sizing: border-box;
+  /* Pad the toolbar below the status bar (time/battery) and inside any side cutouts.
+     env(safe-area-inset-*) requires viewport-fit=cover (set in index.html); the Android
+     content webview's top margin is kept in sync natively (MainActivity adds the same
+     status-bar inset to its 96dp base). */
+  height: calc(96px + env(safe-area-inset-top));
+  padding: env(safe-area-inset-top) calc(8px + env(safe-area-inset-right)) 0
+    calc(8px + env(safe-area-inset-left));
   align-content: center;
   row-gap: 6px;
-  padding: 0 8px;
 }
 .aegis-mobile .address-bar {
   order: 99; /* wrap onto the second row, below the controls */

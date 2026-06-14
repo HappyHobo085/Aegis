@@ -150,15 +150,38 @@ pub fn run() {
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
         }
-        // On the proprietary NVIDIA driver, WebKit's accelerated compositing can abort
-        // the web process intermittently (a libstdc++ assertion in the EGL/GBM path) —
-        // disabling DMABUF alone doesn't fully prevent it. Fall back to unaccelerated
-        // compositing on NVIDIA only (a slight perf cost for much better stability);
-        // other GPUs keep full acceleration. Guarded so the user can still override.
+        // The bundled GTK ignores the system theme, and the prefer-dark hint is a no-op
+        // on themes (e.g. KDE Breeze) whose dark form is a *separate* theme — so native
+        // file choosers (import/export) and <select> popups render white. Force a
+        // guaranteed-present dark GTK theme so they match Aegis's dark UI. User-overridable.
+        if std::env::var_os("GTK_THEME").is_none() {
+            std::env::set_var("GTK_THEME", "Adwaita:dark");
+        }
+        // Force GTK's own (in-process, themeable) file chooser instead of delegating to
+        // the xdg-desktop-portal one, which renders with the portal's own light theme and
+        // ignores GTK_THEME above — that's why the import/export dialogs stayed white.
+        if std::env::var_os("GTK_USE_PORTAL").is_none() {
+            std::env::set_var("GTK_USE_PORTAL", "0");
+        }
+        // The proprietary NVIDIA driver's Wayland EGL/GBM path crashes the WebKit web
+        // process (a libstdc++ assertion deep in libnvidia-egl-*); disabling DMABUF or
+        // compositing does NOT prevent it. Force the app onto XWayland (X11/GLX) — the
+        // traditional, stable NVIDIA path — when we detect NVIDIA + a Wayland session.
+        // X11 sessions and non-NVIDIA GPUs are untouched; guarded so the user can still
+        // override GDK_BACKEND. Also keeps compositing as a belt-and-suspenders disable.
         let nvidia = std::path::Path::new("/proc/driver/nvidia").exists()
             || std::path::Path::new("/dev/nvidia0").exists();
-        if nvidia && std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
-            std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some()
+            || std::env::var("XDG_SESSION_TYPE")
+                .map(|v| v.eq_ignore_ascii_case("wayland"))
+                .unwrap_or(false);
+        if nvidia {
+            if wayland && std::env::var_os("GDK_BACKEND").is_none() {
+                std::env::set_var("GDK_BACKEND", "x11");
+            }
+            if std::env::var_os("WEBKIT_DISABLE_COMPOSITING_MODE").is_none() {
+                std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
+            }
         }
     }
 
@@ -210,6 +233,27 @@ pub fn run() {
                 use gtk::prelude::*;
                 if let Some(gset) = gtk::Settings::default() {
                     gset.set_gtk_application_prefer_dark_theme(true);
+                    // Select a concrete dark theme by name (Adwaita-dark is built into
+                    // GTK). prefer-dark alone is a no-op on themes like Breeze whose dark
+                    // form is a separate theme, and the GTK_THEME env didn't take — set
+                    // it directly on the live Settings so native dialogs render dark.
+                    gset.set_gtk_theme_name(Some("Adwaita-dark"));
+                }
+                // Style the native floating fullscreen-exit button (linux_layout's
+                // `#aegis-fs-exit`) so it matches the dark UI: a small dark box with a
+                // light ✕, pinned top-right over edge-to-edge fullscreen content.
+                let css = gtk::CssProvider::new();
+                let _ = css.load_from_data(
+                    b"#aegis-fs-exit{background-color:#1f1f1f;border:1px solid #3a3a3a;}\
+                      #aegis-fs-exit:hover{background-color:#333333;}\
+                      #aegis-fs-exit label{color:#eaeaea;font-size:15px;font-weight:700;}",
+                );
+                if let Some(screen) = gtk::gdk::Screen::default() {
+                    gtk::StyleContext::add_provider_for_screen(
+                        &screen,
+                        &css,
+                        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+                    );
                 }
             }
 

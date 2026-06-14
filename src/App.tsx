@@ -80,6 +80,9 @@ export function App() {
   const [managerOpen, setManagerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // The sidebar panel is user-resizable; track its width so the content webview's right
+  // inset matches it exactly (reported up from the Sidebar via onWidthChange).
+  const [sidebarWidth, setSidebarWidth] = useState(280);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -112,14 +115,23 @@ export function App() {
     void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, fullOverlayActive || sidebarOpen || shieldOpen);
   }, [fullOverlayActive, sidebarOpen, shieldOpen]);
   useEffect(() => {
-    // Inset the content for the sidebar only when no full overlay is covering it.
-    void aegis.view.setSidebar?.(PRIMARY_VIEW_ID, sidebarOpen && !fullOverlayActive);
-  }, [sidebarOpen, fullOverlayActive]);
+    // Inset the content by the sidebar's actual width when it's open and no full overlay
+    // is covering it — so the page stays visible beside the panel without overlapping it.
+    void aegis.view.setSidebar?.(PRIMARY_VIEW_ID, sidebarOpen && !fullOverlayActive, sidebarWidth);
+  }, [sidebarOpen, fullOverlayActive, sidebarWidth]);
 
   // Fullscreen: main shrinks chrome to a top-right corner and fills the window
   // with content. Renderer reflects the toggle below (after all hooks).
   useEffect(() => {
     void aegis.view.setFullscreen(PRIMARY_VIEW_ID, fullscreen);
+  }, [fullscreen]);
+
+  // In fullscreen the chrome shrinks to just the exit-button box; give the body a solid
+  // background so that tiny webview actually paints — a transparent body can render
+  // nothing (button present but invisible) with compositing disabled on some GPUs.
+  useEffect(() => {
+    document.body.classList.toggle('aegis-fullscreen', fullscreen);
+    return () => document.body.classList.remove('aegis-fullscreen');
   }, [fullscreen]);
 
   // The backend may exit fullscreen itself (Tauri: Esc in the content webview,
@@ -267,6 +279,7 @@ export function App() {
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onWidthChange={setSidebarWidth}
         history={
           <HistoryPanel
             entries={history.entries}
@@ -366,7 +379,7 @@ export function App() {
           data={
             <DataTab
               onExport={() => aegis.data.export()}
-              onImport={(mode) => aegis.data.import(mode)}
+              onImport={(mode, source) => aegis.data.import(mode, source)}
             />
           }
         />

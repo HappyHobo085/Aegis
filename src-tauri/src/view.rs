@@ -5,7 +5,7 @@
 //     the overlay (behind the opaque content) shows;
 //   - the History/Saved sidebar is a chrome overlay — like the others it HIDES the
 //     content (the opaque content webview would otherwise cover the panel);
-//   - fullscreen fills the whole window with content.
+//   - fullscreen keeps a slim top strip for the exit button; the content fills the rest.
 use serde_json::Value;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -15,8 +15,10 @@ use crate::nav::{CONTENT_LABEL, DEFAULT_INSET_TOP};
 /// Default sidebar panel width (matches `.sidebar__panel` in index.css).
 const SIDEBAR_WIDTH: f64 = 280.0;
 
-/// Top strip kept clear in fullscreen so the chrome's floating exit button
-/// (`.fullscreen-exit`: top 4px + 36px tall) stays visible above the content.
+/// Top strip kept clear in fullscreen (non-Linux) so the chrome's exit button stays
+/// visible above the content. Linux fills the window edge-to-edge instead, with a
+/// native floating exit button on top (see linux_layout).
+#[cfg(not(target_os = "linux"))]
 const FULLSCREEN_TOP: f64 = 44.0;
 
 /// Content-webview layout state. Managed by Tauri state so the resize handler and
@@ -28,9 +30,11 @@ pub struct Layout {
     /// Right inset (the sidebar panel width when the sidebar is open).
     pub right: f64,
     pub fullscreen: bool,
-    /// A full-window chrome overlay is active (hides the content). The History/Saved
-    /// sidebar rides this flag too, so the opaque content hides behind the panel.
+    /// A full-window chrome overlay is active (hides the content).
     pub overlay: bool,
+    /// The sidebar is open: inset the content from the right by its width so the page
+    /// stays visible beside the panel (rather than hiding it like a full overlay).
+    pub sidebar: bool,
 }
 
 pub struct ContentInset(pub Mutex<Layout>);
@@ -43,6 +47,7 @@ impl Default for ContentInset {
             right: 0.0,
             fullscreen: false,
             overlay: false,
+            sidebar: false,
         }))
     }
 }
@@ -56,14 +61,15 @@ fn layout_of(app: &AppHandle) -> Layout {
             right: 0.0,
             fullscreen: false,
             overlay: false,
+            sidebar: false,
         })
 }
 
-/// Hide the content for any full-window chrome overlay — settings, downloads, the
-/// History/Saved sidebar — so the chrome shows above the opaque content webview;
-/// keep it visible only in fullscreen or when nothing is overlaid.
+/// Hide the content for a full-window chrome overlay (settings, downloads, …) so the
+/// chrome shows above the opaque content webview. The sidebar is NOT a full overlay — it
+/// insets the content (page stays visible beside it), so it keeps content shown.
 fn apply_visibility(app: &AppHandle, lay: Layout) {
-    let visible = lay.fullscreen || !lay.overlay;
+    let visible = lay.fullscreen || lay.sidebar || !lay.overlay;
     #[cfg(target_os = "linux")]
     crate::linux_layout::set_content_visible(app, visible);
     // Windows/macOS: Tauri's hide/show work directly. (Mobile is single-webview —
@@ -78,8 +84,15 @@ fn apply_visibility(app: &AppHandle, lay: Layout) {
 /// left of the right inset (or the whole window in fullscreen).
 pub fn apply_inset(app: &AppHandle) {
     let lay = layout_of(app);
+    // Fullscreen content geometry differs by platform: Linux fills the window
+    // edge-to-edge (a native floating exit button sits on top — see linux_layout),
+    // while other platforms keep a top strip for the chrome's exit button.
+    #[cfg(target_os = "linux")]
+    let fs = (0.0, 0.0, 0.0);
+    #[cfg(not(target_os = "linux"))]
+    let fs = (0.0, FULLSCREEN_TOP, 0.0);
     let (left, top, right) = if lay.fullscreen {
-        (0.0, FULLSCREEN_TOP, 0.0)
+        fs
     } else {
         (lay.left, lay.top, lay.right)
     };
@@ -102,6 +115,7 @@ pub fn apply_inset(app: &AppHandle) {
         right as i32,
         logical.width as i32,
         logical.height as i32,
+        lay.fullscreen,
     );
 
     #[cfg(all(desktop, not(target_os = "linux")))]
@@ -160,13 +174,17 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         // visible) instead of hiding it.
         "view.setSidebar" => {
             let active = payload.get("active").and_then(Value::as_bool).unwrap_or(false);
+            // The sidebar panel is user-resizable; inset the content by its ACTUAL width
+            // (reported by the chrome) so the opaque content never overlaps the panel.
+            let width = payload.get("width").and_then(Value::as_f64).unwrap_or(SIDEBAR_WIDTH);
             update(app, |l| {
-                l.right = if active { SIDEBAR_WIDTH } else { 0.0 };
+                l.sidebar = active;
+                l.right = if active { width } else { 0.0 };
             });
             Ok(Value::Null)
         }
-        // Fullscreen: content fills the whole window; the chrome's exit button is
-        // covered, so Esc (handled in the content webview) exits.
+        // Fullscreen: content fills the window below a slim top strip that holds the
+        // chrome's exit button; Esc (handled in the content webview) also exits.
         "view.setFullscreen" => {
             let on = payload.get("on").and_then(Value::as_bool).unwrap_or(false);
             update(app, |l| l.fullscreen = on);

@@ -1,6 +1,8 @@
 //! Data export/import (data.* IPC). Bundles every JSON store + settings + custom
-//! filters into one file (in the Downloads dir) and restores from it. Import is
-//! replace-mode (restore from backup); a file picker + merge-mode are follow-ups.
+//! filters into one file (in the Downloads dir) and restores from it. Import takes
+//! pasted JSON (the in-app field) or, if none, the Downloads backup — no native file
+//! picker (it renders in the OS light theme). Import is replace-mode; merge-mode is a
+//! follow-up.
 use std::path::PathBuf;
 
 use serde_json::{json, Map, Value};
@@ -44,12 +46,28 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         "data.import" => {
-            let path = export_file(app, payload);
-            let Ok(txt) = std::fs::read_to_string(&path) else {
-                return Some(Ok(json!({ "ok": false })));
-            };
-            let Ok(bundle) = serde_json::from_str::<Value>(&txt) else {
-                return Some(Ok(json!({ "ok": false })));
+            // Source: pasted JSON text from the in-app field, else the backup file
+            // (the path the client passed, or the default in Downloads). No native
+            // file picker — that renders in the OS's light theme, clashing with the UI.
+            let bundle: Value = match payload
+                .get("text")
+                .and_then(Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+            {
+                Some(t) => match serde_json::from_str(t) {
+                    Ok(v) => v,
+                    Err(_) => return Some(Ok(json!({ "ok": false }))),
+                },
+                None => {
+                    let path = export_file(app, payload);
+                    let Ok(txt) = std::fs::read_to_string(&path) else {
+                        return Some(Ok(json!({ "ok": false })));
+                    };
+                    match serde_json::from_str::<Value>(&txt) {
+                        Ok(v) => v,
+                        Err(_) => return Some(Ok(json!({ "ok": false }))),
+                    }
+                }
             };
             let mut counts = Map::new();
             for s in STORES {
