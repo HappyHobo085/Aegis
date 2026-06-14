@@ -29,6 +29,7 @@ mod safety;
 mod settings;
 mod subs;
 mod tab_registry;
+mod tabs;
 mod update;
 mod view;
 
@@ -51,6 +52,9 @@ pub fn emit_event<S: serde::Serialize + Clone>(app: &tauri::AppHandle, name: &st
 #[tauri::command]
 fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, String> {
     if let Some(result) = nav::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = tabs::dispatch(&app, &channel, &payload) {
         return result;
     }
     if let Some(result) = view::dispatch(&app, &channel, &payload) {
@@ -211,8 +215,14 @@ pub fn run() {
                 )?;
             }
 
-            // Add the content webview (the browsed page) below the chrome.
-            nav::spawn_content(app.handle())?;
+            // Initialize the tab registry from the configured home page, then spawn
+            // the first tab's content webview.
+            let home = crate::settings::home_url(app.handle()).to_string();
+            app.manage(tabs::Tabs::new(home.clone()));
+            let first = app.state::<tabs::Tabs>().reg.lock().unwrap().active_id();
+            if let Ok(u) = tauri::Url::parse(&home) {
+                nav::spawn_tab(app.handle(), first, u)?;
+            }
 
             // Tauri child-webview auto-resize is incomplete; recompute bounds on
             // window resize so the content view keeps filling the area below the chrome.

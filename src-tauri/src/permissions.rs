@@ -94,9 +94,8 @@ fn classify(req: &webkit2gtk::PermissionRequest) -> String {
 /// remembered decision, else raise a prompt; deny unrecognized request types.
 #[cfg(target_os = "linux")]
 pub fn install_handler(app: &AppHandle) {
-    use tauri::Manager;
     use webkit2gtk::{PermissionRequestExt, WebViewExt};
-    let Some(content) = app.get_webview(crate::nav::CONTENT_LABEL) else {
+    let Some(content) = crate::nav::active_webview(app) else {
         return;
     };
     let app = app.clone();

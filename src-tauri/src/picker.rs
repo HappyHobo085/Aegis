@@ -11,8 +11,6 @@
 //! client-side too, for instant feedback.
 use serde_json::{json, Value};
 use tauri::AppHandle;
-#[cfg(target_os = "linux")]
-use tauri::Manager;
 
 /// Sentinel prefix a picked selector's JSON is wrapped in (via document.title).
 pub const SENTINEL: &str = "AEGISPICK:";
@@ -121,7 +119,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
     #[cfg(target_os = "linux")]
     {
         use webkit2gtk::WebViewExt;
-        let Some(content) = app.get_webview(crate::nav::CONTENT_LABEL) else {
+        let Some(content) = crate::nav::active_webview(app) else {
             return Some(Ok(json!({ "ok": false })));
         };
         let _ = content.with_webview(|pw| {

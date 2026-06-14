@@ -10,13 +10,11 @@ use gtk::prelude::*;
 use tauri::{AppHandle, Manager};
 use webkit2gtk::WebViewExt;
 
-use crate::nav::CONTENT_LABEL;
-
 /// Record page titles into history as WebKit makes them available. The visit is
 /// recorded URL-only at page-load (nav.rs); the title arrives slightly later via
 /// the WebView's "title" property, so we fill it in on the title-changed signal.
 pub fn connect_title(app: &AppHandle) {
-    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+    let Some(content) = crate::nav::active_webview(app) else {
         return;
     };
     let app = app.clone();
@@ -54,7 +52,7 @@ fn exit_fullscreen(app: &AppHandle) {
 /// alongside the floating exit button. Only acts while fullscreen; otherwise the key
 /// passes through to the page.
 pub fn connect_fullscreen_exit(app: &AppHandle) {
-    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+    let Some(content) = crate::nav::active_webview(app) else {
         return;
     };
     let app = app.clone();
@@ -78,7 +76,7 @@ pub fn connect_fullscreen_exit(app: &AppHandle) {
 /// Show/hide the content webview at the GTK level (Tauri's hide() doesn't act on
 /// the reparented widget). Used by view.setChromeOverlay to reveal chrome overlays.
 pub fn set_content_visible(app: &AppHandle, visible: bool) {
-    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+    let Some(content) = crate::nav::active_webview(app) else {
         return;
     };
     let _ = content.with_webview(move |pw| {
@@ -140,7 +138,7 @@ pub fn layout(
     win_h: i32,
     fullscreen: bool,
 ) {
-    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+    let Some(content) = crate::nav::active_webview(app) else {
         return;
     };
     let app = app.clone();
