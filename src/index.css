@@ -3433,3 +3433,36 @@ a:focus-visible {
 .interstitial--malware .interstitial__title {
   color: #fca5a5;
 }
+
+/* ===== Mobile (Android phone) chrome =====
+   Applied only when the document is tagged `.aegis-mobile` (set on Android in
+   ipcClient.tauri.ts). A single-webview phone can't fit the desktop toolbar's
+   controls AND the address bar on one narrow row — the address bar (flex: 1,
+   min-width: 0) collapses to nothing. Switch to a two-row toolbar: controls on
+   top, a full-width address bar below. Kept at exactly 96px — the same inset the
+   Android content webview uses (DEFAULT_INSET_TOP) — by folding away the 40px
+   favorites row (the sidebar still reaches favorites), so the content still
+   aligns directly under the chrome. */
+.aegis-mobile .toolbar {
+  flex-wrap: wrap;
+  height: 96px;
+  align-content: center;
+  row-gap: 6px;
+  padding: 0 8px;
+}
+.aegis-mobile .address-bar {
+  order: 99; /* wrap onto the second row, below the controls */
+  flex-basis: 100%;
+}
+.aegis-mobile .address-bar input {
+  font-size: 16px; /* avoid focus-zoom; comfortable touch target */
+  height: 38px;
+}
+.aegis-mobile .favorites-bar {
+  display: none;
+}
+/* Controls with no place on a touch phone. */
+.aegis-mobile .toolbar__fullscreen,
+.aegis-mobile .toolbar__picker {
+  display: none;
+}

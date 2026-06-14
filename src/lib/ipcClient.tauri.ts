@@ -42,6 +42,13 @@ function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
 }
 
+// On Android the chrome is a single phone-sized webview, so tag the document for
+// the mobile toolbar CSS (.aegis-mobile in index.css). The UA is the reliable
+// signal at module load — the AegisAndroid bridge is injected slightly later.
+if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)) {
+  document.documentElement.classList.add('aegis-mobile');
+}
+
 export const aegis: AegisApi = {
   nav: {
     navigate: (viewId, url) => {
