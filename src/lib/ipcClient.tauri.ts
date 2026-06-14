@@ -30,13 +30,60 @@ import { call, on } from './tauriInvoke';
 
 const BACKUP_FILTERS = [{ name: 'Aegis backup', extensions: ['json'] }];
 
+/** The Kotlin content-webview bridge, injected on Android only (window.AegisAndroid).
+ * On mobile there's no separate content webview on the Rust side, so nav goes here. */
+interface AndroidBridge {
+  navigate(url: string): void;
+  back(): void;
+  forward(): void;
+  reload(): void;
+}
+function androidBridge(): AndroidBridge | undefined {
+  return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
+}
+
 export const aegis: AegisApi = {
   nav: {
-    navigate: (viewId, url) => call(IPC.navNavigate, { viewId, url }),
-    back: (viewId) => call(IPC.navBack, { viewId }),
-    forward: (viewId) => call(IPC.navForward, { viewId }),
-    reloadOrStop: (viewId) => call(IPC.navReloadOrStop, { viewId }),
-    home: (viewId) => call(IPC.navHome, { viewId }),
+    navigate: (viewId, url) => {
+      const a = androidBridge();
+      if (a) {
+        a.navigate(url);
+        return Promise.resolve();
+      }
+      return call(IPC.navNavigate, { viewId, url });
+    },
+    back: (viewId) => {
+      const a = androidBridge();
+      if (a) {
+        a.back();
+        return Promise.resolve();
+      }
+      return call(IPC.navBack, { viewId });
+    },
+    forward: (viewId) => {
+      const a = androidBridge();
+      if (a) {
+        a.forward();
+        return Promise.resolve();
+      }
+      return call(IPC.navForward, { viewId });
+    },
+    reloadOrStop: (viewId) => {
+      const a = androidBridge();
+      if (a) {
+        a.reload();
+        return Promise.resolve();
+      }
+      return call(IPC.navReloadOrStop, { viewId });
+    },
+    home: (viewId) => {
+      const a = androidBridge();
+      if (a) {
+        a.navigate('about:blank');
+        return Promise.resolve();
+      }
+      return call(IPC.navHome, { viewId });
+    },
     getState: (viewId) => call<NavState>(IPC.navGetState, { viewId }),
     onState: (cb) => on<NavState>(IPC.evtNavState, cb),
     onFailed: (cb) => on<NavFailed>(IPC.evtNavFailed, cb),
