@@ -131,6 +131,15 @@ pub fn spawn_content(app: &AppHandle) -> tauri::Result<()> {
         tauri::LogicalPosition::new(0.0, DEFAULT_INSET_TOP),
         tauri::LogicalSize::new(size.width, (size.height - DEFAULT_INSET_TOP).max(0.0)),
     )?;
+
+    // Windows: wry only intercepts custom-protocol requests, so install our own
+    // WebView2 WebResourceRequested handler on the content webview for full network
+    // ad-blocking (complements the injected cosmetic/JS tier).
+    #[cfg(target_os = "windows")]
+    if let Some(content) = app.get_webview(CONTENT_LABEL) {
+        let _ = content.with_webview(|pw| crate::adblock_win::install(&pw));
+    }
+
     Ok(())
 }
 

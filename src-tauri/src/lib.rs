@@ -1,9 +1,12 @@
 mod adblock;
 mod adblock_convert;
-// Chromium-side (Android) network ad-blocking engine. Compiled on Android (JNI
-// export active) and under `cargo test` (host unit test); unused on WebKit desktop.
-#[cfg(any(target_os = "android", test))]
+// Chromium-side network ad-blocking engine (`should_block`). Compiled on Android (JNI
+// export) and Windows (WebView2 interception, adblock_win) and under `cargo test`.
+#[cfg(any(target_os = "android", target_os = "windows", test))]
 mod adblock_engine;
+// Windows full network ad-block: our own WebView2 WebResourceRequested interceptor.
+#[cfg(target_os = "windows")]
+mod adblock_win;
 // Injected (document-start) ad/tracker blocker for the desktop content webview — the
 // ad-block layer on Windows/macOS (wry can't intercept their requests), verifiable on
 // Linux where it supplements the WebKit content filters.

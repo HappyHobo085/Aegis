@@ -53,3 +53,11 @@ gio = "0.18"
 # Rust `adblock` engine (adblock_engine.rs). 0.21 matches wry/tao's resolved jni.
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+
+# Windows: add our own WebView2 WebResourceRequested handler (full network ad-block)
+# directly on the content webview's ICoreWebView2 reached via Tauri's with_webview —
+# wry only intercepts custom-protocol requests. webview2-com pinned to match tauri's
+# PlatformWebview types; windows for PWSTR/HSTRING/EventRegistrationToken.
+[target.'cfg(target_os = "windows")'.dependencies]
+webview2-com = "=0.38.2"
+windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_WinRT"] }
