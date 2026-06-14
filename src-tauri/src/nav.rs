@@ -120,11 +120,16 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             let u = u.as_str();
             emit_state(&app_load, load_id, u, "", loading);
             crate::tabs::on_tab_url(&app_load, load_id, u);
-            // Hide the content webview at the blank home so the chrome's Home tab
-            // shows; show it for any real page as soon as it starts loading (so a
-            // slow page doesn't leave the home showing).
+            // Hide THIS tab's content webview at the blank home so the chrome's Home
+            // tab shows; show it for any real page as soon as it starts loading (so a
+            // slow page doesn't leave the home showing). Per-label so each tab toggles
+            // its OWN webview, not whichever happens to be active.
             #[cfg(target_os = "linux")]
-            crate::linux_layout::set_content_visible(&app_load, !u.starts_with("about:"));
+            crate::linux_layout::set_content_visible_label(
+                &app_load,
+                &content_label(load_id),
+                !u.starts_with("about:"),
+            );
             if matches!(event, tauri::webview::PageLoadEvent::Finished) {
                 crate::history::record(&app_load, u, "");
             }
@@ -147,6 +152,18 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         tauri::LogicalPosition::new(0.0, DEFAULT_INSET_TOP),
         tauri::LogicalSize::new(size.width, (size.height - DEFAULT_INSET_TOP).max(0.0)),
     )?;
+
+    // Linux: install this tab's own WebKit signal hooks (title→history + element
+    // picker sentinel, Esc-exits-fullscreen, and the site-permission handler). Done
+    // per-tab so tabs 2+ also record titles, exit fullscreen, and prompt for
+    // permissions — not just the first tab.
+    #[cfg(target_os = "linux")]
+    {
+        crate::linux_layout::mark_content_label(app, &label);
+        crate::linux_layout::connect_title_label(app, &label);
+        crate::linux_layout::connect_fullscreen_exit_label(app, &label);
+        crate::permissions::install_handler_label(app, &label);
+    }
 
     // Windows: wry only intercepts custom-protocol requests, so install our own
     // WebView2 WebResourceRequested handler on the content webview for full network

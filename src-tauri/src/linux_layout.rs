@@ -13,8 +13,8 @@ use webkit2gtk::WebViewExt;
 /// Record page titles into history as WebKit makes them available. The visit is
 /// recorded URL-only at page-load (nav.rs); the title arrives slightly later via
 /// the WebView's "title" property, so we fill it in on the title-changed signal.
-pub fn connect_title(app: &AppHandle) {
-    let Some(content) = crate::nav::active_webview(app) else {
+pub fn connect_title_label(app: &AppHandle, label: &str) {
+    let Some(content) = app.get_webview(label) else {
         return;
     };
     let app = app.clone();
@@ -51,8 +51,8 @@ fn exit_fullscreen(app: &AppHandle) {
 /// fills the whole window; Esc (which the focused content webview receives) exits,
 /// alongside the floating exit button. Only acts while fullscreen; otherwise the key
 /// passes through to the page.
-pub fn connect_fullscreen_exit(app: &AppHandle) {
-    let Some(content) = crate::nav::active_webview(app) else {
+pub fn connect_fullscreen_exit_label(app: &AppHandle, label: &str) {
+    let Some(content) = app.get_webview(label) else {
         return;
     };
     let app = app.clone();
@@ -73,20 +73,41 @@ pub fn connect_fullscreen_exit(app: &AppHandle) {
     });
 }
 
-/// Show/hide the content webview at the GTK level (Tauri's hide() doesn't act on
-/// the reparented widget). Used by view.setChromeOverlay to reveal chrome overlays.
-pub fn set_content_visible(app: &AppHandle, visible: bool) {
-    let Some(content) = crate::nav::active_webview(app) else {
+/// Show/hide a specific content webview by label at the GTK level (Tauri's hide()
+/// doesn't act on the reparented widget). Used per-tab from nav.rs's on_page_load so
+/// each tab hides/shows its OWN webview.
+pub fn set_content_visible_label(app: &AppHandle, label: &str, visible: bool) {
+    let Some(w) = app.get_webview(label) else {
         return;
     };
-    let _ = content.with_webview(move |pw| {
+    let _ = w.with_webview(move |pw| {
         pw.inner().set_visible(visible);
     });
+}
+
+/// Show/hide the active content webview at the GTK level. Used by
+/// view.setChromeOverlay to reveal chrome overlays.
+pub fn set_content_visible(app: &AppHandle, visible: bool) {
+    let label = crate::nav::active_content_label(app);
+    set_content_visible_label(app, &label, visible);
+}
+
+/// Stamp a content webview's GTK widget with CONTENT_WIDGET_NAME so layout() can
+/// classify it. Called once per tab from nav::spawn_tab.
+pub fn mark_content_label(app: &AppHandle, label: &str) {
+    if let Some(w) = app.get_webview(label) {
+        let _ = w.with_webview(|pw| {
+            pw.inner().set_widget_name(CONTENT_WIDGET_NAME);
+        });
+    }
 }
 
 /// Widget name of the native floating fullscreen-exit button, so we can find it
 /// among the GtkFixed's children on later layout calls.
 const FS_EXIT_NAME: &str = "aegis-fs-exit";
+/// GTK widget name stamped on every content (tab) webview so `layout()` can tell
+/// content webviews apart from the chrome webview without per-frame `with_webview`.
+const CONTENT_WIDGET_NAME: &str = "aegis-content";
 /// Floating exit button box size (px).
 const FS_EXIT_SIZE: i32 = 34;
 /// Its margin from the top-right corner (px).
@@ -122,13 +143,18 @@ fn fs_exit_button(fixed: &gtk::Fixed, app: &AppHandle) -> gtk::Widget {
 }
 
 /// Reparent (once, idempotent) into a GtkFixed and lay out the chrome (full window,
-/// behind) and content webviews. Called for the initial layout and on every window
-/// resize; all coordinates in logical px (scale handled by the caller).
+/// behind) and the N content webviews. Called for the initial layout and on every
+/// window resize; all coordinates in logical px (scale handled by the caller).
 ///
-/// Normal: chrome fills the window behind the content, which is inset so the toolbar
-/// shows in the gap above it. Fullscreen: the content fills the whole window
-/// edge-to-edge and a native floating exit button (`fs_exit_button`) is raised on top
-/// in the top-right corner — no top strip, and no WebKit compositing for the button.
+/// Drives off the ACTIVE tab's webview to find the GtkFixed parent (reparenting from
+/// the GtkBox on the first call). The active content webview is positioned in the
+/// inset area and shown; every OTHER content webview is hidden and parked offscreen;
+/// the chrome webview is stretched full-window behind it.
+///
+/// Normal: chrome fills the window behind the active content, which is inset so the
+/// toolbar shows in the gap above it. Fullscreen: the active content fills the whole
+/// window edge-to-edge and a native floating exit button (`fs_exit_button`) is raised
+/// on top in the top-right corner — no top strip, and no WebKit compositing for it.
 pub fn layout(
     app: &AppHandle,
     left: i32,
@@ -138,19 +164,20 @@ pub fn layout(
     win_h: i32,
     fullscreen: bool,
 ) {
-    let Some(content) = crate::nav::active_webview(app) else {
+    let active_label = crate::nav::active_content_label(app);
+    let Some(active) = app.get_webview(&active_label) else {
         return;
     };
-    let app = app.clone();
-    let _ = content.with_webview(move |pw| {
-        let content_w = pw.inner();
-        let content_widget: gtk::Widget = content_w.clone().upcast();
-        let Some(parent) = content_w.parent() else {
+    let app2 = app.clone();
+    let _ = active.with_webview(move |pw| {
+        let active_w = pw.inner();
+        let active_widget: gtk::Widget = active_w.clone().upcast();
+        let Some(parent) = active_w.parent() else {
             return;
         };
 
-        // Reparent the box's two webviews into a GtkFixed the first time; on
-        // later calls the parent is already the GtkFixed.
+        // Reparent the box's webviews into a GtkFixed the first time; on later calls
+        // the parent is already the GtkFixed.
         let fixed: gtk::Fixed = if let Some(f) = parent.dynamic_cast_ref::<gtk::Fixed>() {
             f.clone()
         } else if let Some(box_) = parent.dynamic_cast_ref::<gtk::Box>() {
@@ -161,40 +188,48 @@ pub fn layout(
                 f.put(child, 0, 0);
             }
             box_.pack_start(&f, true, true, 0);
-            f.show_all(); // show the fixed + both webviews once (initial layout)
+            f.show_all(); // show the fixed + webviews once (initial layout)
             f
         } else {
             eprintln!("[aegis-gtk] layout: unexpected parent {}", parent.type_().name());
             return;
         };
 
-        // Content fills the window in fullscreen (left/top/right all 0), else it's
-        // inset and the chrome shows in the gap. The floating exit button is skipped
-        // here — it's positioned/raised separately below, not stretched like the chrome.
+        // The active content fills the window in fullscreen (left/top/right all 0),
+        // else it's inset and the chrome shows in the gap. The floating exit button is
+        // skipped here — it's positioned/raised separately below, not stretched.
         let cw = (win_w - left - right).max(0);
         let ch = (win_h - top).max(0);
-        let mut content_window = None;
+        let mut active_window = None;
         for child in fixed.children() {
-            if child.as_ptr() == content_widget.as_ptr() {
+            let is_active = child.as_ptr() == active_widget.as_ptr();
+            let name = child.widget_name();
+            if is_active {
+                child.set_visible(true);
                 child.set_size_request(cw, ch);
                 fixed.move_(&child, left, top);
-                content_window = child.window();
-            } else if child.widget_name() == FS_EXIT_NAME {
+                active_window = child.window();
+            } else if name == FS_EXIT_NAME {
                 // handled below
+            } else if name == CONTENT_WIDGET_NAME {
+                // a background tab's webview: hide it and park it offscreen.
+                child.set_visible(false);
+                fixed.move_(&child, -10000, -10000);
             } else {
+                // the chrome webview: fill the window behind the active content.
                 child.set_size_request(win_w, win_h);
                 fixed.move_(&child, 0, 0);
             }
         }
-        // Content on top so view.setChromeOverlay can hide it to reveal chrome overlays.
-        // raise() acts on the realized GdkWindow (reliable on X11).
-        if let Some(w) = content_window {
+        // Active content on top so view.setChromeOverlay can hide it to reveal chrome
+        // overlays. raise() acts on the realized GdkWindow (reliable on X11).
+        if let Some(w) = active_window {
             w.raise();
         }
 
         // Native floating exit button: shown ABOVE the content in fullscreen only,
         // pinned to the top-right corner. Raised after the content so it stays on top.
-        let btn = fs_exit_button(&fixed, &app);
+        let btn = fs_exit_button(&fixed, &app2);
         if fullscreen {
             fixed.move_(&btn, (win_w - FS_EXIT_SIZE - FS_EXIT_MARGIN).max(0), FS_EXIT_MARGIN);
             btn.show_all();
@@ -207,7 +242,7 @@ pub fn layout(
         } else {
             btn.hide();
         }
-        // No show_all here: re-showing every layout call would override the content
-        // webview's hide (used by view.setChromeOverlay to reveal chrome overlays).
+        // No show_all here: re-showing every layout call would override the hidden
+        // background tabs and the content webview's hide (view.setChromeOverlay).
     });
 }

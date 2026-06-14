@@ -268,19 +268,10 @@ pub fn run() {
                 }
             }
 
-            // Content-webview permission requests: prompt (remembered per origin),
-            // deny unrecognized types (Linux).
-            #[cfg(target_os = "linux")]
-            permissions::install_handler(app.handle());
-
-            // Fill history entries' titles as WebKit reports them (Linux); also
-            // routes the element picker's title sentinel to picker::on_picked.
-            #[cfg(target_os = "linux")]
-            linux_layout::connect_title(app.handle());
-
-            // Exit fullscreen on Esc from the content webview (Linux).
-            #[cfg(target_os = "linux")]
-            linux_layout::connect_fullscreen_exit(app.handle());
+            // The per-tab WebKit signal hooks (permission handler, title→history +
+            // picker sentinel, Esc-exits-fullscreen) are installed at spawn time in
+            // nav::spawn_tab — including for the first tab spawned above — so they're
+            // no longer wired here.
 
             // Ad-blocking (Linux/WebKit): install EasyList content filters.
             #[cfg(target_os = "linux")]
