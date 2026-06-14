@@ -6,3 +6,6 @@ release/
 .DS_Store
 test-results/
 playwright-report/
+
+# Local data backups produced by the in-app Export (default filename); personal data
+aegis-export.json
