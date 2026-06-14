@@ -36,6 +36,10 @@ Android (iOS is a future, macOS/Xcode-gated tier).
 | `dist/`      | Vite build output (gitignored)      | generated, no docs    |
 | `node_modules/` | npm deps (gitignored)            | generated, no docs    |
 
+> **The `CLAUDE.md` files are living docs.** Every folder's `CLAUDE.md` (this one
+> included) documents *current* behavior — when a change makes one stale, update it
+> in the same commit. Treat them as part of the code, not a one-time snapshot.
+
 ## Commands
 
 ```bash
