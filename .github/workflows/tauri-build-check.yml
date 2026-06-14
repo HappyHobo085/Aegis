@@ -23,7 +23,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        platform: [windows-latest, macos-latest, ubuntu-22.04]
+        include:
+          - platform: windows-latest
+          - platform: macos-latest
+          # Linux: build the portable AppImage only (runs on any distro, incl. Fedora);
+          # skip the .deb. --bundles overrides the config's target list for this build.
+          - platform: ubuntu-22.04
+            bundles: '--bundles appimage'
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 45
     steps:
@@ -73,7 +79,9 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: '1'
-        run: npm run tauri -- build
+        # matrix.bundles is empty on Windows/macOS (config defaults: nsis / app+dmg) and
+        # '--bundles appimage' on Ubuntu, so Linux produces just the AppImage.
+        run: npm run tauri -- build ${{ matrix.bundles }}
 
       - name: Upload installers
         if: always()
