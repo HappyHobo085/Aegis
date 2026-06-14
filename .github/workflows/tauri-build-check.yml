@@ -1,0 +1,70 @@
+name: Tauri Build Check
+
+# Verification-only: build Aegis (Tauri) on real Windows, macOS, and Linux runners to
+# confirm it compiles + links on each OS. No bundling, signing, or release — that's
+# tauri-release.yml on a version tag. Added so the Windows/macOS builds (which can't be
+# run from the Linux dev machine) get verified on actual hardware. Runs on pushes to the
+# migration branch and on demand.
+on:
+  push:
+    branches:
+      - 'feat/tauri-migration'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest, macos-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri's Linux build links webkit2gtk; install the apt equivalents of the Fedora
+      # deps used in dev (mirrors tauri-release.yml).
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ matrix.platform }}-buildcheck-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - run: npm ci
+
+      # Unit tests are JS/Rust and platform-agnostic, but running them here confirms the
+      # toolchain is sane on each OS before the heavier compile.
+      - run: npm test
+
+      # Build the renderer + compile & link the Tauri app (release profile, no bundle).
+      # This is the real "does it build on Windows/macOS" check.
+      - name: Build (compile + link, no bundle)
+        run: npm run tauri -- build --no-bundle
