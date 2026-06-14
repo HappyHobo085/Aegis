@@ -64,7 +64,22 @@ jobs:
       # toolchain is sane on each OS before the heavier compile.
       - run: npm test
 
-      # Build the renderer + compile & link the Tauri app (release profile, no bundle).
-      # This is the real "does it build on Windows/macOS" check.
-      - name: Build (compile + link, no bundle)
-        run: npm run tauri -- build --no-bundle
+      # Build the renderer + the Tauri app WITH installers (release). Unsigned — no
+      # signing key needed and no release is published; the installers are uploaded as
+      # CI artifacts you download from the Actions run page and run, for on-device
+      # runtime testing of Windows/macOS. (APPIMAGE_EXTRACT_AND_RUN handles the Linux
+      # AppImage FUSE quirk; both env vars are ignored on Windows/macOS.)
+      - name: Build installers
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: '1'
+        run: npm run tauri -- build
+
+      - name: Upload installers
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-${{ matrix.platform }}
+          path: src-tauri/target/release/bundle/**
+          if-no-files-found: warn
+          retention-days: 14
