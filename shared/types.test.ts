@@ -198,6 +198,19 @@ describe('shared/types — Phase 4 additions', () => {
   });
 });
 
+describe('shared/types — tabs (multi-tab) additions', () => {
+  it('exposes every tabs channel + the state event', () => {
+    expect(IPC.tabsCreate).toBe('tabs.create');
+    expect(IPC.tabsClose).toBe('tabs.close');
+    expect(IPC.tabsActivate).toBe('tabs.activate');
+    expect(IPC.tabsReorder).toBe('tabs.reorder');
+    expect(IPC.tabsSetPinned).toBe('tabs.setPinned');
+    expect(IPC.tabsReopenClosed).toBe('tabs.reopenClosed');
+    expect(IPC.tabsList).toBe('tabs.list');
+    expect(IPC.evtTabsState).toBe('tabs.state');
+  });
+});
+
 describe('shared/types — Phase 5 additions', () => {
   it('exposes the downloads IPC channel constants (incl. the changed event)', () => {
     expect(IPC.downloadsList).toBe('downloads.list');

@@ -92,6 +92,16 @@ export const IPC = {
   safetyListExceptions: 'safety.listExceptions',
   safetyRemoveException: 'safety.removeException',
   evtSafetyInterstitial: 'safety.interstitial',
+  // tabs (chrome -> main)
+  tabsCreate: 'tabs.create',
+  tabsClose: 'tabs.close',
+  tabsActivate: 'tabs.activate',
+  tabsReorder: 'tabs.reorder',
+  tabsSetPinned: 'tabs.setPinned',
+  tabsReopenClosed: 'tabs.reopenClosed',
+  tabsList: 'tabs.list',
+  // events (main -> chrome): the tab list + which is active
+  evtTabsState: 'tabs.state',
 } as const;
 
 export interface NavState {
@@ -115,6 +125,19 @@ export interface NavFailed {
 export interface NavCrashed {
   viewId: ViewId;
   reason: string;
+}
+
+// ---- tabs data model ----
+/** One row in the tab strip. `live` is false for a discarded ("asleep") tab. */
+export interface TabMeta {
+  id: ViewId;
+  pinned: boolean;
+  live: boolean;
+}
+/** The whole tab list + which tab is active. Order === strip order. */
+export interface TabsState {
+  tabs: TabMeta[];
+  activeId: ViewId;
 }
 
 // ---- places data model (Phase 3) ----
@@ -226,6 +249,9 @@ export interface Settings {
   hideChromeByDefault: boolean;
   downloadDir: string; // '' → main resolves to app.getPath('downloads')
   httpsOnly: boolean;
+  /** Minutes a background tab may sit idle before it is discarded (reloaded on
+   * return). 0 disables time-based discard. */
+  tabIdleTimeout: number;
 }
 
 /** Exposed on window.aegis by chromePreload via contextBridge. */
@@ -240,6 +266,16 @@ export interface AegisApi {
     onState(cb: (s: NavState) => void): () => void;
     onFailed(cb: (f: NavFailed) => void): () => void;
     onCrashed(cb: (c: NavCrashed) => void): () => void;
+  };
+  tabs: {
+    list(): Promise<TabsState>;
+    create(url?: string): Promise<TabsState>;
+    close(id: ViewId): Promise<TabsState>;
+    activate(id: ViewId): Promise<TabsState>;
+    reorder(ids: ViewId[]): Promise<TabsState>;
+    setPinned(id: ViewId, pinned: boolean): Promise<TabsState>;
+    reopenClosed(): Promise<TabsState>;
+    onState(cb: (s: TabsState) => void): () => void;
   };
   view: {
     setContentVisible(viewId: ViewId, visible: boolean): Promise<void>;
