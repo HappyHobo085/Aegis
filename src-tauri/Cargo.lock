@@ -118,6 +118,7 @@ dependencies = [
  "gio",
  "glib",
  "gtk",
+ "jni 0.21.1",
  "log",
  "reqwest",
  "rustls",

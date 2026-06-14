@@ -1,5 +1,9 @@
 mod adblock;
 mod adblock_convert;
+// Chromium-side (Android) network ad-blocking engine. Compiled on Android (JNI
+// export active) and under `cargo test` (host unit test); unused on WebKit desktop.
+#[cfg(any(target_os = "android", test))]
+mod adblock_engine;
 #[cfg(target_os = "linux")]
 mod adblock_webkit;
 #[cfg(target_os = "linux")]
