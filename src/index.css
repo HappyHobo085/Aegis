@@ -3436,7 +3436,7 @@ a:focus-visible {
 
 /* ===== Mobile (Android phone) chrome =====
    Applied only when the document is tagged `.aegis-mobile` (set on Android in
-   ipcClient.tauri.ts). A single-webview phone can't fit the desktop toolbar's
+   ipcClient.ts). A single-webview phone can't fit the desktop toolbar's
    controls AND the address bar on one narrow row — the address bar (flex: 1,
    min-width: 0) collapses to nothing. Switch to a two-row toolbar: controls on
    top, a full-width address bar below. Kept at exactly 96px — the same inset the

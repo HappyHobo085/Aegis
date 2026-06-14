@@ -1,5 +1,5 @@
 // src/lib/addressParse.ts
-import { isAllowedNavigationUrl } from '../../electron/lib/schemes';
+import { isAllowedNavigationUrl } from './schemes';
 
 export type AddressParseResult =
   | { kind: 'navigate'; url: string }

@@ -1,9 +1,9 @@
-// electron/lib/schemes.ts
+// src/lib/schemes.ts
 import { ALLOWED_NAV_SCHEMES } from '../../shared/types';
 
 /**
- * Dependency-free navigation scheme allowlist, imported by both the main process
- * and the renderer. Returns true for https:, http:, and exactly 'about:blank';
+ * Dependency-free navigation scheme allowlist used by the renderer. Returns true
+ * for https:, http:, and exactly 'about:blank';
  * false for file:, javascript:, data:, chrome:, other schemes, and invalid input.
  *
  * The URL constructor normalises the scheme to lowercase, so mixed-case variants

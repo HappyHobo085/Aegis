@@ -1,4 +1,4 @@
-// electron/lib/schemes.test.ts
+// src/lib/schemes.test.ts
 import { describe, it, expect } from 'vitest';
 import { isAllowedNavigationUrl } from './schemes';
 

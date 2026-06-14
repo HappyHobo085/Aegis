@@ -202,11 +202,7 @@ export interface SafetyInterstitialPayload {
   reason: 'https-failed' | 'malware';
 }
 
-/**
- * One filter-list subscription row. Canonical shape lives in
- * `electron/main/db/subsRepo.ts`; re-declared here so the preload + renderer can
- * type the `subs.*` IPC surface without importing main-process modules.
- */
+/** One filter-list subscription row — the shape of the `subs.*` IPC surface. */
 export interface Subscription {
   listId: string;
   url: string;

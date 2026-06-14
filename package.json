@@ -1,120 +1,38 @@
 {
   "name": "aegis",
   "version": "0.1.0",
-  "description": "Aegis — an Electron ad-blocking browser shell",
+  "description": "Aegis — a Tauri ad-blocking browser shell",
   "author": "HappyHobo085",
   "repository": {
     "type": "git",
     "url": "https://github.com/HappyHobo085/Aegis.git"
   },
   "private": true,
-  "main": "out/main/index.js",
-  "build": {
-    "appId": "com.aegis.browser",
-    "productName": "Aegis",
-    "publish": {
-      "provider": "github",
-      "owner": "HappyHobo085",
-      "repo": "Aegis"
-    },
-    "directories": {
-      "output": "release"
-    },
-    "files": [
-      "out/**/*",
-      "package.json"
-    ],
-    "asarUnpack": [
-      "**/node_modules/better-sqlite3/**",
-      "**/node_modules/bindings/**",
-      "**/node_modules/file-uri-to-path/**",
-      "**/node_modules/@ghostery/**"
-    ],
-    "extraResources": [
-      {
-        "from": "electron/main/adblock/seed/engine-seed.bin",
-        "to": "engine-seed.bin"
-      }
-    ],
-    "npmRebuild": false,
-    "afterPack": "build/afterPack.js",
-    "linux": {
-      "target": [
-        "AppImage"
-      ],
-      "category": "Network",
-      "icon": "build/icon.png",
-      "synopsis": "Ad-blocking browser",
-      "desktop": {
-        "entry": {
-          "Name": "Aegis"
-        }
-      },
-      "syncDesktopName": true
-    },
-    "win": {
-      "target": [
-        "nsis",
-        "portable"
-      ],
-      "icon": "build/icon.png"
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true
-    }
-  },
   "scripts": {
-    "prepare": "patch-package",
-    "predev": "npm run rebuild:electron",
-    "dev": "electron-vite dev",
-    "prebuild": "npm run rebuild:electron",
-    "build": "electron-vite build",
-    "generate-seed": "node scripts/generate-seed.mjs",
-    "dist": "npm run build && electron-builder --linux AppImage",
-    "dist:win": "npm run build && electron-builder --win nsis portable",
-    "preview": "electron-vite preview",
+    "dev": "tauri dev",
+    "build": "tauri build",
     "dev:renderer": "vite",
     "build:renderer": "vite build",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 tauri build",
-    "pretest": "npm run rebuild:node",
-    "test": "vitest run",
-    "pretest:e2e": "npm run rebuild:electron && npm run build",
-    "test:e2e": "playwright test",
-    "rebuild:electron": "electron-rebuild -f -w better-sqlite3",
-    "rebuild:node": "npm rebuild better-sqlite3"
+    "test": "vitest run"
   },
   "dependencies": {
-    "@ghostery/adblocker-electron": "2.18.0",
-    "@ghostery/adblocker-electron-preload": "2.18.0",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-dialog": "^2.7.1",
-    "better-sqlite3": "^12.10.0",
-    "electron-updater": "^6.8.9",
     "lucide-react": "^0.477.0"
   },
   "devDependencies": {
-    "@electron/fuses": "^1.8.0",
-    "@electron/rebuild": "^4.0.4",
-    "@playwright/test": "^1.49.0",
     "@tauri-apps/cli": "^2.11.2",
     "@testing-library/jest-dom": "^6.6.0",
     "@testing-library/react": "^16.1.0",
     "@testing-library/user-event": "^14.5.0",
-    "@types/better-sqlite3": "^7.6.11",
     "@types/node": "^22",
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "42.4.0",
-    "electron-builder": "^26.15.2",
-    "electron-vite": "^5.0.0",
     "jsdom": "^25.0.0",
-    "node-gyp": "^12.4.0",
-    "patch-package": "^8.0.1",
     "react": "^19",
     "react-dom": "^19",
     "typescript": "^5.7.0",

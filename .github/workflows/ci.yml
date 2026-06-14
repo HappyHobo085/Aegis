@@ -2,9 +2,7 @@ name: CI
 
 # Unit-test gate + supply-chain checks. Runs on every PR (so Dependabot's
 # grouped update PRs are gated), on push to main, and weekly (to catch
-# dependency-audit / Electron-currency drift even without a PR). The e2e suite
-# is intentionally NOT run here — it needs Electron + a virtual display and stays
-# the local pre-merge gate.
+# dependency-audit drift even without a PR).
 on:
   pull_request: {}
   push:
@@ -35,13 +33,7 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - name: Unit tests (node + jsdom)
-        # `pretest` rebuilds better-sqlite3 for the NODE ABI (not the Electron
-        # ABI) — a prebuilt exists for Node 22, with the ubuntu toolchain as
-        # fallback; this is unrelated to the Electron-ABI build in build-windows.yml.
         run: npm test
       - name: Dependency audit gate (high/critical)
         if: ${{ !cancelled() }}
         run: node scripts/check-npm-audit.mjs
-      - name: Electron security-currency check
-        if: ${{ !cancelled() }}
-        run: node scripts/check-electron-current.mjs
