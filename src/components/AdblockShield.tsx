@@ -11,6 +11,10 @@ export interface AdblockShieldProps {
   host: string | null;
   setEnabled(enabled: boolean): void;
   toggleAllowlist(): void;
+  /** Notified when the popover opens/closes, so the app can raise the chrome above
+   *  the opaque, always-on-top content webview on Tauri (else the popover renders
+   *  behind the page). No-op on Electron's transparent-chrome architecture. */
+  onOpenChange?(open: boolean): void;
 }
 
 function Popover({
@@ -68,6 +72,10 @@ function Popover({
 
 export function AdblockShield(props: AdblockShieldProps) {
   const [open, setOpen] = useState(false);
+  const changeOpen = (v: boolean) => {
+    setOpen(v);
+    props.onOpenChange?.(v);
+  };
 
   // Blocking is effectively active for this host only when the global toggle is
   // on AND the host isn't allowlisted.
@@ -85,14 +93,14 @@ export function AdblockShield(props: AdblockShieldProps) {
         title="Ad blocking"
         aria-haspopup="dialog"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => changeOpen(!open)}
       >
         <span aria-hidden="true" className="adblock-shield__icon">
           <ShieldIcon size={18} aria-hidden="true" />
         </span>
         <span className="adblock-shield__badge">{props.page}</span>
       </button>
-      {open && <Popover {...props} onClose={() => setOpen(false)} />}
+      {open && <Popover {...props} onClose={() => changeOpen(false)} />}
     </div>
   );
 }

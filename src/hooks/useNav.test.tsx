@@ -44,7 +44,6 @@ const baseState: NavState = {
 };
 
 const baseSettings: Settings = {
-  siteName: 'Aegis',
   homeUrl: 'https://duckduckgo.com/',
   primaryColor: '#4f8cff',
   defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',

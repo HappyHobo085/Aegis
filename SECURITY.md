@@ -2,9 +2,9 @@
 
 ## Supported versions
 
-Aegis ships an auto-update channel (electron-updater + GitHub Releases). Only the
-**latest released version** receives security updates; older builds are expected
-to auto-update to it. There is no long-term-support branch.
+Aegis ships an auto-update channel (tauri-plugin-updater + GitHub Releases). Only
+the **latest released version** receives security updates; older builds are
+expected to auto-update to it. There is no long-term-support branch.
 
 | Version        | Supported                     |
 | -------------- | ----------------------------- |
@@ -28,23 +28,40 @@ their GitHub profile rather than filing a public issue.
 
 ## Security model (summary)
 
-Aegis is an Electron application configured for browsing untrusted web content:
+Aegis is a **Tauri 2** application (Rust core + a WebView-hosted UI) configured for
+browsing untrusted web content:
 
-- **Process isolation:** web content runs sandboxed with `contextIsolation` on and
-  `nodeIntegration` off; the chrome to main IPC surface is sender-guarded.
-- **Patch cadence:** Electron is exact-pinned and tracked against upstream stable.
-  CI fails when it falls outside Electron's 3-major security-support window (see
-  `docs/superpowers/engine-update-policy.md`), and releases ship over the
-  SHA512-verified auto-update feed.
-- **Tamper resistance:** packaged builds flip Electron fuses
-  (RunAsNode / NODE_OPTIONS / inspect off, load-app-from-asar only, cookie
-  encryption) and enable ASAR integrity where the platform supports it.
-- **Network protections:** built-in ad/tracker blocking via the Ghostery engine.
-  (Additional network hardening — HTTPS-Only and malicious-site blocking — is on
-  the roadmap.)
+- **Webview isolation:** the trusted UI ("chrome") and the page being browsed run in
+  separate webviews. The chrome reaches the Rust core only through a single,
+  channel-dispatched `ipc(channel, payload)` command; browsed pages have no access
+  to that surface. A strict **Content-Security-Policy** (in `tauri.conf.json`)
+  constrains the chrome to its own bundled assets — `default-src 'self'`,
+  `script-src 'self'`, `object-src 'none'`, no inline/remote scripts.
+- **Least privilege:** the Tauri capability set (`src-tauri/capabilities/default.json`)
+  grants only core events and open/save file dialogs — no filesystem, shell, or
+  arbitrary-command permissions.
+- **Network protections (built in):**
+  - **Ad/tracker blocking** via Brave's `adblock` engine + EasyList — WebKit content
+    filters on Linux, a native `WebResourceRequested` handler on Windows (WebView2),
+    a native `shouldInterceptRequest` filter on Android, plus an injected
+    fetch/XHR/cosmetic tier on Windows/macOS.
+  - **HTTPS-Only:** top-level `http://` navigations are upgraded to `https://`
+    (localhost exempt), with a warning interstitial when the secure load fails.
+  - **Malicious-site blocking (MalwareGuard):** navigations and subresources are
+    checked against a bundled URLhaus host blocklist; matches are blocked with a
+    warning, with an opt-in session bypass.
+- **Anti-fingerprinting:** the content webview presents a stock Chrome User-Agent
+  rather than leaking the embedder/runtime identity.
+- **Permissions:** site permission requests (geolocation, camera, microphone,
+  notifications, pointer-lock) are denied by default and prompted on first use;
+  the decision is remembered per origin and is revocable in Settings.
+- **Updates:** release builds are published to GitHub Releases with a signed
+  `latest.json` update manifest (minisign); the app verifies the signature against
+  the public key embedded in `tauri.conf.json` before applying an update.
 
 ## Dependencies
 
-Dependencies are kept current by Dependabot and gated in CI by an `npm audit`
-check: high/critical advisories block merge unless explicitly allowlisted, with
-justification, in `.audit-allowlist.json`.
+JavaScript dependencies are kept current by Dependabot and gated in CI by an
+`npm audit` check: high/critical advisories block merge unless explicitly
+allowlisted, with justification, in `.audit-allowlist.json`. Rust dependencies are
+pinned via `src-tauri/Cargo.lock`.

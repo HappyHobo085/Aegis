@@ -1,6 +1,6 @@
 // src/components/DataTab.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { ImportMode } from '../../shared/types';
 import { DataTab } from './DataTab';
@@ -14,7 +14,10 @@ import { confirm, toast } from '../lib/toast';
 function props(over: Partial<React.ComponentProps<typeof DataTab>> = {}) {
   return {
     onExport: vi.fn(async () => ({ ok: true, path: '/tmp/aegis-export.json' })),
-    onImport: vi.fn(async (_mode: ImportMode) => ({ ok: true, counts: {} })),
+    onImport: vi.fn(async (_mode: ImportMode, _source?: { text?: string }) => ({
+      ok: true,
+      counts: {},
+    })),
     ...over,
   };
 }
@@ -72,5 +75,15 @@ describe('DataTab', () => {
     render(<DataTab {...p} />);
     await userEvent.click(screen.getByRole('button', { name: /^import$/i }));
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
+  });
+
+  it('imports pasted JSON (no native file picker) when the paste field is filled', async () => {
+    const p = props();
+    render(<DataTab {...p} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /backup json to import/i }), {
+      target: { value: '{"version":1}' },
+    });
+    await userEvent.click(screen.getByRole('button', { name: /^import$/i }));
+    expect(p.onImport).toHaveBeenCalledWith('merge', { text: '{"version":1}' });
   });
 });

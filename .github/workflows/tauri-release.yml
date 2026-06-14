@@ -1,0 +1,86 @@
+name: Tauri Release
+
+# Build Aegis (Tauri) for all desktop OSes and publish a GitHub Release with the
+# auto-update artifacts (latest.json + signed bundles) on a version tag. This is
+# the electron-updater equivalent for the Tauri rewrite — the update feed the app
+# checks. Signing uses the minisign keypair generated with `tauri signer generate`;
+# add the private key as the TAURI_SIGNING_PRIVATE_KEY repo secret (and the password
+# as TAURI_SIGNING_PRIVATE_KEY_PASSWORD if the key has one). Dormant until the Tauri
+# app is on the default branch + a v* tag is pushed.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: macos-latest # Apple Silicon
+            args: '--target aarch64-apple-darwin'
+          - platform: macos-latest # Intel
+            args: '--target x86_64-apple-darwin'
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: windows-latest
+            args: ''
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri's Linux build links webkit2gtk; install the apt equivalents of the
+      # Fedora deps used in dev.
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ matrix.platform }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - run: npm ci
+
+      - name: Build + publish (signed updater artifacts)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Update-signing keypair (tauri signer generate). Absent today -> build
+          # still succeeds but produces no signature; add the secret to enable
+          # auto-update. Windows/macOS OS code-signing secrets are separate and
+          # also drop-in later (WINDOWS_CERTIFICATE, APPLE_CERTIFICATE, ...).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Aegis ${{ github.ref_name }}'
+          releaseBody: 'See the assets to download and install. Auto-update via latest.json.'
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}

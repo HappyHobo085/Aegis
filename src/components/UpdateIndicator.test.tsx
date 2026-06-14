@@ -10,14 +10,21 @@ const st = (over: Partial<UpdateState> = {}): UpdateState => ({
 });
 
 describe('UpdateIndicator', () => {
-  it('renders nothing until an update is downloaded', () => {
-    render(<UpdateIndicator state={st({ status: 'available', version: '0.2.0' })} onRestart={vi.fn()} />);
+  it('renders nothing when no update is pending', () => {
+    render(<UpdateIndicator state={st({ status: 'checking' })} onRestart={vi.fn()} />);
     expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('renders an install button when an update is available', () => {
+    render(<UpdateIndicator state={st({ status: 'available', version: '0.2.0' })} onRestart={vi.fn()} />);
+    expect(
+      screen.getByRole('button', { name: /update available 0\.2\.0 — install/i }),
+    ).toBeInTheDocument();
   });
 
   it('renders a restart button once an update is downloaded', () => {
     render(<UpdateIndicator state={st({ status: 'downloaded', version: '0.2.0' })} onRestart={vi.fn()} />);
-    expect(screen.getByRole('button', { name: /restart to update to 0\.2\.0/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /restart to update 0\.2\.0/i })).toBeInTheDocument();
   });
 
   it('calls onRestart when clicked', async () => {

@@ -11,6 +11,7 @@ export interface ToolbarAdblockProps {
   host: string | null;
   setEnabled(enabled: boolean): void;
   toggleAllowlist(): void;
+  onOpenChange?(open: boolean): void;
 }
 
 export interface ToolbarProps {
@@ -63,6 +64,7 @@ export function Toolbar({
         host={adblock.host}
         setEnabled={adblock.setEnabled}
         toggleAllowlist={adblock.toggleAllowlist}
+        onOpenChange={adblock.onOpenChange}
       />
       {bookmark}
       {downloads}

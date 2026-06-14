@@ -1,5 +1,4 @@
 // src/components/AppearanceTab.tsx
-import { useState } from 'react';
 import type { Settings } from '../../shared/types';
 
 export interface AppearanceTabProps {
@@ -8,8 +7,6 @@ export interface AppearanceTabProps {
 }
 
 export function AppearanceTab({ settings, update }: AppearanceTabProps) {
-  const [siteName, setSiteName] = useState(settings.siteName);
-
   return (
     <div className="appearance-tab">
       <label className="appearance-tab__field">
@@ -21,25 +18,6 @@ export function AppearanceTab({ settings, update }: AppearanceTabProps) {
           onChange={(e) => void update({ primaryColor: e.target.value })}
         />
       </label>
-
-      <div className="appearance-tab__field" role="group" aria-label="Site name">
-        <label htmlFor="appearance-tab-site-name">Site name</label>
-        <input
-          id="appearance-tab-site-name"
-          type="text"
-          aria-label="Site name"
-          placeholder="Aegis"
-          value={siteName}
-          onChange={(e) => setSiteName(e.target.value)}
-        />
-        <button
-          type="button"
-          aria-label="Save site name"
-          onClick={() => void update({ siteName })}
-        >
-          Save
-        </button>
-      </div>
     </div>
   );
 }

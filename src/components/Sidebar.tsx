@@ -42,9 +42,11 @@ export interface SidebarProps {
   onClose(): void;
   history: ReactNode;
   saved: ReactNode;
+  /** Report the panel's current width so the content webview's inset can track it. */
+  onWidthChange?(width: number): void;
 }
 
-export function Sidebar({ open, onClose, history, saved }: SidebarProps) {
+export function Sidebar({ open, onClose, history, saved, onWidthChange }: SidebarProps) {
   const [tab, setTab] = useState<Tab>('history');
   // Width is read from localStorage on each open (the panel unmounts when closed),
   // so a resized width is remembered across re-opens and app restarts.
@@ -56,14 +58,16 @@ export function Sidebar({ open, onClose, history, saved }: SidebarProps) {
   const historyPanelId = useId();
   const savedPanelId = useId();
 
-  // Persist the width whenever it changes (idempotent — StrictMode-safe).
+  // Persist the width whenever it changes (idempotent — StrictMode-safe) and report it
+  // up so the content webview's right inset tracks the (resizable) panel exactly.
   useEffect(() => {
     try {
       window.localStorage.setItem(WIDTH_KEY, String(width));
     } catch {
       // localStorage unavailable — width simply isn't remembered.
     }
-  }, [width]);
+    onWidthChange?.(width);
+  }, [width, onWidthChange]);
 
   const onResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
     e.preventDefault();

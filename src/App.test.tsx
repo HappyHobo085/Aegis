@@ -15,7 +15,6 @@ const baseState: NavState = {
 };
 
 const baseSettings: Settings = {
-  siteName: 'Aegis',
   homeUrl: 'https://duckduckgo.com/',
   primaryColor: '#4f8cff',
   defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
@@ -312,11 +311,6 @@ describe('App', () => {
     render(<App />);
     await waitFor(() => expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument());
     expect(screen.queryByRole('dialog', { name: /settings/i })).not.toBeInTheDocument();
-  });
-
-  it('reflects the configured siteName in the document title', async () => {
-    render(<App />);
-    await waitFor(() => expect(document.title).toBe('Aegis'));
   });
 
   it('mounts the toolbar downloads indicator', async () => {

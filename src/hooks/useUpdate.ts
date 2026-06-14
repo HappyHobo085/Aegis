@@ -20,6 +20,9 @@ export function useUpdate(): {
     const unsubscribe = aegis.update.onState((s) => {
       setState(s);
     });
+    // Auto-check on startup so updates surface without the user asking ("auto-
+    // updating"). Result arrives via onState; no-ops quietly when up to date.
+    void aegis.update.checkNow();
     return () => {
       active = false;
       unsubscribe();

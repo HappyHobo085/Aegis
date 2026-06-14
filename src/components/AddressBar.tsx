@@ -6,11 +6,15 @@ export interface AddressBarProps {
   onSubmit(raw: string): void;
 }
 
+// The blank home page has no meaningful URL to show — present an empty address
+// bar (just the placeholder) so the first tap-and-type starts a clean query.
+const display = (u: string) => (u === 'about:blank' ? '' : u);
+
 export function AddressBar({ url, onSubmit }: AddressBarProps) {
-  const [value, setValue] = useState(url);
+  const [value, setValue] = useState(display(url));
 
   useEffect(() => {
-    setValue(url);
+    setValue(display(url));
   }, [url]);
 
   return (
@@ -28,6 +32,10 @@ export function AddressBar({ url, onSubmit }: AddressBarProps) {
         value={value}
         spellCheck={false}
         autoComplete="off"
+        // Select all on focus, like a real browser address bar, so tapping it and
+        // typing replaces the URL instead of appending (critical on touch, where
+        // there's no Ctrl+A).
+        onFocus={(e) => e.currentTarget.select()}
         onChange={(e) => setValue(e.target.value)}
       />
     </form>

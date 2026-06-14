@@ -5,6 +5,7 @@ import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
+import { subscribeConfirmOpen } from './lib/toast';
 import { useNav } from './hooks/useNav';
 import { useAdblock } from './hooks/useAdblock';
 import { useFavorites } from './hooks/useFavorites';
@@ -63,6 +64,9 @@ function hostOf(url: string): string | null {
 export function App() {
   const nav = useNav(PRIMARY_VIEW_ID);
   const adblock = useAdblock(PRIMARY_VIEW_ID, nav.state.url);
+  // The ad-block shield popover is a chrome dropdown; track it so the content webview
+  // is lowered while it's open (Tauri's content view is opaque and on top).
+  const [shieldOpen, setShieldOpen] = useState(false);
   const favorites = useFavorites(nav.state.url);
   const history = useHistory();
   const saved = useSaved(nav.state.url);
@@ -76,29 +80,45 @@ export function App() {
   const [managerOpen, setManagerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // The sidebar panel is user-resizable; track its width so the content webview's right
+  // inset matches it exactly (reported up from the Sidebar via onWidthChange).
+  const [sidebarWidth, setSidebarWidth] = useState(280);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
   const update = useUpdate();
   const safety = useSafety();
+
+  // A confirm dialog (e.g. "Clear all history") is a full-window overlay; track it
+  // so the content webview hides behind it (else it renders behind the page).
+  useEffect(() => subscribeConfirmOpen(setConfirmOpen), []);
 
   // Favorites bar is always-on (constant top inset); overlays never inset content.
   useContentInset(PRIMARY_VIEW_ID);
 
-  // Any full-window chrome overlay (sidebar, settings, favorites manager,
-  // permission prompt, error/crash screen) must bring the transparent chrome
-  // view on top of the content view so it paints over the page.
-  const chromeOverlayActive =
-    sidebarOpen ||
+  // Full-window chrome overlays (settings, favorites manager, permission prompt,
+  // error/crash, downloads, safety) must bring the chrome over the content. The
+  // sidebar is a partial right panel handled separately (setSidebar) so the page
+  // stays visible beside it; on Electron the sidebar still rides the chrome overlay
+  // (the union below preserves the original setChromeOverlay calls), and setSidebar
+  // is a Tauri-only no-op there.
+  const fullOverlayActive =
     downloadsOpen ||
     settingsOpen ||
     managerOpen ||
+    confirmOpen ||
     permissions.prompt !== null ||
     failed !== null ||
     crashed !== null ||
     safety.interstitial !== null;
   useEffect(() => {
-    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, chromeOverlayActive);
-  }, [chromeOverlayActive]);
+    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, fullOverlayActive || sidebarOpen || shieldOpen);
+  }, [fullOverlayActive, sidebarOpen, shieldOpen]);
+  useEffect(() => {
+    // Inset the content by the sidebar's actual width when it's open and no full overlay
+    // is covering it — so the page stays visible beside the panel without overlapping it.
+    void aegis.view.setSidebar?.(PRIMARY_VIEW_ID, sidebarOpen && !fullOverlayActive, sidebarWidth);
+  }, [sidebarOpen, fullOverlayActive, sidebarWidth]);
 
   // Fullscreen: main shrinks chrome to a top-right corner and fills the window
   // with content. Renderer reflects the toggle below (after all hooks).
@@ -106,15 +126,23 @@ export function App() {
     void aegis.view.setFullscreen(PRIMARY_VIEW_ID, fullscreen);
   }, [fullscreen]);
 
+  // In fullscreen the chrome shrinks to just the exit-button box; give the body a solid
+  // background so that tiny webview actually paints — a transparent body can render
+  // nothing (button present but invisible) with compositing disabled on some GPUs.
+  useEffect(() => {
+    document.body.classList.toggle('aegis-fullscreen', fullscreen);
+    return () => document.body.classList.remove('aegis-fullscreen');
+  }, [fullscreen]);
+
+  // The backend may exit fullscreen itself (Tauri: Esc in the content webview,
+  // which covers the chrome's exit button); sync the React state when it does.
+  useEffect(() => {
+    return aegis.view.onFullscreen?.((s) => setFullscreen(s.on));
+  }, []);
+
   useEffect(() => {
     void aegis.settings.get().then((s) => applyTheme(s));
   }, []);
-
-  // Make `siteName` functional: reflect it as the document title. `useSettings`
-  // also sets it on every update; this effect covers the initial load + edits.
-  useEffect(() => {
-    document.title = settings.settings.siteName;
-  }, [settings.settings.siteName]);
 
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {
@@ -188,6 +216,7 @@ export function App() {
           host: hostOf(nav.state.url),
           setEnabled: adblock.setEnabled,
           toggleAllowlist: adblock.toggleAllowlist,
+          onOpenChange: setShieldOpen,
         }}
         bookmark={
           <BookmarkButton
@@ -250,6 +279,7 @@ export function App() {
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
+        onWidthChange={setSidebarWidth}
         history={
           <HistoryPanel
             entries={history.entries}
@@ -349,7 +379,7 @@ export function App() {
           data={
             <DataTab
               onExport={() => aegis.data.export()}
-              onImport={(mode) => aegis.data.import(mode)}
+              onImport={(mode, source) => aegis.data.import(mode, source)}
             />
           }
         />

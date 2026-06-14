@@ -1,0 +1,164 @@
+name: Tauri Build Check
+
+# Build Aegis (Tauri) on real Windows, macOS, and Linux runners + a debug Android APK,
+# to confirm it compiles/links on each OS and to produce runnable artifacts you can
+# download from the Actions run page for on-device testing:
+#   - aegis-linux-appimage   : portable .AppImage (any distro, incl. Fedora)
+#   - aegis-windows-portable : portable, self-contained Aegis_x64_portable.exe
+#   - aegis-macos            : .app + .dmg
+#   - aegis-android-apk      : installable debug APK
+# No signing / release — that's tauri-release.yml on a version tag. Runs on pushes to
+# the migration branch and on demand.
+on:
+  push:
+    branches:
+      - 'feat/tauri-migration'
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows: a PORTABLE, self-contained .exe — the raw release binary (it needs
+          # only the system WebView2 runtime, present on Win10/11). --no-bundle skips the
+          # NSIS installer; we ship the portable exe instead.
+          - platform: windows-latest
+            artifact: aegis-windows-portable
+            bundles: '--no-bundle'
+            artifact_path: src-tauri/target/release/Aegis_x64_portable.exe
+          # macOS: the default .app + .dmg bundles.
+          - platform: macos-latest
+            artifact: aegis-macos
+            bundles: ''
+            artifact_path: src-tauri/target/release/bundle/**
+          # Linux: the portable AppImage only (runs on any distro, incl. Fedora); skip
+          # the .deb. --bundles overrides the config's target list for this build.
+          - platform: ubuntu-22.04
+            artifact: aegis-linux-appimage
+            bundles: '--bundles appimage'
+            artifact_path: src-tauri/target/release/bundle/appimage/*.AppImage
+    runs-on: ${{ matrix.platform }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # Tauri's Linux build links webkit2gtk; install the apt equivalents of the Fedora
+      # deps used in dev (mirrors tauri-release.yml).
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            patchelf
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ matrix.platform }}-buildcheck-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - run: npm ci
+
+      # Unit tests are JS/Rust and platform-agnostic, but running them here confirms the
+      # toolchain is sane on each OS before the heavier compile.
+      - run: npm test
+
+      # Build the renderer + the Tauri app (release). Unsigned, no release published.
+      # (APPIMAGE_EXTRACT_AND_RUN handles the Linux AppImage FUSE quirk; both env vars
+      # are ignored on Windows/macOS.) matrix.bundles is '--no-bundle' on Windows (we
+      # ship the raw exe), '--bundles appimage' on Linux, and empty on macOS (defaults).
+      - name: Build
+        env:
+          APPIMAGE_EXTRACT_AND_RUN: '1'
+          NO_STRIP: '1'
+        run: npm run tauri -- build ${{ matrix.bundles }}
+
+      # Windows: the portable build is the raw release binary. The bundler doesn't emit
+      # it under a friendly name, so stage a copy for the artifact.
+      - name: Stage portable exe (Windows)
+        if: matrix.platform == 'windows-latest'
+        shell: pwsh
+        run: Copy-Item src-tauri/target/release/app.exe -Destination src-tauri/target/release/Aegis_x64_portable.exe
+
+      - name: Upload artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact_path }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      # Android targets for the Rust core (it compiles to a per-ABI cdylib bundled in
+      # the APK).
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: android-buildcheck-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - run: npm ci
+
+      # Build a DEBUG APK — auto-signed with the debug keystore, so it installs on any
+      # device with "install unknown apps" enabled (no release signing key needed). The
+      # Android SDK + NDK are preinstalled on the runner; point Tauri at the latest NDK.
+      - name: Build debug APK
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          echo "Using NDK at $NDK_HOME"
+          npm run tauri -- android build --apk --debug
+
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: aegis-android-apk
+          path: src-tauri/gen/android/app/build/outputs/apk/**/*.apk
+          if-no-files-found: warn
+          retention-days: 14

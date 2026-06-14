@@ -14,6 +14,7 @@ export const IPC = {
   viewSetContentVisible: 'view.setContentVisible',
   viewSetContentInset: 'view.setContentInset',
   viewSetChromeOverlay: 'view.setChromeOverlay',
+  viewSetSidebar: 'view.setSidebar',
   viewSetFullscreen: 'view.setFullscreen',
   settingsGet: 'settings.get',
   settingsSet: 'settings.set',
@@ -55,6 +56,7 @@ export const IPC = {
   adblockClearAllowlist: 'adblock.clearAllowlist',
   // events (main -> chrome renderer)
   evtNavState: 'nav.state',
+  evtViewFullscreen: 'view.fullscreen',
   evtNavFailed: 'nav.failed',
   evtNavCrashed: 'nav.crashed',
   evtAdblockBlockedCount: 'adblock.blockedCount',
@@ -200,11 +202,7 @@ export interface SafetyInterstitialPayload {
   reason: 'https-failed' | 'malware';
 }
 
-/**
- * One filter-list subscription row. Canonical shape lives in
- * `electron/main/db/subsRepo.ts`; re-declared here so the preload + renderer can
- * type the `subs.*` IPC surface without importing main-process modules.
- */
+/** One filter-list subscription row — the shape of the `subs.*` IPC surface. */
 export interface Subscription {
   listId: string;
   url: string;
@@ -221,7 +219,6 @@ export interface SearchEngine {
 }
 
 export interface Settings {
-  siteName: string;
   homeUrl: string;
   primaryColor: string;
   defaultSearchTemplate: string; // e.g. https://duckduckgo.com/?q=%s
@@ -248,7 +245,14 @@ export interface AegisApi {
     setContentVisible(viewId: ViewId, visible: boolean): Promise<void>;
     setContentInset(viewId: ViewId, inset: ContentInset): Promise<void>;
     setChromeOverlay(viewId: ViewId, active: boolean): Promise<void>;
+    /** The sidebar is a right panel: inset the content from the right (page stays
+     * visible) rather than hiding it. Optional — Electron composes its sidebar via
+     * the chrome overlay, so it may not implement this. */
+    setSidebar?(viewId: ViewId, active: boolean, width?: number): Promise<void>;
     setFullscreen(viewId: ViewId, on: boolean): Promise<void>;
+    /** Backend-driven fullscreen change (e.g. Esc exits on Tauri). Optional:
+     * Electron's chrome owns its own fullscreen exit, so it may not emit this. */
+    onFullscreen?(cb: (state: { on: boolean }) => void): () => void;
   };
   favorites: {
     list(): Promise<Favorite[]>;
@@ -317,7 +321,7 @@ export interface AegisApi {
   };
   data: {
     export(): Promise<{ ok: boolean; path?: string }>;
-    import(mode: ImportMode): Promise<{ ok: boolean; counts?: unknown }>;
+    import(mode: ImportMode, source?: { text?: string }): Promise<{ ok: boolean; counts?: unknown }>;
   };
   picker: {
     start(): Promise<{ ok: boolean; rule?: string }>;
