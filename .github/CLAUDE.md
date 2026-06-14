@@ -10,7 +10,7 @@ GitHub Actions workflows and Dependabot config for Aegis.
   no native build.
 - **`tauri-build-check.yml`** (Tauri Build Check) — proves the app compiles, links,
   and bundles on real OSes and produces downloadable artifacts for on-device
-  testing. Triggers on push to `feat/tauri-migration` and on demand. Matrix:
+  testing. Triggers on push to `main` and on demand. Matrix:
   - `windows-latest` → portable `Aegis_x64_portable.exe` (`--no-bundle`, raw exe)
   - `macos-latest` → `.app` + `.dmg`
   - `ubuntu-22.04` → portable `.AppImage` (`--bundles appimage`)
@@ -25,10 +25,9 @@ GitHub Actions workflows and Dependabot config for Aegis.
 
 ## `dependabot.yml`
 
-Weekly npm + github-actions updates. Minor/patch npm bumps are grouped to reduce
-noise; `electron` and `@ghostery/*` are excluded so they arrive as individual PRs.
-(That exclusion and its referenced policy doc are legacy-Electron leftovers — inert
-on the Tauri branch, kept for when/if Electron tooling matters again.)
+Weekly npm + github-actions updates. All minor/patch npm bumps are grouped into a
+single PR to reduce noise; major bumps arrive individually. (Cargo/Rust deps aren't
+covered yet — `src-tauri/Cargo.lock` is pinned manually.)
 
 ## Notes
 
@@ -36,5 +35,5 @@ on the Tauri branch, kept for when/if Electron tooling matters again.)
   equivalents of the Fedora dev deps.
 - CI uses Node 22 with npm cache; cargo registry + `src-tauri/target` are cached by
   `Cargo.lock` hash.
-- The build-check trigger branch is `feat/tauri-migration`; update it if the Tauri
-  work merges to `main`.
+- `tauri-build-check.yml` runs the full multi-OS + Android build on every push to
+  `main` (and on demand) — heavier than `ci.yml`.

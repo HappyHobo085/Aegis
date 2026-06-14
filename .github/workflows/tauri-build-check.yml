@@ -8,11 +8,11 @@ name: Tauri Build Check
 #   - aegis-macos            : .app + .dmg
 #   - aegis-android-apk      : installable debug APK
 # No signing / release — that's tauri-release.yml on a version tag. Runs on pushes to
-# the migration branch and on demand.
+# main and on demand.
 on:
   push:
     branches:
-      - 'feat/tauri-migration'
+      - main
   workflow_dispatch: {}
 
 permissions:

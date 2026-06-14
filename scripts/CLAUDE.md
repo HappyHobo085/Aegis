@@ -29,7 +29,3 @@ justification in the commit** — that's the documented escape hatch.
 node scripts/check-npm-audit.mjs   # the gate
 npm test                           # includes auditCheck.test.mjs (node project)
 ```
-
-> Note: a comment in `.github/dependabot.yml` references an Electron/@ghostery
-> currency policy from the now-removed `docs/`. That tooling targets the legacy
-> Electron build; on the Tauri branch it's inert but harmless.
