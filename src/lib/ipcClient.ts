@@ -137,6 +137,7 @@ export const aegis: AegisApi = {
     reorder: (ids) => call<TabsState>(IPC.tabsReorder, { ids }),
     setPinned: (id, pinned) => call<TabsState>(IPC.tabsSetPinned, { id, pinned }),
     reopenClosed: () => call<TabsState>(IPC.tabsReopenClosed),
+    setTitle: (id, title) => call<TabsState>(IPC.tabsSetTitle, { id, title }),
     onState: (cb) => on<TabsState>(IPC.evtTabsState, cb),
     onShortcut: (cb) => on<TabShortcut>(IPC.evtTabsShortcut, cb),
   },

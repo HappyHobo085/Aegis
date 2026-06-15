@@ -103,6 +103,17 @@ export function MobileApp() {
     return () => { delete window.__aegisOpenTab; };
   }, [tabs.create]);
 
+  // On Android the Rust core can't observe the content WebView's title (there's no
+  // WebKit title signal like desktop), so the tab switcher would show host fallbacks.
+  // Relay the active tab's title from its nav state into the registry. Guard on the
+  // nav state's own viewId so a transient (pre-activate) state from the previous tab
+  // isn't recorded against the newly-active tab.
+  useEffect(() => {
+    if (nav.state.title && nav.state.viewId === tabs.activeId) {
+      void aegis.tabs.setTitle(tabs.activeId, nav.state.title);
+    }
+  }, [nav.state.title, nav.state.viewId, tabs.activeId]);
+
   const host = hostOf(nav.state.url);
   const shield = (
     <AdblockShield

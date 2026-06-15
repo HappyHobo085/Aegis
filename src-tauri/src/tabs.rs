@@ -125,6 +125,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             emit_and_persist(app);
             Some(Ok(state_value(app)))
         }
+        "tabs.setTitle" => {
+            let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let title = payload.get("title").and_then(Value::as_str).unwrap_or("").to_string();
+            app.state::<Tabs>().reg.lock().unwrap().set_title(id, title);
+            emit_and_persist(app);
+            Some(Ok(state_value(app)))
+        }
         _ => None,
     }
 }
