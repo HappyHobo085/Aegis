@@ -15,6 +15,8 @@ export function useMobileTabSync(tabs: TabMeta[], activeId: ViewId): void {
     const before = prev.current;
 
     // Ensure the active tab's WebView exists + is shown (idempotent).
+    // A discarded tab is only ever resurrected via tabs.activate(), which changes activeId,
+    // so this condition also covers re-showing a discarded tab.
     if (active && (!before || before.activeId !== activeId)) {
       activateTab(activeId, active.url);
     }

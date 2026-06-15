@@ -33,8 +33,10 @@ describe('MobileMenuSheet', () => {
     expect(p.onBack).toHaveBeenCalled();
   });
   it('shows the bookmark toggle and reflects saved state', () => {
-    setup({ isCurrentSaved: true });
+    const p = setup({ isCurrentSaved: true });
     expect(screen.getByRole('button', { name: /remove bookmark/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /remove bookmark/i }));
+    expect(p.onToggleBookmark).toHaveBeenCalled();
   });
   it('disables bookmarking when not bookmarkable', () => {
     setup({ canBookmark: false });

@@ -23,6 +23,7 @@ describe('MobileBottomBar', () => {
   });
   it('shows the open-tab count on the Tabs button', () => {
     setup({ tabCount: 5 });
+    expect(screen.getByRole('button', { name: /tabs \(5 open\)/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /tabs/i })).toHaveTextContent('5');
   });
   it('fires callbacks on tap', () => {
