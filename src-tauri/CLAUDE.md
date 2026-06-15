@@ -89,11 +89,13 @@ malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt
 (JNI into the Rust `libapp_lib.so`). `AndroidManifest.xml` grants only `INTERNET`.
 
 **Mobile chrome (`MainActivity.kt`), kept in sync with the `MobileApp` shell in `src/`:**
-- The content WebView is inset by the chrome heights: `topMargin = 72dp`
+- The content area is inset by the chrome heights: `topMargin = 72dp`
   (`MOBILE_ADDRESS_H` 48 + `MOBILE_FAV_H` 24) + status inset, `bottomMargin = 56dp`
   (`MOBILE_BOTTOMBAR_H`) + nav inset. **`applyContentMargins()`** is the single place
   that computes them from the `fullscreen` / `bottomBarHidden` flags + cached chrome
   heights + captured system insets; the insets listener and the bridges all call it.
+  It sets the margins on the **`GestureContainer`** that wraps the tab WebViews (see
+  Touch gestures below), which carries the insets so each tab WebView just fills it.
 - The `AegisAndroid` bridge adds `setBackInterceptActive` (Back closes an open sheet),
   `setBottomBarHidden` (the top-bar chevron — content reclaims the bar's gap), and
   `setFullscreen` (desktop-parity hide-all-chrome — content fills the safe area, Back
@@ -116,6 +118,23 @@ malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt
   bar would blank). The tab title is NOT observed natively (no WebKit signal) — the chrome
   relays it via `tabs.setTitle`. `makeChromeClient().onCreateWindow` routes
   `target=_blank`/`window.open` to `window.__aegisOpenTab` → a background tab.
+- **Touch gestures (`GestureContainer.kt`).** A custom `FrameLayout` wraps the tab
+  WebViews (so the chrome-bar margins live on it, not per-tab). It uses the
+  watch-then-steal model — `onInterceptTouchEvent` lets the active WebView handle
+  touches until it positively recognizes one of two gestures, then steals the stream
+  (the WebView gets `ACTION_CANCEL`): **edge-swipe back/forward** (a horizontal drag
+  from a ~20dp left/right edge strip — left=back, right=forward, with a ◀/▶ arrow that
+  follows the finger; navigates on release past ~¼-width) and **pull-to-refresh** (a
+  downward drag while the active WebView is at `scrollY==0`, with a spinner; reloads on
+  release past threshold). It acts on the active tab through a `GestureHost` interface
+  the activity implements (`gestureBack/Forward/Reload/CanGoBack/CanGoForward/AtTop` →
+  `contentWebView`). `setSystemGestureExclusionRects` (API 29+) claims the edge strips
+  from Android's own back gesture; `stopRefresh()` is called from the active tab's
+  `onPageFinished` to hide the spinner. The indicator is drawn in **`dispatchDraw()`
+  after `super` (NOT `onDraw`)** so it paints over the opaque content WebView (gotcha
+  11). Nav reuses the existing `pushNavState` pipeline, so the address bar +
+  back/forward state update with **no renderer/IPC changes**. Tuning constants
+  (`edgePx`, `hDistance()`, `pullThreshold()`, pull damping) are all in `GestureContainer`.
 
 ## Build
 
@@ -151,6 +170,12 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     desktop-only (see `tabs.rs::close_webview`, the `lib.rs` builder). Only an android
     build / `cargo check --target aarch64-linux-android` catches these; desktop and the
     Windows cross-check do not.
+11. **Draw over a ViewGroup's children with `dispatchDraw`, not `onDraw`.** A
+    `ViewGroup`'s `onDraw()` paints *behind* its children, so an indicator drawn there is
+    occluded by an opaque `MATCH_PARENT` child (the content WebView). `GestureContainer`
+    draws its swipe arrow / refresh spinner in `dispatchDraw()` after `super.dispatchDraw()`,
+    which renders on top. (Same class of bug as the earlier "chrome overlay rendered behind
+    the native content view.")
 
 ### Multi-webview Linux layout (hard-won facts)
 

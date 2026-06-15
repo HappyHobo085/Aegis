@@ -32,7 +32,7 @@ import org.json.JSONObject
  * The active tab's WebView is mirrored into contentWebView so all existing active-tab
  * logic (margins, overlay, nav, ad-block) keeps targeting "the active tab" unchanged.
  */
-class MainActivity : TauriActivity() {
+class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   private var contentWebView: WebView? = null
   private var chromeWebView: WebView? = null
 
@@ -43,8 +43,9 @@ class MainActivity : TauriActivity() {
   // Per-tab current page URL (the ad-block first-party context), read on the network
   // thread in shouldInterceptRequest; concurrent for safe cross-thread reads.
   private val pageUrls = java.util.concurrent.ConcurrentHashMap<Int, String>()
-  // The shared content container (the chrome webview's parent), set in onWebViewCreate.
-  private var contentParent: ViewGroup? = null
+  // The gesture layer that wraps the tab WebViews (edge-swipe + pull-to-refresh); it's
+  // the child of the chrome webview's parent that hosts the per-tab content WebViews.
+  private var gestureContainer: GestureContainer? = null
 
   // The native content WebView is shown only when a real page is loaded AND no chrome
   // overlay (settings/sidebar/shield popover/…) is covering it. Tauri's setChromeOverlay
@@ -81,11 +82,11 @@ class MainActivity : TauriActivity() {
    *  showing — the top chrome (unless fullscreen) and the bottom action bar (unless it's
    *  toggled off or fullscreen). Called from the insets listener and the chrome bridges. */
   private fun applyContentMargins() {
-    val c = contentWebView ?: return
-    (c.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
+    val gc = gestureContainer ?: return
+    (gc.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
       p.topMargin = (if (fullscreen) 0 else topChromePx) + statusTop
       p.bottomMargin = (if (fullscreen || bottomBarHidden) 0 else bottomBarPx) + navBottom
-      c.layoutParams = p
+      gc.layoutParams = p
     }
   }
 
@@ -117,7 +118,10 @@ class MainActivity : TauriActivity() {
       pushNavState(id, url, true, view)
     }
 
-    override fun onPageFinished(view: WebView, url: String) = pushNavState(id, url, false, view)
+    override fun onPageFinished(view: WebView, url: String) {
+      pushNavState(id, url, false, view)
+      if (id == activeTabId) gestureContainer?.stopRefresh()
+    }
 
     override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
       pageUrls[id] = url
@@ -259,10 +263,8 @@ class MainActivity : TauriActivity() {
       FrameLayout.LayoutParams.MATCH_PARENT,
       FrameLayout.LayoutParams.MATCH_PARENT,
     )
-    lp.topMargin = topChromePx + statusTop
-    lp.bottomMargin = bottomBarPx + navBottom
     wv.visibility = View.GONE
-    contentParent?.addView(wv, lp)
+    gestureContainer?.addView(wv, lp)
     pageUrls[id] = url
     wv.loadUrl(url)
     return wv
@@ -273,9 +275,8 @@ class MainActivity : TauriActivity() {
     // Defer until the chrome webview is attached so we can share its parent container.
     webView.post {
       val parent = (webView.parent as? ViewGroup) ?: findViewById(android.R.id.content)
-      // Cache the content parent and chrome heights; actual WebViews are created lazily
-      // by activateTab (the chrome calls it on mount for the first tab).
-      contentParent = parent
+      // Chrome heights are cached below; actual WebViews are created lazily by
+      // activateTab (the chrome calls it on mount for the first tab).
       // Slim top chrome = address bar (48dp) + favourites strip (24dp) = 72dp; the
       // bottom action bar is 56dp. These MUST stay in sync with src/lib/layout.ts
       // (MOBILE_ADDRESS_H + MOBILE_FAV_H for the top, MOBILE_BOTTOMBAR_H for the bottom).
@@ -284,6 +285,15 @@ class MainActivity : TauriActivity() {
       val bottomBar = (56 * density).toInt()
       topChromePx = top
       bottomBarPx = bottomBar
+      val gc = GestureContainer(this, this)
+      val gcLp = FrameLayout.LayoutParams(
+        FrameLayout.LayoutParams.MATCH_PARENT,
+        FrameLayout.LayoutParams.MATCH_PARENT,
+      )
+      gcLp.topMargin = top
+      gcLp.bottomMargin = bottomBar
+      parent.addView(gc, gcLp)
+      gestureContainer = gc
       // Keep the content webview below the status bar and above the system nav bar +
       // the bottom action bar (when the top-bar toggle hides the bar, the content
       // reclaims the 56dp gap). Recomputed on every inset change (rotation, gesture vs
@@ -421,7 +431,7 @@ class MainActivity : TauriActivity() {
     fun closeTab(id: Int) = runOnUiThread {
       tabWebViews.remove(id)?.let {
         it.visibility = View.GONE
-        contentParent?.removeView(it)
+        gestureContainer?.removeView(it)
         it.destroy()
       }
       pageUrls.remove(id)
@@ -434,7 +444,7 @@ class MainActivity : TauriActivity() {
     fun discardTab(id: Int) = runOnUiThread {
       tabWebViews.remove(id)?.let {
         it.visibility = View.GONE
-        contentParent?.removeView(it)
+        gestureContainer?.removeView(it)
         it.destroy()
       }
       pageUrls.remove(id)
@@ -520,6 +530,14 @@ class MainActivity : TauriActivity() {
       }
     }
   }
+
+  // --- GestureContainer.GestureHost: the gesture layer acts on the active tab. ---
+  override fun gestureCanGoBack(): Boolean = contentWebView?.canGoBack() == true
+  override fun gestureCanGoForward(): Boolean = contentWebView?.canGoForward() == true
+  override fun gestureAtTop(): Boolean = (contentWebView?.scrollY ?: 1) == 0
+  override fun gestureBack() { contentWebView?.let { if (it.canGoBack()) it.goBack() } }
+  override fun gestureForward() { contentWebView?.let { if (it.canGoForward()) it.goForward() } }
+  override fun gestureReload() { contentWebView?.reload() }
 
   companion object {
     // Vanilla mobile Chrome UA (no "; wv" WebView marker), mirroring the desktop
