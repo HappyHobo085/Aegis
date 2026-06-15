@@ -114,14 +114,14 @@ class MainActivity : TauriActivity() {
   private fun makeContentClient(id: Int): WebViewClient = object : WebViewClient() {
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
       pageUrls[id] = url
-      pushNavState(id, url, true)
+      pushNavState(id, url, true, view)
     }
 
-    override fun onPageFinished(view: WebView, url: String) = pushNavState(id, url, false)
+    override fun onPageFinished(view: WebView, url: String) = pushNavState(id, url, false, view)
 
     override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
       pageUrls[id] = url
-      pushNavState(id, url, view.progress < 100)
+      pushNavState(id, url, view.progress < 100, view)
     }
 
     // Per-request guard (runs on a WebView network thread; native calls block
@@ -230,7 +230,9 @@ class MainActivity : TauriActivity() {
             "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(url)})",
             null,
           )
-          temp.destroy()
+          // Defer destroy: tearing down a WebView from inside its own client callback
+          // is fragile; post it to run after the callback returns.
+          temp.post { temp.destroy() }
           return true
         }
       }
@@ -375,12 +377,13 @@ class MainActivity : TauriActivity() {
   private fun blockedResponse(): WebResourceResponse =
     WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
 
-  /** Push the content webview's nav state to the chrome's React state (NavState shape,
-   *  viewId = [id]), by calling a global the Tauri client's nav.onState installs.
-   *  The chrome's useNav(viewId) filters events by viewId === activeId so the address
-   *  bar tracks only the active tab. */
-  private fun pushNavState(id: Int, url: String, loading: Boolean) {
-    val c = contentWebView
+  /** Push a tab's nav state to the chrome's React state (NavState shape, viewId = [id]),
+   *  by calling a global the Tauri client's nav.onState installs. The chrome's
+   *  useNav(viewId) filters events by viewId === activeId so the address bar tracks only
+   *  the active tab. [wv] is the tab's own WebView — pass it for background-tab events so
+   *  title/canGoBack/canGoForward describe that tab, not whichever tab is active. */
+  private fun pushNavState(id: Int, url: String, loading: Boolean, wv: WebView? = contentWebView) {
+    val c = wv
     val obj = JSONObject()
       .put("viewId", id)
       .put("url", url)
