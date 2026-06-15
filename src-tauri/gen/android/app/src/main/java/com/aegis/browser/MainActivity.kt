@@ -410,6 +410,10 @@ class MainActivity : TauriActivity() {
       hasPage = (pageUrls[id] ?: url) != "about:blank"
       applyContentMargins()
       updateContentVisibility()
+      // Re-push this tab's nav state so the chrome's address bar + back/forward update to
+      // it. Switching to an already-live tab fires no page-load event, so without this the
+      // chrome's useNav would reset to a blank state for the newly-activated tab.
+      pushNavState(id, pageUrls[id] ?: url, false, wv)
     }
 
     /** Permanently close a tab: destroy its WebView and remove it from the map. */
