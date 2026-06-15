@@ -43,9 +43,8 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // Per-tab current page URL (the ad-block first-party context), read on the network
   // thread in shouldInterceptRequest; concurrent for safe cross-thread reads.
   private val pageUrls = java.util.concurrent.ConcurrentHashMap<Int, String>()
-  // The shared content container (the chrome webview's parent), set in onWebViewCreate.
-  private var contentParent: ViewGroup? = null
-  // The gesture layer that wraps the tab WebViews (edge-swipe + pull-to-refresh).
+  // The gesture layer that wraps the tab WebViews (edge-swipe + pull-to-refresh); it's
+  // the child of the chrome webview's parent that hosts the per-tab content WebViews.
   private var gestureContainer: GestureContainer? = null
 
   // The native content WebView is shown only when a real page is loaded AND no chrome
@@ -276,9 +275,8 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // Defer until the chrome webview is attached so we can share its parent container.
     webView.post {
       val parent = (webView.parent as? ViewGroup) ?: findViewById(android.R.id.content)
-      // Cache the content parent and chrome heights; actual WebViews are created lazily
-      // by activateTab (the chrome calls it on mount for the first tab).
-      contentParent = parent
+      // Chrome heights are cached below; actual WebViews are created lazily by
+      // activateTab (the chrome calls it on mount for the first tab).
       // Slim top chrome = address bar (48dp) + favourites strip (24dp) = 72dp; the
       // bottom action bar is 56dp. These MUST stay in sync with src/lib/layout.ts
       // (MOBILE_ADDRESS_H + MOBILE_FAV_H for the top, MOBILE_BOTTOMBAR_H for the bottom).
