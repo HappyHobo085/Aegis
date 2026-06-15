@@ -58,8 +58,6 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
     color = Color.WHITE; style = Paint.Style.STROKE; strokeWidth = 3f * density; strokeCap = Paint.Cap.ROUND
   }
 
-  init { setWillNotDraw(false) }
-
   private fun hDistance() = min(0.25f * width, 96f * density)
   private fun pullThreshold() = 96f * density
 
@@ -121,8 +119,11 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
     if (refreshing) { refreshing = false; mode = Mode.NONE; invalidate() }
   }
 
-  override fun onDraw(canvas: Canvas) {
-    super.onDraw(canvas)
+  // Draw the indicator AFTER the child WebViews so it isn't occluded by the active
+  // (opaque, MATCH_PARENT) tab WebView. A ViewGroup's onDraw() paints *behind* its
+  // children; dispatchDraw() after super.dispatchDraw() paints on top.
+  override fun dispatchDraw(canvas: Canvas) {
+    super.dispatchDraw(canvas)
     when (mode) {
       Mode.BACK, Mode.FORWARD -> drawArrow(canvas)
       else -> {}
