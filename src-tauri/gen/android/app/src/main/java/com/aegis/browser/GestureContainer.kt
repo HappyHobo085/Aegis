@@ -74,7 +74,7 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
   override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
     when (ev.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
-        mode = Mode.NONE
+        if (!refreshing) mode = Mode.NONE
         startX = ev.x; startY = ev.y; curX = ev.x; curY = ev.y
       }
       MotionEvent.ACTION_MOVE -> {
@@ -89,7 +89,12 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
         if (startX >= width - edgePx && -dx > slop && abs(dx) > abs(dy) && host.gestureCanGoForward()) {
           mode = Mode.FORWARD; curX = ev.x; curY = ev.y; return true
         }
+        // Pull to refresh: downward drag while the page is at the very top.
+        if (dy > slop && dy > abs(dx) && host.gestureAtTop()) {
+          mode = Mode.REFRESH; curX = ev.x; curY = ev.y; return true
+        }
       }
+      MotionEvent.ACTION_CANCEL -> { mode = Mode.NONE }
     }
     return false
   }
@@ -106,11 +111,17 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
 
   private fun finishGesture() {
     when (mode) {
-      Mode.BACK -> if (curX - startX >= hDistance()) host.gestureBack()
-      Mode.FORWARD -> if (startX - curX >= hDistance()) host.gestureForward()
-      else -> {}
+      Mode.BACK -> { if (curX - startX >= hDistance()) host.gestureBack(); mode = Mode.NONE }
+      Mode.FORWARD -> { if (startX - curX >= hDistance()) host.gestureForward(); mode = Mode.NONE }
+      Mode.REFRESH -> {
+        if (curY - startY >= pullThreshold()) {
+          refreshing = true; spin = 0f; host.gestureReload(); postInvalidateOnAnimation()
+        } else {
+          mode = Mode.NONE
+        }
+      }
+      else -> mode = Mode.NONE
     }
-    mode = Mode.NONE
     invalidate()
   }
 
@@ -126,7 +137,29 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
     super.dispatchDraw(canvas)
     when (mode) {
       Mode.BACK, Mode.FORWARD -> drawArrow(canvas)
+      Mode.REFRESH -> drawSpinner(canvas)
       else -> {}
+    }
+  }
+
+  private fun drawSpinner(canvas: Canvas) {
+    val r = 16f * density
+    val cx = width / 2f
+    val cy: Float
+    if (refreshing) {
+      disc.alpha = 255
+      cy = pullThreshold() * 0.5f
+      spin = (spin + 9f) % 360f
+      canvas.drawCircle(cx, cy, r + 3f * density, disc)
+      canvas.drawArc(RectF(cx - r, cy - r, cx + r, cy + r), spin, 270f, false, arc)
+      postInvalidateOnAnimation()
+    } else {
+      val pull = curY - startY
+      cy = min(pull * 0.5f, pullMaxPx)
+      val progress = min(pull / pullThreshold(), 1f).coerceAtLeast(0f)
+      disc.alpha = (160 + 95 * progress).toInt().coerceIn(0, 255)
+      canvas.drawCircle(cx, cy, r + 3f * density, disc)
+      canvas.drawArc(RectF(cx - r, cy - r, cx + r, cy + r), -90f, progress * 300f, false, arc)
     }
   }
 

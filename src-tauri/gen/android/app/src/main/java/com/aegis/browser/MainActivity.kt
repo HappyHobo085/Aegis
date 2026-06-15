@@ -119,7 +119,10 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       pushNavState(id, url, true, view)
     }
 
-    override fun onPageFinished(view: WebView, url: String) = pushNavState(id, url, false, view)
+    override fun onPageFinished(view: WebView, url: String) {
+      pushNavState(id, url, false, view)
+      if (id == activeTabId) gestureContainer?.stopRefresh()
+    }
 
     override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
       pageUrls[id] = url
