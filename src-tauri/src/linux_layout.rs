@@ -176,24 +176,54 @@ pub fn layout(
             return;
         };
 
-        // Reparent the box's webviews into a GtkFixed the first time; on later calls
-        // the parent is already the GtkFixed.
-        let fixed: gtk::Fixed = if let Some(f) = parent.dynamic_cast_ref::<gtk::Fixed>() {
-            f.clone()
-        } else if let Some(box_) = parent.dynamic_cast_ref::<gtk::Box>() {
-            let children = box_.children();
-            let f = gtk::Fixed::new();
-            for child in &children {
-                box_.remove(child); // child kept alive by the Vec's ref
-                f.put(child, 0, 0);
-            }
-            box_.pack_start(&f, true, true, 0);
-            f.show_all(); // show the fixed + webviews once (initial layout)
-            f
+        // Resolve THE single canonical GtkFixed that must hold the chrome + every content
+        // webview. The active webview's parent is either the window's GtkBox (this webview is
+        // a stray just add_child'd) or the canonical GtkFixed (already reparented). Find the
+        // GtkBox, find-or-create the one Fixed beneath it, then pull any stray webviews from
+        // the Box into it. This prevents the nested-Fixed bug where new tabs land in a sibling
+        // Fixed and never get hidden.
+        let box_: gtk::Box;
+        let fixed: gtk::Fixed;
+        if let Some(f) = parent.dynamic_cast_ref::<gtk::Fixed>() {
+            let Some(b) = f.parent().and_then(|p| p.downcast::<gtk::Box>().ok()) else { return; };
+            box_ = b;
+            fixed = f.clone();
+        } else if let Some(b) = parent.dynamic_cast_ref::<gtk::Box>() {
+            let existing = b.children().into_iter().find_map(|c| c.downcast::<gtk::Fixed>().ok());
+            fixed = match existing {
+                Some(f) => f,
+                None => {
+                    let f = gtk::Fixed::new();
+                    b.pack_start(&f, true, true, 0);
+                    f.show();
+                    f
+                }
+            };
+            box_ = b.clone();
         } else {
             eprintln!("[aegis-gtk] layout: unexpected parent {}", parent.type_().name());
             return;
-        };
+        }
+        // Pull every stray webview still parented to the Box (the chrome on the first call;
+        // each newly add_child'd tab on later calls) INTO the canonical Fixed. Skip the Fixed
+        // itself. Use show() per widget — NOT show_all(), which would re-reveal the hidden
+        // fullscreen-exit button.
+        let mut moved = 0;
+        for child in box_.children() {
+            if child.dynamic_cast_ref::<gtk::Fixed>().is_some() {
+                continue; // the canonical Fixed
+            }
+            box_.remove(&child);
+            fixed.put(&child, 0, 0);
+            child.show();
+            moved += 1;
+        }
+        if moved > 0 {
+            eprintln!(
+                "[aegis-gtk] reparented {moved} stray webview(s) into the canonical fixed; it now has {} children",
+                fixed.children().len()
+            );
+        }
 
         // The active content fills the window in fullscreen (left/top/right all 0),
         // else it's inset and the chrome shows in the gap. The floating exit button is
