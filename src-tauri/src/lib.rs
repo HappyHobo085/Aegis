@@ -217,24 +217,31 @@ pub fn run() {
         Err(_) => eprintln!("[aegis] rustls provider was already installed"),
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(view::ContentInset::default())
         .manage(update::UpdateState::default())
         .manage(adblock::AdblockState::default())
-        .manage(safety::SafetyState::default())
-        .on_menu_event(|app, event| {
-            let s = match event.id().0.as_str() {
-                "tab_new" => "new",
-                "tab_close" => "close",
-                "tab_reopen" => "reopen",
-                "tab_next" => "next",
-                "tab_prev" => "prev",
-                _ => return,
-            };
-            let _ = crate::emit_event(app, "tabs.shortcut", s);
-        })
+        .manage(safety::SafetyState::default());
+
+    // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
+    // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;
+    // mobile has no menu bar (and tabs are a single-webview stub there).
+    #[cfg(desktop)]
+    let builder = builder.on_menu_event(|app, event| {
+        let s = match event.id().0.as_str() {
+            "tab_new" => "new",
+            "tab_close" => "close",
+            "tab_reopen" => "reopen",
+            "tab_next" => "next",
+            "tab_prev" => "prev",
+            _ => return,
+        };
+        let _ = crate::emit_event(app, "tabs.shortcut", s);
+    });
+
+    builder
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(

@@ -59,11 +59,17 @@ fn spawn(app: &AppHandle, id: u32, url: &str) {
     }
 }
 
+/// Desktop: tear down the tab's child webview. Mobile is single-webview (tabs are a
+/// no-op stub there — see `nav::spawn_tab`), so there's no child webview to close.
+#[cfg(desktop)]
 fn close_webview(app: &AppHandle, id: u32) {
     if let Some(w) = app.get_webview(&crate::nav::content_label(id)) {
         let _ = w.close();
     }
 }
+
+#[cfg(mobile)]
+fn close_webview(_app: &AppHandle, _id: u32) {}
 
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     let now = now_ms(app);
