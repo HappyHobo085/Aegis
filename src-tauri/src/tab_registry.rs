@@ -17,6 +17,10 @@ struct Tab {
     /// background and never activated — its creation time. (Unused while the tab
     /// is active.) Drives the time-based idle sweep.
     last_active: u64,
+    /// Per-tab navigation history: list of visited URLs.
+    history: Vec<String>,
+    /// Index into `history` of the currently-displayed page.
+    hist_index: usize,
 }
 
 #[derive(Clone)]
@@ -82,6 +86,8 @@ impl Registry {
                 pinned: false,
                 live: true,
                 last_active: 0,
+                history: vec![home_url.clone()],
+                hist_index: 0,
             }],
             active_id: 1,
             closed_stack: Vec::new(),
@@ -100,6 +106,8 @@ impl Registry {
             .tabs
             .into_iter()
             .map(|p| Tab {
+                history: vec![p.url.clone()],
+                hist_index: 0,
                 id: p.id,
                 url: p.url,
                 title: p.title,
@@ -176,6 +184,7 @@ impl Registry {
         self.tabs.push(Tab {
             id, url: url.clone(), title: String::new(),
             pinned: false, live: true, last_active: now_ms,
+            history: vec![url.clone()], hist_index: 0,
         });
         if !background {
             if let Some(i) = self.idx(self.active_id) { self.tabs[i].last_active = now_ms; }
@@ -264,6 +273,49 @@ impl Registry {
         }
     }
 
+    /// Record a navigation. A duplicate of the current entry (a reload, or the event
+    /// produced by go_back/go_forward) is ignored. A new URL truncates the forward stack.
+    pub fn record_nav(&mut self, id: ViewId, url: &str) {
+        if let Some(i) = self.idx(id) {
+            let t = &mut self.tabs[i];
+            if t.history.get(t.hist_index).map(String::as_str) == Some(url) {
+                return;
+            }
+            t.history.truncate(t.hist_index + 1);
+            t.history.push(url.to_string());
+            t.hist_index = t.history.len() - 1;
+            t.url = url.to_string();
+        }
+    }
+
+    pub fn can_go_back(&self, id: ViewId) -> bool {
+        self.idx(id).map(|i| self.tabs[i].hist_index > 0).unwrap_or(false)
+    }
+
+    pub fn can_go_forward(&self, id: ViewId) -> bool {
+        self.idx(id).map(|i| { let t = &self.tabs[i]; t.hist_index + 1 < t.history.len() }).unwrap_or(false)
+    }
+
+    /// Move back one entry; returns the URL to navigate to (None if already at the start).
+    pub fn go_back(&mut self, id: ViewId) -> Option<String> {
+        let i = self.idx(id)?;
+        let t = &mut self.tabs[i];
+        if t.hist_index == 0 { return None; }
+        t.hist_index -= 1;
+        t.url = t.history[t.hist_index].clone();
+        Some(t.url.clone())
+    }
+
+    /// Move forward one entry; returns the URL to navigate to (None if already at the end).
+    pub fn go_forward(&mut self, id: ViewId) -> Option<String> {
+        let i = self.idx(id)?;
+        let t = &mut self.tabs[i];
+        if t.hist_index + 1 >= t.history.len() { return None; }
+        t.hist_index += 1;
+        t.url = t.history[t.hist_index].clone();
+        Some(t.url.clone())
+    }
+
     /// Reopen the most-recently-closed tab (Ctrl+Shift+T). Returns its (id, url).
     /// Discard live, non-active, non-pinned tabs idle for >= timeout_ms.
     /// `timeout_ms == 0` disables. Returns ids whose webviews the caller must close().
@@ -294,6 +346,7 @@ impl Registry {
         self.tabs.insert(pos, Tab {
             id, url: c.url.clone(), title: c.title,
             pinned: c.pinned, live: true, last_active: now_ms,
+            history: vec![c.url.clone()], hist_index: 0,
         });
         if let Some(i) = self.idx(self.active_id) {
             self.tabs[i].last_active = now_ms;
@@ -537,5 +590,32 @@ mod tests {
         let (_b, _) = r.create(None, false, 50_000);        // tab 1 backgrounded@50s
         let victims = r.sweep_idle(60_000, 30_000);         // idle only 10s < 30s
         assert!(victims.is_empty());
+    }
+
+    #[test]
+    fn nav_history_tracks_back_forward() {
+        let mut r = reg();                    // tab 1 @ home: history=[home], index 0
+        r.record_nav(1, "https://a.test/");
+        r.record_nav(1, "https://b.test/");
+        assert!(r.can_go_back(1));
+        assert!(!r.can_go_forward(1));
+        assert_eq!(r.go_back(1), Some("https://a.test/".to_string()));
+        assert_eq!(r.url_of(1), Some("https://a.test/"));
+        assert!(r.can_go_back(1));            // still can go back to home
+        assert!(r.can_go_forward(1));         // can go forward to b
+        // the navigation event caused by going back is a no-op (dedup), keeps forward
+        r.record_nav(1, "https://a.test/");
+        assert!(r.can_go_forward(1));
+        assert_eq!(r.go_forward(1), Some("https://b.test/".to_string()));
+        // a genuinely new navigation truncates the forward stack
+        r.record_nav(1, "https://c.test/");
+        assert!(!r.can_go_forward(1));
+    }
+
+    #[test]
+    fn go_back_forward_at_ends_return_none() {
+        let mut r = reg();
+        assert_eq!(r.go_back(1), None);       // at home, nothing behind
+        assert_eq!(r.go_forward(1), None);    // nothing ahead
     }
 }

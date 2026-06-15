@@ -43,6 +43,9 @@ fn is_local_host(url: &Url) -> bool {
 
 /// Emit a `nav.state` carrying the real tab id and page state.
 fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loading: bool) {
+    let (back, fwd) = app.try_state::<crate::tabs::Tabs>()
+        .map(|s| { let r = s.reg.lock().unwrap(); (r.can_go_back(id), r.can_go_forward(id)) })
+        .unwrap_or((false, false));
     let _ = crate::emit_event(
         app,
         "nav.state",
@@ -50,8 +53,8 @@ fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loading: bool) {
             "viewId": id,
             "url": url,
             "title": title,
-            "canGoBack": false,
-            "canGoForward": false,
+            "canGoBack": back,
+            "canGoForward": fwd,
             "isLoading": loading,
             "crashed": false
         }),
@@ -214,14 +217,22 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             }
         }
         "nav.back" => {
-            if let Some(w) = content {
-                let _ = w.eval("history.back()");
+            let target_id = id.unwrap_or_else(|| {
+                app.try_state::<crate::tabs::Tabs>().map(|s| s.reg.lock().unwrap().active_id()).unwrap_or(1)
+            });
+            let url = app.try_state::<crate::tabs::Tabs>().and_then(|s| s.reg.lock().unwrap().go_back(target_id));
+            if let (Some(url), Some(w)) = (url, content) {
+                if let Ok(u) = Url::parse(&url) { let _ = w.navigate(u); }
             }
             Ok(Value::Null)
         }
         "nav.forward" => {
-            if let Some(w) = content {
-                let _ = w.eval("history.forward()");
+            let target_id = id.unwrap_or_else(|| {
+                app.try_state::<crate::tabs::Tabs>().map(|s| s.reg.lock().unwrap().active_id()).unwrap_or(1)
+            });
+            let url = app.try_state::<crate::tabs::Tabs>().and_then(|s| s.reg.lock().unwrap().go_forward(target_id));
+            if let (Some(url), Some(w)) = (url, content) {
+                if let Ok(u) = Url::parse(&url) { let _ = w.navigate(u); }
             }
             Ok(Value::Null)
         }
@@ -248,9 +259,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     .map(|s| s.reg.lock().unwrap().active_id())
                     .unwrap_or(1)
             });
+            let (back, fwd) = app.try_state::<crate::tabs::Tabs>()
+                .map(|s| { let r = s.reg.lock().unwrap(); (r.can_go_back(vid), r.can_go_forward(vid)) })
+                .unwrap_or((false, false));
             Ok(json!({
                 "viewId": vid, "url": url, "title": "",
-                "canGoBack": false, "canGoForward": false, "isLoading": false, "crashed": false
+                "canGoBack": back, "canGoForward": fwd, "isLoading": false, "crashed": false
             }))
         }
         _ => return None,

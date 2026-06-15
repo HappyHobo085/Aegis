@@ -39,7 +39,7 @@ fn emit_and_persist(app: &AppHandle) {
 /// Record a tab's current URL (called from nav.rs on_page_load) for restore.
 pub fn on_tab_url(app: &AppHandle, id: u32, url: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
-        s.reg.lock().unwrap().set_url(id, url.to_string());
+        s.reg.lock().unwrap().record_nav(id, url);
     }
     // Flush so a tab browsed-then-quit (no structural change) restores to its current URL.
     persist(app);
