@@ -3518,44 +3518,56 @@ a:focus-visible {
   color: #fca5a5;
 }
 
-/* ===== Mobile (Android phone) chrome =====
-   Applied only when the document is tagged `.aegis-mobile` (set on Android in
-   ipcClient.ts). A single-webview phone can't fit the desktop toolbar's
-   controls AND the address bar on one narrow row — the address bar (flex: 1,
-   min-width: 0) collapses to nothing. Switch to a two-row toolbar: controls on
-   top, a full-width address bar below. Kept at exactly 96px — the same inset the
-   Android content webview uses (DEFAULT_INSET_TOP) — by folding away the 40px
-   favorites row (the sidebar still reaches favorites), so the content still
-   aligns directly under the chrome. */
-.aegis-mobile .toolbar {
-  flex-wrap: wrap;
-  box-sizing: border-box;
-  /* Pad the toolbar below the status bar (time/battery) and inside any side cutouts.
-     env(safe-area-inset-*) requires viewport-fit=cover (set in index.html); the Android
-     content webview's top margin is kept in sync natively (MainActivity adds the same
-     status-bar inset to its 96dp base). */
-  height: calc(96px + env(safe-area-inset-top));
-  padding: env(safe-area-inset-top) calc(8px + env(safe-area-inset-right)) 0
-    calc(8px + env(safe-area-inset-left));
-  align-content: center;
-  row-gap: 6px;
-}
-.aegis-mobile .address-bar {
-  order: 99; /* wrap onto the second row, below the controls */
-  flex-basis: 100%;
-}
-.aegis-mobile .address-bar input {
-  font-size: 16px; /* avoid focus-zoom; comfortable touch target */
-  height: 38px;
-}
-.aegis-mobile .favorites-bar {
-  display: none;
-}
-/* Controls with no place on a touch phone. */
-.aegis-mobile .toolbar__fullscreen,
-.aegis-mobile .toolbar__picker {
-  display: none;
-}
+/* ===== Mobile (Android) chrome — the MobileApp shell ===== */
+.aegis-mobile .address-bar input { font-size: 16px; height: 38px; } /* no focus-zoom, touch height */
+
+/* --aegis-inset-top/bottom are pushed from MainActivity.kt (the real status/nav bar
+   insets). On Android WebView env(safe-area-inset-*) is only the display cutout, so it
+   can't clear the system bars — the vars do; env() stays as a desktop/browser fallback. */
+.mobile-topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10;
+  background: #1b1b1b; border-bottom: 1px solid #2a2a2a;
+  padding: var(--aegis-inset-top, env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) 0 calc(8px + env(safe-area-inset-left)); }
+.mobile-topbar__row { display: flex; align-items: center; gap: 6px; height: 48px; }
+.mobile-topbar__reload, .mobile-topbar__toggle { display: inline-flex; align-items: center;
+  justify-content: center; width: 38px; height: 38px; border: 0; background: transparent;
+  color: #cfcfcf; border-radius: 8px; }
+.mobile-favourites { display: flex; gap: 6px; height: 24px; overflow-x: auto; align-items: center;
+  scrollbar-width: none; }
+.mobile-favourites::-webkit-scrollbar { display: none; }
+.mobile-favourites__chip { flex: 0 0 auto; height: 22px; padding: 0 8px; font-size: 12px; line-height: 22px;
+  border: 0; border-radius: 11px; background: #2a2a2a; color: #cfcfcf; white-space: nowrap; }
+
+.mobile-bottombar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; height: 56px;
+  box-sizing: content-box; /* the nav-inset padding extends the bar UP, not inward (global reset is border-box) */
+  display: flex; align-items: center; justify-content: space-around;
+  background: #1b1b1b; border-top: 1px solid #2a2a2a;
+  padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom)); }
+.mobile-bottombar__btn { display: inline-flex; align-items: center; justify-content: center;
+  width: 48px; height: 48px; border: 0; background: transparent; color: #e6e6e6; border-radius: 10px; }
+.mobile-bottombar__btn:disabled { color: #555; }
+.mobile-bottombar__shield { display: inline-flex; align-items: center; }
+
+.mobile-sheet { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
+  background: #161616; padding-top: var(--aegis-inset-top, env(safe-area-inset-top)); padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom)); }
+.mobile-sheet__bar { display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 8px;
+  border-bottom: 1px solid #2a2a2a; }
+.mobile-sheet__back { display: inline-flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; border: 0; background: transparent; color: #e6e6e6; border-radius: 10px; }
+.mobile-sheet__title { font-size: 17px; margin: 0; color: #fff; }
+.mobile-sheet__body { flex: 1; overflow: auto; }
+
+.mobile-menu { list-style: none; margin: 0; padding: 8px; }
+.mobile-menu__item { display: flex; align-items: center; gap: 12px; width: 100%; height: 52px;
+  padding: 0 12px; border: 0; background: transparent; color: #e6e6e6; font-size: 16px; text-align: left; }
+.mobile-menu__item:disabled { color: #666; }
+
+/* Reused desktop modals go full-screen on mobile. */
+/* SettingsModal: root=.settings-modal (scrim+centering), content card=.settings-modal__content */
+.aegis-mobile .settings-modal { inset: 0; }
+.aegis-mobile .settings-modal__content { width: 100%; height: 100%; max-width: none; max-height: none; border-radius: 0; }
+/* DownloadsModal: outer scrim=.downloads-modal__scrim, dialog card=.downloads-modal */
+.aegis-mobile .downloads-modal__scrim { inset: 0; }
+.aegis-mobile .downloads-modal { width: 100%; height: 100%; max-width: none; max-height: none; border-radius: 0; }
 
 /* ===== Tab strip ===== */
 .tabstrip { display: flex; align-items: stretch; height: 36px; gap: 2px; padding: 0 6px;

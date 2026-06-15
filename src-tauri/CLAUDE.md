@@ -85,9 +85,24 @@ Linux → `gtk`/`webkit2gtk`/`glib`/`gio`; Android → `jni`; Windows →
 
 Hand-written Kotlin under `app/src/main/java/com/aegis/browser/`:
 `MainActivity.kt` (native content WebView; `shouldInterceptRequest` → ad-block +
-malware; `window.AegisAndroid` JS bridge: navigate/back/forward/reload/
-setContentHidden/openExternal), `NativeAdblock.kt` + `NativeSafety.kt` (JNI into
-the Rust `libapp_lib.so`). `AndroidManifest.xml` grants only `INTERNET`.
+malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt`
+(JNI into the Rust `libapp_lib.so`). `AndroidManifest.xml` grants only `INTERNET`.
+
+**Mobile chrome (`MainActivity.kt`), kept in sync with the `MobileApp` shell in `src/`:**
+- The content WebView is inset by the chrome heights: `topMargin = 72dp`
+  (`MOBILE_ADDRESS_H` 48 + `MOBILE_FAV_H` 24) + status inset, `bottomMargin = 56dp`
+  (`MOBILE_BOTTOMBAR_H`) + nav inset. **`applyContentMargins()`** is the single place
+  that computes them from the `fullscreen` / `bottomBarHidden` flags + cached chrome
+  heights + captured system insets; the insets listener and the bridges all call it.
+- The `AegisAndroid` bridge adds `setBackInterceptActive` (Back closes an open sheet),
+  `setBottomBarHidden` (the top-bar chevron — content reclaims the bar's gap), and
+  `setFullscreen` (desktop-parity hide-all-chrome — content fills the safe area, Back
+  exits). The chrome installs `window.__aegisMobileBack` for native Back to call.
+- **Safe-area insets:** `env(safe-area-inset-*)` in an Android WebView reports the
+  display cutout, NOT the system bars, so the insets listener pushes the real status/nav
+  insets to the chrome as `--aegis-inset-top/bottom` CSS vars (px ÷ density).
+- A **`WebChromeClient`** (`onShowCustomView`/`onHideCustomView` + immersive bars) gives
+  pages HTML5 fullscreen (video, etc.) — distinct from the chrome-hiding `setFullscreen`.
 
 ## Build
 
@@ -96,7 +111,8 @@ npm run tauri:dev                              # dev
 npm run tauri:build                            # desktop installers
 cargo check                                    # quick type-check
 cargo check --target x86_64-pc-windows-gnu     # cross-check Windows from Linux (needs mingw)
-npm run android:build                          # debug APK
+npm run android:build                          # debug APK (NEEDS JDK 21 — see gotcha 8)
+npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a phone)
 ```
 
 ## Gotchas
@@ -111,6 +127,17 @@ npm run android:build                          # debug APK
    runtime-verify (CI compiles/links but doesn't launch the GUI).
 7. **TLS** — a crypto provider must be installed once (done in `lib.rs`) or every
    reqwest/updater HTTPS call panics.
+8. **Android needs JDK 21.** Gradle 8.14.3 / AGP 8.11.0 can't run under JDK 25 (the
+   `:buildSrc` configuration fails with a bare `> 25.0.3`). Build with the Android
+   Studio JBR: `JAVA_HOME=~/development/android-studio/jbr npm run android:build`.
+9. **16 KB page alignment (Android 15+).** `build.rs` passes
+   `-Wl,-z,max-page-size=16384` for android targets so `libapp_lib.so`'s LOAD segments
+   are 16 KB-aligned; without it the lib fails to load ("LOAD segment not aligned").
+10. **Desktop-only Tauri APIs must be `#[cfg(desktop)]`-gated** — the Rust lib has to
+    compile for android too. `Webview::close()`, `Builder::on_menu_event`, etc. are
+    desktop-only (see `tabs.rs::close_webview`, the `lib.rs` builder). Only an android
+    build / `cargo check --target aarch64-linux-android` catches these; desktop and the
+    Windows cross-check do not.
 
 ### Multi-webview Linux layout (hard-won facts)
 

@@ -12,7 +12,7 @@ src/
 ├── index.html        # <div id="root">; loads main.tsx; viewport-fit=cover (mobile notches)
 ├── main.tsx          # mounts <App/> inside <ErrorBoundary> + StrictMode; imports index.css
 ├── App.tsx           # root shell: orchestrates chrome, overlays, sidebar, fullscreen z-order
-├── index.css         # global dark theme + chrome layout (incl. .aegis-mobile two-row toolbar)
+├── index.css         # global dark theme + chrome layout (desktop chrome + .aegis-mobile shell)
 ├── components/       # presentational components + Settings tabs (+ co-located *.test.tsx)
 ├── hooks/            # one hook per feature domain (useNav, useAdblock, …) (+ tests)
 └── lib/              # IPC client, address parsing, theme, toast, layout consts (+ tests)
@@ -28,7 +28,9 @@ src/
   forbids `.` in event names** (the Rust side emits with `:`). Don't bypass this.
 - **Android path:** when `window.AegisAndroid` is present (native Kotlin bridge,
   no Tauri), `ipcClient` routes nav + content-visibility calls to the bridge
-  instead of `invoke`, and sets the `.aegis-mobile` class for the two-row toolbar.
+  instead of `invoke`, and sets the `.aegis-mobile` class. On mobile `App` renders
+  **`MobileApp`** (a dedicated touch shell) instead of the desktop chrome — see the
+  Mobile shell section below.
 
 Channel and event names, and all payload/return types, are defined once in
 `shared/types.ts` (`IPC` const + interfaces). Treat it as the contract.
@@ -58,6 +60,33 @@ Channel and event names, and all payload/return types, are defined once in
 - **`lib/layout.ts`** gained `TABSTRIP_H` (the pixel height reserved for the
   tab strip), used by `useContentInset` to keep the content webview positioned
   below it.
+
+## Mobile shell (`components/mobile/`, Android)
+
+On Android (`isMobile`, read from the `.aegis-mobile` class) `App` renders **`MobileApp`**
+instead of the desktop chrome; the desktop body is unchanged (just renamed `DesktopApp`).
+`MobileApp` reuses the existing hooks + presentational panels inside a touch shell:
+
+- **`MobileTopBar`** — slim address bar (reused `AddressBar`) + reload/stop + a 24dp
+  favourites strip (`MobileFavourites`), plus a **bottom-bar toggle** (chevron) and an
+  **Enter fullscreen** (Maximize) button.
+- **`MobileBottomBar`** — back / forward / home / shield / menu (thumb-reachable).
+- **`MobileMenuSheet` / `MobileSheet`** — the ☰ drawer and a generic full-screen sheet
+  hosting History/Saved; Settings/Downloads reuse their modals full-screen.
+- **Sheets** route through the existing `view.setChromeOverlay` so the native content
+  webview lowers. The native **Back** button precedence is: close an open sheet → exit
+  fullscreen → page-back (`setBackInterceptActive` + `window.__aegisMobileBack`).
+- **Chrome heights** live in `lib/layout.ts` (`MOBILE_ADDRESS_H` 48 / `MOBILE_FAV_H` 24 /
+  `MOBILE_BOTTOMBAR_H` 56) and **must stay in sync with the content-WebView margins in
+  `MainActivity.kt`**.
+- **Bottom-bar toggle** and **fullscreen** (hide all chrome — desktop parity) call
+  `setBottomBarHidden` / `setFullscreen` on the bridge; the native side shrinks the
+  content webview's margins so the page reclaims the space.
+- **Safe-area insets:** `env(safe-area-inset-*)` on Android WebView is only the display
+  cutout, not the system bars, so `MainActivity` pushes the real status/nav insets as
+  `--aegis-inset-top/bottom` CSS vars; the mobile bars use `var(--aegis-inset-*, env(...))`.
+  `.mobile-bottombar` is `box-sizing: content-box` so the nav-inset padding extends it
+  upward (the global reset is `border-box`).
 
 ## Tests
 

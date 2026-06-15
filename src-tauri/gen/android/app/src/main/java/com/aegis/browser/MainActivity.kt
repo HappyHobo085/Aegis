@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -15,6 +16,7 @@ import android.widget.FrameLayout
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import java.io.ByteArrayInputStream
 import org.json.JSONObject
 
@@ -42,13 +44,60 @@ class MainActivity : TauriActivity() {
   private var hasPage = false
   private var overlayHidden = false
 
+  // True while a chrome sheet/menu is open — the Back button should close it (via the
+  // chrome) before navigating the page. Set by the chrome through AegisAndroid.
+  @Volatile private var backInterceptActive = false
+
+  // System-bar insets (top status bar, bottom nav bar) captured in the insets listener;
+  // applyContentMargins() uses them so the content sits in the safe area + chrome gaps.
+  @Volatile private var statusTop = 0
+  @Volatile private var navBottom = 0
+
+  // Chrome heights (px), cached for the bridges: top chrome = address bar + favourites
+  // (72dp); bottom action bar = 56dp.
+  private var topChromePx = 0
+  private var bottomBarPx = 0
+
+  // Chrome-hiding flags driven by the chrome via AegisAndroid; read by applyContentMargins()
+  // so they survive rotation / inset changes. bottomBarHidden = the top-bar chevron;
+  // fullscreen = the desktop-parity hide-all-chrome mode (content fills, Back exits).
+  @Volatile private var bottomBarHidden = false
+  @Volatile private var fullscreen = false
+
   private fun updateContentVisibility() {
     contentWebView?.visibility = if (hasPage && !overlayHidden) View.VISIBLE else View.GONE
+  }
+
+  /** Position the content webview: fill the safe area minus the chrome gaps currently
+   *  showing — the top chrome (unless fullscreen) and the bottom action bar (unless it's
+   *  toggled off or fullscreen). Called from the insets listener and the chrome bridges. */
+  private fun applyContentMargins() {
+    val c = contentWebView ?: return
+    (c.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
+      p.topMargin = (if (fullscreen) 0 else topChromePx) + statusTop
+      p.bottomMargin = (if (fullscreen || bottomBarHidden) 0 else bottomBarPx) + navBottom
+      c.layoutParams = p
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+  }
+
+  // Back-press precedence: (a) a chrome sheet/menu is open -> tell the chrome to close
+  // it (window.__aegisMobileBack) and consume the press; (b) else the content page can
+  // go back -> navigate it back; (c) else default (exit). The chrome sets
+  // backInterceptActive via the AegisAndroid bridge whenever a sheet is open.
+  @Deprecated("Back press precedence: close an open chrome sheet, else page-back, else default")
+  override fun onBackPressed() {
+    when {
+      backInterceptActive -> chromeWebView?.evaluateJavascript(
+        "window.__aegisMobileBack && window.__aegisMobileBack()", null,
+      )
+      contentWebView?.canGoBack() == true -> contentWebView?.goBack()
+      else -> @Suppress("DEPRECATION") super.onBackPressed()
+    }
   }
 
   override fun onWebViewCreate(webView: WebView) {
@@ -63,6 +112,44 @@ class MainActivity : TauriActivity() {
       // Android System WebView string (which carries a "; wv" marker that flags it as
       // an embedded webview), mirroring the desktop build's Chrome UA.
       content.settings.userAgentString = CHROME_UA
+      // HTML5 fullscreen (e.g. tapping a video's fullscreen button) only works if a
+      // WebChromeClient implements onShowCustomView: show the page's custom view over
+      // everything in immersive mode (system bars hidden), and restore on exit.
+      content.webChromeClient = object : WebChromeClient() {
+        private var customView: View? = null
+        private var customCallback: WebChromeClient.CustomViewCallback? = null
+
+        override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
+          if (customView != null) {
+            onHideCustomView()
+          }
+          customView = view
+          customCallback = callback
+          view.setBackgroundColor(android.graphics.Color.BLACK)
+          (window.decorView as ViewGroup).addView(
+            view,
+            FrameLayout.LayoutParams(
+              FrameLayout.LayoutParams.MATCH_PARENT,
+              FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+          )
+          WindowInsetsControllerCompat(window, window.decorView).apply {
+            systemBarsBehavior =
+              WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+          }
+        }
+
+        override fun onHideCustomView() {
+          val v = customView ?: return
+          (window.decorView as ViewGroup).removeView(v)
+          customView = null
+          WindowInsetsControllerCompat(window, window.decorView)
+            .show(WindowInsetsCompat.Type.systemBars())
+          customCallback?.onCustomViewHidden()
+          customCallback = null
+        }
+      }
       // Report navigations back to the chrome so the address bar/back/forward track
       // the current page (link clicks, redirects, form posts — not just typed URLs).
       content.webViewClient = object : WebViewClient() {
@@ -130,29 +217,38 @@ class MainActivity : TauriActivity() {
           }
         }
       }
-      // Inset below the chrome toolbar (DEFAULT_INSET_TOP = 96 logical px). On a
-      // phone the chrome folds the favorites row into a two-row toolbar that is also
-      // 96px, so the content still lines up directly under it.
-      val top = (96 * resources.displayMetrics.density).toInt()
+      // Slim top chrome = address bar (48dp) + favourites strip (24dp) = 72dp; the
+      // bottom action bar is 56dp. These MUST stay in sync with src/lib/layout.ts
+      // (MOBILE_ADDRESS_H + MOBILE_FAV_H for the top, MOBILE_BOTTOMBAR_H for the bottom).
+      val density = resources.displayMetrics.density
+      val top = (72 * density).toInt()
+      val bottomBar = (56 * density).toInt()
+      topChromePx = top
+      bottomBarPx = bottomBar
       val lp = FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.MATCH_PARENT,
         FrameLayout.LayoutParams.MATCH_PARENT,
       )
       lp.topMargin = top
+      lp.bottomMargin = bottomBar
       content.visibility = View.GONE // hidden at home so the chrome's home screen shows
       parent.addView(content, lp)
       contentWebView = content
-      // Keep the content webview below the status bar (time/battery) and above the
-      // system navigation bar. The chrome pads its toolbar down by the same status-bar
-      // inset (env(safe-area-inset-top)), so the content starts at 96dp + that inset.
-      // Recomputed on every inset change (rotation, gesture vs 3-button nav, etc.).
+      // Keep the content webview below the status bar and above the system nav bar +
+      // the bottom action bar (when the top-bar toggle hides the bar, the content
+      // reclaims the 56dp gap). Recomputed on every inset change (rotation, gesture vs
+      // 3-button nav). We ALSO push the real system-bar insets to the chrome as CSS vars:
+      // on Android WebView env(safe-area-inset-*) reports the display cutout, NOT the
+      // status/nav bars, so the chrome's fixed top/bottom bars need these to clear them.
       ViewCompat.setOnApplyWindowInsetsListener(parent) { _, insets ->
         val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-        (content.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
-          p.topMargin = top + bars.top
-          p.bottomMargin = bars.bottom
-          content.layoutParams = p
-        }
+        statusTop = bars.top
+        navBottom = bars.bottom
+        applyContentMargins()
+        val js =
+          "document.documentElement.style.setProperty('--aegis-inset-top','${bars.top / density}px');" +
+          "document.documentElement.style.setProperty('--aegis-inset-bottom','${bars.bottom / density}px');"
+        webView.evaluateJavascript(js, null)
         insets
       }
       ViewCompat.requestApplyInsets(parent)
@@ -288,6 +384,31 @@ class MainActivity : TauriActivity() {
 
     @JavascriptInterface
     fun reload() = runOnUiThread { contentWebView?.reload() }
+
+    /** The chrome reports here whether a sheet/menu is open, so the activity Back
+     *  button closes the sheet (via window.__aegisMobileBack) before navigating. */
+    @JavascriptInterface
+    fun setBackInterceptActive(active: Boolean) = runOnUiThread {
+      backInterceptActive = active
+    }
+
+    /** Hide/show the bottom action bar (the top-bar toggle). Hiding shrinks the content's
+     *  bottom margin so the page reclaims the bar's gap; showing restores it. A discrete
+     *  user action, so there's no scroll feedback loop (unlike the removed auto-hide). */
+    @JavascriptInterface
+    fun setBottomBarHidden(hidden: Boolean) = runOnUiThread {
+      bottomBarHidden = hidden
+      applyContentMargins()
+    }
+
+    /** Enter/exit the chrome-hiding fullscreen (the top-bar Maximize button; desktop
+     *  parity): the content fills the safe area with no top/bottom chrome. The chrome
+     *  hides its bars in React and Back exits (via window.__aegisMobileBack). */
+    @JavascriptInterface
+    fun setFullscreen(on: Boolean) = runOnUiThread {
+      fullscreen = on
+      applyContentMargins()
+    }
 
     /** Open a URL in the external browser (used to reach the releases page to install
      *  an update — the Tauri updater is desktop-only). */

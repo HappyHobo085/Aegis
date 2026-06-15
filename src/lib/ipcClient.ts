@@ -36,6 +36,15 @@ interface AndroidBridge {
   reload(): void;
   setContentHidden(hidden: boolean): void;
   openExternal(url: string): void;
+  /** Tell the native Android Back handler a chrome sheet is open (so Back closes it
+   * instead of navigating the page). */
+  setBackInterceptActive(active: boolean): void;
+  /** Hide/show the bottom action bar (the manual top-bar toggle); the content webview
+   * reclaims the bar's gap when hidden. */
+  setBottomBarHidden(hidden: boolean): void;
+  /** Enter/exit chrome-hiding fullscreen (desktop parity): the content fills the safe
+   * area with no top/bottom chrome. Back exits. */
+  setFullscreen(on: boolean): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -252,3 +261,19 @@ export const aegis: AegisApi = {
     onInterstitial: (cb) => on<SafetyInterstitialPayload | null>(IPC.evtSafetyInterstitial, cb),
   },
 };
+
+/** Mobile-only: report whether a chrome sheet/menu is open so the native Android
+ * Back button closes it first. No-op off Android. */
+export function setBackInterceptActive(active: boolean): void {
+  androidBridge()?.setBackInterceptActive(active);
+}
+
+/** Mobile-only: hide/show the bottom action bar (the top-bar toggle). No-op off Android. */
+export function setBottomBarHidden(hidden: boolean): void {
+  androidBridge()?.setBottomBarHidden(hidden);
+}
+
+/** Mobile-only: enter/exit chrome-hiding fullscreen (desktop parity). No-op off Android. */
+export function setFullscreen(on: boolean): void {
+  androidBridge()?.setFullscreen(on);
+}
