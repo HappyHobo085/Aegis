@@ -77,9 +77,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "tabs.list" => Some(Ok(state_value(app))),
         "tabs.create" => {
             let url = payload.get("url").and_then(Value::as_str).map(str::to_string);
-            let (id, u) = app.state::<Tabs>().reg.lock().unwrap().create(url, false, now);
+            // background = true opens the tab without switching the active tab (target=_blank
+            // / window.open on mobile; matches on_new_window's open_background on desktop).
+            let background = payload.get("background").and_then(Value::as_bool).unwrap_or(false);
+            let (id, u) = app.state::<Tabs>().reg.lock().unwrap().create(url, background, now);
             spawn(app, id, &u);
-            crate::view::apply_inset(app); // show the new active tab
+            crate::view::apply_inset(app); // show the active tab (unchanged when background)
             emit_and_persist(app);
             Some(Ok(state_value(app)))
         }

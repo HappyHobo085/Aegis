@@ -279,7 +279,7 @@ export interface AegisApi {
   };
   tabs: {
     list(): Promise<TabsState>;
-    create(url?: string): Promise<TabsState>;
+    create(url?: string, background?: boolean): Promise<TabsState>;
     close(id: ViewId): Promise<TabsState>;
     activate(id: ViewId): Promise<TabsState>;
     reorder(ids: ViewId[]): Promise<TabsState>;
