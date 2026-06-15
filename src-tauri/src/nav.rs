@@ -173,6 +173,7 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         crate::linux_layout::mark_content_label(app, &label);
         crate::linux_layout::connect_title_label(app, &label);
         crate::linux_layout::connect_fullscreen_exit_label(app, &label);
+        crate::linux_layout::connect_tab_keys_label(app, &label);
         crate::permissions::install_handler_label(app, &label);
     }
 

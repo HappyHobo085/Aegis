@@ -144,6 +144,24 @@ pub fn install_adblock(app: tauri::AppHandle) {
     });
 }
 
+#[cfg(all(desktop, not(target_os = "linux")))]
+fn install_tab_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    let item = |id: &str, label: &str, accel: &str| {
+        MenuItemBuilder::with_id(id, label).accelerator(accel).build(app)
+    };
+    let tabs_menu = SubmenuBuilder::new(app, "Tabs")
+        .item(&item("tab_new", "New Tab", "CmdOrCtrl+T")?)
+        .item(&item("tab_close", "Close Tab", "CmdOrCtrl+W")?)
+        .item(&item("tab_reopen", "Reopen Closed Tab", "CmdOrCtrl+Shift+T")?)
+        .item(&item("tab_next", "Next Tab", "Ctrl+Tab")?)
+        .item(&item("tab_prev", "Previous Tab", "Ctrl+Shift+Tab")?)
+        .build()?;
+    let menu = MenuBuilder::new(app).item(&tabs_menu).build()?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // webkit2gtk's DMABUF renderer paints a blank/white window on many Linux GPU
@@ -206,6 +224,17 @@ pub fn run() {
         .manage(update::UpdateState::default())
         .manage(adblock::AdblockState::default())
         .manage(safety::SafetyState::default())
+        .on_menu_event(|app, event| {
+            let s = match event.id().0.as_str() {
+                "tab_new" => "new",
+                "tab_close" => "close",
+                "tab_reopen" => "reopen",
+                "tab_next" => "next",
+                "tab_prev" => "prev",
+                _ => return,
+            };
+            let _ = crate::emit_event(app, "tabs.shortcut", s);
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -236,6 +265,12 @@ pub fn run() {
                 });
             }
             view::apply_inset(app.handle());
+
+            // Win/macOS: install a "Tabs" menu with accelerators so native OS-level
+            // key capture delivers Ctrl+T/W/Tab etc. even when the content webview has
+            // focus. Linux uses a GTK key hook instead (connect_tab_keys_label).
+            #[cfg(all(desktop, not(target_os = "linux")))]
+            install_tab_menu(app.handle())?;
 
             // Linux: render native widgets (the <select> popup menus, file dialogs)
             // in the dark variant so they match Aegis's always-dark UI instead of a

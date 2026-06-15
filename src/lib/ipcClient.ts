@@ -20,6 +20,7 @@ import type {
   SitePermission,
   PermissionPrompt,
   TabsState,
+  TabShortcut,
   UpdateState,
   SafetyInterstitialPayload,
 } from '../../shared/types';
@@ -120,6 +121,7 @@ export const aegis: AegisApi = {
     setPinned: (id, pinned) => call<TabsState>(IPC.tabsSetPinned, { id, pinned }),
     reopenClosed: () => call<TabsState>(IPC.tabsReopenClosed),
     onState: (cb) => on<TabsState>(IPC.evtTabsState, cb),
+    onShortcut: (cb) => on<TabShortcut>(IPC.evtTabsShortcut, cb),
   },
   view: {
     setContentVisible: (viewId, visible) => call(IPC.viewSetContentVisible, { viewId, visible }),

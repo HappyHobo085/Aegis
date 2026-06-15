@@ -73,6 +73,36 @@ pub fn connect_fullscreen_exit_label(app: &AppHandle, label: &str) {
     });
 }
 
+/// Capture tab keyboard shortcuts (Ctrl+T/W/Shift+T/Tab/Shift+Tab) in the content
+/// webview and emit `tabs.shortcut` so the chrome can handle them. Mirrors
+/// `connect_fullscreen_exit_label`; called from `nav::spawn_tab` for each tab.
+pub fn connect_tab_keys_label(app: &AppHandle, label: &str) {
+    let Some(content) = app.get_webview(label) else {
+        return;
+    };
+    let app = app.clone();
+    let _ = content.with_webview(move |pw| {
+        pw.inner().connect_key_press_event(move |_w, ev| {
+            let ctrl = ev.state().contains(gtk::gdk::ModifierType::CONTROL_MASK);
+            let shift = ev.state().contains(gtk::gdk::ModifierType::SHIFT_MASK);
+            if !ctrl {
+                return glib::Propagation::Proceed;
+            }
+            use gtk::gdk::keys::constants as k;
+            let s = match ev.keyval() {
+                x if x == k::t && !shift => "new",
+                x if x == k::w && !shift => "close",
+                x if x == k::T && shift => "reopen",
+                x if x == k::Tab && !shift => "next",
+                x if (x == k::Tab || x == k::ISO_Left_Tab) && shift => "prev",
+                _ => return glib::Propagation::Proceed,
+            };
+            crate::emit_event(&app, "tabs.shortcut", s);
+            glib::Propagation::Stop
+        });
+    });
+}
+
 /// Show/hide a specific content webview by label at the GTK level (Tauri's hide()
 /// doesn't act on the reparented widget). Used per-tab from nav.rs's on_page_load so
 /// each tab hides/shows its OWN webview.

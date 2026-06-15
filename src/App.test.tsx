@@ -152,6 +152,7 @@ vi.mock('./lib/ipcClient', () => ({
       setPinned: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
       reopenClosed: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
       onState: vi.fn(() => () => {}),
+      onShortcut: vi.fn(() => () => {}),
     },
   },
 }));

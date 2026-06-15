@@ -102,6 +102,7 @@ export const IPC = {
   tabsList: 'tabs.list',
   // events (main -> chrome): the tab list + which is active
   evtTabsState: 'tabs.state',
+  evtTabsShortcut: 'tabs.shortcut',
 } as const;
 
 export interface NavState {
@@ -139,6 +140,11 @@ export interface TabsState {
   tabs: TabMeta[];
   activeId: ViewId;
 }
+
+export type TabShortcut =
+  | 'new' | 'close' | 'next' | 'prev' | 'reopen'
+  | 'jump1' | 'jump2' | 'jump3' | 'jump4' | 'jump5'
+  | 'jump6' | 'jump7' | 'jump8' | 'jumpLast';
 
 // ---- places data model (Phase 3) ----
 export interface Favorite {
@@ -276,6 +282,7 @@ export interface AegisApi {
     setPinned(id: ViewId, pinned: boolean): Promise<TabsState>;
     reopenClosed(): Promise<TabsState>;
     onState(cb: (s: TabsState) => void): () => void;
+    onShortcut(cb: (s: TabShortcut) => void): () => void;
   };
   view: {
     setContentVisible(viewId: ViewId, visible: boolean): Promise<void>;

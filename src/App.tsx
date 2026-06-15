@@ -162,6 +162,24 @@ export function App() {
     void aegis.settings.get().then((s) => applyTheme(s));
   }, []);
 
+  // Native-captured tab keyboard shortcuts (Ctrl+T/W/Tab etc.) arrive via the
+  // tabs.shortcut event and are mapped to tab actions here in the chrome.
+  useEffect(() => {
+    return aegis.tabs.onShortcut((s) => {
+      if (s === 'new') void tabs.create();
+      else if (s === 'close') void tabs.close(tabs.activeId);
+      else if (s === 'reopen') void tabs.reopenClosed();
+      else if (s === 'next' || s === 'prev') {
+        const ids = tabs.tabs.map((t) => t.id);
+        const i = ids.indexOf(tabs.activeId);
+        if (ids.length > 0) {
+          const ni = s === 'next' ? (i + 1) % ids.length : (i - 1 + ids.length) % ids.length;
+          void tabs.activate(ids[ni]);
+        }
+      }
+    });
+  }, [tabs.tabs, tabs.activeId]);
+
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {
       if (f.viewId !== tabs.activeId) return;
