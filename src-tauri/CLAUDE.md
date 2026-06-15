@@ -103,6 +103,19 @@ malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt
   insets to the chrome as `--aegis-inset-top/bottom` CSS vars (px ÷ density).
 - A **`WebChromeClient`** (`onShowCustomView`/`onHideCustomView` + immersive bars) gives
   pages HTML5 fullscreen (video, etc.) — distinct from the chrome-hiding `setFullscreen`.
+- **Multi-tab (live tabs).** `MainActivity` keeps a `tabId → WebView` map; the active
+  tab's WebView is mirrored into `contentWebView` so all existing active-tab logic
+  (margins/overlay/nav/back) is unchanged. The chrome drives it via
+  `AegisAndroid.activateTab(id,url)` / `closeTab(id)` / `discardTab(id)` (Rust can't touch
+  native Android views — the chrome coordinates). WebViews are created **lazily** by
+  `activateTab` (not eagerly in `onWebViewCreate`). Each tab has its own `WebViewClient`
+  (`makeContentClient(id)`) with a per-tab `pageUrls[id]` first-party context for ad-block,
+  and `pushNavState(id,…)` carries the tab id as `viewId` so the chrome's
+  `useNav(activeId)` tracks the active tab. **`activateTab` re-pushes the tab's nav state**
+  (switching to an already-live tab fires no page-load event, so without this the address
+  bar would blank). The tab title is NOT observed natively (no WebKit signal) — the chrome
+  relays it via `tabs.setTitle`. `makeChromeClient().onCreateWindow` routes
+  `target=_blank`/`window.open` to `window.__aegisOpenTab` → a background tab.
 
 ## Build
 

@@ -17,8 +17,10 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
     `DownloadEntry`, `SitePermission`, `Settings` (incl. `tabIdleTimeout`),
     `AdblockState`, `UpdateState`, `SafetyInterstitialPayload`, `Subscription`,
     `TabMeta`, `TabsState` (the ordered tab list + active id), etc.
-  - `tabs.*` channels: `tabs.create`, `tabs.close`, `tabs.activate`,
-    `tabs.reorder`, `tabs.setPinned`, `tabs.reopenClosed`, `tabs.list`.
+  - `tabs.*` channels: `tabs.create` (optional `background` flag — opens without
+    switching the active tab, for mobile `target=_blank`), `tabs.close`, `tabs.activate`,
+    `tabs.reorder`, `tabs.setPinned`, `tabs.reopenClosed`, `tabs.list`, `tabs.setTitle`
+    (chrome relays the content title into the registry; Android has no native title signal).
   - `tabs.state` event (emitted on every structural change) + `tabs.shortcut`
     event (Ctrl+T/W/Shift+T from native accelerator/GTK hook).
   - `AegisApi` — the typed shape of `window.aegis` (what `src/lib/ipcClient.ts`
