@@ -42,6 +42,10 @@ class MainActivity : TauriActivity() {
   private var hasPage = false
   private var overlayHidden = false
 
+  // True while a chrome sheet/menu is open — the Back button should close it (via the
+  // chrome) before navigating the page. Set by the chrome through AegisAndroid.
+  @Volatile private var backInterceptActive = false
+
   private fun updateContentVisibility() {
     contentWebView?.visibility = if (hasPage && !overlayHidden) View.VISIBLE else View.GONE
   }
@@ -49,6 +53,21 @@ class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+  }
+
+  // Back-press precedence: (a) a chrome sheet/menu is open -> tell the chrome to close
+  // it (window.__aegisMobileBack) and consume the press; (b) else the content page can
+  // go back -> navigate it back; (c) else default (exit). The chrome sets
+  // backInterceptActive via the AegisAndroid bridge whenever a sheet is open.
+  @Deprecated("Back press precedence: close an open chrome sheet, else page-back, else default")
+  override fun onBackPressed() {
+    when {
+      backInterceptActive -> chromeWebView?.evaluateJavascript(
+        "window.__aegisMobileBack && window.__aegisMobileBack()", null,
+      )
+      contentWebView?.canGoBack() == true -> contentWebView?.goBack()
+      else -> @Suppress("DEPRECATION") super.onBackPressed()
+    }
   }
 
   override fun onWebViewCreate(webView: WebView) {
@@ -292,6 +311,13 @@ class MainActivity : TauriActivity() {
 
     @JavascriptInterface
     fun reload() = runOnUiThread { contentWebView?.reload() }
+
+    /** The chrome reports here whether a sheet/menu is open, so the activity Back
+     *  button closes the sheet (via window.__aegisMobileBack) before navigating. */
+    @JavascriptInterface
+    fun setBackInterceptActive(active: Boolean) = runOnUiThread {
+      backInterceptActive = active
+    }
 
     /** Open a URL in the external browser (used to reach the releases page to install
      *  an update — the Tauri updater is desktop-only). */
