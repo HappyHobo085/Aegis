@@ -34,8 +34,20 @@ dotted event name.
 - **`lib.rs`** — app setup + `ipc()` dispatcher + `emit_event()`. Installs the
   rustls aws-lc-rs crypto provider once; sets Linux env workarounds (see gotchas).
 - **`main.rs`** — thin entry; calls `app_lib::run()`.
-- **`nav.rs`** — content webview creation (`spawn_content`, desktop), navigation
-  callbacks (malware guard, HTTPS-Only upgrade), emits `nav.state`/`nav.failed`.
+- **`tab_registry.rs`** — pure (Tauri-free, fully unit-tested) tab state machine:
+  lifecycle (`create`/`activate`/`close`/`reopen_closed`), pinned/reorder,
+  per-tab back/forward history (`record_nav`/`go_back`/`go_forward`),
+  time-based idle sweep (`sweep_idle`), session (de)serialization
+  (`to_persisted`/`restore`). 24 unit tests.
+- **`tabs.rs`** — Tauri layer over the registry: `tabs.*` IPC dispatch, applies
+  spawn/close decisions to child webviews, the idle-sweep background thread
+  (`start_idle_sweep`), `tabs.json` session persistence, `open_background`
+  (called from `on_new_window` to open target=\_blank links as background tabs).
+- **`nav.rs`** — content webview creation (`spawn_tab(id, url)`, replaces the
+  old `spawn_content`), navigation callbacks (malware guard, HTTPS-Only upgrade),
+  emits `nav.state`/`nav.failed`. Active webview now accessed via
+  `active_content_label()`/`active_webview()` (refactored from the old single
+  `CONTENT_LABEL` constant).
 - **`view.rs`** — content webview geometry: insets, sidebar, fullscreen, overlay.
 - **`data.rs`** — `data.export` / `data.import` (bundles all stores + settings).
 - **Data stores** — `jsonstore.rs` (tiny JSON-array helper) backs `places.rs`
@@ -57,7 +69,8 @@ dotted event name.
   `isMalwareHost`), `permissions.rs` (site permission prompts).
 - **Linux** — `linux_layout.rs`: works around **tauri#10420** by reparenting
   webkit2gtk widgets GtkBox → GtkFixed; title-changed signal feeds history +
-  routes the element-picker sentinel; Esc-exits-fullscreen.
+  routes the element-picker sentinel; Esc-exits-fullscreen; GTK key hook
+  handles Ctrl+T/W/Shift+T tab shortcuts (accelerator menus used on Win/macOS).
 - **Misc** — `picker.rs` (element picker), `update.rs` (tauri-plugin-updater state).
 
 ## Key dependencies (`Cargo.toml`)
@@ -98,3 +111,27 @@ npm run android:build                          # debug APK
    runtime-verify (CI compiles/links but doesn't launch the GUI).
 7. **TLS** — a crypto provider must be installed once (done in `lib.rs`) or every
    reqwest/updater HTTPS call panics.
+
+### Multi-webview Linux layout (hard-won facts)
+
+These apply when there is more than one content webview (i.e. multiple tabs):
+
+a. **One canonical GtkFixed.** Every content webview must live in the same
+   `GtkFixed` container. New `add_child`-ed tabs land in the `GtkBox` and must
+   be re-parented into the `GtkFixed` each layout pass; leaving them in a nested
+   `GtkFixed` breaks the hide-others logic.
+
+b. **Classify by GTK widget name, not pointer.** Content webviews are identified
+   in `layout()` by a GTK widget name set via `mark_content_label`
+   (constant `CONTENT_WIDGET_NAME`). Do NOT collect pointers via `with_webview`
+   — that closure runs off the main thread and races with layout.
+
+c. **Active tab visibility follows the overlay state.** The active content
+   webview's visibility must be set to `content_visible = fullscreen || sidebar
+   || !overlay` (and hidden when the URL is about:blank), NOT forced to always
+   visible. Forcing it visible causes chrome overlays to render behind the page.
+
+d. **Fullscreen exit button must be the topmost GtkFixed child.** In fullscreen
+   mode the exit button must be re-added as the last (topmost z-order) child of
+   the `GtkFixed` each layout pass — `raise()` alone is not enough to lift a GTK
+   widget above native WebKit windows.

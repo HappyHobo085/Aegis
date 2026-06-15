@@ -119,8 +119,6 @@ pub fn open_background(app: &AppHandle, url: &str) {
     let (id, u) = app.state::<Tabs>().reg.lock().unwrap().create(Some(url.to_string()), true, now);
     spawn(app, id, &u);
     emit_and_persist(app);
-    let _ = id;
-    let _ = u;
 }
 
 fn session_path(app: &AppHandle) -> Option<std::path::PathBuf> {

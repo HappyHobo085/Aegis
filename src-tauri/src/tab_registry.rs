@@ -261,18 +261,6 @@ impl Registry {
         self.resort_pinned();
     }
 
-    pub fn set_url(&mut self, id: ViewId, url: String) {
-        if let Some(i) = self.idx(id) {
-            self.tabs[i].url = url;
-        }
-    }
-
-    pub fn set_title(&mut self, id: ViewId, title: String) {
-        if let Some(i) = self.idx(id) {
-            self.tabs[i].title = title;
-        }
-    }
-
     /// Record a navigation. A duplicate of the current entry (a reload, or the event
     /// produced by go_back/go_forward) is ignored. A new URL truncates the forward stack.
     pub fn record_nav(&mut self, id: ViewId, url: &str) {
@@ -545,16 +533,6 @@ mod tests {
         r.reorder(&[b, 1, c]);                   // request b,1,c; c stays pinned-first
         let ids: Vec<ViewId> = r.tabs_state().tabs.iter().map(|t| t.id).collect();
         assert_eq!(ids, vec![c, b, 1]);
-    }
-
-    #[test]
-    fn set_url_and_title_update_the_tab() {
-        let mut r = reg();
-        r.set_url(1, "https://x.test/".into());
-        r.set_title(1, "X".into());
-        assert_eq!(r.url_of(1), Some("https://x.test/"));
-        let p = r.to_persisted();
-        assert_eq!(p.tabs[0].title, "X");
     }
 
     #[test]
