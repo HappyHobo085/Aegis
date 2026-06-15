@@ -2,7 +2,7 @@
 //! the content webview; the user hovers to highlight and clicks an element. The
 //! overlay computes a CSS selector + the page host and signals them back by briefly
 //! setting `document.title` to an `AEGISPICK:{json}` sentinel — caught by the
-//! existing title-change handler (linux_layout::connect_title), which routes it
+//! existing title-change handler (linux_layout::connect_title_label), which routes it
 //! here. (A WebKit script-message handler would collide with wry's own catch-all
 //! IPC handler, so the title channel keeps the picker off the native IPC surface.)
 //! We persist `host##selector` as a custom cosmetic filter — the content-blocker
@@ -11,8 +11,6 @@
 //! client-side too, for instant feedback.
 use serde_json::{json, Value};
 use tauri::AppHandle;
-#[cfg(target_os = "linux")]
-use tauri::Manager;
 
 /// Sentinel prefix a picked selector's JSON is wrapped in (via document.title).
 pub const SENTINEL: &str = "AEGISPICK:";
@@ -83,7 +81,7 @@ const PICKER_JS: &str = r#"
 
 /// Persist a picked element as a custom cosmetic filter and re-install the engine.
 /// `payload` is the JSON `{selector, host}` from the title sentinel (prefix
-/// already stripped). Called by linux_layout::connect_title.
+/// already stripped). Called by linux_layout::connect_title_label.
 #[cfg(target_os = "linux")]
 pub fn on_picked(app: &AppHandle, payload: &str) {
     let parsed: Value = serde_json::from_str(payload).unwrap_or(Value::Null);
@@ -121,7 +119,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
     #[cfg(target_os = "linux")]
     {
         use webkit2gtk::WebViewExt;
-        let Some(content) = app.get_webview(crate::nav::CONTENT_LABEL) else {
+        let Some(content) = crate::nav::active_webview(app) else {
             return Some(Ok(json!({ "ok": false })));
         };
         let _ = content.with_webview(|pw| {

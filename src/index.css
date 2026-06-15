@@ -1895,6 +1895,42 @@ body.aegis-fullscreen {
   cursor: pointer;
 }
 
+/* ─── Tabs tab ───────────────────────────────────────────────────── */
+
+.tabs-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tabs-tab__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tabs-tab__field input[type="number"] {
+  width: 100px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.tabs-tab__field input[type="number"]:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.tabs-tab__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
 /* ─── Search tab ─────────────────────────────────────────────────── */
 
 .search-tab {
@@ -3520,3 +3556,16 @@ a:focus-visible {
 .aegis-mobile .toolbar__picker {
   display: none;
 }
+
+/* ===== Tab strip ===== */
+.tabstrip { display: flex; align-items: stretch; height: 36px; gap: 2px; padding: 0 6px;
+  background: #1b1b1b; border-bottom: 1px solid #2a2a2a; overflow-x: auto; }
+.tab { display: flex; align-items: center; gap: 6px; max-width: 200px; padding: 0 8px;
+  background: #232323; border-radius: 6px 6px 0 0; cursor: pointer; color: #cfcfcf; white-space: nowrap; }
+.tab--active { background: #2f2f2f; color: #fff; }
+.tab--asleep { opacity: 0.55; }
+.tab--pinned { max-width: 36px; justify-content: center; }
+.tab__title { overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.tab__close { display: inline-flex; border: 0; background: transparent; color: inherit; cursor: pointer; padding: 2px; border-radius: 4px; }
+.tab__close:hover { background: #444; }
+.tabstrip__new { display: inline-flex; align-items: center; border: 0; background: transparent; color: #cfcfcf; cursor: pointer; padding: 0 8px; }

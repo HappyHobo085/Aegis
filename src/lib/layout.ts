@@ -9,4 +9,6 @@
  */
 export const TOOLBAR_H = 56;
 export const FAVBAR_H = 40;
+/** TABSTRIP_H — the top tab strip height (desktop only). */
+export const TABSTRIP_H = 36;
 export const SIDEBAR_W = 280;

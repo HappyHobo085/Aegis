@@ -28,6 +28,8 @@ mod places;
 mod safety;
 mod settings;
 mod subs;
+mod tab_registry;
+mod tabs;
 mod update;
 mod view;
 
@@ -50,6 +52,9 @@ pub fn emit_event<S: serde::Serialize + Clone>(app: &tauri::AppHandle, name: &st
 #[tauri::command]
 fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, String> {
     if let Some(result) = nav::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = tabs::dispatch(&app, &channel, &payload) {
         return result;
     }
     if let Some(result) = view::dispatch(&app, &channel, &payload) {
@@ -139,6 +144,24 @@ pub fn install_adblock(app: tauri::AppHandle) {
     });
 }
 
+#[cfg(all(desktop, not(target_os = "linux")))]
+fn install_tab_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
+    use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+    let item = |id: &str, label: &str, accel: &str| {
+        MenuItemBuilder::with_id(id, label).accelerator(accel).build(app)
+    };
+    let tabs_menu = SubmenuBuilder::new(app, "Tabs")
+        .item(&item("tab_new", "New Tab", "CmdOrCtrl+T")?)
+        .item(&item("tab_close", "Close Tab", "CmdOrCtrl+W")?)
+        .item(&item("tab_reopen", "Reopen Closed Tab", "CmdOrCtrl+Shift+T")?)
+        .item(&item("tab_next", "Next Tab", "Ctrl+Tab")?)
+        .item(&item("tab_prev", "Previous Tab", "Ctrl+Shift+Tab")?)
+        .build()?;
+    let menu = MenuBuilder::new(app).item(&tabs_menu).build()?;
+    app.set_menu(menu)?;
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // webkit2gtk's DMABUF renderer paints a blank/white window on many Linux GPU
@@ -201,6 +224,17 @@ pub fn run() {
         .manage(update::UpdateState::default())
         .manage(adblock::AdblockState::default())
         .manage(safety::SafetyState::default())
+        .on_menu_event(|app, event| {
+            let s = match event.id().0.as_str() {
+                "tab_new" => "new",
+                "tab_close" => "close",
+                "tab_reopen" => "reopen",
+                "tab_next" => "next",
+                "tab_prev" => "prev",
+                _ => return,
+            };
+            let _ = crate::emit_event(app, "tabs.shortcut", s);
+        })
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -210,8 +244,23 @@ pub fn run() {
                 )?;
             }
 
-            // Add the content webview (the browsed page) below the chrome.
-            nav::spawn_content(app.handle())?;
+            // Initialize the tab registry: restore from tabs.json if it exists,
+            // otherwise start fresh with the configured home page.  Only the active
+            // tab gets an eager webview; the rest lazy-spawn on activation.
+            let home = crate::settings::home_url(app.handle()).to_string();
+            let reg = match tabs::load_session(app.handle()) {
+                Some(session) => crate::tab_registry::Registry::restore(session, home.clone()),
+                None => crate::tab_registry::Registry::new(home.clone()),
+            };
+            app.manage(tabs::Tabs::from_registry(reg));
+            let active = app.state::<tabs::Tabs>().reg.lock().unwrap().active_id();
+            let active_url = app.state::<tabs::Tabs>().reg.lock().unwrap().url_of(active).map(str::to_string);
+            if let Some(url) = active_url {
+                if let Ok(u) = tauri::Url::parse(&url) {
+                    nav::spawn_tab(app.handle(), active, u)?;
+                }
+            }
+            tabs::start_idle_sweep(app.handle());
 
             // Tauri child-webview auto-resize is incomplete; recompute bounds on
             // window resize so the content view keeps filling the area below the chrome.
@@ -224,6 +273,19 @@ pub fn run() {
                 });
             }
             view::apply_inset(app.handle());
+
+            // Emit the restored tabs state so the chrome renders all tabs immediately
+            // (belt-and-suspenders: the chrome also calls tabs.list on mount).
+            let _ = crate::emit_event(app.handle(), "tabs.state", {
+                let s = app.state::<tabs::Tabs>().reg.lock().unwrap().tabs_state();
+                serde_json::to_value(s).unwrap_or(serde_json::Value::Null)
+            });
+
+            // Win/macOS: install a "Tabs" menu with accelerators so native OS-level
+            // key capture delivers Ctrl+T/W/Tab etc. even when the content webview has
+            // focus. Linux uses a GTK key hook instead (connect_tab_keys_label).
+            #[cfg(all(desktop, not(target_os = "linux")))]
+            install_tab_menu(app.handle())?;
 
             // Linux: render native widgets (the <select> popup menus, file dialogs)
             // in the dark variant so they match Aegis's always-dark UI instead of a
@@ -257,19 +319,10 @@ pub fn run() {
                 }
             }
 
-            // Content-webview permission requests: prompt (remembered per origin),
-            // deny unrecognized types (Linux).
-            #[cfg(target_os = "linux")]
-            permissions::install_handler(app.handle());
-
-            // Fill history entries' titles as WebKit reports them (Linux); also
-            // routes the element picker's title sentinel to picker::on_picked.
-            #[cfg(target_os = "linux")]
-            linux_layout::connect_title(app.handle());
-
-            // Exit fullscreen on Esc from the content webview (Linux).
-            #[cfg(target_os = "linux")]
-            linux_layout::connect_fullscreen_exit(app.handle());
+            // The per-tab WebKit signal hooks (permission handler, title→history +
+            // picker sentinel, Esc-exits-fullscreen) are installed at spawn time in
+            // nav::spawn_tab — including for the first tab spawned above — so they're
+            // no longer wired here.
 
             // Ad-blocking (Linux/WebKit): install EasyList content filters.
             #[cfg(target_os = "linux")]

@@ -19,6 +19,8 @@ import type {
   DownloadEntry,
   SitePermission,
   PermissionPrompt,
+  TabsState,
+  TabShortcut,
   UpdateState,
   SafetyInterstitialPayload,
 } from '../../shared/types';
@@ -109,6 +111,17 @@ export const aegis: AegisApi = {
     },
     onFailed: (cb) => on<NavFailed>(IPC.evtNavFailed, cb),
     onCrashed: (cb) => on<NavCrashed>(IPC.evtNavCrashed, cb),
+  },
+  tabs: {
+    list: () => call<TabsState>(IPC.tabsList),
+    create: (url) => call<TabsState>(IPC.tabsCreate, { url }),
+    close: (id) => call<TabsState>(IPC.tabsClose, { id }),
+    activate: (id) => call<TabsState>(IPC.tabsActivate, { id }),
+    reorder: (ids) => call<TabsState>(IPC.tabsReorder, { ids }),
+    setPinned: (id, pinned) => call<TabsState>(IPC.tabsSetPinned, { id, pinned }),
+    reopenClosed: () => call<TabsState>(IPC.tabsReopenClosed),
+    onState: (cb) => on<TabsState>(IPC.evtTabsState, cb),
+    onShortcut: (cb) => on<TabShortcut>(IPC.evtTabsShortcut, cb),
   },
   view: {
     setContentVisible: (viewId, visible) => call(IPC.viewSetContentVisible, { viewId, visible }),

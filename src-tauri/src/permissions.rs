@@ -10,6 +10,8 @@
 //! run_on_main_thread (the same main thread), so the request never crosses
 //! threads.
 use serde_json::{json, Value};
+#[cfg(target_os = "linux")]
+use tauri::Manager;
 use tauri::AppHandle;
 
 use crate::jsonstore;
@@ -90,13 +92,13 @@ fn classify(req: &webkit2gtk::PermissionRequest) -> String {
     "other".into()
 }
 
-/// Install the content-webview permission handler (Linux): allow/deny from the
-/// remembered decision, else raise a prompt; deny unrecognized request types.
+/// Install the permission handler on a specific content webview by label (Linux):
+/// allow/deny from the remembered decision, else raise a prompt; deny unrecognized
+/// request types. Called per-tab at spawn so every tab handles its own requests.
 #[cfg(target_os = "linux")]
-pub fn install_handler(app: &AppHandle) {
-    use tauri::Manager;
+pub fn install_handler_label(app: &AppHandle, label: &str) {
     use webkit2gtk::{PermissionRequestExt, WebViewExt};
-    let Some(content) = app.get_webview(crate::nav::CONTENT_LABEL) else {
+    let Some(content) = app.get_webview(label) else {
         return;
     };
     let app = app.clone();

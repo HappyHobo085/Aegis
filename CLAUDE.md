@@ -20,9 +20,11 @@ Android (iOS is a future, macOS/Xcode-gated tier).
   `src-tauri/tauri.conf.json`: `frontendDist: "../dist"` and
   `beforeBuildCommand: "npm run build:renderer"`. Deleting the frontend breaks
   the build. The frontend *is* part of the Rust implementation.
-- Desktop runs **two webviews** (chrome + content) via Tauri's unstable
-  `Window::add_child`. Android runs a **single** webview with a native Kotlin
-  content `WebView` bridged as `window.AegisAndroid`.
+- Desktop runs **one chrome webview + one content webview per tab** via Tauri's
+  unstable `Window::add_child`. The active tab's webview is visible; background
+  tabs are hidden; idle tabs are discarded and reloaded on next activation.
+  Android runs a **single** webview with a native Kotlin content `WebView`
+  bridged as `window.AegisAndroid`.
 
 ## Folder map
 

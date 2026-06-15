@@ -20,12 +20,10 @@ use std::ffi::CString;
 use std::path::PathBuf;
 
 use glib::translate::ToGlibPtr;
-use tauri::{AppHandle, Manager};
+use tauri::AppHandle;
 use webkit2gtk::{
     UserContentInjectedFrames, UserContentManagerExt, UserStyleLevel, UserStyleSheet, WebViewExt,
 };
-
-use crate::nav::CONTENT_LABEL;
 
 /// Apply content-blocker JSON `chunks` to the content webview, each as its own
 /// WebKit content filter named `aegis-{i}`. When `cached` is true the filters are
@@ -35,7 +33,7 @@ pub fn apply_filters(app: &AppHandle, chunks: Vec<String>, store_dir: PathBuf, c
     if chunks.is_empty() {
         return;
     }
-    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+    let Some(content) = crate::nav::active_webview(app) else {
         return;
     };
     let _ = content.with_webview(move |pw| {
@@ -63,7 +61,7 @@ pub fn apply_filters(app: &AppHandle, chunks: Vec<String>, store_dir: PathBuf, c
 
 /// Remove all content filters from the content webview (ad-block disabled).
 pub fn remove_all(app: &AppHandle) {
-    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+    let Some(content) = crate::nav::active_webview(app) else {
         return;
     };
     let _ = content.with_webview(move |pw| {
@@ -79,7 +77,7 @@ pub fn apply_cosmetic_css(app: &AppHandle, css: String) {
     if css.is_empty() {
         return;
     }
-    let Some(content) = app.get_webview(CONTENT_LABEL) else {
+    let Some(content) = crate::nav::active_webview(app) else {
         return;
     };
     let _ = content.with_webview(move |pw| {

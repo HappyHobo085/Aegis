@@ -1,7 +1,6 @@
 // src/App.tsx
 import { useEffect, useState } from 'react';
 import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
-import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
@@ -19,6 +18,7 @@ import { usePermissions } from './hooks/usePermissions';
 import { useContentInset } from './hooks/useContentInset';
 import { useUpdate } from './hooks/useUpdate';
 import { useSafety } from './hooks/useSafety';
+import { useTabs } from './hooks/useTabs';
 import { Toolbar } from './components/Toolbar';
 import { BookmarkButton } from './components/BookmarkButton';
 import { DownloadsIndicator } from './components/DownloadsIndicator';
@@ -48,6 +48,12 @@ import { DownloadsTab } from './components/DownloadsTab';
 import { SitePermissionsTab } from './components/SitePermissionsTab';
 import { SecurityTab } from './components/SecurityTab';
 import { DataTab } from './components/DataTab';
+import { TabsTab } from './components/TabsTab';
+import { TabStrip } from './components/TabStrip';
+
+const isMobile =
+  typeof document !== 'undefined' &&
+  document.documentElement.classList.contains('aegis-mobile');
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
 
@@ -62,8 +68,9 @@ function hostOf(url: string): string | null {
 }
 
 export function App() {
-  const nav = useNav(PRIMARY_VIEW_ID);
-  const adblock = useAdblock(PRIMARY_VIEW_ID, nav.state.url);
+  const tabs = useTabs();
+  const nav = useNav(tabs.activeId);
+  const adblock = useAdblock(tabs.activeId, nav.state.url);
   // The ad-block shield popover is a chrome dropdown; track it so the content webview
   // is lowered while it's open (Tauri's content view is opaque and on top).
   const [shieldOpen, setShieldOpen] = useState(false);
@@ -93,8 +100,8 @@ export function App() {
   // so the content webview hides behind it (else it renders behind the page).
   useEffect(() => subscribeConfirmOpen(setConfirmOpen), []);
 
-  // Favorites bar is always-on (constant top inset); overlays never inset content.
-  useContentInset(PRIMARY_VIEW_ID);
+  // Favorites bar is always-on (constant top inset); tab strip adds to the inset on desktop.
+  useContentInset(tabs.activeId, !isMobile);
 
   // Full-window chrome overlays (settings, favorites manager, permission prompt,
   // error/crash, downloads, safety) must bring the chrome over the content. The
@@ -112,19 +119,19 @@ export function App() {
     crashed !== null ||
     safety.interstitial !== null;
   useEffect(() => {
-    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, fullOverlayActive || sidebarOpen || shieldOpen);
-  }, [fullOverlayActive, sidebarOpen, shieldOpen]);
+    void aegis.view.setChromeOverlay(tabs.activeId, fullOverlayActive || sidebarOpen || shieldOpen);
+  }, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen]);
   useEffect(() => {
     // Inset the content by the sidebar's actual width when it's open and no full overlay
     // is covering it — so the page stays visible beside the panel without overlapping it.
-    void aegis.view.setSidebar?.(PRIMARY_VIEW_ID, sidebarOpen && !fullOverlayActive, sidebarWidth);
-  }, [sidebarOpen, fullOverlayActive, sidebarWidth]);
+    void aegis.view.setSidebar?.(tabs.activeId, sidebarOpen && !fullOverlayActive, sidebarWidth);
+  }, [tabs.activeId, sidebarOpen, fullOverlayActive, sidebarWidth]);
 
   // Fullscreen: main shrinks chrome to a top-right corner and fills the window
   // with content. Renderer reflects the toggle below (after all hooks).
   useEffect(() => {
-    void aegis.view.setFullscreen(PRIMARY_VIEW_ID, fullscreen);
-  }, [fullscreen]);
+    void aegis.view.setFullscreen(tabs.activeId, fullscreen);
+  }, [tabs.activeId, fullscreen]);
 
   // In fullscreen the chrome shrinks to just the exit-button box; give the body a solid
   // background so that tiny webview actually paints — a transparent body can render
@@ -144,14 +151,54 @@ export function App() {
     void aegis.settings.get().then((s) => applyTheme(s));
   }, []);
 
+  // Native-captured tab keyboard shortcuts (Ctrl+T/W/Tab etc.) arrive via the
+  // tabs.shortcut event and are mapped to tab actions here in the chrome.
+  useEffect(() => {
+    return aegis.tabs.onShortcut((s) => {
+      if (s === 'new') void tabs.create();
+      else if (s === 'close') void tabs.close(tabs.activeId);
+      else if (s === 'reopen') void tabs.reopenClosed();
+      else if (s === 'next' || s === 'prev') {
+        const ids = tabs.tabs.map((t) => t.id);
+        const i = ids.indexOf(tabs.activeId);
+        if (ids.length > 0) {
+          const ni = s === 'next' ? (i + 1) % ids.length : (i - 1 + ids.length) % ids.length;
+          void tabs.activate(ids[ni]);
+        }
+      } else if (s.startsWith('jump')) {
+        const ids = tabs.tabs.map((t) => t.id);
+        if (ids.length === 0) return;
+        const target = s === 'jumpLast' ? ids[ids.length - 1] : ids[Number(s.slice(4)) - 1];
+        if (target !== undefined) void tabs.activate(target);
+      }
+    });
+  }, [tabs.tabs, tabs.activeId]);
+
+  // Ctrl+1-9 when the chrome/address bar is focused (and as the Win/macOS path,
+  // where content-webview digit keys aren't captured by a menu accelerator).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      if (e.key >= '1' && e.key <= '9') {
+        e.preventDefault();
+        const ids = tabs.tabs.map((t) => t.id);
+        if (ids.length === 0) return;
+        const target = e.key === '9' ? ids[ids.length - 1] : ids[Number(e.key) - 1];
+        if (target !== undefined) void tabs.activate(target);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tabs.tabs]);
+
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {
-      if (f.viewId !== PRIMARY_VIEW_ID) return;
+      if (f.viewId !== tabs.activeId) return;
       setCrashed(null);
       setFailed(f);
     });
     const offCrashed = aegis.nav.onCrashed((c) => {
-      if (c.viewId !== PRIMARY_VIEW_ID) return;
+      if (c.viewId !== tabs.activeId) return;
       setFailed(null);
       setCrashed(c);
     });
@@ -159,7 +206,7 @@ export function App() {
       offFailed();
       offCrashed();
     };
-  }, []);
+  }, [tabs.activeId]);
 
   // Main owns content hide/show for failures and crashes. When a fresh
   // navigation reports loading state, clear any error/crash overlay. We do NOT
@@ -172,7 +219,7 @@ export function App() {
   }, [nav.state.isLoading, nav.state.crashed]);
 
   const handleRetry = (): void => {
-    void aegis.nav.reloadOrStop(PRIMARY_VIEW_ID);
+    void aegis.nav.reloadOrStop(tabs.activeId);
   };
 
   const handleHome = (): void => {
@@ -203,6 +250,17 @@ export function App() {
   return (
     <div className="app">
       <SkipLink targetId={CONTENT_ANCHOR_ID} />
+      {!isMobile && (
+        <TabStrip
+          tabs={tabs.tabs}
+          activeId={tabs.activeId}
+          onActivate={(id) => void tabs.activate(id)}
+          onClose={(id) => void tabs.close(id)}
+          onCreate={() => void tabs.create()}
+          onReorder={(ids) => void tabs.reorder(ids)}
+          onSetPinned={(id, pinned) => void tabs.setPinned(id, pinned)}
+        />
+      )}
       <Toolbar
         state={nav.state}
         navigate={nav.navigate}
@@ -343,6 +401,7 @@ export function App() {
           appearance={<AppearanceTab settings={settings.settings} update={settings.update} />}
           search={<SearchTab settings={settings.settings} update={settings.update} />}
           home={<HomeTab settings={settings.settings} update={settings.update} />}
+          tabs={<TabsTab settings={settings.settings} update={settings.update} />}
           filterLists={
             <FilterListsTab
               subs={subscriptions.subs}

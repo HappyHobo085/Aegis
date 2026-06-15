@@ -9,7 +9,6 @@ use std::sync::{Mutex, OnceLock};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Url};
 
-use crate::nav::CONTENT_LABEL;
 
 /// Parsed malware hosts (bundled URLhaus hostfile), built once.
 fn malware_hosts() -> &'static HashSet<String> {
@@ -88,7 +87,8 @@ pub fn raise(app: &AppHandle, url: &str) {
         // No '#' or '&' in the body — they'd be parsed as URL fragment/query and
         // truncate the data: URL. Colors use %23 (percent-encoded #).
         const WARN: &str = "data:text/html,<body style='font:16px system-ui;margin:0;padding:48px;background:%23450a0a;color:%23fff'><h1>Malicious site blocked</h1><p>Aegis blocked a known-malware site (URLhaus blocklist). Go back to leave this page.</p></body>";
-        if let (Some(w), Ok(u)) = (app2.get_webview(CONTENT_LABEL), Url::parse(WARN)) {
+        let label = crate::nav::active_content_label(&app2);
+        if let (Some(w), Ok(u)) = (app2.get_webview(&label), Url::parse(WARN)) {
             let _ = w.navigate(u);
         }
     });
@@ -112,7 +112,8 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     *s.interstitial.lock().unwrap() = Value::Null;
                 }
                 let _ = crate::emit_event(app, "safety.interstitial", Value::Null);
-                if let Some(w) = app.get_webview(CONTENT_LABEL) {
+                let label = crate::nav::active_content_label(app);
+                if let Some(w) = app.get_webview(&label) {
                     let _ = w.navigate(u);
                 }
             }

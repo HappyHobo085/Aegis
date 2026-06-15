@@ -47,8 +47,17 @@ Channel and event names, and all payload/return types, are defined once in
 - **Content inset** is set deterministically from layout constants in `lib/layout.ts`
   (toolbar + favbar height), via `hooks/useContentInset.ts` — no DOM measurement.
 - **One hook per domain** in `hooks/` (nav, adblock, history, saved, favorites,
-  settings, subscriptions, customFilters, downloads, permissions, update, safety).
-  Components stay presentational; state + IPC wiring lives in the hook.
+  settings, subscriptions, customFilters, downloads, permissions, update, safety,
+  **tabs**). Components stay presentational; state + IPC wiring lives in the hook.
+- **`hooks/useTabs`** — owns `TabsState` (the ordered tab list), the active tab
+  id, and per-tab nav-state + page titles. All chrome features (nav bar, adblock
+  shield, overlays, inset sidebar) key on the active tab id.
+- **`components/TabStrip`** — the top row of the chrome, rendered above the
+  toolbar on desktop only (hidden on mobile via `.aegis-mobile`). Shows the tab
+  list and drives `tabs.create`/`tabs.activate`/`tabs.close` etc.
+- **`lib/layout.ts`** gained `TABSTRIP_H` (the pixel height reserved for the
+  tab strip), used by `useContentInset` to keep the content webview positioned
+  below it.
 
 ## Tests
 

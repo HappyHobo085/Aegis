@@ -14,8 +14,13 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
     dispatches on them. **Logical names are dotted here**; the Rust/JS transport
     rewrites event `.` → `:` because Tauri 2 forbids dots in event names.
   - Data models — `NavState`, `Favorite`, `HistoryEntry`, `SavedItem`,
-    `DownloadEntry`, `SitePermission`, `Settings`, `AdblockState`, `UpdateState`,
-    `SafetyInterstitialPayload`, `Subscription`, etc.
+    `DownloadEntry`, `SitePermission`, `Settings` (incl. `tabIdleTimeout`),
+    `AdblockState`, `UpdateState`, `SafetyInterstitialPayload`, `Subscription`,
+    `TabMeta`, `TabsState` (the ordered tab list + active id), etc.
+  - `tabs.*` channels: `tabs.create`, `tabs.close`, `tabs.activate`,
+    `tabs.reorder`, `tabs.setPinned`, `tabs.reopenClosed`, `tabs.list`.
+  - `tabs.state` event (emitted on every structural change) + `tabs.shortcut`
+    event (Ctrl+T/W/Shift+T from native accelerator/GTK hook).
   - `AegisApi` — the typed shape of `window.aegis` (what `src/lib/ipcClient.ts`
     implements). Adding a feature means adding it here first.
 - **`types.test.ts`, `types.update.test.ts`** — assert the contract's invariants
