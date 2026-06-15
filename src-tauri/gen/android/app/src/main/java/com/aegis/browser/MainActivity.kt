@@ -130,27 +130,31 @@ class MainActivity : TauriActivity() {
           }
         }
       }
-      // Inset below the chrome toolbar (DEFAULT_INSET_TOP = 96 logical px). On a
-      // phone the chrome folds the favorites row into a two-row toolbar that is also
-      // 96px, so the content still lines up directly under it.
-      val top = (96 * resources.displayMetrics.density).toInt()
+      // Slim top chrome = address bar (48dp) + favourites strip (24dp) = 72dp; the
+      // bottom action bar is 56dp. These MUST stay in sync with src/lib/layout.ts
+      // (MOBILE_ADDRESS_H + MOBILE_FAV_H for the top, MOBILE_BOTTOMBAR_H for the bottom).
+      val density = resources.displayMetrics.density
+      val top = (72 * density).toInt()
+      val bottomBar = (56 * density).toInt()
       val lp = FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.MATCH_PARENT,
         FrameLayout.LayoutParams.MATCH_PARENT,
       )
       lp.topMargin = top
+      lp.bottomMargin = bottomBar
       content.visibility = View.GONE // hidden at home so the chrome's home screen shows
       parent.addView(content, lp)
       contentWebView = content
       // Keep the content webview below the status bar (time/battery) and above the
-      // system navigation bar. The chrome pads its toolbar down by the same status-bar
-      // inset (env(safe-area-inset-top)), so the content starts at 96dp + that inset.
-      // Recomputed on every inset change (rotation, gesture vs 3-button nav, etc.).
+      // system navigation bar + the 56dp bottom action bar. The chrome pads its top
+      // chrome down by the same status-bar inset (env(safe-area-inset-top)), so the
+      // content starts at 72dp + that inset and ends 56dp + the nav-bar inset above
+      // the bottom. Recomputed on every inset change (rotation, gesture vs 3-button nav).
       ViewCompat.setOnApplyWindowInsetsListener(parent) { _, insets ->
         val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
         (content.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
           p.topMargin = top + bars.top
-          p.bottomMargin = bars.bottom
+          p.bottomMargin = bottomBar + bars.bottom
           content.layoutParams = p
         }
         insets
