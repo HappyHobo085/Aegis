@@ -3538,6 +3538,7 @@ a:focus-visible {
   border: 0; border-radius: 11px; background: #2a2a2a; color: #cfcfcf; white-space: nowrap; }
 
 .mobile-bottombar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; height: 56px;
+  box-sizing: content-box; /* the nav-inset padding extends the bar UP, not inward (global reset is border-box) */
   display: flex; align-items: center; justify-content: space-around;
   background: #1b1b1b; border-top: 1px solid #2a2a2a;
   padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom)); }
