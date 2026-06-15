@@ -163,11 +163,24 @@ pub fn layout(
     win_w: i32,
     win_h: i32,
     fullscreen: bool,
+    content_visible: bool,
 ) {
     let active_label = crate::nav::active_content_label(app);
     let Some(active) = app.get_webview(&active_label) else {
         return;
     };
+    // The active content is shown only when no full-window chrome overlay is up AND the
+    // tab isn't sitting at about:blank (where the chrome's home shows through). Read the
+    // active tab's URL from the registry here (lock released before the GTK closure).
+    let active_at_home = app
+        .try_state::<crate::tabs::Tabs>()
+        .map(|s| {
+            let r = s.reg.lock().unwrap();
+            let id = r.active_id();
+            r.url_of(id).map(|u| u.starts_with("about:")).unwrap_or(true)
+        })
+        .unwrap_or(true);
+    let active_visible = content_visible && !active_at_home;
     let app2 = app.clone();
     let _ = active.with_webview(move |pw| {
         let active_w = pw.inner();
@@ -235,7 +248,7 @@ pub fn layout(
             let is_active = child.as_ptr() == active_widget.as_ptr();
             let name = child.widget_name();
             if is_active {
-                child.set_visible(true);
+                child.set_visible(active_visible);
                 child.set_size_request(cw, ch);
                 fixed.move_(&child, left, top);
                 active_window = child.window();
@@ -261,7 +274,11 @@ pub fn layout(
         // pinned to the top-right corner. Raised after the content so it stays on top.
         let btn = fs_exit_button(&fixed, &app2);
         if fullscreen {
-            fixed.move_(&btn, (win_w - FS_EXIT_SIZE - FS_EXIT_MARGIN).max(0), FS_EXIT_MARGIN);
+            // Content webviews added after the button sit above it in the Fixed's child
+            // stacking, and GdkWindow.raise() alone doesn't reliably lift a GTK widget above
+            // WebKit's native windows. Re-add the button LAST so it's the topmost child.
+            fixed.remove(&btn);
+            fixed.put(&btn, (win_w - FS_EXIT_SIZE - FS_EXIT_MARGIN).max(0), FS_EXIT_MARGIN);
             btn.show_all();
             if btn.window().is_none() {
                 btn.realize();

@@ -108,15 +108,19 @@ pub fn apply_inset(app: &AppHandle) {
     // Linux: wry's GtkBox ignores set_bounds (tauri#10420). Position the webviews
     // ourselves via the GtkFixed workaround. Other platforms: set_bounds works.
     #[cfg(target_os = "linux")]
-    crate::linux_layout::layout(
-        app,
-        left as i32,
-        top as i32,
-        right as i32,
-        logical.width as i32,
-        logical.height as i32,
-        lay.fullscreen,
-    );
+    {
+        let content_visible = lay.fullscreen || lay.sidebar || !lay.overlay;
+        crate::linux_layout::layout(
+            app,
+            left as i32,
+            top as i32,
+            right as i32,
+            logical.width as i32,
+            logical.height as i32,
+            lay.fullscreen,
+            content_visible,
+        );
+    }
 
     #[cfg(all(desktop, not(target_os = "linux")))]
     if let Some(content) = crate::nav::active_webview(app) {
