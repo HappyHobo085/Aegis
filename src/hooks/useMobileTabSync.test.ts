@@ -23,6 +23,18 @@ describe('useMobileTabSync', () => {
     });
     expect(activateTab).toHaveBeenCalledWith(1, 'https://t1.test/');
   });
+  it('activates the active tab once useTabs resolves, even if activeId never changed', () => {
+    // Regression: useTabs seeds an EMPTY {tabs:[], activeId:1} state before its async
+    // list() resolves. When the registry's real active id is also 1 (the common
+    // fresh-start case), an activeId-diff would never fire -> no native WebView ->
+    // dead address bar. The active tab must be activated when it first appears.
+    const { rerender } = renderHook(({ tabs, activeId }) => useMobileTabSync(tabs, activeId), {
+      initialProps: { tabs: [] as TabMeta[], activeId: 1 },
+    });
+    expect(activateTab).not.toHaveBeenCalled();
+    rerender({ tabs: [t(1)], activeId: 1 });
+    expect(activateTab).toHaveBeenCalledWith(1, 'https://t1.test/');
+  });
   it('activates the new active tab when activeId changes', () => {
     const { rerender } = renderHook(({ tabs, activeId }) => useMobileTabSync(tabs, activeId), {
       initialProps: { tabs: [t(1), t(2)], activeId: 1 },
