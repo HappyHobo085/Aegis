@@ -46,6 +46,10 @@ class MainActivity : TauriActivity() {
   // chrome) before navigating the page. Set by the chrome through AegisAndroid.
   @Volatile private var backInterceptActive = false
 
+  // The current system nav-bar bottom inset, captured in the insets listener so the
+  // scroll auto-hide can restore the correct bottom-bar gap when re-showing the bar.
+  @Volatile private var navBottom = 0
+
   private fun updateContentVisibility() {
     contentWebView?.visibility = if (hasPage && !overlayHidden) View.VISIBLE else View.GONE
   }
@@ -171,6 +175,7 @@ class MainActivity : TauriActivity() {
       // the bottom. Recomputed on every inset change (rotation, gesture vs 3-button nav).
       ViewCompat.setOnApplyWindowInsetsListener(parent) { _, insets ->
         val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+        navBottom = bars.bottom
         (content.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
           p.topMargin = top + bars.top
           p.bottomMargin = bottomBar + bars.bottom
@@ -179,6 +184,31 @@ class MainActivity : TauriActivity() {
         insets
       }
       ViewCompat.requestApplyInsets(parent)
+      // Auto-hide the bottom action bar on scroll: scrolling DOWN past a small
+      // threshold collapses the content's bottom-margin gap (the bar, which lives in
+      // the chrome behind the content webview, is covered = hidden); scrolling UP, or
+      // reaching the top, restores the gap. Push model — the chrome bar only shows in
+      // this gap. (Stretch: if janky on-device, this listener can be removed.)
+      val threshold = (6 * density).toInt()
+      content.setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
+        val dy = scrollY - oldScrollY
+        val target = when {
+          scrollY <= 0 -> bottomBar + navBottom            // top of page: always show
+          dy > threshold -> 0                              // scrolling down: hide
+          dy < -threshold -> bottomBar + navBottom         // scrolling up: show
+          else -> return@setOnScrollChangeListener
+        }
+        val p = content.layoutParams as? FrameLayout.LayoutParams ?: return@setOnScrollChangeListener
+        if (p.bottomMargin == target) return@setOnScrollChangeListener
+        android.animation.ValueAnimator.ofInt(p.bottomMargin, target).apply {
+          duration = 160
+          addUpdateListener { a ->
+            p.bottomMargin = a.animatedValue as Int
+            content.layoutParams = p
+          }
+          start()
+        }
+      }
       // Let the React chrome (in the chrome webview) drive this content webview.
       webView.addJavascriptInterface(Bridge(), "AegisAndroid")
       // Warm the adblock engine (parses EasyList ~once) off the UI thread so the
