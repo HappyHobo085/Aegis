@@ -127,6 +127,7 @@ vi.mock('../../lib/ipcClient', () => ({
   },
   setBackInterceptActive: vi.fn(),
   setBottomBarHidden: vi.fn(),
+  setFullscreen: vi.fn(),
 }));
 
 import { MobileApp } from './MobileApp';
@@ -157,5 +158,11 @@ describe('MobileApp', () => {
     expect(await screen.findByRole('navigation', { name: /browser actions/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /hide toolbar/i }));
     expect(screen.queryByRole('navigation', { name: /browser actions/i })).toBeNull();
+  });
+  it('enters fullscreen from the top bar, hiding all chrome', async () => {
+    render(<MobileApp />);
+    fireEvent.click(await screen.findByRole('button', { name: /enter fullscreen/i }));
+    expect(screen.queryByRole('navigation', { name: /browser actions/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /enter fullscreen/i })).toBeNull();
   });
 });

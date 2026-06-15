@@ -48,18 +48,36 @@ class MainActivity : TauriActivity() {
   // chrome) before navigating the page. Set by the chrome through AegisAndroid.
   @Volatile private var backInterceptActive = false
 
-  // The current system nav-bar bottom inset, captured in the insets listener so the
-  // bottom-bar gap and the manual hide/show toggle restore the right margin.
+  // System-bar insets (top status bar, bottom nav bar) captured in the insets listener;
+  // applyContentMargins() uses them so the content sits in the safe area + chrome gaps.
+  @Volatile private var statusTop = 0
   @Volatile private var navBottom = 0
 
-  // Manual bottom-bar toggle (the top-bar button): when hidden, the content reclaims the
-  // bar's gap. `bottomBarPx` caches the bar height for the bridge; `bottomBarHidden` is
-  // read by the insets listener so the choice survives rotation / inset changes.
-  @Volatile private var bottomBarHidden = false
+  // Chrome heights (px), cached for the bridges: top chrome = address bar + favourites
+  // (72dp); bottom action bar = 56dp.
+  private var topChromePx = 0
   private var bottomBarPx = 0
+
+  // Chrome-hiding flags driven by the chrome via AegisAndroid; read by applyContentMargins()
+  // so they survive rotation / inset changes. bottomBarHidden = the top-bar chevron;
+  // fullscreen = the desktop-parity hide-all-chrome mode (content fills, Back exits).
+  @Volatile private var bottomBarHidden = false
+  @Volatile private var fullscreen = false
 
   private fun updateContentVisibility() {
     contentWebView?.visibility = if (hasPage && !overlayHidden) View.VISIBLE else View.GONE
+  }
+
+  /** Position the content webview: fill the safe area minus the chrome gaps currently
+   *  showing — the top chrome (unless fullscreen) and the bottom action bar (unless it's
+   *  toggled off or fullscreen). Called from the insets listener and the chrome bridges. */
+  private fun applyContentMargins() {
+    val c = contentWebView ?: return
+    (c.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
+      p.topMargin = (if (fullscreen) 0 else topChromePx) + statusTop
+      p.bottomMargin = (if (fullscreen || bottomBarHidden) 0 else bottomBarPx) + navBottom
+      c.layoutParams = p
+    }
   }
 
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -205,6 +223,7 @@ class MainActivity : TauriActivity() {
       val density = resources.displayMetrics.density
       val top = (72 * density).toInt()
       val bottomBar = (56 * density).toInt()
+      topChromePx = top
       bottomBarPx = bottomBar
       val lp = FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.MATCH_PARENT,
@@ -223,12 +242,9 @@ class MainActivity : TauriActivity() {
       // status/nav bars, so the chrome's fixed top/bottom bars need these to clear them.
       ViewCompat.setOnApplyWindowInsetsListener(parent) { _, insets ->
         val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+        statusTop = bars.top
         navBottom = bars.bottom
-        (content.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
-          p.topMargin = top + bars.top
-          p.bottomMargin = (if (bottomBarHidden) 0 else bottomBar) + bars.bottom
-          content.layoutParams = p
-        }
+        applyContentMargins()
         val js =
           "document.documentElement.style.setProperty('--aegis-inset-top','${bars.top / density}px');" +
           "document.documentElement.style.setProperty('--aegis-inset-bottom','${bars.bottom / density}px');"
@@ -382,11 +398,16 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun setBottomBarHidden(hidden: Boolean) = runOnUiThread {
       bottomBarHidden = hidden
-      val c = contentWebView ?: return@runOnUiThread
-      (c.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
-        p.bottomMargin = (if (hidden) 0 else bottomBarPx) + navBottom
-        c.layoutParams = p
-      }
+      applyContentMargins()
+    }
+
+    /** Enter/exit the chrome-hiding fullscreen (the top-bar Maximize button; desktop
+     *  parity): the content fills the safe area with no top/bottom chrome. The chrome
+     *  hides its bars in React and Back exits (via window.__aegisMobileBack). */
+    @JavascriptInterface
+    fun setFullscreen(on: Boolean) = runOnUiThread {
+      fullscreen = on
+      applyContentMargins()
     }
 
     /** Open a URL in the external browser (used to reach the releases page to install

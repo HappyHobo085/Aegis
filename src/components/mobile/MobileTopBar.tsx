@@ -1,4 +1,4 @@
-import { RotateCw, X, ChevronUp, ChevronDown } from 'lucide-react';
+import { RotateCw, X, ChevronUp, ChevronDown, Maximize2 } from 'lucide-react';
 import type { Favorite } from '../../../shared/types';
 import { AddressBar } from '../AddressBar';
 import { MobileFavourites } from './MobileFavourites';
@@ -12,11 +12,12 @@ interface MobileTopBarProps {
   onOpenFavourite(url: string): void;
   bottomBarHidden: boolean;
   onToggleBottomBar(): void;
+  onEnterFullscreen(): void;
 }
 
 export function MobileTopBar({
   url, isLoading, onNavigate, onReloadOrStop, favorites, onOpenFavourite,
-  bottomBarHidden, onToggleBottomBar,
+  bottomBarHidden, onToggleBottomBar, onEnterFullscreen,
 }: MobileTopBarProps) {
   return (
     <div className="mobile-topbar">
@@ -38,6 +39,14 @@ export function MobileTopBar({
           onClick={onToggleBottomBar}
         >
           {bottomBarHidden ? <ChevronUp size={18} aria-hidden="true" /> : <ChevronDown size={18} aria-hidden="true" />}
+        </button>
+        <button
+          type="button"
+          className="mobile-topbar__toggle"
+          aria-label="Enter fullscreen"
+          onClick={onEnterFullscreen}
+        >
+          <Maximize2 size={18} aria-hidden="true" />
         </button>
       </div>
       <MobileFavourites favorites={favorites} onOpen={onOpenFavourite} />

@@ -10,7 +10,7 @@ function setup(over = {}) {
     url: 'https://example.com/', isLoading: false,
     onNavigate: vi.fn(), onReloadOrStop: vi.fn(),
     favorites: favs, onOpenFavourite: vi.fn(),
-    bottomBarHidden: false, onToggleBottomBar: vi.fn(),
+    bottomBarHidden: false, onToggleBottomBar: vi.fn(), onEnterFullscreen: vi.fn(),
     ...over,
   };
   render(<MobileTopBar {...props} />);
@@ -41,5 +41,10 @@ describe('MobileTopBar', () => {
   it('flips the toggle to "Show toolbar" when the bottom bar is hidden', () => {
     setup({ bottomBarHidden: true });
     expect(screen.getByRole('button', { name: /show toolbar/i })).toBeInTheDocument();
+  });
+  it('has an "Enter fullscreen" button that fires onEnterFullscreen', () => {
+    const p = setup();
+    fireEvent.click(screen.getByRole('button', { name: /enter fullscreen/i }));
+    expect(p.onEnterFullscreen).toHaveBeenCalled();
   });
 });

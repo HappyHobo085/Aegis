@@ -42,6 +42,9 @@ interface AndroidBridge {
   /** Hide/show the bottom action bar (the manual top-bar toggle); the content webview
    * reclaims the bar's gap when hidden. */
   setBottomBarHidden(hidden: boolean): void;
+  /** Enter/exit chrome-hiding fullscreen (desktop parity): the content fills the safe
+   * area with no top/bottom chrome. Back exits. */
+  setFullscreen(on: boolean): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -268,4 +271,9 @@ export function setBackInterceptActive(active: boolean): void {
 /** Mobile-only: hide/show the bottom action bar (the top-bar toggle). No-op off Android. */
 export function setBottomBarHidden(hidden: boolean): void {
   androidBridge()?.setBottomBarHidden(hidden);
+}
+
+/** Mobile-only: enter/exit chrome-hiding fullscreen (desktop parity). No-op off Android. */
+export function setFullscreen(on: boolean): void {
+  androidBridge()?.setFullscreen(on);
 }

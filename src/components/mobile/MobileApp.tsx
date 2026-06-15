@@ -1,7 +1,7 @@
 // src/components/mobile/MobileApp.tsx
 import { useEffect, useState } from 'react';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
-import { aegis, setBackInterceptActive, setBottomBarHidden as setNativeBottomBarHidden } from '../../lib/ipcClient';
+import { aegis, setBackInterceptActive, setBottomBarHidden as setNativeBottomBarHidden, setFullscreen as setNativeFullscreen } from '../../lib/ipcClient';
 import { applyTheme } from '../../lib/theme';
 import { useNav } from '../../hooks/useNav';
 import { useAdblock } from '../../hooks/useAdblock';
@@ -61,6 +61,7 @@ export function MobileApp() {
   const [sheet, setSheet] = useState<Sheet>(null);
   const [shieldOpen, setShieldOpen] = useState(false);
   const [bottomBarHidden, setBottomBarHidden] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
 
   useEffect(() => { void aegis.settings.get().then((s) => applyTheme(s)); }, []);
 
@@ -68,15 +69,22 @@ export function MobileApp() {
   // bar so the content webview reclaims (or restores) the bar's bottom-margin gap.
   useEffect(() => { setNativeBottomBarHidden(bottomBarHidden); }, [bottomBarHidden]);
 
+  // Chrome-hiding fullscreen (the top-bar Maximize button; desktop parity): native drops
+  // the top + bottom content margins so the page fills the safe area; React hides the bars.
+  useEffect(() => { setNativeFullscreen(fullscreen); }, [fullscreen]);
+
   const overlayOpen = sheet !== null || shieldOpen;
   useEffect(() => {
     void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, overlayOpen);
   }, [overlayOpen]);
   useEffect(() => {
-    setBackInterceptActive(sheet !== null);
-    window.__aegisMobileBack = () => setSheet(null);
+    setBackInterceptActive(sheet !== null || fullscreen);
+    window.__aegisMobileBack = () => {
+      if (sheet !== null) setSheet(null);
+      else if (fullscreen) setFullscreen(false);
+    };
     return () => { delete window.__aegisMobileBack; };
-  }, [sheet]);
+  }, [sheet, fullscreen]);
 
   const host = hostOf(nav.state.url);
   const shield = (
@@ -92,18 +100,21 @@ export function MobileApp() {
 
   return (
     <div className="app app--mobile">
-      <MobileTopBar
-        url={nav.state.url}
-        isLoading={nav.state.isLoading}
-        onNavigate={nav.navigate}
-        onReloadOrStop={nav.reloadOrStop}
-        favorites={favorites.favorites}
-        onOpenFavourite={(url) => void nav.navigate(url)}
-        bottomBarHidden={bottomBarHidden}
-        onToggleBottomBar={() => setBottomBarHidden((v) => !v)}
-      />
+      {!fullscreen && (
+        <MobileTopBar
+          url={nav.state.url}
+          isLoading={nav.state.isLoading}
+          onNavigate={nav.navigate}
+          onReloadOrStop={nav.reloadOrStop}
+          favorites={favorites.favorites}
+          onOpenFavourite={(url) => void nav.navigate(url)}
+          bottomBarHidden={bottomBarHidden}
+          onToggleBottomBar={() => setBottomBarHidden((v) => !v)}
+          onEnterFullscreen={() => setFullscreen(true)}
+        />
+      )}
       <div className="content-anchor" />
-      {!bottomBarHidden && (
+      {!bottomBarHidden && !fullscreen && (
         <MobileBottomBar
           canGoBack={nav.state.canGoBack}
           canGoForward={nav.state.canGoForward}
