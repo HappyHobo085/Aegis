@@ -36,6 +36,9 @@ interface AndroidBridge {
   reload(): void;
   setContentHidden(hidden: boolean): void;
   openExternal(url: string): void;
+  /** Tell the native Android Back handler a chrome sheet is open (so Back closes it
+   * instead of navigating the page). */
+  setBackInterceptActive(active: boolean): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -252,3 +255,9 @@ export const aegis: AegisApi = {
     onInterstitial: (cb) => on<SafetyInterstitialPayload | null>(IPC.evtSafetyInterstitial, cb),
   },
 };
+
+/** Mobile-only: report whether a chrome sheet/menu is open so the native Android
+ * Back button closes it first. No-op off Android. */
+export function setBackInterceptActive(active: boolean): void {
+  androidBridge()?.setBackInterceptActive(active);
+}
