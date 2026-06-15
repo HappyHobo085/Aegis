@@ -7,6 +7,7 @@ import android.util.Log
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.JavascriptInterface
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -15,6 +16,7 @@ import android.widget.FrameLayout
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import java.io.ByteArrayInputStream
 import org.json.JSONObject
 
@@ -92,6 +94,44 @@ class MainActivity : TauriActivity() {
       // Android System WebView string (which carries a "; wv" marker that flags it as
       // an embedded webview), mirroring the desktop build's Chrome UA.
       content.settings.userAgentString = CHROME_UA
+      // HTML5 fullscreen (e.g. tapping a video's fullscreen button) only works if a
+      // WebChromeClient implements onShowCustomView: show the page's custom view over
+      // everything in immersive mode (system bars hidden), and restore on exit.
+      content.webChromeClient = object : WebChromeClient() {
+        private var customView: View? = null
+        private var customCallback: WebChromeClient.CustomViewCallback? = null
+
+        override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
+          if (customView != null) {
+            onHideCustomView()
+          }
+          customView = view
+          customCallback = callback
+          view.setBackgroundColor(android.graphics.Color.BLACK)
+          (window.decorView as ViewGroup).addView(
+            view,
+            FrameLayout.LayoutParams(
+              FrameLayout.LayoutParams.MATCH_PARENT,
+              FrameLayout.LayoutParams.MATCH_PARENT,
+            ),
+          )
+          WindowInsetsControllerCompat(window, window.decorView).apply {
+            systemBarsBehavior =
+              WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
+          }
+        }
+
+        override fun onHideCustomView() {
+          val v = customView ?: return
+          (window.decorView as ViewGroup).removeView(v)
+          customView = null
+          WindowInsetsControllerCompat(window, window.decorView)
+            .show(WindowInsetsCompat.Type.systemBars())
+          customCallback?.onCustomViewHidden()
+          customCallback = null
+        }
+      }
       // Report navigations back to the chrome so the address bar/back/forward track
       // the current page (link clicks, redirects, form posts — not just typed URLs).
       content.webViewClient = object : WebViewClient() {
