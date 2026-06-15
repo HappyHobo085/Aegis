@@ -4,9 +4,8 @@ import { MobileBottomBar } from './MobileBottomBar';
 
 function setup(over = {}) {
   const props = {
-    canGoBack: true, canGoForward: false,
-    onBack: vi.fn(), onForward: vi.fn(), onHome: vi.fn(), onMenu: vi.fn(),
-    shield: <div data-testid="shield" />,
+    onSaved: vi.fn(), onHistory: vi.fn(), onTabs: vi.fn(), onMenu: vi.fn(),
+    tabCount: 3, shield: <div data-testid="shield" />,
     ...over,
   };
   render(<MobileBottomBar {...props} />);
@@ -14,23 +13,26 @@ function setup(over = {}) {
 }
 
 describe('MobileBottomBar', () => {
-  it('renders the five controls + the shield slot', () => {
+  it('renders Saved, History, Tabs, Menu + the shield slot', () => {
     setup();
-    expect(screen.getByRole('button', { name: /back/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /forward/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /home/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /saved/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /history/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /tabs/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /menu/i })).toBeInTheDocument();
     expect(screen.getByTestId('shield')).toBeInTheDocument();
   });
-  it('disables back/forward per canGo flags', () => {
-    setup({ canGoBack: false, canGoForward: true });
-    expect(screen.getByRole('button', { name: /back/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /forward/i })).not.toBeDisabled();
+  it('shows the open-tab count on the Tabs button', () => {
+    setup({ tabCount: 5 });
+    expect(screen.getByRole('button', { name: /tabs/i })).toHaveTextContent('5');
   });
   it('fires callbacks on tap', () => {
     const p = setup();
-    fireEvent.click(screen.getByRole('button', { name: /home/i }));
-    expect(p.onHome).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /saved/i }));
+    expect(p.onSaved).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /history/i }));
+    expect(p.onHistory).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /tabs/i }));
+    expect(p.onTabs).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /menu/i }));
     expect(p.onMenu).toHaveBeenCalled();
   });

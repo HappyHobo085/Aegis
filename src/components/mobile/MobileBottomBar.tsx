@@ -1,29 +1,29 @@
 import type { ReactNode } from 'react';
-import { ArrowLeft, ArrowRight, Home, Menu } from 'lucide-react';
+import { Bookmark, History, Layers, Menu } from 'lucide-react';
 
 interface MobileBottomBarProps {
-  canGoBack: boolean;
-  canGoForward: boolean;
-  onBack(): void;
-  onForward(): void;
-  onHome(): void;
-  onMenu(): void;
+  onSaved(): void;
+  onHistory(): void;
+  onTabs(): void;
+  tabCount: number;
   shield: ReactNode;
+  onMenu(): void;
 }
 
 export function MobileBottomBar({
-  canGoBack, canGoForward, onBack, onForward, onHome, onMenu, shield,
+  onSaved, onHistory, onTabs, tabCount, shield, onMenu,
 }: MobileBottomBarProps) {
   return (
     <nav className="mobile-bottombar" aria-label="Browser actions">
-      <button type="button" className="mobile-bottombar__btn" aria-label="Back" disabled={!canGoBack} onClick={onBack}>
-        <ArrowLeft size={22} aria-hidden="true" />
+      <button type="button" className="mobile-bottombar__btn" aria-label="Saved" onClick={onSaved}>
+        <Bookmark size={22} aria-hidden="true" />
       </button>
-      <button type="button" className="mobile-bottombar__btn" aria-label="Forward" disabled={!canGoForward} onClick={onForward}>
-        <ArrowRight size={22} aria-hidden="true" />
+      <button type="button" className="mobile-bottombar__btn" aria-label="History" onClick={onHistory}>
+        <History size={22} aria-hidden="true" />
       </button>
-      <button type="button" className="mobile-bottombar__btn" aria-label="Home" onClick={onHome}>
-        <Home size={22} aria-hidden="true" />
+      <button type="button" className="mobile-bottombar__btn mobile-bottombar__tabs" aria-label={`Tabs (${tabCount} open)`} onClick={onTabs}>
+        <Layers size={20} aria-hidden="true" />
+        <span className="mobile-bottombar__count" aria-hidden="true">{tabCount}</span>
       </button>
       <div className="mobile-bottombar__shield">{shield}</div>
       <button type="button" className="mobile-bottombar__btn" aria-label="Menu" onClick={onMenu}>
