@@ -8,11 +8,13 @@ const panels = () => ({
   appearance: <div data-testid="panel-appearance">APPEARANCE</div>,
   search: <div data-testid="panel-search">SEARCH</div>,
   home: <div data-testid="panel-home">HOME</div>,
+  tabs: <div data-testid="panel-tabs">TABS</div>,
   filterLists: <div data-testid="panel-filterLists">FILTER LISTS</div>,
   myFilters: <div data-testid="panel-myFilters">MY FILTERS</div>,
   allowlist: <div data-testid="panel-allowlist">ALLOWLIST</div>,
   downloads: <div data-testid="panel-downloads">DOWNLOADS</div>,
   sitePermissions: <div data-testid="panel-sitePermissions">SITE PERMISSIONS</div>,
+  security: <div data-testid="panel-security">SECURITY</div>,
   data: <div data-testid="panel-data">DATA</div>,
 });
 
@@ -30,7 +32,7 @@ describe('SettingsModal', () => {
     expect(dialog).toHaveAccessibleName(/settings/i);
   });
 
-  it('renders a tablist with all nine tabs', () => {
+  it('renders a tablist with all eleven tabs', () => {
     render(<SettingsModal {...props()} />);
     const tablist = screen.getByRole('tablist', { name: /settings sections/i });
     expect(tablist).toBeInTheDocument();
@@ -38,11 +40,13 @@ describe('SettingsModal', () => {
       /appearance/i,
       /search/i,
       /^home$/i,
+      /^tabs$/i,
       /filter lists/i,
       /my filters/i,
       /allowlist/i,
       /^downloads$/i,
       /site permissions/i,
+      /^security$/i,
       /^data$/i,
     ]) {
       expect(screen.getByRole('tab', { name })).toBeInTheDocument();

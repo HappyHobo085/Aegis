@@ -1895,6 +1895,42 @@ body.aegis-fullscreen {
   cursor: pointer;
 }
 
+/* ─── Tabs tab ───────────────────────────────────────────────────── */
+
+.tabs-tab {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.tabs-tab__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tabs-tab__field input[type="number"] {
+  width: 100px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  background: var(--bg-input);
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.tabs-tab__field input[type="number"]:focus {
+  outline: 2px solid var(--accent-color);
+  outline-offset: 1px;
+}
+
+.tabs-tab__hint {
+  margin: 0;
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
 /* ─── Search tab ─────────────────────────────────────────────────── */
 
 .search-tab {

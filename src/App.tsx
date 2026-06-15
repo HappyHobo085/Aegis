@@ -48,6 +48,7 @@ import { DownloadsTab } from './components/DownloadsTab';
 import { SitePermissionsTab } from './components/SitePermissionsTab';
 import { SecurityTab } from './components/SecurityTab';
 import { DataTab } from './components/DataTab';
+import { TabsTab } from './components/TabsTab';
 import { TabStrip } from './components/TabStrip';
 
 const isMobile =
@@ -400,6 +401,7 @@ export function App() {
           appearance={<AppearanceTab settings={settings.settings} update={settings.update} />}
           search={<SearchTab settings={settings.settings} update={settings.update} />}
           home={<HomeTab settings={settings.settings} update={settings.update} />}
+          tabs={<TabsTab settings={settings.settings} update={settings.update} />}
           filterLists={
             <FilterListsTab
               subs={subscriptions.subs}

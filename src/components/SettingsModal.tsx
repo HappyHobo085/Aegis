@@ -9,6 +9,7 @@ type SettingsTab =
   | 'appearance'
   | 'search'
   | 'home'
+  | 'tabs'
   | 'filterLists'
   | 'myFilters'
   | 'allowlist'
@@ -21,6 +22,7 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   appearance: 'Appearance',
   search: 'Search',
   home: 'Home',
+  tabs: 'Tabs',
   filterLists: 'Filter Lists',
   myFilters: 'My Filters',
   allowlist: 'Allowlist',
@@ -34,6 +36,7 @@ const TAB_ORDER: SettingsTab[] = [
   'appearance',
   'search',
   'home',
+  'tabs',
   'filterLists',
   'myFilters',
   'allowlist',
@@ -48,6 +51,7 @@ export interface SettingsModalProps {
   appearance: ReactNode;
   search: ReactNode;
   home: ReactNode;
+  tabs: ReactNode;
   filterLists: ReactNode;
   myFilters: ReactNode;
   allowlist: ReactNode;
@@ -62,6 +66,7 @@ export function SettingsModal({
   appearance,
   search,
   home,
+  tabs,
   filterLists,
   myFilters,
   allowlist,
@@ -79,6 +84,7 @@ export function SettingsModal({
   const appearanceTabId = useId();
   const searchTabId = useId();
   const homeTabId = useId();
+  const tabsTabId = useId();
   const filterListsTabId = useId();
   const myFiltersTabId = useId();
   const allowlistTabId = useId();
@@ -92,6 +98,7 @@ export function SettingsModal({
     appearance: appearanceTabId,
     search: searchTabId,
     home: homeTabId,
+    tabs: tabsTabId,
     filterLists: filterListsTabId,
     myFilters: myFiltersTabId,
     allowlist: allowlistTabId,
@@ -105,6 +112,7 @@ export function SettingsModal({
     appearance,
     search,
     home,
+    tabs,
     filterLists,
     myFilters,
     allowlist,
