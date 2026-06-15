@@ -10,6 +10,7 @@ function setup(over = {}) {
     url: 'https://example.com/', isLoading: false,
     onNavigate: vi.fn(), onReloadOrStop: vi.fn(),
     favorites: favs, onOpenFavourite: vi.fn(),
+    bottomBarHidden: false, onToggleBottomBar: vi.fn(),
     ...over,
   };
   render(<MobileTopBar {...props} />);
@@ -31,5 +32,14 @@ describe('MobileTopBar', () => {
     const p = setup();
     fireEvent.click(screen.getByRole('button', { name: 'Home' }));
     expect(p.onOpenFavourite).toHaveBeenCalledWith('https://home.test/');
+  });
+  it('shows a "Hide toolbar" toggle that fires onToggleBottomBar', () => {
+    const p = setup({ bottomBarHidden: false });
+    fireEvent.click(screen.getByRole('button', { name: /hide toolbar/i }));
+    expect(p.onToggleBottomBar).toHaveBeenCalled();
+  });
+  it('flips the toggle to "Show toolbar" when the bottom bar is hidden', () => {
+    setup({ bottomBarHidden: true });
+    expect(screen.getByRole('button', { name: /show toolbar/i })).toBeInTheDocument();
   });
 });

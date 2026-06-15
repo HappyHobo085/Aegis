@@ -1,7 +1,7 @@
 // src/components/mobile/MobileApp.tsx
 import { useEffect, useState } from 'react';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
-import { aegis, setBackInterceptActive } from '../../lib/ipcClient';
+import { aegis, setBackInterceptActive, setBottomBarHidden as setNativeBottomBarHidden } from '../../lib/ipcClient';
 import { applyTheme } from '../../lib/theme';
 import { useNav } from '../../hooks/useNav';
 import { useAdblock } from '../../hooks/useAdblock';
@@ -60,8 +60,13 @@ export function MobileApp() {
   const permissions = usePermissions();
   const [sheet, setSheet] = useState<Sheet>(null);
   const [shieldOpen, setShieldOpen] = useState(false);
+  const [bottomBarHidden, setBottomBarHidden] = useState(false);
 
   useEffect(() => { void aegis.settings.get().then((s) => applyTheme(s)); }, []);
+
+  // Manual bottom-bar toggle (the top-bar button): tell the native side to hide/show the
+  // bar so the content webview reclaims (or restores) the bar's bottom-margin gap.
+  useEffect(() => { setNativeBottomBarHidden(bottomBarHidden); }, [bottomBarHidden]);
 
   const overlayOpen = sheet !== null || shieldOpen;
   useEffect(() => {
@@ -94,17 +99,21 @@ export function MobileApp() {
         onReloadOrStop={nav.reloadOrStop}
         favorites={favorites.favorites}
         onOpenFavourite={(url) => void nav.navigate(url)}
+        bottomBarHidden={bottomBarHidden}
+        onToggleBottomBar={() => setBottomBarHidden((v) => !v)}
       />
       <div className="content-anchor" />
-      <MobileBottomBar
-        canGoBack={nav.state.canGoBack}
-        canGoForward={nav.state.canGoForward}
-        onBack={nav.back}
-        onForward={nav.forward}
-        onHome={nav.home}
-        onMenu={() => setSheet('menu')}
-        shield={shield}
-      />
+      {!bottomBarHidden && (
+        <MobileBottomBar
+          canGoBack={nav.state.canGoBack}
+          canGoForward={nav.state.canGoForward}
+          onBack={nav.back}
+          onForward={nav.forward}
+          onHome={nav.home}
+          onMenu={() => setSheet('menu')}
+          shield={shield}
+        />
+      )}
 
       {sheet === 'menu' && (
         <MobileMenuSheet

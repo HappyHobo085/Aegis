@@ -47,8 +47,14 @@ class MainActivity : TauriActivity() {
   @Volatile private var backInterceptActive = false
 
   // The current system nav-bar bottom inset, captured in the insets listener so the
-  // scroll auto-hide can restore the correct bottom-bar gap when re-showing the bar.
+  // bottom-bar gap and the manual hide/show toggle restore the right margin.
   @Volatile private var navBottom = 0
+
+  // Manual bottom-bar toggle (the top-bar button): when hidden, the content reclaims the
+  // bar's gap. `bottomBarPx` caches the bar height for the bridge; `bottomBarHidden` is
+  // read by the insets listener so the choice survives rotation / inset changes.
+  @Volatile private var bottomBarHidden = false
+  private var bottomBarPx = 0
 
   private fun updateContentVisibility() {
     contentWebView?.visibility = if (hasPage && !overlayHidden) View.VISIBLE else View.GONE
@@ -159,6 +165,7 @@ class MainActivity : TauriActivity() {
       val density = resources.displayMetrics.density
       val top = (72 * density).toInt()
       val bottomBar = (56 * density).toInt()
+      bottomBarPx = bottomBar
       val lp = FrameLayout.LayoutParams(
         FrameLayout.LayoutParams.MATCH_PARENT,
         FrameLayout.LayoutParams.MATCH_PARENT,
@@ -168,47 +175,27 @@ class MainActivity : TauriActivity() {
       content.visibility = View.GONE // hidden at home so the chrome's home screen shows
       parent.addView(content, lp)
       contentWebView = content
-      // Keep the content webview below the status bar (time/battery) and above the
-      // system navigation bar + the 56dp bottom action bar. The chrome pads its top
-      // chrome down by the same status-bar inset (env(safe-area-inset-top)), so the
-      // content starts at 72dp + that inset and ends 56dp + the nav-bar inset above
-      // the bottom. Recomputed on every inset change (rotation, gesture vs 3-button nav).
+      // Keep the content webview below the status bar and above the system nav bar +
+      // the bottom action bar (when the top-bar toggle hides the bar, the content
+      // reclaims the 56dp gap). Recomputed on every inset change (rotation, gesture vs
+      // 3-button nav). We ALSO push the real system-bar insets to the chrome as CSS vars:
+      // on Android WebView env(safe-area-inset-*) reports the display cutout, NOT the
+      // status/nav bars, so the chrome's fixed top/bottom bars need these to clear them.
       ViewCompat.setOnApplyWindowInsetsListener(parent) { _, insets ->
         val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
         navBottom = bars.bottom
         (content.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
           p.topMargin = top + bars.top
-          p.bottomMargin = bottomBar + bars.bottom
+          p.bottomMargin = (if (bottomBarHidden) 0 else bottomBar) + bars.bottom
           content.layoutParams = p
         }
+        val js =
+          "document.documentElement.style.setProperty('--aegis-inset-top','${bars.top / density}px');" +
+          "document.documentElement.style.setProperty('--aegis-inset-bottom','${bars.bottom / density}px');"
+        webView.evaluateJavascript(js, null)
         insets
       }
       ViewCompat.requestApplyInsets(parent)
-      // Auto-hide the bottom action bar on scroll: scrolling DOWN past a small
-      // threshold collapses the content's bottom-margin gap (the bar, which lives in
-      // the chrome behind the content webview, is covered = hidden); scrolling UP, or
-      // reaching the top, restores the gap. Push model — the chrome bar only shows in
-      // this gap. (Stretch: if janky on-device, this listener can be removed.)
-      val threshold = (6 * density).toInt()
-      content.setOnScrollChangeListener { _, _, scrollY, _, oldScrollY ->
-        val dy = scrollY - oldScrollY
-        val target = when {
-          scrollY <= 0 -> bottomBar + navBottom            // top of page: always show
-          dy > threshold -> 0                              // scrolling down: hide
-          dy < -threshold -> bottomBar + navBottom         // scrolling up: show
-          else -> return@setOnScrollChangeListener
-        }
-        val p = content.layoutParams as? FrameLayout.LayoutParams ?: return@setOnScrollChangeListener
-        if (p.bottomMargin == target) return@setOnScrollChangeListener
-        android.animation.ValueAnimator.ofInt(p.bottomMargin, target).apply {
-          duration = 160
-          addUpdateListener { a ->
-            p.bottomMargin = a.animatedValue as Int
-            content.layoutParams = p
-          }
-          start()
-        }
-      }
       // Let the React chrome (in the chrome webview) drive this content webview.
       webView.addJavascriptInterface(Bridge(), "AegisAndroid")
       // Warm the adblock engine (parses EasyList ~once) off the UI thread so the
@@ -347,6 +334,19 @@ class MainActivity : TauriActivity() {
     @JavascriptInterface
     fun setBackInterceptActive(active: Boolean) = runOnUiThread {
       backInterceptActive = active
+    }
+
+    /** Hide/show the bottom action bar (the top-bar toggle). Hiding shrinks the content's
+     *  bottom margin so the page reclaims the bar's gap; showing restores it. A discrete
+     *  user action, so there's no scroll feedback loop (unlike the removed auto-hide). */
+    @JavascriptInterface
+    fun setBottomBarHidden(hidden: Boolean) = runOnUiThread {
+      bottomBarHidden = hidden
+      val c = contentWebView ?: return@runOnUiThread
+      (c.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
+        p.bottomMargin = (if (hidden) 0 else bottomBarPx) + navBottom
+        c.layoutParams = p
+      }
     }
 
     /** Open a URL in the external browser (used to reach the releases page to install

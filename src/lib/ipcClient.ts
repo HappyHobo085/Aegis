@@ -39,6 +39,9 @@ interface AndroidBridge {
   /** Tell the native Android Back handler a chrome sheet is open (so Back closes it
    * instead of navigating the page). */
   setBackInterceptActive(active: boolean): void;
+  /** Hide/show the bottom action bar (the manual top-bar toggle); the content webview
+   * reclaims the bar's gap when hidden. */
+  setBottomBarHidden(hidden: boolean): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -260,4 +263,9 @@ export const aegis: AegisApi = {
  * Back button closes it first. No-op off Android. */
 export function setBackInterceptActive(active: boolean): void {
   androidBridge()?.setBackInterceptActive(active);
+}
+
+/** Mobile-only: hide/show the bottom action bar (the top-bar toggle). No-op off Android. */
+export function setBottomBarHidden(hidden: boolean): void {
+  androidBridge()?.setBottomBarHidden(hidden);
 }

@@ -126,6 +126,7 @@ vi.mock('../../lib/ipcClient', () => ({
     },
   },
   setBackInterceptActive: vi.fn(),
+  setBottomBarHidden: vi.fn(),
 }));
 
 import { MobileApp } from './MobileApp';
@@ -150,5 +151,11 @@ describe('MobileApp', () => {
     fireEvent.click(await screen.findByRole('button', { name: /menu/i }));
     fireEvent.click(await screen.findByRole('button', { name: /history/i }));
     expect(await screen.findByRole('dialog', { name: 'History' })).toBeInTheDocument();
+  });
+  it('hides the bottom bar via the top-bar toggle', async () => {
+    render(<MobileApp />);
+    expect(await screen.findByRole('navigation', { name: /browser actions/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /hide toolbar/i }));
+    expect(screen.queryByRole('navigation', { name: /browser actions/i })).toBeNull();
   });
 });
