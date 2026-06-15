@@ -1,8 +1,8 @@
 // src/components/mobile/MobileApp.tsx
 import { useEffect, useState } from 'react';
-import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import { aegis, setBackInterceptActive, setBottomBarHidden as setNativeBottomBarHidden, setFullscreen as setNativeFullscreen } from '../../lib/ipcClient';
 import { applyTheme } from '../../lib/theme';
+import { useTabs } from '../../hooks/useTabs';
 import { useNav } from '../../hooks/useNav';
 import { useAdblock } from '../../hooks/useAdblock';
 import { useFavorites } from '../../hooks/useFavorites';
@@ -13,6 +13,7 @@ import { useSubscriptions } from '../../hooks/useSubscriptions';
 import { useCustomFilters } from '../../hooks/useCustomFilters';
 import { useDownloads } from '../../hooks/useDownloads';
 import { usePermissions } from '../../hooks/usePermissions';
+import { useMobileTabSync } from '../../hooks/useMobileTabSync';
 import { AdblockShield } from '../AdblockShield';
 import { HistoryPanel } from '../HistoryPanel';
 import { SavedPanel } from '../SavedPanel';
@@ -36,20 +37,26 @@ import { MobileTopBar } from './MobileTopBar';
 import { MobileBottomBar } from './MobileBottomBar';
 import { MobileMenuSheet } from './MobileMenuSheet';
 import { MobileSheet } from './MobileSheet';
+import { MobileTabSwitcher } from './MobileTabSwitcher';
 
 declare global {
-  interface Window { __aegisMobileBack?: () => void }
+  interface Window {
+    __aegisMobileBack?: () => void;
+    __aegisOpenTab?: (url: string) => void;
+  }
 }
 
-type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | null;
+type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | 'tabs' | null;
 
 function hostOf(url: string): string | null {
   try { const h = new URL(url).hostname; return h.length > 0 ? h : null; } catch { return null; }
 }
 
 export function MobileApp() {
-  const nav = useNav(PRIMARY_VIEW_ID);
-  const adblock = useAdblock(PRIMARY_VIEW_ID, nav.state.url);
+  const tabs = useTabs();
+  const nav = useNav(tabs.activeId);
+  const adblock = useAdblock(tabs.activeId, nav.state.url);
+  useMobileTabSync(tabs.tabs, tabs.activeId);
   const favorites = useFavorites(nav.state.url);
   const history = useHistory();
   const saved = useSaved(nav.state.url);
@@ -75,8 +82,8 @@ export function MobileApp() {
 
   const overlayOpen = sheet !== null || shieldOpen;
   useEffect(() => {
-    void aegis.view.setChromeOverlay(PRIMARY_VIEW_ID, overlayOpen);
-  }, [overlayOpen]);
+    void aegis.view.setChromeOverlay(tabs.activeId, overlayOpen);
+  }, [overlayOpen, tabs.activeId]);
   useEffect(() => {
     setBackInterceptActive(sheet !== null || fullscreen);
     window.__aegisMobileBack = () => {
@@ -85,6 +92,12 @@ export function MobileApp() {
     };
     return () => { delete window.__aegisMobileBack; };
   }, [sheet, fullscreen]);
+
+  // Allow native Android code to open a URL in a new tab (e.g., from a context menu).
+  useEffect(() => {
+    window.__aegisOpenTab = (url) => { void tabs.create(url); };
+    return () => { delete window.__aegisOpenTab; };
+  }, [tabs]);
 
   const host = hostOf(nav.state.url);
   const shield = (
@@ -116,29 +129,42 @@ export function MobileApp() {
       <div className="content-anchor" />
       {!bottomBarHidden && !fullscreen && (
         <MobileBottomBar
-          canGoBack={nav.state.canGoBack}
-          canGoForward={nav.state.canGoForward}
-          onBack={nav.back}
-          onForward={nav.forward}
-          onHome={nav.home}
-          onMenu={() => setSheet('menu')}
+          onSaved={() => setSheet('saved')}
+          onHistory={() => setSheet('history')}
+          onTabs={() => setSheet('tabs')}
+          tabCount={tabs.tabs.length}
           shield={shield}
+          onMenu={() => setSheet('menu')}
         />
       )}
 
       {sheet === 'menu' && (
         <MobileMenuSheet
           onClose={() => setSheet(null)}
-          onSettings={() => setSheet('settings')}
-          onHistory={() => setSheet('history')}
-          onSaved={() => setSheet('saved')}
+          onBack={nav.back}
+          onForward={nav.forward}
+          canGoBack={nav.state.canGoBack}
+          canGoForward={nav.state.canGoForward}
+          onHome={nav.home}
           onDownloads={() => setSheet('downloads')}
+          onSettings={() => setSheet('settings')}
           isCurrentSaved={saved.isCurrentSaved}
           canBookmark={host !== null}
           onToggleBookmark={() => {
             if (saved.isCurrentSaved) void saved.removeCurrent();
             else void saved.addCurrent(nav.state.title);
           }}
+        />
+      )}
+
+      {sheet === 'tabs' && (
+        <MobileTabSwitcher
+          tabs={tabs.tabs}
+          activeId={tabs.activeId}
+          onSwitch={(id) => { void tabs.activate(id); setSheet(null); }}
+          onCloseTab={(id) => void tabs.close(id)}
+          onNewTab={() => { void tabs.create('about:blank'); setSheet(null); }}
+          onClose={() => setSheet(null)}
         />
       )}
 

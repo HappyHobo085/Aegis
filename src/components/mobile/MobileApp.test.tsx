@@ -128,6 +128,9 @@ vi.mock('../../lib/ipcClient', () => ({
   setBackInterceptActive: vi.fn(),
   setBottomBarHidden: vi.fn(),
   setFullscreen: vi.fn(),
+  activateTab: vi.fn(),
+  closeTab: vi.fn(),
+  discardTab: vi.fn(),
 }));
 
 import { MobileApp } from './MobileApp';
@@ -147,13 +150,20 @@ describe('MobileApp', () => {
     fireEvent.click(await screen.findByRole('button', { name: /menu/i }));
     expect(await screen.findByRole('dialog', { name: 'Menu' })).toBeInTheDocument();
   });
-  // History moved from the menu sheet to the bottom bar (Milestone 1 redesign).
-  // MobileApp wiring for the new bottom-bar layout is handled in Milestone 2.
-  it.skip('opens History from the menu', async () => {
+  it('opens History from the bottom bar', async () => {
     render(<MobileApp />);
-    fireEvent.click(await screen.findByRole('button', { name: /menu/i }));
     fireEvent.click(await screen.findByRole('button', { name: /history/i }));
     expect(await screen.findByRole('dialog', { name: 'History' })).toBeInTheDocument();
+  });
+  it('opens the tab switcher from the bottom bar', async () => {
+    render(<MobileApp />);
+    fireEvent.click(await screen.findByRole('button', { name: /tabs/i }));
+    expect(await screen.findByRole('dialog', { name: 'Tabs' })).toBeInTheDocument();
+  });
+  it('opens Saved directly from the bottom bar', async () => {
+    render(<MobileApp />);
+    fireEvent.click(await screen.findByRole('button', { name: /saved/i }));
+    expect(await screen.findByRole('dialog', { name: 'Saved' })).toBeInTheDocument();
   });
   it('hides the bottom bar via the top-bar toggle', async () => {
     render(<MobileApp />);
