@@ -8,7 +8,7 @@ describe('MobileSheet', () => {
     render(<MobileSheet title="History" onClose={onClose}><p>body</p></MobileSheet>);
     expect(screen.getByRole('dialog', { name: 'History' })).toBeInTheDocument();
     expect(screen.getByText('body')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: /back/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close/i }));
     expect(onClose).toHaveBeenCalled();
   });
 });

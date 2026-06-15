@@ -70,12 +70,25 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
 - **`MobileTopBar`** — slim address bar (reused `AddressBar`) + reload/stop + a 24dp
   favourites strip (`MobileFavourites`), plus a **bottom-bar toggle** (chevron) and an
   **Enter fullscreen** (Maximize) button.
-- **`MobileBottomBar`** — back / forward / home / shield / menu (thumb-reachable).
-- **`MobileMenuSheet` / `MobileSheet`** — the ☰ drawer and a generic full-screen sheet
-  hosting History/Saved; Settings/Downloads reuse their modals full-screen.
-- **Sheets** route through the existing `view.setChromeOverlay` so the native content
-  webview lowers. The native **Back** button precedence is: close an open sheet → exit
-  fullscreen → page-back (`setBackInterceptActive` + `window.__aegisMobileBack`).
+- **`MobileBottomBar`** — Saved / History / **Tabs (live count)** / shield / menu
+  (thumb-reachable). Saved + History open their sheets directly; Tabs opens the switcher.
+- **`MobileMenuSheet` / `MobileSheet`** — the ☰ drawer (now Back / Forward / Home /
+  Bookmark / Downloads / Settings — Back/Forward moved here off the bottom bar) and a
+  generic full-screen sheet hosting History/Saved; Settings/Downloads reuse their modals.
+- **`MobileTabSwitcher`** — a vertical-list tab switcher sheet (`'tabs'`): one row per
+  tab (page title, or host fallback), tap to switch, X to close, **+ New tab**.
+- **Multi-tab wiring.** `MobileApp` uses `useTabs()` + `useNav(tabs.activeId)` (active-id
+  keyed); **`useMobileTabSync`** diffs the registry's tabs state and drives the native
+  per-tab bridge (`activateTab`/`closeTab`/`discardTab`) — it tracks the last-activated id
+  (not an activeId diff) so the first tab still activates when `useTabs` resolves its
+  EMPTY `{activeId:1}` seed into a real `activeId:1`. `window.__aegisOpenTab(url)` opens a
+  **background** tab (`tabs.create(url, true)`) for native `target=_blank`/`window.open`.
+  On Android the Rust core can't see the WebView title, so MobileApp relays the active
+  tab's title into the registry via **`tabs.setTitle`** (guarded on the nav state's viewId)
+  to keep the switcher labels accurate.
+- **Sheets** (incl. the tab switcher) route through `view.setChromeOverlay` so the native
+  content webview lowers. The native **Back** button precedence is: close an open sheet →
+  exit fullscreen → page-back (`setBackInterceptActive` + `window.__aegisMobileBack`).
 - **Chrome heights** live in `lib/layout.ts` (`MOBILE_ADDRESS_H` 48 / `MOBILE_FAV_H` 24 /
   `MOBILE_BOTTOMBAR_H` 56) and **must stay in sync with the content-WebView margins in
   `MainActivity.kt`**.

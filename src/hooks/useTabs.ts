@@ -7,7 +7,7 @@ const EMPTY: TabsState = { tabs: [], activeId: 1 };
 export function useTabs(): {
   tabs: TabsState['tabs'];
   activeId: ViewId;
-  create(url?: string): Promise<void>;
+  create(url?: string, background?: boolean): Promise<void>;
   close(id: ViewId): Promise<void>;
   activate(id: ViewId): Promise<void>;
   reorder(ids: ViewId[]): Promise<void>;
@@ -23,7 +23,7 @@ export function useTabs(): {
     return () => { active = false; off(); };
   }, []);
 
-  const create = useCallback(async (url?: string) => { setState(await aegis.tabs.create(url)); }, []);
+  const create = useCallback(async (url?: string, background?: boolean) => { setState(await aegis.tabs.create(url, background)); }, []);
   const close = useCallback(async (id: ViewId) => { setState(await aegis.tabs.close(id)); }, []);
   const activate = useCallback(async (id: ViewId) => { setState(await aegis.tabs.activate(id)); }, []);
   const reorder = useCallback(async (ids: ViewId[]) => { setState(await aegis.tabs.reorder(ids)); }, []);

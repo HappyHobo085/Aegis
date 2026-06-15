@@ -3569,6 +3569,25 @@ a:focus-visible {
 .aegis-mobile .downloads-modal__scrim { inset: 0; }
 .aegis-mobile .downloads-modal { width: 100%; height: 100%; max-width: none; max-height: none; border-radius: 0; }
 
+.mobile-bottombar__tabs { position: relative; }
+.mobile-bottombar__count { position: absolute; font-size: 10px; line-height: 1; font-weight: 700;
+  color: #e6e6e6; top: 50%; left: 50%; transform: translate(-50%, -45%);
+  /* Pill so a 2-digit count stays legible over the (same-coloured) Layers icon strokes. */
+  background: rgba(20, 22, 27, 0.78); border-radius: 3px; padding: 1px 2px; }
+
+.mobile-tabs__new { display: flex; align-items: center; gap: 8px; width: 100%; height: 48px;
+  padding: 0 16px; border: 0; border-bottom: 1px solid #2a2a2a; background: transparent;
+  color: #cfcfcf; font-size: 15px; }
+.mobile-tabs { list-style: none; margin: 0; padding: 0; }
+.mobile-tabs__row { display: flex; align-items: center; border-bottom: 1px solid #222; }
+.mobile-tabs__row--active { background: #20232a; }
+.mobile-tabs__open { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0;
+  height: 52px; padding: 0 12px; border: 0; background: transparent; color: #e6e6e6;
+  font-size: 15px; text-align: left; }
+.mobile-tabs__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mobile-tabs__close { display: inline-flex; align-items: center; justify-content: center;
+  width: 44px; height: 52px; border: 0; background: transparent; color: #9aa0a6; }
+
 /* ===== Tab strip ===== */
 .tabstrip { display: flex; align-items: stretch; height: 36px; gap: 2px; padding: 0 6px;
   background: #1b1b1b; border-bottom: 1px solid #2a2a2a; overflow-x: auto; }

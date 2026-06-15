@@ -27,15 +27,24 @@ import org.json.JSONObject
  * (window.AegisAndroid), so the app actually browses. Navigation events flow the
  * other way — the content WebView's WebViewClient pushes nav state into the chrome
  * webview (window.__aegisNavState) so the address bar tracks the current page.
+ *
+ * Multi-tab: the chrome drives per-tab native WebViews via activateTab/closeTab/discardTab.
+ * The active tab's WebView is mirrored into contentWebView so all existing active-tab
+ * logic (margins, overlay, nav, ad-block) keeps targeting "the active tab" unchanged.
  */
 class MainActivity : TauriActivity() {
   private var contentWebView: WebView? = null
   private var chromeWebView: WebView? = null
 
-  /** The content webview's current page URL — the `source_url` (first-party context)
-   *  the adblock engine needs. Written on navigation (UI thread), read in
-   *  shouldInterceptRequest (network thread); volatile for safe cross-thread reads. */
-  @Volatile private var currentPageUrl: String = ""
+  // One native WebView per tab (live tabs); the active one is mirrored into contentWebView
+  // so the existing margin/overlay/nav logic keeps targeting "the active tab".
+  private val tabWebViews = HashMap<Int, WebView>()
+  private var activeTabId = -1
+  // Per-tab current page URL (the ad-block first-party context), read on the network
+  // thread in shouldInterceptRequest; concurrent for safe cross-thread reads.
+  private val pageUrls = java.util.concurrent.ConcurrentHashMap<Int, String>()
+  // The shared content container (the chrome webview's parent), set in onWebViewCreate.
+  private var contentParent: ViewGroup? = null
 
   // The native content WebView is shown only when a real page is loaded AND no chrome
   // overlay (settings/sidebar/shield popover/…) is covering it. Tauri's setChromeOverlay
@@ -100,123 +109,173 @@ class MainActivity : TauriActivity() {
     }
   }
 
+  /** Build a per-tab WebViewClient. All fields (pageUrls, pushNavState) are threaded
+   *  through [id] so each tab's navigation events carry the right tab identity. */
+  private fun makeContentClient(id: Int): WebViewClient = object : WebViewClient() {
+    override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
+      pageUrls[id] = url
+      pushNavState(id, url, true, view)
+    }
+
+    override fun onPageFinished(view: WebView, url: String) = pushNavState(id, url, false, view)
+
+    override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
+      pageUrls[id] = url
+      pushNavState(id, url, view.progress < 100, view)
+    }
+
+    // Per-request guard (runs on a WebView network thread; native calls block
+    // briefly on their engine thread). Block malware-host subresources and
+    // ad/tracker requests with an empty response; allow the rest (null) so the
+    // WebView fetches them normally.
+    override fun shouldInterceptRequest(
+      view: WebView,
+      request: WebResourceRequest,
+    ): WebResourceResponse? {
+      val url = request.url?.toString() ?: return null
+      if (!url.startsWith("http")) return null // skip about:/data:/blob:/file:
+      return try {
+        val host = request.url?.host
+        val firstParty = pageUrls[id] ?: ""
+        when {
+          host != null && NativeSafety.isMalwareHost(host) -> {
+            Log.i("AegisSafety", "BLOCK malware $url")
+            blockedResponse()
+          }
+          NativeAdblock.shouldBlock(url, firstParty, requestType(url, request)) -> {
+            Log.i("AegisAdblock", "BLOCK $url")
+            blockedResponse()
+          }
+          else -> null
+        }
+      } catch (t: Throwable) {
+        Log.w("AegisGuard", "intercept failed for $url", t)
+        null
+      }
+    }
+
+    // Main-frame navigations the page initiates (link clicks; some redirects):
+    // block malware (→ warning page), upgrade http→https (HTTPS-Only). Typed and
+    // programmatic navigations are guarded in Bridge.navigate instead.
+    override fun shouldOverrideUrlLoading(
+      view: WebView,
+      request: WebResourceRequest,
+    ): Boolean {
+      val raw = request.url?.toString() ?: return false
+      if (!raw.startsWith("http")) return false
+      return when (val target = secureUrl(raw)) {
+        null -> {
+          showMalwareWarning(raw)
+          true
+        }
+        raw -> false // unchanged: let the WebView proceed
+        else -> {
+          view.loadUrl(target)
+          true
+        }
+      }
+    }
+  }
+
+  /** Build a tab-agnostic WebChromeClient handling HTML5 fullscreen (video etc.) and
+   *  multi-window (target=_blank / window.open → background tab via __aegisOpenTab). */
+  private fun makeChromeClient(): WebChromeClient = object : WebChromeClient() {
+    private var customView: View? = null
+    private var customCallback: WebChromeClient.CustomViewCallback? = null
+
+    override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
+      if (customView != null) onHideCustomView()
+      customView = view
+      customCallback = callback
+      view.setBackgroundColor(android.graphics.Color.BLACK)
+      (window.decorView as ViewGroup).addView(
+        view,
+        FrameLayout.LayoutParams(
+          FrameLayout.LayoutParams.MATCH_PARENT,
+          FrameLayout.LayoutParams.MATCH_PARENT,
+        ),
+      )
+      WindowInsetsControllerCompat(window, window.decorView).apply {
+        systemBarsBehavior =
+          WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        hide(WindowInsetsCompat.Type.systemBars())
+      }
+    }
+
+    override fun onHideCustomView() {
+      val v = customView ?: return
+      (window.decorView as ViewGroup).removeView(v)
+      customView = null
+      WindowInsetsControllerCompat(window, window.decorView)
+        .show(WindowInsetsCompat.Type.systemBars())
+      customCallback?.onCustomViewHidden()
+      customCallback = null
+    }
+
+    // Task 9: target=_blank / window.open → background tab.
+    // A temporary WebView captures the target URL, routes it to a new chrome tab
+    // via window.__aegisOpenTab (installed by Milestone 2), then self-destroys.
+    override fun onCreateWindow(
+      view: WebView,
+      isDialog: Boolean,
+      isUserGesture: Boolean,
+      resultMsg: android.os.Message,
+    ): Boolean {
+      val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+      val temp = WebView(this@MainActivity)
+      temp.webViewClient = object : WebViewClient() {
+        override fun shouldOverrideUrlLoading(v: WebView, req: WebResourceRequest): Boolean {
+          val url = req.url?.toString() ?: return true
+          chromeWebView?.evaluateJavascript(
+            "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(url)})",
+            null,
+          )
+          // Defer destroy: tearing down a WebView from inside its own client callback
+          // is fragile; post it to run after the callback returns.
+          temp.post { temp.destroy() }
+          return true
+        }
+      }
+      transport.webView = temp
+      resultMsg.sendToTarget()
+      return true
+    }
+  }
+
+  /** Create a new native WebView for [id], configure it, add it hidden to the container,
+   *  and begin loading [url]. The caller registers it in tabWebViews. */
+  private fun createTabWebView(id: Int, url: String): WebView {
+    val wv = WebView(this)
+    wv.settings.javaScriptEnabled = true
+    wv.settings.domStorageEnabled = true
+    // Anti-fingerprint: present a vanilla mobile Chrome UA (no "; wv" WebView marker).
+    wv.settings.userAgentString = CHROME_UA
+    // Multi-window support for target=_blank / window.open (Task 9).
+    wv.settings.setSupportMultipleWindows(true)
+    wv.settings.javaScriptCanOpenWindowsAutomatically = true
+    wv.webChromeClient = makeChromeClient()
+    wv.webViewClient = makeContentClient(id)
+    val lp = FrameLayout.LayoutParams(
+      FrameLayout.LayoutParams.MATCH_PARENT,
+      FrameLayout.LayoutParams.MATCH_PARENT,
+    )
+    lp.topMargin = topChromePx + statusTop
+    lp.bottomMargin = bottomBarPx + navBottom
+    wv.visibility = View.GONE
+    contentParent?.addView(wv, lp)
+    pageUrls[id] = url
+    wv.loadUrl(url)
+    return wv
+  }
+
   override fun onWebViewCreate(webView: WebView) {
     chromeWebView = webView
     // Defer until the chrome webview is attached so we can share its parent container.
     webView.post {
       val parent = (webView.parent as? ViewGroup) ?: findViewById(android.R.id.content)
-      val content = WebView(this)
-      content.settings.javaScriptEnabled = true
-      content.settings.domStorageEnabled = true
-      // Anti-fingerprint: present a vanilla mobile Chrome UA instead of the default
-      // Android System WebView string (which carries a "; wv" marker that flags it as
-      // an embedded webview), mirroring the desktop build's Chrome UA.
-      content.settings.userAgentString = CHROME_UA
-      // HTML5 fullscreen (e.g. tapping a video's fullscreen button) only works if a
-      // WebChromeClient implements onShowCustomView: show the page's custom view over
-      // everything in immersive mode (system bars hidden), and restore on exit.
-      content.webChromeClient = object : WebChromeClient() {
-        private var customView: View? = null
-        private var customCallback: WebChromeClient.CustomViewCallback? = null
-
-        override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
-          if (customView != null) {
-            onHideCustomView()
-          }
-          customView = view
-          customCallback = callback
-          view.setBackgroundColor(android.graphics.Color.BLACK)
-          (window.decorView as ViewGroup).addView(
-            view,
-            FrameLayout.LayoutParams(
-              FrameLayout.LayoutParams.MATCH_PARENT,
-              FrameLayout.LayoutParams.MATCH_PARENT,
-            ),
-          )
-          WindowInsetsControllerCompat(window, window.decorView).apply {
-            systemBarsBehavior =
-              WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-            hide(WindowInsetsCompat.Type.systemBars())
-          }
-        }
-
-        override fun onHideCustomView() {
-          val v = customView ?: return
-          (window.decorView as ViewGroup).removeView(v)
-          customView = null
-          WindowInsetsControllerCompat(window, window.decorView)
-            .show(WindowInsetsCompat.Type.systemBars())
-          customCallback?.onCustomViewHidden()
-          customCallback = null
-        }
-      }
-      // Report navigations back to the chrome so the address bar/back/forward track
-      // the current page (link clicks, redirects, form posts — not just typed URLs).
-      content.webViewClient = object : WebViewClient() {
-        override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
-          currentPageUrl = url
-          pushNavState(url, true)
-        }
-
-        override fun onPageFinished(view: WebView, url: String) =
-          pushNavState(url, false)
-
-        override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
-          currentPageUrl = url
-          pushNavState(url, view.progress < 100)
-        }
-
-        // Per-request guard (runs on a WebView network thread; native calls block
-        // briefly on their engine thread). Block malware-host subresources and
-        // ad/tracker requests with an empty response; allow the rest (null) so the
-        // WebView fetches them normally.
-        override fun shouldInterceptRequest(
-          view: WebView,
-          request: WebResourceRequest,
-        ): WebResourceResponse? {
-          val url = request.url?.toString() ?: return null
-          if (!url.startsWith("http")) return null // skip about:/data:/blob:/file:
-          return try {
-            val host = request.url?.host
-            when {
-              host != null && NativeSafety.isMalwareHost(host) -> {
-                Log.i("AegisSafety", "BLOCK malware $url")
-                blockedResponse()
-              }
-              NativeAdblock.shouldBlock(url, currentPageUrl, requestType(url, request)) -> {
-                Log.i("AegisAdblock", "BLOCK $url")
-                blockedResponse()
-              }
-              else -> null
-            }
-          } catch (t: Throwable) {
-            Log.w("AegisGuard", "intercept failed for $url", t)
-            null
-          }
-        }
-
-        // Main-frame navigations the page initiates (link clicks; some redirects):
-        // block malware (→ warning page), upgrade http→https (HTTPS-Only). Typed and
-        // programmatic navigations are guarded in Bridge.navigate instead.
-        override fun shouldOverrideUrlLoading(
-          view: WebView,
-          request: WebResourceRequest,
-        ): Boolean {
-          val raw = request.url?.toString() ?: return false
-          if (!raw.startsWith("http")) return false
-          return when (val target = secureUrl(raw)) {
-            null -> {
-              showMalwareWarning(raw)
-              true
-            }
-            raw -> false // unchanged: let the WebView proceed
-            else -> {
-              view.loadUrl(target)
-              true
-            }
-          }
-        }
-      }
+      // Cache the content parent and chrome heights; actual WebViews are created lazily
+      // by activateTab (the chrome calls it on mount for the first tab).
+      contentParent = parent
       // Slim top chrome = address bar (48dp) + favourites strip (24dp) = 72dp; the
       // bottom action bar is 56dp. These MUST stay in sync with src/lib/layout.ts
       // (MOBILE_ADDRESS_H + MOBILE_FAV_H for the top, MOBILE_BOTTOMBAR_H for the bottom).
@@ -225,15 +284,6 @@ class MainActivity : TauriActivity() {
       val bottomBar = (56 * density).toInt()
       topChromePx = top
       bottomBarPx = bottomBar
-      val lp = FrameLayout.LayoutParams(
-        FrameLayout.LayoutParams.MATCH_PARENT,
-        FrameLayout.LayoutParams.MATCH_PARENT,
-      )
-      lp.topMargin = top
-      lp.bottomMargin = bottomBar
-      content.visibility = View.GONE // hidden at home so the chrome's home screen shows
-      parent.addView(content, lp)
-      contentWebView = content
       // Keep the content webview below the status bar and above the system nav bar +
       // the bottom action bar (when the top-bar toggle hides the bar, the content
       // reclaims the 56dp gap). Recomputed on every inset change (rotation, gesture vs
@@ -321,18 +371,21 @@ class MainActivity : TauriActivity() {
     hasPage = true
     updateContentVisibility()
     contentWebView?.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
-    pushNavState(url, false)
+    pushNavState(activeTabId, url, false)
   }
 
   private fun blockedResponse(): WebResourceResponse =
     WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
 
-  /** Push the content webview's nav state to the chrome's React state (NavState
-   *  shape, viewId 1), by calling a global the Tauri client's nav.onState installs. */
-  private fun pushNavState(url: String, loading: Boolean) {
-    val c = contentWebView
+  /** Push a tab's nav state to the chrome's React state (NavState shape, viewId = [id]),
+   *  by calling a global the Tauri client's nav.onState installs. The chrome's
+   *  useNav(viewId) filters events by viewId === activeId so the address bar tracks only
+   *  the active tab. [wv] is the tab's own WebView — pass it for background-tab events so
+   *  title/canGoBack/canGoForward describe that tab, not whichever tab is active. */
+  private fun pushNavState(id: Int, url: String, loading: Boolean, wv: WebView? = contentWebView) {
+    val c = wv
     val obj = JSONObject()
-      .put("viewId", 1)
+      .put("viewId", id)
       .put("url", url)
       .put("title", c?.title ?: "")
       .put("canGoBack", c?.canGoBack() ?: false)
@@ -346,6 +399,48 @@ class MainActivity : TauriActivity() {
   /** Exposed to the chrome webview's JS as `window.AegisAndroid`. Methods run on the
    *  JS-bridge thread, so all WebView calls hop to the UI thread. */
   inner class Bridge {
+    /** Activate a tab: create its WebView lazily on first call, show it, hide all others.
+     *  The chrome calls this on mount for the first tab and on every tab switch. */
+    @JavascriptInterface
+    fun activateTab(id: Int, url: String) = runOnUiThread {
+      val wv = tabWebViews[id] ?: createTabWebView(id, url).also { tabWebViews[id] = it }
+      activeTabId = id
+      contentWebView = wv
+      for ((tid, w) in tabWebViews) if (tid != id) w.visibility = View.GONE
+      hasPage = (pageUrls[id] ?: url) != "about:blank"
+      applyContentMargins()
+      updateContentVisibility()
+      // Re-push this tab's nav state so the chrome's address bar + back/forward update to
+      // it. Switching to an already-live tab fires no page-load event, so without this the
+      // chrome's useNav would reset to a blank state for the newly-activated tab.
+      pushNavState(id, pageUrls[id] ?: url, false, wv)
+    }
+
+    /** Permanently close a tab: destroy its WebView and remove it from the map. */
+    @JavascriptInterface
+    fun closeTab(id: Int) = runOnUiThread {
+      tabWebViews.remove(id)?.let {
+        it.visibility = View.GONE
+        contentParent?.removeView(it)
+        it.destroy()
+      }
+      pageUrls.remove(id)
+      if (activeTabId == id) { activeTabId = -1; contentWebView = null }
+    }
+
+    /** Discard an idle tab (memory reclaim): destroy its WebView; re-activating will
+     *  reload it via activateTab. Same teardown as closeTab. */
+    @JavascriptInterface
+    fun discardTab(id: Int) = runOnUiThread {
+      tabWebViews.remove(id)?.let {
+        it.visibility = View.GONE
+        contentParent?.removeView(it)
+        it.destroy()
+      }
+      pageUrls.remove(id)
+      if (activeTabId == id) { activeTabId = -1; contentWebView = null }
+    }
+
     @JavascriptInterface
     fun navigate(url: String) = runOnUiThread {
       val c = contentWebView ?: return@runOnUiThread
@@ -354,7 +449,8 @@ class MainActivity : TauriActivity() {
         // clear the address bar (blank state).
         hasPage = false
         updateContentVisibility()
-        pushNavState("about:blank", false)
+        if (activeTabId >= 0) pageUrls[activeTabId] = "about:blank"
+        pushNavState(activeTabId, "about:blank", false)
       } else {
         // Apply the security policy (malware block / HTTPS-Only upgrade) before load.
         when (val target = secureUrl(url)) {
@@ -362,6 +458,7 @@ class MainActivity : TauriActivity() {
           else -> {
             hasPage = true
             updateContentVisibility()
+            if (activeTabId >= 0) pageUrls[activeTabId] = target
             c.loadUrl(target)
           }
         }

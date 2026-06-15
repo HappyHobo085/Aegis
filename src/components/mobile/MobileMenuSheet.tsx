@@ -1,38 +1,46 @@
-import { Settings, History, Bookmark, Download, Star } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Home, Star, Download, Settings } from 'lucide-react';
 import { MobileSheet } from './MobileSheet';
 
 interface MobileMenuSheetProps {
   onClose(): void;
-  onSettings(): void;
-  onHistory(): void;
-  onSaved(): void;
+  onBack(): void;
+  onForward(): void;
+  canGoBack: boolean;
+  canGoForward: boolean;
+  onHome(): void;
   onDownloads(): void;
+  onSettings(): void;
   isCurrentSaved: boolean;
   canBookmark: boolean;
   onToggleBookmark(): void;
 }
 
 export function MobileMenuSheet({
-  onClose, onSettings, onHistory, onSaved, onDownloads,
-  isCurrentSaved, canBookmark, onToggleBookmark,
+  onClose, onBack, onForward, canGoBack, canGoForward, onHome,
+  onDownloads, onSettings, isCurrentSaved, canBookmark, onToggleBookmark,
 }: MobileMenuSheetProps) {
   return (
     <MobileSheet title="Menu" onClose={onClose}>
       <ul className="mobile-menu">
         <li>
+          <button type="button" className="mobile-menu__item" disabled={!canGoBack} onClick={onBack}>
+            <ArrowLeft size={20} aria-hidden="true" />Back
+          </button>
+        </li>
+        <li>
+          <button type="button" className="mobile-menu__item" disabled={!canGoForward} onClick={onForward}>
+            <ArrowRight size={20} aria-hidden="true" />Forward
+          </button>
+        </li>
+        <li>
+          <button type="button" className="mobile-menu__item" onClick={onHome}>
+            <Home size={20} aria-hidden="true" />Home
+          </button>
+        </li>
+        <li>
           <button type="button" className="mobile-menu__item" disabled={!canBookmark} onClick={onToggleBookmark}>
             <Star size={20} aria-hidden="true" />
             {isCurrentSaved ? 'Remove bookmark' : 'Bookmark this page'}
-          </button>
-        </li>
-        <li>
-          <button type="button" className="mobile-menu__item" onClick={onSaved}>
-            <Bookmark size={20} aria-hidden="true" />Saved
-          </button>
-        </li>
-        <li>
-          <button type="button" className="mobile-menu__item" onClick={onHistory}>
-            <History size={20} aria-hidden="true" />History
           </button>
         </li>
         <li>

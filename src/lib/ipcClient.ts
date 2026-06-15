@@ -45,6 +45,14 @@ interface AndroidBridge {
   /** Enter/exit chrome-hiding fullscreen (desktop parity): the content fills the safe
    * area with no top/bottom chrome. Back exits. */
   setFullscreen(on: boolean): void;
+  /** Show tab `id` (lazily creating its native WebView at `url` if absent) and hide the
+   * rest — switching, or reopening a discarded tab. */
+  activateTab(id: number, url: string): void;
+  /** Destroy + forget tab `id`'s native WebView. */
+  closeTab(id: number): void;
+  /** Destroy tab `id`'s native WebView but keep the tab (idle-sweep); recreated on next
+   * activateTab. */
+  discardTab(id: number): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -123,12 +131,13 @@ export const aegis: AegisApi = {
   },
   tabs: {
     list: () => call<TabsState>(IPC.tabsList),
-    create: (url) => call<TabsState>(IPC.tabsCreate, { url }),
+    create: (url, background) => call<TabsState>(IPC.tabsCreate, { url, background }),
     close: (id) => call<TabsState>(IPC.tabsClose, { id }),
     activate: (id) => call<TabsState>(IPC.tabsActivate, { id }),
     reorder: (ids) => call<TabsState>(IPC.tabsReorder, { ids }),
     setPinned: (id, pinned) => call<TabsState>(IPC.tabsSetPinned, { id, pinned }),
     reopenClosed: () => call<TabsState>(IPC.tabsReopenClosed),
+    setTitle: (id, title) => call<TabsState>(IPC.tabsSetTitle, { id, title }),
     onState: (cb) => on<TabsState>(IPC.evtTabsState, cb),
     onShortcut: (cb) => on<TabShortcut>(IPC.evtTabsShortcut, cb),
   },
@@ -276,4 +285,17 @@ export function setBottomBarHidden(hidden: boolean): void {
 /** Mobile-only: enter/exit chrome-hiding fullscreen (desktop parity). No-op off Android. */
 export function setFullscreen(on: boolean): void {
   androidBridge()?.setFullscreen(on);
+}
+
+/** Mobile-only: show/lazily-create the active tab's native WebView. No-op off Android. */
+export function activateTab(id: number, url: string): void {
+  androidBridge()?.activateTab(id, url);
+}
+/** Mobile-only: destroy + forget a tab's native WebView. No-op off Android. */
+export function closeTab(id: number): void {
+  androidBridge()?.closeTab(id);
+}
+/** Mobile-only: discard a tab's native WebView (idle-sweep), keeping the tab. No-op off Android. */
+export function discardTab(id: number): void {
+  androidBridge()?.discardTab(id);
 }

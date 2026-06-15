@@ -11,7 +11,7 @@ export function MobileSheet({ title, onClose, children }: MobileSheetProps) {
   return (
     <div className="mobile-sheet" role="dialog" aria-modal="true" aria-label={title}>
       <header className="mobile-sheet__bar">
-        <button type="button" className="mobile-sheet__back" aria-label="Back" onClick={onClose}>
+        <button type="button" className="mobile-sheet__back" aria-label="Close" onClick={onClose}>
           <ArrowLeft size={22} aria-hidden="true" />
         </button>
         <h2 className="mobile-sheet__title">{title}</h2>
