@@ -94,10 +94,12 @@ export function MobileApp() {
   }, [sheet, fullscreen]);
 
   // Allow native Android code to open a URL in a new tab (e.g., from a context menu).
+  // Depend on the stable `tabs.create` callback (a useCallback in useTabs), not the whole
+  // `tabs` object — which is re-created every render and would reinstall this each render.
   useEffect(() => {
     window.__aegisOpenTab = (url) => { void tabs.create(url); };
     return () => { delete window.__aegisOpenTab; };
-  }, [tabs]);
+  }, [tabs.create]);
 
   const host = hostOf(nav.state.url);
   const shield = (

@@ -3571,7 +3571,9 @@ a:focus-visible {
 
 .mobile-bottombar__tabs { position: relative; }
 .mobile-bottombar__count { position: absolute; font-size: 10px; line-height: 1; font-weight: 700;
-  color: #e6e6e6; top: 50%; left: 50%; transform: translate(-50%, -45%); }
+  color: #e6e6e6; top: 50%; left: 50%; transform: translate(-50%, -45%);
+  /* Pill so a 2-digit count stays legible over the (same-coloured) Layers icon strokes. */
+  background: rgba(20, 22, 27, 0.78); border-radius: 3px; padding: 1px 2px; }
 
 .mobile-tabs__new { display: flex; align-items: center; gap: 8px; width: 100%; height: 48px;
   padding: 0 16px; border: 0; border-bottom: 1px solid #2a2a2a; background: transparent;
