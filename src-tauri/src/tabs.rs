@@ -41,8 +41,16 @@ pub fn on_tab_url(app: &AppHandle, id: u32, url: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
         s.reg.lock().unwrap().record_nav(id, url);
     }
-    // Flush so a tab browsed-then-quit (no structural change) restores to its current URL.
-    persist(app);
+    emit_and_persist(app);
+}
+
+/// Record a tab's page title (from the WebKit title-changed signal). Updates the
+/// strip + persists it so restored "asleep" tabs show their title.
+pub fn on_tab_title(app: &AppHandle, id: u32, title: &str) {
+    if let Some(s) = app.try_state::<Tabs>() {
+        s.reg.lock().unwrap().set_title(id, title.to_string());
+    }
+    emit_and_persist(app);
 }
 
 fn spawn(app: &AppHandle, id: u32, url: &str) {

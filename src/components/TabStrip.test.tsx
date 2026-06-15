@@ -4,14 +4,13 @@ import { TabStrip } from './TabStrip';
 import type { TabMeta } from '../../shared/types';
 
 const tabs: TabMeta[] = [
-  { id: 1, pinned: false, live: true },
-  { id: 2, pinned: false, live: false },
+  { id: 1, pinned: false, live: true, title: 'Alpha', url: 'https://alpha.test/' },
+  { id: 2, pinned: false, live: false, title: 'Beta', url: 'https://beta.test/' },
 ];
-const titles = new Map<number, string>([[1, 'Alpha'], [2, 'Beta']]);
 
 function setup(over: Partial<React.ComponentProps<typeof TabStrip>> = {}) {
   const props = {
-    tabs, activeId: 1, titles,
+    tabs, activeId: 1,
     onActivate: vi.fn(), onClose: vi.fn(), onCreate: vi.fn(),
     onReorder: vi.fn(), onSetPinned: vi.fn(),
     ...over,

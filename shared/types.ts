@@ -134,6 +134,10 @@ export interface TabMeta {
   id: ViewId;
   pinned: boolean;
   live: boolean;
+  /** Latest page title (empty until the page reports one). */
+  title: string;
+  /** Latest URL — label fallback (hostname) when there's no title. */
+  url: string;
 }
 /** The whole tab list + which tab is active. Order === strip order. */
 export interface TabsState {

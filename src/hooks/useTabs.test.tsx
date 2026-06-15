@@ -8,9 +8,9 @@ vi.mock('../lib/ipcClient', () => {
   return {
     aegis: {
       tabs: {
-        list: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
-        create: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }, { id: 2, pinned: false, live: true }], activeId: 2 }),
-        close: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
+        list: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+        create: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }, { id: 2, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 2 }),
+        close: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
         activate: vi.fn().mockResolvedValue({ tabs: [], activeId: 2 }),
         reorder: vi.fn().mockResolvedValue({ tabs: [], activeId: 1 }),
         setPinned: vi.fn().mockResolvedValue({ tabs: [], activeId: 1 }),
@@ -44,7 +44,7 @@ describe('useTabs', () => {
     await waitFor(() => expect(result.current.tabs.length).toBe(1));
     act(() => {
       (aegis.tabs as unknown as { __emit: (s: unknown) => void }).__emit({
-        tabs: [{ id: 1, pinned: false, live: false }], activeId: 1,
+        tabs: [{ id: 1, pinned: false, live: false, title: '', url: 'about:blank' }], activeId: 1,
       });
     });
     expect(result.current.tabs[0].live).toBe(false);

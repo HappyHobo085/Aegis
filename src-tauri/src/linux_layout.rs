@@ -18,6 +18,7 @@ pub fn connect_title_label(app: &AppHandle, label: &str) {
         return;
     };
     let app = app.clone();
+    let id = label.strip_prefix("content:").and_then(|s| s.parse::<u32>().ok());
     let _ = content.with_webview(move |pw| {
         pw.inner().connect_title_notify(move |wv| {
             let title = wv.title().map(|s| s.to_string()).unwrap_or_default();
@@ -29,6 +30,9 @@ pub fn connect_title_label(app: &AppHandle, label: &str) {
             }
             let url = wv.uri().map(|s| s.to_string()).unwrap_or_default();
             crate::history::update_title(&app, &url, &title);
+            if let Some(id) = id {
+                crate::tabs::on_tab_title(&app, id, &title);
+            }
         });
     });
 }

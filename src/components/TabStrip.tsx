@@ -4,7 +4,6 @@ import type { TabMeta, ViewId } from '../../shared/types';
 interface TabStripProps {
   tabs: TabMeta[];
   activeId: ViewId;
-  titles: Map<number, string>;
   onActivate(id: ViewId): void;
   onClose(id: ViewId): void;
   onCreate(): void;
@@ -12,18 +11,24 @@ interface TabStripProps {
   onSetPinned(id: ViewId, pinned: boolean): void;
 }
 
-function labelFor(id: ViewId, titles: Map<number, string>): string {
-  const t = titles.get(id)?.trim();
-  return t && t.length > 0 ? t : 'New tab';
+function hostOf(url: string): string {
+  try { return new URL(url).hostname; } catch { return ''; }
+}
+
+function labelFor(tab: TabMeta): string {
+  const t = tab.title?.trim();
+  if (t && t.length > 0) return t;
+  const h = hostOf(tab.url);
+  return h.length > 0 ? h : 'New tab';
 }
 
 export function TabStrip({
-  tabs, activeId, titles, onActivate, onClose, onCreate, onReorder, onSetPinned,
+  tabs, activeId, onActivate, onClose, onCreate, onReorder, onSetPinned,
 }: TabStripProps) {
   return (
     <div className="tabstrip" role="tablist" aria-label="Open tabs">
       {tabs.map((t) => {
-        const title = labelFor(t.id, titles);
+        const title = labelFor(t);
         const isActive = t.id === activeId;
         return (
           <div

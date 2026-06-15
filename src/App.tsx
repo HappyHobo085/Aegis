@@ -95,18 +95,6 @@ export function App() {
   const update = useUpdate();
   const safety = useSafety();
 
-  // Per-tab title map: fed from nav.state events so the TabStrip can show page titles.
-  const [titles, setTitles] = useState<Map<number, string>>(new Map());
-  useEffect(() => {
-    return aegis.nav.onState((s) => {
-      setTitles((m) => {
-        const next = new Map(m);
-        next.set(s.viewId, s.title || s.url);
-        return next;
-      });
-    });
-  }, []);
-
   // A confirm dialog (e.g. "Clear all history") is a full-window overlay; track it
   // so the content webview hides behind it (else it renders behind the page).
   useEffect(() => subscribeConfirmOpen(setConfirmOpen), []);
@@ -265,7 +253,6 @@ export function App() {
         <TabStrip
           tabs={tabs.tabs}
           activeId={tabs.activeId}
-          titles={titles}
           onActivate={(id) => void tabs.activate(id)}
           onClose={(id) => void tabs.close(id)}
           onCreate={() => void tabs.create()}

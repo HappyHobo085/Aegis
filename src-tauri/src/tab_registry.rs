@@ -37,6 +37,8 @@ pub struct TabMeta {
     pub id: ViewId,
     pub pinned: bool,
     pub live: bool,
+    pub title: String,
+    pub url: String,
 }
 #[derive(Clone, Serialize, PartialEq, Debug)]
 pub struct TabsState {
@@ -154,9 +156,21 @@ impl Registry {
             tabs: self
                 .tabs
                 .iter()
-                .map(|t| TabMeta { id: t.id, pinned: t.pinned, live: t.live })
+                .map(|t| TabMeta {
+                    id: t.id,
+                    pinned: t.pinned,
+                    live: t.live,
+                    title: t.title.clone(),
+                    url: t.url.clone(),
+                })
                 .collect(),
             active_id: self.active_id,
+        }
+    }
+
+    pub fn set_title(&mut self, id: ViewId, title: String) {
+        if let Some(i) = self.idx(id) {
+            self.tabs[i].title = title;
         }
     }
 
@@ -595,5 +609,15 @@ mod tests {
         let mut r = reg();
         assert_eq!(r.go_back(1), None);       // at home, nothing behind
         assert_eq!(r.go_forward(1), None);    // nothing ahead
+    }
+
+    #[test]
+    fn tabs_state_carries_title_and_url() {
+        let mut r = reg();              // tab 1 @ home
+        r.record_nav(1, "https://a.test/");
+        r.set_title(1, "Alpha".into());
+        let meta = &r.tabs_state().tabs[0];
+        assert_eq!(meta.url, "https://a.test/");
+        assert_eq!(meta.title, "Alpha");
     }
 }

@@ -30,7 +30,7 @@ const setChromeOverlay = vi.fn(async () => {});
 const setFullscreen = vi.fn(async () => {});
 let failedCb: ((f: NavFailed) => void) | undefined;
 let crashedCb: ((c: NavCrashed) => void) | undefined;
-// Multiple hooks (useNav + titles effect in App) both subscribe to onState.
+// Multiple hooks (useNav) subscribe to onState.
 // We fan out to all registered callbacks so firing stateCb drives all of them.
 const stateCbs: Array<(s: NavState) => void> = [];
 const stateCb = (s: NavState): void => { stateCbs.forEach((cb) => cb(s)); };
@@ -144,13 +144,13 @@ vi.mock('./lib/ipcClient', () => ({
       onInterstitial: vi.fn(() => () => {}),
     },
     tabs: {
-      list: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
-      create: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
-      close: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
-      activate: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
-      reorder: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
-      setPinned: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
-      reopenClosed: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true }], activeId: 1 }),
+      list: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+      create: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+      close: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+      activate: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+      reorder: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+      setPinned: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+      reopenClosed: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
       onState: vi.fn(() => () => {}),
       onShortcut: vi.fn(() => () => {}),
     },
