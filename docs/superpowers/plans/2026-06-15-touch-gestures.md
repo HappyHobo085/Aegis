@@ -527,3 +527,11 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - **Type consistency:** `GestureHost` methods (`gestureCanGoBack/Forward/AtTop/Back/Forward/Reload`) are declared in Task 1's interface, implemented on the activity in Task 1 Step 7, and called in Tasks 2–3. `Mode` enum (`NONE/BACK/FORWARD/REFRESH`) is defined in Task 1 and used in 2–3. `stopRefresh()` defined in Task 1, called in Task 3 Step 4. `gestureContainer` field defined in Task 1, used in Tasks 1/3.
 - **Native caveat:** no headless tests — every task is owner-built/GUI-validated. Constants are starting values; Task 4 is the explicit on-device tuning pass.
 - **Behavior-preservation:** Task 1 is a pure structural re-parent validated to browse exactly as before, so any regression is caught before gesture logic is added.
+
+## As-built deltas (post-implementation)
+
+Three divergences from the steps above, discovered during execution + on-device validation:
+
+1. **Indicator draws in `dispatchDraw()`, not `onDraw()`.** On-device the arrow was invisible: a `ViewGroup`'s `onDraw()` paints *behind* its children, so the indicator was occluded by the opaque `MATCH_PARENT` content WebView. Fixed by drawing in `dispatchDraw()` after `super.dispatchDraw()` (and dropping the now-pointless `setWillNotDraw(false)`). Tasks 2 & 3's draw dispatch use `dispatchDraw`. (Captured as gotcha 11 in `src-tauri/CLAUDE.md`.)
+2. **Defensive `mode` guards** added to `onInterceptTouchEvent`: an `ACTION_CANCEL -> { mode = Mode.NONE }` arm, and the `ACTION_DOWN` reset guarded as `if (!refreshing) mode = Mode.NONE` — the latter fixes a defect where touching the screen during an in-flight pull-to-refresh reload reset `mode` away from `REFRESH`, freezing/hiding the spinner until the load finished.
+3. **Known follow-up gaps (accepted, not fixed):** a stalled load that never fires `onPageFinished` leaves the refresh spinner spinning indefinitely (matches platform `SwipeRefreshLayout`); switching tabs mid-refresh clears the spinner via the new active tab's page-finish rather than the originating tab's. Both are benign (`stopRefresh()` is idempotent) — candidates for a future timeout / `onReceivedError` stop.
