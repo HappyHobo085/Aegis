@@ -223,6 +223,7 @@ pub fn run() {
             if let Ok(u) = tauri::Url::parse(&home) {
                 nav::spawn_tab(app.handle(), first, u)?;
             }
+            tabs::start_idle_sweep(app.handle());
 
             // Tauri child-webview auto-resize is incomplete; recompute bounds on
             // window resize so the content view keeps filling the area below the chrome.

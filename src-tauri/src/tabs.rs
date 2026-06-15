@@ -126,3 +126,24 @@ pub fn open_background(app: &AppHandle, url: &str) {
 
 /// Persist the session to tabs.json (Task 19 fills this in; stub for now).
 pub fn persist(_app: &AppHandle) {}
+
+/// Start the idle-sweep thread: every 30s, discard tabs idle past the timeout.
+pub fn start_idle_sweep(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        let timeout_ms = crate::settings::tab_idle_timeout_min(&app).saturating_mul(60_000);
+        if timeout_ms == 0 { continue; }
+        let now = now_ms(&app);
+        let victims = match app.try_state::<Tabs>() {
+            Some(s) => s.reg.lock().unwrap().sweep_idle(now, timeout_ms),
+            None => continue,
+        };
+        if victims.is_empty() { continue; }
+        let app2 = app.clone();
+        let _ = app.run_on_main_thread(move || {
+            for id in &victims { close_webview(&app2, *id); }
+            emit_and_persist(&app2); // strip re-renders the discarded tabs as "asleep"
+        });
+    });
+}

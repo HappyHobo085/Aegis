@@ -23,7 +23,8 @@ fn defaults() -> Value {
         ],
         "hideChromeByDefault": false,
         "downloadDir": "",
-        "httpsOnly": true
+        "httpsOnly": true,
+        "tabIdleTimeout": 30
     })
 }
 
@@ -57,6 +58,11 @@ pub fn https_only(app: &AppHandle) -> bool {
         .get("httpsOnly")
         .and_then(Value::as_bool)
         .unwrap_or(true)
+}
+
+/// Minutes a background tab may idle before discard (0 disables). Default 30.
+pub fn tab_idle_timeout_min(app: &AppHandle) -> u64 {
+    load(app).get("tabIdleTimeout").and_then(Value::as_u64).unwrap_or(30)
 }
 
 /// The configured home page as a URL (default about:blank). Blank or unparseable
