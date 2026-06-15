@@ -113,5 +113,16 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
     }
 }
 
+/// Open a URL in a new BACKGROUND tab (from on_new_window / Ctrl-click). Spawns
+/// the webview, emits state + persists, but does NOT change the active tab.
+pub fn open_background(app: &AppHandle, url: &str) {
+    let now = now_ms(app);
+    let (id, u) = app.state::<Tabs>().reg.lock().unwrap().create(Some(url.to_string()), true, now);
+    spawn(app, id, &u);
+    emit_and_persist(app);
+    let _ = id;
+    let _ = u;
+}
+
 /// Persist the session to tabs.json (Task 19 fills this in; stub for now).
 pub fn persist(_app: &AppHandle) {}

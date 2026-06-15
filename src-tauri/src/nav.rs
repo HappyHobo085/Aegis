@@ -145,6 +145,17 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
                 _ => {}
             }
             true
+        })
+        .on_new_window({
+            let app_nw = app.clone();
+            move |url, _features| {
+                let app_main = app_nw.clone();
+                let u = url.to_string();
+                let _ = app_nw.run_on_main_thread(move || {
+                    crate::tabs::open_background(&app_main, &u);
+                });
+                tauri::webview::NewWindowResponse::Deny
+            }
         });
 
     window.add_child(
