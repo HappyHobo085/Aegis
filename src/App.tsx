@@ -50,6 +50,7 @@ import { SecurityTab } from './components/SecurityTab';
 import { DataTab } from './components/DataTab';
 import { TabsTab } from './components/TabsTab';
 import { TabStrip } from './components/TabStrip';
+import { MobileApp } from './components/mobile/MobileApp';
 
 const isMobile =
   typeof document !== 'undefined' &&
@@ -67,7 +68,7 @@ function hostOf(url: string): string | null {
   }
 }
 
-export function App() {
+function DesktopApp() {
   const tabs = useTabs();
   const nav = useNav(tabs.activeId);
   const adblock = useAdblock(tabs.activeId, nav.state.url);
@@ -454,4 +455,8 @@ export function App() {
       <ConfirmDialog />
     </div>
   );
+}
+
+export function App() {
+  return isMobile ? <MobileApp /> : <DesktopApp />;
 }
