@@ -15,9 +15,6 @@ pub struct Tabs {
 }
 
 impl Tabs {
-    pub fn new(home_url: String) -> Self {
-        Tabs { reg: Mutex::new(Registry::new(home_url)), start: Instant::now() }
-    }
     pub fn from_registry(reg: Registry) -> Self {
         Tabs { reg: Mutex::new(reg), start: Instant::now() }
     }
@@ -44,6 +41,8 @@ pub fn on_tab_url(app: &AppHandle, id: u32, url: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
         s.reg.lock().unwrap().set_url(id, url.to_string());
     }
+    // Flush so a tab browsed-then-quit (no structural change) restores to its current URL.
+    persist(app);
 }
 
 fn spawn(app: &AppHandle, id: u32, url: &str) {
@@ -124,8 +123,29 @@ pub fn open_background(app: &AppHandle, url: &str) {
     let _ = u;
 }
 
-/// Persist the session to tabs.json (Task 19 fills this in; stub for now).
-pub fn persist(_app: &AppHandle) {}
+fn session_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("tabs.json"))
+}
+
+/// Persist the session to tabs.json.
+pub fn persist(app: &AppHandle) {
+    let Some(p) = session_path(app) else { return; };
+    let session = match app.try_state::<Tabs>() {
+        Some(s) => s.reg.lock().unwrap().to_persisted(),
+        None => return,
+    };
+    if let Some(dir) = p.parent() { let _ = std::fs::create_dir_all(dir); }
+    if let Ok(txt) = serde_json::to_string_pretty(&session) {
+        let _ = std::fs::write(p, txt);
+    }
+}
+
+/// Load a saved session, if any.
+pub fn load_session(app: &AppHandle) -> Option<crate::tab_registry::PersistedSession> {
+    let p = session_path(app)?;
+    let txt = std::fs::read_to_string(p).ok()?;
+    serde_json::from_str(&txt).ok()
+}
 
 /// Start the idle-sweep thread: every 30s, discard tabs idle past the timeout.
 pub fn start_idle_sweep(app: &AppHandle) {

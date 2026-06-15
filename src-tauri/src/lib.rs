@@ -244,13 +244,21 @@ pub fn run() {
                 )?;
             }
 
-            // Initialize the tab registry from the configured home page, then spawn
-            // the first tab's content webview.
+            // Initialize the tab registry: restore from tabs.json if it exists,
+            // otherwise start fresh with the configured home page.  Only the active
+            // tab gets an eager webview; the rest lazy-spawn on activation.
             let home = crate::settings::home_url(app.handle()).to_string();
-            app.manage(tabs::Tabs::new(home.clone()));
-            let first = app.state::<tabs::Tabs>().reg.lock().unwrap().active_id();
-            if let Ok(u) = tauri::Url::parse(&home) {
-                nav::spawn_tab(app.handle(), first, u)?;
+            let reg = match tabs::load_session(app.handle()) {
+                Some(session) => crate::tab_registry::Registry::restore(session, home.clone()),
+                None => crate::tab_registry::Registry::new(home.clone()),
+            };
+            app.manage(tabs::Tabs::from_registry(reg));
+            let active = app.state::<tabs::Tabs>().reg.lock().unwrap().active_id();
+            let active_url = app.state::<tabs::Tabs>().reg.lock().unwrap().url_of(active).map(str::to_string);
+            if let Some(url) = active_url {
+                if let Ok(u) = tauri::Url::parse(&url) {
+                    nav::spawn_tab(app.handle(), active, u)?;
+                }
             }
             tabs::start_idle_sweep(app.handle());
 
@@ -265,6 +273,13 @@ pub fn run() {
                 });
             }
             view::apply_inset(app.handle());
+
+            // Emit the restored tabs state so the chrome renders all tabs immediately
+            // (belt-and-suspenders: the chrome also calls tabs.list on mount).
+            let _ = crate::emit_event(app.handle(), "tabs.state", {
+                let s = app.state::<tabs::Tabs>().reg.lock().unwrap().tabs_state();
+                serde_json::to_value(s).unwrap_or(serde_json::Value::Null)
+            });
 
             // Win/macOS: install a "Tabs" menu with accelerators so native OS-level
             // key capture delivers Ctrl+T/W/Tab etc. even when the content webview has
