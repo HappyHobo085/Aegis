@@ -176,9 +176,31 @@ export function App() {
           const ni = s === 'next' ? (i + 1) % ids.length : (i - 1 + ids.length) % ids.length;
           void tabs.activate(ids[ni]);
         }
+      } else if (s.startsWith('jump')) {
+        const ids = tabs.tabs.map((t) => t.id);
+        if (ids.length === 0) return;
+        const target = s === 'jumpLast' ? ids[ids.length - 1] : ids[Number(s.slice(4)) - 1];
+        if (target !== undefined) void tabs.activate(target);
       }
     });
   }, [tabs.tabs, tabs.activeId]);
+
+  // Ctrl+1-9 when the chrome/address bar is focused (and as the Win/macOS path,
+  // where content-webview digit keys aren't captured by a menu accelerator).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+      if (e.key >= '1' && e.key <= '9') {
+        e.preventDefault();
+        const ids = tabs.tabs.map((t) => t.id);
+        if (ids.length === 0) return;
+        const target = e.key === '9' ? ids[ids.length - 1] : ids[Number(e.key) - 1];
+        if (target !== undefined) void tabs.activate(target);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tabs.tabs]);
 
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {

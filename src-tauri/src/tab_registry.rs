@@ -304,7 +304,6 @@ impl Registry {
         Some(t.url.clone())
     }
 
-    /// Reopen the most-recently-closed tab (Ctrl+Shift+T). Returns its (id, url).
     /// Discard live, non-active, non-pinned tabs idle for >= timeout_ms.
     /// `timeout_ms == 0` disables. Returns ids whose webviews the caller must close().
     pub fn sweep_idle(&mut self, now_ms: u64, timeout_ms: u64) -> Vec<ViewId> {
@@ -326,6 +325,7 @@ impl Registry {
         victims
     }
 
+    /// Reopen the most-recently-closed tab (Ctrl+Shift+T). Returns its (id, url).
     pub fn reopen_closed(&mut self, now_ms: u64) -> Option<(ViewId, String)> {
         let c = self.closed_stack.pop()?;
         let id = self.next_id;

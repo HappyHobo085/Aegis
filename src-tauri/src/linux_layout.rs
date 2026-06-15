@@ -95,6 +95,15 @@ pub fn connect_tab_keys_label(app: &AppHandle, label: &str) {
                 x if x == k::T && shift => "reopen",
                 x if x == k::Tab && !shift => "next",
                 x if (x == k::Tab || x == k::ISO_Left_Tab) && shift => "prev",
+                x if x == k::_1 && !shift => "jump1",
+                x if x == k::_2 && !shift => "jump2",
+                x if x == k::_3 && !shift => "jump3",
+                x if x == k::_4 && !shift => "jump4",
+                x if x == k::_5 && !shift => "jump5",
+                x if x == k::_6 && !shift => "jump6",
+                x if x == k::_7 && !shift => "jump7",
+                x if x == k::_8 && !shift => "jump8",
+                x if x == k::_9 && !shift => "jumpLast",
                 _ => return glib::Propagation::Proceed,
             };
             crate::emit_event(&app, "tabs.shortcut", s);
