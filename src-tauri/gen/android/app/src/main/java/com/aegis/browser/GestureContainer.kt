@@ -73,11 +73,48 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
     }
   }
 
-  // Touch recognition is added in later tasks; for now the container is a transparent
-  // pass-through so the WebView behaves exactly as before.
-  override fun onInterceptTouchEvent(ev: MotionEvent): Boolean = false
+  override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
+    when (ev.actionMasked) {
+      MotionEvent.ACTION_DOWN -> {
+        mode = Mode.NONE
+        startX = ev.x; startY = ev.y; curX = ev.x; curY = ev.y
+      }
+      MotionEvent.ACTION_MOVE -> {
+        if (ev.pointerCount > 1 || refreshing) return false
+        val dx = ev.x - startX
+        val dy = ev.y - startY
+        // Left edge, drag right -> back.
+        if (startX <= edgePx && dx > slop && dx > abs(dy) && host.gestureCanGoBack()) {
+          mode = Mode.BACK; curX = ev.x; curY = ev.y; return true
+        }
+        // Right edge, drag left -> forward.
+        if (startX >= width - edgePx && -dx > slop && abs(dx) > abs(dy) && host.gestureCanGoForward()) {
+          mode = Mode.FORWARD; curX = ev.x; curY = ev.y; return true
+        }
+      }
+    }
+    return false
+  }
 
-  override fun onTouchEvent(ev: MotionEvent): Boolean = false
+  override fun onTouchEvent(ev: MotionEvent): Boolean {
+    if (mode == Mode.NONE) return false
+    when (ev.actionMasked) {
+      MotionEvent.ACTION_MOVE -> { curX = ev.x; curY = ev.y; invalidate() }
+      MotionEvent.ACTION_UP -> finishGesture()
+      MotionEvent.ACTION_CANCEL -> { mode = Mode.NONE; invalidate() }
+    }
+    return true
+  }
+
+  private fun finishGesture() {
+    when (mode) {
+      Mode.BACK -> if (curX - startX >= hDistance()) host.gestureBack()
+      Mode.FORWARD -> if (startX - curX >= hDistance()) host.gestureForward()
+      else -> {}
+    }
+    mode = Mode.NONE
+    invalidate()
+  }
 
   /** Called by the host when the active tab finishes (re)loading — hides the spinner. */
   fun stopRefresh() {
@@ -86,6 +123,25 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
 
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
-    // Indicator drawing is added with each gesture in later tasks.
+    when (mode) {
+      Mode.BACK, Mode.FORWARD -> drawArrow(canvas)
+      else -> {}
+    }
+  }
+
+  private fun drawArrow(canvas: Canvas) {
+    val travel = if (mode == Mode.BACK) curX - startX else startX - curX
+    val progress = min(travel / hDistance(), 1f).coerceAtLeast(0f)
+    val r = 18f * density
+    val cy = curY.coerceIn(r, height - r)
+    val cx = if (mode == Mode.BACK) r + progress * 10f * density
+             else width - r - progress * 10f * density
+    disc.alpha = (160 + 95 * progress).toInt().coerceIn(0, 255)
+    canvas.drawCircle(cx, cy, r, disc)
+    val a = 6f * density
+    val p = Path()
+    if (mode == Mode.BACK) { p.moveTo(cx + a, cy - a); p.lineTo(cx - a, cy); p.lineTo(cx + a, cy + a) }
+    else { p.moveTo(cx - a, cy - a); p.lineTo(cx + a, cy); p.lineTo(cx - a, cy + a) }
+    canvas.drawPath(p, glyph)
   }
 }
