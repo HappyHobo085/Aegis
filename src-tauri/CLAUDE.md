@@ -97,7 +97,13 @@ dotted event name.
     the chunks; `nav::spawn_tab` calls `apply_to_new_tab` so tabs opened *after*
     boot get filters too (not just the boot-active tab); `remove_all` clears all.
   - `adblock_inject.rs` (Windows + macOS) — document-start JS blocking
-    fetch/XHR/sendBeacon + cosmetic hiding. Returns empty on Linux.
+    fetch/XHR/sendBeacon + cosmetic hiding. On Linux it skips the heavy injection (native
+    filters cover it) but STILL injects the **pop-under guard** (`POPUP_GUARD`, shipped on
+    EVERY platform): overrides `window.open` to drop CROSS-ORIGIN scripted popups before any
+    window/tab opens — the "prevent it loading" layer for on-click pop-under ads, which open
+    a new window to a rotating ad domain no list can track. Same-origin / `about:blank` opens
+    pass through (native `on_new_window` vets those). Trade-off: legit cross-origin scripted
+    popups (e.g. OAuth) are blocked too; real `<a target=_blank>` links still open.
   - `adblock_win.rs` (Windows) — hooks WebView2 `WebResourceRequested` on
     `ICoreWebView2` via unsafe COM for full network interception.
 - **Security** — `safety.rs` (URLhaus malware host set from `resources/`, JNI

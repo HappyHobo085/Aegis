@@ -15,18 +15,48 @@
 #[cfg(not(target_os = "linux"))]
 static SCRIPT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
-/// The document-start ad-block script to inject into the content webview. Empty on
-/// Linux, which already does full network blocking via WebKit content filters — no
-/// need to pay the ~1 MB injection on the daily-driver. Non-empty (built once from
-/// EasyList) on Windows/macOS, where wry exposes no request interception.
+/// Pop-under guard, injected at document-start on EVERY platform (and every frame).
+/// On-click pop-under / pop-up ads on streaming sites open a new window to a rotating
+/// ad-network domain via `window.open` — which no static domain list can keep ahead of.
+/// So instead of chasing the destination, drop the *mechanism*: override `window.open`
+/// to refuse CROSS-ORIGIN scripted popups before any window/tab opens. A harmless stub
+/// is returned (with no-op `blur`/`focus`/`close`) so the caller's pop-under focus trick
+/// doesn't throw and the script believes it succeeded (no fallback). Same-origin popups
+/// (a site opening its own content) and non-http(s)/`about:blank` opens pass through —
+/// the native `on_new_window` still vets those (blank shells + ad domains). This is the
+/// "prevent it loading" layer; the network/navigation blockers remain as a backstop.
+/// Trade-off: legit cross-origin scripted popups (e.g. an OAuth login window) are also
+/// blocked — rare on the target sites, and a real `<a target=_blank>` link still opens.
+const POPUP_GUARD: &str = r#"(function(){
+  try {
+    var realOpen = window.open;
+    if (typeof realOpen !== 'function') return;
+    var stub = { closed: true, __aegisBlocked: true,
+      close: function(){}, focus: function(){}, blur: function(){}, postMessage: function(){} };
+    window.open = function(u, name, features) {
+      try {
+        var d = new URL(u == null ? '' : String(u), location.href);
+        if ((d.protocol === 'http:' || d.protocol === 'https:') && d.origin !== location.origin) {
+          return stub; // cross-origin scripted popup = pop-under ad → drop it
+        }
+      } catch (e) {}
+      return realOpen.apply(this, arguments);
+    };
+  } catch (e) {}
+})();"#;
+
+/// The document-start script injected into the content webview. The pop-under guard
+/// runs on EVERY platform; the heavier fetch/XHR/cosmetic ad-block layer is added only
+/// on Windows/macOS (Linux does full network blocking via WebKit content filters, so it
+/// skips the ~1 MB injection — but still gets the tiny pop-under guard).
 pub fn script() -> &'static str {
     #[cfg(target_os = "linux")]
     {
-        ""
+        POPUP_GUARD
     }
     #[cfg(not(target_os = "linux"))]
     {
-        SCRIPT.get_or_init(build).as_str()
+        SCRIPT.get_or_init(|| format!("{POPUP_GUARD}\n{}", build())).as_str()
     }
 }
 
@@ -127,5 +157,19 @@ mod tests {
         // Procedural selectors are filtered out (no extended pseudos leak into CSS).
         assert!(!s.contains(":matches-css"));
         assert!(!s.contains(":has-text("));
+    }
+
+    #[test]
+    fn popup_guard_overrides_window_open_and_ships_everywhere() {
+        let g = super::POPUP_GUARD;
+        // It replaces window.open and gates on cross-origin, returning the marker stub.
+        assert!(g.contains("window.open ="));
+        assert!(g.contains("d.origin !== location.origin"));
+        assert!(g.contains("__aegisBlocked"));
+        // Same-origin / non-http(s) opens still fall through to the real window.open.
+        assert!(g.contains("realOpen.apply"));
+        // script() carries the guard on EVERY platform — incl. the Linux test host,
+        // where the heavy ad-block injection is otherwise skipped.
+        assert!(super::script().contains("__aegisBlocked"));
     }
 }
