@@ -229,10 +229,17 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     main-frame filter, so cross-site iframe/embedded-player loads call it too — and it
     only hands you a `&Url` (no frame info), so you can't tell them apart. Emitting
     `nav.state` there made the address bar flicker to embedded ad/player URLs mid-load.
-    Drive the URL bar from `on_page_load` instead (wired to `load-changed` = main-frame
-    only). Keep safety/HTTPS-Only checks in `on_navigation` so they still cover subframes.
-    (Android is unaffected — it reports via `onPageStarted`/`doUpdateVisitedHistory`,
-    already main-frame-only. Set `AEGIS_NAV_DEBUG=1` to trace what reaches the bar.)
+    Keep safety/HTTPS-Only checks in `on_navigation` (they should cover subframes), but
+    drive the URL bar from two main-frame-only sources instead: `on_page_load` (wired to
+    `load-changed`) for the loading state on full loads, and **`notify::uri`**
+    (`linux_layout::connect_url_tracker`) for the URL — the latter also catches
+    same-document History-API (`pushState`/`replaceState`) + hash navigations that
+    `load-changed` does NOT fire for (SPAs like streamex switch `?server=` that way), so
+    the bar stays correct without ever showing a subframe URL. (Android is unaffected — it
+    reports via `onPageStarted`/`doUpdateVisitedHistory`, already main-frame-only. Set
+    `AEGIS_NAV_DEBUG=1` to trace what reaches the bar.) Windows/macOS currently update on
+    full loads only; same-document URL tracking there needs WebView2 `SourceChanged` /
+    WKWebView `URL` KVO (not yet wired — can't be runtime-verified from Linux).
 
 ### Multi-webview Linux layout (hard-won facts)
 

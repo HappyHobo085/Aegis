@@ -42,7 +42,7 @@ fn is_local_host(url: &Url) -> bool {
 }
 
 /// Emit a `nav.state` carrying the real tab id and page state.
-fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loading: bool) {
+pub(crate) fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loading: bool) {
     if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
         eprintln!("[aegis-nav] emit_state id={id} loading={loading} url={url}");
     }
@@ -203,6 +203,9 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     {
         crate::linux_layout::mark_content_label(app, &label);
         crate::linux_layout::connect_title_label(app, &label);
+        // Track the main-frame URL for the address bar (incl. SPA pushState/hash that
+        // on_page_load's load-changed misses; main-frame only, so no subframe flicker).
+        crate::linux_layout::connect_url_tracker(app, &label);
         crate::linux_layout::connect_fullscreen_exit_label(app, &label);
         crate::linux_layout::connect_tab_keys_label(app, &label);
         crate::permissions::install_handler_label(app, &label);

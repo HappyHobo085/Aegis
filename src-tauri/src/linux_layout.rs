@@ -37,6 +37,34 @@ pub fn connect_title_label(app: &AppHandle, label: &str) {
     });
 }
 
+/// Keep the address bar on the **main-frame** URL across ALL top-frame navigations,
+/// including same-document History API (`pushState`/`replaceState`) and hash changes —
+/// which `load-changed` (the signal behind `on_page_load`) does NOT fire for, so without
+/// this the bar goes stale on SPA in-site navigation (common on streaming sites). The
+/// WebView's `uri` property is the top document's URL and is main-frame only (a subframe
+/// load does not change it), so `notify::uri` is the correct, flicker-free source.
+/// (`on_navigation` can't be used for the bar — it fires for subframes too; see `nav.rs`.)
+pub fn connect_url_tracker(app: &AppHandle, label: &str) {
+    let Some(content) = app.get_webview(label) else {
+        return;
+    };
+    let Some(id) = label.strip_prefix("content:").and_then(|s| s.parse::<u32>().ok()) else {
+        return;
+    };
+    let app = app.clone();
+    let _ = content.with_webview(move |pw| {
+        pw.inner().connect_uri_notify(move |wv| {
+            let url = wv.uri().map(|s| s.to_string()).unwrap_or_default();
+            // The blank home (about:blank) is the chrome's Home tab — don't surface it.
+            if url.is_empty() || url == "about:blank" {
+                return;
+            }
+            let title = wv.title().map(|s| s.to_string()).unwrap_or_default();
+            crate::nav::emit_state(&app, id, &url, &title, wv.is_loading());
+        });
+    });
+}
+
 /// Count ad/tracker subresources blocked on this tab, for the shield badge. WebKit
 /// content filters block declaratively with no per-block callback, but resource-load-started
 /// still fires for blocked resources (verified), so we run each subresource through the
