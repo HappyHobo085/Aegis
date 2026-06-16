@@ -61,7 +61,10 @@ jobs:
       - uses: actions/checkout@v6
 
       # Tauri's Linux build links webkit2gtk; install the apt equivalents of the Fedora
-      # deps used in dev (mirrors tauri-release.yml).
+      # deps used in dev (mirrors tauri-release.yml). The gstreamer1.0-* codec packages
+      # are needed at BUILD time so bundleMediaFramework can bundle the decoders/sinks
+      # (libav = H.264/AAC, good/bad/ugly = demuxers/sinks/hls) — without them the
+      # AppImage demuxes but can't decode, so <video>/streams error out.
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-24.04'
         run: |
@@ -71,7 +74,11 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             libxdo-dev \
-            patchelf
+            patchelf \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly
 
       - uses: actions/setup-node@v6
         with:
