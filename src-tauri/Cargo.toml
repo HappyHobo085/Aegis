@@ -61,3 +61,12 @@ jni = "0.21"
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "=0.38.2"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_WinRT"] }
+
+# macOS: observe the WKWebView's `URL` via KVO (nav_url_mac.rs) so the address bar
+# tracks same-document History-API/hash navigations that wry's WKNavigationDelegate
+# callbacks don't report — the WKWebView analog of Linux's notify::uri. Versions match
+# tauri/wry's resolved objc2 so PlatformWebview::inner() casts to the same WKWebView.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-web-kit = "0.3"

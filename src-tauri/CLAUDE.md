@@ -237,9 +237,12 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     `load-changed` does NOT fire for (SPAs like streamex switch `?server=` that way), so
     the bar stays correct without ever showing a subframe URL. (Android is unaffected — it
     reports via `onPageStarted`/`doUpdateVisitedHistory`, already main-frame-only. Set
-    `AEGIS_NAV_DEBUG=1` to trace what reaches the bar.) Windows/macOS currently update on
-    full loads only; same-document URL tracking there needs WebView2 `SourceChanged` /
-    WKWebView `URL` KVO (not yet wired — can't be runtime-verified from Linux).
+    `AEGIS_NAV_DEBUG=1` to trace what reaches the bar.) The same-document URL tracking is
+    wired on every desktop: **Windows** `nav_url_win.rs` (WebView2 `SourceChanged`,
+    compile-verified via the gnu cross-check + CI) and **macOS** `nav_url_mac.rs`
+    (WKWebView `URL` KVO, mirroring wry's own `DocumentTitleChangedObserver`). NOTE: the
+    macOS objc2 code can't be compiled from Linux at all — `objc2`'s build script needs a
+    macOS C toolchain — so it is **CI-verified only** (macos-latest), not locally.
 
 ### Multi-webview Linux layout (hard-won facts)
 

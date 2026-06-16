@@ -11,6 +11,13 @@ mod adblock_engine;
 // Windows full network ad-block: our own WebView2 WebResourceRequested interceptor.
 #[cfg(target_os = "windows")]
 mod adblock_win;
+// Address-bar URL tracking for same-document (History-API/hash) navigations — the
+// per-platform analog of Linux's WebKitGTK notify::uri (linux_layout::connect_url_tracker):
+// WebView2 SourceChanged on Windows, WKWebView `URL` KVO on macOS.
+#[cfg(target_os = "windows")]
+mod nav_url_win;
+#[cfg(target_os = "macos")]
+mod nav_url_mac;
 // Injected (document-start) ad/tracker blocker for the desktop content webview — the
 // ad-block layer on Windows/macOS (wry can't intercept their requests), verifiable on
 // Linux where it supplements the WebKit content filters.

@@ -218,10 +218,27 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
 
     // Windows: wry only intercepts custom-protocol requests, so install our own
     // WebView2 WebResourceRequested handler on the content webview for full network
-    // ad-blocking (complements the injected cosmetic/JS tier).
+    // ad-blocking (complements the injected cosmetic/JS tier). Also install the
+    // SourceChanged URL tracker so the address bar follows same-document (History-API)
+    // navigations — the WebView2 analog of Linux's notify::uri.
     #[cfg(target_os = "windows")]
     if let Some(content) = app.get_webview(&label) {
-        let _ = content.with_webview(|pw| crate::adblock_win::install(&pw));
+        let app_url = app.clone();
+        let _ = content.with_webview(move |pw| {
+            crate::adblock_win::install(&pw);
+            crate::nav_url_win::install(&pw, app_url, id);
+        });
+    }
+
+    // macOS: observe the WKWebView's `URL` (KVO) so the address bar follows
+    // same-document (History-API/hash) navigations that wry's nav callbacks miss —
+    // the WKWebView analog of Linux's notify::uri.
+    #[cfg(target_os = "macos")]
+    if let Some(content) = app.get_webview(&label) {
+        let app_url = app.clone();
+        let _ = content.with_webview(move |pw| {
+            crate::nav_url_mac::install(&pw, app_url, id);
+        });
     }
 
     Ok(())
