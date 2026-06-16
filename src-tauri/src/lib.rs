@@ -217,6 +217,58 @@ pub fn run() {
                 std::env::set_var("WEBKIT_DISABLE_COMPOSITING_MODE", "1");
             }
         }
+        // WebKitGTK plays HTML5 <video>/<audio> through GStreamer, which dlopens its
+        // plugins — `appsink` (how WebKit pulls decoded frames) plus the actual codecs —
+        // from GST_PLUGIN_SYSTEM_PATH_1_0. In the AppImage, AppRun points that variable at
+        // the *bundled* plugin dir, but linuxdeploy bundles libgstreamer (a linked dep)
+        // WITHOUT the dlopened plugin modules, so the dir is empty: media dies with
+        // "GStreamer element appsink not found" — a permanent spinner, no playback (the
+        // streamex.sh symptom). The bundled libgstreamer is copied from this host and
+        // version-matches its plugins, so appending the host's plugin dir(s) lets them
+        // load. Harmless outside the AppImage (the .deb / `tauri dev` already use these
+        // dirs); we only append dirs that exist and aren't already on the path.
+        {
+            let mut dirs: Vec<&str> = vec![
+                "/usr/lib64/gstreamer-1.0",                // Fedora/RHEL/SUSE x86_64
+                "/usr/lib/x86_64-linux-gnu/gstreamer-1.0", // Debian/Ubuntu x86_64
+            ];
+            // `/usr/lib/gstreamer-1.0` is the generic (Arch) location, but on Fedora
+            // multilib it's the *i686* dir — only fall back to it when no arch-specific
+            // dir exists, so we never scan wrong-arch plugins into this x86_64 process.
+            if !std::path::Path::new("/usr/lib64/gstreamer-1.0").is_dir()
+                && !std::path::Path::new("/usr/lib/x86_64-linux-gnu/gstreamer-1.0").is_dir()
+            {
+                dirs.push("/usr/lib/gstreamer-1.0");
+            }
+            let current = std::env::var("GST_PLUGIN_SYSTEM_PATH_1_0").unwrap_or_default();
+            let mut paths: Vec<&str> = current.split(':').filter(|s| !s.is_empty()).collect();
+            for dir in dirs {
+                if std::path::Path::new(dir).is_dir() && !paths.contains(&dir) {
+                    paths.push(dir);
+                }
+            }
+            if !paths.is_empty() {
+                std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", paths.join(":"));
+            }
+            // The AppImage may point GST_PLUGIN_SCANNER at a bundled helper that wasn't
+            // packaged; fall back to the host's so plugin scanning isn't done noisily
+            // in-process. Only override when the current value is missing/nonexistent.
+            let scanner_ok = std::env::var_os("GST_PLUGIN_SCANNER")
+                .map(|s| std::path::Path::new(&s).exists())
+                .unwrap_or(false);
+            if !scanner_ok {
+                for scanner in [
+                    "/usr/libexec/gstreamer-1.0/gst-plugin-scanner",
+                    "/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner",
+                    "/usr/lib/gstreamer-1.0/gst-plugin-scanner",
+                ] {
+                    if std::path::Path::new(scanner).exists() {
+                        std::env::set_var("GST_PLUGIN_SCANNER", scanner);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     // Install the process-global rustls crypto provider once, up front: reqwest is

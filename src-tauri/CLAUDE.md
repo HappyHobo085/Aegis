@@ -214,6 +214,16 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     draws its swipe arrow / refresh spinner in `dispatchDraw()` after `super.dispatchDraw()`,
     which renders on top. (Same class of bug as the earlier "chrome overlay rendered behind
     the native content view.")
+12. **AppImage HTML5 video — GStreamer plugin path.** WebKitGTK decodes `<video>`/`<audio>`
+    via GStreamer, which `dlopen`s its plugins (incl. `appsink`, how WebKit pulls frames)
+    from `GST_PLUGIN_SYSTEM_PATH_1_0`. linuxdeploy bundles `libgstreamer` (a *linked* dep)
+    but NOT the `dlopen`-ed plugin modules, and `AppRun` points that env var at the bundled
+    (empty) dir — so all media fails with "GStreamer element appsink not found": permanent
+    spinner, no playback (the streamex.sh symptom). `lib.rs` appends the host's plugin
+    dir(s) (`/usr/lib64/gstreamer-1.0`, …) to the path; the bundled libgstreamer is copied
+    from the build host so it version-matches and loads them. Harmless for the `.deb`/dev
+    (those dirs are already default). Fedora multilib note: `/usr/lib/gstreamer-1.0` is the
+    *i686* dir, so it's only used as a fallback when no arch-specific dir exists.
 
 ### Multi-webview Linux layout (hard-won facts)
 
