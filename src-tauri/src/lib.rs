@@ -276,6 +276,42 @@ pub fn run() {
                 }
             }
         }
+        // glib's TLS backend — glib-networking's `libgiognutls.so` GIO module — is what
+        // lets the webview speak HTTPS. The AppImage bundles it, but the bundled glib
+        // looks for GIO modules at its compiled-in (build-distro) path, which doesn't
+        // exist on other distros: an ubuntu-built AppImage run on Fedora loads NO TLS
+        // backend (GLib "invalid (NULL) pointer instance" criticals) and every https page
+        // comes up blank — which looks like a network error. $APPDIR isn't set, but
+        // AppRun puts the bundle's lib dirs on LD_LIBRARY_PATH and the gio/modules dir
+        // sits under one of them; point GIO at the bundled module. No-op outside the
+        // AppImage (the module isn't found there, so glib's system default is used).
+        if std::env::var_os("GIO_MODULE_DIR").is_none() {
+            if let Some(ld) = std::env::var_os("LD_LIBRARY_PATH") {
+                for dir in std::env::split_paths(&ld) {
+                    let module = dir.join("gio/modules/libgiognutls.so");
+                    // Pick the HOST-arch module: on multilib, LD_LIBRARY_PATH lists the
+                    // 32-bit lib dir before the 64-bit one, and pointing glib at a
+                    // wrong-arch module fails ("wrong ELF class: ELFCLASS32") leaving TLS
+                    // broken. Trust the ELF class byte (e_ident[4]: 2 = 64-bit), not order.
+                    let is_elf64 = {
+                        use std::io::Read;
+                        let mut b = [0u8; 5];
+                        std::fs::File::open(&module)
+                            .and_then(|mut f| f.read_exact(&mut b))
+                            .is_ok()
+                            && &b[0..4] == b"\x7fELF"
+                            && b[4] == 2
+                    };
+                    if is_elf64 {
+                        let mods = dir.join("gio/modules");
+                        std::env::set_var("GIO_MODULE_DIR", &mods);
+                        std::env::set_var("GIO_EXTRA_MODULES", &mods); // older glib
+                        eprintln!("[aegis] GIO_MODULE_DIR -> {} (bundled TLS backend)", mods.display());
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     // Install the process-global rustls crypto provider once, up front: reqwest is
