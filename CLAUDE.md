@@ -76,6 +76,11 @@ Native build deps: a Rust toolchain; on Linux, webkit2gtk/gtk dev packages.
 
 ## Status (as of the Tauri migration branch)
 
-Linux desktop is verified on real hardware. Android browses + ad-blocks + is
-secure (verified on emulator). Windows/macOS compile + bundle green in CI but are
-not yet GUI-runtime-verified. iOS is unstarted (needs macOS + Xcode).
+Linux desktop is verified on real hardware. Windows desktop is verified on real
+hardware (Windows 11): browses and ad-blocks — both the WebView2 network tier
+(`adblock_win`) and the injected tier — with no crash, and the CI-built portable
+exe behaves identically to a local build. (The shield block-*counter* is still
+Linux-only; ad-block works on Windows, it just isn't counted on the badge — see the
+adblock note in `src-tauri/CLAUDE.md`.) Android browses + ad-blocks + is secure
+(verified on emulator). macOS compiles + bundles green in CI but is not yet
+GUI-runtime-verified. iOS is unstarted (needs macOS + Xcode).
