@@ -5,12 +5,15 @@
 # For more details, see
 #   http://developer.android.com/guide/developing/tools/proguard.html
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# Aegis exposes a native bridge to the chrome webview's JS as `window.AegisAndroid`
+# (MainActivity$Bridge, via addJavascriptInterface). R8/minify in the release build
+# would otherwise rename those @JavascriptInterface methods, breaking every
+# window.AegisAndroid call (nav, content-visibility, fullscreen, back). Keep them.
+# (The Rust JNI exports — NativeAdblock.shouldBlock etc. — are already kept by the wry
+# rule `-keep class com.aegis.browser.* { native <methods>; }`.)
+-keepclassmembers class * {
+    @android.webkit.JavascriptInterface <methods>;
+}
 
 # Uncomment this to preserve the line number information for
 # debugging stack traces.

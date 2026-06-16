@@ -24,6 +24,20 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
+    // Optional real release signing: drop a `keystore.properties` (gitignored) at the
+    // android project root with storeFile/storePassword/keyAlias/keyPassword. Without it,
+    // the release build falls back to the debug key (sideload-installable). Lets a Play
+    // Store / stable-update build use a proper key without code changes.
+    val keystorePropsFile = rootProject.file("keystore.properties")
+    if (keystorePropsFile.exists()) {
+        val props = Properties().apply { keystorePropsFile.inputStream().use { load(it) } }
+        signingConfigs.create("release") {
+            storeFile = file(props.getProperty("storeFile"))
+            storePassword = props.getProperty("storePassword")
+            keyAlias = props.getProperty("keyAlias")
+            keyPassword = props.getProperty("keyPassword")
+        }
+    }
     buildTypes {
         getByName("debug") {
             applicationIdSuffix = ".debug"
@@ -44,6 +58,13 @@ android {
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
                     .toList().toTypedArray()
             )
+            // Sign the release APK so it's installable. Use a real release keystore when
+            // keystore.properties exists (storeFile/storePassword/keyAlias/keyPassword —
+            // see .gitignore); else fall back to the debug key so `tauri android build
+            // --apk` still yields a sideloadable APK (fine for personal installs; a Play
+            // Store upload needs a real keystore). signingConfigs are declared up in the
+            // android{} block; this just selects one.
+            signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
     kotlinOptions {

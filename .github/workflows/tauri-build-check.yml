@@ -40,9 +40,13 @@ jobs:
             artifact: aegis-macos
             bundles: ''
             artifact_path: src-tauri/target/release/bundle/**
-          # Linux: the portable AppImage only (runs on any distro, incl. Fedora); skip
-          # the .deb. --bundles overrides the config's target list for this build.
-          - platform: ubuntu-22.04
+          # Linux: the portable AppImage only; skip the .deb. --bundles overrides the
+          # config's target list. Built on ubuntu-24.04 (NOT 22.04): 22.04's webkit2gtk
+          # is built with _GLIBCXX_ASSERTIONS and hits a libstdc++ abort in Skia's COLR-v1
+          # color-font path, so the bundled-webkit AppImage crashed (blank/frozen pages)
+          # on newer distros like Fedora; 24.04's newer webkit avoids it. (glibc floor
+          # rises to 2.39 — fine for current distros.)
+          - platform: ubuntu-24.04
             artifact: aegis-linux-appimage
             bundles: '--bundles appimage'
             artifact_path: src-tauri/target/release/bundle/appimage/*.AppImage
@@ -54,7 +58,7 @@ jobs:
       # Tauri's Linux build links webkit2gtk; install the apt equivalents of the Fedora
       # deps used in dev (mirrors tauri-release.yml).
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -145,14 +149,17 @@ jobs:
 
       - run: npm ci
 
-      # Build a DEBUG APK — auto-signed with the debug keystore, so it installs on any
-      # device with "install unknown apps" enabled (no release signing key needed). The
-      # Android SDK + NDK are preinstalled on the runner; point Tauri at the latest NDK.
-      - name: Build debug APK
+      # Build a RELEASE APK (minified, not debuggable). build.gradle.kts signs it with
+      # the debug key when no keystore.properties is present, so it still installs on any
+      # device with "install unknown apps" enabled (no release key needed). NOTE: each CI
+      # runner generates its own debug key, so two CI APKs can't update each other — fine
+      # for a one-off install/test; a stable channel comes from tauri-release.yml on a tag.
+      # The Android SDK + NDK are preinstalled on the runner; point Tauri at the latest NDK.
+      - name: Build release APK
         run: |
           export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           echo "Using NDK at $NDK_HOME"
-          npm run tauri -- android build --apk --debug
+          npm run tauri -- android build --apk
 
       - name: Upload APK
         if: always()

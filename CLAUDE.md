@@ -50,7 +50,7 @@ npm run tauri:dev      # run the app (Vite renderer + Tauri, hot reload)
 npm test               # vitest: node project (shared/ + scripts/) + jsdom (src/)
 npm run tauri:build    # build installers (AppImage/deb/nsis/app/dmg)
 npm run android:dev    # Android emulator/device
-npm run android:build  # debug APK
+npm run android:build  # release APK (signed with the debug key unless keystore.properties exists)
 ```
 
 Native build deps: a Rust toolchain; on Linux, webkit2gtk/gtk dev packages.

@@ -140,6 +140,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 /// Close tab `id` programmatically (e.g. nav.rs auto-closing a pop-under shell whose
 /// only navigation was a blocked ad). Applies the same registry + webview + neighbour-
 /// respawn steps as the `tabs.close` IPC. No-op if the id is unknown.
+#[allow(dead_code)] // desktop-only caller (nav::on_navigation); the mobile build stubs spawn_tab
 pub fn close_tab(app: &AppHandle, id: u32) {
     let now = now_ms(app);
     let out = app.state::<Tabs>().reg.lock().unwrap().close(id, now);
