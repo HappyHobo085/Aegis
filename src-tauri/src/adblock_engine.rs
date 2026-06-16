@@ -61,9 +61,12 @@ fn tx() -> &'static Sender<Query> {
     TX.get_or_init(|| {
         let (tx, rx) = channel::<Query>();
         std::thread::spawn(move || {
-            const EASYLIST: &str = include_str!("../resources/easylist.txt");
             let mut set = FilterSet::new(false); // false = matching engine (not convert)
-            set.add_filters(EASYLIST.lines(), ParseOptions::default());
+            // Block from every bundled list (ads + trackers + Peter Lowe's), not just
+            // EasyList — see `adblock_lists`. Same set the WebKit/inject tiers use.
+            for list in crate::adblock_lists::ALL {
+                set.add_filters(list.lines(), ParseOptions::default());
+            }
             let engine = Engine::from_filter_set(set, true);
             while let Ok(q) = rx.recv() {
                 let blocked = match Request::new(&q.url, &q.source, &q.rtype) {
@@ -105,6 +108,24 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
     answer.recv().unwrap_or(false)
 }
 
+/// Whether a new-window / pop-under request to `url` should be dropped rather than
+/// opened as a background tab. Two cases:
+/// 1. A **blank/script-scheme shell** — `window.open('about:blank')` (or no URL) that
+///    the opener then scripts. Aegis opens new windows as separate tabs and can't
+///    share that window handle, so the tab just stays blank ("no content loads") —
+///    these are almost always ad pop-unders. No legit "open in new tab" targets
+///    `about:`/`javascript:`/blank.
+/// 2. An **ad/tracker destination** (honors the on/off toggle + allowlist).
+/// A normal `target=_blank` link (a real http(s) page) is NOT dropped.
+pub fn is_unwanted_popup(url: &str, opener_url: &str) -> bool {
+    let u = url.trim();
+    let lower = u.to_ascii_lowercase();
+    if u.is_empty() || lower.starts_with("about:") || lower.starts_with("javascript:") {
+        return true;
+    }
+    should_block(url, opener_url, "document")
+}
+
 /// JNI bridge for Android's `NativeAdblock.shouldBlock` (a Kotlin `object`, so the
 /// symbol is `Java_<pkg>_NativeAdblock_shouldBlock` and the second arg is the
 /// singleton instance, ignored). Called from the content WebView's
@@ -132,7 +153,20 @@ pub extern "system" fn Java_com_aegis_browser_NativeAdblock_shouldBlock(
 
 #[cfg(test)]
 mod tests {
-    use super::{set_policy, should_block};
+    use super::{is_unwanted_popup, set_policy, should_block};
+
+    // Blank/script-scheme shells are dropped without consulting the engine, so this
+    // is policy-independent (won't race the policy-mutating test below).
+    #[test]
+    fn unwanted_popup_drops_blank_and_script_shells() {
+        assert!(is_unwanted_popup("about:blank", "https://site.example"));
+        assert!(is_unwanted_popup("", "https://site.example"));
+        assert!(is_unwanted_popup("  ", "https://site.example"));
+        assert!(is_unwanted_popup("javascript:void(0)", "https://site.example"));
+        assert!(is_unwanted_popup("ABOUT:BLANK", "https://site.example"));
+        // A real http(s) link is decided by the ad engine, not the shell check.
+        assert!(!is_unwanted_popup("https://example.org/article", "https://site.example"));
+    }
 
     // One test (not several) because it mutates the process-wide policy globals.
     #[test]
@@ -143,6 +177,32 @@ mod tests {
             should_block("https://adnxs.com/tag.js", "https://news.example.com", "script"),
             "a known ad/tracker domain must be blocked"
         );
+        // Trackers/analytics live in EasyPrivacy, NOT EasyList — these prove the
+        // privacy list is actually in the engine (they would NOT block on EasyList
+        // alone, which is exactly the coverage gap this bundle closes).
+        assert!(
+            should_block("https://www.google-analytics.com/analytics.js", "https://news.example.com", "script"),
+            "an analytics tracker (EasyPrivacy) must be blocked"
+        );
+        assert!(
+            should_block("https://sb.scorecardresearch.com/beacon.js", "https://news.example.com", "script"),
+            "a comScore tracker (EasyPrivacy) must be blocked"
+        );
+        // Rotating malvertising domains on throwaway TLDs (the streamex pop-under/banner
+        // networks) — caught by the abuse-TLD block (`||cfd^`), since no static domain
+        // list can keep up with disposable random names like these.
+        assert!(
+            should_block("https://cupcake.limbycocking.cfd/banner.jpg", "https://streamex.sh/watch", "image"),
+            "a rotating .cfd malvertising domain must be blocked by the abuse-TLD list"
+        );
+        assert!(
+            should_block("https://1x39.r5zkgi2ufhmkn5ty2i.cfd/x", "https://streamex.sh/watch", "script"),
+            "any .cfd host must be blocked regardless of the random subdomain"
+        );
+        assert!(
+            !should_block("https://cfd.example.com/app.js", "https://example.com", "script"),
+            "a host that merely contains 'cfd' as a non-TLD label must NOT be blocked"
+        );
         assert!(
             !should_block("https://example.com/", "https://example.com/", "document"),
             "a normal first-party page must not be blocked"
@@ -150,6 +210,21 @@ mod tests {
         assert!(
             !should_block("https://example.com/styles.css", "https://example.com/", "stylesheet"),
             "a normal first-party asset must not be blocked"
+        );
+        // A pop-under (top-level document) to an ad domain is blocked too — this is
+        // exactly what nav::on_new_window checks to drop ad pop-unders into nowhere.
+        assert!(
+            should_block("https://adnxs.com/popunder", "https://news.example.com", "document"),
+            "an ad-domain pop-under (document) must be blocked"
+        );
+        assert!(
+            !should_block("https://example.org/article", "https://news.example.com", "document"),
+            "a legit target=_blank link (clean domain) must still open"
+        );
+        // is_unwanted_popup combines the blank-shell check with the ad-domain check.
+        assert!(
+            is_unwanted_popup("https://adnxs.com/popunder", "https://news.example.com"),
+            "an ad-domain pop-under must be dropped"
         );
 
         // Toggle OFF → nothing is ad-blocked.

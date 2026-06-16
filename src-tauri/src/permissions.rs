@@ -41,6 +41,7 @@ fn remembered(app: &AppHandle, origin: &str, permission: &str) -> Option<bool> {
 }
 
 /// Upsert a remembered (origin, permission) decision.
+#[allow(dead_code)] // only reached via the Linux permission handler (linux_layout)
 fn persist(app: &AppHandle, origin: &str, permission: &str, allow: bool) {
     let mut items = list(app);
     items.retain(|it| {

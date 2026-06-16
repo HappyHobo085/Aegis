@@ -46,6 +46,7 @@ pub fn on_tab_url(app: &AppHandle, id: u32, url: &str) {
 
 /// Record a tab's page title (from the WebKit title-changed signal). Updates the
 /// strip + persists it so restored "asleep" tabs show their title.
+#[allow(dead_code)] // only called from the Linux WebKit title-changed signal (linux_layout)
 pub fn on_tab_title(app: &AppHandle, id: u32, title: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
         s.reg.lock().unwrap().set_title(id, title.to_string());

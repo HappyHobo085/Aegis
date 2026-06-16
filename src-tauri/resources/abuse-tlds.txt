@@ -1,0 +1,36 @@
+[Adblock Plus 2.0]
+! Title: Aegis abuse-TLD blocklist
+! A small, curated list of throwaway top-level domains that are used almost
+! exclusively for malvertising / rotating ad + scam networks and have negligible
+! legitimate use. Piracy/streaming sites (the ad-block's primary target) serve
+! their pop-under and banner ads from rotating, randomly-named domains on these
+! TLDs (e.g. limbycocking.cfd, newsboydurance.cfd) — no static domain list can
+! keep up with the rotation, but blocking the TLD itself does.
+!
+! `||tld^` is a host-anchor that matches any host ending in `.tld` (and NOT a host
+! that merely contains the label, e.g. `cfd.com` is unaffected). It blocks across
+! every Aegis tier: the matching engine, the WebKit content-filter converter, and
+! the injected-JS domain set (suffix match) — see adblock_lists.rs.
+!
+! Intentionally conservative — these are the ShortDot/low-reputation gTLDs most
+! associated with ad/malware abuse in 2024-2025 reports. TLDs with real mainstream
+! use (.xyz, .top, .online, .site, .live, .club, .icu, .shop) are deliberately
+! EXCLUDED to avoid breaking legitimate sites. The whole list is governed by the
+! ad-block on/off toggle + per-site allowlist; extend via custom filters.
+!
+! This network rotates across throwaway TLDs — confirmed serving ads on streamex.sh
+! (2026-06-16): .cfd (LUST GODDESS banner) and .qpon ("XXX Game" overlay). Extend as
+! new rotations are observed.
+||cfd^
+||qpon^
+||sbs^
+||cyou^
+||bond^
+||rest^
+||mom^
+||lol^
+||makeup^
+||hair^
+||skin^
+||beauty^
+||quest^

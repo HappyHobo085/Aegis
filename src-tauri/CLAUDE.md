@@ -14,7 +14,7 @@ src-tauri/
 ├── capabilities/       # Tauri permission grants (default.json)
 ├── gen/android/        # generated Android project + hand-written Kotlin bridge
 ├── icons/              # app icons (png/ico/icns)
-├── resources/          # bundled filter lists (easylist.txt, malware-hosts.txt)
+├── resources/          # bundled filter lists (easylist.txt, easyprivacy.txt, peter-lowe.txt, abuse-tlds.txt, malware-hosts.txt)
 ├── target/             # cargo build output (gitignored)
 ├── Cargo.toml          # deps, incl. platform-gated blocks
 ├── tauri.conf.json     # app config, CSP, bundle targets, updater endpoint+pubkey
@@ -42,7 +42,9 @@ dotted event name.
 - **`tabs.rs`** — Tauri layer over the registry: `tabs.*` IPC dispatch, applies
   spawn/close decisions to child webviews, the idle-sweep background thread
   (`start_idle_sweep`), `tabs.json` session persistence, `open_background`
-  (called from `on_new_window` to open target=\_blank links as background tabs).
+  (called from `on_new_window` to open target=\_blank links as background tabs —
+  but `on_new_window` first drops the request if the ad-block engine flags the
+  destination as an ad pop-under; see Ad-block below).
 - **`nav.rs`** — content webview creation (`spawn_tab(id, url)`, replaces the
   old `spawn_content`), navigation callbacks (malware guard, HTTPS-Only upgrade),
   emits `nav.state`/`nav.failed`. Active webview now accessed via
@@ -54,13 +56,43 @@ dotted event name.
   (favorites + saved), `history.rs`, `downloads.rs`, `subs.rs` (filter
   subscriptions + fetch), `customfilters.rs`, `settings.rs`.
 - **Ad-block (layered, platform-gated):**
+  - `adblock_lists.rs` — **single source of truth for the bundled filter lists**:
+    EasyList (ads) **+ EasyPrivacy (trackers/analytics)** **+ Peter Lowe's** (ad+tracking
+    hosts) **+ a curated abuse-TLD block** (`abuse-tlds.txt`: `||cfd^` etc.), mirroring
+    uBlock Origin's default set plus rotating-domain defense. EasyList alone blocks ad
+    servers but *not* analytics (google-analytics, hotjar, scorecardresearch, …), so
+    EasyPrivacy closes that gap; and piracy/streaming sites serve pop-under/banner ads
+    from rotating random domains on throwaway TLDs (e.g. `limbycocking.cfd`) that no
+    static domain list catches — `||tld^` blocks the whole abuse TLD (engine, converter,
+    and the inject domain-set via suffix match all honor it). **Every tier below reads
+    `adblock_lists::ALL`** (engine, the WebKit
+    converter, the inject builder) so coverage is identical on Linux/Windows/macOS/Android
+    — add a list here and all platforms widen at once. Custom rules + user subscriptions
+    layer on top in the callers that support them.
   - `adblock.rs` — state machine (enabled + allowlist), `adblock.*` IPC.
+    `sync_engine` mirrors the on/off + allowlist into `adblock_engine` on **all**
+    targets (desktop + Android), so the pop-under check honors them everywhere.
+    Also owns the **shield-badge counters**: `note_blocked`/`reset_page` keep a
+    monotonic session total + per-tab page count and emit `adblock.blockedCount`;
+    `getState` returns the active tab's `pageBlocked` so the chrome recovers the
+    count on mount/tab-switch (live events emitted before the chrome subscribed —
+    e.g. the restored boot page — are otherwise lost). Counting is wired on **Linux**
+    only so far (`linux_layout::connect_block_counter`); Win/Android is a follow-up.
   - `adblock_engine.rs` — Brave `adblock::Engine`. **`Engine` is `!Send`**, so it
     lives on one dedicated thread (OnceLock); queries cross via mpsc. Android JNI
-    entry `should_block(...)`.
+    entry `should_block(...)`. Compiled on **all desktop + Android** (not just
+    Win/Android): every desktop calls `should_block` from `nav::on_new_window` to
+    **drop ad/tracker pop-unders** (`window.open`/`target=_blank` to an ad domain)
+    instead of opening them as tabs; warmed off-thread at boot (`lib.rs`) so the
+    first check doesn't parse the lists on the UI thread. Loads every
+    `adblock_lists::ALL` list into the `FilterSet`. Android does the same in
+    `MainActivity.onCreateWindow` via `NativeAdblock.shouldBlock`.
   - `adblock_webkit.rs` (Linux) — declarative WebKit content filters via
     `adblock_convert.rs` (Brave → Safari content-blocker JSON), chunked ~25k
-    rules/filter (WebKit caps ~50k), disk-cached by hash.
+    rules/filter (WebKit caps ~50k), disk-cached by hash. **Filters are per-webview
+    (per-tab), not global** — `apply_filters` covers every content webview + caches
+    the chunks; `nav::spawn_tab` calls `apply_to_new_tab` so tabs opened *after*
+    boot get filters too (not just the boot-active tab); `remove_all` clears all.
   - `adblock_inject.rs` (Windows + macOS) — document-start JS blocking
     fetch/XHR/sendBeacon + cosmetic hiding. Returns empty on Linux.
   - `adblock_win.rs` (Windows) — hooks WebView2 `WebResourceRequested` on
@@ -71,6 +103,12 @@ dotted event name.
   webkit2gtk widgets GtkBox → GtkFixed; title-changed signal feeds history +
   routes the element-picker sentinel; Esc-exits-fullscreen; GTK key hook
   handles Ctrl+T/W/Shift+T tab shortcuts (accelerator menus used on Win/macOS).
+  `connect_block_counter` counts blocked ads for the badge: the content filters
+  block declaratively (no per-block callback), but `resource-load-started` **does**
+  fire for blocked resources, so each subresource is run through the engine and
+  matches call `adblock::note_blocked`. Caveat: WebKit negative-caches a blocked URL,
+  so an identical URL won't re-fire on reload — real ad URLs are unique per request so
+  this is mostly moot, but a page of *static* ad URLs under-counts on repeat loads.
 - **Misc** — `picker.rs` (element picker), `update.rs` (tauri-plugin-updater state).
 
 ## Key dependencies (`Cargo.toml`)

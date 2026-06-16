@@ -37,6 +37,31 @@ pub fn connect_title_label(app: &AppHandle, label: &str) {
     });
 }
 
+/// Count ad/tracker subresources blocked on this tab, for the shield badge. WebKit
+/// content filters block declaratively with no per-block callback, but resource-load-started
+/// still fires for blocked resources (verified), so we run each subresource through the
+/// same engine + EasyList and count the matches — which honors the on/off toggle +
+/// per-site allowlist (`should_block` does). `note_blocked` pushes the totals to the chrome.
+pub fn connect_block_counter(app: &AppHandle, label: &str) {
+    let Some(content) = app.get_webview(label) else {
+        return;
+    };
+    let Some(id) = label.strip_prefix("content:").and_then(|s| s.parse::<u32>().ok()) else {
+        return;
+    };
+    let app = app.clone();
+    let _ = content.with_webview(move |pw| {
+        pw.inner().connect_resource_load_started(move |wv, _res, request| {
+            use webkit2gtk::URIRequestExt;
+            let url = request.uri().map(|s| s.to_string()).unwrap_or_default();
+            let page = wv.uri().map(|s| s.to_string()).unwrap_or_default();
+            if crate::adblock_engine::should_block(&url, &page, "other") {
+                crate::adblock::note_blocked(&app, id);
+            }
+        });
+    });
+}
+
 /// Leave fullscreen: clear the flag, re-inset the content, and notify the chrome.
 /// Shared by the Esc key handler and the native floating exit button.
 fn exit_fullscreen(app: &AppHandle) {

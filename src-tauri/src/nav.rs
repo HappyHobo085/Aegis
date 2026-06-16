@@ -123,6 +123,11 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             let u = u.as_str();
             emit_state(&app_load, load_id, u, "", loading);
             crate::tabs::on_tab_url(&app_load, load_id, u);
+            // New top-frame navigation → reset this tab's per-page blocked count (badge).
+            #[cfg(target_os = "linux")]
+            if loading {
+                crate::adblock::reset_page(&app_load, load_id);
+            }
             // Hide THIS tab's content webview at the blank home so the chrome's Home
             // tab shows; show it for any real page as soon as it starts loading (so a
             // slow page doesn't leave the home showing). Per-label so each tab toggles
@@ -151,9 +156,23 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         })
         .on_new_window({
             let app_nw = app.clone();
+            let opener_id = id;
             move |url, _features| {
-                let app_main = app_nw.clone();
                 let u = url.to_string();
+                // Drop ad pop-unders instead of opening them as background tabs:
+                // blank/script-scheme shells (window.open('about:blank') the opener
+                // scripts — Aegis can't share the handle, so it'd leave an empty tab)
+                // and ad/tracker destinations (honoring the toggle + allowlist). A
+                // legit target=_blank link to a real http(s) page still opens.
+                let opener = app_nw
+                    .get_webview(&content_label(opener_id))
+                    .and_then(|w| w.url().ok())
+                    .map(|u| u.to_string())
+                    .unwrap_or_default();
+                if crate::adblock_engine::is_unwanted_popup(&u, &opener) {
+                    return tauri::webview::NewWindowResponse::Deny;
+                }
+                let app_main = app_nw.clone();
                 let _ = app_nw.run_on_main_thread(move || {
                     crate::tabs::open_background(&app_main, &u);
                 });
@@ -178,6 +197,11 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         crate::linux_layout::connect_fullscreen_exit_label(app, &label);
         crate::linux_layout::connect_tab_keys_label(app, &label);
         crate::permissions::install_handler_label(app, &label);
+        // Ad-block: WebKit content filters live per-webview, so this new tab needs
+        // its own copy (install_adblock only filtered tabs that existed at boot).
+        crate::adblock_webkit::apply_to_new_tab(app, &label);
+        // Count blocked subresources on this tab for the shield badge.
+        crate::linux_layout::connect_block_counter(app, &label);
     }
 
     // Windows: wry only intercepts custom-protocol requests, so install our own

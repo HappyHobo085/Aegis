@@ -18,24 +18,117 @@
 #![allow(dead_code)]
 use std::ffi::CString;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 use glib::translate::ToGlibPtr;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use webkit2gtk::{
     UserContentInjectedFrames, UserContentManagerExt, UserStyleLevel, UserStyleSheet, WebViewExt,
 };
 
-/// Apply content-blocker JSON `chunks` to the content webview, each as its own
-/// WebKit content filter named `aegis-{i}`. When `cached` is true the filters are
-/// loaded from `store_dir` (fast); otherwise they are compiled and saved (slow,
-/// first run). `store_dir` persists compiled filters across runs.
+/// The converted EasyList filters, cached after the first conversion so tabs
+/// spawned *later* (`apply_to_new_tab`) get the same filters as the boot tab.
+/// WebKit content filters live on each webview's own `UserContentManager`, so a
+/// filter added to one tab does NOT cover another — every tab must be filtered.
+struct CachedFilters {
+    chunks: Vec<String>,
+    store_dir: PathBuf,
+    cached: bool,
+}
+static FILTERS: OnceLock<Mutex<Option<CachedFilters>>> = OnceLock::new();
+fn filters_cell() -> &'static Mutex<Option<CachedFilters>> {
+    FILTERS.get_or_init(|| Mutex::new(None))
+}
+
+// --- Deferred ready-marker (fixes a stale-cache race) ---
+// Compiling a chunk persists it to the on-disk store ASYNCHRONOUSLY (the
+// `webkit_user_content_filter_store_save` callback). The "these filters are
+// compiled" marker must therefore be written only AFTER every save callback has
+// fired — writing it up front (as install_adblock used to) races a mid-compile
+// exit: the marker survives but the blobs are partial/stale, so the next launch
+// does `cached=true` and loads incomplete filters → silent under-blocking.
+// `arm_ready_marker` records how many compiles to wait for; each `save_done`
+// decrements, and the last one writes the marker. Callbacks run on the single GTK
+// main loop, so plain atomics (no real concurrency) are enough. Armed only on the
+// compile path (`cached=false`); loads leave the count at 0 and never write.
+static SAVES_PENDING: AtomicUsize = AtomicUsize::new(0);
+static READY_MARKER: OnceLock<Mutex<Option<PathBuf>>> = OnceLock::new();
+fn ready_marker_cell() -> &'static Mutex<Option<PathBuf>> {
+    READY_MARKER.get_or_init(|| Mutex::new(None))
+}
+
+/// Arm the deferred ready-marker: once `expected` chunk compiles have completed,
+/// `marker` is written so the next launch can safely load the now-complete filters.
+pub fn arm_ready_marker(expected: usize, marker: PathBuf) {
+    *ready_marker_cell().lock().unwrap() = Some(marker);
+    SAVES_PENDING.store(expected, Ordering::SeqCst);
+}
+
+/// One chunk compile finished (success or failure). When the last armed compile
+/// completes, write the ready-marker. No-op when not armed (the load path).
+fn note_save_complete() {
+    if SAVES_PENDING.load(Ordering::SeqCst) == 0 {
+        return; // not armed (load path, or already written)
+    }
+    if SAVES_PENDING.fetch_sub(1, Ordering::SeqCst) == 1 {
+        if let Some(marker) = ready_marker_cell().lock().unwrap().take() {
+            if let Some(dir) = marker.parent() {
+                let _ = std::fs::create_dir_all(dir);
+            }
+            let _ = std::fs::write(&marker, b"");
+            eprintln!("[aegis-cf] ready-marker written ({} compiles done)", marker.display());
+        }
+    }
+}
+
+/// Apply content-blocker JSON `chunks` to **every** content webview (all tabs),
+/// each chunk as its own WebKit content filter named `aegis-{i}`, and cache them
+/// so tabs spawned afterwards are filtered too (`apply_to_new_tab`). When `cached`
+/// is true the filters are loaded from `store_dir` (fast); otherwise compiled and
+/// saved (slow, first run). `store_dir` persists compiled filters across runs.
 pub fn apply_filters(app: &AppHandle, chunks: Vec<String>, store_dir: PathBuf, cached: bool) {
     if chunks.is_empty() {
         return;
     }
-    let Some(content) = crate::nav::active_webview(app) else {
+    *filters_cell().lock().unwrap() = Some(CachedFilters {
+        chunks: chunks.clone(),
+        store_dir: store_dir.clone(),
+        cached,
+    });
+    for (label, content) in app.webviews() {
+        if is_content_label(&label) {
+            install_on(content, &chunks, &store_dir, cached);
+        }
+    }
+}
+
+/// Apply the cached filters to a single just-spawned tab's webview (called from
+/// `nav::spawn_tab`). No-op when ad-block is off or the filters aren't converted
+/// yet (the boot `apply_filters` covers tabs that exist at startup).
+pub fn apply_to_new_tab(app: &AppHandle, label: &str) {
+    let enabled = app
+        .try_state::<crate::adblock::AdblockState>()
+        .map(|s| s.0.lock().unwrap().enabled)
+        .unwrap_or(true);
+    if !enabled {
         return;
-    };
+    }
+    let guard = filters_cell().lock().unwrap();
+    if let (Some(f), Some(content)) = (guard.as_ref(), app.get_webview(label)) {
+        eprintln!("[aegis-cf] applying filters to new tab {label}");
+        install_on(content, &f.chunks, &f.store_dir, f.cached);
+    }
+}
+
+fn is_content_label(label: &str) -> bool {
+    label.starts_with("content:")
+}
+
+/// Install `chunks` as WebKit content filters on one webview's UserContentManager.
+fn install_on(content: tauri::Webview, chunks: &[String], store_dir: &PathBuf, cached: bool) {
+    let chunks = chunks.to_vec();
+    let store_dir = store_dir.clone();
     let _ = content.with_webview(move |pw| {
         let webview = pw.inner();
         let Some(ucm) = webview.user_content_manager() else {
@@ -59,16 +152,18 @@ pub fn apply_filters(app: &AppHandle, chunks: Vec<String>, store_dir: PathBuf, c
     });
 }
 
-/// Remove all content filters from the content webview (ad-block disabled).
+/// Remove all content filters from **every** content webview (ad-block disabled).
 pub fn remove_all(app: &AppHandle) {
-    let Some(content) = crate::nav::active_webview(app) else {
-        return;
-    };
-    let _ = content.with_webview(move |pw| {
-        if let Some(ucm) = pw.inner().user_content_manager() {
-            ucm.remove_all_filters();
+    for (label, content) in app.webviews() {
+        if !is_content_label(&label) {
+            continue;
         }
-    });
+        let _ = content.with_webview(move |pw| {
+            if let Some(ucm) = pw.inner().user_content_manager() {
+                ucm.remove_all_filters();
+            }
+        });
+    }
 }
 
 /// Inject an element-hiding stylesheet (safe API), for cosmetic rules beyond what
@@ -168,6 +263,9 @@ unsafe extern "C" fn save_done(
     let mut err: *mut glib::ffi::GError = std::ptr::null_mut();
     let filter = webkit2gtk::ffi::webkit_user_content_filter_store_save_finish(store, res, &mut err);
     add_and_finish(filter, err, user_data as *mut FilterCtx, "compiled+added");
+    // A compile finished — only now is this chunk safely on disk. Write the marker
+    // once the last one lands (avoids the stale-cache race; see arm_ready_marker).
+    note_save_complete();
 }
 
 unsafe extern "C" fn load_done(
@@ -179,4 +277,20 @@ unsafe extern "C" fn load_done(
     let mut err: *mut glib::ffi::GError = std::ptr::null_mut();
     let filter = webkit2gtk::ffi::webkit_user_content_filter_store_load_finish(store, res, &mut err);
     add_and_finish(filter, err, user_data as *mut FilterCtx, "loaded+added");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_content_label;
+
+    #[test]
+    fn content_labels_are_matched_but_chrome_is_not() {
+        // Every tab webview is "content:<id>" (see nav::content_label); the chrome
+        // (React UI) webview must NEVER get ad-block content filters or the UI breaks.
+        assert!(is_content_label("content:1"));
+        assert!(is_content_label("content:42"));
+        assert!(!is_content_label("main"));
+        assert!(!is_content_label(""));
+        assert!(!is_content_label("contentish"));
+    }
 }

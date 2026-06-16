@@ -68,6 +68,7 @@ fn fetch_text(url: String) -> Result<String, String> {
 /// Concatenated text of every ENABLED subscription, read from cache. Folded into
 /// the engine by `install_adblock`. Subscriptions with no cache yet contribute
 /// nothing (so a still-fetching or failed list is simply absent).
+#[allow(dead_code)] // only called from install_adblock, which is Linux-only
 pub fn enabled_text(app: &AppHandle) -> String {
     let mut out = String::new();
     for row in jsonstore::load(app, "subs") {

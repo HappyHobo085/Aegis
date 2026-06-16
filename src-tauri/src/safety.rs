@@ -54,7 +54,9 @@ pub fn is_blocked(app: &AppHandle, url: &Url) -> bool {
 /// Whether `host` is a known-malware host in the bundled list (case-insensitive).
 /// Used by the Android content WebView's navigation/resource guard — there's no
 /// AppHandle/session-exception context there (per-site "proceed anyway" on mobile is
-/// a follow-up).
+/// a follow-up). Android-only (its sole caller is the JNI export below), so it's
+/// `cfg`-gated to avoid a dead-code warning on desktop builds.
+#[cfg(target_os = "android")]
 pub fn is_malware_host(host: &str) -> bool {
     malware_hosts().contains(&host.to_ascii_lowercase())
 }

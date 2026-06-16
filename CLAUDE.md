@@ -69,6 +69,10 @@ Native build deps: a Rust toolchain; on Linux, webkit2gtk/gtk dev packages.
 - **Don't guess — verify.** Per the repo owner's standing instruction, read the
   actual file/config/code before claiming behavior; run commands and report real
   output rather than assuming.
+- **Always finish with all platforms being on the same version/level.** A feature or
+  fix isn't done when it works on one platform — bring Linux, Windows, macOS, and
+  Android to parity (iOS when it exists) before calling it complete. Don't leave a
+  capability working on Linux with "Win/Android is a follow-up"; close the gap.
 
 ## Status (as of the Tauri migration branch)
 

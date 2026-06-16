@@ -35,6 +35,7 @@ pub fn record(app: &AppHandle, url: &str, title: &str) {
 /// Fill in the title of the most-recent history entry for `url`. WebKit sets the
 /// page title after the load finishes, so the URL-only visit recorded at page-load
 /// (see nav.rs) gets its title here when the title-changed signal fires.
+#[allow(dead_code)] // only called from the Linux WebKit title-changed signal (linux_layout)
 pub fn update_title(app: &AppHandle, url: &str, title: &str) {
     if url.is_empty() || title.is_empty() || url.starts_with("about:") || url.starts_with("data:") {
         return;

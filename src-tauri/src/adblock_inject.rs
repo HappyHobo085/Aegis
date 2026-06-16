@@ -32,11 +32,11 @@ pub fn script() -> &'static str {
 
 #[cfg(any(not(target_os = "linux"), test))]
 fn build() -> String {
-    const EASYLIST: &str = include_str!("../resources/easylist.txt");
-
     let mut domains: Vec<&str> = Vec::new();
     let mut selectors: Vec<&str> = Vec::new();
-    for line in EASYLIST.lines() {
+    // Extract from EVERY bundled list (ads + trackers + Peter Lowe's), so the injected
+    // blocker covers the same domains/cosmetics as the engine tier — see `adblock_lists`.
+    for line in crate::adblock_lists::ALL.iter().flat_map(|list| list.lines()) {
         let l = line.trim();
         if let Some(rest) = l.strip_prefix("||") {
             // Plain domain anchor `||domain^` (no path, no $options) → block the domain

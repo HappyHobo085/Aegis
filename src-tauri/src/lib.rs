@@ -1,8 +1,12 @@
 mod adblock;
+// The bundled filter lists (EasyList + EasyPrivacy + Peter Lowe's), single-sourced so
+// every ad-block tier blocks from the identical set across all platforms.
+mod adblock_lists;
 mod adblock_convert;
-// Chromium-side network ad-blocking engine (`should_block`). Compiled on Android (JNI
-// export) and Windows (WebView2 interception, adblock_win) and under `cargo test`.
-#[cfg(any(target_os = "android", target_os = "windows", test))]
+// Chromium-side network ad-blocking engine (`should_block`). Used by Android (JNI
+// export) and Windows (WebView2 interception, adblock_win) for full request blocking,
+// and by ALL desktop platforms to drop ad/tracker pop-unders in nav::on_new_window.
+#[cfg(any(desktop, target_os = "android", test))]
 mod adblock_engine;
 // Windows full network ad-block: our own WebView2 WebResourceRequested interceptor.
 #[cfg(target_os = "windows")]
@@ -122,22 +126,29 @@ pub fn install_adblock(app: tauri::AppHandle) {
     let subs_text = subs::enabled_text(&app);
     std::thread::spawn(move || {
         use std::hash::{Hash, Hasher};
-        const EASYLIST: &str = include_str!("../resources/easylist.txt");
-        // Cache key = source hash (EasyList + custom rules + enabled subscriptions).
+        // Convert EVERY bundled list (ads + trackers + Peter Lowe's), not just EasyList,
+        // so the WebKit content filters match the same set as the engine/inject tiers.
+        let bundled = adblock_lists::ALL;
+        // Cache key = source hash (all bundled lists + custom rules + enabled subscriptions).
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        EASYLIST.hash(&mut hasher);
+        for list in bundled {
+            list.hash(&mut hasher);
+        }
         custom.hash(&mut hasher);
         subs_text.hash(&mut hasher);
         let marker = store_dir.join(format!("v{:x}.ready", hasher.finish()));
         let cached = marker.exists();
-        match adblock_convert::to_content_blocker_chunks(&[EASYLIST, &custom, &subs_text], 25_000) {
+        let sources: Vec<&str> = bundled.iter().copied().chain([custom.as_str(), subs_text.as_str()]).collect();
+        match adblock_convert::to_content_blocker_chunks(&sources, 25_000) {
             Ok(chunks) => {
-                eprintln!("[aegis-cf] EasyList -> {} chunks (cached={cached})", chunks.len());
-                adblock_webkit::apply_filters(&app, chunks, store_dir.clone(), cached);
+                eprintln!("[aegis-cf] filter lists -> {} chunks (cached={cached})", chunks.len());
+                // Arm the marker BEFORE kicking off the (async) compiles, so it's written
+                // only after the last chunk actually persists — not up front, which would
+                // race a mid-compile exit into a stale partial cache. See adblock_webkit.
                 if !cached {
-                    let _ = std::fs::create_dir_all(&store_dir);
-                    let _ = std::fs::write(&marker, b"");
+                    adblock_webkit::arm_ready_marker(chunks.len(), marker.clone());
                 }
+                adblock_webkit::apply_filters(&app, chunks, store_dir.clone(), cached);
             }
             Err(e) => eprintln!("[aegis-cf] convert failed: {e}"),
         }
@@ -334,6 +345,17 @@ pub fn run() {
             // Ad-blocking (Linux/WebKit): install EasyList content filters.
             #[cfg(target_os = "linux")]
             install_adblock(app.handle().clone());
+            // Warm the pop-under matching engine off-thread so the first window.open
+            // check (nav::on_new_window) doesn't pay the EasyList parse on the UI thread.
+            // (Android already warms it on the first intercepted request.)
+            #[cfg(desktop)]
+            std::thread::spawn(|| {
+                let _ = adblock_engine::should_block(
+                    "https://aegis.invalid/",
+                    "https://aegis.invalid/",
+                    "document",
+                );
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![ipc])

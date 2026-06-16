@@ -63,6 +63,18 @@ mod tests {
     }
 
     #[test]
+    fn bundled_lists_convert_and_cover_trackers() {
+        // The Linux tier blocks page subresources via these converted content filters
+        // (NOT the engine), so prove EasyPrivacy's tracker rules survive conversion to
+        // WebKit JSON — a tracker EasyList alone would miss must appear in the output.
+        let chunks = to_content_blocker_chunks(&crate::adblock_lists::ALL, 25_000).unwrap();
+        assert!(!chunks.is_empty(), "bundled lists must convert to at least one chunk");
+        let all: String = chunks.concat();
+        assert!(all.contains("doubleclick"), "EasyList ad rule must convert");
+        assert!(all.contains("google-analytics"), "EasyPrivacy tracker rule must convert (Linux content-filter coverage)");
+    }
+
+    #[test]
     fn chunks_respect_the_max_size() {
         let rules = (0..50)
             .map(|i| format!("||ads{i}.example.com^"))

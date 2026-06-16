@@ -42,7 +42,11 @@ export function useAdblock(
   useEffect(() => {
     let active = true;
     void aegis.adblock.getState().then((s) => {
-      if (active) setState(s);
+      if (!active) return;
+      setState(s);
+      // Recover the active page's count on mount / tab-switch (live blockedCount events
+      // emitted before this subscription — e.g. the restored boot page — were missed).
+      setPage(s.pageBlocked ?? 0);
     });
     const unsubscribe = aegis.adblock.onBlockedCount((c: BlockedCount) => {
       if (c.viewId !== viewId) return;

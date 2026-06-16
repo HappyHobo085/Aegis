@@ -13,6 +13,7 @@ use serde_json::{json, Value};
 use tauri::AppHandle;
 
 /// Sentinel prefix a picked selector's JSON is wrapped in (via document.title).
+#[allow(dead_code)] // parsed only by the Linux WebKit title-changed signal (linux_layout)
 pub const SENTINEL: &str = "AEGISPICK:";
 
 /// Picking overlay: highlight on hover, pick on click, Esc to cancel. On pick it

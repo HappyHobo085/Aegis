@@ -203,6 +203,7 @@ export interface AdblockState {
   enabled: boolean; // global on/off
   allowlistedHosts: string[]; // hosts where blocking is suppressed
   sessionBlocked: number; // monotonic session total
+  pageBlocked?: number; // active tab's current-page count (recovers it on mount/tab-switch when live events were missed)
 }
 export interface BlockedCount {
   viewId: ViewId;

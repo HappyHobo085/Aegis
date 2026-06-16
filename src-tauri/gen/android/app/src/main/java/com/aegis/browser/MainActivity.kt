@@ -230,6 +230,18 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       temp.webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(v: WebView, req: WebResourceRequest): Boolean {
           val url = req.url?.toString() ?: return true
+          // Drop ad pop-unders instead of opening a background tab: blank/script-scheme
+          // shells (window.open('about:blank') the opener scripts → a dead empty tab)
+          // and ad/tracker destinations (same engine + synced toggle/allowlist as
+          // shouldInterceptRequest). The opener is the active tab; legit target=_blank
+          // links to a real page still open a tab.
+          val lower = url.trim().lowercase()
+          val opener = pageUrls[activeTabId] ?: ""
+          if (lower.isEmpty() || lower.startsWith("about:") || lower.startsWith("javascript:") ||
+            NativeAdblock.shouldBlock(url, opener, "document")) {
+            temp.post { temp.destroy() }
+            return true
+          }
           chromeWebView?.evaluateJavascript(
             "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(url)})",
             null,
