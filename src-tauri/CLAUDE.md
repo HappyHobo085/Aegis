@@ -46,8 +46,11 @@ dotted event name.
   but `on_new_window` first drops the request if the ad-block engine flags the
   destination as an ad pop-under; see Ad-block below).
 - **`nav.rs`** — content webview creation (`spawn_tab(id, url)`, replaces the
-  old `spawn_content`), navigation callbacks (malware guard, HTTPS-Only upgrade),
-  emits `nav.state`/`nav.failed`. Active webview now accessed via
+  old `spawn_content`), navigation callbacks (malware guard, HTTPS-Only upgrade,
+  **ad-block: `on_navigation` cancels loads of blocked ad/tracker destinations** via
+  `should_block` — catches pop-under redirect chains whose final ad domain `on_new_window`
+  never saw, and ad iframes, on every desktop; Android does the equivalent in
+  `shouldInterceptRequest`), emits `nav.state`/`nav.failed`. Active webview now accessed via
   `active_content_label()`/`active_webview()` (refactored from the old single
   `CONTENT_LABEL` constant).
 - **`view.rs`** — content webview geometry: insets, sidebar, fullscreen, overlay.

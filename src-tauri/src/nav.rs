@@ -106,6 +106,28 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
                 return false;
             }
 
+            // Ad-block at the navigation level: cancel loads of blocked ad/tracker
+            // destinations. `on_new_window` only sees a pop-under's INITIAL url, but these
+            // networks open a clean redirector that bounces through an ad domain
+            // (e.g. .../api/rtb-pops/go -> daleelerah.info -> the landing page), so the tab
+            // opens before the ad domain is known. Catching it here stops the chain on any
+            // frame and on every desktop (the WebKit content filters only cover
+            // subresources, not top-frame loads). Honors the on/off toggle + allowlist
+            // (should_block does); source = the page initiating the navigation.
+            {
+                let source = app_nav
+                    .get_webview(&content_label(nav_id))
+                    .and_then(|w| w.url().ok())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default();
+                if crate::adblock_engine::should_block(u.as_str(), &source, "document") {
+                    if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
+                        eprintln!("[aegis-nav] BLOCK ad navigation: {} (from {source})", u.as_str());
+                    }
+                    return false;
+                }
+            }
+
             // HTTPS-Only: upgrade http -> https (unless localhost, or the setting is
             // off — the escape hatch for http-only sites). Re-navigate on the main
             // thread AFTER this callback returns, to avoid re-entrancy.
