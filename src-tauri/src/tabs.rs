@@ -137,6 +137,23 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
     }
 }
 
+/// Close tab `id` programmatically (e.g. nav.rs auto-closing a pop-under shell whose
+/// only navigation was a blocked ad). Applies the same registry + webview + neighbour-
+/// respawn steps as the `tabs.close` IPC. No-op if the id is unknown.
+pub fn close_tab(app: &AppHandle, id: u32) {
+    let now = now_ms(app);
+    let out = app.state::<Tabs>().reg.lock().unwrap().close(id, now);
+    if out.closed_live {
+        close_webview(app, id);
+    }
+    if let Some((nid, u)) = out.spawn {
+        spawn(app, nid, &u);
+    }
+    crate::nav::forget_tab_content(id);
+    crate::view::apply_inset(app);
+    emit_and_persist(app);
+}
+
 /// Open a URL in a new BACKGROUND tab (from on_new_window / Ctrl-click). Spawns
 /// the webview, emits state + persists, but does NOT change the active tab.
 pub fn open_background(app: &AppHandle, url: &str) {

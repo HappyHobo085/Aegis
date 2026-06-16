@@ -1,8 +1,39 @@
 // Content-webview navigation (Phase 0 Task 6). A second webview is added as a
 // child of the "main" window, positioned below the chrome by `view.rs`. nav.*
 // channels drive it; navigation events are pushed to the chrome as `nav.state`.
+use std::collections::HashSet;
+use std::sync::{Mutex, OnceLock};
+
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Url, WebviewUrl};
+
+/// Tabs that have committed at least one real (non-`about:blank`) top-frame page.
+/// Used to auto-close pop-under shells: a background tab opened by `window.open` that
+/// goes straight to a blocked ad domain (directly or via a redirector) never shows real
+/// content, so when its ad navigation is cancelled we close the empty tab instead of
+/// leaving it behind. A tab that DID load a real page is never auto-closed.
+static TABS_WITH_CONTENT: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+fn tabs_with_content() -> &'static Mutex<HashSet<u32>> {
+    TABS_WITH_CONTENT.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Mark tab `id` as having shown a real page (called on a non-blank top-frame load).
+pub fn mark_tab_has_content(id: u32) {
+    tabs_with_content().lock().unwrap().insert(id);
+}
+
+/// Forget a closed tab's content flag (ids are monotonic, so this is just tidiness).
+pub fn forget_tab_content(id: u32) {
+    tabs_with_content().lock().unwrap().remove(&id);
+}
+
+/// Whether a tab whose ad navigation was just cancelled should be auto-closed as a
+/// pop-under shell. ONLY a non-active tab that has never shown a real page: the active
+/// tab is never closed (the user is looking at it), and a tab that already loaded real
+/// content is kept (the ad navigation is still blocked, just not fatal to the tab).
+fn should_autoclose_popunder(tab_id: u32, active_id: u32, has_content: bool) -> bool {
+    tab_id != active_id && !has_content
+}
 
 /// Webview label for a tab. Tab ids start at 1; the first tab is `content:1`.
 pub fn content_label(id: u32) -> String {
@@ -124,6 +155,22 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
                     if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
                         eprintln!("[aegis-nav] BLOCK ad navigation: {} (from {source})", u.as_str());
                     }
+                    // Auto-close a pop-under shell: a NON-active tab that never showed real
+                    // content and whose navigation is an ad is an opened-then-redirected-to-ad
+                    // pop-under — close the empty tab rather than leave it. The active tab and
+                    // any tab that already loaded a real page are never closed (just blocked).
+                    let has_content = tabs_with_content().lock().unwrap().contains(&nav_id);
+                    let active = app_nav
+                        .try_state::<crate::tabs::Tabs>()
+                        .map(|s| s.reg.lock().unwrap().active_id())
+                        .unwrap_or(0);
+                    if should_autoclose_popunder(nav_id, active, has_content) {
+                        let app_close = app_nav.clone();
+                        // Defer off the navigation callback to avoid re-entrancy.
+                        let _ = app_nav.run_on_main_thread(move || {
+                            crate::tabs::close_tab(&app_close, nav_id);
+                        });
+                    }
                     return false;
                 }
             }
@@ -154,6 +201,11 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             let u = u.as_str();
             emit_state(&app_load, load_id, u, "", loading);
             crate::tabs::on_tab_url(&app_load, load_id, u);
+            // A real page committed → this tab isn't a blank pop-under shell, so the
+            // ad-navigation auto-close (above) must never close it.
+            if !u.starts_with("about:") {
+                mark_tab_has_content(load_id);
+            }
             // New top-frame navigation → reset this tab's per-page blocked count (badge).
             #[cfg(target_os = "linux")]
             if loading {
@@ -345,4 +397,29 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         _ => return None,
     };
     Some(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{forget_tab_content, mark_tab_has_content, should_autoclose_popunder, tabs_with_content};
+
+    #[test]
+    fn autoclose_only_nonactive_blank_tabs() {
+        // A background (non-active) tab that never showed content → close the shell.
+        assert!(should_autoclose_popunder(7, 3, false));
+        // The ACTIVE tab is never auto-closed, even with no content — it's the user's tab.
+        assert!(!should_autoclose_popunder(3, 3, false));
+        // A tab that already loaded a real page is kept (the ad nav is still blocked).
+        assert!(!should_autoclose_popunder(7, 3, true));
+    }
+
+    #[test]
+    fn content_flag_round_trips() {
+        let id = 99_001; // unlikely to collide with other tests sharing the global
+        assert!(!tabs_with_content().lock().unwrap().contains(&id));
+        mark_tab_has_content(id);
+        assert!(tabs_with_content().lock().unwrap().contains(&id));
+        forget_tab_content(id);
+        assert!(!tabs_with_content().lock().unwrap().contains(&id));
+    }
 }
