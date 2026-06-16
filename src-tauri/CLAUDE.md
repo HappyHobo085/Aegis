@@ -224,6 +224,15 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     from the build host so it version-matches and loads them. Harmless for the `.deb`/dev
     (those dirs are already default). Fedora multilib note: `/usr/lib/gstreamer-1.0` is the
     *i686* dir, so it's only used as a fallback when no arch-specific dir exists.
+13. **`on_navigation` fires for subframes; don't drive the URL bar from it.** wry wires
+    Tauri's `on_navigation` to WebKitGTK `decide-policy` (NavigationAction) with NO
+    main-frame filter, so cross-site iframe/embedded-player loads call it too — and it
+    only hands you a `&Url` (no frame info), so you can't tell them apart. Emitting
+    `nav.state` there made the address bar flicker to embedded ad/player URLs mid-load.
+    Drive the URL bar from `on_page_load` instead (wired to `load-changed` = main-frame
+    only). Keep safety/HTTPS-Only checks in `on_navigation` so they still cover subframes.
+    (Android is unaffected — it reports via `onPageStarted`/`doUpdateVisitedHistory`,
+    already main-frame-only. Set `AEGIS_NAV_DEBUG=1` to trace what reaches the bar.)
 
 ### Multi-webview Linux layout (hard-won facts)
 

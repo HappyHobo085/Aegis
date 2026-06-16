@@ -43,6 +43,9 @@ fn is_local_host(url: &Url) -> bool {
 
 /// Emit a `nav.state` carrying the real tab id and page state.
 fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loading: bool) {
+    if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
+        eprintln!("[aegis-nav] emit_state id={id} loading={loading} url={url}");
+    }
     let (back, fwd) = app.try_state::<crate::tabs::Tabs>()
         .map(|s| { let r = s.reg.lock().unwrap(); (r.can_go_back(id), r.can_go_forward(id)) })
         .unwrap_or((false, false));
@@ -88,8 +91,14 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         // wry exposes no request interception) it IS the ad-block layer.
         .initialization_script_for_all_frames(crate::adblock_inject::script())
         .on_navigation(move |u| {
-            // Fires for every navigation (programmatic, link clicks, redirects).
-            emit_state(&app_nav, nav_id, u.as_str(), "", true);
+            // Fires for EVERY navigation action — including cross-site subframe/iframe
+            // loads. wry wires this to WebKitGTK's `decide-policy` (NavigationAction),
+            // which does NOT filter to the main frame, so an embedded player/ad iframe
+            // navigating would land here too. We must NOT update the address bar from
+            // here, or it flickers to those embedded URLs while a page loads. The URL bar
+            // is driven by `on_page_load` below — wired to `load-changed`, which is
+            // main-frame only. We still run the safety + HTTPS-Only checks here so they
+            // cover subframes too (a malware/insecure iframe should be caught as well).
 
             // Malicious-site guard: block known-malware hosts.
             if crate::safety::is_blocked(&app_nav, u) {
