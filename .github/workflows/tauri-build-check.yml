@@ -46,9 +46,14 @@ jobs:
           # color-font path, so the bundled-webkit AppImage crashed (blank/frozen pages)
           # on newer distros like Fedora; 24.04's newer webkit avoids it. (glibc floor
           # rises to 2.39 — fine for current distros.)
+          # bundleMediaFramework (via --config) ships GStreamer plugins matched to the
+          # bundled libgstreamer, so HTML5 <video>/streams play on other distros — without
+          # it the bundled (ubuntu) libgstreamer can't load the host's (e.g. Fedora) plugins
+          # and playback fails/crashes. It's CI-only: linuxdeploy's gstreamer plugin is
+          # Debian-pathed and fails on a Fedora dev box, so the main config leaves it off.
           - platform: ubuntu-24.04
             artifact: aegis-linux-appimage
-            bundles: '--bundles appimage'
+            bundles: '--bundles appimage --config src-tauri/tauri.appimage-mediaframework.conf.json'
             artifact_path: src-tauri/target/release/bundle/appimage/*.AppImage
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 45

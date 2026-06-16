@@ -180,6 +180,21 @@ fn install_tab_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+/// Whether `path` is a 64-bit ELF (magic `\x7fELF` + EI_CLASS==2). Used to pick the
+/// host-arch shared object when an AppImage bundles both 32- and 64-bit copies — Fedora
+/// multilib lists the i686 dir first on LD_LIBRARY_PATH, and pointing a loader at a
+/// wrong-arch module fails ("wrong ELF class"). Missing/short files read as false.
+#[cfg(target_os = "linux")]
+fn is_host_elf64(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut b = [0u8; 5];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut b))
+        .is_ok()
+        && &b[0..4] == b"\x7fELF"
+        && b[4] == 2
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // webkit2gtk's DMABUF renderer paints a blank/white window on many Linux GPU
@@ -225,53 +240,62 @@ pub fn run() {
             }
         }
         // WebKitGTK plays HTML5 <video>/<audio> through GStreamer, which dlopens its
-        // plugins — `appsink` (how WebKit pulls decoded frames) plus the actual codecs —
-        // from GST_PLUGIN_SYSTEM_PATH_1_0. In the AppImage, AppRun points that variable at
-        // the *bundled* plugin dir, but linuxdeploy bundles libgstreamer (a linked dep)
-        // WITHOUT the dlopened plugin modules, so the dir is empty: media dies with
-        // "GStreamer element appsink not found" — a permanent spinner, no playback (the
-        // streamex.sh symptom). The bundled libgstreamer is copied from this host and
-        // version-matches its plugins, so appending the host's plugin dir(s) lets them
-        // load. Harmless outside the AppImage (the .deb / `tauri dev` already use these
-        // dirs); we only append dirs that exist and aren't already on the path.
+        // plugins — `appsink` (how WebKit pulls decoded frames) plus the codecs — from
+        // GST_PLUGIN_SYSTEM_PATH_1_0. With `bundleMediaFramework` the AppImage now ships
+        // version-matched plugins under usr/lib/<arch>/gstreamer-1.0 (on LD_LIBRARY_PATH);
+        // use THOSE. The host's system plugins are built against the host's libgstreamer,
+        // NOT the bundled one, so on a cross-distro AppImage they're rejected ("GStreamer
+        // element ... not found") and a stream fails/crashes on load. Outside the AppImage
+        // (.deb / `tauri dev`) nothing is bundled, so fall back to the host's plugin dirs
+        // (there the system libgstreamer matches the system plugins).
         {
-            let mut dirs: Vec<&str> = vec![
-                "/usr/lib64/gstreamer-1.0",                // Fedora/RHEL/SUSE x86_64
-                "/usr/lib/x86_64-linux-gnu/gstreamer-1.0", // Debian/Ubuntu x86_64
-            ];
-            // `/usr/lib/gstreamer-1.0` is the generic (Arch) location, but on Fedora
-            // multilib it's the *i686* dir — only fall back to it when no arch-specific
-            // dir exists, so we never scan wrong-arch plugins into this x86_64 process.
-            if !std::path::Path::new("/usr/lib64/gstreamer-1.0").is_dir()
-                && !std::path::Path::new("/usr/lib/x86_64-linux-gnu/gstreamer-1.0").is_dir()
-            {
-                dirs.push("/usr/lib/gstreamer-1.0");
-            }
-            let current = std::env::var("GST_PLUGIN_SYSTEM_PATH_1_0").unwrap_or_default();
-            let mut paths: Vec<&str> = current.split(':').filter(|s| !s.is_empty()).collect();
-            for dir in dirs {
-                if std::path::Path::new(dir).is_dir() && !paths.contains(&dir) {
-                    paths.push(dir);
+            let bundled = std::env::var_os("LD_LIBRARY_PATH").and_then(|ld| {
+                std::env::split_paths(&ld)
+                    .map(|d| d.join("gstreamer-1.0"))
+                    // libgstcoreelements is in every GStreamer; ELF-check picks the host
+                    // arch (multilib LD_LIBRARY_PATH lists the 32-bit dir first).
+                    .find(|d| is_host_elf64(&d.join("libgstcoreelements.so")))
+            });
+            if let Some(gst) = bundled {
+                std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &gst);
+                // bundleMediaFramework also bundles gst-plugin-scanner and points
+                // GST_PLUGIN_SCANNER at it — leave that alone (a host scanner would be the
+                // wrong version for the bundled plugins).
+            } else {
+                let mut dirs: Vec<&str> = vec![
+                    "/usr/lib64/gstreamer-1.0",                // Fedora/RHEL/SUSE x86_64
+                    "/usr/lib/x86_64-linux-gnu/gstreamer-1.0", // Debian/Ubuntu x86_64
+                ];
+                // `/usr/lib/gstreamer-1.0` is generic (Arch) but the i686 dir on Fedora
+                // multilib — only fall back to it when no arch-specific dir exists.
+                if !std::path::Path::new("/usr/lib64/gstreamer-1.0").is_dir()
+                    && !std::path::Path::new("/usr/lib/x86_64-linux-gnu/gstreamer-1.0").is_dir()
+                {
+                    dirs.push("/usr/lib/gstreamer-1.0");
                 }
-            }
-            if !paths.is_empty() {
-                std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", paths.join(":"));
-            }
-            // The AppImage may point GST_PLUGIN_SCANNER at a bundled helper that wasn't
-            // packaged; fall back to the host's so plugin scanning isn't done noisily
-            // in-process. Only override when the current value is missing/nonexistent.
-            let scanner_ok = std::env::var_os("GST_PLUGIN_SCANNER")
-                .map(|s| std::path::Path::new(&s).exists())
-                .unwrap_or(false);
-            if !scanner_ok {
-                for scanner in [
-                    "/usr/libexec/gstreamer-1.0/gst-plugin-scanner",
-                    "/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner",
-                    "/usr/lib/gstreamer-1.0/gst-plugin-scanner",
-                ] {
-                    if std::path::Path::new(scanner).exists() {
-                        std::env::set_var("GST_PLUGIN_SCANNER", scanner);
-                        break;
+                let current = std::env::var("GST_PLUGIN_SYSTEM_PATH_1_0").unwrap_or_default();
+                let mut paths: Vec<&str> = current.split(':').filter(|s| !s.is_empty()).collect();
+                for dir in dirs {
+                    if std::path::Path::new(dir).is_dir() && !paths.contains(&dir) {
+                        paths.push(dir);
+                    }
+                }
+                if !paths.is_empty() {
+                    std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", paths.join(":"));
+                }
+                let scanner_ok = std::env::var_os("GST_PLUGIN_SCANNER")
+                    .map(|s| std::path::Path::new(&s).exists())
+                    .unwrap_or(false);
+                if !scanner_ok {
+                    for scanner in [
+                        "/usr/libexec/gstreamer-1.0/gst-plugin-scanner",
+                        "/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner",
+                        "/usr/lib/gstreamer-1.0/gst-plugin-scanner",
+                    ] {
+                        if std::path::Path::new(scanner).exists() {
+                            std::env::set_var("GST_PLUGIN_SCANNER", scanner);
+                            break;
+                        }
                     }
                 }
             }
@@ -288,21 +312,10 @@ pub fn run() {
         if std::env::var_os("GIO_MODULE_DIR").is_none() {
             if let Some(ld) = std::env::var_os("LD_LIBRARY_PATH") {
                 for dir in std::env::split_paths(&ld) {
-                    let module = dir.join("gio/modules/libgiognutls.so");
-                    // Pick the HOST-arch module: on multilib, LD_LIBRARY_PATH lists the
-                    // 32-bit lib dir before the 64-bit one, and pointing glib at a
-                    // wrong-arch module fails ("wrong ELF class: ELFCLASS32") leaving TLS
-                    // broken. Trust the ELF class byte (e_ident[4]: 2 = 64-bit), not order.
-                    let is_elf64 = {
-                        use std::io::Read;
-                        let mut b = [0u8; 5];
-                        std::fs::File::open(&module)
-                            .and_then(|mut f| f.read_exact(&mut b))
-                            .is_ok()
-                            && &b[0..4] == b"\x7fELF"
-                            && b[4] == 2
-                    };
-                    if is_elf64 {
+                    // Pick the HOST-arch module: on multilib LD_LIBRARY_PATH lists the
+                    // 32-bit dir before the 64-bit one, and pointing glib at a wrong-arch
+                    // module fails ("wrong ELF class: ELFCLASS32"), leaving TLS broken.
+                    if is_host_elf64(&dir.join("gio/modules/libgiognutls.so")) {
                         let mods = dir.join("gio/modules");
                         std::env::set_var("GIO_MODULE_DIR", &mods);
                         std::env::set_var("GIO_EXTRA_MODULES", &mods); // older glib
