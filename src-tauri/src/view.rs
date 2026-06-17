@@ -144,6 +144,21 @@ pub fn apply_inset(app: &AppHandle) {
             size: tauri::LogicalSize::new(w, h).into(),
         });
     }
+
+    // Windows/macOS: per-tab content webviews all sit at the same inset and OVERLAP, and
+    // z-order alone doesn't follow the active tab — so on every layout pass show the
+    // active tab's webview and hide every other tab's, or switching tabs just leaves the
+    // previous page on top. (Linux does this inside linux_layout::layout above.)
+    #[cfg(all(desktop, not(target_os = "linux")))]
+    {
+        let active = crate::nav::active_content_label(app);
+        let active_visible = lay.fullscreen || lay.sidebar || !lay.overlay;
+        for (label, w) in app.webviews() {
+            if label.starts_with("content:") {
+                let _ = if label == active && active_visible { w.show() } else { w.hide() };
+            }
+        }
+    }
 }
 
 /// Mutate the layout state, then re-apply visibility + geometry.

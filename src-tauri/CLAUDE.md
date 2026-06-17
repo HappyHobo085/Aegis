@@ -276,6 +276,18 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     so the controller's hit rect matches the host window. Only bites fractional DPI — 100%
     is unaffected, which is why CI / 100%-DPI testing missed it. (macOS keeps Logical.)
 
+16. **Windows runtime tab creation must spawn the webview OFF the UI thread, and tabs
+    need explicit show/hide.** Two pre-existing Windows multi-tab bugs:
+    (a) `window.add_child` **deadlocks the UI thread** when called synchronously from the
+    `ipc` command — WebView2's async `CreateCoreWebView2Controller` can't complete while
+    the event loop is blocked waiting on it (Tauri `WebviewBuilder` docs / wry#583). So
+    `tabs::spawn` creates the webview on a `std::thread::spawn` worker on Windows, then
+    re-applies layout via `run_on_main_thread`. Without it, the **+** button / Ctrl+T
+    froze the whole app. (b) Per-tab content webviews all sit at the inset and **overlap**;
+    z-order doesn't follow the active tab, so `view::apply_inset` shows the active tab's
+    webview and hides every other tab's each layout pass (Linux does this in
+    `linux_layout::layout`). Without it, switching tabs left the previous page on top.
+
 ### Multi-webview Linux layout (hard-won facts)
 
 These apply when there is more than one content webview (i.e. multiple tabs):
