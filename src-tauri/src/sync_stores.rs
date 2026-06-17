@@ -116,16 +116,26 @@ fn normalize_url(u: &str) -> String {
 /// other field (`"url"`) is URL-normalized.
 fn dedup_key(rec: &Value, key_field: &str) -> Option<String> {
     let raw = rec.get(key_field).and_then(Value::as_str)?;
-    Some(if key_field == "host" {
+    let key = if key_field == "host" {
         raw.trim().to_lowercase()
     } else {
         normalize_url(raw)
-    })
+    };
+    // A record whose key normalizes to nothing (empty / "#" / "/" / whitespace) is
+    // unidentifiable — treat it like a missing key so distinct junk records never group
+    // together and get tombstoned.
+    if key.is_empty() {
+        None
+    } else {
+        Some(key)
+    }
 }
 
 /// Among LIVE records, group by normalized key; for each group of >1, keep the deterministic
-/// survivor (highest HLC, tie-broken by lexicographically smallest uuid) and return the loser
-/// uuids. Pure + convergent: every device computes the same survivor from replicated fields.
+/// survivor: the highest HLC (`wall_ms`, `counter`, `node` — and `node` is a per-device id, so
+/// it almost always decides a cross-device tie); only on a FULL HLC tie does the smaller uuid
+/// win. Returns the loser uuids. Pure + convergent: every device computes the same survivor
+/// from replicated fields, independent of record order.
 fn duplicate_losers(records: &[Value], key_field: &str) -> Vec<String> {
     use std::collections::HashMap;
     let mut groups: HashMap<String, Vec<(String, Option<crate::sync_envelope::Hlc>)>> =
@@ -237,6 +247,31 @@ mod tests {
             drec("c", "http://y", "url", 5, false),
         ];
         assert!(duplicate_losers(&recs, "url").is_empty());
+    }
+
+    #[test]
+    fn dedup_skips_empty_normalized_keys() {
+        // empty / "#frag" / "/" all normalize to "" → unidentifiable → never grouped or deleted.
+        let recs = vec![
+            drec("a", "", "url", 10, false),
+            drec("b", "#frag", "url", 20, false),
+            drec("c", "/", "url", 30, false),
+        ];
+        assert!(duplicate_losers(&recs, "url").is_empty());
+    }
+
+    #[test]
+    fn dedup_node_decides_tie_before_uuid() {
+        // Equal wall_ms + counter but different node: the higher node wins (node is compared
+        // before the uuid fallback), regardless of which uuid is smaller.
+        let recs = vec![
+            json!({ "uuid": "aaa", "url": "http://x/p", "deleted": false,
+                    "hlc": { "wall_ms": 10, "counter": 0, "node": "zzz" } }),
+            json!({ "uuid": "zzz", "url": "http://x/p", "deleted": false,
+                    "hlc": { "wall_ms": 10, "counter": 0, "node": "aaa" } }),
+        ];
+        // node "zzz" > "aaa" → record "aaa" survives; "zzz" (smaller node) is the loser.
+        assert_eq!(duplicate_losers(&recs, "url"), vec!["zzz".to_string()]);
     }
 
     fn rec(uuid: &str, wall: i64, deleted: bool, payload: &str) -> Value {
