@@ -278,6 +278,8 @@ export const aegis: AegisApi = {
     enableFromPhrase: (opts) => call<SyncState>(IPC.syncEnableFromPhrase, { ...opts }),
     disable: (opts) => call<SyncState>(IPC.syncDisable, { ...(opts ?? {}) }),
     syncNow: () => call<SyncState>(IPC.syncNow),
+    testConnection: (url: string) =>
+      call<{ ok: boolean; latencyMs?: number; error?: string }>(IPC.syncTestConnection, { url }),
     getRecoveryPhrase: (opts) => call<{ recoveryPhrase: string }>(IPC.syncGetRecoveryPhrase, { ...opts }),
     listDevices: () => call<SyncDevice[]>(IPC.syncListDevices),
     removeDevice: (deviceId) => call<SyncDevice[]>(IPC.syncRemoveDevice, { deviceId }),

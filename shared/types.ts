@@ -110,6 +110,7 @@ export const IPC = {
   syncEnableFromPhrase: 'sync.enableFromPhrase',
   syncDisable: 'sync.disable',
   syncNow: 'sync.syncNow',
+  syncTestConnection: 'sync.testConnection',
   syncGetRecoveryPhrase: 'sync.getRecoveryPhrase',
   syncListDevices: 'sync.listDevices',
   syncRemoveDevice: 'sync.removeDevice',
@@ -445,6 +446,7 @@ export interface AegisApi {
     enableFromPhrase(opts: { phrase: string; passphrase?: string }): Promise<SyncState>;
     disable(opts?: { forget?: boolean }): Promise<SyncState>;
     syncNow(): Promise<SyncState>;
+    testConnection(url: string): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
     /** Highest-sensitivity: gated on an explicit confirm. */
     getRecoveryPhrase(opts: { confirm: boolean }): Promise<{ recoveryPhrase: string }>;
     listDevices(): Promise<SyncDevice[]>;

@@ -22,6 +22,7 @@ export interface UseSync {
   enableFromPhrase(phrase: string, passphrase?: string): Promise<void>;
   disable(forget?: boolean): Promise<void>;
   syncNow(): Promise<void>;
+  testConnection: (url: string) => Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
   getRecoveryPhrase(): Promise<string>;
   listDevices: typeof aegis.sync.listDevices;
   removeDevice: typeof aegis.sync.removeDevice;
@@ -64,6 +65,11 @@ export function useSync(): UseSync {
     setState(await aegis.sync.syncNow());
   }, []);
 
+  const testConnection = useCallback(
+    (url: string) => aegis.sync.testConnection(url),
+    [],
+  );
+
   const getRecoveryPhrase = useCallback(async (): Promise<string> => {
     const r = await aegis.sync.getRecoveryPhrase({ confirm: true });
     return r.recoveryPhrase;
@@ -78,6 +84,7 @@ export function useSync(): UseSync {
     enableFromPhrase,
     disable,
     syncNow,
+    testConnection,
     getRecoveryPhrase,
     listDevices,
     removeDevice,
