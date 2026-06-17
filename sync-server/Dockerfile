@@ -1,10 +1,19 @@
 # ---- build stage: static-ish musl binary ----
-FROM rust:alpine AS builder
+# Builder Alpine pinned to 3.20 to match the runtime base below, so the binary links against
+# the same musl it runs against (no skew if the floating `rust:alpine` tag bumps its Alpine).
+FROM rust:alpine3.20 AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /build
+# Dependency-cache layer: compile deps against a stub main so editing src/ doesn't rebuild them.
+# This RUN stays CACHED across source edits (only Cargo.toml/Cargo.lock changes invalidate it).
 COPY Cargo.toml Cargo.lock ./
+RUN mkdir src \
+    && echo 'fn main() {}' > src/main.rs \
+    && cargo build --release --locked \
+    && rm -rf src
+# Real sources; `touch` forces cargo to rebuild the bin crate while reusing the cached deps.
 COPY src ./src
-RUN cargo build --release --locked
+RUN touch src/main.rs && cargo build --release --locked
 
 # ---- runtime stage: minimal, non-root ----
 FROM alpine:3.20
