@@ -55,7 +55,26 @@ pub fn on_tab_title(app: &AppHandle, id: u32, title: &str) {
 }
 
 fn spawn(app: &AppHandle, id: u32, url: &str) {
-    if let Ok(u) = Url::parse(url) {
+    let Ok(u) = Url::parse(url) else { return };
+    // Windows: WebView2 DEADLOCKS the UI thread if a webview is created synchronously on
+    // the event-loop thread — i.e. directly from the sync `ipc` command (see the Tauri
+    // WebviewBuilder docs / wry#583: the async CreateCoreWebView2Controller can't complete
+    // because the loop is blocked waiting on it). So create the webview on a SEPARATE
+    // thread, then re-apply the content layout on the main thread once it exists.
+    #[cfg(target_os = "windows")]
+    {
+        let app = app.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = crate::nav::spawn_tab(&app, id, u) {
+                eprintln!("[aegis] spawn_tab({id}) failed: {e}");
+                return;
+            }
+            let app_layout = app.clone();
+            let _ = app.run_on_main_thread(move || crate::view::apply_inset(&app_layout));
+        });
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
         let _ = crate::nav::spawn_tab(app, id, u);
     }
 }

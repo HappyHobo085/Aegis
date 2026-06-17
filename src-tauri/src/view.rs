@@ -122,7 +122,20 @@ pub fn apply_inset(app: &AppHandle) {
         );
     }
 
-    #[cfg(all(desktop, not(target_os = "linux")))]
+    // Windows: at fractional DPI (e.g. 125%) wry's Logical set_bounds mispositions the
+    // WebView2 controller's INPUT region — the content webview renders below the chrome
+    // bars but still captures their clicks, so the toolbar/favourites become dead. Pass
+    // PHYSICAL bounds so the controller's hit-test rect matches the host window.
+    #[cfg(target_os = "windows")]
+    if let Some(content) = crate::nav::active_webview(app) {
+        let w = (logical.width - left - right).max(0.0);
+        let h = (logical.height - top).max(0.0);
+        let _ = content.set_bounds(tauri::Rect {
+            position: tauri::PhysicalPosition::new((left * scale).round() as i32, (top * scale).round() as i32).into(),
+            size: tauri::PhysicalSize::new((w * scale).round() as u32, (h * scale).round() as u32).into(),
+        });
+    }
+    #[cfg(target_os = "macos")]
     if let Some(content) = crate::nav::active_webview(app) {
         let w = (logical.width - left - right).max(0.0);
         let h = (logical.height - top).max(0.0);
@@ -130,6 +143,21 @@ pub fn apply_inset(app: &AppHandle) {
             position: tauri::LogicalPosition::new(left, top).into(),
             size: tauri::LogicalSize::new(w, h).into(),
         });
+    }
+
+    // Windows/macOS: per-tab content webviews all sit at the same inset and OVERLAP, and
+    // z-order alone doesn't follow the active tab — so on every layout pass show the
+    // active tab's webview and hide every other tab's, or switching tabs just leaves the
+    // previous page on top. (Linux does this inside linux_layout::layout above.)
+    #[cfg(all(desktop, not(target_os = "linux")))]
+    {
+        let active = crate::nav::active_content_label(app);
+        let active_visible = lay.fullscreen || lay.sidebar || !lay.overlay;
+        for (label, w) in app.webviews() {
+            if label.starts_with("content:") {
+                let _ = if label == active && active_visible { w.show() } else { w.hide() };
+            }
+        }
     }
 }
 

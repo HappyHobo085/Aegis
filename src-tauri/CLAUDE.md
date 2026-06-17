@@ -221,8 +221,13 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
 3. **NVIDIA + Wayland** — force XWayland (`GDK_BACKEND=x11`) in `lib.rs`.
 4. **`Engine` is `!Send`** — keep it on its one thread; only `String`/`bool` cross.
 5. **Event names** — always go through `emit_event()` (`.`→`:`).
-6. **WebView2 COM** in `adblock_win.rs` is unsafe + needs a real Windows desktop to
-   runtime-verify (CI compiles/links but doesn't launch the GUI).
+6. **WebView2 COM** in `adblock_win.rs` is unsafe; CI compiles/links but doesn't
+   launch the GUI. **Runtime-verified on real Windows 11 (2026-06):** it installs
+   without panicking and the network ad-block tier blocks (DoubleClick `gpt.js`
+   served an empty 204; a non-ad control script still loaded). `nav_url_win.rs`'s
+   `SourceChanged` handler installs cleanly too, though its same-document URL
+   tracking wasn't exercised yet. The shield block-counter is still NOT wired on
+   Windows (`note_blocked` is Linux-only) — blocking works, the badge just shows 0.
 7. **TLS** — a crypto provider must be installed once (done in `lib.rs`) or every
    reqwest/updater HTTPS call panics.
 8. **Android needs JDK 21.** Gradle 8.14.3 / AGP 8.11.0 can't run under JDK 25 (the
@@ -271,6 +276,36 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     (WKWebView `URL` KVO, mirroring wry's own `DocumentTitleChangedObserver`). NOTE: the
     macOS objc2 code can't be compiled from Linux at all — `objc2`'s build script needs a
     macOS C toolchain — so it is **CI-verified only** (macos-latest), not locally.
+
+14. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
+    backend). The MSVC "Desktop development with C++" workload bundles CMake; install
+    NASM separately (nasm.us) and add it to PATH. CI's `windows-latest` ships both, so
+    this only bites local builds. Same-machine aside: behind a network that blocks the
+    CA revocation endpoints (OCSP/CRL), cargo's schannel TLS fails every crates.io
+    fetch with `CRYPT_E_NO_REVOCATION_CHECK` — set `http.check-revoke = false` in
+    `~/.cargo/config.toml`.
+
+15. **Windows child webviews need PHYSICAL bounds at fractional DPI.** wry's `add_child`
+    / `set_bounds` called with `LogicalPosition`/`LogicalSize` mispositions the WebView2
+    controller's INPUT/hit-test region at non-100% scaling (e.g. 125%): the content
+    webview *renders* below the chrome bars but *captures their clicks*, so the toolbar
+    and favourites bar go dead (the tab strip, above the misplaced region, still works —
+    that's the "can't add a tab / favourites don't click" symptom). `nav::spawn_tab` and
+    `view::apply_inset` pass `PhysicalPosition`/`PhysicalSize` on Windows (logical×scale)
+    so the controller's hit rect matches the host window. Only bites fractional DPI — 100%
+    is unaffected, which is why CI / 100%-DPI testing missed it. (macOS keeps Logical.)
+
+16. **Windows runtime tab creation must spawn the webview OFF the UI thread, and tabs
+    need explicit show/hide.** Two pre-existing Windows multi-tab bugs:
+    (a) `window.add_child` **deadlocks the UI thread** when called synchronously from the
+    `ipc` command — WebView2's async `CreateCoreWebView2Controller` can't complete while
+    the event loop is blocked waiting on it (Tauri `WebviewBuilder` docs / wry#583). So
+    `tabs::spawn` creates the webview on a `std::thread::spawn` worker on Windows, then
+    re-applies layout via `run_on_main_thread`. Without it, the **+** button / Ctrl+T
+    froze the whole app. (b) Per-tab content webviews all sit at the inset and **overlap**;
+    z-order doesn't follow the active tab, so `view::apply_inset` shows the active tab's
+    webview and hides every other tab's each layout pass (Linux does this in
+    `linux_layout::layout`). Without it, switching tabs left the previous page on top.
 
 ### Multi-webview Linux layout (hard-won facts)
 
