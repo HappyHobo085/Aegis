@@ -93,7 +93,27 @@ fn merge_records(
 pub fn merge_into(app: &AppHandle, name: &str, remote: &[Value]) -> Vec<String> {
     let node = crate::sync_identity::node_id(app);
     let local = read_all(app, name);
-    let (merged, changed) = merge_records(local, remote, &node, crate::jsonstore::now_ms());
+    let (mut merged, mut changed) =
+        merge_records(local, remote, &node, crate::jsonstore::now_ms());
+    // Collapse cross-device duplicates (same normalized url/host): tombstone the losers so the
+    // deletion converges across devices. Idempotent — tombstoned losers are skipped next pass.
+    let losers = duplicate_losers(&merged, key_field_for(name));
+    if !losers.is_empty() {
+        crate::jsonstore::tombstone(
+            &mut merged,
+            |it| {
+                crate::jsonstore::uuid_of(it)
+                    .map(|u| losers.iter().any(|l| l == u))
+                    .unwrap_or(false)
+            },
+            app,
+        );
+        for u in losers {
+            if !changed.contains(&u) {
+                changed.push(u);
+            }
+        }
+    }
     if !changed.is_empty() {
         let _ = crate::jsonstore::save(app, name, &merged);
         if name == "allowlist" {
@@ -128,6 +148,15 @@ fn dedup_key(rec: &Value, key_field: &str) -> Option<String> {
         None
     } else {
         Some(key)
+    }
+}
+
+/// Which record field identifies a duplicate, per namespace.
+fn key_field_for(name: &str) -> &'static str {
+    if name == "allowlist" {
+        "host"
+    } else {
+        "url"
     }
 }
 
@@ -364,5 +393,12 @@ mod tests {
         let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert_eq!(changed, vec!["ok".to_string()]); // only the well-formed one
         assert_eq!(merged.len(), 1);
+    }
+
+    #[test]
+    fn key_field_for_picks_host_only_for_allowlist() {
+        assert_eq!(key_field_for("allowlist"), "host");
+        assert_eq!(key_field_for("favorites"), "url");
+        assert_eq!(key_field_for("saved"), "url");
     }
 }
