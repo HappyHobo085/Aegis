@@ -11,6 +11,7 @@ import { useFavorites } from './hooks/useFavorites';
 import { useHistory } from './hooks/useHistory';
 import { useSaved } from './hooks/useSaved';
 import { useSettings } from './hooks/useSettings';
+import { useSync } from './hooks/useSync';
 import { useSubscriptions } from './hooks/useSubscriptions';
 import { useCustomFilters } from './hooks/useCustomFilters';
 import { useDownloads } from './hooks/useDownloads';
@@ -47,6 +48,7 @@ import { AllowlistTab } from './components/AllowlistTab';
 import { DownloadsTab } from './components/DownloadsTab';
 import { SitePermissionsTab } from './components/SitePermissionsTab';
 import { SecurityTab } from './components/SecurityTab';
+import { SyncSettingsTab } from './components/SyncSettingsTab';
 import { DataTab } from './components/DataTab';
 import { TabsTab } from './components/TabsTab';
 import { TabStrip } from './components/TabStrip';
@@ -79,6 +81,7 @@ function DesktopApp() {
   const history = useHistory();
   const saved = useSaved(nav.state.url);
   const settings = useSettings();
+  const sync = useSync();
   const subscriptions = useSubscriptions();
   const customFilters = useCustomFilters();
   const downloads = useDownloads();
@@ -434,6 +437,12 @@ function DesktopApp() {
               update={settings.update}
               listExceptions={() => aegis.safety.listExceptions()}
               removeException={(h) => void aegis.safety.removeException(h)}
+            />
+          }
+          sync={
+            <SyncSettingsTab
+              sync={sync}
+              onSetServerUrl={(url) => void settings.update({ syncServerUrl: url })}
             />
           }
           data={

@@ -55,29 +55,63 @@ struct Query {
     reply: Sender<bool>,
 }
 
-static TX: OnceLock<Sender<Query>> = OnceLock::new();
+/// Messages to the engine thread. The `!Send` `Engine` lives on that one thread, so a
+/// FilterSet rebuild can't happen in-place from a caller — it's requested via `Reload`,
+/// which carries the extra list texts (enabled subscriptions + custom filters) to fold in
+/// alongside the bundled lists. `Query` and `Reload` are processed FIFO, so a query sent
+/// after a reload always sees the rebuilt engine.
+enum Msg {
+    Query(Query),
+    Reload(Vec<String>),
+}
 
-fn tx() -> &'static Sender<Query> {
+/// Build the matching engine from every bundled list (ads + trackers + Peter Lowe's +
+/// abuse-TLDs — see `adblock_lists`) plus the caller-supplied `extra` list texts. One
+/// EasyList-scale parse (~20 MB); runs on the engine thread.
+fn build_engine(extra: &[String]) -> Engine {
+    let mut set = FilterSet::new(false); // false = matching engine (not convert)
+    for list in crate::adblock_lists::ALL {
+        set.add_filters(list.lines(), ParseOptions::default());
+    }
+    for text in extra {
+        set.add_filters(text.lines(), ParseOptions::default());
+    }
+    Engine::from_filter_set(set, true)
+}
+
+static TX: OnceLock<Sender<Msg>> = OnceLock::new();
+
+fn tx() -> &'static Sender<Msg> {
     TX.get_or_init(|| {
-        let (tx, rx) = channel::<Query>();
+        let (tx, rx) = channel::<Msg>();
         std::thread::spawn(move || {
-            let mut set = FilterSet::new(false); // false = matching engine (not convert)
-            // Block from every bundled list (ads + trackers + Peter Lowe's), not just
-            // EasyList — see `adblock_lists`. Same set the WebKit/inject tiers use.
-            for list in crate::adblock_lists::ALL {
-                set.add_filters(list.lines(), ParseOptions::default());
-            }
-            let engine = Engine::from_filter_set(set, true);
-            while let Ok(q) = rx.recv() {
-                let blocked = match Request::new(&q.url, &q.source, &q.rtype) {
-                    Ok(req) => engine.check_network_request(&req).matched,
-                    Err(_) => false, // fail open: unparseable URL is allowed
-                };
-                let _ = q.reply.send(blocked);
+            let mut engine = build_engine(&[]);
+            while let Ok(msg) = rx.recv() {
+                match msg {
+                    Msg::Query(q) => {
+                        let blocked = match Request::new(&q.url, &q.source, &q.rtype) {
+                            Ok(req) => engine.check_network_request(&req).matched,
+                            Err(_) => false, // fail open: unparseable URL is allowed
+                        };
+                        let _ = q.reply.send(blocked);
+                    }
+                    // Rebuild the FilterSet + Engine in place on this thread (the only
+                    // place the !Send Engine can be replaced).
+                    Msg::Reload(extra) => engine = build_engine(&extra),
+                }
             }
         });
         tx
     })
+}
+
+/// Rebuild the engine's FilterSet from the bundled lists + `extra_lists` (the enabled
+/// subscriptions' text + the user's custom filters) so a filter change takes effect on
+/// Windows/macOS/Android (which otherwise never re-read them after boot). Fire-and-forget;
+/// the FIFO channel guarantees the next query sees the rebuilt engine. Called from
+/// `adblock_refresh::refresh`. (Linux's declarative WebKit tier reloads separately.)
+pub fn reload_lists(extra_lists: Vec<String>) {
+    let _ = tx().send(Msg::Reload(extra_lists));
 }
 
 /// Whether a subresource request to `url`, made by the page at `source_url` (with a
@@ -102,7 +136,7 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
         rtype: request_type.to_owned(),
         reply,
     };
-    if tx().send(q).is_err() {
+    if tx().send(Msg::Query(q)).is_err() {
         return false;
     }
     answer.recv().unwrap_or(false)
@@ -153,7 +187,7 @@ pub extern "system" fn Java_com_aegis_browser_NativeAdblock_shouldBlock(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_unwanted_popup, set_policy, should_block};
+    use super::{is_unwanted_popup, reload_lists, set_policy, should_block};
 
     // Blank/script-scheme shells are dropped without consulting the engine, so this
     // is policy-independent (won't race the policy-mutating test below).
@@ -248,5 +282,25 @@ mod tests {
         // Reset to default so nothing else sees a mutated engine.
         set_policy(true, &[]);
         assert!(should_block("https://adnxs.com/tag.js", "https://news.example.com", "script"));
+
+        // reload_lists folds extra filter text (an enabled subscription / a custom rule)
+        // into the engine. `reloadtest.example` is in NO bundled list, so it only blocks
+        // after the reload — proving the FilterSet rebuild took effect (FIFO: the query
+        // below is processed after the reload).
+        reload_lists(vec!["||reloadtest.example^".to_string()]);
+        assert!(
+            should_block("https://reloadtest.example/x", "https://site.example", "script"),
+            "a reloaded custom filter must take effect"
+        );
+        assert!(
+            should_block("https://adnxs.com/tag.js", "https://news.example.com", "script"),
+            "the bundled lists still apply after a reload"
+        );
+        // Reset the engine to the bundled-only lists so other tests don't see it blocked.
+        reload_lists(vec![]);
+        assert!(
+            !should_block("https://reloadtest.example/x", "https://site.example", "script"),
+            "after reloading without the custom filter, it no longer blocks"
+        );
     }
 }

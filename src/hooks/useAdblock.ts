@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AdblockState, BlockedCount, ListUpdateResult, ViewId } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
+import { onSyncChange } from '../lib/syncBus';
 
 const emptyState: AdblockState = {
   enabled: true,
@@ -55,9 +56,16 @@ export function useAdblock(
       // figure stays live without an extra getState round-trip.
       setState((prev) => (prev.sessionBlocked === c.session ? prev : { ...prev, sessionBlocked: c.session }));
     });
+    // The allowlist is syncable — refetch state (incl. allowlistedHosts) when sync merges it.
+    const offSync = onSyncChange('allowlist', () => {
+      void aegis.adblock.getState().then((s) => {
+        if (active) setState(s);
+      });
+    });
     return () => {
       active = false;
       unsubscribe();
+      offSync();
     };
   }, [viewId]);
 

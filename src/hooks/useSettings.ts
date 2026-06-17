@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { Settings } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { applyTheme } from '../lib/theme';
+import { onSyncChange } from '../lib/syncBus';
 
 const emptySettings: Settings = {
   homeUrl: '',
@@ -11,6 +12,10 @@ const emptySettings: Settings = {
   searchEngines: [],
   hideChromeByDefault: false,
   downloadDir: '',
+  httpsOnly: true,
+  tabIdleTimeout: 30,
+  webrtcPolicy: 'public-only',
+  syncServerUrl: '',
 };
 
 export function useSettings(): {
@@ -21,12 +26,22 @@ export function useSettings(): {
 
   useEffect(() => {
     let active = true;
+    // Mount: just load (the initial accent theme is applied once by App/MobileApp).
     void aegis.settings.get().then((s) => {
-      if (!active) return;
-      setSettings(s);
+      if (active) setSettings(s);
+    });
+    // On a SYNC-merged settings change, refetch AND re-apply the accent theme live
+    // (idempotent) so a synced primaryColor recolors the chrome without a reload.
+    const off = onSyncChange('settings', () => {
+      void aegis.settings.get().then((s) => {
+        if (!active) return;
+        setSettings(s);
+        applyTheme({ primaryColor: s.primaryColor });
+      });
     });
     return () => {
       active = false;
+      off();
     };
   }, []);
 

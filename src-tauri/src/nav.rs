@@ -110,17 +110,29 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     let size = window.inner_size()?.to_logical::<f64>(scale);
     let label = content_label(id);
 
+    // Per-site WebRTC escape hatch: an allowlisted host (the ad-block allowlist doubles as
+    // "trusted site") is exempt from the WebRTC shim + native backstops. Computed from the
+    // spawn URL's host before `url` is moved into the builder. Residual: keyed on the spawn
+    // host; an in-tab SPA navigation to a different host isn't re-evaluated until respawn.
+    let host_allowlisted = url
+        .host_str()
+        .map(|h| crate::adblock::host_allowlisted(app, h))
+        .unwrap_or(false);
+
     let app_nav = app.clone();
     let app_load = app.clone();
     let app_dl = app.clone();
     let nav_id = id;
     let load_id = id;
-    let builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(url))
+    // `mut` is only needed on Windows (additional_browser_args below); harmless elsewhere.
+    #[allow(unused_mut)]
+    let mut builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(url))
         .user_agent(CONTENT_UA)
-        // Inject the ad/tracker blocker at document start into the page and all iframes.
-        // On Linux this supplements the WebKit content filters; on Windows/macOS (where
-        // wry exposes no request interception) it IS the ad-block layer.
-        .initialization_script_for_all_frames(crate::adblock_inject::script())
+        // Inject the WebRTC IP-leak shim + ad/tracker blocker at document start into the
+        // page and all iframes. The shim hides the local IP per the user's webrtcPolicy;
+        // the ad-block part supplements WebKit content filters on Linux and IS the ad-block
+        // layer on Windows/macOS (where wry exposes no request interception).
+        .initialization_script_for_all_frames(crate::adblock_inject::script(app, host_allowlisted))
         .on_navigation(move |u| {
             // Fires for EVERY navigation action — including cross-site subframe/iframe
             // loads. wry wires this to WebKitGTK's `decide-policy` (NavigationAction),
@@ -263,6 +275,35 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             }
         });
 
+    // Windows: WebRTC native backstop via Chromium's IP-handling policy. CRITICAL:
+    // additional_browser_args REPLACES wry's ENTIRE default arg string, so we must
+    // re-include BOTH defaults wry sets — the --disable-features list AND
+    // --autoplay-policy=no-user-gesture-required (wry appends it because autoplay defaults
+    // to true; dropping it would break HTML5 video/audio autoplay). disable → block all
+    // non-proxied UDP (worker-tight); public-only → only the public interface (hides the
+    // LAN IP). Only override the args when we actually add a WebRTC flag, so the
+    // no-protection / allowlisted path keeps wry's untouched defaults. Read at webview
+    // creation only → a mid-session change applies to new tabs; the shim covers open tabs.
+    #[cfg(target_os = "windows")]
+    {
+        let webrtc_arg = if host_allowlisted {
+            None
+        } else {
+            match crate::settings::webrtc_policy(app).as_str() {
+                "disable" => Some(" --force-webrtc-ip-handling-policy=disable_non_proxied_udp"),
+                "public-only" => Some(" --force-webrtc-ip-handling-policy=default_public_interface_only"),
+                _ => None,
+            }
+        };
+        if let Some(arg) = webrtc_arg {
+            let mut args = String::from(
+                "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required",
+            );
+            args.push_str(arg);
+            builder = builder.additional_browser_args(&args);
+        }
+    }
+
     window.add_child(
         builder,
         tauri::LogicalPosition::new(0.0, DEFAULT_INSET_TOP),
@@ -288,6 +329,16 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         crate::adblock_webkit::apply_to_new_tab(app, &label);
         // Count blocked subresources on this tab for the shield badge.
         crate::linux_layout::connect_block_counter(app, &label);
+        // WebRTC native backstop: WebKitGTK's set_enable_webrtc is all-or-nothing, so it
+        // only enforces "disable" (worker-tight); public-only/default rely on the injected
+        // shim. Skipped for allowlisted ("trusted") hosts.
+        if !host_allowlisted {
+            crate::linux_layout::apply_webrtc_policy_label(
+                app,
+                &label,
+                &crate::settings::webrtc_policy(app),
+            );
+        }
     }
 
     // Windows: wry only intercepts custom-protocol requests, so install our own

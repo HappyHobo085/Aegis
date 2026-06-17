@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Favorite } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
+import { onSyncChange } from '../lib/syncBus';
 
 export function useFavorites(_currentUrl: string): {
   favorites: Favorite[];
@@ -14,11 +15,16 @@ export function useFavorites(_currentUrl: string): {
 
   useEffect(() => {
     let active = true;
-    void aegis.favorites.list().then((items) => {
-      if (active) setFavorites(items);
-    });
+    const load = () =>
+      void aegis.favorites.list().then((items) => {
+        if (active) setFavorites(items);
+      });
+    load();
+    // Refetch (targeted) when sync merges remote favorites — never a full reload.
+    const off = onSyncChange('favorites', load);
     return () => {
       active = false;
+      off();
     };
   }, []);
 

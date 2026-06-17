@@ -175,16 +175,17 @@ pub fn persist(app: &AppHandle) {
         Some(s) => s.reg.lock().unwrap().to_persisted(),
         None => return,
     };
-    if let Some(dir) = p.parent() { let _ = std::fs::create_dir_all(dir); }
     if let Ok(txt) = serde_json::to_string_pretty(&session) {
-        let _ = std::fs::write(p, txt);
+        // Durable write (atomic temp→rename + .bak) — tabs.json is rewritten on every
+        // tab/nav change, so a crash mid-write must not truncate it and lose the session.
+        let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
     }
 }
 
-/// Load a saved session, if any.
+/// Load a saved session, if any. Recovers from tabs.json.bak if the primary is corrupt.
 pub fn load_session(app: &AppHandle) -> Option<crate::tab_registry::PersistedSession> {
     let p = session_path(app)?;
-    let txt = std::fs::read_to_string(p).ok()?;
+    let txt = crate::jsonstore::read_with_backup(&p)?;
     serde_json::from_str(&txt).ok()
 }
 

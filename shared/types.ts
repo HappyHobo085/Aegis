@@ -104,6 +104,18 @@ export const IPC = {
   // events (main -> chrome): the tab list + which is active
   evtTabsState: 'tabs.state',
   evtTabsShortcut: 'tabs.shortcut',
+  // sync (E2E-encrypted cross-platform sync)
+  syncGetState: 'sync.getState',
+  syncEnableNew: 'sync.enableNew',
+  syncEnableFromPhrase: 'sync.enableFromPhrase',
+  syncDisable: 'sync.disable',
+  syncNow: 'sync.syncNow',
+  syncGetRecoveryPhrase: 'sync.getRecoveryPhrase',
+  syncListDevices: 'sync.listDevices',
+  syncRemoveDevice: 'sync.removeDevice',
+  // events (main -> chrome): engine state + a targeted post-merge change notice
+  evtSyncState: 'sync.state',
+  evtSyncChanged: 'sync.changed',
 } as const;
 
 export interface NavState {
@@ -264,6 +276,40 @@ export interface Settings {
   /** Minutes a background tab may sit idle before it is discarded (reloaded on
    * return). 0 disables time-based discard. */
   tabIdleTimeout: number;
+  /** WebRTC IP-leak policy. `'public-only'` (default) filters local/private ICE
+   * candidates so a page can't read your LAN/loopback IP, while keeping TURN/relay
+   * candidates so calls still work; `'disable'` blocks WebRTC construction entirely
+   * (breaks video calls); `'default'` applies no filtering. */
+  webrtcPolicy: 'default' | 'public-only' | 'disable';
+  /** The E2E-encrypted sync server endpoint. Empty = sync not configured (data stays
+   * local). Self-hosted: paste your reference-server URL. The server only ever sees
+   * opaque ciphertext. */
+  syncServerUrl?: string;
+}
+
+/** Engine status for the Sync settings UI. The server only stores ciphertext. */
+export interface SyncState {
+  enabled: boolean;
+  status: 'disabled' | 'idle' | 'syncing' | 'error';
+  serverUrl: string;
+  lastSyncMs: number;
+  lastError: string;
+  deviceId: string;
+  accountId: string;
+  vaultBacking: 'keychain' | 'passphrase' | 'none';
+}
+
+export interface SyncDevice {
+  deviceId: string;
+  label: string;
+  lastSeenMs?: number;
+  isThisDevice: boolean;
+}
+
+/** Targeted post-merge change notice — drives a per-store refetch, never a full reload. */
+export interface SyncChanged {
+  namespace: string;
+  changedUuids: string[];
 }
 
 /** Exposed on window.aegis by chromePreload via contextBridge. */
@@ -391,6 +437,20 @@ export interface AegisApi {
     listExceptions(): Promise<string[]>;
     removeException(host: string): Promise<void>;
     onInterstitial(cb: (p: SafetyInterstitialPayload | null) => void): () => void;
+  };
+  sync: {
+    getState(): Promise<SyncState>;
+    /** Start fresh — returns the 24-word recovery phrase ONCE (show, then discard). */
+    enableNew(opts?: { passphrase?: string }): Promise<{ recoveryPhrase: string }>;
+    enableFromPhrase(opts: { phrase: string; passphrase?: string }): Promise<SyncState>;
+    disable(opts?: { forget?: boolean }): Promise<SyncState>;
+    syncNow(): Promise<SyncState>;
+    /** Highest-sensitivity: gated on an explicit confirm. */
+    getRecoveryPhrase(opts: { confirm: boolean }): Promise<{ recoveryPhrase: string }>;
+    listDevices(): Promise<SyncDevice[]>;
+    removeDevice(deviceId: string): Promise<SyncDevice[]>;
+    onState(cb: (s: SyncState) => void): () => void;
+    onChanged(cb: (c: SyncChanged) => void): () => void;
   };
 }
 

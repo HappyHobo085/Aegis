@@ -68,10 +68,12 @@ fn fetch_text(url: String) -> Result<String, String> {
 /// Concatenated text of every ENABLED subscription, read from cache. Folded into
 /// the engine by `install_adblock`. Subscriptions with no cache yet contribute
 /// nothing (so a still-fetching or failed list is simply absent).
-#[allow(dead_code)] // only called from install_adblock, which is Linux-only
 pub fn enabled_text(app: &AppHandle) -> String {
     let mut out = String::new();
     for row in jsonstore::load(app, "subs") {
+        if jsonstore::is_deleted(&row) {
+            continue; // tombstoned subscription contributes nothing
+        }
         if !row.get("enabled").and_then(Value::as_bool).unwrap_or(false) {
             continue;
         }
@@ -85,13 +87,10 @@ pub fn enabled_text(app: &AppHandle) -> String {
     out
 }
 
-/// Rebuild + reapply the ad-block engine (folds in the current enabled subs).
-/// No-op off Linux until the Chromium-side engine lands.
+/// Rebuild + reapply ad-block after a subscription change, on every platform (Linux
+/// WebKit filters + the engine FilterSet reload via adblock_refresh).
 fn reinstall_adblock(app: &AppHandle) {
-    #[cfg(target_os = "linux")]
-    crate::install_adblock(app.clone());
-    #[cfg(not(target_os = "linux"))]
-    let _ = app;
+    crate::adblock_refresh::refresh(app);
 }
 
 /// Fetch a subscription in the background, cache it, stamp `lastUpdated`/`hash` on
@@ -100,13 +99,16 @@ fn reinstall_adblock(app: &AppHandle) {
 fn fetch_in_background(app: AppHandle, list_id: String, url: String) {
     std::thread::spawn(move || match fetch_text(url) {
         Ok(text) => {
-            let _ = std::fs::write(cache_path(&app, &list_id), &text);
+            // No .bak: the cache is regenerable from the network, so a recovery copy
+            // would just clutter the cache dir (and orphan on subs.remove).
+            let _ = jsonstore::write_atomic_no_backup(&cache_path(&app, &list_id), text.as_bytes());
             let hash = hash_text(&text);
-            let mut items = jsonstore::load(&app, "subs");
+            let mut items = jsonstore::load_synced(&app, "subs");
             for it in items.iter_mut() {
                 if it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()) {
                     it["lastUpdated"] = json!(jsonstore::now_ms());
                     it["hash"] = json!(hash);
+                    jsonstore::touch(it, &app);
                 }
             }
             let _ = jsonstore::save(&app, "subs", &items);
@@ -133,6 +135,7 @@ pub fn update_all(app: &AppHandle) -> Value {
     let now = jsonstore::now_ms();
     let enabled: Vec<(String, String)> = jsonstore::load(app, "subs")
         .iter()
+        .filter(|it| !jsonstore::is_deleted(it))
         .filter(|it| it.get("enabled").and_then(Value::as_bool).unwrap_or(false))
         .filter_map(|it| {
             Some((
@@ -149,7 +152,8 @@ pub fn update_all(app: &AppHandle) -> Value {
             let app = app.clone();
             std::thread::spawn(move || {
                 let res = fetch_text(url).map(|text| {
-                    let _ = std::fs::write(cache_path(&app, &id), &text);
+                    // Regenerable cache → no .bak (see fetch_in_background).
+                    let _ = jsonstore::write_atomic_no_backup(&cache_path(&app, &id), text.as_bytes());
                     hash_text(&text)
                 });
                 (id, res)
@@ -172,12 +176,13 @@ pub fn update_all(app: &AppHandle) -> Value {
     }
 
     // Stamp the rows we refreshed, then rebuild the engine if anything changed.
-    let mut items = jsonstore::load(app, "subs");
+    let mut items = jsonstore::load_synced(app, "subs");
     for it in items.iter_mut() {
         let id = it.get("listId").and_then(Value::as_str).map(str::to_string);
         if let Some(hash) = id.and_then(|id| hashes.get(&id)) {
             it["lastUpdated"] = json!(now);
             it["hash"] = json!(hash);
+            jsonstore::touch(it, app);
         }
     }
     let _ = jsonstore::save(app, "subs", &items);
@@ -191,7 +196,7 @@ pub fn update_all(app: &AppHandle) -> Value {
 /// Handle `subs.*`. Returns `None` if not a subs channel.
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {
-        "subs.list" => Some(Ok(json!(jsonstore::load(app, "subs")))),
+        "subs.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(app, "subs"))))),
 
         "subs.add" => {
             let url = payload
@@ -204,30 +209,52 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 return Some(Err("subscription url must be http(s)".into()));
             }
             let list_id = list_id_from_url(&url);
-            let mut items = jsonstore::load(app, "subs");
-            // Upsert by listId; insert optimistically (lastUpdated=null until the
-            // background fetch completes) so the IPC returns without a network wait.
-            items.retain(|it| it.get("listId").and_then(Value::as_str) != Some(list_id.as_str()));
-            items.push(json!({
-                "listId": list_id, "url": url, "enabled": true,
-                "lastUpdated": Value::Null, "etag": Value::Null, "hash": Value::Null,
-            }));
+            let mut items = jsonstore::load_synced(app, "subs");
+            // Upsert by listId. Revive an existing row IN PLACE (preserving its uuid) —
+            // including a tombstoned one — instead of dropping + re-creating, so a
+            // re-added subscription keeps its sync identity. lastUpdated=null until the
+            // background fetch completes (so the IPC returns without a network wait).
+            match items
+                .iter_mut()
+                .find(|it| it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()))
+            {
+                Some(it) => {
+                    if let Some(o) = it.as_object_mut() {
+                        o.insert("url".into(), json!(url));
+                        o.insert("enabled".into(), json!(true));
+                        o.insert("lastUpdated".into(), Value::Null);
+                        o.insert("deleted".into(), json!(false)); // revive if tombstoned
+                    }
+                    jsonstore::touch(it, app);
+                }
+                None => {
+                    let mut item = json!({
+                        "listId": list_id, "url": url, "enabled": true,
+                        "lastUpdated": Value::Null, "etag": Value::Null, "hash": Value::Null,
+                    });
+                    jsonstore::stamp_new(&mut item, app);
+                    items.push(item);
+                }
+            }
             let _ = jsonstore::save(app, "subs", &items);
             fetch_in_background(app.clone(), list_id, url);
-            Some(Ok(json!(items)))
+            Some(Ok(json!(jsonstore::live(items))))
         }
 
         "subs.setEnabled" => {
             let list_id = payload.get("listId").and_then(Value::as_str).unwrap_or("").to_string();
             let enabled = payload.get("enabled").and_then(Value::as_bool).unwrap_or(false);
-            let mut items = jsonstore::load(app, "subs");
+            let mut items = jsonstore::load_synced(app, "subs");
             let mut need_fetch = false;
             for it in items.iter_mut() {
-                if it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()) {
+                if !jsonstore::is_deleted(it)
+                    && it.get("listId").and_then(Value::as_str) == Some(list_id.as_str())
+                {
                     it["enabled"] = json!(enabled);
                     // Enabling a list we've never fetched → fetch it now.
                     need_fetch =
                         enabled && it.get("lastUpdated").map(Value::is_null).unwrap_or(true);
+                    jsonstore::touch(it, app);
                 }
             }
             let _ = jsonstore::save(app, "subs", &items);
@@ -235,17 +262,21 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 (true, Some(url)) => fetch_in_background(app.clone(), list_id, url),
                 _ => reinstall_adblock(app),
             }
-            Some(Ok(json!(items)))
+            Some(Ok(json!(jsonstore::live(items))))
         }
 
         "subs.remove" => {
             let list_id = payload.get("listId").and_then(Value::as_str).unwrap_or("").to_string();
-            let mut items = jsonstore::load(app, "subs");
-            items.retain(|it| it.get("listId").and_then(Value::as_str) != Some(list_id.as_str()));
+            let mut items = jsonstore::load_synced(app, "subs");
+            jsonstore::tombstone(
+                &mut items,
+                |it| it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()),
+                app,
+            );
             let _ = jsonstore::save(app, "subs", &items);
-            let _ = std::fs::remove_file(cache_path(app, &list_id));
+            let _ = std::fs::remove_file(cache_path(app, &list_id)); // cache is regenerable
             reinstall_adblock(app);
-            Some(Ok(json!(items)))
+            Some(Ok(json!(jsonstore::live(items))))
         }
 
         _ => None,

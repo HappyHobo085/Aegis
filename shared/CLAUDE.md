@@ -30,9 +30,28 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
 
 ## Adding a channel
 
-1. Add the channel/event name to the `IPC` const here (and any new interface).
-2. Add the method to `AegisApi` and implement it in `src/lib/ipcClient.ts`.
-3. Handle the channel in the Rust dispatcher (`src-tauri/src/lib.rs` → owning module).
+Three places, always (the `types.test.ts` invariant enforces every `IPC` value is
+dot-separated and unique, so a malformed/colliding name fails the test):
+
+1. **PLACE 1 — `types.ts`:** add the channel/event name to the `IPC` const, any new
+   payload interface, and the typed method/namespace to `AegisApi`.
+2. **PLACE 2 — `src-tauri/src/lib.rs`:** `mod foo;` + an
+   `if let Some(result) = foo::dispatch(&app, &channel, &payload) { return result; }`
+   arm in `ipc()` before the fallthrough. The module's
+   `dispatch(app, channel, payload) -> Option<Result<Value, String>>` matches its
+   channels and returns `None` otherwise (see `settings.rs`). For an **event**, emit
+   only via `crate::emit_event(app, "foo.bar", payload)` — it does the `.`→`:`
+   rewrite; never `app.emit` a raw dotted name.
+3. **PLACE 3 — `src/lib/ipcClient.ts`:** `call<T>(IPC.x, payload)` for commands;
+   `on<T>(IPC.evtX, cb)` for events (tauriInvoke.ts reverses `:`→`.`).
+
+**Settings-field shortcut.** A new *settings field* needs **no new channel** — add it
+to `settings.rs defaults()` + the `Settings` interface here; `settings.set`
+shallow-merges it. A Rust reader (mirror `https_only()`) exposes it to the core.
+
+**Event-driven refetch.** A `*.changed` event must drive a **targeted per-store
+refetch** (the precedent is `useHistory` subscribing `onChanged(() => list())`), never
+a `window.location.reload()`.
 
 ## Tests
 

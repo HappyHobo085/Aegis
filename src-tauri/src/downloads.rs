@@ -35,9 +35,9 @@ pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf) {
     let save = dir(app).join(&filename);
     *destination = save.clone();
 
-    let mut items = jsonstore::load(app, "downloads");
+    let mut items = jsonstore::load_synced(app, "downloads");
     let id = jsonstore::next_id(&items);
-    items.push(json!({
+    let mut item = json!({
         "id": id,
         "url": url,
         "filename": filename,
@@ -46,22 +46,25 @@ pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf) {
         "receivedBytes": 0,
         "totalBytes": 0,
         "startedAt": jsonstore::now_ms()
-    }));
+    });
+    jsonstore::stamp_new(&mut item, app);
+    items.push(item);
     let _ = jsonstore::save(app, "downloads", &items);
     let _ = crate::emit_event(app, "downloads.changed", Value::Null);
 }
 
 /// On DownloadEvent::Finished: mark the newest progressing entry completed/interrupted.
 pub fn on_finished(app: &AppHandle, success: bool) {
-    let mut items = jsonstore::load(app, "downloads");
+    let mut items = jsonstore::load_synced(app, "downloads");
     for it in items.iter_mut().rev() {
-        if it.get("state").and_then(Value::as_str) == Some("progressing") {
+        if !jsonstore::is_deleted(it) && it.get("state").and_then(Value::as_str) == Some("progressing") {
             if let Some(o) = it.as_object_mut() {
                 o.insert(
                     "state".into(),
                     json!(if success { "completed" } else { "interrupted" }),
                 );
             }
+            jsonstore::touch(it, app);
             break;
         }
     }
@@ -72,24 +75,29 @@ pub fn on_finished(app: &AppHandle, success: bool) {
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     let id = || payload.get("id").and_then(Value::as_i64);
     match channel {
-        "downloads.list" => Some(Ok(json!(jsonstore::load(app, "downloads")))),
+        "downloads.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(app, "downloads"))))),
 
         "downloads.remove" | "downloads.cancel" => {
-            let mut items = jsonstore::load(app, "downloads");
+            let mut items = jsonstore::load_synced(app, "downloads");
             let want = id();
-            items.retain(|it| it.get("id").and_then(Value::as_i64) != want);
+            jsonstore::tombstone(&mut items, |it| it.get("id").and_then(Value::as_i64) == want, app);
             let _ = jsonstore::save(app, "downloads", &items);
-            Some(Ok(json!(items)))
+            Some(Ok(json!(jsonstore::live(items))))
         }
 
         "downloads.clear" => {
-            // keep in-progress, clear finished
-            let kept: Vec<Value> = jsonstore::load(app, "downloads")
-                .into_iter()
-                .filter(|it| it.get("state").and_then(Value::as_str) == Some("progressing"))
-                .collect();
-            let _ = jsonstore::save(app, "downloads", &kept);
-            Some(Ok(json!(kept)))
+            // Tombstone finished rows (completed/interrupted); keep in-progress live.
+            let mut items = jsonstore::load_synced(app, "downloads");
+            jsonstore::tombstone(
+                &mut items,
+                |it| {
+                    !jsonstore::is_deleted(it)
+                        && it.get("state").and_then(Value::as_str) != Some("progressing")
+                },
+                app,
+            );
+            let _ = jsonstore::save(app, "downloads", &items);
+            Some(Ok(json!(jsonstore::live(items))))
         }
 
         "downloads.openFile" => {
