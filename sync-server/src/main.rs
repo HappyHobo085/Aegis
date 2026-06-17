@@ -160,6 +160,7 @@ impl Snapshot {
         let records = store
             .records
             .iter()
+            // _uuid == record.uuid by construction (see into_store); use the field value, not the key
             .map(|((account, ns, _uuid), record)| SnapRecord {
                 account: account.clone(),
                 ns: ns.clone(),
@@ -439,5 +440,6 @@ mod tests {
         let r = back.records.get(&("acct".into(), "bookmarks".into(), "u1".into())).unwrap();
         assert_eq!(r.ct, "cc");
         assert_eq!(back.devices.get("acct").unwrap().get("dev1").unwrap().label, "phone");
+        assert_eq!(back.devices.get("acct").unwrap().get("dev1").unwrap().last_seen_ms, 42);
     }
 }
