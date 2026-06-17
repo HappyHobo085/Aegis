@@ -263,6 +263,20 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             }
         });
 
+    // Windows (fractional DPI): create the child webview with PHYSICAL bounds so the
+    // WebView2 controller's input/hit-test region matches its render region. With Logical
+    // bounds at e.g. 125% the controller's hit region ends up far above the host window,
+    // so the content webview swallows clicks meant for the chrome's toolbar/favourites.
+    #[cfg(target_os = "windows")]
+    window.add_child(
+        builder,
+        tauri::PhysicalPosition::new(0.0, (DEFAULT_INSET_TOP * scale).round()),
+        tauri::PhysicalSize::new(
+            (size.width * scale).round(),
+            ((size.height - DEFAULT_INSET_TOP).max(0.0) * scale).round(),
+        ),
+    )?;
+    #[cfg(not(target_os = "windows"))]
     window.add_child(
         builder,
         tauri::LogicalPosition::new(0.0, DEFAULT_INSET_TOP),

@@ -266,6 +266,16 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     fetch with `CRYPT_E_NO_REVOCATION_CHECK` — set `http.check-revoke = false` in
     `~/.cargo/config.toml`.
 
+15. **Windows child webviews need PHYSICAL bounds at fractional DPI.** wry's `add_child`
+    / `set_bounds` called with `LogicalPosition`/`LogicalSize` mispositions the WebView2
+    controller's INPUT/hit-test region at non-100% scaling (e.g. 125%): the content
+    webview *renders* below the chrome bars but *captures their clicks*, so the toolbar
+    and favourites bar go dead (the tab strip, above the misplaced region, still works —
+    that's the "can't add a tab / favourites don't click" symptom). `nav::spawn_tab` and
+    `view::apply_inset` pass `PhysicalPosition`/`PhysicalSize` on Windows (logical×scale)
+    so the controller's hit rect matches the host window. Only bites fractional DPI — 100%
+    is unaffected, which is why CI / 100%-DPI testing missed it. (macOS keeps Logical.)
+
 ### Multi-webview Linux layout (hard-won facts)
 
 These apply when there is more than one content webview (i.e. multiple tabs):
