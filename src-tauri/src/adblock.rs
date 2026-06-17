@@ -10,6 +10,8 @@ use std::sync::{Mutex, OnceLock};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager};
 
+use crate::jsonstore;
+
 // --- Blocked-resource counters (the shield badge) ---
 // The actual blocking is platform-specific (Linux WebKit content filters, etc.), so
 // counting hooks into the per-platform request path: on Linux, the resource-load-started
@@ -82,6 +84,93 @@ impl Default for AdblockState {
     }
 }
 
+/// Whether `host` is covered by the ad-block allowlist — an exact match or a subdomain
+/// of an allowlisted host (allowlisting `example.com` also covers `www.example.com`).
+/// Reused as the WebRTC per-site escape hatch: an allowlisted site is "trusted", so its
+/// WebRTC isn't filtered by the shim / native backstops.
+#[cfg_attr(target_os = "android", allow(dead_code))] // desktop-only escape hatch in v1
+pub fn host_allowlisted(app: &AppHandle, host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    match app.try_state::<AdblockState>() {
+        Some(s) => {
+            let g = s.0.lock().unwrap();
+            g.allowlist
+                .iter()
+                .any(|h| host == h || host.ends_with(&format!(".{h}")))
+        }
+        None => false,
+    }
+}
+
+// --- Persisted allowlist (allowlist.json, a syncable store of {host, uuid, hlc, deleted}) ---
+// Before this the allowlist was in-memory only (lost on restart). It's now a syncable
+// store; the in-memory Inner.allowlist is a fast cache reseeded from it after every change
+// and at boot.
+
+/// The live allowlisted hosts from the persisted store.
+pub fn load_allowlist_hosts(app: &AppHandle) -> Vec<String> {
+    jsonstore::live(jsonstore::load_synced(app, "allowlist"))
+        .iter()
+        .filter_map(|it| it.get("host").and_then(Value::as_str).map(String::from))
+        .collect()
+}
+
+/// Add a host (revive a tombstone in place, or stamp a new record).
+fn add_host(app: &AppHandle, host: &str) {
+    let mut items = jsonstore::load_synced(app, "allowlist");
+    match items
+        .iter_mut()
+        .find(|it| it.get("host").and_then(Value::as_str) == Some(host))
+    {
+        Some(it) => {
+            if jsonstore::is_deleted(it) {
+                if let Some(o) = it.as_object_mut() {
+                    o.insert("deleted".into(), json!(false));
+                }
+                jsonstore::touch(it, app);
+            }
+        }
+        None => {
+            let mut item = json!({ "host": host });
+            jsonstore::stamp_new(&mut item, app);
+            items.push(item);
+        }
+    }
+    let _ = jsonstore::save(app, "allowlist", &items);
+}
+
+/// Tombstone a host.
+fn remove_host(app: &AppHandle, host: &str) {
+    let mut items = jsonstore::load_synced(app, "allowlist");
+    jsonstore::tombstone(&mut items, |it| it.get("host").and_then(Value::as_str) == Some(host), app);
+    let _ = jsonstore::save(app, "allowlist", &items);
+}
+
+/// Tombstone every live host (clear).
+fn clear_hosts(app: &AppHandle) {
+    let mut items = jsonstore::load_synced(app, "allowlist");
+    jsonstore::tombstone(&mut items, |it| !jsonstore::is_deleted(it), app);
+    let _ = jsonstore::save(app, "allowlist", &items);
+}
+
+/// Refresh the in-memory Inner.allowlist cache from the persisted store.
+fn reseed_inner(app: &AppHandle) {
+    let hosts = load_allowlist_hosts(app);
+    if let Some(s) = app.try_state::<AdblockState>() {
+        s.0.lock().unwrap().allowlist = hosts;
+    }
+}
+
+/// Seed the (already `.manage()`'d) AdblockState from disk at boot — MUTATE the managed
+/// state (it's managed before `setup()` runs, so it can't be constructed with data) — then
+/// mirror the policy into the engine. Fixes the restart-loses-allowlist bug on all platforms.
+pub fn seed_from_disk(app: &AppHandle) {
+    reseed_inner(app);
+    sync_engine(app);
+}
+
 fn state_json(app: &AppHandle) -> Value {
     match app.try_state::<AdblockState>() {
         Some(s) => {
@@ -131,25 +220,26 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 
         "adblock.toggleAllowlist" | "adblock.removeAllowlist" => {
             let host = payload.get("host").and_then(Value::as_str).unwrap_or("").to_string();
-            if let Some(s) = app.try_state::<AdblockState>() {
-                let mut g = s.0.lock().unwrap();
+            if !host.is_empty() {
                 if channel == "adblock.removeAllowlist" {
-                    g.allowlist.retain(|h| h != &host);
-                } else if let Some(i) = g.allowlist.iter().position(|h| h == &host) {
-                    g.allowlist.remove(i);
-                } else if !host.is_empty() {
-                    g.allowlist.push(host);
+                    remove_host(app, &host);
+                } else if load_allowlist_hosts(app).iter().any(|h| h == &host) {
+                    remove_host(app, &host); // toggle off
+                } else {
+                    add_host(app, &host); // toggle on
                 }
             }
+            reseed_inner(app); // refresh the in-memory cache from the persisted store
             sync_engine(app);
+            crate::sync::nudge(app); // allowlist is SYNCABLE (no-op when sync is disabled)
             Some(Ok(state_json(app)))
         }
 
         "adblock.clearAllowlist" => {
-            if let Some(s) = app.try_state::<AdblockState>() {
-                s.0.lock().unwrap().allowlist.clear();
-            }
+            clear_hosts(app);
+            reseed_inner(app);
             sync_engine(app);
+            crate::sync::nudge(app);
             Some(Ok(state_json(app)))
         }
 

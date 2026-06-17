@@ -108,6 +108,25 @@ dotted event name.
     `ICoreWebView2` via unsafe COM for full network interception.
 - **Security** — `safety.rs` (URLhaus malware host set from `resources/`, JNI
   `isMalwareHost`), `permissions.rs` (site permission prompts).
+- **WebRTC IP-leak defense** — `webrtc_shim.rs`: the `webrtcPolicy` setting
+  (`default`/`public-only`(default)/`disable`) as a document-start JS shim that wraps
+  `RTCPeerConnection` to filter local/private ICE candidates (the `icecandidate` event,
+  `createOffer`/`Answer` SDP, `localDescription` getters, **and `getStats()`**) while
+  keeping TURN/relay so calls survive. The shipped JS is single-sourced in
+  `webrtc_shim.public-only.js` / `webrtc_shim.disable.js` (`include_str!`'d) and executed
+  by the vitest runtime test `src/lib/webrtcShim.test.ts` (authoritative); the Rust
+  `is_local_address`/`keep_candidate`/`filter_sdp` are a parallel unit-tested reference.
+  Baked into the injection by `adblock_inject::script(app, host_allowlisted)`; the
+  per-site escape hatch reuses the ad-block allowlist (`adblock::host_allowlisted`). Native
+  backstops: Linux `set_enable_webrtc(false)` for `disable` only (`linux_layout`); Windows
+  `--force-webrtc-ip-handling-policy` via `additional_browser_args` (which **replaces**
+  wry's defaults, so it re-includes both `--disable-features=…` and
+  `--autoplay-policy=no-user-gesture-required`). Android: the policy lives in a global
+  (`note_policy`, seeded at boot + on `settings.set`), read by the `NativeWebrtc.shimScript`
+  JNI getter and registered per-tab. **Residual matrix (honest):** the shim covers page +
+  iframe frames but NOT Web Worker scopes. `disable` is worker-tight on Linux/Windows
+  (native), shim-only (workers leak) on macOS/Android. `public-only` is native (worker-tight)
+  on Windows, shim-only on Linux/macOS/Android. Per-site hatch is desktop-only in v1.
 - **Linux** — `linux_layout.rs`: works around **tauri#10420** by reparenting
   webkit2gtk widgets GtkBox → GtkFixed; title-changed signal feeds history +
   routes the element-picker sentinel; Esc-exits-fullscreen; GTK key hook

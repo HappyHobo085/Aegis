@@ -1,6 +1,7 @@
 // src/hooks/useCustomFilters.ts
 import { useCallback, useEffect, useState } from 'react';
 import { aegis } from '../lib/ipcClient';
+import { onSyncChange } from '../lib/syncBus';
 
 export function useCustomFilters(): {
   text: string;
@@ -10,11 +11,16 @@ export function useCustomFilters(): {
 
   useEffect(() => {
     let active = true;
-    void aegis.customFilters.get().then((stored) => {
-      if (active) setText(stored);
-    });
+    const load = () =>
+      void aegis.customFilters.get().then((stored) => {
+        if (active) setText(stored);
+      });
+    load();
+    // Refetch when sync merges a remote custom-filter change.
+    const off = onSyncChange('customFilters', load);
     return () => {
       active = false;
+      off();
     };
   }, []);
 

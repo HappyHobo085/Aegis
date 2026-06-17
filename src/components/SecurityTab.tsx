@@ -57,6 +57,27 @@ export function SecurityTab({
           ))}
         </ul>
       )}
+      <h3>WebRTC IP protection</h3>
+      <label className="security-tab__field">
+        <span>WebRTC policy</span>
+        <select
+          value={settings.webrtcPolicy}
+          onChange={(e) => update({ webrtcPolicy: e.target.value as Settings['webrtcPolicy'] })}
+          aria-label="WebRTC policy"
+        >
+          <option value="public-only">Hide my local IP (recommended)</option>
+          <option value="disable">Disable WebRTC entirely — breaks video calls</option>
+          <option value="default">No protection</option>
+        </select>
+      </label>
+      <p>
+        WebRTC can leak your device&apos;s local-network IP to websites, even over a VPN.
+        &ldquo;Hide my local IP&rdquo; filters out private/loopback addresses while keeping
+        relay candidates so video and voice calls still work. &ldquo;Disable&rdquo; turns
+        WebRTC off entirely (calls won&apos;t work). Changes apply to new tabs &mdash;
+        reload open tabs to apply.
+      </p>
+
       <h3>Malicious-site protection</h3>
       <p>
         On &mdash; known malware and phishing sites are blocked with a warning. This protection is always

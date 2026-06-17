@@ -23,6 +23,9 @@ import type {
   TabShortcut,
   UpdateState,
   SafetyInterstitialPayload,
+  SyncState,
+  SyncDevice,
+  SyncChanged,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call, on } from './tauriInvoke';
@@ -268,6 +271,18 @@ export const aegis: AegisApi = {
     listExceptions: () => call<string[]>(IPC.safetyListExceptions),
     removeException: (host) => call(IPC.safetyRemoveException, { host }),
     onInterstitial: (cb) => on<SafetyInterstitialPayload | null>(IPC.evtSafetyInterstitial, cb),
+  },
+  sync: {
+    getState: () => call<SyncState>(IPC.syncGetState),
+    enableNew: (opts) => call<{ recoveryPhrase: string }>(IPC.syncEnableNew, { ...(opts ?? {}) }),
+    enableFromPhrase: (opts) => call<SyncState>(IPC.syncEnableFromPhrase, { ...opts }),
+    disable: (opts) => call<SyncState>(IPC.syncDisable, { ...(opts ?? {}) }),
+    syncNow: () => call<SyncState>(IPC.syncNow),
+    getRecoveryPhrase: (opts) => call<{ recoveryPhrase: string }>(IPC.syncGetRecoveryPhrase, { ...opts }),
+    listDevices: () => call<SyncDevice[]>(IPC.syncListDevices),
+    removeDevice: (deviceId) => call<SyncDevice[]>(IPC.syncRemoveDevice, { deviceId }),
+    onState: (cb) => on<SyncState>(IPC.evtSyncState, cb),
+    onChanged: (cb) => on<SyncChanged>(IPC.evtSyncChanged, cb),
   },
 };
 

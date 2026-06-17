@@ -62,6 +62,21 @@ vi.mock('../../lib/ipcClient', () => ({
       onBlockedCount: vi.fn().mockReturnValue(() => {}),
     },
     lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
+    sync: {
+      getState: vi.fn().mockResolvedValue({
+        enabled: false, status: 'disabled', serverUrl: '', lastSyncMs: 0,
+        lastError: '', deviceId: '', accountId: '', vaultBacking: 'none',
+      }),
+      enableNew: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
+      enableFromPhrase: vi.fn().mockResolvedValue({}),
+      disable: vi.fn().mockResolvedValue({}),
+      syncNow: vi.fn().mockResolvedValue({}),
+      getRecoveryPhrase: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
+      listDevices: vi.fn().mockResolvedValue([]),
+      removeDevice: vi.fn().mockResolvedValue([]),
+      onState: vi.fn().mockReturnValue(() => {}),
+      onChanged: vi.fn().mockReturnValue(() => {}),
+    },
     favorites: {
       list: vi.fn().mockResolvedValue([]),
       add: vi.fn().mockResolvedValue([]),

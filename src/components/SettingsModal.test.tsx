@@ -15,6 +15,7 @@ const panels = () => ({
   downloads: <div data-testid="panel-downloads">DOWNLOADS</div>,
   sitePermissions: <div data-testid="panel-sitePermissions">SITE PERMISSIONS</div>,
   security: <div data-testid="panel-security">SECURITY</div>,
+  sync: <div data-testid="panel-sync">SYNC</div>,
   data: <div data-testid="panel-data">DATA</div>,
 });
 

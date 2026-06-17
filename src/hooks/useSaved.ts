@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import type { SavedItem } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
+import { onSyncChange } from '../lib/syncBus';
 
 export interface UseSaved {
   items: SavedItem[];
@@ -42,14 +43,27 @@ export function useSaved(currentUrl: string): UseSaved {
 
   useEffect(() => {
     let active = true;
-    void aegis.saved.list().then((list) => {
-      if (active) setItems(list);
-    });
-    void aegis.saved.tagUnion().then((union) => {
-      if (active) setTagUnion(union);
+    const loadList = () => {
+      void aegis.saved.list().then((list) => {
+        if (active) setItems(list);
+      });
+      void aegis.saved.tagUnion().then((union) => {
+        if (active) setTagUnion(union);
+      });
+    };
+    loadList();
+    // Refetch (targeted) when sync merges remote saved items — list + tagUnion + the
+    // current-url fill state (a synced add/remove can change whether THIS url is saved).
+    // `has` is only refreshed here (mount already queries it via the currentUrl effect).
+    const off = onSyncChange('saved', () => {
+      loadList();
+      void aegis.saved.has(urlRef.current).then((saved) => {
+        if (active) setIsCurrentSaved(saved);
+      });
     });
     return () => {
       active = false;
+      off();
     };
   }, []);
 

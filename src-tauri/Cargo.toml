@@ -30,6 +30,9 @@ tauri-plugin-log = "2"
 tauri-plugin-dialog = "2"
 adblock = { version = "0.12.5", features = ["content-blocking"] }
 tauri-plugin-updater = "2.10.1"
+# Sync data-layer (F2a): stable per-record ids for the syncable stores. Already resolved
+# transitively (Cargo.lock unchanged but for adding `uuid` to this package's dep list).
+uuid = { version = "1", features = ["v4", "serde"] }
 # Blocking HTTPS client for fetching filter-list subscriptions. reqwest is already
 # in the tree (tauri-plugin-updater pulls it); we just enable the `blocking` API.
 # TLS (rustls) comes from the updater's features via cargo feature unification, so
@@ -39,6 +42,18 @@ tauri-plugin-updater = "2.10.1"
 # at startup (see run()), pulling rustls directly for aws-lc-rs::default_provider().
 reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
 rustls = "0.23"
+
+# Sync engine (F2b) crypto. getrandom 0.2 (NOT the 0.4 uuid pulls) for raw OS randomness;
+# everything else derives from the BIP39 seed via HKDF. ed25519 keys come from HKDF bytes via
+# the infallible SigningKey::from_bytes, so no rand_core is needed.
+chacha20poly1305 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+ed25519-dalek = { version = "2", features = ["zeroize"] }
+bip39 = "2"
+argon2 = "0.5"
+getrandom = "0.2"
+zeroize = { version = "1", features = ["derive"] }
 
 # Linux-only: reach the underlying webkit2gtk widget to work around tauri#10420
 # (multiwebview stacks vertically in wry's GtkBox instead of honoring positions).
@@ -53,6 +68,9 @@ gio = "0.18"
 # Rust `adblock` engine (adblock_engine.rs). 0.21 matches wry/tao's resolved jni.
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+# Reach the JVM from Rust (the JavaVM + Activity context) so sync_keystore can up-call the
+# Kotlin AegisKeystore to wrap/unwrap the sync seed with the hardware AndroidKeyStore.
+ndk-context = "0.1"
 
 # Windows: add our own WebView2 WebResourceRequested handler (full network ad-block)
 # directly on the content webview's ICoreWebView2 reached via Tauri's with_webview —
@@ -70,3 +88,9 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_WinR
 objc2 = "0.6"
 objc2-foundation = "0.3"
 objc2-web-kit = "0.3"
+
+# OS keychain for the sync seed at rest (desktop only — keyring 3.x has NO Android backend;
+# Android wraps the seed via the hardware Keystore through JNI). When no secret-service
+# daemon is present (headless/CI) the vault falls back to a passphrase-wrapped file.
+[target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
+keyring = { version = "3", features = ["linux-native-sync-persistent", "windows-native", "apple-native"] }

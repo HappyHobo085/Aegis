@@ -11,9 +11,12 @@
 //! (`<img>`/`<script>`/`<iframe>` src) still hit the network — but the cosmetic layer
 //! hides what they render, and the JS-API layer stops scripts/trackers/beacons.
 
-// Only the non-Linux script() path caches into this; the test calls build() directly.
+// Caches only the HEAVY build() output (the ~1 MB ad/tracker domain set + cosmetic CSS),
+// which parses once. The cheap per-call wrapper (the WebRTC shim + pop-under guard) is
+// concatenated per call so it can vary with policy/allowlist without rebuilding the heavy
+// part. The test calls build() directly.
 #[cfg(not(target_os = "linux"))]
-static SCRIPT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+static BUILT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Pop-under guard, injected at document-start on EVERY platform (and every frame).
 /// On-click pop-under / pop-up ads on streaming sites open a new window to a rotating
@@ -45,18 +48,31 @@ const POPUP_GUARD: &str = r#"(function(){
   } catch (e) {}
 })();"#;
 
-/// The document-start script injected into the content webview. The pop-under guard
-/// runs on EVERY platform; the heavier fetch/XHR/cosmetic ad-block layer is added only
-/// on Windows/macOS (Linux does full network blocking via WebKit content filters, so it
-/// skips the ~1 MB injection — but still gets the tiny pop-under guard).
-pub fn script() -> &'static str {
+/// The document-start script injected into the desktop content webview: the WebRTC
+/// IP-leak shim (per the user's `webrtcPolicy` + the per-site allowlist escape hatch),
+/// then the pop-under guard (EVERY platform), then — on Windows/macOS — the heavier
+/// fetch/XHR/cosmetic ad-block layer (Linux does full network blocking via WebKit content
+/// filters, so it skips the ~1 MB injection). `host_allowlisted` = the tab host is on the
+/// ad-block allowlist, which doubles as the WebRTC escape hatch (shim returns ""). Android
+/// builds its equivalent via the NativeInject + NativeWebrtc JNI getters.
+#[cfg_attr(target_os = "android", allow(dead_code))] // Android uses the JNI getters instead
+pub fn script(app: &tauri::AppHandle, host_allowlisted: bool) -> String {
+    let webrtc = crate::webrtc_shim::shim_for(&crate::settings::webrtc_policy(app), host_allowlisted);
+    compose(&webrtc)
+}
+
+/// Compose the document-start script from the (already-built) WebRTC shim prefix + the
+/// pop-under guard + (non-Linux) the cached ad-block body. Split out so the composition is
+/// unit-testable without an AppHandle.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+fn compose(webrtc: &str) -> String {
     #[cfg(target_os = "linux")]
     {
-        POPUP_GUARD
+        format!("{webrtc}\n{POPUP_GUARD}")
     }
     #[cfg(not(target_os = "linux"))]
     {
-        SCRIPT.get_or_init(|| format!("{POPUP_GUARD}\n{}", build())).as_str()
+        format!("{webrtc}\n{POPUP_GUARD}\n{}", BUILT.get_or_init(build))
     }
 }
 
@@ -141,6 +157,26 @@ fn is_procedural(sel: &str) -> bool {
     MARKERS.iter().any(|m| sel.contains(m))
 }
 
+/// JNI bridge for Android's `NativeInject.documentStartScript()` (a Kotlin `object`,
+/// so the symbol is `Java_<pkg>_NativeInject_documentStartScript` and the second arg is
+/// the singleton instance, ignored). Returns the full document-start script (pop-under
+/// guard + the fetch/XHR/cosmetic ad-block layer) for Kotlin to register via
+/// `WebViewCompat.addDocumentStartJavaScript`. Returns a null jstring on failure (Kotlin
+/// then skips injection rather than crashing). Lives in `libapp_lib.so`, loaded at startup.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeInject_documentStartScript<'a>(
+    env: jni::JNIEnv<'a>,
+    _this: jni::objects::JObject<'a>,
+) -> jni::sys::jstring {
+    // Phase 1 folds the WebRTC shim in via the same InjectConfig seam used by script().
+    let s = format!("{POPUP_GUARD}\n{}", build());
+    match env.new_string(s) {
+        Ok(js) => js.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #[test]
@@ -168,8 +204,11 @@ mod tests {
         assert!(g.contains("__aegisBlocked"));
         // Same-origin / non-http(s) opens still fall through to the real window.open.
         assert!(g.contains("realOpen.apply"));
-        // script() carries the guard on EVERY platform — incl. the Linux test host,
-        // where the heavy ad-block injection is otherwise skipped.
-        assert!(super::script().contains("__aegisBlocked"));
+        // The composed script carries the guard on EVERY platform — incl. the Linux test
+        // host, where the heavy ad-block injection is otherwise skipped. compose() with an
+        // empty WebRTC prefix is the no-policy/allowlisted case.
+        assert!(super::compose("").contains("__aegisBlocked"));
+        // The WebRTC shim is prepended ahead of the guard when present.
+        assert!(super::compose("/*shim*/").starts_with("/*shim*/"));
     }
 }

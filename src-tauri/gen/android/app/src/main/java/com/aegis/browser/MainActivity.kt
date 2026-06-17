@@ -17,6 +17,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import java.io.ByteArrayInputStream
 import org.json.JSONObject
 
@@ -260,6 +262,13 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
 
   /** Create a new native WebView for [id], configure it, add it hidden to the container,
    *  and begin loading [url]. The caller registers it in tabWebViews. */
+  // The document-start script (pop-under guard + injected ad-block tier) from the Rust
+  // adblock_inject module. Computed ONCE — the ~1 MB string crossing JNI per tab would be
+  // wasteful. Empty if the JNI getter fails, which disables injection rather than crashing.
+  private val documentStartScript: String by lazy {
+    try { NativeInject.documentStartScript() } catch (_: Throwable) { "" }
+  }
+
   private fun createTabWebView(id: Int, url: String): WebView {
     val wv = WebView(this)
     wv.settings.javaScriptEnabled = true
@@ -271,6 +280,33 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     wv.settings.javaScriptCanOpenWindowsAutomatically = true
     wv.webChromeClient = makeChromeClient()
     wv.webViewClient = makeContentClient(id)
+    // Inject the pop-under guard + ad-block tier at document-start in the page main world
+    // (and all frames), before page scripts run — the Android analog of the desktop
+    // initialization_script_for_all_frames. Guarded on the runtime feature (older System
+    // WebView lacks DOCUMENT_START_SCRIPT → would throw); a malformed origin rule can also
+    // throw IllegalArgumentException, so keep the try/catch.
+    if (documentStartScript.isNotEmpty() &&
+      WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+    ) {
+      try {
+        WebViewCompat.addDocumentStartJavaScript(wv, documentStartScript, setOf("*"))
+      } catch (t: Throwable) {
+        Log.w("AegisInject", "document-start inject failed", t)
+      }
+    }
+    // WebRTC IP-leak shim, document-start, per the user's webrtcPolicy. Read fresh per
+    // tab (NOT cached) so a policy change applies to new tabs; "" when no filtering
+    // applies ("default" policy).
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+      val webrtc = try { NativeWebrtc.shimScript() } catch (_: Throwable) { "" }
+      if (webrtc.isNotEmpty()) {
+        try {
+          WebViewCompat.addDocumentStartJavaScript(wv, webrtc, setOf("*"))
+        } catch (t: Throwable) {
+          Log.w("AegisWebrtc", "webrtc shim inject failed", t)
+        }
+      }
+    }
     val lp = FrameLayout.LayoutParams(
       FrameLayout.LayoutParams.MATCH_PARENT,
       FrameLayout.LayoutParams.MATCH_PARENT,

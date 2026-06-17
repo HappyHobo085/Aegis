@@ -8,6 +8,10 @@ mod adblock_convert;
 // and by ALL desktop platforms to drop ad/tracker pop-unders in nav::on_new_window.
 #[cfg(any(desktop, target_os = "android", test))]
 mod adblock_engine;
+// Cross-platform post-change ad-block re-apply (WebKit reinstall on Linux + engine policy
+// mirror + engine FilterSet reload everywhere). Replaces the Linux-only install_adblock
+// calls so sub/custom-filter changes take effect on Win/macOS/Android too.
+mod adblock_refresh;
 // Windows full network ad-block: our own WebView2 WebResourceRequested interceptor.
 #[cfg(target_os = "windows")]
 mod adblock_win;
@@ -18,15 +22,26 @@ mod adblock_win;
 mod nav_url_win;
 #[cfg(target_os = "macos")]
 mod nav_url_mac;
-// Injected (document-start) ad/tracker blocker for the desktop content webview — the
-// ad-block layer on Windows/macOS (wry can't intercept their requests), verifiable on
-// Linux where it supplements the WebKit content filters.
-#[cfg(any(desktop, test))]
+// Injected (document-start) ad/tracker blocker for the content webview — the ad-block
+// layer on Windows/macOS (wry can't intercept their requests), verifiable on Linux where
+// it supplements the WebKit content filters, and on Android it provides the pop-under
+// guard + injected ad-block tier via the NativeInject JNI getter (Android injected
+// nothing before this). Gated like adblock_engine so the JNI export links on Android.
+#[cfg(any(desktop, target_os = "android", test))]
 mod adblock_inject;
+// WebRTC IP-leak defense: the document-start shim builder + reference filter rules.
+// Gated like adblock_engine so the NativeWebrtc JNI export links on Android.
+#[cfg(any(desktop, target_os = "android", test))]
+mod webrtc_shim;
 #[cfg(target_os = "linux")]
 mod adblock_webkit;
 #[cfg(target_os = "linux")]
 mod linux_layout;
+// Sync engine (F2b) crypto: key tree + recovery phrase + record seal/open. Ungated — the
+// crypto deps build on every target (the cross-compile gate confirmed this), incl. Android.
+mod crypto;
+// Per-device Ed25519 signed-token auth for the sync server (F2b).
+mod sync_auth;
 mod customfilters;
 mod data;
 mod downloads;
@@ -39,6 +54,17 @@ mod places;
 mod safety;
 mod settings;
 mod subs;
+// Sync data-layer (F2a): the HLC envelope + stable device node id that timestamp every
+// syncable record. Pure/ungated — the sync engine (F2b) builds on this frozen contract.
+mod sync_envelope;
+mod sync_identity;
+// Sync seed at rest (F2b): OS keychain (desktop) / passphrase-wrapped fallback + the
+// per-install device salt. Android hardware-Keystore path wired in the Android-parity step.
+mod sync_keystore;
+// The merge seam F2b consumes: SYNCABLE stores + read_all/merge_into (HLC last-writer-wins).
+mod sync_stores;
+// The sync ENGINE (F2b): enable/disable, device pairing, the encrypted pull/merge/push loop.
+mod sync;
 mod tab_registry;
 mod tabs;
 mod update;
@@ -99,6 +125,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         return result;
     }
     if let Some(result) = downloads::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = sync::dispatch(&app, &channel, &payload) {
         return result;
     }
     if let Some(result) = data::dispatch(&app, &channel, &payload) {
@@ -342,7 +371,8 @@ pub fn run() {
         .manage(view::ContentInset::default())
         .manage(update::UpdateState::default())
         .manage(adblock::AdblockState::default())
-        .manage(safety::SafetyState::default());
+        .manage(safety::SafetyState::default())
+        .manage(sync::SyncState::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;
@@ -369,6 +399,19 @@ pub fn run() {
                         .build(),
                 )?;
             }
+
+            // Android: seed the WebRTC document-start shim's policy from settings (its JNI
+            // getter has no AppHandle). Kept fresh on settings change in settings.rs.
+            #[cfg(target_os = "android")]
+            crate::webrtc_shim::note_policy(&crate::settings::webrtc_policy(app.handle()));
+
+            // Seed the ad-block allowlist from disk (the managed AdblockState was created
+            // empty at builder time) + mirror it into the engine — so allowlisted hosts
+            // survive a restart on every platform.
+            crate::adblock::seed_from_disk(app.handle());
+
+            // Sync: auto-unlock from the OS keychain if a seed is stored, and start syncing.
+            crate::sync::start(app.handle());
 
             // Initialize the tab registry: restore from tabs.json if it exists,
             // otherwise start fresh with the configured home page.  Only the active

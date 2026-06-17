@@ -1,6 +1,10 @@
 //! Browsing history (history.* IPC) backed by the JSON store. Visits are recorded
 //! from the content webview's page-load (see nav.rs). list/search return newest
 //! first; the collection is capped to keep the file bounded.
+//!
+//! History is NOT syncable (product decision) — it stays device-local with plain
+//! hard-delete storage (no sync envelope / tombstones), so `clear` truly removes the URLs
+//! from disk rather than leaving them as deleted-but-present tombstones.
 use serde_json::{json, Value};
 use tauri::AppHandle;
 
@@ -104,6 +108,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             Some(Ok(Value::Null))
         }
         "history.clear" => {
+            // Truly remove (history isn't synced) — clear actually clears.
             let empty: [Value; 0] = [];
             let _ = jsonstore::save(app, "history", &empty);
             let _ = crate::emit_event(app, "history.changed", Value::Null);

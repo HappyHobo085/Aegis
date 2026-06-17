@@ -315,3 +315,22 @@ describe('shared/types — Phase 5 additions', () => {
     expect(Object.keys(pickerShape)).toEqual(['start']);
   });
 });
+
+describe('shared/types — IPC channel-name invariants (Foundation)', () => {
+  const entries = Object.entries(IPC) as [string, string][];
+
+  it('every name is dot-separated (namespace.action) with no colon', () => {
+    // Logical names are dotted; the transport rewrites event `.`→`:` (lib.rs
+    // emit_event / tauriInvoke.ts). A raw colon here would be a name that can
+    // never round-trip, and a missing dot breaks the namespace dispatch convention.
+    for (const [key, value] of entries) {
+      expect(typeof value, key).toBe('string');
+      expect(value, `${key} = ${value}`).toMatch(/^[a-z][a-zA-Z]*\.[a-zA-Z]+$/);
+    }
+  });
+
+  it('every name is unique (no dispatch collision)', () => {
+    const values = entries.map(([, v]) => v);
+    expect(new Set(values).size).toBe(values.length);
+  });
+});

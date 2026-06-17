@@ -9,6 +9,7 @@ import { useFavorites } from '../../hooks/useFavorites';
 import { useHistory } from '../../hooks/useHistory';
 import { useSaved } from '../../hooks/useSaved';
 import { useSettings } from '../../hooks/useSettings';
+import { useSync } from '../../hooks/useSync';
 import { useSubscriptions } from '../../hooks/useSubscriptions';
 import { useCustomFilters } from '../../hooks/useCustomFilters';
 import { useDownloads } from '../../hooks/useDownloads';
@@ -29,6 +30,7 @@ import { AllowlistTab } from '../AllowlistTab';
 import { DownloadsTab } from '../DownloadsTab';
 import { SitePermissionsTab } from '../SitePermissionsTab';
 import { SecurityTab } from '../SecurityTab';
+import { SyncSettingsTab } from '../SyncSettingsTab';
 import { DataTab } from '../DataTab';
 import { PermissionPromptDialog } from '../PermissionPromptDialog';
 import { Toaster } from '../Toaster';
@@ -61,6 +63,7 @@ export function MobileApp() {
   const history = useHistory();
   const saved = useSaved(nav.state.url);
   const settings = useSettings();
+  const sync = useSync();
   const subscriptions = useSubscriptions();
   const customFilters = useCustomFilters();
   const downloads = useDownloads();
@@ -264,6 +267,12 @@ export function MobileApp() {
               update={settings.update}
               listExceptions={() => aegis.safety.listExceptions()}
               removeException={(h) => void aegis.safety.removeException(h)}
+            />
+          }
+          sync={
+            <SyncSettingsTab
+              sync={sync}
+              onSetServerUrl={(url) => void settings.update({ syncServerUrl: url })}
             />
           }
           data={

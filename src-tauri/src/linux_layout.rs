@@ -188,6 +188,24 @@ pub fn set_content_visible(app: &AppHandle, visible: bool) {
     set_content_visible_label(app, &label, visible);
 }
 
+/// WebRTC native backstop for a content webview via WebKitGTK settings.
+/// `set_enable_webrtc` is all-or-nothing, so this only ENFORCES "disable" — it turns
+/// WebRTC off engine-wide (incl. Web Worker scopes the injected shim can't reach).
+/// "public-only"/"default" leave WebRTC enabled and rely on the injected shim.
+pub fn apply_webrtc_policy_label(app: &AppHandle, label: &str, policy: &str) {
+    let Some(w) = app.get_webview(label) else {
+        return;
+    };
+    let disable = policy == "disable";
+    let _ = w.with_webview(move |pw| {
+        use webkit2gtk::SettingsExt;
+        // UFCS: `gtk::prelude::WidgetExt` also has a `settings()`, so name the WebView one.
+        if let Some(s) = WebViewExt::settings(&pw.inner()) {
+            s.set_enable_webrtc(!disable);
+        }
+    });
+}
+
 /// Stamp a content webview's GTK widget with CONTENT_WIDGET_NAME so layout() can
 /// classify it. Called once per tab from nav::spawn_tab.
 pub fn mark_content_label(app: &AppHandle, label: &str) {
