@@ -14,6 +14,8 @@
 //! The auth `canonical()` + token shape below MUST match src-tauri/src/sync_auth.rs
 //! byte-for-byte (kept in sync by hand; covered by the round-trip test).
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use axum::extract::{Query, State};
@@ -188,6 +190,37 @@ impl Snapshot {
             store.devices.entry(sd.account).or_default().insert(device_id, sd.device);
         }
         store
+    }
+}
+
+/// Atomically write the snapshot to `path`: serialize to a sibling `.tmp`, fsync it, then
+/// rename over the target (atomic on the same filesystem). Callers serialize their writes
+/// via AppState's writer mutex, so a single fixed `.tmp` name is safe.
+fn save_snapshot(path: &Path, snap: &Snapshot) -> std::io::Result<()> {
+    let json = serde_json::to_vec_pretty(snap)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    let mut tmp_os = path.as_os_str().to_owned();
+    tmp_os.push(".tmp");
+    let tmp = PathBuf::from(tmp_os);
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(&json)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)
+}
+
+/// Load a store from `path`. A missing file is a fresh start (empty store); an unparseable
+/// file is a hard error so the operator fails loud rather than silently losing data.
+fn load_store(path: &Path) -> std::io::Result<Store> {
+    match std::fs::read(path) {
+        Ok(bytes) => {
+            let snap: Snapshot = serde_json::from_slice(&bytes)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            Ok(snap.into_store())
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Store::default()),
+        Err(e) => Err(e),
     }
 }
 
@@ -413,6 +446,44 @@ mod tests {
 
         // A signature for a different device_id doesn't transfer.
         assert!(!verify_account_root(&account_id, "other", &ok));
+    }
+
+    #[test]
+    fn save_then_load_yields_equal_store() {
+        let dir = std::env::temp_dir().join(format!("aegis-sync-save-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("data.json");
+
+        let mut store = Store::default();
+        store
+            .devices
+            .entry("acct".into())
+            .or_default()
+            .insert("dev1".into(), Device { device_id: "dev1".into(), label: "L".into(), last_seen_ms: 7 });
+
+        save_snapshot(&path, &Snapshot::from_store(&store)).unwrap();
+        let loaded = load_store(&path).unwrap();
+
+        assert_eq!(loaded.devices.get("acct").unwrap().get("dev1").unwrap().last_seen_ms, 7);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn missing_file_loads_empty() {
+        let path = std::env::temp_dir().join(format!("aegis-sync-absent-{}.json", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let store = load_store(&path).unwrap();
+        assert!(store.records.is_empty() && store.devices.is_empty());
+    }
+
+    #[test]
+    fn corrupt_file_is_an_error() {
+        let dir = std::env::temp_dir().join(format!("aegis-sync-corrupt-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("data.json");
+        std::fs::write(&path, b"not json {").unwrap();
+        assert!(load_store(&path).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
