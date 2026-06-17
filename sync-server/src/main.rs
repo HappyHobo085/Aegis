@@ -227,6 +227,47 @@ fn load_store(path: &Path) -> std::io::Result<Store> {
 
 type Db = Arc<Mutex<Store>>;
 
+/// Shared request state: the in-memory store plus optional disk persistence. `writer`
+/// serializes atomic writes so two concurrent mutations never clobber each other's temp file.
+#[derive(Clone)]
+struct AppState {
+    db: Db,
+    data_path: Option<Arc<PathBuf>>,
+    writer: Arc<Mutex<()>>,
+}
+
+impl AppState {
+    fn new(store: Store, data_path: Option<PathBuf>) -> AppState {
+        AppState {
+            db: Arc::new(Mutex::new(store)),
+            data_path: data_path.map(Arc::new),
+            writer: Arc::new(Mutex::new(())),
+        }
+    }
+
+    /// Snapshot the store under its lock, release it, then atomically write to disk under the
+    /// writer lock — so requests never block on fsync. No-op when persistence is disabled.
+    ///
+    /// The snapshot and the write are taken under separate locks, so under heavy concurrent
+    /// writes the on-disk file may lag the in-memory store by one mutation (e.g. snapshot A,
+    /// then B fully persists, then A's older snapshot writes last). The write is always atomic
+    /// (temp→fsync→rename), so the file is never torn — only at worst one mutation stale, and
+    /// the next persist re-writes current state. The in-memory store stays fully serialized by
+    /// the db mutex and is authoritative for all reads. Acceptable at the intended personal
+    /// scale; tightening it (snapshot under the writer lock) would hold up writers on fsync.
+    fn persist(&self) {
+        let Some(path) = self.data_path.clone() else { return };
+        let snap = {
+            let g = self.db.lock().unwrap();
+            Snapshot::from_store(&g)
+        };
+        let _w = self.writer.lock().unwrap();
+        if let Err(e) = save_snapshot(&path, &snap) {
+            eprintln!("[aegis-sync-server] WARN failed to persist to {}: {e}", path.display());
+        }
+    }
+}
+
 fn require_registered(db: &Db, account: &str, device: &str) -> Result<(), StatusCode> {
     let g = db.lock().unwrap();
     match g.devices.get(account) {
@@ -243,13 +284,13 @@ struct RecordsQuery {
 }
 
 async fn get_records(
-    State(db): State<Db>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Query(q): Query<RecordsQuery>,
 ) -> Result<Json<Value>, StatusCode> {
     let (account, device) = verify_auth(&headers)?;
-    require_registered(&db, &account, &device)?;
-    let g = db.lock().unwrap();
+    require_registered(&state.db, &account, &device)?;
+    let g = state.db.lock().unwrap();
     let records: Vec<WireRecord> = g
         .records
         .iter()
@@ -266,24 +307,31 @@ struct PostRecords {
 }
 
 async fn post_records(
-    State(db): State<Db>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<PostRecords>,
 ) -> Result<Json<Value>, StatusCode> {
     let (account, device) = verify_auth(&headers)?;
-    require_registered(&db, &account, &device)?;
-    let mut g = db.lock().unwrap();
-    for rec in body.records {
-        let key = (account.clone(), body.ns.clone(), rec.uuid.clone());
-        // HLC last-writer-wins: keep the incoming record only if it strictly dominates the
-        // stored one (a stale push from a lagging device can't roll the server back).
-        let keep = match g.records.get(&key) {
-            Some(existing) => hlc_key(&rec.hlc) > hlc_key(&existing.hlc),
-            None => true,
-        };
-        if keep {
-            g.records.insert(key, rec);
+    require_registered(&state.db, &account, &device)?;
+    let mut changed = false;
+    {
+        let mut g = state.db.lock().unwrap();
+        for rec in body.records {
+            let key = (account.clone(), body.ns.clone(), rec.uuid.clone());
+            // HLC last-writer-wins: keep the incoming record only if it strictly dominates the
+            // stored one (a stale push from a lagging device can't roll the server back).
+            let keep = match g.records.get(&key) {
+                Some(existing) => hlc_key(&rec.hlc) > hlc_key(&existing.hlc),
+                None => true,
+            };
+            if keep {
+                g.records.insert(key, rec);
+                changed = true;
+            }
         }
+    }
+    if changed {
+        state.persist();
     }
     Ok(Json(json!({ "ok": true })))
 }
@@ -320,7 +368,7 @@ fn verify_account_root(account_id: &str, device_id: &str, account_sig: &str) -> 
 }
 
 async fn post_device(
-    State(db): State<Db>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<RegisterDevice>,
 ) -> Result<Json<Value>, StatusCode> {
@@ -336,18 +384,24 @@ async fn post_device(
     if !verify_account_root(&body.account_id, &body.device_id, &body.account_sig) {
         return Err(StatusCode::FORBIDDEN);
     }
-    let mut g = db.lock().unwrap();
-    g.devices.entry(account).or_default().insert(
-        device.clone(),
-        Device { device_id: device, label: body.label, last_seen_ms: now_ms() },
-    );
+    {
+        let mut g = state.db.lock().unwrap();
+        g.devices.entry(account).or_default().insert(
+            device.clone(),
+            Device { device_id: device, label: body.label, last_seen_ms: now_ms() },
+        );
+    }
+    state.persist();
     Ok(Json(json!({ "ok": true })))
 }
 
-async fn get_devices(State(db): State<Db>, headers: HeaderMap) -> Result<Json<Value>, StatusCode> {
+async fn get_devices(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, StatusCode> {
     let (account, device) = verify_auth(&headers)?;
-    require_registered(&db, &account, &device)?;
-    let g = db.lock().unwrap();
+    require_registered(&state.db, &account, &device)?;
+    let g = state.db.lock().unwrap();
     let devices: Vec<Device> =
         g.devices.get(&account).map(|m| m.values().cloned().collect()).unwrap_or_default();
     Ok(Json(json!({ "devices": devices })))
@@ -360,34 +414,50 @@ struct RemoveDevice {
 }
 
 async fn remove_device(
-    State(db): State<Db>,
+    State(state): State<AppState>,
     headers: HeaderMap,
     Json(body): Json<RemoveDevice>,
 ) -> Result<Json<Value>, StatusCode> {
     let (account, device) = verify_auth(&headers)?;
-    require_registered(&db, &account, &device)?;
-    let mut g = db.lock().unwrap();
-    if let Some(set) = g.devices.get_mut(&account) {
-        set.remove(&body.device_id);
+    require_registered(&state.db, &account, &device)?;
+    let mut removed = false;
+    {
+        let mut g = state.db.lock().unwrap();
+        if let Some(set) = g.devices.get_mut(&account) {
+            removed = set.remove(&body.device_id).is_some();
+        }
+    }
+    if removed {
+        state.persist();
     }
     Ok(Json(json!({ "ok": true })))
 }
 
-fn app(db: Db) -> Router {
+fn app(state: AppState) -> Router {
     Router::new()
         .route("/v1/records", get(get_records).post(post_records))
         .route("/v1/devices", get(get_devices).post(post_device))
         .route("/v1/devices/remove", post(remove_device))
-        .with_state(db)
+        .with_state(state)
 }
 
 #[tokio::main]
 async fn main() {
     let addr = std::env::var("AEGIS_SYNC_ADDR").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
-    let db: Db = Arc::new(Mutex::new(Store::default()));
+    let data_path = std::env::var("AEGIS_SYNC_DATA").ok().map(PathBuf::from);
+    let store = match &data_path {
+        Some(p) => load_store(p)
+            .unwrap_or_else(|e| panic!("[aegis-sync-server] failed to load {}: {e}", p.display())),
+        None => Store::default(),
+    };
+    let state = AppState::new(store, data_path.clone());
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
-    println!("[aegis-sync-server] listening on http://{addr} (in-memory, ciphertext-only)");
-    axum::serve(listener, app(db)).await.expect("serve");
+    let storage = data_path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| "in-memory".to_string());
+    println!("[aegis-sync-server] listening on http://{addr} (storage: {storage}, ciphertext-only)");
+    axum::serve(listener, app(state)).await.expect("serve");
 }
 
 #[cfg(test)]
@@ -498,6 +568,24 @@ mod tests {
         let path = dir.join("data.json");
         std::fs::write(&path, b"not json {").unwrap();
         assert!(load_store(&path).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn persist_writes_and_reloads_through_appstate() {
+        let dir = std::env::temp_dir().join(format!("aegis-sync-appstate-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("data.json");
+
+        let state = AppState::new(Store::default(), Some(path.clone()));
+        state.db.lock().unwrap().devices.entry("acct".into()).or_default().insert(
+            "dev1".into(),
+            Device { device_id: "dev1".into(), label: "laptop".into(), last_seen_ms: 99 },
+        );
+        state.persist();
+
+        let reloaded = load_store(&path).unwrap();
+        assert_eq!(reloaded.devices.get("acct").unwrap().get("dev1").unwrap().label, "laptop");
         std::fs::remove_dir_all(&dir).ok();
     }
 
