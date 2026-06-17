@@ -1,0 +1,20 @@
+services:
+  sync:
+    build: .
+    image: aegis-sync-server
+    restart: unless-stopped
+    ports:
+      - "${AEGIS_SYNC_PORT:-8787}:8787"
+    environment:
+      - AEGIS_SYNC_ADDR=0.0.0.0:8787
+      - AEGIS_SYNC_DATA=/data/aegis-sync.json
+    volumes:
+      - aegis-sync-data:/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+
+volumes:
+  aegis-sync-data:
