@@ -105,10 +105,139 @@ pub fn merge_into(app: &AppHandle, name: &str, remote: &[Value]) -> Vec<String> 
     changed
 }
 
+/// Normalize a favorites/saved URL for dup detection: drop the #fragment and trailing
+/// slashes, trim whitespace. Path + query preserved, no case-folding (so `?id=1` ≠ `?id=2`).
+fn normalize_url(u: &str) -> String {
+    let no_frag = u.split('#').next().unwrap_or("");
+    no_frag.trim().trim_end_matches('/').to_string()
+}
+
+/// The dedup key for a record, by namespace field: `"host"` (allowlist) is lowercased; any
+/// other field (`"url"`) is URL-normalized.
+fn dedup_key(rec: &Value, key_field: &str) -> Option<String> {
+    let raw = rec.get(key_field).and_then(Value::as_str)?;
+    Some(if key_field == "host" {
+        raw.trim().to_lowercase()
+    } else {
+        normalize_url(raw)
+    })
+}
+
+/// Among LIVE records, group by normalized key; for each group of >1, keep the deterministic
+/// survivor (highest HLC, tie-broken by lexicographically smallest uuid) and return the loser
+/// uuids. Pure + convergent: every device computes the same survivor from replicated fields.
+fn duplicate_losers(records: &[Value], key_field: &str) -> Vec<String> {
+    use std::collections::HashMap;
+    let mut groups: HashMap<String, Vec<(String, Option<crate::sync_envelope::Hlc>)>> =
+        HashMap::new();
+    for r in records {
+        if crate::jsonstore::is_deleted(r) {
+            continue;
+        }
+        let (Some(key), Some(uuid)) = (dedup_key(r, key_field), crate::jsonstore::uuid_of(r))
+        else {
+            continue;
+        };
+        groups
+            .entry(key)
+            .or_default()
+            .push((uuid.to_string(), crate::sync_envelope::from_value(r)));
+    }
+    let mut losers = Vec::new();
+    for (_key, members) in groups {
+        if members.len() < 2 {
+            continue;
+        }
+        // Survivor = max by HLC; on an HLC tie the smaller uuid wins (so it ranks as "max").
+        let survivor = members
+            .iter()
+            .enumerate()
+            .max_by(|(_, (ua, ha)), (_, (ub, hb))| match ha.cmp(hb) {
+                std::cmp::Ordering::Equal => ub.cmp(ua),
+                other => other,
+            })
+            .map(|(i, _)| i)
+            .unwrap();
+        for (i, (uuid, _)) in members.into_iter().enumerate() {
+            if i != survivor {
+                losers.push(uuid);
+            }
+        }
+    }
+    losers
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn drec(uuid: &str, key: &str, key_field: &str, wall: i64, deleted: bool) -> Value {
+        json!({
+            "uuid": uuid,
+            key_field: key,
+            "hlc": { "wall_ms": wall, "counter": 0, "node": "n" },
+            "deleted": deleted,
+        })
+    }
+
+    #[test]
+    fn dedup_keeps_latest_hlc_survivor() {
+        let recs = vec![
+            drec("a", "http://x/p", "url", 10, false),
+            drec("b", "http://x/p", "url", 20, false),
+        ];
+        assert_eq!(duplicate_losers(&recs, "url"), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn dedup_hlc_tie_smaller_uuid_survives() {
+        let recs = vec![
+            drec("b", "http://x/p", "url", 10, false),
+            drec("a", "http://x/p", "url", 10, false),
+        ];
+        assert_eq!(duplicate_losers(&recs, "url"), vec!["b".to_string()]);
+    }
+
+    #[test]
+    fn dedup_normalizes_slash_and_fragment() {
+        let recs = vec![
+            drec("a", "http://x/p/", "url", 10, false),
+            drec("b", "http://x/p", "url", 20, false),
+            drec("c", "http://x/p#frag", "url", 30, false),
+        ];
+        let mut losers = duplicate_losers(&recs, "url");
+        losers.sort();
+        assert_eq!(losers, vec!["a".to_string(), "b".to_string()]); // survivor = c
+    }
+
+    #[test]
+    fn dedup_distinct_query_not_merged() {
+        let recs = vec![
+            drec("a", "http://x/p?id=1", "url", 10, false),
+            drec("b", "http://x/p?id=2", "url", 20, false),
+        ];
+        assert!(duplicate_losers(&recs, "url").is_empty());
+    }
+
+    #[test]
+    fn dedup_allowlist_host_case_insensitive() {
+        let recs = vec![
+            drec("a", "Example.com", "host", 10, false),
+            drec("b", "example.com", "host", 20, false),
+        ];
+        assert_eq!(duplicate_losers(&recs, "host"), vec!["a".to_string()]);
+    }
+
+    #[test]
+    fn dedup_ignores_tombstones_and_singletons() {
+        let recs = vec![
+            drec("a", "http://x/p", "url", 10, true),
+            drec("b", "http://x/p", "url", 20, false),
+            drec("c", "http://y", "url", 5, false),
+        ];
+        assert!(duplicate_losers(&recs, "url").is_empty());
+    }
 
     fn rec(uuid: &str, wall: i64, deleted: bool, payload: &str) -> Value {
         json!({
