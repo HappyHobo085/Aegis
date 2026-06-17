@@ -433,11 +433,17 @@ async fn remove_device(
     Ok(Json(json!({ "ok": true })))
 }
 
+/// Unauthenticated liveness probe for Docker/reverse proxies. Returns no account data.
+async fn healthz() -> Json<Value> {
+    Json(json!({ "ok": true }))
+}
+
 fn app(state: AppState) -> Router {
     Router::new()
         .route("/v1/records", get(get_records).post(post_records))
         .route("/v1/devices", get(get_devices).post(post_device))
         .route("/v1/devices/remove", post(remove_device))
+        .route("/healthz", get(healthz))
         .with_state(state)
 }
 
@@ -587,6 +593,12 @@ mod tests {
         let reloaded = load_store(&path).unwrap();
         assert_eq!(reloaded.devices.get("acct").unwrap().get("dev1").unwrap().label, "laptop");
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test]
+    async fn healthz_returns_ok() {
+        let Json(v) = healthz().await;
+        assert_eq!(v, json!({ "ok": true }));
     }
 
     #[test]
