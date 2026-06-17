@@ -117,7 +117,7 @@ fn hlc_key(hlc: &Value) -> (i64, u64, String) {
     )
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Deserialize)]
 struct Device {
     #[serde(rename = "deviceId")]
     device_id: String,
@@ -132,6 +132,62 @@ struct Store {
     records: HashMap<(String, String, String), WireRecord>,
     // account -> deviceId -> device
     devices: HashMap<String, HashMap<String, Device>>,
+}
+
+// On-disk shape. The live Store is keyed by tuples (which JSON can't use as map keys),
+// so we flatten to vectors for serialization and rebuild the maps on load.
+#[derive(Serialize, Deserialize)]
+struct SnapRecord {
+    account: String,
+    ns: String,
+    record: WireRecord,
+}
+
+#[derive(Serialize, Deserialize)]
+struct SnapDevice {
+    account: String,
+    device: Device,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct Snapshot {
+    records: Vec<SnapRecord>,
+    devices: Vec<SnapDevice>,
+}
+
+impl Snapshot {
+    fn from_store(store: &Store) -> Snapshot {
+        let records = store
+            .records
+            .iter()
+            .map(|((account, ns, _uuid), record)| SnapRecord {
+                account: account.clone(),
+                ns: ns.clone(),
+                record: record.clone(),
+            })
+            .collect();
+        let devices = store
+            .devices
+            .iter()
+            .flat_map(|(account, set)| {
+                set.values().map(move |d| SnapDevice { account: account.clone(), device: d.clone() })
+            })
+            .collect();
+        Snapshot { records, devices }
+    }
+
+    fn into_store(self) -> Store {
+        let mut store = Store::default();
+        for sr in self.records {
+            let key = (sr.account, sr.ns, sr.record.uuid.clone());
+            store.records.insert(key, sr.record);
+        }
+        for sd in self.devices {
+            let device_id = sd.device.device_id.clone();
+            store.devices.entry(sd.account).or_default().insert(device_id, sd.device);
+        }
+        store
+    }
 }
 
 type Db = Arc<Mutex<Store>>;
@@ -356,5 +412,32 @@ mod tests {
 
         // A signature for a different device_id doesn't transfer.
         assert!(!verify_account_root(&account_id, "other", &ok));
+    }
+
+    #[test]
+    fn snapshot_round_trips_records_and_devices() {
+        let mut store = Store::default();
+        store.records.insert(
+            ("acct".into(), "bookmarks".into(), "u1".into()),
+            WireRecord {
+                uuid: "u1".into(),
+                hlc: json!({ "wall_ms": 1, "counter": 0, "node": "a" }),
+                deleted: false,
+                nonce: "nn".into(),
+                ct: "cc".into(),
+            },
+        );
+        store
+            .devices
+            .entry("acct".into())
+            .or_default()
+            .insert("dev1".into(), Device { device_id: "dev1".into(), label: "phone".into(), last_seen_ms: 42 });
+
+        let back = Snapshot::from_store(&store).into_store();
+
+        assert_eq!(back.records.len(), 1);
+        let r = back.records.get(&("acct".into(), "bookmarks".into(), "u1".into())).unwrap();
+        assert_eq!(r.ct, "cc");
+        assert_eq!(back.devices.get("acct").unwrap().get("dev1").unwrap().label, "phone");
     }
 }
