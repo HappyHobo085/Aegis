@@ -194,8 +194,9 @@ impl Snapshot {
 }
 
 /// Atomically write the snapshot to `path`: serialize to a sibling `.tmp`, fsync it, then
-/// rename over the target (atomic on the same filesystem). Callers serialize their writes
-/// via AppState's writer mutex, so a single fixed `.tmp` name is safe.
+/// rename over the target (atomic on the same filesystem). Callers must serialize concurrent
+/// writes externally (Task 3 wires this via the writer mutex); a fixed `.tmp` name is then
+/// safe because only one write can be in flight at a time.
 fn save_snapshot(path: &Path, snap: &Snapshot) -> std::io::Result<()> {
     let json = serde_json::to_vec_pretty(snap)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -460,11 +461,25 @@ mod tests {
             .entry("acct".into())
             .or_default()
             .insert("dev1".into(), Device { device_id: "dev1".into(), label: "L".into(), last_seen_ms: 7 });
+        // Also exercise a record through the disk path (devices alone wouldn't catch a
+        // broken SnapRecord (de)serialization).
+        store.records.insert(
+            ("acct".into(), "bm".into(), "u1".into()),
+            WireRecord {
+                uuid: "u1".into(),
+                hlc: json!({ "wall_ms": 1, "counter": 0, "node": "a" }),
+                deleted: false,
+                nonce: "n".into(),
+                ct: "c".into(),
+            },
+        );
 
         save_snapshot(&path, &Snapshot::from_store(&store)).unwrap();
         let loaded = load_store(&path).unwrap();
 
         assert_eq!(loaded.devices.get("acct").unwrap().get("dev1").unwrap().last_seen_ms, 7);
+        assert_eq!(loaded.records.len(), 1);
+        assert_eq!(loaded.records.get(&("acct".into(), "bm".into(), "u1".into())).unwrap().ct, "c");
         std::fs::remove_dir_all(&dir).ok();
     }
 
