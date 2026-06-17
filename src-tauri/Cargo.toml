@@ -67,10 +67,10 @@ gio = "0.18"
 # Android: JNI bridge so the content WebView's shouldInterceptRequest can call the
 # Rust `adblock` engine (adblock_engine.rs). 0.21 matches wry/tao's resolved jni.
 [target.'cfg(target_os = "android")'.dependencies]
+# Reach the JVM from Rust so sync_keystore can up-call the Kotlin AegisKeystore to wrap/unwrap
+# the sync seed with the hardware AndroidKeyStore. The JavaVM is captured in JNI_OnLoad — Tauri
+# doesn't use ndk-glue, so ndk_context is never initialized (see sync_keystore.rs).
 jni = "0.21"
-# Reach the JVM from Rust (the JavaVM + Activity context) so sync_keystore can up-call the
-# Kotlin AegisKeystore to wrap/unwrap the sync seed with the hardware AndroidKeyStore.
-ndk-context = "0.1"
 
 # Windows: add our own WebView2 WebResourceRequested handler (full network ad-block)
 # directly on the content webview's ICoreWebView2 reached via Tauri's with_webview —

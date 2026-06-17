@@ -9,9 +9,10 @@
 //! when that backing is used) and `sync-device-salt.json` (the per-install salt that makes
 //! this device's signing key distinct — see crypto::device_signing_seed).
 //!
-//! NOTE: the desktop keyring path is implemented here; the Android hardware-Keystore path is
-//! wired in the Android-parity step (it requires a Kotlin AegisKeystore + a JNI round-trip).
-//! Until then Android uses the passphrase fallback (or in-memory-only if none is set).
+//! NOTE: desktop uses the `keyring` crate; Android up-calls the Kotlin `AegisKeystore` over JNI
+//! (the JavaVM is captured in `JNI_OnLoad` — Tauri doesn't run ndk-glue, so `ndk_context` is
+//! never initialized). Either path falls back to the passphrase-wrapped file, or in-memory-only
+//! if no passphrase is set, on any error.
 use crate::crypto::RootSecret;
 use tauri::{AppHandle, Manager};
 use zeroize::Zeroize;
@@ -155,12 +156,41 @@ mod android_keystore {
     use jni::objects::{JByteArray, JString, JValue};
     use jni::JavaVM;
 
-    /// Attach to the JVM and run `f` with a JNIEnv. None if the JVM/thread isn't reachable.
+    use std::sync::OnceLock;
+
+    // Tauri's Android runtime does NOT use ndk-glue, so `ndk_context` is never initialized —
+    // calling `ndk_context::android_context()` panics ("android context was not initialized"),
+    // and because the keystore up-call runs under the non-unwinding `Rust_ipc` JNI frame, that
+    // panic aborts the whole process (SIGABRT) instead of falling back. So we capture the VM
+    // the canonical way instead: `JNI_OnLoad`, which the runtime calls exactly once when
+    // libapp_lib.so loads, before any other JNI entry point.
+    static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+
+    /// Called once by the Android runtime when the native library is loaded; stashes the VM
+    /// so Rust→Java up-calls (the hardware Keystore) can attach without ndk-glue.
+    #[no_mangle]
+    pub extern "system" fn JNI_OnLoad(
+        vm: *mut jni::sys::JavaVM,
+        _reserved: *mut std::ffi::c_void,
+    ) -> jni::sys::jint {
+        if let Ok(vm) = unsafe { JavaVM::from_raw(vm) } {
+            let _ = JAVA_VM.set(vm);
+        }
+        jni::sys::JNI_VERSION_1_6
+    }
+
+    /// Attach to the JVM and run `f` with a JNIEnv. Returns `None` (NEVER a crash) if the VM
+    /// isn't available or the closure panics — callers then fall back to the passphrase /
+    /// in-memory path. The `catch_unwind` is essential: this executes beneath the `extern "C"`
+    /// `Rust_ipc` frame, where an escaping panic aborts the process rather than unwinding.
     fn with_env<T>(f: impl FnOnce(&mut jni::JNIEnv) -> Option<T>) -> Option<T> {
-        let ctx = ndk_context::android_context();
-        let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.ok()?;
-        let mut env = vm.attach_current_thread().ok()?;
-        f(&mut env)
+        let vm = JAVA_VM.get()?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
+            let mut env = vm.attach_current_thread().ok()?;
+            f(&mut env)
+        }))
+        .ok()
+        .flatten()
     }
 
     /// Wrap the 32-byte root via `AegisKeystore.wrap([B)Ljava/lang/String;`. None on any error.
