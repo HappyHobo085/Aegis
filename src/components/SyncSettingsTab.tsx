@@ -18,6 +18,7 @@ export function SyncSettingsTab({
   const [forget, setForget] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [testStatus, setTestStatus] = useState('');
 
   // Keep the URL field in step with the backend value (e.g. after enable/import).
   useEffect(() => {
@@ -72,10 +73,27 @@ export function SyncSettingsTab({
             value={serverUrl}
             placeholder="https://your-sync-server.example"
             aria-label="Sync server URL"
-            onChange={(e) => setServerUrl(e.target.value)}
+            onChange={(e) => { setServerUrl(e.target.value); setTestStatus(''); }}
             onBlur={() => onSetServerUrl(serverUrl.trim())}
           />
         </label>
+        <button
+          type="button"
+          disabled={busy || serverUrl.trim().length === 0}
+          onClick={() =>
+            void run(async () => {
+              const r = await sync.testConnection(serverUrl.trim());
+              setTestStatus(r.ok ? `Connected — ${r.latencyMs} ms` : `Failed: ${r.error ?? 'unreachable'}`);
+            })
+          }
+        >
+          Test connection
+        </button>
+        {testStatus && (
+          <p className="sync-tab__status" role="status">
+            {testStatus}
+          </p>
+        )}
 
         {phrase ? (
           <div className="sync-tab__phrase" role="alert">
