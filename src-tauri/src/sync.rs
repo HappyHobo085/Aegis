@@ -448,6 +448,45 @@ pub fn start(app: &AppHandle) {
     }
 }
 
+/// Build the unauthenticated health-probe URL from a user-entered server URL. `None` for an
+/// empty/whitespace entry. Trims surrounding whitespace and a single trailing slash.
+fn healthz_url(raw: &str) -> Option<String> {
+    let base = raw.trim().trim_end_matches('/');
+    if base.is_empty() {
+        return None;
+    }
+    Some(format!("{base}/healthz"))
+}
+
+/// Probe `{url}/healthz` (unauthenticated) with a short timeout. Returns a STRUCTURED result —
+/// a failed probe is a value, not a thrown IPC error. Uses the spawn-thread + reqwest::blocking
+/// pattern (blocking client can't run in the command's async context); 8s keeps it interactive.
+fn test_connection(raw_url: &str) -> Value {
+    let Some(target) = healthz_url(raw_url) else {
+        return json!({ "ok": false, "error": "Enter a server URL first" });
+    };
+    let start = std::time::Instant::now();
+    let probe = std::thread::spawn(move || -> Result<(), String> {
+        let client = reqwest::blocking::Client::builder()
+            .timeout(std::time::Duration::from_secs(8))
+            .build()
+            .map_err(|e| e.to_string())?;
+        let resp = client.get(&target).send().map_err(|e| e.to_string())?;
+        let status = resp.status();
+        if !status.is_success() {
+            return Err(format!("HTTP {status}"));
+        }
+        Ok(())
+    })
+    .join()
+    .map_err(|_| "probe thread panicked".to_string())
+    .and_then(|r| r);
+    match probe {
+        Ok(()) => json!({ "ok": true, "latencyMs": start.elapsed().as_millis() as i64 }),
+        Err(e) => json!({ "ok": false, "error": e }),
+    }
+}
+
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {
         "sync.getState" => Some(Ok(state_json(app))),
@@ -503,6 +542,11 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "sync.syncNow" => {
             nudge(app);
             Some(Ok(state_json(app)))
+        }
+
+        "sync.testConnection" => {
+            let url = payload.get("url").and_then(Value::as_str).unwrap_or("");
+            Some(Ok(test_connection(url)))
         }
 
         "sync.getRecoveryPhrase" => {
@@ -595,6 +639,18 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn healthz_url_builds_or_rejects() {
+        assert_eq!(healthz_url(""), None);
+        assert_eq!(healthz_url("   "), None);
+        assert_eq!(healthz_url("http://h:8787"), Some("http://h:8787/healthz".to_string()));
+        assert_eq!(healthz_url("http://h:8787/"), Some("http://h:8787/healthz".to_string()));
+        assert_eq!(
+            healthz_url("  https://sync.example.com/  "),
+            Some("https://sync.example.com/healthz".to_string())
+        );
+    }
 
     #[test]
     fn wire_seal_open_round_trips_a_record() {
