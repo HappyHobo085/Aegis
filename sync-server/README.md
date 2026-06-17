@@ -5,15 +5,18 @@ A minimal, self-hosted reference server for Aegis's end-to-end-encrypted sync. I
 bookmarks, saved items, or allowlist. Authentication is per-device Ed25519 signed tokens;
 a device self-registers on first contact (the account secret is your recovery phrase).
 
-This reference keeps everything **in memory** (it resets on restart) — fine for trying sync
-out or a single-user setup. For durable use, swap the `HashMap`s in `src/main.rs` for a
-database or disk-backed store; the HTTP contract stays the same.
+By default this keeps everything **in memory** (it resets on restart) — fine for a quick try.
+For durable use, set **`AEGIS_SYNC_DATA`** to a writable file path and the server snapshots
+all records + device registrations to that JSON file (atomic write on change, loaded on boot)
+— no database required. The easiest durable deployment is Docker: see **[DOCKER.md](DOCKER.md)**,
+which sets `AEGIS_SYNC_DATA` on a persistent volume for you.
 
 ## Run
 
 ```bash
-cargo run                                   # listens on 127.0.0.1:8787
-AEGIS_SYNC_ADDR=0.0.0.0:8787 cargo run       # expose on your LAN
+cargo run                                              # in-memory, 127.0.0.1:8787
+AEGIS_SYNC_ADDR=0.0.0.0:8787 cargo run                  # expose on your LAN
+AEGIS_SYNC_DATA=./aegis-sync.json cargo run             # durable: persist to a JSON file
 ```
 
 Then in Aegis: **Settings → Sync → Server URL** = `http://<host>:8787`, and **Start new

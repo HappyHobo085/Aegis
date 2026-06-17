@@ -34,6 +34,7 @@ Android (iOS is a future, macOS/Xcode-gated tier).
 | `src-tauri/` | Rust core + native platform code    | yes                   |
 | `shared/`    | `types.ts` — the IPC contract       | yes                   |
 | `scripts/`   | npm-audit CI gate (Node ESM)        | yes                   |
+| `sync-server/` | Self-hosted E2E sync server (Rust/axum, standalone) | yes |
 | `.github/`   | CI workflows + Dependabot           | yes                   |
 | `dist/`      | Vite build output (gitignored)      | generated, no docs    |
 | `node_modules/` | npm deps (gitignored)            | generated, no docs    |
