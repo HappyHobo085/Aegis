@@ -449,7 +449,7 @@ pub fn start(app: &AppHandle) {
 }
 
 /// Build the unauthenticated health-probe URL from a user-entered server URL. `None` for an
-/// empty/whitespace entry. Trims surrounding whitespace and a single trailing slash.
+/// empty/whitespace entry. Trims surrounding whitespace and any trailing slashes.
 fn healthz_url(raw: &str) -> Option<String> {
     let base = raw.trim().trim_end_matches('/');
     if base.is_empty() {
@@ -482,7 +482,7 @@ fn test_connection(raw_url: &str) -> Value {
     .map_err(|_| "probe thread panicked".to_string())
     .and_then(|r| r);
     match probe {
-        Ok(()) => json!({ "ok": true, "latencyMs": start.elapsed().as_millis() as i64 }),
+        Ok(()) => json!({ "ok": true, "latencyMs": start.elapsed().as_millis() as u64 }),
         Err(e) => json!({ "ok": false, "error": e }),
     }
 }
@@ -650,6 +650,8 @@ mod tests {
             healthz_url("  https://sync.example.com/  "),
             Some("https://sync.example.com/healthz".to_string())
         );
+        // A double trailing slash (copy-paste artifact) collapses to one — no `//healthz`.
+        assert_eq!(healthz_url("http://h:8787//"), Some("http://h:8787/healthz".to_string()));
     }
 
     #[test]
