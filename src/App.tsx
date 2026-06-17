@@ -56,6 +56,12 @@ const isMobile =
   typeof document !== 'undefined' &&
   document.documentElement.classList.contains('aegis-mobile');
 
+// Windows hides the native "Tabs" menu bar (redundant with the tab strip), which drops
+// its keyboard accelerators — so the chrome handles the tab shortcuts itself there. macOS
+// keeps the menu (in the system menu bar), so it handles them natively; don't double-fire.
+const isWindows =
+  typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
+
 const CONTENT_ANCHOR_ID = 'content-anchor';
 
 /** Returns the hostname of `url`, or null when `url` has no parseable host. */
@@ -191,6 +197,31 @@ function DesktopApp() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [tabs.tabs]);
+
+  // Windows: the native "Tabs" menu (which carried Ctrl+T/W/Shift+T/Ctrl+Tab) is hidden,
+  // so handle those tab shortcuts here when the chrome has focus. No-op on macOS, where the
+  // menu fires them natively (see `isWindows`), to avoid double-firing.
+  useEffect(() => {
+    if (!isWindows) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey) return;
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        const ids = tabs.tabs.map((t) => t.id);
+        if (ids.length === 0) return;
+        const i = ids.indexOf(tabs.activeId);
+        const ni = e.shiftKey ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
+        void tabs.activate(ids[ni]);
+        return;
+      }
+      const k = e.key.toLowerCase();
+      if (k === 't' && e.shiftKey) { e.preventDefault(); void tabs.reopenClosed(); }
+      else if (k === 't') { e.preventDefault(); void tabs.create(); }
+      else if (k === 'w') { e.preventDefault(); void tabs.close(tabs.activeId); }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tabs.tabs, tabs.activeId]);
 
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {

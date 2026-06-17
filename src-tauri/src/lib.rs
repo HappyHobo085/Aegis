@@ -177,6 +177,15 @@ fn install_tab_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
         .build()?;
     let menu = MenuBuilder::new(app).item(&tabs_menu).build()?;
     app.set_menu(menu)?;
+    // Windows: hide the lone "Tabs" menu bar — the tab strip below already shows the open
+    // tabs, so it's redundant. (macOS keeps it: there it lives in the system menu bar at
+    // the top of the screen, not in the window, so it isn't redundant.) Hiding it drops the
+    // menu's keyboard accelerators on Windows, so the chrome re-implements the tab
+    // shortcuts in JS there (see the Windows keydown handler in App.tsx).
+    #[cfg(target_os = "windows")]
+    if let Some(w) = app.get_window("main") {
+        let _ = w.hide_menu();
+    }
     Ok(())
 }
 
