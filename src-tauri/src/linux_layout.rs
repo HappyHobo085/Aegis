@@ -380,21 +380,18 @@ pub fn layout(
                 chrome_window = child.window();
             }
         }
-        // Active content on top so view.setChromeOverlay can hide it to reveal chrome
-        // overlays. raise() acts on the realized GdkWindow (reliable on X11).
-        if let Some(w) = active_window {
-            w.raise();
-        }
-        // A full-window chrome overlay (Settings, Downloads, …) must sit ABOVE the content.
-        // Relying only on hiding the content is fragile across flag/timing combos — the
-        // sidebar + Settings open together left Settings rendered behind the page — so whenever
-        // no content is shown (content_visible is false, i.e. a full overlay is up, NOT the
-        // sidebar) we ALSO raise the chrome above the content, after it, so the overlay wins
-        // regardless of any stale content-visibility state.
-        if !content_visible {
-            if let Some(w) = chrome_window {
+        // Z-order: when the active content is shown, raise it on top; when it's hidden (a full
+        // overlay is up, or the tab is at home), raise the CHROME instead. Crucially we must
+        // NOT raise the content while it's hidden — raise() re-stacks the WebKit native window
+        // on top even after set_visible(false), which re-covered the chrome and left Settings
+        // rendered behind the (supposedly hidden) page. raise() acts on the realized GdkWindow
+        // (reliable on X11).
+        if active_visible {
+            if let Some(w) = active_window {
                 w.raise();
             }
+        } else if let Some(w) = chrome_window {
+            w.raise();
         }
 
         // Native floating exit button: shown ABOVE the content in fullscreen only,
