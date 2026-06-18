@@ -26,4 +26,30 @@ describe('visibility shim', () => {
     document.dispatchEvent(new Event('visibilitychange'));
     expect(handler).not.toHaveBeenCalled();
   });
+
+  it('reports the window as always focused', () => {
+    runShim();
+    expect(document.hasFocus()).toBe(true);
+  });
+
+  it('swallows window-level blur/focus listeners but leaves element focus intact', () => {
+    runShim();
+    const winBlur = vi.fn();
+    const winFocus = vi.fn();
+    window.addEventListener('blur', winBlur);
+    window.addEventListener('focus', winFocus);
+    window.dispatchEvent(new Event('blur'));
+    window.dispatchEvent(new Event('focus'));
+    expect(winBlur).not.toHaveBeenCalled();
+    expect(winFocus).not.toHaveBeenCalled();
+
+    // Element-level blur/focus must still work (forms rely on it).
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    const elBlur = vi.fn();
+    input.addEventListener('blur', elBlur);
+    input.dispatchEvent(new Event('blur'));
+    expect(elBlur).toHaveBeenCalledTimes(1);
+    input.remove();
+  });
 });
