@@ -158,6 +158,7 @@ export const aegis: AegisApi = {
       return call(IPC.viewSetChromeOverlay, { viewId, active });
     },
     setSidebar: (viewId, active, width) => call(IPC.viewSetSidebar, { viewId, active, width }),
+    setLayout: (viewId, opts) => call(IPC.viewSetLayout, { viewId, ...opts }),
     setFullscreen: (viewId, on) => call(IPC.viewSetFullscreen, { viewId, on }),
     onFullscreen: (cb) => on<{ on: boolean }>(IPC.evtViewFullscreen, cb),
   },

@@ -15,6 +15,7 @@ export const IPC = {
   viewSetContentInset: 'view.setContentInset',
   viewSetChromeOverlay: 'view.setChromeOverlay',
   viewSetSidebar: 'view.setSidebar',
+  viewSetLayout: 'view.setLayout',
   viewSetFullscreen: 'view.setFullscreen',
   settingsGet: 'settings.get',
   settingsSet: 'settings.set',
@@ -349,6 +350,13 @@ export interface AegisApi {
      * visible) rather than hiding it. Optional — Electron composes its sidebar via
      * the chrome overlay, so it may not implement this. */
     setSidebar?(viewId: ViewId, active: boolean, width?: number): Promise<void>;
+    /** Atomic overlay+sidebar update in ONE call, so the content layout is applied from
+     * consistent state — avoids the two-call race (setChromeOverlay + setSidebar) where a
+     * full overlay like Settings could land behind the content. Optional — Tauri desktop. */
+    setLayout?(
+      viewId: ViewId,
+      opts: { overlay: boolean; sidebar: boolean; width?: number },
+    ): Promise<void>;
     setFullscreen(viewId: ViewId, on: boolean): Promise<void>;
     /** Backend-driven fullscreen change (e.g. Esc exits on Tauri). Optional:
      * Electron's chrome owns its own fullscreen exit, so it may not emit this. */

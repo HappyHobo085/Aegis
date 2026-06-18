@@ -215,6 +215,23 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             });
             Ok(Value::Null)
         }
+        // Atomic overlay+sidebar update: the chrome computes both flags and sets them in ONE
+        // call so the content layout is applied from a single, consistent state. Opening
+        // Settings while the sidebar was open used to fire two separate updates
+        // (setChromeOverlay + setSidebar), each triggering its own layout pass — which could
+        // apply mid-transition and leave Settings rendered behind the content. One update → one
+        // apply removes that race.
+        "view.setLayout" => {
+            let overlay = payload.get("overlay").and_then(Value::as_bool).unwrap_or(false);
+            let sidebar = payload.get("sidebar").and_then(Value::as_bool).unwrap_or(false);
+            let width = payload.get("width").and_then(Value::as_f64).unwrap_or(SIDEBAR_WIDTH);
+            update(app, |l| {
+                l.overlay = overlay;
+                l.sidebar = sidebar;
+                l.right = if sidebar { width } else { 0.0 };
+            });
+            Ok(Value::Null)
+        }
         // Fullscreen: content fills the window below a slim top strip that holds the
         // chrome's exit button; Esc (handled in the content webview) also exits.
         "view.setFullscreen" => {

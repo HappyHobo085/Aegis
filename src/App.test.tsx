@@ -27,6 +27,7 @@ const reloadOrStop = vi.fn(async () => {});
 const setContentVisible = vi.fn(async () => {});
 const setContentInset = vi.fn(async () => {});
 const setChromeOverlay = vi.fn(async () => {});
+const setLayout = vi.fn(async () => {});
 const setFullscreen = vi.fn(async () => {});
 let failedCb: ((f: NavFailed) => void) | undefined;
 let crashedCb: ((c: NavCrashed) => void) | undefined;
@@ -61,6 +62,7 @@ vi.mock('./lib/ipcClient', () => ({
       setContentVisible: (...a: any[]) => setContentVisible(...a),
       setContentInset: (...a: any[]) => setContentInset(...a),
       setChromeOverlay: (...a: any[]) => setChromeOverlay(...a),
+      setLayout: (...a: any[]) => setLayout(...a),
       setFullscreen: (...a: any[]) => setFullscreen(...a),
     },
     settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
@@ -276,37 +278,37 @@ describe('App', () => {
   it('drives view.setChromeOverlay false on mount (no overlay active)', async () => {
     render(<App />);
     await waitFor(() =>
-      expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false),
+      expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })),
     );
   });
 
   it('brings chrome on top when the sidebar opens', async () => {
     render(<App />);
-    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
+    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(screen.getByRole('button', { name: /toggle sidebar/i }));
     await waitFor(() =>
-      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
     );
   });
 
   it('brings chrome on top when the Settings modal opens', async () => {
     render(<App />);
-    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
+    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(screen.getByRole('button', { name: /open settings/i }));
     await waitFor(() =>
-      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
     );
   });
 
   it('brings chrome on top when the favorites manager opens', async () => {
     render(<App />);
-    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
+    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(await screen.findByRole('button', { name: /manage favorites/i }));
     await waitFor(() =>
-      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
     );
   });
 
@@ -321,12 +323,12 @@ describe('App', () => {
     );
     render(<App />);
     await waitFor(() => expect(promptCb).toBeTypeOf('function'));
-    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
+    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
     act(() =>
       promptCb!({ requestId: 1, origin: 'https://example.com', permission: 'geolocation' }),
     );
     await waitFor(() =>
-      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
     );
   });
 
@@ -377,11 +379,11 @@ describe('App', () => {
 
   it('brings chrome on top when the Downloads modal opens', async () => {
     render(<App />);
-    await waitFor(() => expect(setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
+    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(await screen.findByRole('button', { name: /^downloads$/i }));
     await waitFor(() =>
-      expect(setChromeOverlay).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
+      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
     );
   });
 

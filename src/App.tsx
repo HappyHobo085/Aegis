@@ -129,13 +129,18 @@ function DesktopApp() {
     crashed !== null ||
     safety.interstitial !== null;
   useEffect(() => {
-    void aegis.view.setChromeOverlay(tabs.activeId, fullOverlayActive || sidebarOpen || shieldOpen);
-  }, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen]);
-  useEffect(() => {
-    // Inset the content by the sidebar's actual width when it's open and no full overlay
-    // is covering it — so the page stays visible beside the panel without overlapping it.
-    void aegis.view.setSidebar?.(tabs.activeId, sidebarOpen && !fullOverlayActive, sidebarWidth);
-  }, [tabs.activeId, sidebarOpen, fullOverlayActive, sidebarWidth]);
+    // ONE atomic update for the overlay + sidebar so the content layout is applied from a
+    // single consistent state. Two separate calls (setChromeOverlay + setSidebar) each
+    // triggered their own layout pass and could apply mid-transition — leaving a full overlay
+    // (e.g. Settings opened while the sidebar was open) rendered behind the content. overlay =
+    // a full overlay OR the sidebar/shield ride the chrome; sidebar = the inset panel, only
+    // when no full overlay is covering it.
+    void aegis.view.setLayout?.(tabs.activeId, {
+      overlay: fullOverlayActive || sidebarOpen || shieldOpen,
+      sidebar: sidebarOpen && !fullOverlayActive,
+      width: sidebarWidth,
+    });
+  }, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen, sidebarWidth]);
 
   // Fullscreen: main shrinks chrome to a top-right corner and fills the window
   // with content. Renderer reflects the toggle below (after all hooks).
