@@ -169,6 +169,17 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     ): Boolean {
       val raw = request.url?.toString() ?: return false
       if (!raw.startsWith("http")) return false
+
+      // Scripted cross-origin top-frame redirect guard (anti-malvertising).
+      val current = pageUrls[id] ?: ""
+      val scripted = !request.hasGesture()
+      if (current.isNotEmpty() &&
+          NativeRedirectGuard.shouldBlock(current, raw, scripted, request.isForMainFrame)) {
+        Log.i("AegisRedirect", "BLOCK $raw (from $current)")
+        pushRedirectBlocked(id, current, raw)
+        return true
+      }
+
       return when (val target = secureUrl(raw)) {
         null -> {
           showMalwareWarning(raw)
@@ -451,6 +462,18 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       .put("isLoading", loading)
       .put("crashed", false)
     val js = "window.__aegisNavState && window.__aegisNavState($obj)"
+    chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
+  }
+
+  /** Deliver a blocked-redirect notice to the chrome (React) UI. Mirrors pushNavState:
+   *  calls a global the Tauri client's redirect.onBlocked installs
+   *  (window.__aegisRedirectBlocked), so the chrome can raise its "Open anyway" toast. */
+  private fun pushRedirectBlocked(id: Int, from: String, to: String) {
+    val obj = JSONObject()
+      .put("viewId", id)
+      .put("from", from)
+      .put("to", to)
+    val js = "window.__aegisRedirectBlocked && window.__aegisRedirectBlocked($obj)"
     chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
   }
 
