@@ -8,6 +8,12 @@ mod adblock_convert;
 // and by ALL desktop platforms to drop ad/tracker pop-unders in nav::on_new_window.
 #[cfg(any(desktop, target_os = "android", test))]
 mod adblock_engine;
+// Scripted cross-origin top-frame redirect blocker (anti-malvertising). Pure
+// policy (should_block) + per-tab app-initiated nav registry; each platform's
+// native nav-policy hook derives the inputs and cancels. See
+// docs/superpowers/specs/2026-06-18-scripted-redirect-blocker-design.md.
+#[cfg(any(desktop, target_os = "android", test))]
+mod redirect_guard;
 // Cross-platform post-change ad-block re-apply (WebKit reinstall on Linux + engine policy
 // mirror + engine FilterSet reload everywhere). Replaces the Linux-only install_adblock
 // calls so sub/custom-filter changes take effect on Win/macOS/Android too.
