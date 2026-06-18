@@ -358,6 +358,7 @@ pub fn layout(
         let cw = (win_w - left - right).max(0);
         let ch = (win_h - top).max(0);
         let mut active_window = None;
+        let mut chrome_window = None;
         for child in fixed.children() {
             let is_active = child.as_ptr() == active_widget.as_ptr();
             let name = child.widget_name();
@@ -376,12 +377,24 @@ pub fn layout(
                 // the chrome webview: fill the window behind the active content.
                 child.set_size_request(win_w, win_h);
                 fixed.move_(&child, 0, 0);
+                chrome_window = child.window();
             }
         }
         // Active content on top so view.setChromeOverlay can hide it to reveal chrome
         // overlays. raise() acts on the realized GdkWindow (reliable on X11).
         if let Some(w) = active_window {
             w.raise();
+        }
+        // A full-window chrome overlay (Settings, Downloads, …) must sit ABOVE the content.
+        // Relying only on hiding the content is fragile across flag/timing combos — the
+        // sidebar + Settings open together left Settings rendered behind the page — so whenever
+        // no content is shown (content_visible is false, i.e. a full overlay is up, NOT the
+        // sidebar) we ALSO raise the chrome above the content, after it, so the overlay wins
+        // regardless of any stale content-visibility state.
+        if !content_visible {
+            if let Some(w) = chrome_window {
+                w.raise();
+            }
         }
 
         // Native floating exit button: shown ABOVE the content in fullscreen only,
