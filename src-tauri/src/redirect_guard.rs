@@ -2,7 +2,7 @@
 //! anti-malvertising guard. The POLICY lives here once; each platform's native
 //! nav-policy hook derives the four inputs and calls in. See
 //! docs/superpowers/specs/2026-06-18-scripted-redirect-blocker-design.md.
-use tauri::Url;
+use tauri::{AppHandle, Manager, Url};
 
 /// The core test: a script-initiated, cross-origin navigation targeting the top
 /// frame. All four platforms feed it the same inputs. (Freshness — excluding
@@ -82,6 +82,41 @@ pub fn decide(
         return false; // app-initiated
     }
     should_block(current, target, scripted, main_frame)
+}
+
+/// Record an app-initiated navigation so the guard won't block it.
+pub fn expect(app: &AppHandle, tab: u32, url: &str) {
+    if let Some(s) = app.try_state::<PendingNavs>() {
+        s.expect(tab, url);
+    }
+}
+
+/// AppHandle-bound `decide`: pulls the shared registry from Tauri state.
+pub fn decide_for(
+    app: &AppHandle,
+    tab: u32,
+    current: &str,
+    target: &str,
+    scripted: bool,
+    main_frame: bool,
+    is_redirect: bool,
+) -> bool {
+    let Some(s) = app.try_state::<PendingNavs>() else {
+        return false;
+    };
+    decide(s.inner(), tab, current, target, scripted, main_frame, is_redirect)
+}
+
+/// Emit the `redirect.blocked` event so the chrome can raise its toast.
+pub fn on_blocked(app: &AppHandle, tab: u32, from: &str, to: &str) {
+    if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
+        eprintln!("[aegis-redirect] BLOCK {to} (from {from})");
+    }
+    crate::emit_event(
+        app,
+        "redirect.blocked",
+        serde_json::json!({ "viewId": tab, "from": from, "to": to }),
+    );
 }
 
 #[cfg(test)]
