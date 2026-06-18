@@ -321,10 +321,21 @@ b. **Classify by GTK widget name, not pointer.** Content webviews are identified
    (constant `CONTENT_WIDGET_NAME`). Do NOT collect pointers via `with_webview`
    — that closure runs off the main thread and races with layout.
 
-c. **Active tab visibility follows the overlay state.** The active content
-   webview's visibility must be set to `content_visible = fullscreen || sidebar
-   || !overlay` (and hidden when the URL is about:blank), NOT forced to always
-   visible. Forcing it visible causes chrome overlays to render behind the page.
+c. **Hide the active content by parking it OFFSCREEN, never `set_visible(false)`.**
+   A full-window chrome overlay (settings/downloads/sidebar-less) should cover the
+   page: `content_visible = fullscreen || sidebar || !overlay` (also treat
+   `about:`/home as not-covering). But on this stack `set_visible(false)` on the
+   active content is wrong twice over: (1) it *backgrounds* the page — rAF stalls,
+   which malvertising weaponizes to fire a redirect — and (2) it doesn't even
+   reliably hide it: the WebKit native window stays stacked on top, so a full
+   overlay renders BEHIND the page (confirmed via layout logging — the flags were
+   correct, content stayed on top regardless; see gotcha (d)). So `layout()` keeps
+   the active content `set_visible(true)` ALWAYS and, when it shouldn't cover the
+   screen, moves it OFFSCREEN (`fixed.move_(&child, -10000, -10000)`) — the same
+   mechanism that reliably hides background tabs. Visible+offscreen = not
+   backgrounded and not covering the chrome. Z-order: raise the content only when
+   it's shown; otherwise raise the chrome — never `raise()` the content while it's
+   parked, or it re-covers the overlay.
 
 d. **Fullscreen exit button must be the topmost GtkFixed child.** In fullscreen
    mode the exit button must be re-added as the last (topmost z-order) child of
