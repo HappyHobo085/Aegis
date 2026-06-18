@@ -363,9 +363,21 @@ pub fn layout(
             let is_active = child.as_ptr() == active_widget.as_ptr();
             let name = child.widget_name();
             if is_active {
-                child.set_visible(active_visible);
+                // NEVER hide the active content with set_visible(false): on this stack that
+                // (a) backgrounds the page — rAF stalls, which malvertising uses to redirect —
+                // and (b) doesn't even reliably hide it (the WebKit native window stays stacked
+                // on top, leaving a full overlay rendered BEHIND it — confirmed via layout
+                // logging: flags were correct, content stayed on top anyway). Instead keep it
+                // visible and, when a full overlay should cover the screen, park it OFFSCREEN —
+                // the same mechanism that reliably hides background tabs below. Visible +
+                // offscreen = not backgrounded (no redirect) and not covering the chrome.
+                child.set_visible(true);
                 child.set_size_request(cw, ch);
-                fixed.move_(&child, left, top);
+                if active_visible {
+                    fixed.move_(&child, left, top);
+                } else {
+                    fixed.move_(&child, -10000, -10000);
+                }
                 active_window = child.window();
             } else if name == FS_EXIT_NAME {
                 // handled below
