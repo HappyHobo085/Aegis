@@ -48,6 +48,11 @@ const POPUP_GUARD: &str = r#"(function(){
   } catch (e) {}
 })();"#;
 
+/// Document-start shim that keeps content pages reporting themselves visible, so an in-app
+/// overlay hiding the content webview can't fire visibilitychange-hidden and arm a
+/// malvertising redirect/pop-under. Shipped on EVERY platform alongside POPUP_GUARD.
+const VISIBILITY_GUARD: &str = include_str!("visibility_shim.js");
+
 /// The document-start script injected into the desktop content webview: the WebRTC
 /// IP-leak shim (per the user's `webrtcPolicy` + the per-site allowlist escape hatch),
 /// then the pop-under guard (EVERY platform), then — on Windows/macOS — the heavier
@@ -68,11 +73,11 @@ pub fn script(app: &tauri::AppHandle, host_allowlisted: bool) -> String {
 fn compose(webrtc: &str) -> String {
     #[cfg(target_os = "linux")]
     {
-        format!("{webrtc}\n{POPUP_GUARD}")
+        format!("{webrtc}\n{POPUP_GUARD}\n{VISIBILITY_GUARD}")
     }
     #[cfg(not(target_os = "linux"))]
     {
-        format!("{webrtc}\n{POPUP_GUARD}\n{}", BUILT.get_or_init(build))
+        format!("{webrtc}\n{POPUP_GUARD}\n{VISIBILITY_GUARD}\n{}", BUILT.get_or_init(build))
     }
 }
 
@@ -170,7 +175,7 @@ pub extern "system" fn Java_com_aegis_browser_NativeInject_documentStartScript<'
     _this: jni::objects::JObject<'a>,
 ) -> jni::sys::jstring {
     // Phase 1 folds the WebRTC shim in via the same InjectConfig seam used by script().
-    let s = format!("{POPUP_GUARD}\n{}", build());
+    let s = format!("{POPUP_GUARD}\n{VISIBILITY_GUARD}\n{}", build());
     match env.new_string(s) {
         Ok(js) => js.into_raw(),
         Err(_) => std::ptr::null_mut(),
@@ -193,6 +198,13 @@ mod tests {
         // Procedural selectors are filtered out (no extended pseudos leak into CSS).
         assert!(!s.contains(":matches-css"));
         assert!(!s.contains(":has-text("));
+    }
+
+    #[test]
+    fn visibility_shim_ships_in_the_composed_script() {
+        // The shim is concatenated on every platform; compose("") is the Linux-host case.
+        assert!(super::compose("").contains("aegis-visibility-shim"));
+        assert!(super::compose("").contains("visibilityState"));
     }
 
     #[test]
