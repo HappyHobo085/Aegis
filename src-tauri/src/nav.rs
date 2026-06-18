@@ -143,6 +143,18 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
             // main-frame only. We still run the safety + HTTPS-Only checks here so they
             // cover subframes too (a malware/insecure iframe should be caught as well).
 
+            // While a full-window chrome overlay (Settings/Downloads/shield/…) covers the page,
+            // the user isn't driving it — so any navigation the content initiates is a script/ad
+            // redirect (malvertising fires top-frame redirects on the resize/blur that opening an
+            // overlay over the page causes). Cancel them. NOT gated on the sidebar alone: the page
+            // stays interactive beside the sidebar panel, so real navigation must still work there.
+            if let Some(st) = app_nav.try_state::<crate::view::ContentInset>() {
+                let lay = *st.0.lock().unwrap();
+                if lay.overlay && !lay.sidebar {
+                    return false;
+                }
+            }
+
             // Malicious-site guard: block known-malware hosts.
             if crate::safety::is_blocked(&app_nav, u) {
                 crate::safety::raise(&app_nav, u.as_str());
