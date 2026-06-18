@@ -39,6 +39,23 @@ fn should_autoclose_popunder(tab_id: u32, active_id: u32, has_content: bool) -> 
 pub fn content_label(id: u32) -> String {
     format!("content:{id}")
 }
+
+/// Parse the tab id out of a `content:{id}` label (defaults to 1).
+fn label_id(label: &str) -> u32 {
+    label.strip_prefix("content:").and_then(|s| s.parse().ok()).unwrap_or(1)
+}
+
+/// Navigate a tab's content webview, FIRST registering the target as an
+/// app-initiated navigation so the redirect guard never blocks it. Every
+/// programmatic content navigation must go through here.
+#[cfg(desktop)]
+#[allow(dead_code)]
+pub fn navigate_tab(app: &AppHandle, id: u32, url: Url) {
+    crate::redirect_guard::expect(app, id, url.as_str());
+    if let Some(w) = app.get_webview(&content_label(id)) {
+        let _ = w.navigate(url);
+    }
+}
 /// The active tab's webview label (from the registry).
 pub fn active_content_label(app: &AppHandle) -> String {
     let id = app
@@ -109,6 +126,9 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     let scale = window.scale_factor().unwrap_or(1.0);
     let size = window.inner_size()?.to_logical::<f64>(scale);
     let label = content_label(id);
+    // The initial page load reaches the policy hook as a gesture-less navigation;
+    // register it so the redirect guard exempts it (it's an app-initiated load).
+    crate::redirect_guard::expect(app, id, url.as_str());
 
     // Per-site WebRTC escape hatch: an allowlisted host (the ad-block allowlist doubles as
     // "trusted site") is exempt from the WebRTC shim + native backstops. Computed from the
@@ -210,8 +230,11 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
                 let app_main = app_nav.clone();
                 let lbl = content_label(nav_id);
                 let _ = app_nav.run_on_main_thread(move || {
-                    if let (Some(w), Ok(p)) = (app_main.get_webview(&lbl), Url::parse(&https)) {
-                        let _ = w.navigate(p);
+                    if let Ok(p) = Url::parse(&https) {
+                        crate::redirect_guard::expect(&app_main, nav_id, p.as_str());
+                        if let Some(w) = app_main.get_webview(&lbl) {
+                            let _ = w.navigate(p);
+                        }
                     }
                 });
                 return false; // cancel the http navigation; https replaces it
@@ -415,7 +438,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             let url_s = payload.get("url").and_then(|v| v.as_str()).unwrap_or("");
             match Url::parse(url_s) {
                 Ok(u) => match content {
-                    Some(w) => w.navigate(u).map(|_| Value::Null).map_err(|e| e.to_string()),
+                    Some(w) => {
+                        crate::redirect_guard::expect(app, label_id(&label), u.as_str());
+                        w.navigate(u).map(|_| Value::Null).map_err(|e| e.to_string())
+                    }
                     None => Ok(Value::Null),
                 },
                 Err(e) => Err(format!("invalid url '{url_s}': {e}")),
@@ -427,7 +453,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             });
             let url = app.try_state::<crate::tabs::Tabs>().and_then(|s| s.reg.lock().unwrap().go_back(target_id));
             if let (Some(url), Some(w)) = (url, content) {
-                if let Ok(u) = Url::parse(&url) { let _ = w.navigate(u); }
+                if let Ok(u) = Url::parse(&url) {
+                    crate::redirect_guard::expect(app, label_id(&label), u.as_str());
+                    let _ = w.navigate(u);
+                }
             }
             Ok(Value::Null)
         }
@@ -437,7 +466,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             });
             let url = app.try_state::<crate::tabs::Tabs>().and_then(|s| s.reg.lock().unwrap().go_forward(target_id));
             if let (Some(url), Some(w)) = (url, content) {
-                if let Ok(u) = Url::parse(&url) { let _ = w.navigate(u); }
+                if let Ok(u) = Url::parse(&url) {
+                    crate::redirect_guard::expect(app, label_id(&label), u.as_str());
+                    let _ = w.navigate(u);
+                }
             }
             Ok(Value::Null)
         }
@@ -449,7 +481,9 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
         "nav.home" => {
             if let Some(w) = content {
-                let _ = w.navigate(crate::settings::home_url(app));
+                let home = crate::settings::home_url(app);
+                crate::redirect_guard::expect(app, label_id(&label), home.as_str());
+                let _ = w.navigate(home);
             }
             Ok(Value::Null)
         }
