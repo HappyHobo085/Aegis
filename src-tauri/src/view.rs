@@ -65,11 +65,21 @@ fn layout_of(app: &AppHandle) -> Layout {
         })
 }
 
+/// Whether the content webview should be shown. A full-window chrome overlay (Settings,
+/// Downloads, the safety interstitial, …) hides the content REGARDLESS of the sidebar: the
+/// sidebar only insets the content (page stays visible beside it) and never sets `overlay`,
+/// so it must NOT force visibility when a full overlay is also open (the bug where opening
+/// Settings while the sidebar was open left Settings rendered behind the page). Fullscreen
+/// always shows.
+fn content_visible(lay: &Layout) -> bool {
+    lay.fullscreen || !lay.overlay
+}
+
 /// Hide the content for a full-window chrome overlay (settings, downloads, …) so the
 /// chrome shows above the opaque content webview. The sidebar is NOT a full overlay — it
 /// insets the content (page stays visible beside it), so it keeps content shown.
 fn apply_visibility(app: &AppHandle, lay: Layout) {
-    let visible = lay.fullscreen || lay.sidebar || !lay.overlay;
+    let visible = content_visible(&lay);
     #[cfg(target_os = "linux")]
     crate::linux_layout::set_content_visible(app, visible);
     // Windows/macOS: Tauri's hide/show work directly. (Mobile is single-webview —
@@ -109,7 +119,6 @@ pub fn apply_inset(app: &AppHandle) {
     // ourselves via the GtkFixed workaround. Other platforms: set_bounds works.
     #[cfg(target_os = "linux")]
     {
-        let content_visible = lay.fullscreen || lay.sidebar || !lay.overlay;
         crate::linux_layout::layout(
             app,
             left as i32,
@@ -118,7 +127,7 @@ pub fn apply_inset(app: &AppHandle) {
             logical.width as i32,
             logical.height as i32,
             lay.fullscreen,
-            content_visible,
+            content_visible(&lay),
         );
     }
 
@@ -152,7 +161,7 @@ pub fn apply_inset(app: &AppHandle) {
     #[cfg(all(desktop, not(target_os = "linux")))]
     {
         let active = crate::nav::active_content_label(app);
-        let active_visible = lay.fullscreen || lay.sidebar || !lay.overlay;
+        let active_visible = content_visible(&lay);
         for (label, w) in app.webviews() {
             if label.starts_with("content:") {
                 let _ = if label == active && active_visible { w.show() } else { w.hide() };
@@ -225,4 +234,27 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         _ => return None,
     };
     Some(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{content_visible, Layout};
+
+    fn lay(fullscreen: bool, overlay: bool, sidebar: bool) -> Layout {
+        Layout { left: 0.0, top: 0.0, right: 0.0, fullscreen, overlay, sidebar }
+    }
+
+    #[test]
+    fn content_visible_full_overlay_hides_even_with_sidebar_open() {
+        // Nothing open, and sidebar-only, keep the page visible (it shows beside the panel).
+        assert!(content_visible(&lay(false, false, false)));
+        assert!(content_visible(&lay(false, false, true)));
+        // A full-window overlay (Settings/Downloads) hides the content...
+        assert!(!content_visible(&lay(false, true, false)));
+        // ...and STILL hides it when the sidebar is also open — the regression: it used to
+        // stay visible (sidebar forced it), so Settings rendered behind the page.
+        assert!(!content_visible(&lay(false, true, true)));
+        // Fullscreen always shows, regardless of the overlay flag.
+        assert!(content_visible(&lay(true, true, true)));
+    }
 }
