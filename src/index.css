@@ -407,6 +407,15 @@ body.aegis-fullscreen {
   gap: 8px;
 }
 
+/* On mobile the shield sits in the bottom bar, so its popover must open UPWARD — the
+   desktop default (top: 100%) opens it below the bar, off-screen and inaccessible. The
+   bottom bar doesn't clip overflow and opening the shield raises the chrome above the
+   native content, so an upward popover is visible. */
+.aegis-mobile .adblock-shield__popover {
+  top: auto;
+  bottom: calc(100% + 6px);
+}
+
 /* Row inside popover (flex row for label + control pairs) */
 .adblock-shield__row {
   display: flex;
