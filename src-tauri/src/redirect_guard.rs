@@ -119,6 +119,24 @@ pub fn on_blocked(app: &AppHandle, tab: u32, from: &str, to: &str) {
     );
 }
 
+/// JNI bridge for Android's `NativeRedirectGuard.shouldBlock` (a Kotlin `object`).
+/// Android derives scripted (=!hasGesture) + main_frame (=isForMainFrame) and the
+/// URLs; this applies the shared cross-origin predicate. Lives in libapp_lib.so.
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_shouldBlock(
+    mut env: jni::JNIEnv,
+    _this: jni::objects::JObject,
+    current: jni::objects::JString,
+    target: jni::objects::JString,
+    scripted: jni::sys::jboolean,
+    main_frame: jni::sys::jboolean,
+) -> jni::sys::jboolean {
+    let current: String = env.get_string(&current).map(|s| s.into()).unwrap_or_default();
+    let target: String = env.get_string(&target).map(|s| s.into()).unwrap_or_default();
+    should_block(&current, &target, scripted != 0, main_frame != 0) as jni::sys::jboolean
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
