@@ -1,11 +1,13 @@
 // src/components/Toaster.test.tsx
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, act, waitFor } from '@testing-library/react';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { render, screen, act, waitFor, cleanup } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { Toaster } from './Toaster';
 import { toast, __resetToasts } from '../lib/toast';
 
 beforeEach(() => {
   __resetToasts();
+  cleanup();
 });
 
 describe('Toaster', () => {
@@ -33,5 +35,21 @@ describe('Toaster', () => {
     await waitFor(() => expect(screen.getByText('FYI')).toBeInTheDocument());
     const toastEl = screen.getByText('FYI').closest('.toast');
     expect(toastEl).toHaveClass('toast--info');
+  });
+});
+
+describe('Toaster action', () => {
+  beforeEach(() => {
+    __resetToasts();
+    cleanup();
+  });
+
+  it('renders the action button and fires onClick', async () => {
+    render(<Toaster />);
+    const onClick = vi.fn();
+    toast.info('Blocked a redirect to evil.com', { action: { label: 'Open anyway', onClick } });
+    const btn = await screen.findByRole('button', { name: 'Open anyway' });
+    await userEvent.click(btn);
+    expect(onClick).toHaveBeenCalledOnce();
   });
 });

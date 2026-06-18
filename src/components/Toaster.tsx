@@ -11,7 +11,16 @@ export function Toaster() {
     <div className="toaster" role="status" aria-live="polite" aria-atomic="false">
       {toasts.map((t) => (
         <div key={t.id} className={`toast toast--${t.kind}`}>
-          {t.message}
+          <span className="toast__message">{t.message}</span>
+          {t.action && (
+            <button
+              type="button"
+              className="toast__action"
+              onClick={() => t.action?.onClick()}
+            >
+              {t.action.label}
+            </button>
+          )}
         </div>
       ))}
     </div>

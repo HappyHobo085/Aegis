@@ -3157,6 +3157,31 @@ body.aegis-fullscreen {
   border-left-color: var(--accent-color);
 }
 
+/* Toast with an action button (e.g. "Open anyway" on a blocked redirect) lays
+   its message + button out on one row; the button matches the toast accent. */
+.toast:has(.toast__action) {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.toast__message {
+  flex: 1 1 auto;
+}
+
+.toast__action {
+  flex: 0 0 auto;
+  margin-left: 4px;
+  background: transparent;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 2px 8px;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  white-space: nowrap;
+}
+
 /* ─── Welcome hint ───────────────────────────────────────────────── */
 
 /* Fixed bottom-left floating card with accent left border */
