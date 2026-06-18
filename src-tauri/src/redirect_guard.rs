@@ -23,6 +23,67 @@ fn is_cross_origin_http(current: &str, target: &str) -> bool {
     cur.origin() != tgt.origin()
 }
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+/// One expected app-initiated target URL per tab. The app records the URL it is
+/// about to navigate to (address bar, new tab, HTTPS upgrade, Open-anyway, restore)
+/// BEFORE navigating; the guard consumes a match so app navigations are never
+/// blocked. Page-script navigations never match.
+#[derive(Default)]
+pub struct PendingNavs(pub Mutex<HashMap<u32, String>>);
+
+impl PendingNavs {
+    /// Record (overwrite) the tab's one-shot expected target.
+    pub fn expect(&self, tab: u32, url: &str) {
+        self.0.lock().unwrap().insert(tab, url.to_string());
+    }
+    /// Consume the tab's expected target if `target` matches it. Returns true on match.
+    pub fn take_if_match(&self, tab: u32, target: &str) -> bool {
+        let mut m = self.0.lock().unwrap();
+        if m.get(&tab).is_some_and(|exp| same_target(exp, target)) {
+            m.remove(&tab);
+            return true;
+        }
+        false
+    }
+}
+
+/// Equal up to fragment / trailing-slash differences (the engine may canonicalize
+/// the URL it passes back into the policy hook).
+fn same_target(a: &str, b: &str) -> bool {
+    match (Url::parse(a), Url::parse(b)) {
+        (Ok(x), Ok(y)) => {
+            x.scheme() == y.scheme()
+                && x.host_str() == y.host_str()
+                && x.port_or_known_default() == y.port_or_known_default()
+                && x.path().trim_end_matches('/') == y.path().trim_end_matches('/')
+                && x.query() == y.query()
+        }
+        _ => a == b,
+    }
+}
+
+/// Decide whether to BLOCK this navigation (true = cancel). `is_redirect` marks a
+/// redirect hop continuing an already-vetted navigation.
+pub fn decide(
+    pending: &PendingNavs,
+    tab: u32,
+    current: &str,
+    target: &str,
+    scripted: bool,
+    main_frame: bool,
+    is_redirect: bool,
+) -> bool {
+    if is_redirect {
+        return false; // continuation of a vetted navigation
+    }
+    if pending.take_if_match(tab, target) {
+        return false; // app-initiated
+    }
+    should_block(current, target, scripted, main_frame)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,5 +119,36 @@ mod tests {
     fn cross_origin_by_port_and_scheme() {
         assert!(should_block("https://a.com/", "http://a.com/", true, true)); // scheme differs
         assert!(should_block("https://a.com:8443/", "https://a.com/", true, true)); // port differs
+    }
+    #[test]
+    fn redirect_hop_is_allowed() {
+        let p = PendingNavs::default();
+        assert!(!decide(&p, 1, "https://a.com/", "https://b.com/", true, true, true));
+    }
+    #[test]
+    fn app_initiated_is_allowed_and_consumed() {
+        let p = PendingNavs::default();
+        p.expect(1, "https://b.com/");
+        assert!(!decide(&p, 1, "https://a.com/", "https://b.com/", true, true, false));
+        // consumed: a second identical scripted nav now blocks
+        assert!(decide(&p, 1, "https://a.com/", "https://b.com/", true, true, false));
+    }
+    #[test]
+    fn app_initiated_match_ignores_fragment_and_trailing_slash() {
+        let p = PendingNavs::default();
+        p.expect(1, "https://b.com/path");
+        assert!(!decide(&p, 1, "https://a.com/", "https://b.com/path/#frag", true, true, false));
+    }
+    #[test]
+    fn fresh_scripted_cross_origin_blocks() {
+        let p = PendingNavs::default();
+        assert!(decide(&p, 1, "https://a.com/", "https://evil.com/", true, true, false));
+    }
+    #[test]
+    fn pending_is_per_tab() {
+        let p = PendingNavs::default();
+        p.expect(1, "https://b.com/");
+        // tab 2 has no pending entry → still blocked
+        assert!(decide(&p, 2, "https://a.com/", "https://b.com/", true, true, false));
     }
 }
