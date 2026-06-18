@@ -4,7 +4,7 @@ import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
 import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
-import { subscribeConfirmOpen } from './lib/toast';
+import { subscribeConfirmOpen, toast } from './lib/toast';
 import { useNav } from './hooks/useNav';
 import { useAdblock } from './hooks/useAdblock';
 import { useFavorites } from './hooks/useFavorites';
@@ -246,6 +246,24 @@ function DesktopApp() {
       offFailed();
       offCrashed();
     };
+  }, [tabs.activeId]);
+
+  // A scripted cross-origin top-frame redirect was cancelled by the native guard;
+  // surface a toast whose "Open anyway" reuses tabs.create to open the URL anyway.
+  useEffect(() => {
+    return aegis.redirect.onBlocked((r) => {
+      if (r.viewId !== tabs.activeId) return;
+      let host = r.to;
+      try {
+        host = new URL(r.to).hostname;
+      } catch {
+        /* keep raw */
+      }
+      toast.info(`Blocked a redirect to ${host}`, {
+        durationMs: 6000,
+        action: { label: 'Open anyway', onClick: () => void tabs.create(r.to, false) },
+      });
+    });
   }, [tabs.activeId]);
 
   // Main owns content hide/show for failures and crashes. When a fresh

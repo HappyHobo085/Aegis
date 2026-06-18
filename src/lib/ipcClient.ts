@@ -14,6 +14,7 @@ import type {
   Settings,
   AdblockState,
   BlockedCount,
+  RedirectBlocked,
   ListUpdateResult,
   Subscription,
   DownloadEntry,
@@ -197,6 +198,25 @@ export const aegis: AegisApi = {
     clearAllowlist: () => call<AdblockState>(IPC.adblockClearAllowlist),
     getState: () => call<AdblockState>(IPC.adblockGetState),
     onBlockedCount: (cb) => on<BlockedCount>(IPC.evtAdblockBlockedCount, cb),
+  },
+  redirect: {
+    onBlocked: (cb: (r: RedirectBlocked) => void) => {
+      // Android has no Tauri event bus on the content side; the Kotlin client pushes
+      // RedirectBlocked via window.__aegisRedirectBlocked (set up here), mirroring nav state.
+      if (androidBridge()) {
+        const w = window as unknown as {
+          __aegisRedirectBlockedCbs?: Set<(r: RedirectBlocked) => void>;
+          __aegisRedirectBlocked?: (r: RedirectBlocked) => void;
+        };
+        const cbs = (w.__aegisRedirectBlockedCbs ??= new Set());
+        cbs.add(cb);
+        w.__aegisRedirectBlocked = (r) => cbs.forEach((f) => f(r));
+        return () => {
+          cbs.delete(cb);
+        };
+      }
+      return on<RedirectBlocked>(IPC.evtRedirectBlocked, cb);
+    },
   },
   lists: {
     updateNow: () => call<ListUpdateResult>(IPC.listsUpdateNow),

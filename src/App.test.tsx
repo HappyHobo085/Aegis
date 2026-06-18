@@ -84,6 +84,9 @@ vi.mock('./lib/ipcClient', () => ({
       clearAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
       onBlockedCount: vi.fn().mockReturnValue(() => {}),
     },
+    redirect: {
+      onBlocked: vi.fn().mockReturnValue(() => {}),
+    },
     lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
     sync: {
       getState: vi.fn().mockResolvedValue({
