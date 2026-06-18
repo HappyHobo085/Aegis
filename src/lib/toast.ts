@@ -1,10 +1,16 @@
 // src/lib/toast.ts
 export type ToastKind = 'success' | 'error' | 'info';
 
+export interface ToastAction {
+  label: string;
+  onClick: () => void;
+}
+
 export interface ToastItem {
   id: number;
   kind: ToastKind;
   message: string;
+  action?: ToastAction;
 }
 
 type Listener = (toasts: ToastItem[]) => void;
@@ -28,15 +34,20 @@ export function subscribeToasts(listener: Listener): () => void {
   };
 }
 
-function push(kind: ToastKind, message: string): void {
-  const item: ToastItem = { id: nextId++, kind, message };
+interface PushOpts {
+  action?: ToastAction;
+  durationMs?: number;
+}
+
+function push(kind: ToastKind, message: string, opts: PushOpts = {}): void {
+  const item: ToastItem = { id: nextId++, kind, message, action: opts.action };
   toasts = [...toasts, item];
   emit();
   const handle = setTimeout(() => {
     dismissTimers.delete(item.id);
     toasts = toasts.filter((t) => t.id !== item.id);
     emit();
-  }, 4000);
+  }, opts.durationMs ?? 4000);
   dismissTimers.set(item.id, handle);
 }
 
@@ -47,8 +58,8 @@ export const toast = {
   error(m: string): void {
     push('error', m);
   },
-  info(m: string): void {
-    push('info', m);
+  info(m: string, opts?: { action?: ToastAction; durationMs?: number }): void {
+    push('info', m, opts);
   },
 };
 
