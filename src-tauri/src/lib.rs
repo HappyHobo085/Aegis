@@ -26,6 +26,9 @@ mod adblock_win;
 // WebView2 SourceChanged on Windows, WKWebView `URL` KVO on macOS.
 #[cfg(target_os = "windows")]
 mod nav_url_win;
+// Windows scripted cross-origin top-frame redirect guard: WebView2 NavigationStarting.
+#[cfg(target_os = "windows")]
+mod nav_policy_win;
 #[cfg(target_os = "macos")]
 mod nav_url_mac;
 // Injected (document-start) ad/tracker blocker for the content webview — the ad-block
