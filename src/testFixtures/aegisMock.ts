@@ -3,7 +3,7 @@
 // can reuse it without duplicating the object.
 import { vi } from 'vitest';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
-import type { NavState, NavFailed, NavCrashed } from '../../shared/types';
+import type { NavState, NavFailed, NavCrashed, Settings } from '../../shared/types';
 
 const baseState: NavState = {
   viewId: PRIMARY_VIEW_ID,
@@ -13,6 +13,15 @@ const baseState: NavState = {
   canGoForward: false,
   isLoading: false,
   crashed: false,
+};
+
+const baseSettings: Settings = {
+  homeUrl: 'https://duckduckgo.com/',
+  primaryColor: '#4f8cff',
+  defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
+  searchEngines: [],
+  hideChromeByDefault: false,
+  downloadDir: '',
 };
 
 export function aegisMockModule() {
@@ -36,14 +45,7 @@ export function aegisMockModule() {
         setLayout: vi.fn(async () => {}),
         setFullscreen: vi.fn(async () => {}),
       },
-      settings: { get: vi.fn(async () => ({
-        homeUrl: 'https://duckduckgo.com/',
-        primaryColor: '#4f8cff',
-        defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
-        searchEngines: [],
-        hideChromeByDefault: false,
-        downloadDir: '',
-      })), set: vi.fn(async () => ({})) },
+      settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
       subs: {
         list: vi.fn(async () => []),
         setEnabled: vi.fn(async () => []),
