@@ -16,13 +16,19 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
   - Data models — `NavState`, `Favorite`, `HistoryEntry`, `SavedItem`,
     `DownloadEntry`, `SitePermission`, `Settings` (incl. `tabIdleTimeout`),
     `AdblockState`, `UpdateState`, `SafetyInterstitialPayload`, `Subscription`,
-    `TabMeta`, `TabsState` (the ordered tab list + active id), etc.
+    `TabMeta`, `TabsState` (the ordered tab list + active id), `RedirectBlocked`, etc.
   - `tabs.*` channels: `tabs.create` (optional `background` flag — opens without
     switching the active tab, for mobile `target=_blank`), `tabs.close`, `tabs.activate`,
     `tabs.reorder`, `tabs.setPinned`, `tabs.reopenClosed`, `tabs.list`, `tabs.setTitle`
     (chrome relays the content title into the registry; Android has no native title signal).
   - `tabs.state` event (emitted on every structural change) + `tabs.shortcut`
     event (Ctrl+T/W/Shift+T from native accelerator/GTK hook).
+  - `redirect.blocked` event (`evtRedirectBlocked`, payload `RedirectBlocked { viewId,
+    from, to }`) — the native redirect guard cancelled a scripted cross-origin top-frame
+    redirect. The chrome surfaces it (desktop `RedirectBar` infobar / Android Material
+    Snackbar) with "Open anyway" → opens `to` in a new tab (`tabs.create` desktop /
+    `__aegisOpenTab` Android). Emitted per-platform from the native nav-policy hook; see
+    `src-tauri/CLAUDE.md` gotcha 14.
   - `AegisApi` — the typed shape of `window.aegis` (what `src/lib/ipcClient.ts`
     implements). Adding a feature means adding it here first.
 - **`types.test.ts`, `types.update.test.ts`** — assert the contract's invariants
