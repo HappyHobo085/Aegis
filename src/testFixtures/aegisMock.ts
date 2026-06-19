@@ -26,6 +26,14 @@ const baseSettings: Settings = {
 
 export function aegisMockModule() {
   return {
+    // Standalone mobile-only functions exported from ipcClient (no-ops off Android;
+    // the mobile tour needs these exported so MobileApp.tsx can import them).
+    setBackInterceptActive: vi.fn(),
+    setBottomBarHidden: vi.fn(),
+    setFullscreen: vi.fn(),
+    activateTab: vi.fn(),
+    closeTab: vi.fn(),
+    discardTab: vi.fn(),
     aegis: {
       nav: {
         navigate: vi.fn(async () => {}),
@@ -42,8 +50,11 @@ export function aegisMockModule() {
         setContentVisible: vi.fn(async () => {}),
         setContentInset: vi.fn(async () => {}),
         setChromeOverlay: vi.fn(async () => {}),
+        // Optional methods (Tauri desktop — called with ?. in App.tsx and catalog)
+        setSidebar: vi.fn(async () => {}),
         setLayout: vi.fn(async () => {}),
         setFullscreen: vi.fn(async () => {}),
+        onFullscreen: vi.fn().mockReturnValue(() => {}),
       },
       settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
       subs: {
@@ -77,6 +88,7 @@ export function aegisMockModule() {
         enableFromPhrase: vi.fn().mockResolvedValue({}),
         disable: vi.fn().mockResolvedValue({}),
         syncNow: vi.fn().mockResolvedValue({}),
+        testConnection: vi.fn().mockResolvedValue({ ok: true, latencyMs: 5 }),
         getRecoveryPhrase: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
         listDevices: vi.fn().mockResolvedValue([]),
         removeDevice: vi.fn().mockResolvedValue([]),
@@ -151,6 +163,7 @@ export function aegisMockModule() {
         reorder: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
         setPinned: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
         reopenClosed: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+        setTitle: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
         onState: vi.fn(() => () => {}),
         onShortcut: vi.fn(() => () => {}),
       },
