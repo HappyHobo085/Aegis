@@ -1613,15 +1613,17 @@ export const INTERACTIONS: InteractionSpec[] = [
         const allEngines = before.searchEngines ?? [];
         // Find an engine whose template differs from the current default.
         const alternate = allEngines.find((e) => e.template !== _originalTemplate);
-        if (!alternate && allEngines.length === 0)
+        if (allEngines.length === 0)
           throw new Error('No "Default search engine" radio found — searchEngines list may be empty');
-        // Click the radio for the alternate engine (or any radio if all share the same template).
-        const targetName = alternate?.name ?? allEngines[0]?.name;
-        _selectedEngineTemplate = alternate?.template ?? allEngines[0]?.template;
-        const radio = targetName
-          ? ctx.byLabel(new RegExp(`^Default search engine ${targetName}$`))
-          : ctx.byLabel(/^Default search engine /);
-        if (!radio) throw new Error(`No "Default search engine" radio found for engine "${targetName ?? '(any)'}"`);
+        // Need an engine with a DIFFERENT template so the click produces an observable change;
+        // otherwise re-selecting the current default is a no-op the assert can't verify.
+        if (!alternate)
+          throw new Error('All search engines share the current default template — no observable change possible');
+        // Click the radio for the alternate engine.
+        const targetName = alternate.name;
+        _selectedEngineTemplate = alternate.template;
+        const radio = ctx.byLabel(new RegExp(`^Default search engine ${targetName}$`));
+        if (!radio) throw new Error(`No "Default search engine" radio found for engine "${targetName}"`);
         await ctx.click(radio);
       },
       assert: async (ctx: InteractionCtx) => {
