@@ -1,7 +1,8 @@
 // src/autopilot/interactionCtx.ts
 import { within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { AegisApi } from '../../shared/types';
+import { flushSync } from 'react-dom';
+import type { AegisApi, NavState } from '../../shared/types';
 import type { CallLog, InteractionCtx } from './interactions';
 import type { ScreenId } from './screens';
 
@@ -48,6 +49,16 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
     'ctrl+t': '{Control>}t{/Control}', 'ctrl+w': '{Control>}w{/Control}',
     'ctrl+shift+t': '{Control>}{Shift>}t{/Shift}{/Control}',
   };
+
+  // Capture the nav onState callback NOW (before calls.reset() wipes mock.calls).
+  // App mounts synchronously in render(), so onState is called before makeVitestCtx.
+  // Guard: aegis.nav may be absent in unit-test fakes that only stub a single domain.
+  type NavStateMockFn = { mock?: { calls: ((s: NavState) => void)[][] } };
+  const navStateCallback: ((s: NavState) => void) | undefined =
+    aegis.nav
+      ? (aegis.nav.onState as unknown as NavStateMockFn).mock?.calls?.[0]?.[0]
+      : undefined;
+
   return {
     layer: 'vitest',
     click: (el) => user.click(el),
@@ -60,6 +71,14 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
     aegis,
     calls: vitestCallLog(aegis),
     reach: (s) => reach(s),
+    emitNavState: (state: NavState) => {
+      // flushSync forces React to apply the state update synchronously, so the
+      // DOM reflects the new state immediately after this call returns — without
+      // needing to await a tick or re-enter act().  Without this, the Back/Forward
+      // buttons would still be disabled when the next line of run() queries them.
+      if (navStateCallback) flushSync(() => navStateCallback(state));
+      return Promise.resolve();
+    },
   };
 }
 
