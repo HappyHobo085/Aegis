@@ -34,6 +34,10 @@ export function useSaved(currentUrl: string): UseSaved {
   const itemsRef = useRef<SavedItem[]>(items);
   itemsRef.current = items;
 
+  // In-flight guard: prevents a rapid double-click from dispatching saved.add twice.
+  // Set to true before the awaited saved.add call; cleared in the finally block.
+  const addingRef = useRef<boolean>(false);
+
   const refreshHas = useCallback(async (): Promise<void> => {
     const saved = await aegis.saved.has(urlRef.current);
     setIsCurrentSaved(saved);
@@ -97,9 +101,17 @@ export function useSaved(currentUrl: string): UseSaved {
 
   const addCurrent = useCallback(
     async (title: string): Promise<void> => {
-      setItems(await aegis.saved.add({ url: urlRef.current, title }));
-      await refreshHas();
-      await refreshTagUnion();
+      // In-flight guard: ignore re-entrant calls for the same URL while an add is
+      // already in progress (e.g. rapid double-click on the bookmark star).
+      if (addingRef.current) return;
+      addingRef.current = true;
+      try {
+        setItems(await aegis.saved.add({ url: urlRef.current, title }));
+        await refreshHas();
+        await refreshTagUnion();
+      } finally {
+        addingRef.current = false;
+      }
     },
     [refreshHas, refreshTagUnion],
   );

@@ -2825,8 +2825,14 @@ export const INTERACTIONS: InteractionSpec[] = [
     domain: 'edge',
     description: 'Clear the address bar and press Enter → navigates to empty search (no crash)',
     screen: 'home',
-    // Vitest: assert via CallLog. Live: CallLog is inert; assert via real nav state.
-    // Both layers: the key assertion is that App remains mounted after the gesture.
+    // vitest-only (intentional): empty-Enter produces no observable real-state change
+    // beyond "no crash" and "nav.navigate was called with an empty-query search URL".
+    // The live CallLog is inert (cannot count calls), and the live nav state change
+    // (empty search URL) would be transient and race-prone to poll.  The negative
+    // assertion (App is still mounted + nav.navigate fired) is fully covered by the
+    // vitest mock where CallLog IS observable.  A live branch would only redundantly
+    // confirm the address bar accepts Enter without a URL, which toolbar.home and
+    // toolbar.addressBar.navigate already cover end-to-end in the live layer.
     layers: ['vitest'],
     run: async (ctx) => {
       const bar = ctx.byRole('textbox', /address/i) ?? ctx.bySelector('input[type="text"]');
@@ -3004,64 +3010,82 @@ export const INTERACTIONS: InteractionSpec[] = [
               );
           }
         }
+        // DOM check: no whitespace or empty tag chip should be rendered in the saved item.
+        // Tag chips in the saved panel carry class "tag-chip" (or "tag-input__tag");
+        // scan them all and confirm none has blank visible text.
+        const tagChips = Array.from(document.querySelectorAll('.tag-chip, .tag-input__tag'));
+        const blankChip = tagChips.find((el) => el.textContent?.trim() === '');
+        if (blankChip !== undefined)
+          throw new Error(
+            `REAL BUG: a blank/whitespace tag chip is rendered in the saved item — TagInput validation failed at the DOM level`,
+          );
         if (!document.querySelector('.app'))
           throw new Error('App is no longer mounted after whitespace tag gesture (crash?)');
-        return 'whitespace-only tag Enter → TagInput rejected it (no empty tag in saved.update call)';
+        return 'whitespace-only tag Enter → TagInput rejected it (no empty tag in saved.update call + no blank chip in DOM)';
       },
     } satisfies InteractionSpec;
   })(),
 
   (() => {
-    // Double-click the bookmark star.  In vitest, aegis.saved.has always returns false
-    // (mock), so isCurrentSaved stays false after each click — the BookmarkButton always
-    // shows "Save bookmark".  Both clicks therefore call saved.addCurrent().
+    // Double-click the bookmark star.  The useSaved hook now has an in-flight guard
+    // (addingRef) that suppresses re-entrant addCurrent() calls while a saved.add
+    // IPC is already in flight.  This spec is the regression sentinel: it asserts
+    // that exactly ONE saved.add call is dispatched even on rapid double-click.
     //
-    // NOTE: This exposes a REAL UI BUG: the BookmarkButton / useSaved has NO in-flight
-    // guard (no "saving…" disabled state while the first addCurrent() promise resolves).
-    // Rapid double-click calls saved.add twice.  The Rust core deduplicates on the server
-    // side (saved.add checks live_has_url), but the CHROME (React layer) does not guard
-    // against the race — two IPC round-trips are dispatched.  This is a real finding.
-    //
-    // The spec asserts the ACTUAL behavior (two calls to saved.add) and reports it so it
-    // can be triaged.  Do NOT weaken the assert to hide the finding.
+    // Implementation note: the guard works when the first saved.add IPC is still
+    // awaited while the second click fires.  With the default instant mock, the first
+    // call resolves on the microtask queue before the second click's event handlers
+    // run, so the guard's addingRef would already be false.  To reproduce the real-
+    // world in-flight scenario we temporarily replace the saved.add mock with a
+    // slow version that does NOT resolve until after both clicks have been dispatched.
+    type SavedAddMock = { mockImplementationOnce(fn: (...a: unknown[]) => unknown): void };
+    let _resolveFirst: ((v: import('../../shared/types').SavedItem[]) => void) | undefined;
     return {
       id: 'edge.bookmark.doubleClick',
       domain: 'edge',
-      description: 'Click the bookmark star twice rapidly → assert real net state (no hidden double-add)',
+      description: 'Click the bookmark star twice rapidly → exactly ONE saved.add dispatched (in-flight guard)',
       screen: 'home',
       // vitest-only: the live CallLog is inert and we can't observe the call count there.
-      // The Rust dedup means the live end-result is correct; the bug is in the chrome layer.
+      // The in-flight guard is in the React layer (useSaved.addCurrent); the live Rust
+      // dedup is a separate safety net tested by edge.favorite.duplicate.
       layers: ['vitest'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
         // Ensure the nav URL has a saveable host so the bookmark button is enabled.
         await emitNavState(ctx, { ...BASE_NAV, url: 'https://example.com/', title: 'Example' });
+        // Replace the instant saved.add mock with a slow version (never-resolves-until-we-say)
+        // so the first click is still in flight when the second click fires.
+        (ctx.aegis.saved.add as unknown as SavedAddMock).mockImplementationOnce(
+          () => new Promise<import('../../shared/types').SavedItem[]>((res) => { _resolveFirst = res; }),
+        );
         const btn = ctx.byRole('button', /save bookmark/i);
         if (!btn) throw new Error('Save bookmark button not found');
-        // Click twice in rapid succession WITHOUT awaiting between them.
-        // userEvent.click is still sequenced by the user-event library, but there is no
-        // UI update between the two clicks (async has() hasn't resolved → isCurrentSaved
-        // is still false → button is still "Save bookmark" for click #2).
-        await ctx.click(btn);
-        await ctx.click(btn);
+        // First click: starts addCurrent → addingRef=true → awaits the slow saved.add.
+        // Do NOT await fully — fire the click and immediately fire the second without
+        // waiting for the first addCurrent() to complete.
+        const p1 = ctx.click(btn);
+        // Yield one microtask so the onClick handler starts (addingRef becomes true)
+        // before the second click, but the slow saved.add promise has NOT resolved yet.
+        await Promise.resolve();
+        const p2 = ctx.click(btn);
+        // Now let both clicks propagate so the guard can intercept the second one.
+        // Resolve the first saved.add call so addCurrent() can finish.
+        _resolveFirst?.([]);
+        await p1;
+        await p2;
       },
       assert: async (ctx: InteractionCtx) => {
         const addCalls = ctx.calls.of('saved.add');
         if (!document.querySelector('.app'))
           throw new Error('App is no longer mounted after double-click bookmark (crash?)');
-        // Document the REAL observed behavior: because has() is async and the mock always
-        // returns false, both clicks fire saved.add.  This is the UI-layer race.
-        // The Rust core deduplicates, but the chrome dispatches two IPC calls.
-        // We assert addCalls.length >= 1 (at least one add happened — not a dead button)
-        // and surface the call count so the bug is visible if it changes.
         if (addCalls.length < 1)
           throw new Error('saved.add was never called on double-click — bookmark button appears broken');
-        if (addCalls.length === 2) {
-          // Real finding: rapid double-click dispatches two saved.add IPC calls.
-          // The Rust dedup prevents a real duplicate in the store, but the chrome
-          // sends two requests unnecessarily. Surfaced here; do not weaken this check.
-          return `FINDING: bookmark double-click dispatched saved.add × ${addCalls.length} (UI has no in-flight guard; Rust dedup saves correctness but chrome sends redundant IPC). App still mounted.`;
-        }
-        return `bookmark double-click → saved.add × ${addCalls.length} + App still mounted`;
+        // Regression sentinel: the in-flight guard must prevent the second click from
+        // dispatching a second saved.add.  If this fails, the guard was removed or broken.
+        if (addCalls.length !== 1)
+          throw new Error(
+            `REGRESSION: bookmark double-click dispatched saved.add × ${addCalls.length} (expected exactly 1 — in-flight guard is missing or broken)`,
+          );
+        return 'bookmark double-click → saved.add × 1 (in-flight guard working) + App still mounted';
       },
     } satisfies InteractionSpec;
   })(),

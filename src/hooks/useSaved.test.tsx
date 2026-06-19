@@ -246,6 +246,26 @@ describe('useSaved', () => {
     expect(result.current.activeTags).toEqual(['technology']);
   });
 
+  it('addCurrent() in-flight guard: rapid double-call results in exactly ONE saved.add IPC call', async () => {
+    // Simulate a slow saved.add so the second call arrives while the first is still in flight.
+    let resolveFirst!: (v: SavedItem[]) => void;
+    add.mockImplementationOnce(() => new Promise<SavedItem[]>((res) => { resolveFirst = res; }));
+    has.mockResolvedValue(false);
+    const { result } = renderHook(() => useSaved('https://example.com/'));
+    await waitFor(() => expect(result.current.items).toHaveLength(2));
+    // Fire two addCurrent() calls without awaiting the first — simulates rapid double-click.
+    const p1 = result.current.addCurrent('Example Title');
+    const p2 = result.current.addCurrent('Example Title');
+    // Resolve the (only) pending saved.add mock and settle both promises.
+    resolveFirst(seed);
+    await act(async () => {
+      await Promise.all([p1, p2]);
+    });
+    // The in-flight guard must have suppressed the second call.
+    expect(add).toHaveBeenCalledTimes(1);
+    expect(add).toHaveBeenCalledWith({ url: 'https://example.com/', title: 'Example Title' });
+  });
+
   it('deleteTag(tag) calls aegis.saved.deleteTag and refreshes items + tagUnion', async () => {
     const pruned: SavedItem[] = [
       item({ id: 1, url: 'https://example.com/', title: 'Example', tags: ['news'], savedAt: 2000 }),
