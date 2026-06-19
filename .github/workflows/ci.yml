@@ -1,13 +1,11 @@
 name: CI
 
 # Unit-test gate + supply-chain checks. Runs on every PR (so Dependabot's
-# grouped update PRs are gated), on push to main, and weekly (to catch
-# dependency-audit drift even without a PR).
+# grouped update PRs are gated) and weekly (to catch dependency-audit drift
+# even without a PR), plus on demand. Does NOT auto-run on push to main —
+# trigger it manually from the Actions tab ("Run workflow") when wanted.
 on:
   pull_request: {}
-  push:
-    branches:
-      - main
   schedule:
     - cron: '17 6 * * 1' # Mondays 06:17 UTC
   workflow_dispatch: {}

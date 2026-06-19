@@ -7,12 +7,10 @@ name: Tauri Build Check
 #   - aegis-windows-portable : portable, self-contained Aegis_x64_portable.exe
 #   - aegis-macos            : .app + .dmg
 #   - aegis-android-apk      : installable debug APK
-# No signing / release — that's tauri-release.yml on a version tag. Runs on pushes to
-# main and on demand.
+# No signing / release — that's tauri-release.yml on a version tag. Runs on demand
+# (workflow_dispatch) only — no auto-run on push to main; trigger it from the
+# Actions tab ("Run workflow") when you want fresh cross-OS build artifacts.
 on:
-  push:
-    branches:
-      - main
   workflow_dispatch: {}
 
 permissions:
