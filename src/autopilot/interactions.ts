@@ -1592,6 +1592,9 @@ export const INTERACTIONS: InteractionSpec[] = [
     // so useSetting stays [].
     // CONCLUSION: setDefault requires a non-empty engine list from the mock. Skip
     // vitest for this; live can exercise it because the real settings store has engines.
+    // Closure: capture original template and the selected engine's template before clicking.
+    let _originalTemplate: string | undefined;
+    let _selectedEngineTemplate: string | undefined;
     return {
       id: 'settings.search.setDefault',
       domain: 'settings.search',
@@ -1601,18 +1604,40 @@ export const INTERACTIONS: InteractionSpec[] = [
       // and no "Default search engine" radio is available.  The live run has real engines.
       layers: ['live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
-        // Live: click the first default-engine radio button.
-        const radio = ctx.byLabel(/^Default search engine /);
-        if (!radio) throw new Error('No "Default search engine" radio found — searchEngines list may be empty');
+        // Capture original template so we can restore it after the assert.
+        const before = await ctx.aegis.settings.get();
+        _originalTemplate = before.defaultSearchTemplate;
+        // Find the first default-engine radio whose engine template differs from the current
+        // default — clicking it will produce an observable change.
+        // The aria-label is "Default search engine <engine-name>".
+        const allEngines = before.searchEngines ?? [];
+        // Find an engine whose template differs from the current default.
+        const alternate = allEngines.find((e) => e.template !== _originalTemplate);
+        if (!alternate && allEngines.length === 0)
+          throw new Error('No "Default search engine" radio found — searchEngines list may be empty');
+        // Click the radio for the alternate engine (or any radio if all share the same template).
+        const targetName = alternate?.name ?? allEngines[0]?.name;
+        _selectedEngineTemplate = alternate?.template ?? allEngines[0]?.template;
+        const radio = targetName
+          ? ctx.byLabel(new RegExp(`^Default search engine ${targetName}$`))
+          : ctx.byLabel(/^Default search engine /);
+        if (!radio) throw new Error(`No "Default search engine" radio found for engine "${targetName ?? '(any)'}"`);
         await ctx.click(radio);
       },
       assert: async (ctx: InteractionCtx) => {
-        // Live: settings.get().defaultSearchTemplate must equal the engine's template.
+        // Live: settings.get().defaultSearchTemplate must have changed to the selected engine's template.
         await new Promise((r) => setTimeout(r, 400));
         const s = await ctx.aegis.settings.get();
         if (!s.defaultSearchTemplate)
           throw new Error('live: defaultSearchTemplate is empty after clicking default-engine radio');
-        return `set default engine → defaultSearchTemplate="${s.defaultSearchTemplate}"`;
+        if (_selectedEngineTemplate !== undefined && s.defaultSearchTemplate !== _selectedEngineTemplate)
+          throw new Error(
+            `live: defaultSearchTemplate is "${s.defaultSearchTemplate}", expected "${_selectedEngineTemplate}" for the selected engine`,
+          );
+        // Restore the original default search template.
+        if (_originalTemplate !== undefined)
+          await ctx.aegis.settings.set({ defaultSearchTemplate: _originalTemplate });
+        return `set default engine → defaultSearchTemplate="${s.defaultSearchTemplate}" (restored to "${_originalTemplate}")`;
       },
     } satisfies InteractionSpec;
   })(),
@@ -1712,6 +1737,9 @@ export const INTERACTIONS: InteractionSpec[] = [
     // Then click the Enable switch for it.
     type SubsMockFn = { mockResolvedValue(v: unknown[]): void };
     const PROBE_SUB = { listId: 'ap7-easylist', url: 'https://ap7.example/list.txt', enabled: true };
+    // Closure: capture the sub's enabled state BEFORE the toggle so assert can verify the flip.
+    let _targetListId: string | undefined;
+    let _preEnabled: boolean | undefined;
     return {
       id: 'settings.filterLists.toggleSub',
       domain: 'settings.filterLists',
@@ -1734,7 +1762,7 @@ export const INTERACTIONS: InteractionSpec[] = [
           await ctx.click(toggle);
         } else {
           // Live: find any existing subscription row and click its enable switch.
-          // If none exist, add a probe URL first.
+          // Snapshot the sub's enabled state first so assert can verify the flip.
           let toggle = ctx.byRole('switch', /^Enable list /);
           if (!toggle) {
             const urlInput = ctx.byLabel(/^List URL$/i);
@@ -1747,6 +1775,15 @@ export const INTERACTIONS: InteractionSpec[] = [
             toggle = ctx.byRole('switch', /^Enable list /);
           }
           if (!toggle) throw new Error('No filter-list Enable switch found after trying to add one');
+          // Extract the listId from the aria-label "Enable list <listId>" to read pre-toggle state.
+          const ariaLabel = toggle.getAttribute('aria-label') ?? '';
+          const listIdMatch = ariaLabel.match(/^Enable list (.+)$/);
+          _targetListId = listIdMatch?.[1];
+          if (_targetListId) {
+            const subs = await ctx.aegis.subs.list();
+            const sub = subs.find((s) => s.listId === _targetListId);
+            _preEnabled = sub?.enabled;
+          }
           await ctx.click(toggle);
         }
       },
@@ -1756,8 +1793,16 @@ export const INTERACTIONS: InteractionSpec[] = [
             throw new Error('subs.setEnabled not called after toggling filter list');
           return 'filter list toggle → subs.setEnabled()';
         }
-        // Live: just confirm the call round-tripped without error (no throw above = success).
-        return 'filter list toggle → subs.setEnabled() completed (live)';
+        // Live: re-read subs.list and verify the enabled flag flipped for the target sub.
+        await new Promise((r) => setTimeout(r, 400));
+        if (_targetListId === undefined)
+          throw new Error('live: _targetListId was never captured (run() may not have executed)');
+        const subs = await ctx.aegis.subs.list();
+        const sub = subs.find((s) => s.listId === _targetListId);
+        if (!sub) throw new Error(`live: subscription "${_targetListId}" not found after toggle`);
+        if (_preEnabled !== undefined && sub.enabled === _preEnabled)
+          throw new Error(`live: sub "${_targetListId}" enabled did not flip (still ${sub.enabled} after toggle)`);
+        return `filter list toggle → "${_targetListId}" enabled flipped ${_preEnabled}→${sub.enabled}`;
       },
     } satisfies InteractionSpec;
   })(),
@@ -2043,34 +2088,43 @@ export const INTERACTIONS: InteractionSpec[] = [
     } satisfies InteractionSpec;
   })(),
 
-  {
-    id: 'settings.downloads.useDefault',
-    domain: 'settings.downloads',
-    description: 'Click "Use default" on Downloads tab → settings.set({downloadDir:""}) called',
-    screen: 'settings:downloads',
-    layers: ['vitest', 'live'],
-    run: async (ctx) => {
-      const btn = ctx.byRole('button', /^Use default$/);
-      if (!btn) throw new Error('"Use default" button not found on Downloads tab');
-      await ctx.click(btn);
-    },
-    assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('settings.set', (a) => {
-          const p = a[0] as Partial<AegisSettings>;
-          return p?.downloadDir === '';
-        }))
-          throw new Error('settings.set not called with downloadDir="" after Use default');
-        return 'Downloads Use default → settings.set({downloadDir:""})';
-      }
-      // Live: downloadDir must be empty string.
-      await new Promise((r) => setTimeout(r, 400));
-      const s = await ctx.aegis.settings.get();
-      if (s.downloadDir !== '')
-        throw new Error(`live: downloadDir is "${s.downloadDir}", expected "" after Use default`);
-      return 'Downloads Use default → downloadDir="" (live)';
-    },
-  },
+  (() => {
+    // Capture original downloadDir before "Use default" clears it so we can restore live state.
+    let _originalDir: string | undefined;
+    return {
+      id: 'settings.downloads.useDefault',
+      domain: 'settings.downloads',
+      description: 'Click "Use default" on Downloads tab → settings.set({downloadDir:""}) called',
+      screen: 'settings:downloads',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') {
+          _originalDir = (await ctx.aegis.settings.get()).downloadDir;
+        }
+        const btn = ctx.byRole('button', /^Use default$/);
+        if (!btn) throw new Error('"Use default" button not found on Downloads tab');
+        await ctx.click(btn);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('settings.set', (a) => {
+            const p = a[0] as Partial<AegisSettings>;
+            return p?.downloadDir === '';
+          }))
+            throw new Error('settings.set not called with downloadDir="" after Use default');
+          return 'Downloads Use default → settings.set({downloadDir:""})';
+        }
+        // Live: downloadDir must be empty string.
+        await new Promise((r) => setTimeout(r, 400));
+        const s = await ctx.aegis.settings.get();
+        if (s.downloadDir !== '')
+          throw new Error(`live: downloadDir is "${s.downloadDir}", expected "" after Use default`);
+        // Restore the original downloadDir so subsequent specs find the setting unchanged.
+        if (_originalDir !== undefined) await ctx.aegis.settings.set({ downloadDir: _originalDir });
+        return `Downloads Use default → downloadDir="" (restored to "${_originalDir}")`;
+      },
+    } satisfies InteractionSpec;
+  })(),
 
   // ── Site Permissions tab ──────────────────────────────────────────────────
   //
@@ -2324,10 +2378,12 @@ export const INTERACTIONS: InteractionSpec[] = [
       screen: 'settings:data',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
-        // The mock returns {ok:false} but we just assert the call was made.
-        // Mock it to return a result with a path for vitest.
-        (ctx.aegis.data.export as unknown as { mockResolvedValue(v: unknown): void })
-          .mockResolvedValue({ ok: true, path: '/tmp/aegis-export.json' });
+        // Guard mock setup to vitest only — on the live layer data.export is the real
+        // Tauri function and does not have .mockResolvedValue.
+        if (ctx.layer === 'vitest') {
+          (ctx.aegis.data.export as unknown as { mockResolvedValue(v: unknown): void })
+            .mockResolvedValue({ ok: true, path: '/tmp/aegis-export.json' });
+        }
         const exportBtn = ctx.byRole('button', /^Export$/);
         if (!exportBtn) throw new Error('"Export" button not found on Data tab');
         await ctx.click(exportBtn);
