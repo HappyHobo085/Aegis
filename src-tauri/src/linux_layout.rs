@@ -83,7 +83,13 @@ pub fn connect_block_counter(app: &AppHandle, label: &str) {
             use webkit2gtk::URIRequestExt;
             let url = request.uri().map(|s| s.to_string()).unwrap_or_default();
             let page = wv.uri().map(|s| s.to_string()).unwrap_or_default();
-            if crate::adblock_engine::should_block(&url, &page, "other") {
+            let blocked = crate::adblock_engine::should_block(&url, &page, "other");
+            // Diagnostic: when AEGIS_AUTOPILOT_TRACE is set, log every subresource the
+            // counter signal sees + its should_block verdict (goes to the autopilot app.log).
+            if std::env::var("AEGIS_AUTOPILOT_TRACE").is_ok() {
+                eprintln!("[aegis-count] block={blocked} page={page} url={url}");
+            }
+            if blocked {
                 crate::adblock::note_blocked(&app, id);
             }
         });

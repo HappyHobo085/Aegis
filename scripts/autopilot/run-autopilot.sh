@@ -49,6 +49,7 @@ VITE_AEGIS_AUTOPILOT=1 \
 VITE_AEGIS_AUTOPILOT_FIXTURE="http://127.0.0.1:$FIXTURE_PORT/" \
 VITE_AEGIS_AUTOPILOT_DISPLAY="$HAS_DISPLAY" \
 VITE_DEV_PORT="$DEV_PORT" \
+AEGIS_AUTOPILOT_TRACE=1 \
   setsid npm run tauri:dev -- --config "{\"build\":{\"devUrl\":\"http://localhost:$DEV_PORT\"}}" > "$OUT/app.log" 2>&1 & APP_PID=$!
 
 # 3) wait for the report sentinel (watchdog). The FIRST run compiles the Rust core,
