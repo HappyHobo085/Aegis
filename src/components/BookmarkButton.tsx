@@ -1,5 +1,5 @@
 // src/components/BookmarkButton.tsx
-import { Star } from 'lucide-react';
+import { Bookmark } from 'lucide-react';
 
 export interface BookmarkButtonProps {
   saved: boolean;
@@ -22,7 +22,7 @@ export function BookmarkButton({ saved, canSave, onSave, onUnsave }: BookmarkBut
       onClick={() => (saved ? onUnsave() : onSave())}
     >
       <span aria-hidden="true" className="bookmark-button__icon">
-        <Star size={18} aria-hidden="true" fill={saved ? 'currentColor' : 'none'} />
+        <Bookmark size={18} aria-hidden="true" fill={saved ? 'currentColor' : 'none'} />
       </span>
     </button>
   );
