@@ -3,14 +3,18 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
-import { dirname, join, normalize } from 'node:path';
+import { dirname, resolve, normalize, sep } from 'node:path';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), 'fixture');
+const root = resolve(dirname(fileURLToPath(import.meta.url)), 'fixture');
 const port = Number(process.argv[2] || 8137);
 
 const server = createServer(async (req, res) => {
-  const rel = normalize(decodeURIComponent((req.url || '/').split('?')[0])).replace(/^(\.\.[/\\])+/, '');
-  const path = join(root, rel === '/' ? 'index.html' : rel);
+  const urlPath = decodeURIComponent((req.url || '/').split('?')[0]);
+  const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
+  const path = resolve(root, normalize(rel));
+  if (path !== root && !path.startsWith(root + sep)) {
+    res.writeHead(403); res.end('forbidden'); return;
+  }
   try {
     const body = await readFile(path);
     res.writeHead(200, { 'content-type': path.endsWith('.html') ? 'text/html' : 'application/octet-stream' });
