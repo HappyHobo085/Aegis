@@ -50,8 +50,10 @@ surface through the real Rust core in an isolated, disposable environment.
     - `VITE_AEGIS_AUTOPILOT_DISPLAY=1` (or empty) — whether to attempt screenshots
       (`spectacle`). Set automatically from `$DISPLAY`/`$WAYLAND_DISPLAY`.
     - `AEGIS_AUTOPILOT_OUT=<ts-dir>` — where the Rust commands write report files.
-  - **Watchdog:** polls `done.sentinel` every second with a 300 s timeout. Prints a
-    pass/fail summary via `node -e '…'` reading `report.json` and exits non-zero if any
+  - **Watchdog:** polls `done.sentinel` every second with a configurable timeout
+    (default 1800 s — the first run compiles the Rust core, which a cold `tauri dev`
+    build can take 10-20 min; override with `AEGIS_AUTOPILOT_TIMEOUT=<seconds>`). Prints
+    a pass/fail summary via `node -e '…'` reading `report.json` and exits non-zero if any
     step failed.
   - Report lands in `target/autopilot/<ts>/report.html` (screenshot gallery) and
     `target/autopilot/<ts>/report.json`.

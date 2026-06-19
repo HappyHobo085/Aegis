@@ -46,9 +46,12 @@ VITE_AEGIS_AUTOPILOT_FIXTURE="http://127.0.0.1:$FIXTURE_PORT/" \
 VITE_AEGIS_AUTOPILOT_DISPLAY="$HAS_DISPLAY" \
   setsid npm run tauri:dev > "$OUT/app.log" 2>&1 & APP_PID=$!
 
-# 3) wait for the report sentinel (watchdog)
-echo "==> waiting for autopilot to finish (max 300s)..."
-for i in $(seq 1 300); do
+# 3) wait for the report sentinel (watchdog). The FIRST run compiles the Rust core,
+# and a cold `tauri dev` build can take 10-20 min, so the default is generous;
+# override with AEGIS_AUTOPILOT_TIMEOUT=<seconds>.
+TIMEOUT="${AEGIS_AUTOPILOT_TIMEOUT:-1800}"
+echo "==> waiting for autopilot to finish (max ${TIMEOUT}s; the first run compiles the Rust core)..."
+for ((i = 0; i < TIMEOUT; i++)); do
   [ -f "$OUT/done.sentinel" ] && break
   if ! kill -0 "$APP_PID" 2>/dev/null; then echo "ERROR: app exited early — see $OUT/app.log"; exit 2; fi
   sleep 1
