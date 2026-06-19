@@ -77,6 +77,8 @@ mod sync;
 mod tab_registry;
 mod tabs;
 mod update;
+#[cfg(debug_assertions)]
+mod autopilot;
 mod view;
 
 use serde_json::Value;
@@ -409,7 +411,7 @@ pub fn run() {
         let _ = crate::emit_event(app, "tabs.shortcut", s);
     });
 
-    builder
+    let builder = builder
         .setup(|app| {
             if cfg!(debug_assertions) {
                 app.handle().plugin(
@@ -528,7 +530,19 @@ pub fn run() {
             });
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![ipc])
+        ;
+    #[cfg(debug_assertions)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        ipc,
+        autopilot::autopilot_screenshot,
+        autopilot::autopilot_write_report,
+        autopilot::autopilot_done,
+        autopilot::autopilot_emit_event
+    ]);
+    #[cfg(not(debug_assertions))]
+    let builder = builder.invoke_handler(tauri::generate_handler![ipc]);
+
+    builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
