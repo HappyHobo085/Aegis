@@ -34,7 +34,7 @@ function liveDeps(): RunDeps {
     emitEvent: devEmit.emitEvent,
     writeReport: devEmit.writeReport,
     done: devEmit.done,
-    hasDisplay: !!(typeof navigator !== 'undefined'),
+    hasDisplay: import.meta.env.VITE_AEGIS_AUTOPILOT_DISPLAY === '1',
     now: () => Date.now(),
     navigateFixture: async () => {
       const url = (import.meta.env.VITE_AEGIS_AUTOPILOT_FIXTURE as string) || '';
@@ -95,6 +95,7 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
 // liveDeps() touches `aegis`/import.meta; in unit tests `partial` overrides everything,
 // so guard so a missing control surface doesn't throw when fully overridden.
 function liveDepsSafe(partial?: Partial<RunDeps>): RunDeps {
+  // Keep this list in sync with the RunDeps interface — a missing key here silently falls through to liveDeps().
   const required: Array<keyof RunDeps> = ['api','control','screenshot','emitEvent','writeReport','done','hasDisplay','now','navigateFixture'];
   if (partial && required.every((k) => k in partial)) return partial as RunDeps;
   return liveDeps();
