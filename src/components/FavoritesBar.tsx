@@ -20,6 +20,7 @@ export function FavoritesBar({ favorites, onOpenFavorite, onOpenManager }: Favor
             type="button"
             className="favorites-bar__chip"
             title={f.url}
+            aria-label={`Open ${f.name}`}
             onClick={() => onOpenFavorite(f.url)}
           >
             {f.name}

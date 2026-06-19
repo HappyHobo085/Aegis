@@ -10,6 +10,8 @@ export function useHistory(): {
   search(): Promise<void>;
   remove(id: number): Promise<void>;
   clear(): Promise<void>;
+  /** Directly set entries (autopilot dev-only seeding; bypasses async refresh). */
+  _setEntries(entries: HistoryEntry[]): void;
 } {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [query, setQueryState] = useState<string>('');
@@ -61,5 +63,5 @@ export function useHistory(): {
     await refresh();
   }, [refresh]);
 
-  return { entries, query, setQuery, search, remove, clear };
+  return { entries, query, setQuery, search, remove, clear, _setEntries: setEntries };
 }

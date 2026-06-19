@@ -1,3 +1,5 @@
+import type { HistoryEntry } from '../../shared/types';
+
 // The dev-only imperative surface DesktopApp registers so the autopilot can reach
 // each overlay/state without selector brittleness. Calls the SAME setState handlers
 // the real buttons use. NEVER registered in production (gated by the caller).
@@ -17,6 +19,8 @@ export interface AutopilotControl {
   showCrash(c: unknown): void;
   clearCrash(): void;
   openConfirm(message: string): void;
+  /** Directly set the history entries (bypasses async refresh; autopilot vitest seeding only). */
+  setHistoryEntries(entries: HistoryEntry[]): void;
 }
 
 const KEY = '__aegisAutopilot';

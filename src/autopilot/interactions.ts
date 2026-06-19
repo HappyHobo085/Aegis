@@ -1,5 +1,5 @@
 // src/autopilot/interactions.ts
-import type { AegisApi, NavState, TabsState, TabShortcut } from '../../shared/types';
+import type { AegisApi, NavState, TabsState, TabShortcut, Favorite, HistoryEntry } from '../../shared/types';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
 import type { ScreenId } from './screens';
 
@@ -48,6 +48,19 @@ export interface InteractionCtx {
    * jsdom even though no native GTK/Win accelerator fires there.  No-op on live.
    */
   emitTabShortcut?(shortcut: TabShortcut): Promise<void>;
+  /**
+   * Vitest-only: seed the history panel with the given entries by resetting the
+   * history.list mock return and firing the onChanged subscriber so the panel
+   * re-renders with non-empty content.  No-op on live (live history comes from
+   * real navigations in the disposable profile).
+   */
+  emitHistory?(entries: HistoryEntry[]): Promise<void>;
+  /**
+   * Vitest-only: seed the favorites list by resetting the favorites.list mock
+   * return and triggering a sync-change re-fetch so useFavorites re-renders
+   * with the seeded items.  No-op on live.
+   */
+  emitFavorites?(items: Favorite[]): Promise<void>;
 }
 
 export interface InteractionSpec {
@@ -636,6 +649,408 @@ export const INTERACTIONS: InteractionSpec[] = [
       return 'Ctrl+Shift+T (onShortcut "reopen") → tabs.reopenClosed()';
     },
   },
+
+  // ─── Task 5: favorites bar/manager + sidebar history ────────────────────
+
+  (() => {
+    // Vitest seeding: open the manager, mock favorites.add to return a seeded list,
+    // fill the Add form, close the manager — the hook's setFavorites fires and the
+    // FavBar gets the chip.  No external emit helper needed.
+    type MockFn = { mockResolvedValue(v: Favorite[]): void };
+    const SEED: Favorite = { id: 1, name: 'Autopilot Test', url: 'https://autopilot.test/', position: 0 };
+    return {
+      id: 'favbar.openFavorite',
+      domain: 'favbar',
+      description: 'Click a favorite chip in the favorites bar → nav.navigate called with its url',
+      screen: 'home',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          // 1. Configure add to return the seeded list so useFavorites sets state.
+          (ctx.aegis.favorites.add as unknown as MockFn).mockResolvedValue([SEED]);
+          // 2. Open the FavoritesManager via the "Manage favorites" button in the FavBar.
+          const manageBtn = ctx.byLabel(/^Manage favorites$/);
+          if (!manageBtn) throw new Error('Manage favorites button not found in FavBar');
+          await ctx.click(manageBtn);
+          // 3. Fill in the Add form and click Add — this triggers the hook's add(),
+          //    which calls setFavorites([SEED]) so the FavBar re-renders.
+          const nameInput = ctx.byLabel(/^New favorite name$/i);
+          if (!nameInput) throw new Error('New favorite name input not found during favbar seed');
+          await ctx.type(nameInput, SEED.name);
+          const urlInput = ctx.byLabel(/^New favorite URL$/i);
+          if (!urlInput) throw new Error('New favorite URL input not found during favbar seed');
+          await ctx.type(urlInput, SEED.url);
+          const addBtn = ctx.byRole('button', /^Add favorite$/);
+          if (!addBtn) throw new Error('Add favorite button not found during favbar seed');
+          await ctx.click(addBtn);
+          // 4. Close the manager so the FavBar is visible again.
+          const closeBtn = ctx.byRole('button', /^Close$/);
+          if (closeBtn) await ctx.click(closeBtn);
+        } else {
+          // Live: add a favorite via the API then wait for the bar to update.
+          await ctx.aegis.favorites.add({ name: SEED.name, url: SEED.url });
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        const chip = ctx.byLabel(/^Open Autopilot Test$/);
+        if (!chip) throw new Error('Favorite chip "Autopilot Test" not found in favorites bar');
+        await ctx.click(chip);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('nav.navigate', (a) => String(a[1]).includes('autopilot.test')))
+            throw new Error('nav.navigate not called with autopilot.test url');
+          return 'favbar chip → nav.navigate(https://autopilot.test/)';
+        }
+        // Live: poll until the page url contains autopilot.test; then clean up the favorite.
+        const deadline = Date.now() + 8000;
+        while (Date.now() < deadline) {
+          const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+          if (url.includes('autopilot.test')) {
+            const list = await ctx.aegis.favorites.list();
+            for (const f of list.filter((f) => f.url.includes('autopilot.test'))) {
+              await ctx.aegis.favorites.remove(f.id);
+            }
+            return `favbar chip → nav navigated to ${url}`;
+          }
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        throw new Error('live: url never became autopilot.test after clicking favorite chip');
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    // Capture the favorites list length BEFORE adding so the assert can verify +1.
+    let _baseLength: number | undefined;
+    return {
+      id: 'favManager.add',
+      domain: 'favManager',
+      description: 'Open favorites manager → fill name + URL → click Add → favorites.add called',
+      screen: 'favoritesManager',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') {
+          const list = await ctx.aegis.favorites.list();
+          _baseLength = list.length;
+        }
+        const nameInput = ctx.byLabel(/^New favorite name$/i);
+        if (!nameInput) throw new Error('New favorite name input not found');
+        const urlInput = ctx.byLabel(/^New favorite URL$/i);
+        if (!urlInput) throw new Error('New favorite URL input not found');
+        await ctx.type(nameInput, 'Test Site');
+        await ctx.type(urlInput, 'https://testsite.test/');
+        const addBtn = ctx.byRole('button', /^Add favorite$/);
+        if (!addBtn) throw new Error('Add favorite button not found');
+        await ctx.click(addBtn);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('favorites.add'))
+            throw new Error('favorites.add not called');
+          return 'favManager add → favorites.add()';
+        }
+        // Live: list length must have increased by 1 from baseline.
+        await new Promise((r) => setTimeout(r, 500));
+        const list = await ctx.aegis.favorites.list();
+        if (_baseLength === undefined)
+          throw new Error('live: _baseLength was never captured');
+        if (list.length !== _baseLength + 1)
+          throw new Error(`live: expected ${_baseLength + 1} favorites after add, got ${list.length}`);
+        // Clean up: remove the test favorite.
+        const added = list.find((f) => f.url === 'https://testsite.test/');
+        if (added) await ctx.aegis.favorites.remove(added.id);
+        return `favManager add → list grew from ${_baseLength} to ${list.length} (cleaned up)`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    // Capture the original name before renaming so we can restore and assert the change.
+    let _originalName: string | undefined;
+    let _favoriteId: number | undefined;
+    type MockFn = { mockResolvedValue(v: Favorite[]): void };
+    const SEED: Favorite = { id: 10, name: 'Original Name', url: 'https://rename-test.test/', position: 0 };
+    return {
+      id: 'favManager.rename',
+      domain: 'favManager',
+      description: 'Edit a favorite name in the manager → click Save → favorites.update called',
+      screen: 'favoritesManager',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          // Seed the manager with one row via the Add form:
+          // 1. Mock favorites.add to return the seeded item so the hook updates state.
+          (ctx.aegis.favorites.add as unknown as MockFn).mockResolvedValue([SEED]);
+          // 2. Fill in the Add form and submit → useFavorites.add → setFavorites([SEED]).
+          const newNameInput = ctx.byLabel(/^New favorite name$/i);
+          if (!newNameInput) throw new Error('New favorite name input not found during seed');
+          await ctx.type(newNameInput, SEED.name);
+          const newUrlInput = ctx.byLabel(/^New favorite URL$/i);
+          if (!newUrlInput) throw new Error('New favorite URL input not found during seed');
+          await ctx.type(newUrlInput, SEED.url);
+          const addBtn = ctx.byRole('button', /^Add favorite$/);
+          if (!addBtn) throw new Error('Add favorite button not found during seed');
+          await ctx.click(addBtn);
+          _originalName = SEED.name;
+          _favoriteId = SEED.id;
+        } else {
+          // Live: add a favorite to rename via the API.
+          const added = await ctx.aegis.favorites.add({ name: SEED.name, url: SEED.url });
+          const fav = added.find((f) => f.url === SEED.url);
+          if (!fav) throw new Error('live: could not find the just-added favorite');
+          _originalName = fav.name;
+          _favoriteId = fav.id;
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        // The FavoritesManager renders a row with "Name for <name>" input.
+        const nameInput = ctx.byLabel(new RegExp(`^Name for ${_originalName}$`));
+        if (!nameInput) throw new Error(`Name input for "${_originalName}" not found in manager`);
+        await ctx.type(nameInput, 'Renamed Favorite');
+        const saveBtn = ctx.byRole('button', new RegExp(`^Save favorite ${_originalName}$`));
+        if (!saveBtn) throw new Error(`Save button for "${_originalName}" not found`);
+        await ctx.click(saveBtn);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('favorites.update'))
+            throw new Error('favorites.update not called');
+          return 'favManager rename → favorites.update()';
+        }
+        // Live: the name in the list must have changed.
+        await new Promise((r) => setTimeout(r, 500));
+        const list = await ctx.aegis.favorites.list();
+        const fav = list.find((f) => f.id === _favoriteId);
+        if (!fav) throw new Error(`live: favorite id=${_favoriteId} not found after rename`);
+        if (fav.name !== 'Renamed Favorite')
+          throw new Error(`live: name is "${fav.name}", expected "Renamed Favorite"`);
+        // Restore original name and clean up.
+        if (_favoriteId !== undefined && _originalName !== undefined) {
+          await ctx.aegis.favorites.update(_favoriteId, { name: _originalName });
+        }
+        if (_favoriteId !== undefined) await ctx.aegis.favorites.remove(_favoriteId);
+        return `favManager rename → name changed to "Renamed Favorite" (restored + cleaned up)`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    // Capture list length BEFORE deletion so assert can verify it shrank by 1.
+    let _baseLength: number | undefined;
+    type MockFn = { mockResolvedValue(v: Favorite[]): void };
+    const SEED: Favorite = { id: 20, name: 'To Delete', url: 'https://delete-test.test/', position: 0 };
+    return {
+      id: 'favManager.delete',
+      domain: 'favManager',
+      description: 'Click delete on a favorite row in the manager → favorites.remove called',
+      screen: 'favoritesManager',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          // Seed the manager with one row via the Add form:
+          // Mock favorites.add to return the seeded item so the hook updates state.
+          (ctx.aegis.favorites.add as unknown as MockFn).mockResolvedValue([SEED]);
+          const newNameInput = ctx.byLabel(/^New favorite name$/i);
+          if (!newNameInput) throw new Error('New favorite name input not found during seed');
+          await ctx.type(newNameInput, SEED.name);
+          const newUrlInput = ctx.byLabel(/^New favorite URL$/i);
+          if (!newUrlInput) throw new Error('New favorite URL input not found during seed');
+          await ctx.type(newUrlInput, SEED.url);
+          const addBtn = ctx.byRole('button', /^Add favorite$/);
+          if (!addBtn) throw new Error('Add favorite button not found during seed');
+          await ctx.click(addBtn);
+        } else {
+          // Live: add a dedicated favorite to delete, snapshot baseline after add.
+          await ctx.aegis.favorites.add({ name: SEED.name, url: SEED.url });
+          await new Promise((r) => setTimeout(r, 400));
+          const list = await ctx.aegis.favorites.list();
+          _baseLength = list.length;
+        }
+        const removeBtn = ctx.byRole('button', /^Remove favorite To Delete$/);
+        if (!removeBtn) throw new Error('Remove favorite "To Delete" button not found');
+        await ctx.click(removeBtn);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('favorites.remove'))
+            throw new Error('favorites.remove not called');
+          return 'favManager delete → favorites.remove()';
+        }
+        // Live: list length must have decreased by exactly 1 from baseline.
+        await new Promise((r) => setTimeout(r, 500));
+        const list = await ctx.aegis.favorites.list();
+        if (_baseLength === undefined)
+          throw new Error('live: _baseLength was never captured');
+        if (list.length !== _baseLength - 1)
+          throw new Error(`live: expected ${_baseLength - 1} favorites after delete, got ${list.length}`);
+        return `favManager delete → list shrank from ${_baseLength} to ${list.length}`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  {
+    id: 'sidebar.history.openEntry',
+    domain: 'sidebar.history',
+    description: 'Click a history row → nav.navigate called with the entry url',
+    screen: 'sidebar:history',
+    layers: ['vitest', 'live'],
+    run: async (ctx) => {
+      if (ctx.layer === 'vitest') {
+        // Seed the history panel with one entry so there is a row to click.
+        const SEEDED: HistoryEntry[] = [
+          { id: 1, url: 'https://history-test.test/', title: 'History Test', visitedAt: Date.now() },
+        ];
+        await ctx.emitHistory?.(SEEDED);
+      } else {
+        // Live: navigate to a page first to create a history entry, then reopen the sidebar.
+        await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
+        await new Promise((r) => setTimeout(r, 1500));
+        // Re-reach the sidebar:history screen (nav may have closed it).
+        await ctx.reach('sidebar:history');
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      // Click the first "Open <url>" button scoped to the history panel.
+      // Use a CSS selector to avoid matching "Open settings" and other toolbar buttons.
+      const openBtn = ctx.bySelector('.history-panel__open');
+      if (!openBtn) throw new Error('No history entry open-button found (panel may be empty)');
+      await ctx.click(openBtn);
+    },
+    assert: async (ctx) => {
+      if (ctx.layer === 'vitest') {
+        if (!ctx.calls.called('nav.navigate'))
+          throw new Error('nav.navigate not called after clicking history row');
+        return 'history row → nav.navigate()';
+      }
+      // Live: url should have changed within 8 s.
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+        if (url !== 'about:blank') return `history row → nav navigated to ${url}`;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      throw new Error('live: url did not change after clicking history entry');
+    },
+  },
+
+  (() => {
+    // Capture history length BEFORE deletion so assert can verify it shrank by 1.
+    let _baseLength: number | undefined;
+    return {
+      id: 'sidebar.history.deleteEntry',
+      domain: 'sidebar.history',
+      description: 'Click the remove button on a history row → history.remove called',
+      screen: 'sidebar:history',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          const SEEDED: HistoryEntry[] = [
+            { id: 5, url: 'https://history-delete.test/', title: 'To Remove', visitedAt: Date.now() },
+          ];
+          await ctx.emitHistory?.(SEEDED);
+        } else {
+          // Live: navigate to seed the list, then snapshot the length.
+          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
+          await new Promise((r) => setTimeout(r, 1500));
+          await ctx.reach('sidebar:history');
+          await new Promise((r) => setTimeout(r, 300));
+          const list = await ctx.aegis.history.list();
+          _baseLength = list.length;
+        }
+        // The remove button has class history-panel__remove; scope to avoid
+        // matching other "Remove" buttons outside the history panel.
+        const removeBtn = ctx.bySelector('.history-panel__remove');
+        if (!removeBtn) throw new Error('No history entry remove-button found (panel may be empty)');
+        await ctx.click(removeBtn);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('history.remove'))
+            throw new Error('history.remove not called after clicking remove');
+          return 'history row remove → history.remove()';
+        }
+        // Live: list length must have decreased by 1.
+        await new Promise((r) => setTimeout(r, 500));
+        const list = await ctx.aegis.history.list();
+        if (_baseLength === undefined)
+          throw new Error('live: _baseLength was never captured');
+        if (list.length !== _baseLength - 1)
+          throw new Error(`live: expected ${_baseLength - 1} entries after remove, got ${list.length}`);
+        return `history row remove → list shrank from ${_baseLength} to ${list.length}`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  {
+    id: 'sidebar.history.search',
+    domain: 'sidebar.history',
+    description: 'Type in the history search box → history.search called with the query',
+    screen: 'sidebar:history',
+    // Live observation is hard: the panel filters in place via React state and there is
+    // no observable real-state effect accessible via ctx.aegis; the call goes to the
+    // hook's internal refresh() → aegis.history.search.  We assert via CallLog (vitest).
+    layers: ['vitest'],
+    run: async (ctx) => {
+      const searchInput = ctx.byLabel(/^Search history$/i);
+      if (!searchInput) throw new Error('Search history input not found');
+      await ctx.type(searchInput, 'example');
+      // Submit the search form (the Search button / form submit).
+      const searchBtn = ctx.byRole('button', /^Run history search$|^Search$/);
+      if (searchBtn) await ctx.click(searchBtn);
+      else await ctx.press('Enter');
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('history.search', (a) => String(a[0]).toLowerCase().includes('example')))
+        throw new Error('history.search not called with "example"');
+      return 'history search → history.search("example")';
+    },
+  },
+
+  {
+    id: 'sidebar.history.clear',
+    domain: 'sidebar.history',
+    description: 'Click Clear all history → confirm → history.clear called',
+    screen: 'sidebar:history',
+    layers: ['vitest', 'live'],
+    run: async (ctx) => {
+      if (ctx.layer === 'vitest') {
+        // Seed at least one entry so the Clear button is enabled.
+        const SEEDED: HistoryEntry[] = [
+          { id: 99, url: 'https://history-clear.test/', title: 'Clear Me', visitedAt: Date.now() },
+        ];
+        await ctx.emitHistory?.(SEEDED);
+      } else {
+        // Live: ensure history is non-empty so the Clear button is enabled.
+        await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
+        await new Promise((r) => setTimeout(r, 1500));
+        await ctx.reach('sidebar:history');
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      const clearBtn = ctx.byRole('button', /^Clear all history$/);
+      if (!clearBtn) throw new Error('Clear all history button not found');
+      await ctx.click(clearBtn);
+      // ConfirmDialog registers a real handler that renders a dialog — click OK.
+      // (window.confirm stub in the tour handles the fallback; ConfirmDialog
+      // overrides it, so we must find and click the real OK button.)
+      const okBtn = ctx.byRole('button', /^OK$/);
+      if (okBtn) await ctx.click(okBtn);
+      // Give the async confirm + clear chain a tick to settle.
+      await new Promise((r) => setTimeout(r, 100));
+    },
+    assert: async (ctx) => {
+      if (ctx.layer === 'vitest') {
+        if (!ctx.calls.called('history.clear'))
+          throw new Error('history.clear not called after confirming Clear all history');
+        return 'Clear all history + OK → history.clear()';
+      }
+      // Live: poll until history.list() is empty.
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        const list = await ctx.aegis.history.list();
+        if (list.length === 0) return 'Clear all history → history.list() is now empty';
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      throw new Error('live: history list never became empty after clear');
+    },
+  },
 ];
 
 /** Documented registry of every interactive control id; the drift guard asserts each has
@@ -658,4 +1073,13 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'keyboard.newTab',
   'keyboard.closeTab',
   'keyboard.reopenTab',
+  // Task 5: favorites bar/manager + sidebar history
+  'favbar.openFavorite',
+  'favManager.add',
+  'favManager.rename',
+  'favManager.delete',
+  'sidebar.history.openEntry',
+  'sidebar.history.deleteEntry',
+  'sidebar.history.search',
+  'sidebar.history.clear',
 ]);

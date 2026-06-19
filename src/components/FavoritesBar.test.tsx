@@ -26,14 +26,14 @@ const props = (over: Partial<React.ComponentProps<typeof FavoritesBar>> = {}) =>
 describe('FavoritesBar', () => {
   it('renders a chip per favorite labelled by name', () => {
     render(<FavoritesBar {...props()} />);
-    expect(screen.getByRole('button', { name: 'Alpha' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Beta' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Alpha' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Open Beta' })).toBeInTheDocument();
   });
 
   it('clicking a favorite chip calls onOpenFavorite with its url', async () => {
     const p = props();
     render(<FavoritesBar {...p} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Beta' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Open Beta' }));
     expect(p.onOpenFavorite).toHaveBeenCalledWith('https://beta.example/');
   });
 

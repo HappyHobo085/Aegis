@@ -132,6 +132,7 @@ function DesktopApp() {
       showCrash: (c) => { setFailed(null); setCrashed(c as NavCrashed); },
       clearCrash: () => setCrashed(null),
       openConfirm: (message) => { void confirm(message); },
+      setHistoryEntries: (entries) => history._setEntries(entries),
     });
   }, []);
 

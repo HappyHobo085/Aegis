@@ -1,10 +1,11 @@
 // src/autopilot/interactionCtx.ts
-import { within, fireEvent } from '@testing-library/react';
+import { within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { flushSync } from 'react-dom';
-import type { AegisApi, NavState, TabsState, TabShortcut } from '../../shared/types';
+import type { AegisApi, NavState, TabsState, TabShortcut, Favorite, HistoryEntry } from '../../shared/types';
 import type { CallLog, InteractionCtx } from './interactions';
 import type { ScreenId } from './screens';
+import { getAutopilotControl } from './control';
 
 type Reach = (screen: ScreenId) => Promise<void>;
 
@@ -108,6 +109,37 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       // way to exercise Ctrl+T/W/Shift+T in jsdom (no native accelerator fires there).
       if (tabsShortcutCallback) flushSync(() => tabsShortcutCallback(shortcut));
       return Promise.resolve();
+    },
+    emitHistory: (entries: HistoryEntry[]) => {
+      // Seed the HistoryPanel by calling setHistoryEntries on the autopilot control,
+      // which directly calls useHistory's setEntries React state setter.  This mirrors
+      // the flushSync pattern used by emitNavState / emitTabsState — synchronous,
+      // no async Promise chains, no nested act().  The DOM update is committed by
+      // flushSync before this function returns.
+      const control = getAutopilotControl();
+      if (control) flushSync(() => control.setHistoryEntries(entries));
+      return Promise.resolve();
+    },
+    emitFavorites: async (items: Favorite[]) => {
+      // Seed the FavoritesBar / FavoritesManager by:
+      // 1. Updating the favorites.list mock to return the seeded items.
+      // 2. Publishing a sync-change for 'favorites' so useFavorites re-fetches
+      //    (useFavorites subscribes via onSyncChange('favorites', load) and load()
+      //    calls aegis.favorites.list() → setFavorites(result)).
+      // 3. Dynamic import of syncBus so we use the SAME module instance as useFavorites
+      //    (vitest's vi.resetModules() between tests would otherwise leave interactionCtx
+      //    holding a stale static import of a different syncBus instance).
+      const mock = aegis.favorites as unknown as {
+        list: { mockResolvedValue(v: Favorite[]): void };
+      };
+      mock.list.mockResolvedValue(items);
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
+      const { publishSyncChange } = await import('../lib/syncBus');
+      await act(async () => {
+        publishSyncChange('favorites', []);
+        // Give the async .list().then(setFavorites) chain time to resolve.
+        await new Promise((r) => setTimeout(r, 0));
+      });
     },
   };
 }
