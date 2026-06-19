@@ -4,7 +4,7 @@ import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
 import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
-import { subscribeConfirmOpen, toast } from './lib/toast';
+import { subscribeConfirmOpen, toast, confirm } from './lib/toast';
 import { useNav } from './hooks/useNav';
 import { useAdblock } from './hooks/useAdblock';
 import { useFavorites } from './hooks/useFavorites';
@@ -53,6 +53,7 @@ import { DataTab } from './components/DataTab';
 import { TabsTab } from './components/TabsTab';
 import { TabStrip } from './components/TabStrip';
 import { MobileApp } from './components/mobile/MobileApp';
+import { installAutopilotControl } from './autopilot/control';
 
 const isMobile =
   typeof document !== 'undefined' &&
@@ -105,6 +106,29 @@ function DesktopApp() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const update = useUpdate();
   const safety = useSafety();
+
+  // Dev-only: expose an imperative control surface so the autopilot can reach every
+  // overlay/state deterministically. Gated so it can NEVER run in a production build.
+  useEffect(() => {
+    if (!import.meta.env.DEV || !import.meta.env.VITE_AEGIS_AUTOPILOT) return;
+    return installAutopilotControl({
+      openSettings: () => setSettingsOpen(true),
+      closeSettings: () => setSettingsOpen(false),
+      openDownloads: () => setDownloadsOpen(true),
+      closeDownloads: () => setDownloadsOpen(false),
+      openManager: () => setManagerOpen(true),
+      closeManager: () => setManagerOpen(false),
+      setSidebar: (open) => setSidebarOpen(open),
+      setShield: (open) => setShieldOpen(open),
+      enterFullscreen: () => setFullscreen(true),
+      exitFullscreen: () => setFullscreen(false),
+      showError: (f) => { setCrashed(null); setFailed(f as NavFailed); },
+      clearError: () => setFailed(null),
+      showCrash: (c) => { setFailed(null); setCrashed(c as NavCrashed); },
+      clearCrash: () => setCrashed(null),
+      openConfirm: (message) => { void confirm(message); },
+    });
+  }, []);
 
   // A confirm dialog (e.g. "Clear all history") is a full-window overlay; track it
   // so the content webview hides behind it (else it renders behind the page).

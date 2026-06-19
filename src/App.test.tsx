@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../shared/types';
-import type { NavState, NavFailed, NavCrashed, Settings } from '../shared/types';
+import type { NavState, NavFailed, NavCrashed } from '../shared/types';
 
 const baseState: NavState = {
   viewId: PRIMARY_VIEW_ID,
@@ -12,15 +12,6 @@ const baseState: NavState = {
   canGoForward: false,
   isLoading: false,
   crashed: false,
-};
-
-const baseSettings: Settings = {
-  homeUrl: 'https://duckduckgo.com/',
-  primaryColor: '#4f8cff',
-  defaultSearchTemplate: 'https://duckduckgo.com/?q=%s',
-  searchEngines: [],
-  hideChromeByDefault: false,
-  downloadDir: '',
 };
 
 const reloadOrStop = vi.fn(async () => {});
@@ -36,154 +27,43 @@ let crashedCb: ((c: NavCrashed) => void) | undefined;
 const stateCbs: Array<(s: NavState) => void> = [];
 const stateCb = (s: NavState): void => { stateCbs.forEach((cb) => cb(s)); };
 
-vi.mock('./lib/ipcClient', () => ({
-  aegis: {
-    nav: {
-      navigate: vi.fn(async () => {}),
-      back: vi.fn(async () => {}),
-      forward: vi.fn(async () => {}),
-      reloadOrStop: (...a: any[]) => reloadOrStop(...a),
-      home: vi.fn(async () => {}),
-      getState: vi.fn(async () => baseState),
-      onState: (cb: (s: NavState) => void) => {
-        stateCbs.push(cb);
-        return () => { const i = stateCbs.indexOf(cb); if (i !== -1) stateCbs.splice(i, 1); };
-      },
-      onFailed: (cb: (f: NavFailed) => void) => {
-        failedCb = cb;
-        return () => {};
-      },
-      onCrashed: (cb: (c: NavCrashed) => void) => {
-        crashedCb = cb;
-        return () => {};
-      },
-    },
-    view: {
-      setContentVisible: (...a: any[]) => setContentVisible(...a),
-      setContentInset: (...a: any[]) => setContentInset(...a),
-      setChromeOverlay: (...a: any[]) => setChromeOverlay(...a),
-      setLayout: (...a: any[]) => setLayout(...a),
-      setFullscreen: (...a: any[]) => setFullscreen(...a),
-    },
-    settings: { get: vi.fn(async () => baseSettings), set: vi.fn(async () => baseSettings) },
-    subs: {
-      list: vi.fn(async () => []),
-      setEnabled: vi.fn(async () => []),
-      add: vi.fn(async () => []),
-      remove: vi.fn(async () => []),
-    },
-    customFilters: {
-      get: vi.fn(async () => ''),
-      set: vi.fn(async () => ''),
-    },
-    adblock: {
-      getState: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-      setEnabled: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-      toggleAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-      removeAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-      clearAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-      onBlockedCount: vi.fn().mockReturnValue(() => {}),
-    },
-    redirect: {
-      onBlocked: vi.fn().mockReturnValue(() => {}),
-    },
-    lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
-    sync: {
-      getState: vi.fn().mockResolvedValue({
-        enabled: false, status: 'disabled', serverUrl: '', lastSyncMs: 0,
-        lastError: '', deviceId: '', accountId: '', vaultBacking: 'none',
-      }),
-      enableNew: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
-      enableFromPhrase: vi.fn().mockResolvedValue({}),
-      disable: vi.fn().mockResolvedValue({}),
-      syncNow: vi.fn().mockResolvedValue({}),
-      getRecoveryPhrase: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
-      listDevices: vi.fn().mockResolvedValue([]),
-      removeDevice: vi.fn().mockResolvedValue([]),
-      onState: vi.fn().mockReturnValue(() => {}),
-      onChanged: vi.fn().mockReturnValue(() => {}),
-    },
-    favorites: {
-      list: vi.fn().mockResolvedValue([]),
-      add: vi.fn().mockResolvedValue([]),
-      update: vi.fn().mockResolvedValue([]),
-      remove: vi.fn().mockResolvedValue([]),
-      reorder: vi.fn().mockResolvedValue([]),
-    },
-    history: {
-      list: vi.fn().mockResolvedValue([]),
-      search: vi.fn().mockResolvedValue([]),
-      remove: vi.fn().mockResolvedValue(undefined),
-      clear: vi.fn().mockResolvedValue(undefined),
-      onChanged: vi.fn().mockReturnValue(() => {}),
-    },
-    saved: {
-      list: vi.fn().mockResolvedValue([]),
-      add: vi.fn().mockResolvedValue([]),
-      remove: vi.fn().mockResolvedValue([]),
-      has: vi.fn().mockResolvedValue(false),
-      update: vi.fn().mockResolvedValue([]),
-      renameTag: vi.fn().mockResolvedValue([]),
-      deleteTag: vi.fn().mockResolvedValue([]),
-      tagUnion: vi.fn().mockResolvedValue([]),
-    },
-    downloads: {
-      list: vi.fn().mockResolvedValue([]),
-      remove: vi.fn().mockResolvedValue([]),
-      clear: vi.fn().mockResolvedValue([]),
-      openFile: vi.fn().mockResolvedValue(undefined),
-      showInFolder: vi.fn().mockResolvedValue(undefined),
-      cancel: vi.fn().mockResolvedValue(undefined),
-      onChanged: vi.fn().mockReturnValue(() => {}),
-    },
-    permissions: {
-      list: vi.fn().mockResolvedValue([]),
-      remove: vi.fn().mockResolvedValue([]),
-      clear: vi.fn().mockResolvedValue([]),
-      resolve: vi.fn().mockResolvedValue(undefined),
-      onPrompt: vi.fn().mockReturnValue(() => {}),
-    },
-    data: {
-      export: vi.fn().mockResolvedValue({ ok: false }),
-      import: vi.fn().mockResolvedValue({ ok: false }),
-    },
-    picker: {
-      start: vi.fn().mockResolvedValue({ ok: false }),
-    },
-    update: {
-      getState: vi.fn().mockResolvedValue({ status: 'idle', version: null, percent: 0, error: null }),
-      checkNow: vi.fn().mockResolvedValue(undefined),
-      restartToInstall: vi.fn().mockResolvedValue(undefined),
-      onState: vi.fn().mockReturnValue(() => {}),
-    },
-    safety: {
-      getState: vi.fn().mockResolvedValue(null),
-      proceed: vi.fn(),
-      listExceptions: vi.fn().mockResolvedValue([]),
-      removeException: vi.fn(),
-      onInterstitial: vi.fn(() => () => {}),
-    },
-    tabs: {
-      list: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      create: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      close: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      activate: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      reorder: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      setPinned: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      reopenClosed: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      onState: vi.fn(() => () => {}),
-      onShortcut: vi.fn(() => () => {}),
-    },
-  },
-}));
+vi.mock('./lib/ipcClient', async () => (await import('./testFixtures/aegisMock')).aegisMockModule());
 
 import { App } from './App';
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   failedCb = undefined;
   crashedCb = undefined;
   stateCbs.length = 0;
+
+  // Wire the file-local spy aliases and captured-callback references into the
+  // shared mock fns that aegisMockModule() returned.
+  const { aegis } = await import('./lib/ipcClient');
+
+  // View spy aliases — point our file-level fns at the mock fns so assertions work.
+  (aegis.view.setContentVisible as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setContentVisible(...(a as Parameters<typeof setContentVisible>)));
+  (aegis.view.setContentInset as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setContentInset(...(a as Parameters<typeof setContentInset>)));
+  (aegis.view.setChromeOverlay as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setChromeOverlay(...(a as Parameters<typeof setChromeOverlay>)));
+  (aegis.view.setLayout as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setLayout(...(a as Parameters<typeof setLayout>)));
+  (aegis.view.setFullscreen as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setFullscreen(...(a as Parameters<typeof setFullscreen>)));
+
+  // Nav reloadOrStop alias.
+  (aegis.nav.reloadOrStop as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => reloadOrStop(...(a as Parameters<typeof reloadOrStop>)));
+
+  // Callback capture: onState fans out to stateCbs; onFailed/onCrashed capture the cb.
+  (aegis.nav.onState as ReturnType<typeof vi.fn>).mockImplementation((cb: (s: NavState) => void) => {
+    stateCbs.push(cb);
+    return () => { const i = stateCbs.indexOf(cb); if (i !== -1) stateCbs.splice(i, 1); };
+  });
+  (aegis.nav.onFailed as ReturnType<typeof vi.fn>).mockImplementation((cb: (f: NavFailed) => void) => {
+    failedCb = cb;
+    return () => {};
+  });
+  (aegis.nav.onCrashed as ReturnType<typeof vi.fn>).mockImplementation((cb: (c: NavCrashed) => void) => {
+    crashedCb = cb;
+    return () => {};
+  });
 });
 
 describe('App', () => {
