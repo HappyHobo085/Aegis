@@ -139,6 +139,43 @@ dotted event name.
   this is mostly moot, but a page of *static* ad URLs under-counts on repeat loads.
 - **Misc** — `picker.rs` (element picker), `update.rs` (tauri-plugin-updater state).
 
+## Dev-only autopilot commands (`src/autopilot.rs`)
+
+The entire module is guarded by `#![cfg(debug_assertions)]`, so it compiles only in
+debug builds and is **completely absent from release binaries**.
+
+Four `#[tauri::command]` functions are registered:
+
+| Command | What it does |
+|---|---|
+| `autopilot_screenshot` | Calls `spectacle -b -n -a -o <dir>/shots/<name>.png` (best-effort; Linux/KDE). |
+| `autopilot_write_report` | Writes `report.json` + `report.html` to `$AEGIS_AUTOPILOT_OUT` (or a temp dir). |
+| `autopilot_done` | Writes `done.sentinel` to the output dir — the launcher's watchdog polls for this. |
+| `autopilot_emit_event` | Re-uses the production `emit_event()` (`.`→`:` rewrite) to synthesize events the live runner needs (e.g. `nav.failed`, `safety.interstitialShown`). |
+
+**These commands are NOT in the `ipc()` dispatcher and NOT in `shared/types.ts`
+`IPC` const.** They are a private side channel: the renderer calls them directly by
+name via `devEmit.ts`, bypassing the single `ipc` chokepoint on purpose (they have no
+production caller). Do not add them to the dispatcher.
+
+`lib.rs` registers them through a cfg-split `invoke_handler`:
+
+```rust
+#[cfg(debug_assertions)]
+let builder = builder.invoke_handler(tauri::generate_handler![
+    ipc,
+    autopilot::autopilot_screenshot,
+    autopilot::autopilot_write_report,
+    autopilot::autopilot_done,
+    autopilot::autopilot_emit_event
+]);
+#[cfg(not(debug_assertions))]
+let builder = builder.invoke_handler(tauri::generate_handler![ipc]);
+```
+
+`$AEGIS_AUTOPILOT_OUT` points to the timestamped `target/autopilot/<ts>/` dir created
+by the launcher (`run-autopilot.sh`); in tests it defaults to a temp dir.
+
 ## Key dependencies (`Cargo.toml`)
 
 `tauri` (feature `unstable` for multi-webview), `adblock` (feature

@@ -106,3 +106,78 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
 `*.test.tsx` / `*.test.ts` are co-located. They run in the vitest **jsdom** project
 (`include: src/**/*.test.{ts,tsx}`). Tests mock the `aegis` object — no real IPC.
 Run the whole suite with `npm test` from the repo root.
+
+## Autopilot harness (`src/autopilot/`)
+
+A dev-only test harness that drives the entire feature surface — IPC layer and UI
+screens — through the real Rust core (live) or through mocks (vitest). **Never
+compiled into production**: every public entry is gated behind
+`import.meta.env.DEV && import.meta.env.VITE_AEGIS_AUTOPILOT` in `main.tsx`, and
+Vite dead-code-eliminates it on `build:renderer`.
+
+### Files
+
+- **`catalog.ts`** — `CATALOG: FeatureCheck[]`. Every IPC feature (nav, tabs, view,
+  favorites, history, saved, settings, adblock, subs, customFilters, downloads,
+  permissions, data, picker, update, safety, sync) has one entry with `id`, `domain`,
+  `title`, `channels[]` (the `IPC.*` constants it exercises), and `exercise(api)` (an
+  async function that calls the real or mocked `AegisApi`). Also exports
+  `UNTESTED_CHANNELS` — channels that exist in catalog entries but whose `exercise`
+  bodies intentionally skip calling them live (destructive, OS-bound, or
+  fire-and-forget). This set is enforcement documentation, not an escape hatch: the
+  drift guard asserts every member also appears in some catalog entry's `channels`.
+- **`screens.ts`** — `SCREENS: ScreenSpec[]`. Every reachable UI state: `home`,
+  `sidebar:history`, `sidebar:saved`, `downloads`, `favoritesManager`,
+  `settings:<tab>` (one entry per `SettingsTab` from `TAB_ORDER`), `shieldPopover`,
+  `fullscreen`, `errorOverlay`, `crashOverlay`, `safetyInterstitial`,
+  `permissionPrompt`, `confirmDialog`. Each entry declares how the live harness
+  reaches it (`via: 'overlay' | 'settingsTab' | 'sidebarTab' | 'event' | 'state'`),
+  consumed by `reach.ts`.
+- **`control.ts`** — `AutopilotControl` interface + `installAutopilotControl` /
+  `getAutopilotControl`. `DesktopApp` calls `installAutopilotControl` in a `useEffect`
+  when running in dev, exposing `window.__aegisAutopilot` so the runner can reach every
+  overlay without selector brittleness. The same `setState` handlers the real buttons
+  use. The global is never written in production.
+- **`reach.ts`** — `reachScreen(control, screen, opts)` / `leaveScreen(control, screen)`.
+  Drives `control` (and emits dev events for `'event'`-type screens) to reach a given
+  `ScreenSpec`, then tears it down after the screenshot. Adapts to the `via` field.
+- **`run.ts`** — `runAutopilot(partial?)`. The orchestrator: walks every `SCREEN`
+  (reach → screenshot → leave), exercises every `CATALOG` entry against the real core,
+  runs the ad-block induction step (navigates the fixture page; checks session block
+  count rose), then calls `devEmit.writeReport` + `devEmit.done`. Dependency-injected
+  via `RunDeps` so vitest can pass mocks; `liveDeps()` wires the real `aegis` API and
+  `devEmit.*` calls. `hasDisplay` (from `VITE_AEGIS_AUTOPILOT_DISPLAY`) controls
+  whether screenshots are attempted.
+- **`devEmit.ts`** — thin wrappers over the four dev-only Rust commands:
+  `screenshot(name)` → `invoke('autopilot_screenshot', …)`,
+  `writeReport(report, html)` → `invoke('autopilot_write_report', …)`,
+  `done()` → `invoke('autopilot_done')`,
+  `emitEvent(channel, payload)` → `invoke('autopilot_emit_event', …)`.
+  These commands are NOT in the production `ipc` dispatcher; see `src-tauri/CLAUDE.md`.
+- **`report.ts`** — `Report` / `StepResult` types, `summarize`, `renderReportHtml`.
+  Produces the JSON report and the standalone HTML screenshot gallery.
+
+### Tests in this folder
+
+- **`tour.test.tsx`** — exhaustive vitest desktop tour. Mocks `AegisApi` + `RunDeps`;
+  runs the full `runAutopilot()` against the mock; asserts every SCREEN is visited and
+  every CATALOG feature runs.
+- **`tour.mobile.test.tsx`** — same tour for the mobile shell (`MobileApp`).
+- **`coverage.test.ts`** — **drift guard**. Asserts every `IPC.*` channel exported from
+  `shared/types.ts` appears in `CATALOG[*].channels` (failing the build when a new
+  feature is added without a catalog entry). Also asserts every `UNTESTED_CHANNELS`
+  member appears in some catalog entry's `channels`.
+- **`control.test.ts`**, **`reach.test.ts`**, **`devEmit.test.ts`**,
+  **`run.test.ts`**, **`report.test.ts`**, **`screens.test.ts`**,
+  **`registration.test.tsx`** — unit tests for each individual module.
+
+### Bootstrap (main.tsx)
+
+```ts
+if (import.meta.env.DEV && import.meta.env.VITE_AEGIS_AUTOPILOT) {
+  setTimeout(() => void import('./autopilot/run').then(m => m.runAutopilot()), 1500);
+}
+```
+
+The 1 500 ms delay lets `App` mount and register `window.__aegisAutopilot` before the
+runner tries to use it.

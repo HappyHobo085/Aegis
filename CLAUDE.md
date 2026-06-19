@@ -56,6 +56,17 @@ npm run android:build  # release APK (signed with the debug key unless keystore.
 
 Native build deps: a Rust toolchain; on Linux, webkit2gtk/gtk dev packages.
 
+### Autopilot test harness
+
+```bash
+npm test                                  # includes the exhaustive vitest tour + drift guard
+bash scripts/autopilot/run-autopilot.sh   # launch the real app + autonomously test every feature (Linux, needs a display)
+```
+
+The live autopilot drives every feature through the real Rust core and screenshots
+every UI state; the report lands in `target/autopilot/<timestamp>/report.html`. It runs
+only in dev (`VITE_AEGIS_AUTOPILOT`) and is dead-code-eliminated from production builds.
+
 ## Conventions that matter everywhere
 
 - **One IPC chokepoint.** All renderer→core calls go through `src/lib/ipcClient.ts`
@@ -74,6 +85,12 @@ Native build deps: a Rust toolchain; on Linux, webkit2gtk/gtk dev packages.
   fix isn't done when it works on one platform — bring Linux, Windows, macOS, and
   Android to parity (iOS when it exists) before calling it complete. Don't leave a
   capability working on Linux with "Win/Android is a follow-up"; close the gap.
+- **Keep the autopilot catalog current (living docs, enforced).** Every feature is
+  registered once in `src/autopilot/catalog.ts` (IPC features) and `src/autopilot/screens.ts`
+  (UI screens), consumed by both the live autopilot and the vitest tour. When you add a
+  feature — a new IPC channel, a Settings tab, or a full-window overlay — add its catalog/
+  screen entry **in the same commit**. The drift-guard test (`src/autopilot/coverage.test.ts`)
+  fails the build if a command channel has no catalog entry, so this isn't optional.
 
 ## Status (as of the Tauri migration branch)
 
