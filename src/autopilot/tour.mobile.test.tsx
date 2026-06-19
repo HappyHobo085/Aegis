@@ -15,6 +15,7 @@ describe('mobile autopilot tour', () => {
     // App computes isMobile at module load, so import AFTER setting the class.
     const { App } = await import('../App');
     const { container } = render(<App />);
-    expect(container.querySelector('.mobile-bottombar, .aegis-mobile, .app')).toBeTruthy();
+    // Assert the mobile-only element is present to confirm MobileApp rendered, not DesktopApp.
+    expect(container.querySelector('.mobile-bottombar')).toBeTruthy();
   });
 });

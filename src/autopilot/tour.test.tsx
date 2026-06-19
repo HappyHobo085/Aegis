@@ -11,8 +11,17 @@ import { getAutopilotControl } from './control';
 
 vi.mock('../lib/ipcClient', async () => (await import('../testFixtures/aegisMock')).aegisMockModule());
 
-beforeEach(() => { vi.stubEnv('VITE_AEGIS_AUTOPILOT', '1'); });
-afterEach(() => { cleanup(); delete (window as Record<string, unknown>).__aegisAutopilot; vi.unstubAllEnvs(); vi.resetModules(); });
+beforeEach(() => {
+  vi.stubEnv('VITE_AEGIS_AUTOPILOT', '1');
+  vi.spyOn(window, 'confirm').mockReturnValue(false);
+});
+afterEach(() => {
+  cleanup();
+  delete (window as Record<string, unknown>).__aegisAutopilot;
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  vi.resetModules();
+});
 
 describe('desktop autopilot tour', () => {
   it('reaches every desktop screen without crashing', async () => {
