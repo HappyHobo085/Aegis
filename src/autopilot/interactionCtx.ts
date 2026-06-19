@@ -2,7 +2,7 @@
 import { within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { flushSync } from 'react-dom';
-import type { AegisApi, NavState } from '../../shared/types';
+import type { AegisApi, NavState, TabsState, TabShortcut } from '../../shared/types';
 import type { CallLog, InteractionCtx } from './interactions';
 import type { ScreenId } from './screens';
 
@@ -59,11 +59,29 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       ? (aegis.nav.onState as unknown as NavStateMockFn).mock?.calls?.[0]?.[0]
       : undefined;
 
+  // Capture the tabs.onState callback (used by useTabs) to emit a TabsState
+  // without touching the aegis mock — same pattern as navStateCallback.
+  type TabsStateMockFn = { mock?: { calls: ((s: TabsState) => void)[][] } };
+  const tabsStateCallback: ((s: TabsState) => void) | undefined =
+    aegis.tabs
+      ? (aegis.tabs.onState as unknown as TabsStateMockFn).mock?.calls?.[0]?.[0]
+      : undefined;
+
+  // Capture the tabs.onShortcut callback (registered by App's useEffect) so
+  // keyboard-shortcut interactions can invoke it directly — there is no DOM
+  // keydown handler for Ctrl+T/W/Shift+T on Linux/macOS (native-only accelerator).
+  type TabsShortcutMockFn = { mock?: { calls: ((s: TabShortcut) => void)[][] } };
+  const tabsShortcutCallback: ((s: TabShortcut) => void) | undefined =
+    aegis.tabs
+      ? (aegis.tabs.onShortcut as unknown as TabsShortcutMockFn).mock?.calls?.[0]?.[0]
+      : undefined;
+
   return {
     layer: 'vitest',
     click: (el) => user.click(el),
     type: async (el, text) => { await user.clear(el); await user.type(el, text); },
     press: (key) => user.keyboard(keyMap[key]),
+    contextMenu: async (el) => { fireEvent.contextMenu(el); },
     byRole: (role, name) => q.queryByRole(role, name ? { name } : undefined) as HTMLElement | null,
     byText: (text) => q.queryByText(text) as HTMLElement | null,
     byLabel: (label) => q.queryByLabelText(label) as HTMLElement | null,
@@ -77,6 +95,18 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       // needing to await a tick or re-enter act().  Without this, the Back/Forward
       // buttons would still be disabled when the next line of run() queries them.
       if (navStateCallback) flushSync(() => navStateCallback(state));
+      return Promise.resolve();
+    },
+    emitTabsState: (state: TabsState) => {
+      // Same pattern as emitNavState: push a TabsState into useTabs synchronously
+      // so the TabStrip re-renders before the next line of run() queries the DOM.
+      if (tabsStateCallback) flushSync(() => tabsStateCallback(state));
+      return Promise.resolve();
+    },
+    emitTabShortcut: (shortcut: TabShortcut) => {
+      // Invoke the onShortcut callback that App's useEffect registered — the only
+      // way to exercise Ctrl+T/W/Shift+T in jsdom (no native accelerator fires there).
+      if (tabsShortcutCallback) flushSync(() => tabsShortcutCallback(shortcut));
       return Promise.resolve();
     },
   };
@@ -105,6 +135,9 @@ export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
       else if (key === 'ctrl+t') fire(target, 't', { ctrlKey: true });
       else if (key === 'ctrl+w') fire(target, 'w', { ctrlKey: true });
       else if (key === 'ctrl+shift+t') fire(target, 'T', { ctrlKey: true, shiftKey: true });
+    },
+    contextMenu: async (el) => {
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
     },
     byRole: (role, name) => {
       // Minimal live role lookup: buttons + links + textboxes by accessible name.
