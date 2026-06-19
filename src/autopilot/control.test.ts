@@ -7,6 +7,8 @@ function fake(): AutopilotControl {
     openManager: vi.fn(), closeManager: vi.fn(), setSidebar: vi.fn(), setShield: vi.fn(),
     enterFullscreen: vi.fn(), exitFullscreen: vi.fn(), showError: vi.fn(), clearError: vi.fn(),
     showCrash: vi.fn(), clearCrash: vi.fn(), openConfirm: vi.fn(),
+    setHistoryEntries: vi.fn(),
+    setSavedItems: vi.fn(),
   };
 }
 

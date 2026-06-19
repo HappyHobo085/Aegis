@@ -327,6 +327,7 @@ export function SavedPanel({
             <div className="saved-panel__manage-actions">
               <button
                 type="button"
+                aria-label="Rename tag"
                 disabled={tagToManage.length === 0 || renameTo.trim().length === 0}
                 onClick={() => {
                   renameTag(tagToManage, renameTo.trim());
@@ -338,6 +339,7 @@ export function SavedPanel({
               </button>
               <button
                 type="button"
+                aria-label="Delete tag"
                 disabled={tagToManage.length === 0}
                 onClick={() => {
                   deleteTag(tagToManage);

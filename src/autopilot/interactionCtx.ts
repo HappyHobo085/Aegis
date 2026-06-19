@@ -2,7 +2,7 @@
 import { within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { flushSync } from 'react-dom';
-import type { AegisApi, NavState, TabsState, TabShortcut, Favorite, HistoryEntry } from '../../shared/types';
+import type { AegisApi, NavState, TabsState, TabShortcut, Favorite, HistoryEntry, SavedItem } from '../../shared/types';
 import type { CallLog, InteractionCtx } from './interactions';
 import type { ScreenId } from './screens';
 import { getAutopilotControl } from './control';
@@ -144,6 +144,15 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
         // or a flushSync alternative before enabling fake timers globally.
         await new Promise((r) => setTimeout(r, 0));
       });
+    },
+    emitSaved: (items: SavedItem[], tagUnion: string[]) => {
+      // Seed the SavedPanel by calling setSavedItems on the autopilot control,
+      // which directly calls useSaved's _setSavedItems React state setter (sets both
+      // items and tagUnion atomically). Uses the same flushSync pattern as
+      // emitHistory: synchronous, no async Promise chains, no nested act().
+      const control = getAutopilotControl();
+      if (control) flushSync(() => control.setSavedItems(items, tagUnion));
+      return Promise.resolve();
     },
   };
 }

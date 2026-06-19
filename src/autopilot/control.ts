@@ -1,4 +1,4 @@
-import type { HistoryEntry } from '../../shared/types';
+import type { HistoryEntry, SavedItem } from '../../shared/types';
 
 // The dev-only imperative surface DesktopApp registers so the autopilot can reach
 // each overlay/state without selector brittleness. Calls the SAME setState handlers
@@ -21,6 +21,8 @@ export interface AutopilotControl {
   openConfirm(message: string): void;
   /** Directly set the history entries (bypasses async refresh; autopilot vitest seeding only). */
   setHistoryEntries(entries: HistoryEntry[]): void;
+  /** Directly set saved items + tagUnion (bypasses async refresh; autopilot vitest seeding only). */
+  setSavedItems(items: SavedItem[], tagUnion: string[]): void;
 }
 
 const KEY = '__aegisAutopilot';

@@ -133,6 +133,7 @@ function DesktopApp() {
       clearCrash: () => setCrashed(null),
       openConfirm: (message) => { void confirm(message); },
       setHistoryEntries: (entries) => history._setEntries(entries),
+      setSavedItems: (items, tagUnion) => saved._setSavedItems(items, tagUnion),
     });
   }, []);
 

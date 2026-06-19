@@ -1,4 +1,5 @@
 // src/autopilot/reach.ts
+import { flushSync } from 'react-dom';
 import type { AutopilotControl } from './control';
 import type { ScreenSpec, ScreenId } from './screens';
 import { IPC, PRIMARY_VIEW_ID } from '../../shared/types';
@@ -67,8 +68,11 @@ export async function reachScreen(control: AutopilotControl, screen: ScreenSpec,
       else if (screen.id === 'confirmDialog') control.openConfirm('Autopilot confirm?');
       break;
     case 'sidebarTab':
-      control.setSidebar(true);
-      await tick();
+      // Use flushSync to open the sidebar synchronously so the tab buttons are in the
+      // DOM before clickTabByLabel queries them.  Without flushSync, React 18 defers
+      // the setSidebar(true) state update to after the current async-act boundary, and
+      // the subsequent clickTabByLabel call finds no buttons.
+      flushSync(() => control.setSidebar(true));
       clickTabByLabel(screen.id === 'sidebar:history' ? 'History' : 'Saved');
       break;
     case 'settingsTab': {
