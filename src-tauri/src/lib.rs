@@ -391,7 +391,8 @@ pub fn run() {
         .manage(adblock::AdblockState::default())
         .manage(safety::SafetyState::default())
         .manage(sync::SyncState::default())
-        .manage(redirect_guard::PendingNavs::default());
+        .manage(redirect_guard::PendingNavs::default())
+        .manage(redirect_guard::NavActions::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;

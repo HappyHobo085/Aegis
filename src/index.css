@@ -3127,6 +3127,60 @@ body.aegis-fullscreen {
   pointer-events: none;
 }
 
+/* Redirect-blocked notification bar — sits below the favbar in the always-visible chrome
+   strip (content insets below it by REDIRECT_BAR_H). Height MUST match REDIRECT_BAR_H (40). */
+.redirect-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  height: 40px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--accent-color);
+  color: var(--fg);
+  font-size: 13px;
+}
+.redirect-bar__icon {
+  flex: 0 0 auto;
+  color: var(--accent-color);
+}
+.redirect-bar__msg {
+  flex: 1 1 auto;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.redirect-bar__open {
+  flex: 0 0 auto;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font: inherit;
+  cursor: pointer;
+}
+.redirect-bar__open:hover {
+  filter: brightness(1.1);
+}
+.redirect-bar__dismiss {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+.redirect-bar__dismiss:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 /* Individual toast item */
 .toast {
   pointer-events: auto;

@@ -60,7 +60,11 @@ zeroize = { version = "1", features = ["derive"] }
 # Versions match wry 0.55.1's resolved deps so the types are compatible.
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk = "0.18"
-webkit2gtk = "2.0"
+# v2_40: the redirect guard's own decide-policy handler needs
+# ResponsePolicyDecision::is_main_frame_main_resource() (added in WebKitGTK 2.40) for
+# reliable main-frame detection. Requires libwebkit2gtk >= 2.40 at build+runtime (Fedora
+# 43 + the ubuntu-24.04 AppImage builder both satisfy this).
+webkit2gtk = { version = "2.0", features = ["v2_40"] }
 glib = "0.18"
 gio = "0.18"
 
