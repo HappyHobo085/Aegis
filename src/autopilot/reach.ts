@@ -82,7 +82,7 @@ export async function reachScreen(control: AutopilotControl, screen: ScreenSpec,
   await tick();
 }
 
-export async function leaveScreen(control: AutopilotControl, screen: ScreenSpec): Promise<void> {
+export async function leaveScreen(control: AutopilotControl, screen: ScreenSpec, deps?: ReachDeps): Promise<void> {
   if (screen.via === 'settingsTab') control.closeSettings();
   else if (screen.id === 'downloads') control.closeDownloads();
   else if (screen.id === 'favoritesManager') control.closeManager();
@@ -92,6 +92,11 @@ export async function leaveScreen(control: AutopilotControl, screen: ScreenSpec)
   else if (screen.id === 'errorOverlay') control.clearError();
   else if (screen.id === 'crashOverlay') control.clearCrash();
   else if (screen.id === 'confirmDialog') clickTabByLabel('Cancel');
+  // Event-driven overlays were shown by emitting an event; dismiss them by emitting the
+  // SAME event with null (the safety/permission hooks set their state = payload, so null
+  // clears it). Otherwise they linger as a full overlay and cancel later content nav.
+  else if (screen.id === 'safetyInterstitial') await deps?.emitEvent(IPC.evtSafetyInterstitial, null);
+  else if (screen.id === 'permissionPrompt') await deps?.emitEvent(IPC.evtPermissionsPrompt, null);
   await tick();
 }
 

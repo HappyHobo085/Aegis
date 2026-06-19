@@ -3,6 +3,7 @@
 // every SCREEN (drive control surface -> screenshot) and every CATALOG feature
 // (exercise the real core), runs end-to-end inductions, then writes the report.
 import type { AegisApi } from '../../shared/types';
+import { IPC } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { getAutopilotControl, type AutopilotControl } from './control';
 import { SCREENS } from './screens';
@@ -44,6 +45,11 @@ function liveDeps(): RunDeps {
       control.closeSettings(); control.closeDownloads(); control.closeManager();
       control.setSidebar(false); control.setShield(false); control.exitFullscreen();
       control.clearError(); control.clearCrash();
+      // Event-driven overlays (safety interstitial / permission prompt) shown during the
+      // screen walk aren't control-owned; clear them too, or a lingering one (a full
+      // overlay) cancels the fixture nav — exactly what produced nav=https://malware.test/.
+      await devEmit.emitEvent(IPC.evtSafetyInterstitial, null);
+      await devEmit.emitEvent(IPC.evtPermissionsPrompt, null);
       await aegis.adblock.setEnabled(true);
       await new Promise((r) => setTimeout(r, 400));
       const before = (await aegis.adblock.getState()).sessionBlocked ?? 0;
@@ -78,7 +84,7 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
     } catch (e) {
       results.push({ id: `screen:${screen.id}`, kind: 'visual', title: screen.label, status: 'fail', detail: String(e) });
     } finally {
-      await leaveScreen(deps.control, screen).catch(() => {});
+      await leaveScreen(deps.control, screen, { emitEvent: deps.emitEvent }).catch(() => {});
     }
   }
 
