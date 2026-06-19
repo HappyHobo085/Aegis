@@ -94,6 +94,13 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
     catch (e) { results.push({ id: f.id, kind: 'core', title: f.title, status: 'fail', detail: String(e) }); }
   }
 
+  // 2b) Functional verification (real round-trips against the real core)
+  for (const f of CATALOG) {
+    if (!f.verify) continue;
+    try { const detail = await f.verify(deps.api); results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'pass', detail }); }
+    catch (e) { results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'fail', detail: String(e) }); }
+  }
+
   // 3) End-to-end induction: ad-block actually blocks on a real page. Blocking itself is
   // verified by the adblock_engine unit tests + the adblock.toggle catalog check; this
   // probes the LIVE shield count, which is environment-sensitive (WebKit negative-caches
