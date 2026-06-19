@@ -118,9 +118,12 @@ export const CATALOG: FeatureCheck[] = [
     exercise: async (a) => { assertObject(await a.sync.getState()); assertArray(await a.sync.listDevices()); } },
 ];
 
-// Channels intentionally not exercised by a catalog `exercise` (destructive,
-// require a real OS file/window, or fire-and-forget side effects covered live/in
-// component tests). Kept explicit so the drift guard still forces a decision.
+// Channels whose `exercise` body intentionally does NOT call them (destructive,
+// OS/file/window-bound, or fire-and-forget) — their real behavior is exercised
+// only in the live run. This set is DOCUMENTATION, not an escape hatch: the
+// coverage drift guard asserts every member here ALSO appears in some catalog
+// entry's `channels`, so a channel can never skip the catalog by being listed
+// here alone. Adding a member here without a catalog entry fails the build.
 export const UNTESTED_CHANNELS = new Set<string>([
   // file/OS-bound — exercised live only, would mutate the host in vitest:
   IPC.downloadsOpenFile, IPC.downloadsShowInFolder, IPC.downloadsCancel,

@@ -23,4 +23,10 @@ describe('catalog drift guard', () => {
     for (const c of CATALOG)
       for (const ch of c.channels) expect(all.has(ch), ch).toBe(true);
   });
+  it('UNTESTED_CHANNELS is documentation, not an escape hatch: every excused channel still has a catalog entry', () => {
+    const covered = new Set(CATALOG.flatMap((c) => c.channels));
+    for (const ch of UNTESTED_CHANNELS) {
+      expect(covered.has(ch), `${ch} is in UNTESTED_CHANNELS but no catalog entry lists it`).toBe(true);
+    }
+  });
 });
