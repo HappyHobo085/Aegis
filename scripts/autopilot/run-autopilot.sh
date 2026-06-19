@@ -9,6 +9,8 @@ TS="$(date +%Y%m%d-%H%M%S)"
 OUT="$(pwd)/target/autopilot/$TS"
 PROFILE="$(mktemp -d /tmp/aegis-autopilot-profile.XXXXXX)"
 FIXTURE_PORT=8137
+# Dedicated Vite dev port so this run coexists with a normal `tauri dev` on 5174.
+DEV_PORT="${AEGIS_AUTOPILOT_DEV_PORT:-5199}"
 mkdir -p "$OUT"
 
 if [ -n "${DISPLAY:-}" ] || [ -n "${WAYLAND_DISPLAY:-}" ]; then
@@ -37,14 +39,17 @@ for _ in 1 2 3 4 5 6 7 8 9 10; do
   sleep 0.3
 done
 
-# 2) launch the app on the disposable profile with autopilot enabled
+# 2) launch the app on the disposable profile with autopilot enabled, on a dedicated
+# Vite dev port (VITE_DEV_PORT) with tauri's devUrl overridden to match (--config),
+# so it doesn't collide with a normal `tauri dev` on 5174.
 XDG_DATA_HOME="$PROFILE/data" \
 XDG_CONFIG_HOME="$PROFILE/config" \
 AEGIS_AUTOPILOT_OUT="$OUT" \
 VITE_AEGIS_AUTOPILOT=1 \
 VITE_AEGIS_AUTOPILOT_FIXTURE="http://127.0.0.1:$FIXTURE_PORT/" \
 VITE_AEGIS_AUTOPILOT_DISPLAY="$HAS_DISPLAY" \
-  setsid npm run tauri:dev > "$OUT/app.log" 2>&1 & APP_PID=$!
+VITE_DEV_PORT="$DEV_PORT" \
+  setsid npm run tauri:dev -- --config "{\"build\":{\"devUrl\":\"http://localhost:$DEV_PORT\"}}" > "$OUT/app.log" 2>&1 & APP_PID=$!
 
 # 3) wait for the report sentinel (watchdog). The FIRST run compiles the Rust core,
 # and a cold `tauri dev` build can take 10-20 min, so the default is generous;

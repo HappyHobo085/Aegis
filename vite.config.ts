@@ -14,7 +14,9 @@ export default defineConfig({
   root: resolve(__dirname, 'src'),
   plugins: [react()],
   clearScreen: false,
-  server: { port: 5174, strictPort: true },
+  // Port is overridable via VITE_DEV_PORT so the autopilot harness can run on its own
+  // port (e.g. 5199) alongside a normal `tauri dev` on 5174 without colliding.
+  server: { port: Number(process.env.VITE_DEV_PORT) || 5174, strictPort: true },
   build: {
     outDir: resolve(__dirname, 'dist'),
     emptyOutDir: true,
