@@ -108,7 +108,9 @@ export const INTERACTIONS: InteractionSpec[] = [
     domain: 'toolbar',
     description: 'Click the Back button → nav.back called',
     screen: 'home',
-    layers: ['vitest', 'live'],
+    // live excluded: the live CallLog is inert so nav.back cannot be confirmed via
+    // ctx.calls, and the page under test has no guaranteed back history to observe.
+    layers: ['vitest'],
     run: async (ctx) => {
       // Back button is disabled when canGoBack=false; emit a state update to enable it.
       await emitNavState(ctx, { ...BASE_NAV, canGoBack: true });
@@ -117,14 +119,9 @@ export const INTERACTIONS: InteractionSpec[] = [
       await ctx.click(btn);
     },
     assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('nav.back'))
-          throw new Error('nav.back not called');
-        return 'Back button → nav.back()';
-      }
-      // Live: nav.back was fired; we can't poll for a meaningful url change since
-      // the real page may not have history either — just confirm the call was made.
-      return 'Back button clicked (live — no history to assert against)';
+      if (!ctx.calls.called('nav.back'))
+        throw new Error('nav.back not called');
+      return 'Back button → nav.back()';
     },
   },
 
@@ -133,7 +130,9 @@ export const INTERACTIONS: InteractionSpec[] = [
     domain: 'toolbar',
     description: 'Click the Forward button → nav.forward called',
     screen: 'home',
-    layers: ['vitest', 'live'],
+    // live excluded: the live CallLog is inert so nav.forward cannot be confirmed via
+    // ctx.calls, and the page under test has no guaranteed forward history to observe.
+    layers: ['vitest'],
     run: async (ctx) => {
       // Forward button is disabled when canGoForward=false; emit a state update to enable it.
       await emitNavState(ctx, { ...BASE_NAV, canGoForward: true });
@@ -142,12 +141,9 @@ export const INTERACTIONS: InteractionSpec[] = [
       await ctx.click(btn);
     },
     assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('nav.forward'))
-          throw new Error('nav.forward not called');
-        return 'Forward button → nav.forward()';
-      }
-      return 'Forward button clicked (live — no forward history to assert against)';
+      if (!ctx.calls.called('nav.forward'))
+        throw new Error('nav.forward not called');
+      return 'Forward button → nav.forward()';
     },
   },
 
@@ -189,15 +185,20 @@ export const INTERACTIONS: InteractionSpec[] = [
           throw new Error('nav.home not called');
         return 'Home button → nav.home()';
       }
+      // Live: read the configured homeUrl and poll until the page lands on it.
+      const settings = await ctx.aegis.settings.get();
+      const homeUrl = settings.homeUrl;
       const deadline = Date.now() + 8000;
       while (Date.now() < deadline) {
         const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-        // Home navigates to the configured homeUrl (DuckDuckGo by default); any
-        // non-blank, non-example URL after the click is consistent with the home call.
-        if (url !== 'https://example.com/' && url !== 'about:blank') return `Home button → ${url}`;
+        if (homeUrl && url.startsWith(homeUrl)) return `Home button → ${url}`;
+        // Fallback: any non-blank change away from the pre-click state is acceptable
+        // evidence when homeUrl itself is empty/default.
+        if (!homeUrl && url !== 'about:blank' && url !== 'https://example.com/')
+          return `Home button → ${url}`;
         await new Promise((r) => setTimeout(r, 400));
       }
-      return 'Home button clicked (live — url did not change within timeout)';
+      throw new Error(`live: url never became homeUrl (${homeUrl ?? 'default'}) within 8 s`);
     },
   },
 
@@ -223,11 +224,13 @@ export const INTERACTIONS: InteractionSpec[] = [
       }
       const deadline = Date.now() + 8000;
       while (Date.now() < deadline) {
-        if ((await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url.toLowerCase().includes('hello'))
+        const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+        // The search engine URL will contain the encoded query ("hello") or its host.
+        if (url.toLowerCase().includes('hello') || url.includes('duckduckgo') || url.includes('google'))
           return 'address bar search → page navigated to search results';
         await new Promise((r) => setTimeout(r, 400));
       }
-      return 'address bar search clicked (live — url did not include hello within timeout)';
+      throw new Error('live: url never contained search term or search-engine host within 8 s');
     },
   },
 
@@ -319,42 +322,58 @@ export const INTERACTIONS: InteractionSpec[] = [
     },
   },
 
-  {
-    id: 'shieldPopover.toggleAdblock',
-    domain: 'shieldPopover',
-    description: 'Open the ad-block shield popover and toggle the switch → adblock.setEnabled called',
-    screen: 'shieldPopover',
-    layers: ['vitest', 'live'],
-    run: async (ctx) => {
-      // reachScreen sets the App-level shieldOpen flag (for z-order/layout) but does NOT
-      // open the AdblockShield's own internal popover state. Click the shield button to
-      // actually render the popover, then click the toggle inside it.
-      const shieldBtn = ctx.byRole('button', /^Ad blocking$/);
-      if (!shieldBtn) throw new Error('Ad blocking shield button not found');
-      await ctx.click(shieldBtn);
-      // Now the popover is rendered; find the toggle switch (role="switch" aria-label="Ad blocking").
-      const toggle = ctx.byRole('switch', /^Ad blocking$/);
-      if (!toggle) throw new Error('Ad blocking switch not found in shield popover');
-      await ctx.click(toggle);
-    },
-    assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('adblock.setEnabled'))
-          throw new Error('adblock.setEnabled not called');
-        return 'shield toggle → adblock.setEnabled()';
-      }
-      // Live: setEnabled was called; verify we can still reach the adblock state.
-      const state = await ctx.aegis.adblock.getState(PRIMARY_VIEW_ID);
-      return `shield toggle → adblock.setEnabled() → enabled=${state.enabled}`;
-    },
-  },
+  (() => {
+    // Capture pre-click enabled state so the assert can verify the flip.
+    let _preEnabled: boolean | undefined;
+    return {
+      id: 'shieldPopover.toggleAdblock',
+      domain: 'shieldPopover',
+      description: 'Open the ad-block shield popover and toggle the switch → adblock.setEnabled called',
+      screen: 'shieldPopover',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') {
+          // Snapshot the pre-click state so assert can detect the actual flip.
+          _preEnabled = (await ctx.aegis.adblock.getState()).enabled;
+        }
+        // reachScreen sets the App-level shieldOpen flag (for z-order/layout) but does NOT
+        // open the AdblockShield's own internal popover state. Click the shield button to
+        // actually render the popover, then click the toggle inside it.
+        const shieldBtn = ctx.byRole('button', /^Ad blocking$/);
+        if (!shieldBtn) throw new Error('Ad blocking shield button not found');
+        await ctx.click(shieldBtn);
+        // Now the popover is rendered; find the toggle switch (role="switch" aria-label="Ad blocking").
+        const toggle = ctx.byRole('switch', /^Ad blocking$/);
+        if (!toggle) throw new Error('Ad blocking switch not found in shield popover');
+        await ctx.click(toggle);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('adblock.setEnabled'))
+            throw new Error('adblock.setEnabled not called');
+          return 'shield toggle → adblock.setEnabled()';
+        }
+        // Live: verify enabled actually flipped from the pre-click value.
+        const after = await ctx.aegis.adblock.getState();
+        if (_preEnabled !== undefined && after.enabled === _preEnabled)
+          throw new Error(`live: adblock.enabled did not flip (still ${after.enabled} after toggle)`);
+        // Restore the original enabled state.
+        await ctx.aegis.adblock.setEnabled(_preEnabled ?? !after.enabled);
+        return `shield toggle → enabled flipped ${_preEnabled}→${after.enabled} (restored)`;
+      },
+    } satisfies InteractionSpec;
+  })(),
 
   {
     id: 'shieldPopover.allowlistSite',
     domain: 'shieldPopover',
     description: 'Open the ad-block shield popover and click the allowlist checkbox → adblock.toggleAllowlist called',
     screen: 'shieldPopover',
-    layers: ['vitest', 'live'],
+    // live excluded: the allowlist checkbox is disabled on about:blank (no parseable host),
+    // and navigating to a real host in the live run makes the assert host-dependent and
+    // fragile (race between nav commit and popover re-render).  The vitest path fully
+    // covers toggleAllowlist via the mock.
+    layers: ['vitest'],
     run: async (ctx) => {
       // Ensure the nav URL has a parseable host so the allowlist checkbox is enabled.
       await emitNavState(ctx, { ...BASE_NAV, url: 'https://example.com/', title: 'Example' });
@@ -368,14 +387,9 @@ export const INTERACTIONS: InteractionSpec[] = [
       await ctx.click(allowToggle);
     },
     assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('adblock.toggleAllowlist'))
-          throw new Error('adblock.toggleAllowlist not called');
-        return 'allowlist checkbox → adblock.toggleAllowlist()';
-      }
-      // Live: verify the allowlist was toggled.
-      const state = await ctx.aegis.adblock.getState(PRIMARY_VIEW_ID);
-      return `allowlist checkbox → adblock.toggleAllowlist() → hosts=${state.allowlistedHosts.length}`;
+      if (!ctx.calls.called('adblock.toggleAllowlist'))
+        throw new Error('adblock.toggleAllowlist not called');
+      return 'allowlist checkbox → adblock.toggleAllowlist()';
     },
   },
 ];
