@@ -35,4 +35,29 @@ describe('SafetyInterstitial', () => {
     await userEvent.click(screen.getByRole('button', { name: /continue anyway/i }));
     expect(onProceed).toHaveBeenCalledWith('http://evil.example/');
   });
+
+  it('renders a Go back button when onBack is provided and clicking it calls the handler', async () => {
+    const onBack = vi.fn();
+    render(
+      <SafetyInterstitial
+        interstitial={{ url: 'http://example.com/', reason: 'https-failed' }}
+        onProceed={() => {}}
+        onBack={onBack}
+      />,
+    );
+    const backBtn = screen.getByRole('button', { name: /go back/i });
+    expect(backBtn).toBeInTheDocument();
+    await userEvent.click(backBtn);
+    expect(onBack).toHaveBeenCalledTimes(1);
+  });
+
+  it('does NOT render a Go back button when onBack is omitted', () => {
+    render(
+      <SafetyInterstitial
+        interstitial={{ url: 'http://example.com/', reason: 'https-failed' }}
+        onProceed={() => {}}
+      />,
+    );
+    expect(screen.queryByRole('button', { name: /go back/i })).not.toBeInTheDocument();
+  });
 });

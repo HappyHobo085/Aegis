@@ -241,7 +241,7 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
     emitPermissionPrompt: (p: PermissionPrompt | null) => {
       // Invoke the onPrompt callback that usePermissions registered so the
       // PermissionPromptDialog renders (or clears when p is null).
-      if (permissionPromptCallback) flushSync(() => permissionPromptCallback(p as PermissionPrompt));
+      if (permissionPromptCallback) flushSync(() => permissionPromptCallback(p));
       return Promise.resolve();
     },
     emitRedirectBlocked: (r: RedirectBlocked) => {
