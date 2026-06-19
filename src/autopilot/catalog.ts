@@ -73,7 +73,7 @@ export const CATALOG: FeatureCheck[] = [
   { id: 'view.layout', domain: 'view', title: 'Content visibility/inset/overlay/sidebar/layout/fullscreen',
     channels: [IPC.viewSetContentVisible, IPC.viewSetContentInset, IPC.viewSetChromeOverlay, IPC.viewSetSidebar, IPC.viewSetLayout, IPC.viewSetFullscreen],
     exercise: async (a) => {
-      await a.view.setContentVisible(V, true); await a.view.setContentInset(V, { top: 0, right: 0, bottom: 0, left: 0 });
+      await a.view.setContentVisible(V, true); await a.view.setContentInset(V, { top: 0, left: 0 });
       await a.view.setChromeOverlay(V, false); await a.view.setSidebar?.(V, false, 280);
       await a.view.setLayout?.(V, { overlay: false, sidebar: false, width: 280 }); await a.view.setFullscreen(V, false);
     } },
@@ -86,19 +86,54 @@ export const CATALOG: FeatureCheck[] = [
       assertArray(await a.favorites.reorder([]));
     },
     verify: async (a) => {
-      const probeUrl = 'https://ap-fav.test/';
-      const after = await a.favorites.add({ name: 'AP-verify', url: probeUrl });
-      const added = after.find((f) => f.url === probeUrl);
-      if (!added) throw new Error('add: probe url not in returned list');
-      const afterRemove = await a.favorites.remove(added.id);
-      if (afterRemove.some((f) => f.url === probeUrl)) throw new Error('remove: probe url still in list');
-      return 'favorite add→list→remove ok';
+      const u1 = 'https://ap-fav1.test/', u2 = 'https://ap-fav2.test/';
+      await a.favorites.add({ name: 'AP-fav1', url: u1 });
+      const added = await a.favorites.add({ name: 'AP-fav2', url: u2 });
+      const f1 = added.find((f) => f.url === u1), f2 = added.find((f) => f.url === u2);
+      if (!f1 || !f2) throw new Error('add: both probe favorites not present');
+      // update (rename) f1
+      const renamed = await a.favorites.update(f1.id, { name: 'AP-fav1-renamed' });
+      if (renamed.find((f) => f.id === f1.id)?.name !== 'AP-fav1-renamed') throw new Error('update: name not changed');
+      // reorder: put f2 before f1 (reorder assigns position 0,1,2… in requested order)
+      const others = renamed.filter((f) => f.id !== f1.id && f.id !== f2.id).map((f) => f.id);
+      const reordered = await a.favorites.reorder([f2.id, f1.id, ...others]);
+      const pos = (id: number) => reordered.find((f) => f.id === id)?.position;
+      const p2 = pos(f2.id), p1 = pos(f1.id);
+      if (p2 === undefined || p1 === undefined || p2 >= p1) throw new Error(`reorder: expected f2 before f1 (positions ${p2}, ${p1})`);
+      // remove both probes
+      await a.favorites.remove(f1.id);
+      const afterRemove = await a.favorites.remove(f2.id);
+      if (afterRemove.some((f) => f.url === u1 || f.url === u2)) throw new Error('remove: a probe favorite survived');
+      return 'favorite add×2→update(rename)→reorder→remove×2 ok';
     } },
-  // history — read-only probe: no deterministic write path via IPC (entries are
-  // written by the core on real navigation, not via a direct add channel).
+  // history — entries are written by the core on real navigation (no direct add channel),
+  // so the live verify navigates for real, then deletes (remove + clear; safe on the
+  // disposable profile). exercise stays a read-only probe for the mock-based tour.
   { id: 'history.crud', domain: 'history', title: 'History list/search/remove/clear',
     channels: [IPC.historyList, IPC.historySearch, IPC.historyRemove, IPC.historyClear],
-    exercise: async (a) => { assertArray(await a.history.list({})); assertArray(await a.history.search('a')); } },
+    exercise: async (a) => { assertArray(await a.history.list({})); assertArray(await a.history.search('a')); },
+    verify: async (a) => {
+      // A real navigation records a history entry (on the title-changed signal). Poll until
+      // it appears (proving recording fired), then delete that entry and assert it's gone.
+      await a.nav.navigate(V, 'https://example.com/');
+      let entry: { id: number; url: string } | undefined;
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        entry = (await a.history.list({})).find((h) => h.url.includes('example.com'));
+        if (entry) break;
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      if (!entry) throw new Error('history: no entry appeared after navigating example.com');
+      const id = entry.id;
+      await a.history.remove(id); // returns void → re-list to assert
+      if ((await a.history.list({})).some((h) => h.id === id)) throw new Error('remove: entry still present');
+      // clear all — the title-changed that created our entry has already fired (it's why the
+      // entry appeared), so no late write races this; disposable profile makes it safe.
+      await a.history.clear();
+      const afterClear = await a.history.list({});
+      if (afterClear.length !== 0) throw new Error(`clear: expected empty history, got ${afterClear.length}`);
+      return 'history navigate→list→remove→clear ok';
+    } },
   // saved
   { id: 'saved.crud', domain: 'saved', title: 'Saved list/add/remove/has/update/tags',
     channels: [IPC.savedList, IPC.savedAdd, IPC.savedRemove, IPC.savedHas, IPC.savedUpdate, IPC.savedRenameTag, IPC.savedDeleteTag, IPC.savedTagUnion],
@@ -108,16 +143,29 @@ export const CATALOG: FeatureCheck[] = [
     },
     verify: async (a) => {
       const probeUrl = 'https://ap-saved.test/';
-      await a.saved.add({ url: probeUrl, title: 'AP', tags: ['ap'] });
-      const hasAfterAdd = await a.saved.has(probeUrl);
-      if (!hasAfterAdd) throw new Error('has: expected true after add');
-      const items = await a.saved.list();
-      const item = items.find((i) => i.url === probeUrl);
+      // add with two (uniquely-named, collision-proof) tags
+      await a.saved.add({ url: probeUrl, title: 'AP', tags: ['ap-tagA', 'ap-tagB'] });
+      if (!(await a.saved.has(probeUrl))) throw new Error('has: expected true after add');
+      let item = (await a.saved.list()).find((i) => i.url === probeUrl);
       if (!item) throw new Error('list: probe url not found');
-      await a.saved.remove(item.id);
-      const hasAfterRemove = await a.saved.has(probeUrl);
-      if (hasAfterRemove) throw new Error('has: expected false after remove');
-      return 'saved add→has→list→remove ok';
+      if (!item.tags.includes('ap-tagA') || !item.tags.includes('ap-tagB')) throw new Error('add: tags not stored');
+      const id = item.id;
+      // update tags: drop ap-tagA, add ap-tagC (update replaces the tags array)
+      item = (await a.saved.update(id, { tags: ['ap-tagB', 'ap-tagC'] })).find((i) => i.id === id);
+      if (!item || item.tags.includes('ap-tagA') || !item.tags.includes('ap-tagC')) throw new Error('update: tags not replaced');
+      // rename tag ap-tagB → ap-tagB2 (global across saved items)
+      item = (await a.saved.renameTag('ap-tagB', 'ap-tagB2')).find((i) => i.id === id);
+      if (!item || item.tags.includes('ap-tagB') || !item.tags.includes('ap-tagB2')) throw new Error('renameTag: tag not renamed');
+      // tagUnion reflects the renamed + added tags
+      const union = await a.saved.tagUnion();
+      if (!union.includes('ap-tagB2') || !union.includes('ap-tagC')) throw new Error('tagUnion: expected tags missing');
+      // delete tag ap-tagC (global)
+      item = (await a.saved.deleteTag('ap-tagC')).find((i) => i.id === id);
+      if (!item || item.tags.includes('ap-tagC')) throw new Error('deleteTag: tag not removed');
+      // remove the item
+      await a.saved.remove(id);
+      if (await a.saved.has(probeUrl)) throw new Error('has: expected false after remove');
+      return 'saved add(tags)→update→renameTag→tagUnion→deleteTag→remove ok';
     } },
   // settings
   { id: 'settings.getset', domain: 'settings', title: 'Settings get/set',
@@ -141,16 +189,20 @@ export const CATALOG: FeatureCheck[] = [
       assertObject(await a.adblock.clearAllowlist());
     },
     verify: async (a) => {
-      const probeHost = 'ap-allow.test';
+      const h1 = 'ap-allow1.test', h2 = 'ap-allow2.test';
       const off = await a.adblock.setEnabled(false);
       if (off.enabled !== false) throw new Error('setEnabled(false): still enabled');
       const on = await a.adblock.setEnabled(true);
       if (on.enabled !== true) throw new Error('setEnabled(true): not enabled');
-      const toggled = await a.adblock.toggleAllowlist(probeHost);
-      if (!toggled.allowlistedHosts.includes(probeHost)) throw new Error('toggleAllowlist: host not in allowlistedHosts');
-      const removed = await a.adblock.removeAllowlist(probeHost);
-      if (removed.allowlistedHosts.includes(probeHost)) throw new Error('removeAllowlist: host still in allowlistedHosts');
-      return 'adblock setEnabled off→on→allowlist add→remove ok';
+      await a.adblock.toggleAllowlist(h1);
+      const toggled = await a.adblock.toggleAllowlist(h2);
+      if (!toggled.allowlistedHosts.includes(h1) || !toggled.allowlistedHosts.includes(h2)) throw new Error('toggleAllowlist: both hosts not present');
+      const removed = await a.adblock.removeAllowlist(h1);
+      if (removed.allowlistedHosts.includes(h1)) throw new Error('removeAllowlist: host still present');
+      if (!removed.allowlistedHosts.includes(h2)) throw new Error('removeAllowlist: removed the wrong host');
+      const cleared = await a.adblock.clearAllowlist();
+      if (cleared.allowlistedHosts.length !== 0) throw new Error(`clearAllowlist: expected empty, got ${cleared.allowlistedHosts.length}`);
+      return 'adblock setEnabled off→on→allowlist add×2→remove→clear ok';
     } },
   // lists — triggering a real network fetch in a verify round-trip is too slow/fragile.
   { id: 'lists.updateNow', domain: 'lists', title: 'Update filter lists', channels: [IPC.listsUpdateNow],
@@ -224,11 +276,15 @@ export const CATALOG: FeatureCheck[] = [
 ];
 
 // Channels whose `exercise` body intentionally does NOT call them (destructive,
-// OS/file/window-bound, or fire-and-forget) — their real behavior is exercised
-// only in the live run. This set is DOCUMENTATION, not an escape hatch: the
-// coverage drift guard asserts every member here ALSO appears in some catalog
-// entry's `channels`, so a channel can never skip the catalog by being listed
-// here alone. Adding a member here without a catalog entry fails the build.
+// OS/file/window-bound, or fire-and-forget). Many of these ARE round-tripped by the
+// live `verify()` functions (which run only in the live run, on a disposable profile,
+// so deletes are safe): favorites update/remove/reorder, saved update/renameTag/
+// deleteTag/remove, history remove/clear, subs setEnabled. The remainder genuinely
+// can't be round-tripped without real OS/file/network/interaction state (a real
+// download, permission prompt, malware interstitial, sync server, or app restart) and
+// stay live-/manual-only. This set is DOCUMENTATION, not an escape hatch: the coverage
+// drift guard asserts every member here ALSO appears in some catalog entry's `channels`,
+// so a channel can never skip the catalog by being listed here alone.
 export const UNTESTED_CHANNELS = new Set<string>([
   // file/OS-bound — exercised live only, would mutate the host in vitest:
   IPC.downloadsOpenFile, IPC.downloadsShowInFolder, IPC.downloadsCancel,

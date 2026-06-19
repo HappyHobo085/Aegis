@@ -23,6 +23,10 @@ export interface RunDeps {
   now(): number;
   /** Navigate the ad fixture; return before/after session block counts (+ final nav url), or null if unavailable. */
   navigateFixture(): Promise<{ before: number; after: number; url?: string } | null>;
+  /** True only for the live run (set by liveDeps). Gates the functional verify
+   *  round-trips: they require the real core, so under the vitest mock (which returns
+   *  empty shapes) they'd fail-fast or spin. run.test.ts covers the orchestration. */
+  live?: boolean;
 }
 
 function liveDeps(): RunDeps {
@@ -72,6 +76,7 @@ function liveDeps(): RunDeps {
       const navUrl = (await aegis.nav.getState(1)).url;
       return { before, after, url: navUrl };
     },
+    live: true,
   };
 }
 
@@ -103,11 +108,15 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
     catch (e) { results.push({ id: f.id, kind: 'core', title: f.title, status: 'fail', detail: String(e) }); }
   }
 
-  // 2b) Functional verification (real round-trips against the real core)
-  for (const f of CATALOG) {
-    if (!f.verify) continue;
-    try { const detail = await f.verify(deps.api); results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'pass', detail }); }
-    catch (e) { results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'fail', detail: String(e) }); }
+  // 2b) Functional verification — real round-trips against the real core (LIVE ONLY).
+  // Each does an action, asserts the effect, and restores state (the disposable profile
+  // makes destructive actions — clear history, clear allowlist, delete tags — safe).
+  if (deps.live) {
+    for (const f of CATALOG) {
+      if (!f.verify) continue;
+      try { const detail = await f.verify(deps.api); results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'pass', detail }); }
+      catch (e) { results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'fail', detail: String(e) }); }
+    }
   }
 
   // 3) End-to-end ad-block induction. navigateFixture drives a real A/B on the live core:

@@ -121,7 +121,15 @@ Vite dead-code-eliminates it on `build:renderer`.
   favorites, history, saved, settings, adblock, subs, customFilters, downloads,
   permissions, data, picker, update, safety, sync) has one entry with `id`, `domain`,
   `title`, `channels[]` (the `IPC.*` constants it exercises), and `exercise(api)` (an
-  async function that calls the real or mocked `AegisApi`). Also exports
+  async function that calls the real or mocked `AegisApi`). An entry may also carry an
+  optional **`verify(api)`** — a real **functional round-trip** that performs a user
+  action, asserts the effect, and restores state (favorites add/update/reorder/remove,
+  saved add + **tag** update/rename/delete, **history** navigate→remove→clear, ad-block
+  enable + allowlist add/remove/clear, settings/customFilters get→set→restore, tabs
+  create→close, nav navigate→poll, subs toggle, data export). `verify` runs **only in the
+  live run** (`run.ts` gates it on `RunDeps.live`) on the disposable profile — so deletes/
+  clears are safe — and is skipped under the vitest mock (which returns empty shapes).
+  Also exports
   `UNTESTED_CHANNELS` — channels that exist in catalog entries but whose `exercise`
   bodies intentionally skip calling them live (destructive, OS-bound, or
   fire-and-forget). This set is enforcement documentation, not an escape hatch: the
