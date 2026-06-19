@@ -175,7 +175,10 @@ Vite dead-code-eliminates it on `build:renderer`.
 
 ```ts
 if (import.meta.env.DEV && import.meta.env.VITE_AEGIS_AUTOPILOT) {
-  setTimeout(() => void import('./autopilot/run').then(m => m.runAutopilot()), 1500);
+  // Give the app a moment to mount + register its control surface, then run.
+  setTimeout(() => {
+    void import('./autopilot/run').then((m) => m.runAutopilot());
+  }, 1500);
 }
 ```
 

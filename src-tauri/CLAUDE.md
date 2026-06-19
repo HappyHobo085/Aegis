@@ -139,7 +139,7 @@ dotted event name.
   this is mostly moot, but a page of *static* ad URLs under-counts on repeat loads.
 - **Misc** — `picker.rs` (element picker), `update.rs` (tauri-plugin-updater state).
 
-## Dev-only autopilot commands (`src/autopilot.rs`)
+## Dev-only autopilot commands (`src-tauri/src/autopilot.rs`)
 
 The entire module is guarded by `#![cfg(debug_assertions)]`, so it compiles only in
 debug builds and is **completely absent from release binaries**.
