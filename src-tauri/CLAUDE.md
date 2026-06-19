@@ -293,7 +293,10 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     the chrome's `RedirectBar` (a notification bar that adds `REDIRECT_BAR_H` to the content
     inset; a floating toast can't paint over the opaque content webview). Other platforms keep
     Tauri's `on_navigation` + their own native top-frame hooks (Windows `NavigationStarting`,
-    macOS `WKNavigationDelegate`, Android `shouldOverrideUrlLoading`).
+    macOS `WKNavigationDelegate`, Android `shouldOverrideUrlLoading`). The block notification is
+    platform-native: desktop shows the `RedirectBar` infobar; **Android shows a Material
+    `Snackbar`** (a chrome-layer bar can't paint over the native content WebView either) with
+    the same "Open anyway" → new-tab action (`MainActivity.showRedirectBlocked`).
 
 14. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
     backend). The MSVC "Desktop development with C++" workload bundles CMake; install
