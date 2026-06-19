@@ -5,7 +5,7 @@ import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 
-type SettingsTab =
+export type SettingsTab =
   | 'appearance'
   | 'search'
   | 'home'
@@ -34,7 +34,7 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   data: 'Data',
 };
 
-const TAB_ORDER: SettingsTab[] = [
+export const TAB_ORDER: SettingsTab[] = [
   'appearance',
   'search',
   'home',
