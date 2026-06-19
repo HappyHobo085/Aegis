@@ -119,6 +119,60 @@ pub fn on_blocked(app: &AppHandle, tab: u32, from: &str, to: &str) {
     );
 }
 
+/// What a NavigationAction told us, kept so the Response phase (where the main-frame flag is
+/// reliable) can apply the guard with the gesture/redirect info that's only on the action.
+#[derive(Clone)]
+pub struct NavInfo {
+    pub scripted: bool,
+    pub is_redirect: bool,
+    pub current: String,
+}
+
+/// Linux two-phase correlation: the gesture/type live on `NavigationAction`, but reliable
+/// main-frame detection lives on `ResponsePolicyDecision`. We record each NavigationAction by
+/// (tab, normalized-url) here, then look it up at Response time. Linux-only (the other
+/// platforms get gesture + main-frame in one place).
+#[derive(Default)]
+pub struct NavActions(pub Mutex<HashMap<(u32, String), NavInfo>>);
+
+/// Normalize a URL into a stable correlation key (ignore fragment / trailing slash, since the
+/// NavigationAction target and the Response URL can differ in those).
+fn norm_key(url: &str) -> String {
+    match Url::parse(url) {
+        Ok(u) => format!(
+            "{}://{}:{}{}?{}",
+            u.scheme(),
+            u.host_str().unwrap_or(""),
+            u.port_or_known_default().map(|p| p.to_string()).unwrap_or_default(),
+            u.path().trim_end_matches('/'),
+            u.query().unwrap_or(""),
+        ),
+        _ => url.to_string(),
+    }
+}
+
+/// Record a NavigationAction (for the Response phase to consume).
+pub fn record_action(app: &AppHandle, tab: u32, target: &str, info: NavInfo) {
+    if let Some(s) = app.try_state::<NavActions>() {
+        s.0.lock().unwrap().insert((tab, norm_key(target)), info);
+    }
+}
+
+/// Take the recorded NavigationAction matching `target` for `tab`, if any.
+pub fn take_action(app: &AppHandle, tab: u32, target: &str) -> Option<NavInfo> {
+    let s = app.try_state::<NavActions>()?;
+    let info = s.0.lock().unwrap().remove(&(tab, norm_key(target)));
+    info
+}
+
+/// Drop a tab's recorded NavigationActions once its top-frame load resolves, so subframe
+/// entries that never matched a main-frame Response don't accumulate.
+pub fn clear_tab_actions(app: &AppHandle, tab: u32) {
+    if let Some(s) = app.try_state::<NavActions>() {
+        s.0.lock().unwrap().retain(|(t, _), _| *t != tab);
+    }
+}
+
 /// JNI bridge for Android's `NativeRedirectGuard.shouldBlock` (a Kotlin `object`).
 /// Android derives scripted (=!hasGesture) + main_frame (=isForMainFrame) and the
 /// URLs; this applies the shared cross-origin predicate. Lives in libapp_lib.so.

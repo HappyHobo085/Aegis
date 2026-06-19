@@ -320,6 +320,27 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     (WKWebView `URL` KVO, mirroring wry's own `DocumentTitleChangedObserver`). NOTE: the
     macOS objc2 code can't be compiled from Linux at all — `objc2`'s build script needs a
     macOS C toolchain — so it is **CI-verified only** (macos-latest), not locally.
+14. **Linux OWNS the `decide-policy` signal for the redirect guard.** wry connects its own
+    `decide-policy` handler (powering `on_navigation`) and CLAIMS the signal (`return true`),
+    so a second handler never fires — and Tauri ALWAYS installs a `navigation_handler` (to run
+    plugin hooks), so you can't free it by skipping `.on_navigation`. To get the gesture/frame
+    info `on_navigation` lacks (gotcha 13), `linux_layout::install_nav_policy` DISCONNECTS
+    wry's handler (`g_signal_handlers_disconnect_matched` by signal id) at tab spawn and
+    installs ours: it runs the shared `nav::decide_navigation` (ad-block/malware/HTTPS/overlay)
+    for NavigationAction AND the scripted-cross-origin-**top-frame redirect guard**. Reliable
+    main-frame detection is NOT on `NavigationAction` (only gesture/type are), so the guard is
+    TWO-PHASE: record gesture/type per-URL at `NavigationAction`, then CANCEL at
+    `ResponsePolicyDecision` where `is_main_frame_main_resource()` (webkit2gtk **`v2_40`** — see
+    Cargo.toml) is reliable AND the response is displayable (so embeds + downloads are skipped).
+    Allowed navs call `use_()`; non-Response / non-blocked fall through (`false`) so
+    downloads/new-windows keep WebKit's default handling. A block emits `redirect.blocked` →
+    the chrome's `RedirectBar` (a notification bar that adds `REDIRECT_BAR_H` to the content
+    inset; a floating toast can't paint over the opaque content webview). Other platforms keep
+    Tauri's `on_navigation` + their own native top-frame hooks (Windows `NavigationStarting`,
+    macOS `WKNavigationDelegate`, Android `shouldOverrideUrlLoading`). The block notification is
+    platform-native: desktop shows the `RedirectBar` infobar; **Android shows a Material
+    `Snackbar`** (a chrome-layer bar can't paint over the native content WebView either) with
+    the same "Open anyway" → new-tab action (`MainActivity.showRedirectBlocked`).
 
 14. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
     backend). The MSVC "Desktop development with C++" workload bundles CMake; install

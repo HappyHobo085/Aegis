@@ -112,6 +112,83 @@ pub(crate) fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loadi
     );
 }
 
+/// The navigation-policy decision shared by every desktop platform: returns `true` to
+/// ALLOW the navigation, `false` to CANCEL it. Runs the overlay-cancel, malware, ad-block
+/// (document-level + pop-under autoclose), and HTTPS-Only checks. Fires for subframes too
+/// (the caller doesn't filter frames) — intentional, so a malware/insecure iframe is caught.
+/// Non-Linux: wired via Tauri's `on_navigation`. Linux: called from our own `decide-policy`
+/// handler (which also adds the gesture/frame-aware redirect guard), because wry otherwise
+/// claims the `decide-policy` signal and our handler never runs.
+#[cfg(desktop)]
+pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
+    // While a full-window chrome overlay (Settings/Downloads/shield/…) covers the page, the
+    // user isn't driving it — so any navigation the content initiates is a script/ad redirect
+    // (malvertising fires top-frame redirects on the resize/blur that opening an overlay
+    // causes). Cancel them. NOT gated on the sidebar alone: the page stays interactive beside
+    // the sidebar panel, so real navigation must still work there.
+    if let Some(st) = app.try_state::<crate::view::ContentInset>() {
+        let lay = *st.0.lock().unwrap();
+        if lay.overlay && !lay.sidebar {
+            return false;
+        }
+    }
+
+    // Malicious-site guard: block known-malware hosts.
+    if crate::safety::is_blocked(app, u) {
+        crate::safety::raise(app, u.as_str());
+        return false;
+    }
+
+    // Ad-block at the navigation level: cancel loads of blocked ad/tracker destinations
+    // (pop-under redirector chains the WebKit content filter can't catch — those only cover
+    // subresources, not top-frame loads). Honors the on/off toggle + allowlist.
+    {
+        let source = app
+            .get_webview(&content_label(nav_id))
+            .and_then(|w| w.url().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+        if crate::adblock_engine::should_block(u.as_str(), &source, "document") {
+            if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
+                eprintln!("[aegis-nav] BLOCK ad navigation: {} (from {source})", u.as_str());
+            }
+            // Auto-close a pop-under shell: a NON-active tab that never showed real content
+            // whose navigation is an ad. The active tab + any tab that loaded a real page are
+            // never closed (just blocked).
+            let has_content = tabs_with_content().lock().unwrap().contains(&nav_id);
+            let active = app
+                .try_state::<crate::tabs::Tabs>()
+                .map(|s| s.reg.lock().unwrap().active_id())
+                .unwrap_or(0);
+            if should_autoclose_popunder(nav_id, active, has_content) {
+                let app_close = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    crate::tabs::close_tab(&app_close, nav_id);
+                });
+            }
+            return false;
+        }
+    }
+
+    // HTTPS-Only: upgrade http -> https (unless localhost, or the setting is off). Re-navigate
+    // on the main thread AFTER this returns, to avoid re-entrancy.
+    if u.scheme() == "http" && !is_local_host(u) && crate::settings::https_only(app) {
+        let https = u.as_str().replacen("http://", "https://", 1);
+        let app_main = app.clone();
+        let lbl = content_label(nav_id);
+        let _ = app.run_on_main_thread(move || {
+            if let Ok(p) = Url::parse(&https) {
+                crate::redirect_guard::expect(&app_main, nav_id, p.as_str());
+                if let Some(w) = app_main.get_webview(&lbl) {
+                    let _ = w.navigate(p);
+                }
+            }
+        });
+        return false; // cancel the http navigation; https replaces it
+    }
+    true
+}
+
 /// Create a content webview for tab `id` loading `url` as a child of the main
 /// window. The label is `content:<id>`. Initial bounds put it below the chrome;
 /// `view::apply_inset` keeps it sized on inset/resize.
@@ -153,94 +230,11 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         // the ad-block part supplements WebKit content filters on Linux and IS the ad-block
         // layer on Windows/macOS (where wry exposes no request interception).
         .initialization_script_for_all_frames(crate::adblock_inject::script(app, host_allowlisted))
-        .on_navigation(move |u| {
-            // Fires for EVERY navigation action — including cross-site subframe/iframe
-            // loads. wry wires this to WebKitGTK's `decide-policy` (NavigationAction),
-            // which does NOT filter to the main frame, so an embedded player/ad iframe
-            // navigating would land here too. We must NOT update the address bar from
-            // here, or it flickers to those embedded URLs while a page loads. The URL bar
-            // is driven by `on_page_load` below — wired to `load-changed`, which is
-            // main-frame only. We still run the safety + HTTPS-Only checks here so they
-            // cover subframes too (a malware/insecure iframe should be caught as well).
-
-            // While a full-window chrome overlay (Settings/Downloads/shield/…) covers the page,
-            // the user isn't driving it — so any navigation the content initiates is a script/ad
-            // redirect (malvertising fires top-frame redirects on the resize/blur that opening an
-            // overlay over the page causes). Cancel them. NOT gated on the sidebar alone: the page
-            // stays interactive beside the sidebar panel, so real navigation must still work there.
-            if let Some(st) = app_nav.try_state::<crate::view::ContentInset>() {
-                let lay = *st.0.lock().unwrap();
-                if lay.overlay && !lay.sidebar {
-                    return false;
-                }
-            }
-
-            // Malicious-site guard: block known-malware hosts.
-            if crate::safety::is_blocked(&app_nav, u) {
-                crate::safety::raise(&app_nav, u.as_str());
-                return false;
-            }
-
-            // Ad-block at the navigation level: cancel loads of blocked ad/tracker
-            // destinations. `on_new_window` only sees a pop-under's INITIAL url, but these
-            // networks open a clean redirector that bounces through an ad domain
-            // (e.g. .../api/rtb-pops/go -> daleelerah.info -> the landing page), so the tab
-            // opens before the ad domain is known. Catching it here stops the chain on any
-            // frame and on every desktop (the WebKit content filters only cover
-            // subresources, not top-frame loads). Honors the on/off toggle + allowlist
-            // (should_block does); source = the page initiating the navigation.
-            {
-                let source = app_nav
-                    .get_webview(&content_label(nav_id))
-                    .and_then(|w| w.url().ok())
-                    .map(|s| s.to_string())
-                    .unwrap_or_default();
-                if crate::adblock_engine::should_block(u.as_str(), &source, "document") {
-                    if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
-                        eprintln!("[aegis-nav] BLOCK ad navigation: {} (from {source})", u.as_str());
-                    }
-                    // Auto-close a pop-under shell: a NON-active tab that never showed real
-                    // content and whose navigation is an ad is an opened-then-redirected-to-ad
-                    // pop-under — close the empty tab rather than leave it. The active tab and
-                    // any tab that already loaded a real page are never closed (just blocked).
-                    let has_content = tabs_with_content().lock().unwrap().contains(&nav_id);
-                    let active = app_nav
-                        .try_state::<crate::tabs::Tabs>()
-                        .map(|s| s.reg.lock().unwrap().active_id())
-                        .unwrap_or(0);
-                    if should_autoclose_popunder(nav_id, active, has_content) {
-                        let app_close = app_nav.clone();
-                        // Defer off the navigation callback to avoid re-entrancy.
-                        let _ = app_nav.run_on_main_thread(move || {
-                            crate::tabs::close_tab(&app_close, nav_id);
-                        });
-                    }
-                    return false;
-                }
-            }
-
-            // HTTPS-Only: upgrade http -> https (unless localhost, or the setting is
-            // off — the escape hatch for http-only sites). Re-navigate on the main
-            // thread AFTER this callback returns, to avoid re-entrancy.
-            if u.scheme() == "http"
-                && !is_local_host(u)
-                && crate::settings::https_only(&app_nav)
-            {
-                let https = u.as_str().replacen("http://", "https://", 1);
-                let app_main = app_nav.clone();
-                let lbl = content_label(nav_id);
-                let _ = app_nav.run_on_main_thread(move || {
-                    if let Ok(p) = Url::parse(&https) {
-                        crate::redirect_guard::expect(&app_main, nav_id, p.as_str());
-                        if let Some(w) = app_main.get_webview(&lbl) {
-                            let _ = w.navigate(p);
-                        }
-                    }
-                });
-                return false; // cancel the http navigation; https replaces it
-            }
-            true
-        })
+        // The policy logic lives in `decide_navigation` so every platform shares it. On Linux
+        // this Tauri hook is disconnected at spawn (wry claims `decide-policy` and would block
+        // our own gesture/frame-aware handler) and `linux_layout::install_nav_policy` runs the
+        // same `decide_navigation` from our own handler; this hook still drives Windows/macOS.
+        .on_navigation(move |u| decide_navigation(&app_nav, nav_id, u))
         .on_page_load(move |_webview, payload| {
             let event = payload.event();
             let loading = matches!(event, tauri::webview::PageLoadEvent::Started);
@@ -379,6 +373,10 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         crate::adblock_webkit::apply_to_new_tab(app, &label);
         // Count blocked subresources on this tab for the shield badge.
         crate::linux_layout::connect_block_counter(app, &label);
+        // Own the decide-policy signal: disconnect wry's handler and run our own (the shared
+        // nav policy + the gesture/frame-aware redirect guard). MUST run after the webview is
+        // built (wry connects its handler during build); with_webview here satisfies that.
+        crate::linux_layout::install_nav_policy(app, &label);
         // WebRTC native backstop: WebKitGTK's set_enable_webrtc is all-or-nothing, so it
         // only enforces "disable" (worker-tight); public-only/default rely on the injected
         // shim. Skipped for allowlisted ("trusted") hosts.

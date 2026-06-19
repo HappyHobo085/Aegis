@@ -19,6 +19,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
+import com.google.android.material.snackbar.Snackbar
 import java.io.ByteArrayInputStream
 import org.json.JSONObject
 
@@ -176,7 +177,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       if (current.isNotEmpty() &&
           NativeRedirectGuard.shouldBlock(current, raw, scripted, request.isForMainFrame)) {
         Log.i("AegisRedirect", "BLOCK $raw (from $current)")
-        pushRedirectBlocked(id, current, raw)
+        showRedirectBlocked(raw)
         return true
       }
 
@@ -465,16 +466,27 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
   }
 
-  /** Deliver a blocked-redirect notice to the chrome (React) UI. Mirrors pushNavState:
-   *  calls a global the Tauri client's redirect.onBlocked installs
-   *  (window.__aegisRedirectBlocked), so the chrome can raise its "Open anyway" toast. */
-  private fun pushRedirectBlocked(id: Int, from: String, to: String) {
-    val obj = JSONObject()
-      .put("viewId", id)
-      .put("from", from)
-      .put("to", to)
-    val js = "window.__aegisRedirectBlocked && window.__aegisRedirectBlocked($obj)"
-    chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
+  /** The mobile counterpart of the desktop RedirectBar: when the guard cancels a scripted
+   *  cross-origin top-frame redirect, show a native Snackbar over the content WebView (a
+   *  chrome-layer bar can't paint over the native WebView; a Snackbar floats above it).
+   *  "Open anyway" opens the destination in a new tab via the chrome's __aegisOpenTab. */
+  private fun showRedirectBlocked(to: String) {
+    val host = try {
+      Uri.parse(to).host ?: to
+    } catch (_: Throwable) {
+      to
+    }
+    runOnUiThread {
+      val root = findViewById<View>(android.R.id.content) ?: return@runOnUiThread
+      Snackbar.make(root, "Blocked a redirect to $host", 7000)
+        .setAction("Open anyway") {
+          chromeWebView?.evaluateJavascript(
+            "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(to)})",
+            null,
+          )
+        }
+        .show()
+    }
   }
 
   /** Exposed to the chrome webview's JS as `window.AegisAndroid`. Methods run on the

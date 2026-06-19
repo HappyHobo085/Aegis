@@ -1,10 +1,11 @@
 // src/App.tsx
 import { useEffect, useState } from 'react';
 import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
-import type { NavCrashed, NavFailed } from '../shared/types';
+import type { NavCrashed, NavFailed, RedirectBlocked } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
-import { subscribeConfirmOpen, toast, confirm } from './lib/toast';
+import { subscribeConfirmOpen, confirm } from './lib/toast';
+import { REDIRECT_BAR_H } from './lib/layout';
 import { useNav } from './hooks/useNav';
 import { useAdblock } from './hooks/useAdblock';
 import { useFavorites } from './hooks/useFavorites';
@@ -52,6 +53,7 @@ import { SyncSettingsTab } from './components/SyncSettingsTab';
 import { DataTab } from './components/DataTab';
 import { TabsTab } from './components/TabsTab';
 import { TabStrip } from './components/TabStrip';
+import { RedirectBar } from './components/RedirectBar';
 import { MobileApp } from './components/mobile/MobileApp';
 import { installAutopilotControl } from './autopilot/control';
 
@@ -104,6 +106,9 @@ function DesktopApp() {
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // A scripted cross-origin top-frame redirect the native guard cancelled; surfaced as a
+  // notification bar (a floating toast can't paint over the opaque content webview).
+  const [blockedRedirect, setBlockedRedirect] = useState<RedirectBlocked | null>(null);
   const update = useUpdate();
   const safety = useSafety();
 
@@ -135,7 +140,9 @@ function DesktopApp() {
   useEffect(() => subscribeConfirmOpen(setConfirmOpen), []);
 
   // Favorites bar is always-on (constant top inset); tab strip adds to the inset on desktop.
-  useContentInset(tabs.activeId, !isMobile);
+  // The redirect-blocked bar, when shown, adds its height so it sits in the visible chrome
+  // strip (content insets below it).
+  useContentInset(tabs.activeId, !isMobile, blockedRedirect ? REDIRECT_BAR_H : 0);
 
   // Full-window chrome overlays (settings, favorites manager, permission prompt,
   // error/crash, downloads, safety) must bring the chrome over the content. The
@@ -272,21 +279,14 @@ function DesktopApp() {
     };
   }, [tabs.activeId]);
 
-  // A scripted cross-origin top-frame redirect was cancelled by the native guard;
-  // surface a toast whose "Open anyway" reuses tabs.create to open the URL anyway.
+  // A scripted cross-origin top-frame redirect was cancelled by the native guard; surface a
+  // notification bar (RedirectBar) whose "Open anyway" reuses tabs.create. Only for the active
+  // tab; switching tabs clears any stale bar.
   useEffect(() => {
+    setBlockedRedirect(null);
     return aegis.redirect.onBlocked((r) => {
       if (r.viewId !== tabs.activeId) return;
-      let host = r.to;
-      try {
-        host = new URL(r.to).hostname;
-      } catch {
-        /* keep raw */
-      }
-      toast.info(`Blocked a redirect to ${host}`, {
-        durationMs: 6000,
-        action: { label: 'Open anyway', onClick: () => void tabs.create(r.to, false) },
-      });
+      setBlockedRedirect(r);
     });
   }, [tabs.activeId]);
 
@@ -416,6 +416,16 @@ function DesktopApp() {
         onOpenFavorite={(url) => void nav.navigate(url)}
         onOpenManager={() => setManagerOpen(true)}
       />
+      {blockedRedirect && (
+        <RedirectBar
+          redirect={blockedRedirect}
+          onOpenAnyway={() => {
+            void tabs.create(blockedRedirect.to, false);
+            setBlockedRedirect(null);
+          }}
+          onDismiss={() => setBlockedRedirect(null)}
+        />
+      )}
       <Sidebar
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}

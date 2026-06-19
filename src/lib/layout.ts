@@ -12,6 +12,13 @@ export const FAVBAR_H = 40;
 /** TABSTRIP_H — the top tab strip height (desktop only). */
 export const TABSTRIP_H = 36;
 export const SIDEBAR_W = 280;
+/**
+ * REDIRECT_BAR_H — the redirect-blocked notification bar height. When a scripted
+ * cross-origin top-frame redirect is cancelled, this bar shows below the favbar and is
+ * ADDED to the content inset so it sits in the chrome's always-visible strip (a floating
+ * toast can't paint over the opaque content webview). Desktop for now.
+ */
+export const REDIRECT_BAR_H = 40;
 
 /**
  * Mobile (Android) chrome heights in logical px. These MUST stay in sync with the

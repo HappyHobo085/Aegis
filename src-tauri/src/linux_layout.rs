@@ -102,6 +102,145 @@ pub fn connect_block_counter(app: &AppHandle, label: &str) {
     });
 }
 
+/// LINUX REDIRECT GUARD: own the content webview's `decide-policy` signal. wry connects its
+/// own decide-policy handler (powering Tauri's `on_navigation`) and claims the signal with
+/// `return true`, so a second handler never runs — we DISCONNECT it and install ours, which
+/// has full `NavigationAction` (gesture/type/redirect) + `ResponsePolicyDecision` (reliable
+/// main-frame via `is_main_frame_main_resource`) access. It runs the shared `decide_navigation`
+/// (the ad-block/malware/HTTPS/overlay policy that used to flow through `on_navigation`) for
+/// NavigationAction, and — at Response time, where the main-frame flag is reliable — cancels a
+/// scripted cross-origin top-frame redirect (the gesture comes from the matching NavigationAction,
+/// recorded by uri). For now (Phase 1) it logs the fields under AEGIS_NAV_DEBUG and does NOT
+/// block redirects; Phase 2 wires `redirect_guard`. Other policy types fall through (`false`) so
+/// WebKit's default handling (downloads/display, new windows) is unchanged.
+pub fn install_nav_policy(app: &AppHandle, label: &str) {
+    let Some(content) = app.get_webview(label) else {
+        return;
+    };
+    let Some(id) = label.strip_prefix("content:").and_then(|s| s.parse::<u32>().ok()) else {
+        return;
+    };
+    let app = app.clone();
+    let _ = content.with_webview(move |pw| {
+        use glib::translate::IntoGlib;
+        use glib::StaticType;
+        use webkit2gtk::{
+            NavigationPolicyDecisionExt, PolicyDecisionExt, ResponsePolicyDecisionExt,
+            URIRequestExt, URIResponseExt,
+        };
+        let webview = pw.inner();
+        // Disconnect wry's decide-policy handler so ours is the sole one (wry's returns `true`,
+        // which would short-circuit the signal before our later-connected handler runs).
+        unsafe {
+            let signal_id = glib::gobject_ffi::g_signal_lookup(
+                b"decide-policy\0".as_ptr() as *const _,
+                webkit2gtk::WebView::static_type().into_glib(),
+            );
+            if signal_id != 0 {
+                glib::gobject_ffi::g_signal_handlers_disconnect_matched(
+                    webview.as_ptr() as *mut glib::gobject_ffi::GObject,
+                    glib::gobject_ffi::G_SIGNAL_MATCH_ID,
+                    signal_id,
+                    0,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                );
+            }
+        }
+        let debug = std::env::var_os("AEGIS_NAV_DEBUG").is_some();
+        webview.connect_decide_policy(move |wv, decision, dtype| {
+            match dtype {
+                webkit2gtk::PolicyDecisionType::NavigationAction => {
+                    if let Some(nav) =
+                        decision.dynamic_cast_ref::<webkit2gtk::NavigationPolicyDecision>()
+                    {
+                        if let Some(mut action) = nav.navigation_action() {
+                            let target = action
+                                .request()
+                                .and_then(|r| r.uri())
+                                .map(|s| s.to_string())
+                                .unwrap_or_default();
+                            // Scripted = navigation type Other with no transient user activation
+                            // (a real click/form/back-forward/reload carries a gesture or a
+                            // non-Other type). is_redirect marks a hop continuing an in-flight nav.
+                            let scripted = action.navigation_type()
+                                == webkit2gtk::NavigationType::Other
+                                && !action.is_user_gesture();
+                            let is_redirect = action.is_redirect();
+                            if debug {
+                                eprintln!(
+                                    "[aegis-navpol] NAV scripted={scripted} type={:?} redirect={is_redirect} target={target}",
+                                    action.navigation_type(),
+                                );
+                            }
+                            // Shared policy (ad-block/malware/HTTPS/overlay) — same logic the
+                            // other platforms run via Tauri's on_navigation.
+                            if let Ok(u) = tauri::Url::parse(&target) {
+                                if !crate::nav::decide_navigation(&app, id, &u) {
+                                    decision.ignore();
+                                    return true; // cancel
+                                }
+                            }
+                            // Record for the Response phase (where the main-frame flag is
+                            // reliable), so the redirect guard can cancel a scripted cross-origin
+                            // TOP-frame redirect WITHOUT touching cross-origin SUBframe navs
+                            // (embedded players). `current` = the page we're leaving.
+                            let current = wv.uri().map(|s| s.to_string()).unwrap_or_default();
+                            crate::redirect_guard::record_action(
+                                &app,
+                                id,
+                                &target,
+                                crate::redirect_guard::NavInfo { scripted, is_redirect, current },
+                            );
+                        }
+                    }
+                    // Allow — EXPLICITLY (mirror wry: `use_()` + claim the signal). Relying on
+                    // WebKit's default policy instead stalled some navigations (e.g. Cloudflare
+                    // challenge sub-navigations whose type doesn't default to "use").
+                    decision.use_();
+                    true
+                }
+                webkit2gtk::PolicyDecisionType::Response => {
+                    if let Some(resp) =
+                        decision.dynamic_cast_ref::<webkit2gtk::ResponsePolicyDecision>()
+                    {
+                        // Only a DISPLAYABLE main-frame main-resource is a real top-frame page
+                        // navigation. Skip subframes (embeds) and downloads (non-displayable mime)
+                        // so their default WebKit handling is untouched.
+                        if resp.is_main_frame_main_resource() && resp.is_mime_type_supported() {
+                            let url = resp
+                                .response()
+                                .and_then(|r| r.uri())
+                                .map(|s| s.to_string())
+                                .unwrap_or_default();
+                            if let Some(info) = crate::redirect_guard::take_action(&app, id, &url) {
+                                if crate::redirect_guard::decide_for(
+                                    &app,
+                                    id,
+                                    &info.current,
+                                    &url,
+                                    info.scripted,
+                                    true, // reliable main-frame
+                                    info.is_redirect,
+                                ) {
+                                    decision.ignore();
+                                    crate::redirect_guard::on_blocked(&app, id, &info.current, &url);
+                                    return true; // cancel the scripted cross-origin top-frame redirect
+                                }
+                            }
+                            // Top-frame load resolved → drop this tab's stale recorded actions.
+                            crate::redirect_guard::clear_tab_actions(&app, id);
+                        }
+                    }
+                    false // default: display / download / subframe untouched
+                }
+                _ => false,
+            }
+        });
+    });
+}
+
 /// Leave fullscreen: clear the flag, re-inset the content, and notify the chrome.
 /// Shared by the Esc key handler and the native floating exit button.
 fn exit_fullscreen(app: &AppHandle) {

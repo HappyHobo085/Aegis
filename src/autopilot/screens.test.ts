@@ -12,7 +12,7 @@ describe('SCREENS', () => {
     for (const id of [
       'sidebar:history', 'sidebar:saved', 'downloads', 'favoritesManager',
       'shieldPopover', 'fullscreen', 'errorOverlay', 'crashOverlay',
-      'safetyInterstitial', 'permissionPrompt', 'confirmDialog', 'home',
+      'safetyInterstitial', 'permissionPrompt', 'redirectBar', 'confirmDialog', 'home',
     ]) expect(ids.has(id)).toBe(true);
   });
   it('has unique ids', () => {

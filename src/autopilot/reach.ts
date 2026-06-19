@@ -29,6 +29,7 @@ const SETTINGS_TAB_LABEL: Record<string, string> = {
 //   NavCrashed   → { viewId, reason }
 //   PermissionPrompt → { requestId: number, origin, permission }
 //   SafetyInterstitialPayload → { url, reason: 'https-failed' | 'malware' }
+//   RedirectBlocked → { viewId, from, to }
 const EVENT_PAYLOAD: Partial<Record<ScreenId, { channel: string; payload: unknown }>> = {
   errorOverlay: {
     channel: IPC.evtNavFailed,
@@ -45,6 +46,10 @@ const EVENT_PAYLOAD: Partial<Record<ScreenId, { channel: string; payload: unknow
   safetyInterstitial: {
     channel: IPC.evtSafetyInterstitial,
     payload: { url: 'https://malware.test/', reason: 'malware' as const },
+  },
+  redirectBar: {
+    channel: IPC.evtRedirectBlocked,
+    payload: { viewId: V, from: 'https://publisher.test/', to: 'https://malvertising.test/landing' },
   },
 };
 
@@ -97,6 +102,10 @@ export async function leaveScreen(control: AutopilotControl, screen: ScreenSpec,
   // clears it). Otherwise they linger as a full overlay and cancel later content nav.
   else if (screen.id === 'safetyInterstitial') await deps?.emitEvent(IPC.evtSafetyInterstitial, null);
   else if (screen.id === 'permissionPrompt') await deps?.emitEvent(IPC.evtPermissionsPrompt, null);
+  // The redirect bar is an infobar (it can't take a null event — its handler reads
+  // r.viewId), so dismiss it the way a user does: click its X. (Harmless if it lingers —
+  // it shrinks the content inset, it doesn't cover the page like a full overlay.)
+  else if (screen.id === 'redirectBar') (document.querySelector('.redirect-bar__dismiss') as HTMLElement | null)?.click();
   await tick();
 }
 

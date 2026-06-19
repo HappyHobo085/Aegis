@@ -11,9 +11,13 @@ import { TOOLBAR_H, FAVBAR_H, TABSTRIP_H } from '../lib/layout';
  * content — they drive a native z-order swap via `view.setChromeOverlay`, which
  * App owns (see the chrome-overlay union effect in App.tsx).
  */
-export function useContentInset(viewId: ViewId, showTabStrip: boolean): void {
+export function useContentInset(
+  viewId: ViewId,
+  showTabStrip: boolean,
+  extraTop = 0,
+): void {
   useEffect(() => {
-    const top = TOOLBAR_H + FAVBAR_H + (showTabStrip ? TABSTRIP_H : 0);
+    const top = TOOLBAR_H + FAVBAR_H + (showTabStrip ? TABSTRIP_H : 0) + extraTop;
     void aegis.view.setContentInset(viewId, { top, left: 0 });
-  }, [viewId, showTabStrip]);
+  }, [viewId, showTabStrip, extraTop]);
 }
