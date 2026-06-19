@@ -887,49 +887,76 @@ export const INTERACTIONS: InteractionSpec[] = [
     } satisfies InteractionSpec;
   })(),
 
-  {
-    id: 'sidebar.history.openEntry',
-    domain: 'sidebar.history',
-    description: 'Click a history row → nav.navigate called with the entry url',
-    screen: 'sidebar:history',
-    layers: ['vitest', 'live'],
-    run: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        // Seed the history panel with one entry so there is a row to click.
-        const SEEDED: HistoryEntry[] = [
-          { id: 1, url: 'https://history-test.test/', title: 'History Test', visitedAt: Date.now() },
-        ];
-        await ctx.emitHistory?.(SEEDED);
-      } else {
-        // Live: navigate to a page first to create a history entry, then reopen the sidebar.
-        await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
-        await new Promise((r) => setTimeout(r, 1500));
-        // Re-reach the sidebar:history screen (nav may have closed it).
-        await ctx.reach('sidebar:history');
-        await new Promise((r) => setTimeout(r, 300));
-      }
-      // Click the first "Open <url>" button scoped to the history panel.
-      // Use a CSS selector to avoid matching "Open settings" and other toolbar buttons.
-      const openBtn = ctx.bySelector('.history-panel__open');
-      if (!openBtn) throw new Error('No history entry open-button found (panel may be empty)');
-      await ctx.click(openBtn);
-    },
-    assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('nav.navigate'))
-          throw new Error('nav.navigate not called after clicking history row');
-        return 'history row → nav.navigate()';
-      }
-      // Live: url should have changed within 8 s.
-      const deadline = Date.now() + 8000;
-      while (Date.now() < deadline) {
-        const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-        if (url !== 'about:blank') return `history row → nav navigated to ${url}`;
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      throw new Error('live: url did not change after clicking history entry');
-    },
-  },
+  (() => {
+    // Capture url before clicking the history row so the live assert can verify the
+    // url CHANGED away from _urlBeforeClick to the entry's destination — not merely
+    // that it is non-blank (which it already was before the click).
+    let _urlBeforeClick: string | undefined;
+    // The destination url of the history entry we seed/click (live only; vitest
+    // asserts via CallLog so we don't need to track it there).
+    const SEED_URL = 'https://example.org/';
+    return {
+      id: 'sidebar.history.openEntry',
+      domain: 'sidebar.history',
+      description: 'Click a history row → nav.navigate called with the entry url',
+      screen: 'sidebar:history',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          // Seed the history panel with one entry so there is a row to click.
+          const SEEDED: HistoryEntry[] = [
+            { id: 1, url: 'https://history-test.test/', title: 'History Test', visitedAt: Date.now() },
+          ];
+          await ctx.emitHistory?.(SEEDED);
+        } else {
+          // Live: navigate to a DIFFERENT page first (not SEED_URL) to create a
+          // history entry for SEED_URL, so the click produces an observable url change.
+          // Navigate to example.com first (the seed entry destination will be example.org).
+          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
+          await new Promise((r) => setTimeout(r, 1500));
+          // Now navigate to the entry's destination so history contains it, then go
+          // back to example.com so clicking the history row produces a real url change.
+          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, SEED_URL);
+          await new Promise((r) => setTimeout(r, 1500));
+          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
+          await new Promise((r) => setTimeout(r, 1500));
+          // Re-reach the sidebar:history screen (nav may have closed it).
+          await ctx.reach('sidebar:history');
+          await new Promise((r) => setTimeout(r, 300));
+          // Snapshot the current url BEFORE clicking the history row.
+          _urlBeforeClick = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        }
+        // Click the first "Open <url>" button scoped to the history panel.
+        // Use a CSS selector to avoid matching "Open settings" and other toolbar buttons.
+        const openBtn = ctx.bySelector('.history-panel__open');
+        if (!openBtn) throw new Error('No history entry open-button found (panel may be empty)');
+        await ctx.click(openBtn);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('nav.navigate'))
+            throw new Error('nav.navigate not called after clicking history row');
+          return 'history row → nav.navigate()';
+        }
+        // Live: poll until the url changes away from _urlBeforeClick AND matches
+        // the history entry's destination (SEED_URL).  A url that never changes
+        // (or changes to a different page) is a test failure.
+        if (_urlBeforeClick === undefined)
+          throw new Error('live: _urlBeforeClick was never captured (run() may not have executed)');
+        const deadline = Date.now() + 8000;
+        while (Date.now() < deadline) {
+          const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+          if (url !== _urlBeforeClick && url.includes('example.org'))
+            return `history row → nav navigated from ${_urlBeforeClick} to ${url}`;
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        const finalUrl = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        throw new Error(
+          `live: url did not change to ${SEED_URL} after clicking history entry (was ${_urlBeforeClick}, now ${finalUrl})`,
+        );
+      },
+    } satisfies InteractionSpec;
+  })(),
 
   (() => {
     // Capture history length BEFORE deletion so assert can verify it shrank by 1.

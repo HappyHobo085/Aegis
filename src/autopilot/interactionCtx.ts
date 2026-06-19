@@ -138,6 +138,10 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       await act(async () => {
         publishSyncChange('favorites', []);
         // Give the async .list().then(setFavorites) chain time to resolve.
+        // NOTE: this relies on REAL timers (setTimeout(r, 0) must actually fire).
+        // If the test suite ever adopts vi.useFakeTimers(), this await will hang
+        // until fake time is advanced — revisit and replace with vi.runAllTimers()
+        // or a flushSync alternative before enabling fake timers globally.
         await new Promise((r) => setTimeout(r, 0));
       });
     },
