@@ -10,6 +10,8 @@ export function useDownloads(): {
   openFile(id: number): Promise<void>;
   showInFolder(id: number): Promise<void>;
   cancel(id: number): Promise<void>;
+  /** Directly set entries (autopilot dev-only seeding; bypasses async refresh). */
+  _setDownloads(entries: DownloadEntry[]): void;
 } {
   const [downloads, setDownloads] = useState<DownloadEntry[]>([]);
 
@@ -64,5 +66,5 @@ export function useDownloads(): {
     [refresh],
   );
 
-  return { downloads, remove, clear, openFile, showInFolder, cancel };
+  return { downloads, remove, clear, openFile, showInFolder, cancel, _setDownloads: setDownloads };
 }

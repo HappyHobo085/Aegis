@@ -12,9 +12,11 @@ function safeHost(url: string): string {
 export function SafetyInterstitial({
   interstitial,
   onProceed,
+  onBack,
 }: {
   interstitial: SafetyInterstitialPayload | null;
   onProceed: (url: string) => void;
+  onBack?: () => void;
 }) {
   if (interstitial === null) return null;
   const host = safeHost(interstitial.url);
@@ -45,6 +47,16 @@ export function SafetyInterstitial({
           )}
         </p>
         <div className="interstitial__actions">
+          {onBack && (
+            <button
+              type="button"
+              className="interstitial__back"
+              aria-label="Go back"
+              onClick={onBack}
+            >
+              Go back
+            </button>
+          )}
           <button
             type="button"
             className="interstitial__continue"

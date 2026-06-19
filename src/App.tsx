@@ -132,6 +132,7 @@ function DesktopApp() {
       showCrash: (c) => { setFailed(null); setCrashed(c as NavCrashed); },
       clearCrash: () => setCrashed(null),
       openConfirm: (message) => { void confirm(message); },
+      setDownloadEntries: (entries) => downloads._setDownloads(entries),
       setHistoryEntries: (entries) => history._setEntries(entries),
       setSavedItems: (items, tagUnion) => saved._setSavedItems(items, tagUnion),
       setSitePermissions: (perms) => permissions._setPermissions(perms),
@@ -470,6 +471,7 @@ function DesktopApp() {
       <SafetyInterstitial
         interstitial={safety.interstitial}
         onProceed={(u) => void safety.proceed(u)}
+        onBack={() => nav.back()}
       />
       {downloadsOpen && (
         <DownloadsModal

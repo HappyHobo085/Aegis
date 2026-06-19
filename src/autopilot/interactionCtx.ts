@@ -2,7 +2,7 @@
 import { within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { flushSync } from 'react-dom';
-import type { AegisApi, NavState, TabsState, TabShortcut, Favorite, HistoryEntry, SavedItem, SitePermission } from '../../shared/types';
+import type { AegisApi, NavState, TabsState, TabShortcut, Favorite, HistoryEntry, SavedItem, SitePermission, NavFailed, NavCrashed, SafetyInterstitialPayload, PermissionPrompt, RedirectBlocked } from '../../shared/types';
 import type { CallLog, InteractionCtx } from './interactions';
 import type { ScreenId } from './screens';
 import { getAutopilotControl } from './control';
@@ -76,6 +76,46 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
     aegis.tabs
       ? (aegis.tabs.onShortcut as unknown as TabsShortcutMockFn).mock?.calls?.[0]?.[0]
       : undefined;
+
+  // Capture the nav.onFailed / nav.onCrashed callbacks (registered by App's useEffect) so
+  // the errorOverlay / crashOverlay interactions can render those overlays synchronously.
+  type NavFailedMockFn = { mock?: { calls: ((f: NavFailed) => void)[][] } };
+  type NavCrashedMockFn = { mock?: { calls: ((c: NavCrashed) => void)[][] } };
+  const navFailedCallback: ((f: NavFailed) => void) | undefined =
+    aegis.nav
+      ? (aegis.nav.onFailed as unknown as NavFailedMockFn).mock?.calls?.[0]?.[0]
+      : undefined;
+  const navCrashedCallback: ((c: NavCrashed) => void) | undefined =
+    aegis.nav
+      ? (aegis.nav.onCrashed as unknown as NavCrashedMockFn).mock?.calls?.[0]?.[0]
+      : undefined;
+
+  // Capture the safety.onInterstitial callback (registered by useSafety) so
+  // the safetyInterstitial interaction can render the interstitial overlay.
+  type SafetyInterstitialMockFn = { mock?: { calls: ((p: SafetyInterstitialPayload | null) => void)[][] } };
+  const safetyInterstitialCallback: ((p: SafetyInterstitialPayload | null) => void) | undefined =
+    aegis.safety
+      ? (aegis.safety.onInterstitial as unknown as SafetyInterstitialMockFn).mock?.calls?.[0]?.[0]
+      : undefined;
+
+  // Capture the permissions.onPrompt callback (registered by usePermissions) so
+  // the permissionPrompt interaction can render the permission dialog.
+  type PermissionPromptMockFn = { mock?: { calls: ((p: PermissionPrompt | null) => void)[][] } };
+  const permissionPromptCallback: ((p: PermissionPrompt | null) => void) | undefined =
+    aegis.permissions
+      ? (aegis.permissions.onPrompt as unknown as PermissionPromptMockFn).mock?.calls?.[0]?.[0]
+      : undefined;
+
+  // Capture the redirect.onBlocked callback (registered by App's useEffect) so
+  // the redirectBar interaction can render the redirect bar.
+  type RedirectBlockedMockFn = { mock?: { calls: ((r: RedirectBlocked) => void)[][] } };
+  const redirectBlockedCallback: ((r: RedirectBlocked) => void) | undefined =
+    aegis.redirect
+      ? (aegis.redirect.onBlocked as unknown as RedirectBlockedMockFn).mock?.calls?.[0]?.[0]
+      : undefined;
+
+  // (downloads.onChanged callback is NOT captured here — useDownloads._setDownloads is
+  // used instead via the control-surface seam, which is synchronous via flushSync.)
 
   return {
     layer: 'vitest',
@@ -169,6 +209,45 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       // Same pattern as emitSitePermissions / emitHistory / emitSaved.
       const control = getAutopilotControl();
       if (control) flushSync(() => control.setAllowlistedHosts(hosts));
+      return Promise.resolve();
+    },
+    emitDownloadsChanged: (entries: import('../../shared/types').DownloadEntry[]) => {
+      // Seed the DownloadsPanel by calling setDownloadEntries on the autopilot control,
+      // which directly calls useDownloads' _setDownloads React state setter (same seam
+      // as setHistoryEntries / emitHistory).  Uses flushSync so the DOM updates
+      // synchronously before the next gesture fires — exactly as emitHistory does.
+      const control = getAutopilotControl();
+      if (control) flushSync(() => control.setDownloadEntries(entries));
+      return Promise.resolve();
+    },
+    emitNavFailed: (f: NavFailed) => {
+      // Invoke the onFailed callback that App's useEffect registered so the error
+      // overlay renders synchronously — identical to the real core emitting nav.failed.
+      if (navFailedCallback) flushSync(() => navFailedCallback(f));
+      return Promise.resolve();
+    },
+    emitNavCrashed: (c: NavCrashed) => {
+      // Invoke the onCrashed callback that App's useEffect registered so the crash
+      // overlay renders synchronously — identical to the real core emitting nav.crashed.
+      if (navCrashedCallback) flushSync(() => navCrashedCallback(c));
+      return Promise.resolve();
+    },
+    emitSafetyInterstitial: (p: SafetyInterstitialPayload | null) => {
+      // Invoke the onInterstitial callback that useSafety registered so the
+      // SafetyInterstitial renders (or clears when p is null).
+      if (safetyInterstitialCallback) flushSync(() => safetyInterstitialCallback(p));
+      return Promise.resolve();
+    },
+    emitPermissionPrompt: (p: PermissionPrompt | null) => {
+      // Invoke the onPrompt callback that usePermissions registered so the
+      // PermissionPromptDialog renders (or clears when p is null).
+      if (permissionPromptCallback) flushSync(() => permissionPromptCallback(p as PermissionPrompt));
+      return Promise.resolve();
+    },
+    emitRedirectBlocked: (r: RedirectBlocked) => {
+      // Invoke the onBlocked callback that App's useEffect registered so the
+      // RedirectBar renders synchronously.
+      if (redirectBlockedCallback) flushSync(() => redirectBlockedCallback(r));
       return Promise.resolve();
     },
   };

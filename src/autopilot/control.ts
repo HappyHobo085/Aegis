@@ -1,4 +1,4 @@
-import type { HistoryEntry, SavedItem, SitePermission } from '../../shared/types';
+import type { DownloadEntry, HistoryEntry, SavedItem, SitePermission } from '../../shared/types';
 
 // The dev-only imperative surface DesktopApp registers so the autopilot can reach
 // each overlay/state without selector brittleness. Calls the SAME setState handlers
@@ -19,6 +19,8 @@ export interface AutopilotControl {
   showCrash(c: unknown): void;
   clearCrash(): void;
   openConfirm(message: string): void;
+  /** Directly set the download entries (bypasses async refresh; autopilot vitest seeding only). */
+  setDownloadEntries(entries: DownloadEntry[]): void;
   /** Directly set the history entries (bypasses async refresh; autopilot vitest seeding only). */
   setHistoryEntries(entries: HistoryEntry[]): void;
   /** Directly set saved items + tagUnion (bypasses async refresh; autopilot vitest seeding only). */
