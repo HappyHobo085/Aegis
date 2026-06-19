@@ -35,7 +35,7 @@ export function renderReportHtml(report: Report): string {
     .map((r) => {
       const shot = r.screenshot ? `<img src="shots/${esc(r.screenshot)}" loading="lazy" width="320">` : '';
       const detail = r.detail ? `<div class="detail">${esc(r.detail)}</div>` : '';
-      return `<tr class="${r.status}"><td>${esc(r.status)}</td><td>${esc(r.kind)}</td><td>${esc(r.title)}${detail}</td><td>${shot}</td></tr>`;
+      return `<tr class="${esc(r.status)}"><td>${esc(r.status)}</td><td>${esc(r.kind)}</td><td>${esc(r.title)}${detail}</td><td>${shot}</td></tr>`;
     })
     .join('\n');
   return `<!doctype html><meta charset="utf-8"><title>Aegis autopilot report</title>
