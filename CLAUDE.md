@@ -91,6 +91,20 @@ only in dev (`VITE_AEGIS_AUTOPILOT`) and is dead-code-eliminated from production
   feature — a new IPC channel, a Settings tab, or a full-window overlay — add its catalog/
   screen entry **in the same commit**. The drift-guard test (`src/autopilot/coverage.test.ts`)
   fails the build if a command channel has no catalog entry, so this isn't optional.
+- **Always update the autopilot tests BEFORE pushing to `main` (required).** These tests
+  exist to catch any bug a real user might hit, so they must **exhaustively cover
+  everything a user can do**. Before any `git push` to `main`, bring the autopilot up to
+  cover every user-facing change in the push — and verify it:
+  - **New command channel** → catalog entry (`channels` + `exercise`) and, if it mutates
+    user data, a `verify(api)` round-trip (action → assert effect → restore).
+  - **New UI screen / overlay / infobar** → a `screens.ts` entry (+ `reach.ts` wiring).
+  - **New interactive control or user action** → an interaction test that drives the real
+    UI the way a user does (click/type/keyboard) and asserts the effect — in the vitest
+    interaction tour (continuous) and, for Linux-runtime behavior, the live autopilot.
+  - **Gate:** `npm test` green, and run `bash scripts/autopilot/run-autopilot.sh` (Linux)
+    for any change that touches runtime behavior — `RESULT: … 0 failed` and `ad-block
+    blocking (trace): PASS`. A push that adds a capability without its autopilot coverage
+    is incomplete.
 
 ## Status (as of the Tauri migration branch)
 
