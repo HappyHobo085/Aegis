@@ -32,7 +32,7 @@ const SETTINGS_TAB_LABEL: Record<string, string> = {
 const EVENT_PAYLOAD: Partial<Record<ScreenId, { channel: string; payload: unknown }>> = {
   errorOverlay: {
     channel: IPC.evtNavFailed,
-    payload: { viewId: V, url: 'https://invalid.invalid/', errorCode: -105, errorDescription: 'NAME_NOT_RESOLVED', validatedURL: 'https://invalid.invalid/', kind: 'load' as const },
+    payload: { viewId: V, errorCode: -105, errorDescription: 'NAME_NOT_RESOLVED', validatedURL: 'https://invalid.invalid/', kind: 'load' as const },
   },
   crashOverlay: {
     channel: IPC.evtNavCrashed,
@@ -91,6 +91,7 @@ export async function leaveScreen(control: AutopilotControl, screen: ScreenSpec)
   else if (screen.id === 'sidebar:history' || screen.id === 'sidebar:saved') control.setSidebar(false);
   else if (screen.id === 'errorOverlay') control.clearError();
   else if (screen.id === 'crashOverlay') control.clearCrash();
+  else if (screen.id === 'confirmDialog') clickTabByLabel('Cancel');
   await tick();
 }
 
