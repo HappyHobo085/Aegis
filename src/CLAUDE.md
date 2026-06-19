@@ -169,6 +169,54 @@ Vite dead-code-eliminates it on `build:renderer`.
 - **`report.ts`** — `Report` / `StepResult` types, `summarize`, `renderReportHtml`.
   Produces the JSON report and the standalone HTML screenshot gallery.
 
+### Interaction catalog (`interactions.ts` + `interactionCtx.ts`)
+
+A third catalog — complementing `catalog.ts` (IPC) and `screens.ts` (UI states) — that
+focuses on **user interaction gestures**: what a user taps or types to trigger a feature,
+and what the resulting DOM / call state should be.
+
+- **`interactions.ts`** — `INTERACTIONS: InteractionSpec[]` + `INTERACTIVE_CONTROLS`.
+  Each `InteractionSpec` has:
+  - `id` — unique dot-namespaced string (e.g. `toolbar.addressBar.navigate`,
+    `mobile.bottomBar.saved`)
+  - `domain` — grouping key (e.g. `toolbar`, `mobile.bottomBar`)
+  - `description` — human-readable label
+  - `screen: ScreenId` — the desktop screen the spec starts from
+  - `layers: InteractionLayer[]` — `'vitest'` | `'live'` | both. All mobile-only
+    specs are `['vitest']` since the live harness drives only the desktop shell.
+  - `mobile?: boolean` — `true` means the spec can (or must) run in the mobile
+    shell. Cross-platform specs (e.g. address-bar, reload) carry `mobile: true` and
+    appear in both tours. Mobile-only specs (domain `mobile.*`) carry `mobile: true`
+    and are EXCLUDED from the desktop tour.
+  - `run(ctx)` — async gesture: fires the interaction (click, type, etc.)
+  - `assert(ctx)` — async assertion: returns a truthy string on success, throws on failure
+  `INTERACTIVE_CONTROLS` is the canonical string array of every interactive control id.
+  The drift-guard test asserts every entry has at least one `InteractionSpec`.
+  **Add a new control to `INTERACTIVE_CONTROLS` in the same commit as its spec.**
+
+- **`interactionCtx.ts`** — `InteractionCtx` interface + `makeVitestCtx(container,
+  aegis, reachFn)`. Provides:
+  - `byRole(role, name)` — `container.querySelector([role="…"][aria-label~="…"])` helper
+  - `click(el)` — `userEvent.click(el)` wrapped in `act()`
+  - `reach(screen)` — calls `reachFn` (desktop: `reachScreen`; mobile: no-op)
+  - `calls` — `CallLog` facade over the mocked `aegis` (checked via `.called(channel)`,
+    reset via `.reset()`)
+  - `emitNavState(state)` — fires `flushSync(() => navStateCallback(state))`; the
+    callback is captured from `aegis.nav.onState.mock.calls[0][0]` at creation time
+  - `emitTabsState(state)` — same pattern via `aegis.tabs.onState.mock.calls[0][0]`
+
+  **React 18 Strict Mode + async-mock ordering gotcha** (discovered during Task 10):
+  `useNav` calls `aegis.nav.getState(viewId).then(setState)` on mount. Under Strict
+  Mode this fires twice. The second async `getState().then()` resolves in the microtask
+  queue AFTER the `useEffect` from the second mount runs, which means calling
+  `emitNavState` alone may be immediately overwritten by the pending `getState()`
+  promise. The safe pattern for state-seeding in mobile interaction specs is:
+  - For tab-count state: call `emitNavState` FIRST (flushes pending microtasks), then
+    `emitTabsState` in the same async `act()` body.
+  - For nav-property state (canGoBack/canGoForward): open the interactive sheet FIRST
+    (so it is already mounted), THEN call `emitNavState` to re-render with the new state.
+  This ordering is enforced in all mobile specs that need non-default state.
+
 ### Tests in this folder
 
 - **`tour.test.tsx`** — exhaustive vitest desktop tour. Renders the real `<App/>`
@@ -176,8 +224,24 @@ Vite dead-code-eliminates it on `build:renderer`.
   no crash), and exercises every CATALOG entry. `runAutopilot()`'s end-to-end
   orchestration (reach → screenshot → leave) is covered by `run.test.ts`.
 - **`tour.mobile.test.tsx`** — same tour for the mobile shell (`MobileApp`).
-- **`coverage.test.ts`** — **drift guard**. Asserts every `IPC.*` channel exported from
-  `shared/types.ts` appears in `CATALOG[*].channels` (failing the build when a new
+- **`interactions.test.tsx`** — **desktop interaction tour**. Renders `<App/>` (desktop
+  shell), reaches each spec's declared screen via `reachScreen()`, runs `spec.run()`, and
+  asserts via `spec.assert()`. Filters `INTERACTIONS` to vitest-layer specs whose domain
+  does NOT start with `mobile.` (mobile-only specs are excluded; cross-platform specs
+  with `mobile: true` on a non-mobile domain ARE included).
+- **`interactions.mobile.test.tsx`** — **mobile interaction tour**. Sets `.aegis-mobile`
+  on `<html>` BEFORE importing `App` so `isMobile=true` and `MobileApp` renders. Runs
+  every spec where `mobile === true && layers.includes('vitest')`. No `reachScreen` call
+  is needed; every mobile spec reaches its sheet via DOM clicks in its `run()` body
+  (MobileApp has no `AutopilotControl` surface).
+- **`interactions.coverage.test.ts`** — **interaction drift guard** (3 assertions):
+  1. All spec ids in `INTERACTIONS` are unique.
+  2. Every spec has a valid `screen` (from `SCREENS`) and at least one `layer`.
+  3. Every string in `INTERACTIVE_CONTROLS` has at least one `InteractionSpec` whose
+     `id` starts with that control string.
+  Fails the build when you add a control to `INTERACTIVE_CONTROLS` without a spec.
+- **`coverage.test.ts`** — **IPC drift guard**. Asserts every `IPC.*` channel exported
+  from `shared/types.ts` appears in `CATALOG[*].channels` (failing the build when a new
   feature is added without a catalog entry). Also asserts every `UNTESTED_CHANNELS`
   member appears in some catalog entry's `channels`.
 - **`control.test.ts`**, **`reach.test.ts`**, **`devEmit.test.ts`**,

@@ -95,3 +95,16 @@ Expected output: `RESULT: N passed, 0 failed, M skipped`, then
 `ad-block blocking (trace): PASS — N ad subresource(s) loaded with ad-block OFF, 0 with
 ad-block ON`, and the gallery path. If `$DISPLAY`/`$WAYLAND_DISPLAY` is unset, screenshots
 are skipped and the functional tour still runs (IPC + ad-block steps only).
+
+### Live run step order (from `src/autopilot/run.ts`)
+
+1. **Screen tour** — every `SCREENS` entry is reached, screenshotted, and torn down.
+2. **Catalog verification** — every `CATALOG` entry's `exercise(api)` runs. If `live=true`,
+   `verify(api)` also runs for entries that declare it (functional round-trips on the
+   disposable profile).
+3. **Interaction specs** — every `INTERACTIONS` spec with `layers.includes('live')` runs
+   via `makeLiveCtx`. Results appear in the report as `interaction:<spec.id>` rows.
+   All mobile-only specs (`domain: 'mobile.*'`) are `['vitest']` only and are NOT
+   included in the live run (the live harness drives only the desktop shell).
+4. **Ad-block induction** — A/B navigation of the fixture page (ad-block OFF then ON)
+   to verify blocking at the network layer.
