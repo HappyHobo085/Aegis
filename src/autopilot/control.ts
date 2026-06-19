@@ -1,4 +1,4 @@
-import type { HistoryEntry, SavedItem } from '../../shared/types';
+import type { HistoryEntry, SavedItem, SitePermission } from '../../shared/types';
 
 // The dev-only imperative surface DesktopApp registers so the autopilot can reach
 // each overlay/state without selector brittleness. Calls the SAME setState handlers
@@ -23,6 +23,10 @@ export interface AutopilotControl {
   setHistoryEntries(entries: HistoryEntry[]): void;
   /** Directly set saved items + tagUnion (bypasses async refresh; autopilot vitest seeding only). */
   setSavedItems(items: SavedItem[], tagUnion: string[]): void;
+  /** Directly set the remembered site-permissions list (bypasses async refresh; autopilot vitest seeding only). */
+  setSitePermissions(permissions: SitePermission[]): void;
+  /** Directly set the allowlisted hosts in the adblock state (bypasses async refresh; autopilot vitest seeding only). */
+  setAllowlistedHosts(hosts: string[]): void;
 }
 
 const KEY = '__aegisAutopilot';

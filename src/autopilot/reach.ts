@@ -76,8 +76,11 @@ export async function reachScreen(control: AutopilotControl, screen: ScreenSpec,
       clickTabByLabel(screen.id === 'sidebar:history' ? 'History' : 'Saved');
       break;
     case 'settingsTab': {
-      control.openSettings();
-      await tick();
+      // Use flushSync for openSettings (same pattern as sidebarTab's setSidebar) so the
+      // modal DOM is committed synchronously before clickTabByLabel tries to query tab
+      // buttons.  Without flushSync, React 18 defers the setSettingsOpen(true) batch
+      // update and the subsequent clickTabByLabel finds no tab buttons in the DOM.
+      flushSync(() => control.openSettings());
       const tab = screen.id.slice('settings:'.length);
       clickTabByLabel(SETTINGS_TAB_LABEL[tab] ?? tab);
       break;

@@ -9,6 +9,8 @@ function fake(): AutopilotControl {
     showCrash: vi.fn(), clearCrash: vi.fn(), openConfirm: vi.fn(),
     setHistoryEntries: vi.fn(),
     setSavedItems: vi.fn(),
+    setSitePermissions: vi.fn(),
+    setAllowlistedHosts: vi.fn(),
   };
 }
 

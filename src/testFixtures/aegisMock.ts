@@ -79,22 +79,25 @@ export function aegisMockModule() {
         onBlocked: vi.fn().mockReturnValue(() => {}),
       },
       lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
-      sync: {
-        getState: vi.fn().mockResolvedValue({
-          enabled: false, status: 'disabled', serverUrl: '', lastSyncMs: 0,
-          lastError: '', deviceId: '', accountId: '', vaultBacking: 'none',
-        }),
-        enableNew: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
-        enableFromPhrase: vi.fn().mockResolvedValue({}),
-        disable: vi.fn().mockResolvedValue({}),
-        syncNow: vi.fn().mockResolvedValue({}),
-        testConnection: vi.fn().mockResolvedValue({ ok: true, latencyMs: 5 }),
-        getRecoveryPhrase: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
-        listDevices: vi.fn().mockResolvedValue([]),
-        removeDevice: vi.fn().mockResolvedValue([]),
-        onState: vi.fn().mockReturnValue(() => {}),
-        onChanged: vi.fn().mockReturnValue(() => {}),
-      },
+      sync: (() => {
+        const baseSyncState = {
+          enabled: false, status: 'disabled' as const, serverUrl: '', lastSyncMs: 0,
+          lastError: '', deviceId: '', accountId: '', vaultBacking: 'none' as const,
+        };
+        return {
+          getState: vi.fn().mockResolvedValue(baseSyncState),
+          enableNew: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
+          enableFromPhrase: vi.fn().mockResolvedValue({ ...baseSyncState, enabled: true, status: 'idle' as const }),
+          disable: vi.fn().mockResolvedValue(baseSyncState),
+          syncNow: vi.fn().mockResolvedValue({ ...baseSyncState, lastSyncMs: Date.now() }),
+          testConnection: vi.fn().mockResolvedValue({ ok: true, latencyMs: 5 }),
+          getRecoveryPhrase: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
+          listDevices: vi.fn().mockResolvedValue([]),
+          removeDevice: vi.fn().mockResolvedValue([]),
+          onState: vi.fn().mockReturnValue(() => {}),
+          onChanged: vi.fn().mockReturnValue(() => {}),
+        };
+      })(),
       favorites: {
         list: vi.fn().mockResolvedValue([]),
         add: vi.fn().mockResolvedValue([]),
