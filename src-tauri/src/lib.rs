@@ -494,7 +494,8 @@ pub fn run() {
                 }
                 // Style the native floating fullscreen-exit button (linux_layout's
                 // `#aegis-fs-exit`) so it matches the dark UI: a small dark box with a
-                // light ✕, pinned top-right over edge-to-edge fullscreen content.
+                // light ↘↖ (arrows pointing inward — matches the React Minimize2 exit
+                // icon), pinned top-right over edge-to-edge fullscreen content.
                 let css = gtk::CssProvider::new();
                 let _ = css.load_from_data(
                     b"#aegis-fs-exit{background-color:#1f1f1f;border:1px solid #3a3a3a;}\

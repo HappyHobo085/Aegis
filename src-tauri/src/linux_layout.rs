@@ -395,7 +395,7 @@ fn fs_exit_button(fixed: &gtk::Fixed, app: &AppHandle) -> gtk::Widget {
     ebox.set_visible_window(true);
     ebox.set_widget_name(FS_EXIT_NAME);
     ebox.set_size_request(FS_EXIT_SIZE, FS_EXIT_SIZE);
-    let label = gtk::Label::new(Some("\u{2715}")); // ✕
+    let label = gtk::Label::new(Some("\u{2198}\u{2196}")); // ↘↖ exit-fullscreen (arrows pointing inward)
     ebox.add(&label);
     let app = app.clone();
     ebox.connect_button_press_event(move |_, _| {
