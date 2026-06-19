@@ -38,22 +38,31 @@ function liveDeps(): RunDeps {
     hasDisplay: import.meta.env.VITE_AEGIS_AUTOPILOT_DISPLAY === '1',
     now: () => Date.now(),
     navigateFixture: async () => {
-      const url = (import.meta.env.VITE_AEGIS_AUTOPILOT_FIXTURE as string) || '';
-      if (!url) return null;
-      // A covering overlay cancels content navigation, and ad-block must be ON for the
-      // count to rise — so return to a clean state and enable blocking first.
+      const base = (import.meta.env.VITE_AEGIS_AUTOPILOT_FIXTURE as string) || '';
+      if (!base) return null;
+      // A covering overlay cancels content navigation — return to a clean state first.
       control.closeSettings(); control.closeDownloads(); control.closeManager();
       control.setSidebar(false); control.setShield(false); control.exitFullscreen();
       control.clearError(); control.clearCrash();
       // Event-driven overlays (safety interstitial / permission prompt) shown during the
-      // screen walk aren't control-owned; clear them too, or a lingering one (a full
-      // overlay) cancels the fixture nav — exactly what produced nav=https://malware.test/.
+      // screen walk aren't control-owned; clear them too, or a lingering full overlay
+      // cancels the fixture nav — exactly what produced nav=https://malware.test/.
       await devEmit.emitEvent(IPC.evtSafetyInterstitial, null);
       await devEmit.emitEvent(IPC.evtPermissionsPrompt, null);
+
+      // A/B induction. The fixture fires the same third-party ad requests on every load
+      // (cache-busted). OFF pass first (content filter removed) — confirms the page
+      // actually generates ad traffic and the resource-load signal fires when unfiltered;
+      // ON pass second — the same requests should then be blocked + counted. The ?ab=
+      // marker forces a full reload (re-runs the JS) and tags each phase in the trace.
+      await aegis.adblock.setEnabled(false);
+      await aegis.nav.navigate(1, base + '?ab=off');
+      await new Promise((r) => setTimeout(r, 2500));
+
       await aegis.adblock.setEnabled(true);
-      await new Promise((r) => setTimeout(r, 400));
+      await new Promise((r) => setTimeout(r, 600));
       const before = (await aegis.adblock.getState()).sessionBlocked ?? 0;
-      await aegis.nav.navigate(1, url);
+      await aegis.nav.navigate(1, base + '?ab=on');
       // Poll up to ~12s: the page's external ad requests fire + get counted asynchronously.
       let after = before;
       for (let i = 0; i < 24 && after <= before; i++) {
@@ -101,18 +110,23 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
     catch (e) { results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'fail', detail: String(e) }); }
   }
 
-  // 3) End-to-end induction: ad-block actually blocks on a real page. Blocking itself is
-  // verified by the adblock_engine unit tests + the adblock.toggle catalog check; this
-  // probes the LIVE shield count, which is environment-sensitive (WebKit negative-caches
-  // blocked URLs; programmatic-nav timing). So: pass if it rises, an honest skip (with
-  // diagnostics) if not — only a thrown error is a hard fail.
+  // 3) End-to-end ad-block induction. navigateFixture drives a real A/B on the live core:
+  // load the ad fixture with ad-block OFF, then ON — exercising nav + the on/off toggle for
+  // real. Two complementary signals verify blocking:
+  //   - The LIVE shield COUNT (recorded here). It is environment-sensitive: the WebKit
+  //     content filter blocks well-known ad hosts BEFORE resource-load-started fires, so the
+  //     counter never sees them and the count can't rise for them (see
+  //     linux_layout::connect_block_counter). So: pass if it rises (an ad slipped the capped
+  //     filter but the engine caught it), honest skip if not, hard fail only on a thrown error.
+  //   - The AUTHORITATIVE proof, asserted by the launcher (summarize.mjs) from the
+  //     [aegis-count] A/B trace: ad subresources load with ad-block OFF and vanish with it ON.
   try {
     const r = await deps.navigateFixture();
-    if (!r) results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block blocks on fixture page', status: 'skip', detail: 'no fixture url' });
-    else if (r.after > r.before) results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block blocks on fixture page', status: 'pass', detail: `blocked ${r.after - r.before}` });
-    else results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block blocks on fixture page', status: 'skip', detail: `live count did not rise (${r.before} -> ${r.after}); nav=${r.url ?? '?'} — blocking is covered by adblock_engine unit tests + the adblock.toggle check` });
+    if (!r) results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block live shield count', status: 'skip', detail: 'no fixture url' });
+    else if (r.after > r.before) results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block live shield count', status: 'pass', detail: `count rose ${r.before} -> ${r.after}` });
+    else results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block live shield count', status: 'skip', detail: `count did not rise (${r.before} -> ${r.after}); nav=${r.url ?? '?'} — the content filter blocks these hosts before the counter signal fires, so blocking is proven from the launcher's A/B trace check + adblock_engine unit tests, not the badge` });
   } catch (e) {
-    results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block blocks on fixture page', status: 'fail', detail: String(e) });
+    results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block live shield count', status: 'fail', detail: String(e) });
   }
 
   const report: Report = { startedAt, finishedAt: deps.now(), display: deps.hasDisplay, results, summary: summarize(results) };

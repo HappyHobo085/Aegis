@@ -50,24 +50,40 @@ surface through the real Rust core in an isolated, disposable environment.
     - `VITE_AEGIS_AUTOPILOT_DISPLAY=1` (or empty) — whether to attempt screenshots
       (`spectacle`). Set automatically from `$DISPLAY`/`$WAYLAND_DISPLAY`.
     - `AEGIS_AUTOPILOT_OUT=<ts-dir>` — where the Rust commands write report files.
+    - `AEGIS_AUTOPILOT_TRACE=1` — makes `linux_layout::connect_block_counter` log a
+      `[aegis-count] block=… page=… url=…` line per subresource to `app.log`. The
+      summarizer reads these to assert ad-block **blocking** (see `summarize.mjs`).
   - **Watchdog:** polls `done.sentinel` every second with a configurable timeout
     (default 1800 s — the first run compiles the Rust core, which a cold `tauri dev`
-    build can take 10-20 min; override with `AEGIS_AUTOPILOT_TIMEOUT=<seconds>`). Prints
-    a pass/fail summary via `node -e '…'` reading `report.json` and exits non-zero if any
-    step failed.
+    build can take 10-20 min; override with `AEGIS_AUTOPILOT_TIMEOUT=<seconds>`). Then
+    runs `summarize.mjs` and exits non-zero if any step failed **or** ad-block blocking
+    regressed.
   - Report lands in `target/autopilot/<ts>/report.html` (screenshot gallery) and
     `target/autopilot/<ts>/report.json`.
 
+- **`summarize.mjs`** — prints the run summary and computes the **authoritative ad-block
+  blocking verdict** from the `[aegis-count]` A/B trace in `app.log`. The live shield
+  COUNT can't prove blocking for well-known hosts (the WebKit content filter cancels a
+  matched request *before* `resource-load-started` fires, so the counter never sees it —
+  see `src-tauri/src/linux_layout.rs`). Instead the fixture is loaded twice — ad-block
+  OFF (`?ab=off`, filter removed) then ON (`?ab=on`, filter active) — and the verdict is
+  PASS when ad subresources fire in the OFF phase and **vanish** in the ON phase, FAIL if
+  any still load with ad-block ON, SKIP if no trace. Pure logic is unit-tested in
+  `summarize.test.mjs` (node project) against a real captured trace.
+
 - **`fixture-server.mjs`** — a tiny Node `http.createServer` that serves files from
   `scripts/autopilot/fixture/` over HTTP on `127.0.0.1:8137`. Must be HTTP (not
-  `file://`) so the content webview's network ad-block filtering applies — the ad-block
-  induction step checks that navigating the fixture page raises the session block count.
-  Path traversal is rejected (`403`); unknown paths return `404`.
+  `file://`) so the content webview's network ad-block filtering applies. The query
+  string is ignored for routing (`split('?')[0]`), so the `?ab=off`/`?ab=on` phase
+  markers still serve `index.html` while forcing a full reload. Path traversal is
+  rejected (`403`); unknown paths return `404`.
 
-- **`fixture/index.html`** — a static ad-bait page: embeds external ad-network URLs
-  (via `<img src="...">` / `<script src="...">`) so the ad-block induction step can
-  verify real blocking. The specific domains come from the Brave `adblock` filter lists
-  bundled in the Rust core (EasyList + EasyPrivacy + Peter Lowe's + abuse-TLDs).
+- **`fixture/index.html`** — an ad-bait page: an inline script fires requests
+  (`new Image().src`, **cache-busted per load** with a unique query) to known third-party
+  ad/tracker hosts so the ad-block A/B trace can verify real blocking. The specific
+  domains come from the Brave `adblock` filter lists bundled in the Rust core (EasyList +
+  EasyPrivacy + Peter Lowe's + abuse-TLDs). Cache-busting matters because WebKit
+  negative-caches a blocked URL, so static ad URLs wouldn't re-fire the load signal.
 
 ### How to run
 
@@ -75,6 +91,7 @@ surface through the real Rust core in an isolated, disposable environment.
 bash scripts/autopilot/run-autopilot.sh
 ```
 
-Expected output: `RESULT: N passed, 0 failed, M skipped` with the gallery path.
-If `$DISPLAY`/`$WAYLAND_DISPLAY` is unset, screenshots are skipped and the functional
-tour still runs (IPC + ad-block steps only).
+Expected output: `RESULT: N passed, 0 failed, M skipped`, then
+`ad-block blocking (trace): PASS — N ad subresource(s) loaded with ad-block OFF, 0 with
+ad-block ON`, and the gallery path. If `$DISPLAY`/`$WAYLAND_DISPLAY` is unset, screenshots
+are skipped and the functional tour still runs (IPC + ad-block steps only).

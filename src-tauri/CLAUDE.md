@@ -131,12 +131,19 @@ dotted event name.
   webkit2gtk widgets GtkBox → GtkFixed; title-changed signal feeds history +
   routes the element-picker sentinel; Esc-exits-fullscreen; GTK key hook
   handles Ctrl+T/W/Shift+T tab shortcuts (accelerator menus used on Win/macOS).
-  `connect_block_counter` counts blocked ads for the badge: the content filters
-  block declaratively (no per-block callback), but `resource-load-started` **does**
-  fire for blocked resources, so each subresource is run through the engine and
-  matches call `adblock::note_blocked`. Caveat: WebKit negative-caches a blocked URL,
-  so an identical URL won't re-fire on reload — real ad URLs are unique per request so
-  this is mostly moot, but a page of *static* ad URLs under-counts on repeat loads.
+  `connect_block_counter` counts ads for the badge via `resource-load-started`.
+  **Correction (verified by the autopilot A/B trace):** the content filter blocks
+  declaratively with no per-block callback, and `resource-load-started` does **NOT**
+  fire for a request the filter blocks (the load is cancelled before the signal). So the
+  counter only sees requests the *capped* content filter ALLOWED, and counts the ones the
+  *full* engine flags (`should_block`) — i.e. ads that slip past the ~50k-rule filter cap
+  but the engine still catches. **Consequence:** well-known hosts (top of EasyList) are
+  always within the cap → filter-blocked pre-signal → blocked but **never counted on the
+  badge** (real blocking, invisible count). This is why the autopilot proves blocking from
+  the A/B trace (ad subresources fire with ad-block OFF, vanish with it ON) rather than
+  from the shield count. (WebKit also negative-caches a blocked URL, a separate reason a
+  page of *static* ad URLs under-counts on reload — moot for real, per-request-unique ad
+  URLs.)
 - **Misc** — `picker.rs` (element picker), `update.rs` (tauri-plugin-updater state).
 
 ## Dev-only autopilot commands (`src-tauri/src/autopilot.rs`)

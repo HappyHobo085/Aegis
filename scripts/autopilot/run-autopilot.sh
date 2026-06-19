@@ -65,12 +65,8 @@ done
 
 if [ ! -f "$OUT/done.sentinel" ]; then echo "ERROR: timed out waiting for report — see $OUT/app.log"; exit 3; fi
 
-# 4) summarize
-node -e '
-  const r = require(process.argv[1] + "/report.json");
-  const s = r.summary;
-  console.log(`\n==> RESULT: ${s.pass} passed, ${s.fail} failed, ${s.skip} skipped`);
-  for (const x of r.results.filter(x => x.status === "fail")) console.log(`   FAIL ${x.title}: ${x.detail || ""}`);
-  console.log(`\n==> gallery: ${process.argv[1]}/report.html`);
-  process.exit(s.fail > 0 ? 1 : 0);
-' "$OUT"
+# 4) summarize — report.json tally + the authoritative ad-block blocking verdict,
+# which is derived from the [aegis-count] A/B trace in app.log (the live shield COUNT
+# can't observe content-filter-blocked ads; see summarize.mjs). Exits non-zero on any
+# failed step OR an ad-block blocking regression.
+node scripts/autopilot/summarize.mjs "$OUT" "http://127.0.0.1:$FIXTURE_PORT/"

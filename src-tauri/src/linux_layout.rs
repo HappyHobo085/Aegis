@@ -65,11 +65,17 @@ pub fn connect_url_tracker(app: &AppHandle, label: &str) {
     });
 }
 
-/// Count ad/tracker subresources blocked on this tab, for the shield badge. WebKit
-/// content filters block declaratively with no per-block callback, but resource-load-started
-/// still fires for blocked resources (verified), so we run each subresource through the
-/// same engine + EasyList and count the matches — which honors the on/off toggle +
-/// per-site allowlist (`should_block` does). `note_blocked` pushes the totals to the chrome.
+/// Count ad/tracker subresources for the shield badge. The WebKit content filter blocks
+/// declaratively with no per-block callback, and — contrary to an earlier assumption —
+/// `resource-load-started` does NOT fire for a request the content filter blocks: the load
+/// is cancelled before the signal (verified via the autopilot's A/B trace — ad subresources
+/// fire the signal with ad-block OFF and vanish entirely with it ON). So this counter only
+/// sees requests the *capped* content filter ALLOWED, and counts the ones the *full* engine
+/// flags via `should_block` (which honors the on/off toggle + per-site allowlist) — i.e. ads
+/// that slip past the ~50k-rule filter cap but the engine still catches. Well-known hosts
+/// (top of EasyList) are always within the cap, so they're filter-blocked pre-signal and
+/// never counted here; their blocking is real but invisible to the badge. `note_blocked`
+/// pushes the totals to the chrome.
 pub fn connect_block_counter(app: &AppHandle, label: &str) {
     let Some(content) = app.get_webview(label) else {
         return;

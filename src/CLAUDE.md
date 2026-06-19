@@ -143,8 +143,12 @@ Vite dead-code-eliminates it on `build:renderer`.
   `ScreenSpec`, then tears it down after the screenshot. Adapts to the `via` field.
 - **`run.ts`** — `runAutopilot(partial?)`. The orchestrator: walks every `SCREEN`
   (reach → screenshot → leave), exercises every `CATALOG` entry against the real core,
-  runs the ad-block induction step (navigates the fixture page; checks session block
-  count rose), then calls `devEmit.writeReport` + `devEmit.done`. Dependency-injected
+  runs each entry's optional `verify(api)` functional round-trip, then the ad-block
+  induction — an A/B navigation of the fixture (ad-block OFF then ON) that records the
+  live shield count (an honest *skip* when it doesn't rise: well-known hosts are blocked
+  by the WebKit content filter before the counter signal fires; blocking itself is proven
+  by the launcher's A/B trace check — `summarize.mjs`). Finally calls
+  `devEmit.writeReport` + `devEmit.done`. Dependency-injected
   via `RunDeps` so vitest can pass mocks; `liveDeps()` wires the real `aegis` API and
   `devEmit.*` calls. `hasDisplay` (from `VITE_AEGIS_AUTOPILOT_DISPLAY`) controls
   whether screenshots are attempted.
