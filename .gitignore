@@ -6,3 +6,8 @@ dist/
 
 # Local data backups produced by the in-app Export (default filename); personal data
 aegis-export.json
+
+# Autopilot run output (report.json/html, screenshots, app.log) — written to
+# <repo-root>/target/autopilot/<ts>/ by scripts/autopilot/run-autopilot.sh.
+# (src-tauri/target — the cargo build dir — is ignored separately.)
+/target/
