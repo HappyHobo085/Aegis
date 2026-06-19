@@ -159,9 +159,10 @@ Vite dead-code-eliminates it on `build:renderer`.
 
 ### Tests in this folder
 
-- **`tour.test.tsx`** — exhaustive vitest desktop tour. Mocks `AegisApi` + `RunDeps`;
-  runs the full `runAutopilot()` against the mock; asserts every SCREEN is visited and
-  every CATALOG feature runs.
+- **`tour.test.tsx`** — exhaustive vitest desktop tour. Renders the real `<App/>`
+  with the mocked `aegis` API, walks every SCREEN via `reachScreen()` (asserting
+  no crash), and exercises every CATALOG entry. `runAutopilot()`'s end-to-end
+  orchestration (reach → screenshot → leave) is covered by `run.test.ts`.
 - **`tour.mobile.test.tsx`** — same tour for the mobile shell (`MobileApp`).
 - **`coverage.test.ts`** — **drift guard**. Asserts every `IPC.*` channel exported from
   `shared/types.ts` appears in `CATALOG[*].channels` (failing the build when a new
