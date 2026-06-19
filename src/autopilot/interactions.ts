@@ -38,9 +38,35 @@ export interface InteractionSpec {
   assert(ctx: InteractionCtx): Promise<string>;
 }
 
-/** Filled in per-domain by later tasks. */
-export const INTERACTIONS: InteractionSpec[] = [];
+export const INTERACTIONS: InteractionSpec[] = [
+  {
+    id: 'toolbar.addressBar.navigate',
+    domain: 'toolbar',
+    description: 'Type a URL in the address bar and press Enter → navigates',
+    screen: 'home',
+    layers: ['vitest', 'live'],
+    run: async (ctx) => {
+      const bar = ctx.byRole('textbox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
+      if (!bar) throw new Error('address bar input not found');
+      await ctx.type(bar, 'example.com');
+      await ctx.press('Enter');
+    },
+    assert: async (ctx) => {
+      if (ctx.layer === 'vitest') {
+        if (!ctx.calls.called('nav.navigate', (a) => String(a[1]).includes('example.com')))
+          throw new Error('nav.navigate not called with example.com');
+        return 'address bar Enter → nav.navigate(example.com)';
+      }
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        if ((await ctx.aegis.nav.getState(1)).url.includes('example.com')) return 'address bar Enter → page navigated';
+        await new Promise((r) => setTimeout(r, 400));
+      }
+      throw new Error('live: url never became example.com');
+    },
+  },
+];
 
 /** Documented registry of every interactive control id; the drift guard asserts each has
  *  an INTERACTIONS entry. Filled in per-domain by later tasks (mirrors UNTESTED_CHANNELS). */
-export const INTERACTIVE_CONTROLS = new Set<string>([]);
+export const INTERACTIVE_CONTROLS = new Set<string>(['toolbar.addressBar']);

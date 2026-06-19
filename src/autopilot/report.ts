@@ -2,7 +2,7 @@ export type StepStatus = 'pass' | 'fail' | 'skip';
 
 export interface StepResult {
   id: string;
-  kind: 'core' | 'visual'; // core = asserted against the backend; visual = UI state shown for a screenshot
+  kind: 'core' | 'visual' | 'interaction'; // core = asserted against the backend; visual = UI state shown for a screenshot; interaction = real gesture driven through the chrome UI
   title: string;
   status: StepStatus;
   detail?: string;

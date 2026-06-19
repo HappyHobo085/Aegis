@@ -6,7 +6,7 @@ import type { AegisApi } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { getAutopilotControl, type AutopilotControl } from './control';
-import { SCREENS } from './screens';
+import { SCREENS, type ScreenId } from './screens';
 import { CATALOG } from './catalog';
 import { reachScreen, leaveScreen } from './reach';
 import { summarize, type Report, type StepResult, renderReportHtml } from './report';
@@ -80,6 +80,8 @@ function liveDeps(): RunDeps {
   };
 }
 
+const screenById = (id: ScreenId) => SCREENS.find((s) => s.id === id)!;
+
 export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> {
   const deps: RunDeps = { ...liveDepsSafe(partial), ...partial } as RunDeps;
   const startedAt = deps.now();
@@ -116,6 +118,25 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
       if (!f.verify) continue;
       try { const detail = await f.verify(deps.api); results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'pass', detail }); }
       catch (e) { results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'fail', detail: String(e) }); }
+    }
+  }
+
+  // 2c) Interaction tour (LIVE ONLY): drive real gestures on the real chrome UI.
+  if (deps.live) {
+    const { INTERACTIONS } = await import('./interactions');
+    const { makeLiveCtx } = await import('./interactionCtx');
+    const ctx = makeLiveCtx(deps.api, (s) => reachScreen(deps.control, screenById(s), { emitEvent: deps.emitEvent }));
+    for (const spec of INTERACTIONS.filter((s) => s.layers.includes('live'))) {
+      try {
+        await ctx.reach(spec.screen);
+        await spec.run(ctx);
+        const detail = await spec.assert(ctx);
+        results.push({ id: `interaction:${spec.id}`, kind: 'interaction', title: spec.description, status: 'pass', detail });
+      } catch (e) {
+        results.push({ id: `interaction:${spec.id}`, kind: 'interaction', title: spec.description, status: 'fail', detail: String(e) });
+      } finally {
+        await leaveScreen(deps.control, screenById(spec.screen), { emitEvent: deps.emitEvent }).catch(() => {});
+      }
     }
   }
 
