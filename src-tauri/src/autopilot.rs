@@ -9,10 +9,13 @@ use std::path::PathBuf;
 use std::process::Command;
 use tauri::AppHandle;
 
+fn out_dir_from(var: Option<String>) -> PathBuf {
+    var.map(PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("aegis-autopilot"))
+}
+
 fn out_dir() -> PathBuf {
-    std::env::var("AEGIS_AUTOPILOT_OUT")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| std::env::temp_dir().join("aegis-autopilot"))
+    out_dir_from(std::env::var("AEGIS_AUTOPILOT_OUT").ok())
 }
 
 #[tauri::command]
@@ -22,6 +25,7 @@ pub fn autopilot_screenshot(name: String) -> Result<(), String> {
     let safe: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
     let path = dir.join(format!("{safe}.png"));
     // Best-effort: spectacle active-window, background mode, no notification.
+    // (Linux/KDE-specific; fails gracefully on other platforms.)
     let status = Command::new("spectacle")
         .args(["-b", "-n", "-a", "-o", &path.to_string_lossy()])
         .status();
@@ -60,8 +64,7 @@ mod tests {
     use super::*;
     #[test]
     fn out_dir_honors_env() {
-        std::env::set_var("AEGIS_AUTOPILOT_OUT", "/tmp/aegis-ap-test");
-        assert_eq!(out_dir(), PathBuf::from("/tmp/aegis-ap-test"));
-        std::env::remove_var("AEGIS_AUTOPILOT_OUT");
+        assert_eq!(out_dir_from(Some("/tmp/aegis-ap-test".into())), PathBuf::from("/tmp/aegis-ap-test"));
+        assert_eq!(out_dir_from(None), std::env::temp_dir().join("aegis-autopilot"));
     }
 }
