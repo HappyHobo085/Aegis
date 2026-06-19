@@ -438,109 +438,121 @@ export const INTERACTIONS: InteractionSpec[] = [
     },
   },
 
-  {
-    id: 'tabs.activate',
-    domain: 'tabs',
-    description: 'Click a second tab → tabs.activate called; live: activeId changes',
-    screen: 'home',
-    layers: ['vitest', 'live'],
-    run: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        // Inject a 2-tab state so the TabStrip renders a second clickable tab.
-        const TWO_TABS: TabsState = {
-          tabs: [
-            { id: 1, pinned: false, live: true, title: 'Tab 1', url: 'https://example.com/' },
-            { id: 2, pinned: false, live: true, title: 'Tab 2', url: 'https://example.org/' },
-          ],
-          activeId: 1,
-        };
-        await ctx.emitTabsState?.(TWO_TABS);
-        // Tab 2 is inactive; click its tab div (aria-label = labelFor result = 'Tab 2').
-        const tab2 = ctx.byRole('tab', /^Tab 2$/);
-        if (!tab2) throw new Error('Second tab "Tab 2" not found in TabStrip');
-        await ctx.click(tab2);
-      } else {
-        // Live: create a second tab first, then click it.
-        const before = await ctx.aegis.tabs.list();
-        await ctx.aegis.tabs.create();
-        // Wait briefly for the new tab to appear in the DOM.
+  (() => {
+    // Capture the newly-created tab's id so the live assert can verify activeId switched.
+    let _newTabId: number | undefined;
+    return {
+      id: 'tabs.activate',
+      domain: 'tabs',
+      description: 'Click a second tab → tabs.activate called; live: activeId changes',
+      screen: 'home',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          // Inject a 2-tab state so the TabStrip renders a second clickable tab.
+          const TWO_TABS: TabsState = {
+            tabs: [
+              { id: 1, pinned: false, live: true, title: 'Tab 1', url: 'https://example.com/' },
+              { id: 2, pinned: false, live: true, title: 'Tab 2', url: 'https://example.org/' },
+            ],
+            activeId: 1,
+          };
+          await ctx.emitTabsState?.(TWO_TABS);
+          // Tab 2 is inactive; click its tab div (aria-label = labelFor result = 'Tab 2').
+          const tab2 = ctx.byRole('tab', /^Tab 2$/);
+          if (!tab2) throw new Error('Second tab "Tab 2" not found in TabStrip');
+          await ctx.click(tab2);
+        } else {
+          // Live: create a second tab first, snapshot its id, then click it.
+          const before = await ctx.aegis.tabs.list();
+          await ctx.aegis.tabs.create();
+          // Wait briefly for the new tab to appear in the DOM.
+          await new Promise((r) => setTimeout(r, 400));
+          const after = await ctx.aegis.tabs.list();
+          const newTab = after.tabs.find((t) => !before.tabs.some((b) => b.id === t.id));
+          if (!newTab) throw new Error('live: newly created tab not found in list');
+          _newTabId = newTab.id;
+          // Click the tab div in the chrome DOM (its aria-label = 'New tab').
+          const tabEl = ctx.byLabel(/^New tab$/) ?? ctx.bySelector(`[role="tab"][aria-selected="false"]`);
+          if (!tabEl) throw new Error('live: second tab element not found in DOM');
+          await ctx.click(tabEl);
+        }
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('tabs.activate'))
+            throw new Error('tabs.activate not called');
+          return 'click second tab → tabs.activate()';
+        }
+        // Live: activeId must equal the newly-created tab's id — proves the click worked.
         await new Promise((r) => setTimeout(r, 400));
-        const after = await ctx.aegis.tabs.list();
-        const newId = after.tabs.find((t) => !before.tabs.some((b) => b.id === t.id))?.id;
-        if (newId === undefined) throw new Error('live: newly created tab not found in list');
-        // Click the tab div in the chrome DOM (its aria-label = 'New tab').
-        const tabEl = ctx.byLabel(/^New tab$/) ?? ctx.bySelector(`[role="tab"][aria-selected="false"]`);
-        if (!tabEl) throw new Error('live: second tab element not found in DOM');
-        await ctx.click(tabEl);
-      }
-    },
-    assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('tabs.activate'))
-          throw new Error('tabs.activate not called');
-        return 'click second tab → tabs.activate()';
-      }
-      // Live: activeId should be the new tab; clean up by closing it.
-      await new Promise((r) => setTimeout(r, 400));
-      const state = await ctx.aegis.tabs.list();
-      const closableId = state.activeId;
-      if (state.tabs.length < 2)
-        throw new Error('live: only 1 tab remains — activate may have failed');
-      // Close the extra tab.
-      await ctx.aegis.tabs.close(closableId);
-      return `click second tab → activeId became ${closableId} (extra tab closed)`;
-    },
-  },
+        const state = await ctx.aegis.tabs.list();
+        if (_newTabId === undefined)
+          throw new Error('live: _newTabId was never captured (run() may not have executed)');
+        if (state.activeId !== _newTabId)
+          throw new Error(`live: activeId is ${state.activeId}, expected ${_newTabId} — activate had no effect`);
+        // Clean up: close the extra tab.
+        await ctx.aegis.tabs.close(_newTabId);
+        return `click second tab → activeId became ${_newTabId} (extra tab closed)`;
+      },
+    } satisfies InteractionSpec;
+  })(),
 
-  {
-    id: 'tabs.close',
-    domain: 'tabs',
-    description: 'Click the X on a tab → tabs.close called; live: tab count decreases',
-    screen: 'home',
-    layers: ['vitest', 'live'],
-    run: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        // Inject a 2-tab state so there is a second tab whose X we can click
-        // without risking closing the last tab (which some UIs may guard against).
-        const TWO_TABS: TabsState = {
-          tabs: [
-            { id: 1, pinned: false, live: true, title: 'Tab 1', url: 'https://example.com/' },
-            { id: 2, pinned: false, live: true, title: 'Tab 2', url: 'https://example.org/' },
-          ],
-          activeId: 1,
-        };
-        await ctx.emitTabsState?.(TWO_TABS);
-        const closeBtn = ctx.byRole('button', /^Close Tab 2$/);
-        if (!closeBtn) throw new Error('Close-tab button for "Tab 2" not found');
-        await ctx.click(closeBtn);
-      } else {
-        // Live: create a second tab then click its close button.
-        const before = await ctx.aegis.tabs.list();
-        await ctx.aegis.tabs.create();
+  (() => {
+    // Capture the tab count BEFORE the close so the live assert can verify it decreased by 1.
+    let _preCloseCount: number | undefined;
+    return {
+      id: 'tabs.close',
+      domain: 'tabs',
+      description: 'Click the X on a tab → tabs.close called; live: tab count decreases',
+      screen: 'home',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          // Inject a 2-tab state so there is a second tab whose X we can click
+          // without risking closing the last tab (which some UIs may guard against).
+          const TWO_TABS: TabsState = {
+            tabs: [
+              { id: 1, pinned: false, live: true, title: 'Tab 1', url: 'https://example.com/' },
+              { id: 2, pinned: false, live: true, title: 'Tab 2', url: 'https://example.org/' },
+            ],
+            activeId: 1,
+          };
+          await ctx.emitTabsState?.(TWO_TABS);
+          const closeBtn = ctx.byRole('button', /^Close Tab 2$/);
+          if (!closeBtn) throw new Error('Close-tab button for "Tab 2" not found');
+          await ctx.click(closeBtn);
+        } else {
+          // Live: create a second tab, snapshot the post-create count, then click close.
+          await ctx.aegis.tabs.create();
+          await new Promise((r) => setTimeout(r, 400));
+          const after = await ctx.aegis.tabs.list();
+          _preCloseCount = after.tabs.length;
+          // Close button aria-label is "Close <title>"; new tab title is 'New tab'.
+          const closeBtn = ctx.byRole('button', /^Close New tab$/);
+          if (!closeBtn) throw new Error('live: Close button for new tab not found');
+          await ctx.click(closeBtn);
+        }
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('tabs.close'))
+            throw new Error('tabs.close not called');
+          return 'close-tab X → tabs.close()';
+        }
+        // Live: tab count must have decreased by exactly 1 from the pre-close snapshot.
         await new Promise((r) => setTimeout(r, 400));
-        const after = await ctx.aegis.tabs.list();
-        const newTab = after.tabs.find((t) => !before.tabs.some((b) => b.id === t.id));
-        if (!newTab) throw new Error('live: newly created tab not found');
-        // Close button aria-label is "Close <title>"; new tab title is 'New tab'.
-        const closeBtn = ctx.byRole('button', /^Close New tab$/);
-        if (!closeBtn) throw new Error('live: Close button for new tab not found');
-        await ctx.click(closeBtn);
-      }
-    },
-    assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('tabs.close'))
-          throw new Error('tabs.close not called');
-        return 'close-tab X → tabs.close()';
-      }
-      // Live: tab count should have returned to the pre-create count.
-      await new Promise((r) => setTimeout(r, 400));
-      const state = await ctx.aegis.tabs.list();
-      if (state.tabs.length < 1)
-        throw new Error('live: no tabs remain after close');
-      return `close-tab X → tab count is now ${state.tabs.length}`;
-    },
-  },
+        const state = await ctx.aegis.tabs.list();
+        if (_preCloseCount === undefined)
+          throw new Error('live: _preCloseCount was never captured (run() may not have executed)');
+        if (state.tabs.length !== _preCloseCount - 1)
+          throw new Error(
+            `live: expected ${_preCloseCount - 1} tabs after close, got ${state.tabs.length} — close had no effect`,
+          );
+        return `close-tab X → tab count decreased from ${_preCloseCount} to ${state.tabs.length}`;
+      },
+    } satisfies InteractionSpec;
+  })(),
 
   {
     id: 'tabs.setPinned',
@@ -576,6 +588,9 @@ export const INTERACTIONS: InteractionSpec[] = [
     // invoke the onShortcut callback directly via emitTabShortcut.
     // Live: the native accelerator fires in the real app and is tested by the catalog's
     // tabs.create verify(); the interaction layer doesn't add live coverage here.
+    // vitest-only (conscious deviation from "both layers"): the native Ctrl+T accelerator
+    // cannot be dispatched as a DOM key in jsdom OR via the live ctx's DOM press(), and
+    // the catalog's tabs.create verify() already covers the live new-tab effect end-to-end.
     layers: ['vitest'],
     run: async (ctx) => {
       await ctx.emitTabShortcut?.('new');
