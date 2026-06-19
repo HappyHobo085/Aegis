@@ -4,9 +4,25 @@
 <h1>Autopilot ad-block fixture</h1>
 <p>This page references known-blocked ad/tracker hosts so the autopilot can verify
 real network ad-blocking on the live content webview.</p>
-<!-- Hosts present in the bundled EasyList/EasyPrivacy/Peter Lowe sets. -->
-<img src="https://ib.adnxs.com/pixel.gif" alt="" width="1" height="1">
-<script src="https://www.googletagmanager.com/gtag/js?id=AP-TEST" async></script>
-<script src="https://static.doubleclick.net/instream/ad_status.js" async></script>
-<img src="https://www.google-analytics.com/collect?v=1" alt="" width="1" height="1">
+<!-- Hosts present in the bundled EasyList/EasyPrivacy/Peter Lowe sets. The ad URLs are
+     CACHE-BUSTED per load (unique query string): WebKit negative-caches a blocked URL,
+     so a page of STATIC ad URLs under-counts on reload because the resource-load signal
+     that drives the shield counter won't re-fire. Real ad URLs are unique per request,
+     so unique URLs here mirror reality and make the counter increment reliably. -->
+<script>
+  var cb = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
+  var hosts = [
+    'https://ib.adnxs.com/pixel.gif',
+    'https://www.googletagmanager.com/gtag/js?id=AP-TEST',
+    'https://static.doubleclick.net/instream/ad_status.js',
+    'https://www.google-analytics.com/collect?v=1',
+    'https://securepubads.g.doubleclick.net/gpt/pubads_impl.js',
+  ];
+  hosts.forEach(function (u, i) {
+    var sep = u.indexOf('?') === -1 ? '?' : '&';
+    // new Image() fires the request regardless of the host's real resource type;
+    // the engine matches by host, so the block (and the count) still applies.
+    new Image().src = u + sep + 'cb=' + cb + '-' + i;
+  });
+</script>
 <p id="done">fixture loaded</p>
