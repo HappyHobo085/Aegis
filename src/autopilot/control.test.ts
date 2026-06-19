@@ -11,6 +11,7 @@ function fake(): AutopilotControl {
     setSavedItems: vi.fn(),
     setSitePermissions: vi.fn(),
     setAllowlistedHosts: vi.fn(),
+    setDownloadEntries: vi.fn(),
   };
 }
 

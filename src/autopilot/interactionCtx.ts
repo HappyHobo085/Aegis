@@ -303,6 +303,3 @@ export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
   };
 }
 
-// Suppress unused import warning — fireEvent is part of the public API surface
-// even though this factory file doesn't use it directly (interaction specs will).
-void fireEvent;

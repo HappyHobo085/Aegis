@@ -255,7 +255,10 @@ export const INTERACTIONS: InteractionSpec[] = [
     domain: 'toolbar',
     description: 'Click the Reload button → nav.reloadOrStop called',
     screen: 'home',
-    layers: ['vitest', 'live'],
+    // live excluded: the live CallLog is inert so nav.reloadOrStop cannot be confirmed
+    // via ctx.calls, and a reload's effect (isLoading true→false) is too fast/racy to
+    // observe reliably — mirroring toolbar.back / toolbar.forward / toolbar.picker.
+    layers: ['vitest'],
     mobile: true, // MobileTopBar has a Reload/Stop button (aria-label="Reload")
     run: async (ctx) => {
       const btn = ctx.byRole('button', /^Reload$/);
@@ -263,12 +266,9 @@ export const INTERACTIONS: InteractionSpec[] = [
       await ctx.click(btn);
     },
     assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('nav.reloadOrStop'))
-          throw new Error('nav.reloadOrStop not called');
-        return 'Reload button → nav.reloadOrStop()';
-      }
-      return 'Reload button clicked';
+      if (!ctx.calls.called('nav.reloadOrStop'))
+        throw new Error('nav.reloadOrStop not called');
+      return 'Reload button → nav.reloadOrStop()';
     },
   },
 
@@ -2422,10 +2422,10 @@ export const INTERACTIONS: InteractionSpec[] = [
       domain: 'settings.data',
       description: 'Click the Export button → data.export called',
       screen: 'settings:data',
-      layers: ['vitest', 'live'] as InteractionLayer[],
+      // live excluded: the live wiring effect (file written on disk) isn't observable
+      // from the renderer; the catalog's data.export exercise() already covers the IPC.
+      layers: ['vitest'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
-        // Guard mock setup to vitest only — on the live layer data.export is the real
-        // Tauri function and does not have .mockResolvedValue.
         if (ctx.layer === 'vitest') {
           (ctx.aegis.data.export as unknown as { mockResolvedValue(v: unknown): void })
             .mockResolvedValue({ ok: true, path: '/tmp/aegis-export.json' });
@@ -2436,17 +2436,9 @@ export const INTERACTIONS: InteractionSpec[] = [
         await new Promise((r) => setTimeout(r, 100));
       },
       assert: async (ctx: InteractionCtx) => {
-        if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('data.export'))
-            throw new Error('data.export not called after clicking Export');
-          return 'Data Export → data.export()';
-        }
-        // Live: the export must return ok:true with a path (real file written).
-        // The data.export call happened in run(); capture the result via a fresh call.
-        const result = await ctx.aegis.data.export();
-        if (!result.ok)
-          throw new Error(`live: data.export returned ok:false — export may have failed`);
-        return `Data Export → data.export() → ok, path="${result.path ?? 'unknown'}"`;
+        if (!ctx.calls.called('data.export'))
+          throw new Error('data.export not called after clicking Export');
+        return 'Data Export → data.export()';
       },
     } satisfies InteractionSpec;
   })(),
