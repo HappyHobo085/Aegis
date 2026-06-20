@@ -2,6 +2,7 @@
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import type { Favorite } from '../../../shared/types';
+import { nudgeSync, waitFor, fixtureUrl } from './helpers';
 
 export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
   // ─── Task 5: favorites bar/manager + sidebar history ────────────────────
@@ -11,7 +12,10 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
     // fill the Add form, close the manager — the hook's setFavorites fires and the
     // FavBar gets the chip.  No external emit helper needed.
     type MockFn = { mockResolvedValue(v: Favorite[]): void };
-    const SEED: Favorite = { id: 1, name: 'Autopilot Test', url: 'https://autopilot.test/', position: 0 };
+    // A fixture URL (loads reliably on live) marked with ?ap=favopen so the assert can
+    // match the marker host-independently — unlike a *.test domain that never commits.
+    const FAV_URL = fixtureUrl('favopen');
+    const SEED: Favorite = { id: 1, name: 'Autopilot Test', url: FAV_URL, position: 0 };
     return {
       id: 'favbar.openFavorite',
       domain: 'favbar',
@@ -41,9 +45,11 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           const closeBtn = ctx.byRole('button', /^Close$/);
           if (closeBtn) await ctx.click(closeBtn);
         } else {
-          // Live: add a favorite via the API then wait for the bar to update.
+          // Live: really add the favorite, nudge useFavorites to re-fetch (a local add
+          // doesn't emit sync.changed), then wait for the chip to render before clicking.
           await ctx.aegis.favorites.add({ name: SEED.name, url: SEED.url });
-          await new Promise((r) => setTimeout(r, 400));
+          await nudgeSync('favorites');
+          await waitFor(() => ctx.byLabel(/^Open Autopilot Test$/), 'favorite chip "Autopilot Test"');
         }
         const chip = ctx.byLabel(/^Open Autopilot Test$/);
         if (!chip) throw new Error('Favorite chip "Autopilot Test" not found in favorites bar');
@@ -51,24 +57,26 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('nav.navigate', (a) => String(a[1]).includes('autopilot.test')))
-            throw new Error('nav.navigate not called with autopilot.test url');
-          return 'favbar chip → nav.navigate(https://autopilot.test/)';
+          if (!ctx.calls.called('nav.navigate', (a) => String(a[1]).includes('ap=favopen')))
+            throw new Error('nav.navigate not called with the favorite url');
+          return 'favbar chip → nav.navigate(favorite url)';
         }
-        // Live: poll until the page url contains autopilot.test; then clean up the favorite.
+        // Live: poll until the page url carries the favorite's ?ap=favopen marker; then clean up.
         const deadline = Date.now() + 8000;
         while (Date.now() < deadline) {
           const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-          if (url.includes('autopilot.test')) {
+          if (url.includes('ap=favopen')) {
             const list = await ctx.aegis.favorites.list();
-            for (const f of list.filter((f) => f.url.includes('autopilot.test'))) {
+            for (const f of list.filter((f) => f.url.includes('ap=favopen'))) {
               await ctx.aegis.favorites.remove(f.id);
             }
-            return `favbar chip → nav navigated to ${url}`;
+            await nudgeSync('favorites');
+            return `favbar chip → nav navigated to ${url} (favorite cleaned up)`;
           }
           await new Promise((r) => setTimeout(r, 400));
         }
-        throw new Error('live: url never became autopilot.test after clicking favorite chip');
+        const now = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        throw new Error(`live: url never carried ?ap=favopen after clicking favorite chip (now ${now})`);
       },
     } satisfies InteractionSpec;
   })(),
@@ -154,7 +162,9 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           if (!fav) throw new Error('live: could not find the just-added favorite');
           _originalName = fav.name;
           _favoriteId = fav.id;
-          await new Promise((r) => setTimeout(r, 400));
+          // Nudge useFavorites to re-fetch so the open manager renders the new row.
+          await nudgeSync('favorites');
+          await waitFor(() => ctx.byLabel(new RegExp(`^Name for ${SEED.name}$`)), `manager row for "${SEED.name}"`);
         }
         // The FavoritesManager renders a row with "Name for <name>" input.
         const nameInput = ctx.byLabel(new RegExp(`^Name for ${_originalName}$`));
@@ -182,6 +192,7 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           await ctx.aegis.favorites.update(_favoriteId, { name: _originalName });
         }
         if (_favoriteId !== undefined) await ctx.aegis.favorites.remove(_favoriteId);
+        await nudgeSync('favorites');
         return `favManager rename → name changed to "Renamed Favorite" (restored + cleaned up)`;
       },
     } satisfies InteractionSpec;
@@ -213,11 +224,12 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           if (!addBtn) throw new Error('Add favorite button not found during seed');
           await ctx.click(addBtn);
         } else {
-          // Live: add a dedicated favorite to delete, snapshot baseline after add.
+          // Live: add a dedicated favorite to delete, nudge the manager to render it,
+          // then snapshot the baseline length after the row is present.
           await ctx.aegis.favorites.add({ name: SEED.name, url: SEED.url });
-          await new Promise((r) => setTimeout(r, 400));
-          const list = await ctx.aegis.favorites.list();
-          _baseLength = list.length;
+          await nudgeSync('favorites');
+          await waitFor(() => ctx.byRole('button', /^Remove favorite To Delete$/), 'manager "Remove favorite To Delete" button');
+          _baseLength = (await ctx.aegis.favorites.list()).length;
         }
         const removeBtn = ctx.byRole('button', /^Remove favorite To Delete$/);
         if (!removeBtn) throw new Error('Remove favorite "To Delete" button not found');

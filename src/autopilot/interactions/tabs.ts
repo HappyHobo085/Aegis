@@ -1,6 +1,7 @@
 // src/autopilot/interactions/tabs.ts
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
 import type { TabsState } from '../../../shared/types';
+import { waitFor, fixtureUrl } from './helpers';
 
 export const TABS_INTERACTIONS: InteractionSpec[] = [
   // ─── Task 4: tabs + keyboard shortcuts ──────────────────────────────────
@@ -59,18 +60,24 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
           if (!tab2) throw new Error('Second tab "Tab 2" not found in TabStrip');
           await ctx.click(tab2);
         } else {
-          // Live: create a second tab first, snapshot its id, then click it.
+          // Create a BACKGROUND tab so activeId stays on the original — clicking the new
+          // tab is then an observable switch. (Bug: a foreground create() already activates
+          // the new tab, so the old code's click on the *unselected* tab switched AWAY from
+          // it → activeId went to the old tab, never the new one.)
           const before = await ctx.aegis.tabs.list();
-          await ctx.aegis.tabs.create();
-          // Wait briefly for the new tab to appear in the DOM.
-          await new Promise((r) => setTimeout(r, 400));
-          const after = await ctx.aegis.tabs.list();
+          await ctx.aegis.tabs.create(fixtureUrl('tab-activate'), true);
+          const after = await waitFor(async () => {
+            const s = await ctx.aegis.tabs.list();
+            return s.tabs.length > before.tabs.length ? s : null;
+          }, 'second tab to appear in the list');
           const newTab = after.tabs.find((t) => !before.tabs.some((b) => b.id === t.id));
           if (!newTab) throw new Error('live: newly created tab not found in list');
           _newTabId = newTab.id;
-          // Click the tab div in the chrome DOM (its aria-label = 'New tab').
-          const tabEl = ctx.byLabel(/^New tab$/) ?? ctx.bySelector(`[role="tab"][aria-selected="false"]`);
-          if (!tabEl) throw new Error('live: second tab element not found in DOM');
+          // The new tab renders LAST in the strip; click that tab element to activate it.
+          const tabEl = await waitFor(() => {
+            const tabs = Array.from(document.querySelectorAll('[role="tab"]')) as HTMLElement[];
+            return tabs.length > before.tabs.length ? tabs[tabs.length - 1] : null;
+          }, 'newest tab element in the strip');
           await ctx.click(tabEl);
         }
       },

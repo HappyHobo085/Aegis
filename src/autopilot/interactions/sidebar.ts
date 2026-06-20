@@ -2,6 +2,14 @@
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import type { HistoryEntry, SavedItem } from '../../../shared/types';
+import { nudgeSync, waitFor, fixtureUrl, liveNavigate } from './helpers';
+
+/** Live-only: remove every saved item whose url matches `url` — clears leftovers a prior
+ *  (possibly failed) spec didn't clean up, so each spec starts from a known state. */
+async function clearSavedProbe(ctx: InteractionCtx, url: string): Promise<void> {
+  const list = await ctx.aegis.saved.list();
+  for (const i of list.filter((i) => i.url === url)) await ctx.aegis.saved.remove(i.id);
+}
 
 export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
   (() => {
@@ -9,9 +17,11 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
     // url CHANGED away from _urlBeforeClick to the entry's destination — not merely
     // that it is non-blank (which it already was before the click).
     let _urlBeforeClick: string | undefined;
-    // The destination url of the history entry we seed/click (live only; vitest
-    // asserts via CallLog so we don't need to track it there).
-    const SEED_URL = 'https://example.org/';
+    // Live: two distinct fixture URLs that both load (so the core records history and the
+    // panel re-renders via aegis.history.onChanged). ENTRY is the row we click; CURRENT is
+    // where we are when we click, so the navigation produces an observable url change.
+    const ENTRY_URL = fixtureUrl('histentry');
+    const CURRENT_URL = fixtureUrl('histcurrent');
     return {
       id: 'sidebar.history.openEntry',
       domain: 'sidebar.history',
@@ -25,28 +35,26 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
             { id: 1, url: 'https://history-test.test/', title: 'History Test', visitedAt: Date.now() },
           ];
           await ctx.emitHistory?.(SEEDED);
-        } else {
-          // Live: navigate to a DIFFERENT page first (not SEED_URL) to create a
-          // history entry for SEED_URL, so the click produces an observable url change.
-          // Navigate to example.com first (the seed entry destination will be example.org).
-          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
-          await new Promise((r) => setTimeout(r, 1500));
-          // Now navigate to the entry's destination so history contains it, then go
-          // back to example.com so clicking the history row produces a real url change.
-          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, SEED_URL);
-          await new Promise((r) => setTimeout(r, 1500));
-          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
-          await new Promise((r) => setTimeout(r, 1500));
-          // Re-reach the sidebar:history screen (nav may have closed it).
-          await ctx.reach('sidebar:history');
-          await new Promise((r) => setTimeout(r, 300));
-          // Snapshot the current url BEFORE clicking the history row.
-          _urlBeforeClick = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+          // Click the first "Open <url>" button scoped to the history panel.
+          const seededBtn = ctx.bySelector('.history-panel__open');
+          if (!seededBtn) throw new Error('No history entry open-button found (panel may be empty)');
+          await ctx.click(seededBtn);
+          return;
         }
-        // Click the first "Open <url>" button scoped to the history panel.
-        // Use a CSS selector to avoid matching "Open settings" and other toolbar buttons.
-        const openBtn = ctx.bySelector('.history-panel__open');
-        if (!openBtn) throw new Error('No history entry open-button found (panel may be empty)');
+        // Live: visit ENTRY (recorded in history), then CURRENT (where we are now), so
+        // clicking the ENTRY row later produces a real url change. Both load → the core
+        // records them and aegis.history.onChanged re-renders the panel.
+        await liveNavigate(ctx, ENTRY_URL);
+        await liveNavigate(ctx, CURRENT_URL);
+        // Re-reach the sidebar:history screen (nav may have closed it).
+        await ctx.reach('sidebar:history');
+        _urlBeforeClick = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        // Click the ENTRY row specifically (NOT the first row — that is CURRENT, the page
+        // we are already on, so it would produce no change). Scope by the ?ap=histentry marker.
+        const openBtn = await waitFor(
+          () => ctx.bySelector('.history-panel__open[aria-label*="ap=histentry"]'),
+          'history row for ?ap=histentry',
+        );
         await ctx.click(openBtn);
       },
       assert: async (ctx: InteractionCtx) => {
@@ -63,13 +71,13 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         const deadline = Date.now() + 8000;
         while (Date.now() < deadline) {
           const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-          if (url !== _urlBeforeClick && url.includes('example.org'))
+          if (url !== _urlBeforeClick && url.includes('ap=histentry'))
             return `history row → nav navigated from ${_urlBeforeClick} to ${url}`;
           await new Promise((r) => setTimeout(r, 400));
         }
         const finalUrl = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
         throw new Error(
-          `live: url did not change to ${SEED_URL} after clicking history entry (was ${_urlBeforeClick}, now ${finalUrl})`,
+          `live: url did not change to ${ENTRY_URL} after clicking history entry (was ${_urlBeforeClick}, now ${finalUrl})`,
         );
       },
     } satisfies InteractionSpec;
@@ -202,13 +210,16 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
     // Capture the url BEFORE clicking the saved row so the live assert can verify
     // the url CHANGED to the entry's destination — not merely that it is non-blank.
     let _urlBeforeClick: string | undefined;
+    // Live: a loadable fixture URL (?ap=savedopen) so the nav commits and is matchable;
+    // CURRENT is where we sit when clicking so the navigation is an observable change.
     const SEED_ITEM: SavedItem = {
       id: 100,
-      url: 'https://saved-open-test.example/',
+      url: fixtureUrl('savedopen'),
       title: 'Saved Open Test',
       tags: [],
       savedAt: 0,
     };
+    const CURRENT_URL = fixtureUrl('savedcurrent');
     return {
       id: 'sidebar.saved.openEntry',
       domain: 'sidebar.saved',
@@ -219,19 +230,25 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         if (ctx.layer === 'vitest') {
           // Seed the panel with one item whose url differs from the current nav state.
           await ctx.emitSaved?.([SEED_ITEM], []);
-        } else {
-          // Live: add the probe item via the API (distinct url), navigate to a
-          // DIFFERENT page first so the click produces a real url change.
-          await ctx.aegis.saved.add({ url: SEED_ITEM.url, title: SEED_ITEM.title });
-          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
-          await new Promise((r) => setTimeout(r, 1500));
-          await ctx.reach('sidebar:saved');
-          await new Promise((r) => setTimeout(r, 300));
-          _urlBeforeClick = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+          // Only the seeded item exists in vitest → first-match open button is it.
+          const openBtn = ctx.bySelector('.saved-panel__open');
+          if (!openBtn) throw new Error('No saved-panel open button found (panel may be empty)');
+          await ctx.click(openBtn);
+          return;
         }
-        // Click the "Open <url>" button — aria-label set by SavedPanel per item.
-        const openBtn = ctx.bySelector('.saved-panel__open');
-        if (!openBtn) throw new Error('No saved-panel open button found (panel may be empty)');
+        // Live: clear leftovers, add the probe, nudge the panel to re-fetch, sit on a
+        // DIFFERENT page, then click the probe's OWN row (scoped — the real panel may hold
+        // other items) so the navigation is an observable, item-specific change.
+        await clearSavedProbe(ctx, SEED_ITEM.url);
+        await ctx.aegis.saved.add({ url: SEED_ITEM.url, title: SEED_ITEM.title });
+        await nudgeSync('saved');
+        await liveNavigate(ctx, CURRENT_URL);
+        await ctx.reach('sidebar:saved');
+        _urlBeforeClick = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        const openBtn = await waitFor(
+          () => ctx.bySelector(`.saved-panel__open[aria-label="Open ${SEED_ITEM.url}"]`),
+          'saved row for the probe item',
+        );
         await ctx.click(openBtn);
       },
       assert: async (ctx: InteractionCtx) => {
@@ -247,19 +264,18 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         const deadline = Date.now() + 8000;
         while (Date.now() < deadline) {
           const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-          if (url !== _urlBeforeClick && url.includes('saved-open-test.example')) {
+          if (url !== _urlBeforeClick && url.includes('ap=savedopen')) {
             // Clean up the probe saved item.
-            const list = await ctx.aegis.saved.list();
-            for (const i of list.filter((i) => i.url === SEED_ITEM.url)) {
-              await ctx.aegis.saved.remove(i.id);
-            }
-            return `saved row open → nav navigated from ${_urlBeforeClick} to ${url}`;
+            await clearSavedProbe(ctx, SEED_ITEM.url);
+            await nudgeSync('saved');
+            return `saved row open → nav navigated from ${_urlBeforeClick} to ${url} (probe cleaned up)`;
           }
           await new Promise((r) => setTimeout(r, 400));
         }
         const finalUrl = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        await clearSavedProbe(ctx, SEED_ITEM.url);
         throw new Error(
-          `live: url did not become saved-open-test.example (was ${_urlBeforeClick}, now ${finalUrl})`,
+          `live: url did not carry ?ap=savedopen after clicking saved row (was ${_urlBeforeClick}, now ${finalUrl})`,
         );
       },
     } satisfies InteractionSpec;
@@ -284,19 +300,24 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
       run: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
           await ctx.emitSaved?.([SEED_ITEM], []);
-        } else {
-          // Live: add a probe item, snapshot the list length after add.
-          await ctx.aegis.saved.add({ url: SEED_ITEM.url, title: SEED_ITEM.title });
-          await new Promise((r) => setTimeout(r, 400));
-          const list = await ctx.aegis.saved.list();
-          _baseLength = list.length;
-          await ctx.reach('sidebar:saved');
-          await new Promise((r) => setTimeout(r, 300));
+          // Only the seeded item exists in vitest → first-match remove button is it.
+          const removeBtn = ctx.bySelector('.saved-panel__remove');
+          if (!removeBtn) throw new Error('No saved-panel remove button found (panel may be empty)');
+          await ctx.click(removeBtn);
+          return;
         }
-        // "Remove <label>" aria-label is set by SavedPanel for each item row.
-        // Use the CSS class selector to avoid matching unrelated Remove buttons.
-        const removeBtn = ctx.bySelector('.saved-panel__remove');
-        if (!removeBtn) throw new Error('No saved-panel remove button found (panel may be empty)');
+        // Live: clear leftovers, add the probe, nudge the panel, then click the probe's
+        // OWN remove button (scoped by title — the real panel may hold other items, so a
+        // first-match would remove the wrong row and pass for the wrong reason).
+        await clearSavedProbe(ctx, SEED_ITEM.url);
+        await ctx.aegis.saved.add({ url: SEED_ITEM.url, title: SEED_ITEM.title });
+        await nudgeSync('saved');
+        await ctx.reach('sidebar:saved');
+        const removeBtn = await waitFor(
+          () => ctx.bySelector(`.saved-panel__remove[aria-label="Remove ${SEED_ITEM.title}"]`),
+          'remove button for the probe item',
+        );
+        _baseLength = (await ctx.aegis.saved.list()).length;
         await ctx.click(removeBtn);
       },
       assert: async (ctx: InteractionCtx) => {
@@ -305,14 +326,15 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
             throw new Error('saved.remove not called');
           return 'saved row remove → saved.remove()';
         }
-        // Live: list length must have decreased by exactly 1 from baseline.
+        // Live: the probe itself must be gone (precise — not merely count−1, which a
+        // wrong-row removal would also satisfy).
         await new Promise((r) => setTimeout(r, 500));
         const list = await ctx.aegis.saved.list();
-        if (_baseLength === undefined)
-          throw new Error('live: _baseLength was never captured');
-        if (list.length !== _baseLength - 1)
+        if (list.some((i) => i.url === SEED_ITEM.url))
+          throw new Error(`live: probe ${SEED_ITEM.url} still in saved list after remove`);
+        if (_baseLength !== undefined && list.length !== _baseLength - 1)
           throw new Error(`live: expected ${_baseLength - 1} saved items after remove, got ${list.length}`);
-        return `saved row remove → list shrank from ${_baseLength} to ${list.length}`;
+        return `saved row remove → probe removed (list ${_baseLength} → ${list.length})`;
       },
     } satisfies InteractionSpec;
   })(),
@@ -340,22 +362,27 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
           // Seed the panel with one item that has no probe tag yet.
           await ctx.emitSaved?.([SEED_ITEM], []);
           _tagsBefore = [...SEED_ITEM.tags];
+          // Only the seeded item exists in vitest → first-match edit button is it.
+          const editBtn = ctx.bySelector('.saved-panel__edit');
+          if (!editBtn) throw new Error('No saved-panel edit button found (panel may be empty)');
+          await ctx.click(editBtn);
         } else {
-          // Live: add the probe saved item, snapshot its tags.
+          // Live: clear leftovers, add the probe, nudge the panel, snapshot its tags, then
+          // open the editor on the probe's OWN row (scoped by its title).
+          await clearSavedProbe(ctx, SEED_ITEM.url);
           await ctx.aegis.saved.add({ url: SEED_ITEM.url, title: SEED_ITEM.title, tags: [] });
-          await new Promise((r) => setTimeout(r, 400));
-          const list = await ctx.aegis.saved.list();
-          const item = list.find((i) => i.url === SEED_ITEM.url);
+          await nudgeSync('saved');
+          const item = (await ctx.aegis.saved.list()).find((i) => i.url === SEED_ITEM.url);
           if (!item) throw new Error('live: probe saved item not found after add');
           _tagsBefore = [...item.tags];
           await ctx.reach('sidebar:saved');
-          await new Promise((r) => setTimeout(r, 300));
+          const editBtn = await waitFor(
+            () => ctx.bySelector(`.saved-panel__edit[aria-label="Edit ${SEED_ITEM.title}"]`),
+            'edit button for the probe item',
+          );
+          await ctx.click(editBtn);
         }
-        // Click the "Edit <label>" button to open the inline editor.
-        const editBtn = ctx.bySelector('.saved-panel__edit');
-        if (!editBtn) throw new Error('No saved-panel edit button found (panel may be empty)');
-        await ctx.click(editBtn);
-        // The TagInput "Add tag" input is now rendered.
+        // The TagInput "Add tag" input is now rendered (only one item edits at a time).
         const tagInput = ctx.byLabel(/^Add tag$/);
         if (!tagInput) throw new Error('"Add tag" input not found in saved item editor');
         await ctx.type(tagInput, PROBE_TAG);
@@ -415,19 +442,23 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
           // Seed with an item carrying the old probe tag so tagUnion contains it.
           await ctx.emitSaved?.([SEED_ITEM], [OLD_TAG]);
         } else {
-          // Live: add the probe item with the old tag so it appears in tagUnion.
+          // Live: add the probe item with the old tag so it enters tagUnion, then nudge
+          // the panel to re-fetch so the "Manage tags" section renders.
+          await clearSavedProbe(ctx, SEED_ITEM.url);
           await ctx.aegis.saved.add({ url: SEED_ITEM.url, title: SEED_ITEM.title, tags: [OLD_TAG] });
-          await new Promise((r) => setTimeout(r, 400));
+          await nudgeSync('saved');
           await ctx.reach('sidebar:saved');
-          await new Promise((r) => setTimeout(r, 300));
+          await waitFor(() => ctx.bySelector('.saved-panel__manage-summary'), '"Manage tags" summary');
         }
         // Open the "Manage tags" details element by clicking its summary.
         const summary = ctx.bySelector('.saved-panel__manage-summary');
         if (!summary) throw new Error('"Manage tags" summary not found (tagUnion may be empty)');
         await ctx.click(summary);
         // Click the probe tag chip to select it (aria-pressed becomes true).
-        const tagChip = ctx.byRole('button', new RegExp(`^${OLD_TAG}$`));
-        if (!tagChip) throw new Error(`Tag chip "${OLD_TAG}" not found in Manage tags section`);
+        const tagChip = await waitFor(
+          () => ctx.byRole('button', new RegExp(`^${OLD_TAG}$`)),
+          `tag chip "${OLD_TAG}" in Manage tags`,
+        );
         await ctx.click(tagChip);
         // Type the new tag name in the "Rename tag to" input.
         const renameInput = ctx.byLabel(/^Rename tag to$/);
@@ -481,19 +512,23 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
           // Seed with an item carrying the probe tag.
           await ctx.emitSaved?.([SEED_ITEM], [PROBE_TAG]);
         } else {
-          // Live: add the probe item with the probe tag.
+          // Live: add the probe item with the probe tag, then nudge the panel to re-fetch
+          // so the "Manage tags" section renders the chip.
+          await clearSavedProbe(ctx, SEED_ITEM.url);
           await ctx.aegis.saved.add({ url: SEED_ITEM.url, title: SEED_ITEM.title, tags: [PROBE_TAG] });
-          await new Promise((r) => setTimeout(r, 400));
+          await nudgeSync('saved');
           await ctx.reach('sidebar:saved');
-          await new Promise((r) => setTimeout(r, 300));
+          await waitFor(() => ctx.bySelector('.saved-panel__manage-summary'), '"Manage tags" summary');
         }
         // Open the "Manage tags" details element by clicking its summary.
         const summary = ctx.bySelector('.saved-panel__manage-summary');
         if (!summary) throw new Error('"Manage tags" summary not found (tagUnion may be empty)');
         await ctx.click(summary);
         // Click the probe tag chip to select it.
-        const tagChip = ctx.byRole('button', new RegExp(`^${PROBE_TAG}$`));
-        if (!tagChip) throw new Error(`Tag chip "${PROBE_TAG}" not found in Manage tags section`);
+        const tagChip = await waitFor(
+          () => ctx.byRole('button', new RegExp(`^${PROBE_TAG}$`)),
+          `tag chip "${PROBE_TAG}" in Manage tags`,
+        );
         await ctx.click(tagChip);
         // Click the "Delete tag" button.
         const deleteBtn = ctx.byRole('button', /^Delete tag$/);

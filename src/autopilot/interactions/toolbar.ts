@@ -1,6 +1,6 @@
 // src/autopilot/interactions/toolbar.ts
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
-import { emitNavState, BASE_NAV } from './helpers';
+import { emitNavState, BASE_NAV, nudgeSync, waitFor, fixtureUrl, liveNavigate } from './helpers';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
 
 export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
@@ -101,72 +101,92 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     },
   },
 
-  {
-    id: 'toolbar.home',
-    domain: 'toolbar',
-    description: 'Click the Home button → nav.home called',
-    screen: 'home',
-    layers: ['vitest', 'live'],
-    run: async (ctx) => {
-      const btn = ctx.byRole('button', /^Home$/);
-      if (!btn) throw new Error('Home button not found');
-      await ctx.click(btn);
-    },
-    assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('nav.home'))
-          throw new Error('nav.home not called');
-        return 'Home button → nav.home()';
-      }
-      // Live: read the configured homeUrl and poll until the page lands on it.
-      const settings = await ctx.aegis.settings.get();
-      const homeUrl = settings.homeUrl;
-      const deadline = Date.now() + 8000;
-      while (Date.now() < deadline) {
-        const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-        if (homeUrl && url.startsWith(homeUrl)) return `Home button → ${url}`;
-        // Fallback: any non-blank change away from the pre-click state is acceptable
-        // evidence when homeUrl itself is empty/default.
-        if (!homeUrl && url !== 'about:blank' && url !== 'https://example.com/')
-          return `Home button → ${url}`;
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      throw new Error(`live: url never became homeUrl (${homeUrl ?? 'default'}) within 8 s`);
-    },
-  },
+  (() => {
+    // Live: the page must NOT already be on home before the click, or "navigated home"
+    // is unobservable. Park on a fixture URL first and capture it as the before-state.
+    let _before: string | undefined;
+    return {
+      id: 'toolbar.home',
+      domain: 'toolbar',
+      description: 'Click the Home button → nav.home called',
+      screen: 'home',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') {
+          await liveNavigate(ctx, fixtureUrl('home-before'));
+          _before = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        }
+        const btn = ctx.byRole('button', /^Home$/);
+        if (!btn) throw new Error('Home button not found');
+        await ctx.click(btn);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('nav.home'))
+            throw new Error('nav.home not called');
+          return 'Home button → nav.home()';
+        }
+        // Live: poll until the url LEAVES the before-state and lands on home. homeUrl is
+        // often about:blank, which the content view reports as '' or 'about:blank' — accept
+        // either; otherwise require the url to start with the configured homeUrl.
+        const home = (await ctx.aegis.settings.get()).homeUrl || 'about:blank';
+        const isHome = (u: string): boolean =>
+          home === 'about:blank' ? u === '' || u.startsWith('about:blank') : u.startsWith(home);
+        const deadline = Date.now() + 8000;
+        while (Date.now() < deadline) {
+          const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+          if (url !== _before && isHome(url)) return `Home button → navigated home (${url || 'about:blank'})`;
+          await new Promise((r) => setTimeout(r, 300));
+        }
+        const now = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        throw new Error(`live: url did not navigate home (before=${_before}, home=${home}, now=${now || 'about:blank'})`);
+      },
+    } satisfies InteractionSpec;
+  })(),
 
-  {
-    id: 'toolbar.addressBar.search',
-    domain: 'toolbar',
-    description: 'Type a search query in the address bar and press Enter → nav.navigate called with search URL',
-    screen: 'home',
-    layers: ['vitest', 'live'],
-    mobile: true, // MobileTopBar includes the same AddressBar component
-    run: async (ctx) => {
-      const bar = ctx.byRole('textbox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
-      if (!bar) throw new Error('address bar input not found');
-      await ctx.type(bar, 'hello world');
-      await ctx.press('Enter');
-    },
-    assert: async (ctx) => {
-      if (ctx.layer === 'vitest') {
-        // 'hello world' has a space so it is treated as a search term → navigate to
-        // searchTemplate.replace('%s', encodeURIComponent('hello world')).
-        if (!ctx.calls.called('nav.navigate', (a) => String(a[1]).toLowerCase().includes('hello')))
-          throw new Error('nav.navigate not called with hello');
-        return 'address bar search → nav.navigate(…hello…)';
-      }
-      const deadline = Date.now() + 8000;
-      while (Date.now() < deadline) {
-        const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-        // The search engine URL will contain the encoded query ("hello") or its host.
-        if (url.toLowerCase().includes('hello') || url.includes('duckduckgo') || url.includes('google'))
-          return 'address bar search → page navigated to search results';
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      throw new Error('live: url never contained search term or search-engine host within 8 s');
-    },
-  },
+  (() => {
+    // Capture the url BEFORE the search so the live assert can require an actual change
+    // (not merely a condition the previous page already satisfied).
+    let _before: string | undefined;
+    return {
+      id: 'toolbar.addressBar.search',
+      domain: 'toolbar',
+      description: 'Type a search query in the address bar and press Enter → nav.navigate called with search URL',
+      screen: 'home',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      mobile: true, // MobileTopBar includes the same AddressBar component
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') _before = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        const bar = ctx.byRole('textbox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
+        if (!bar) throw new Error('address bar input not found');
+        await ctx.type(bar, 'hello world');
+        await ctx.press('Enter');
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          // 'hello world' has a space so it is treated as a search term → navigate to
+          // searchTemplate.replace('%s', encodeURIComponent('hello world')).
+          if (!ctx.calls.called('nav.navigate', (a) => String(a[1]).toLowerCase().includes('hello')))
+            throw new Error('nav.navigate not called with hello');
+          return 'address bar search → nav.navigate(…hello…)';
+        }
+        // Live: derive the configured search engine's host so the assert isn't hard-coded
+        // to one provider. Pass when the url LEFT the before-state AND carries the query
+        // token ("hello") or the search host.
+        let searchHost = '';
+        try { searchHost = new URL((await ctx.aegis.settings.get()).defaultSearchTemplate.replace('%s', 'x')).host; } catch { /* leave empty */ }
+        const deadline = Date.now() + 8000;
+        while (Date.now() < deadline) {
+          const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+          if (url !== _before && (url.toLowerCase().includes('hello') || (searchHost && url.includes(searchHost))))
+            return `address bar search → navigated to search results (${url})`;
+          await new Promise((r) => setTimeout(r, 400));
+        }
+        const now = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        throw new Error(`live: search did not navigate (before=${_before}, searchHost=${searchHost || '?'}, now=${now})`);
+      },
+    } satisfies InteractionSpec;
+  })(),
 
   {
     id: 'toolbar.bookmarkStar.add',
@@ -179,7 +199,18 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     screen: 'home',
     layers: ['vitest', 'live'],
     run: async (ctx) => {
-      // Ensure the page has a saveable URL (canSave = hostOf(url) !== null).
+      if (ctx.layer === 'live') {
+        // Park on a real, saveable fixture URL that is NOT already saved, then nudge
+        // useSaved so isCurrentSaved re-queries → the button reads "Save bookmark".
+        const url = fixtureUrl('bookmark');
+        for (const i of (await ctx.aegis.saved.list()).filter((i) => i.url === url)) await ctx.aegis.saved.remove(i.id);
+        await liveNavigate(ctx, url);
+        await nudgeSync('saved');
+        const btn = await waitFor(() => ctx.byRole('button', /save bookmark/i), '"Save bookmark" button');
+        await ctx.click(btn);
+        return;
+      }
+      // vitest: seed a saveable nav state (canSave = hostOf(url) !== null) and click Save.
       await emitNavState(ctx, { ...BASE_NAV, url: 'https://example.com/', title: 'Example' });
       const btn = ctx.byRole('button', /save bookmark/i);
       if (!btn) throw new Error('Save bookmark button not found');
@@ -191,11 +222,19 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
           throw new Error('saved.add not called');
         return 'Save bookmark → saved.add()';
       }
-      const url = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
-      const items = await ctx.aegis.saved.list();
-      if (!items.some((i) => i.url === url))
-        throw new Error(`live: ${url} not in saved list`);
-      return `Save bookmark → saved persisted (${url})`;
+      const url = fixtureUrl('bookmark');
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        if ((await ctx.aegis.saved.list()).some((i) => i.url === url)) {
+          // Restore: unsave so the next run starts clean.
+          for (const i of (await ctx.aegis.saved.list()).filter((i) => i.url === url)) await ctx.aegis.saved.remove(i.id);
+          await nudgeSync('saved');
+          return `Save bookmark → saved persisted then restored (${url})`;
+        }
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      const urls = (await ctx.aegis.saved.list()).map((i) => i.url).join(', ');
+      throw new Error(`live: ${url} not in saved list after Save bookmark (saved=[${urls}])`);
     },
   },
 
@@ -210,28 +249,30 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     screen: 'home',
     layers: ['live'],
     run: async (ctx) => {
-      // Ensure the current page is saved first (the .add interaction runs before this).
-      // The live profile is disposable; we add then immediately remove.
-      const state = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-      const items = await ctx.aegis.saved.list();
-      if (!items.some((i) => i.url === state.url)) {
-        // Save it first if not already saved.
-        await ctx.aegis.saved.add({ url: state.url, title: state.title });
-        await new Promise((r) => setTimeout(r, 400));
+      // Park on a fixture URL, ensure it IS saved, then nudge useSaved so isCurrentSaved
+      // flips true and the BookmarkButton renders "Remove bookmark". A programmatic
+      // saved.add alone never re-renders the button (no sync.changed) — the old bug.
+      const url = fixtureUrl('bookmarkremove');
+      await liveNavigate(ctx, url);
+      if (!(await ctx.aegis.saved.list()).some((i) => i.url === url)) {
+        await ctx.aegis.saved.add({ url, title: 'AP Bookmark Remove' });
       }
-      // The BookmarkButton now should show "Remove bookmark".
-      const btn = ctx.byRole('button', /remove bookmark/i);
-      if (!btn) throw new Error('Remove bookmark button not found (page may not be saved)');
+      await nudgeSync('saved');
+      const btn = await waitFor(() => ctx.byRole('button', /remove bookmark/i), '"Remove bookmark" button');
       await ctx.click(btn);
     },
     assert: async (ctx) => {
-      // Live: the item should be gone from the saved list.
-      const state = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-      await new Promise((r) => setTimeout(r, 500)); // let the list update
-      const items = await ctx.aegis.saved.list();
-      if (items.some((i) => i.url === state.url))
-        throw new Error(`live: ${state.url} still in saved list after remove`);
-      return `Remove bookmark → saved.remove() → ${state.url} gone from list`;
+      // Live: the fixture item must be gone from the saved list.
+      const url = fixtureUrl('bookmarkremove');
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline) {
+        if (!(await ctx.aegis.saved.list()).some((i) => i.url === url))
+          return `Remove bookmark → saved.remove() → ${url} gone from list`;
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      // Safety cleanup so a failure doesn't leak state into later specs.
+      for (const i of (await ctx.aegis.saved.list()).filter((i) => i.url === url)) await ctx.aegis.saved.remove(i.id);
+      throw new Error(`live: ${url} still in saved list after Remove bookmark`);
     },
   },
 

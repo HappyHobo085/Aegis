@@ -294,7 +294,22 @@ export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
     },
     byLabel: (label) => {
       const re = label instanceof RegExp ? label : new RegExp(`^${label}$`);
-      return (Array.from(root.querySelectorAll('[aria-label]')) as HTMLElement[]).find((e) => re.test(e.getAttribute('aria-label') || '')) ?? null;
+      // 1. aria-label attribute (buttons, chips, icon controls).
+      const byAria = (Array.from(root.querySelectorAll('[aria-label]')) as HTMLElement[])
+        .find((e) => re.test(e.getAttribute('aria-label') || ''));
+      if (byAria) return byAria;
+      // 2. <label> association — `<label for=id>` or a wrapping `<label>` — so form
+      //    inputs labelled the accessible way (not via aria-label) are also found.
+      //    Mirrors testing-library's queryByLabelText, which the vitest ctx uses.
+      for (const l of Array.from(root.querySelectorAll('label')) as HTMLLabelElement[]) {
+        if (!re.test((l.textContent || '').trim())) continue;
+        const forId = l.getAttribute('for');
+        const target = forId
+          ? root.querySelector(`#${CSS.escape(forId)}`)
+          : l.querySelector('input,textarea,select');
+        if (target) return target as HTMLElement;
+      }
+      return null;
     },
     bySelector: (sel) => root.querySelector(sel),
     aegis,

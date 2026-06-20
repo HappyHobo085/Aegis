@@ -41,3 +41,65 @@ export const BASE_NAV: NavState = {
   isLoading: false,
   crashed: false,
 };
+
+// ---------------------------------------------------------------------------
+// Live-only helpers
+//
+// On the live run every ctx.emit* seeding helper is undefined (a no-op via ?.),
+// so a spec that needs UI state must (1) really mutate the core via ctx.aegis.*
+// and (2) nudge the owning hook to re-fetch — the same signal useSync relays on a
+// merge. These helpers make that pattern uniform. They are only ever called from
+// the `ctx.layer === 'live'` branch of a spec (never in jsdom/vitest).
+// ---------------------------------------------------------------------------
+
+/** The autopilot fixture base URL — a real, locally-served page that always loads
+ *  (unlike example.com / *.test / *.example, which are network/DNS-dependent on live).
+ *  Use this (with a distinct ?marker= per spec) for any URL a live spec navigates to. */
+export function fixtureBase(): string {
+  return (import.meta.env.VITE_AEGIS_AUTOPILOT_FIXTURE as string) || 'http://127.0.0.1:8137/';
+}
+
+/** Live-only: build a fixture URL with a unique query marker (host-independent, so the
+ *  assertion can match on the marker regardless of the configured fixture host). */
+export function fixtureUrl(marker: string): string {
+  const base = fixtureBase();
+  return base + (base.includes('?') ? '&' : '?') + 'ap=' + encodeURIComponent(marker);
+}
+
+/** Live-only: poll `fn` until it returns a truthy value or `timeoutMs` elapses.
+ *  Returns the value, or throws `live: timed out waiting for <label>`. */
+export async function waitFor<T>(fn: () => T | Promise<T>, label: string, timeoutMs = 8000): Promise<NonNullable<T>> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const v = await fn();
+    if (v) return v as NonNullable<T>;
+    if (Date.now() >= deadline) throw new Error(`live: timed out waiting for ${label}`);
+    await new Promise((r) => setTimeout(r, 150));
+  }
+}
+
+/** Live-only: nudge a domain hook (favorites/saved/allowlist) to re-fetch from the real
+ *  core after a programmatic ctx.aegis.* mutation — the exact signal useSync publishes on
+ *  a merge. Without this the chrome UI never re-renders for a local programmatic mutation,
+ *  so the seeded chip/row/host never appears for the gesture to target. */
+export async function nudgeSync(namespace: 'favorites' | 'saved' | 'allowlist'): Promise<void> {
+  const { publishSyncChange } = await import('../../lib/syncBus');
+  publishSyncChange(namespace, []);
+}
+
+/** Live-only: navigate the content view to `url` and wait until the page has actually
+ *  committed AND finished loading. Matching is on the ?ap= marker when present (so two
+ *  same-host fixture URLs that differ only by query are distinguished — host-only matching
+ *  would return early), else the host. Waiting for isLoading=false guarantees the load
+ *  finished, so the core has recorded the visit in history before we navigate away. */
+export async function liveNavigate(ctx: InteractionCtx, url: string, timeoutMs = 8000): Promise<void> {
+  await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, url);
+  let token = url;
+  const marker = url.match(/[?&]ap=([^&]+)/);
+  if (marker) token = 'ap=' + marker[1];
+  else { try { token = new URL(url).host; } catch { /* keep raw url as the match token */ } }
+  await waitFor(async () => {
+    const s = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+    return s.url.includes(token) && !s.isLoading;
+  }, `nav → ${url}`, timeoutMs);
+}

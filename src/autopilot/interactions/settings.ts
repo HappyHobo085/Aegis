@@ -1,6 +1,6 @@
 // src/autopilot/interactions/settings.ts
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
-import { fireInputChange } from './helpers';
+import { fireInputChange, nudgeSync, waitFor } from './helpers';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import type { Settings as AegisSettings } from '../../../shared/types';
 
@@ -498,15 +498,17 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
           // emitAllowlist flushes the React update before returning.
           await ctx.emitAllowlist?.([PROBE_HOST]);
         } else {
-          // Live: add the probe host to the allowlist first.
-          const navState = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, `https://${PROBE_HOST}/`);
-          await new Promise((r) => setTimeout(r, 1000));
-          await ctx.aegis.adblock.toggleAllowlist(`https://${PROBE_HOST}/`);
-          await new Promise((r) => setTimeout(r, 400));
-          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, navState.url);
+          // Live: add the probe host directly. toggleAllowlist takes a BARE host and adds
+          // it when absent — the old code passed a full URL, which stores the wrong string
+          // so the host never matches. Then nudge useAdblock to re-fetch the tab.
+          const st = await ctx.aegis.adblock.getState();
+          if (!st.allowlistedHosts.includes(PROBE_HOST)) await ctx.aegis.adblock.toggleAllowlist(PROBE_HOST);
+          await nudgeSync('allowlist');
           await ctx.reach('settings:allowlist');
-          await new Promise((r) => setTimeout(r, 300));
+          await waitFor(
+            () => ctx.byLabel(new RegExp(`Remove ${PROBE_HOST} from allowlist`)),
+            `"Remove ${PROBE_HOST} from allowlist" button`,
+          );
         }
         // Find the "Remove <host> from allowlist" button.
         const removeBtn = ctx.byLabel(new RegExp(`Remove ${PROBE_HOST} from allowlist`));
@@ -542,15 +544,17 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
           // Same emitAllowlist seeding as settings.allowlist.remove.
           await ctx.emitAllowlist?.([PROBE_HOST]);
         } else {
-          // Live: add the probe host to make the Clear all button enabled.
-          const navState = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
-          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, `https://${PROBE_HOST}/`);
-          await new Promise((r) => setTimeout(r, 1000));
-          await ctx.aegis.adblock.toggleAllowlist(`https://${PROBE_HOST}/`);
-          await new Promise((r) => setTimeout(r, 400));
-          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, navState.url);
+          // Live: add a bare probe host (see settings.allowlist.remove for the URL-vs-host
+          // bug) so the list is non-empty, then nudge useAdblock and wait until the host
+          // makes the "Clear all" button enabled (it is disabled on an empty list).
+          const st = await ctx.aegis.adblock.getState();
+          if (!st.allowlistedHosts.includes(PROBE_HOST)) await ctx.aegis.adblock.toggleAllowlist(PROBE_HOST);
+          await nudgeSync('allowlist');
           await ctx.reach('settings:allowlist');
-          await new Promise((r) => setTimeout(r, 300));
+          await waitFor(() => {
+            const b = ctx.byRole('button', /^Clear all$/) as HTMLButtonElement | null;
+            return b && !b.disabled ? b : null;
+          }, 'enabled "Clear all" button');
         }
         const clearBtn = ctx.byRole('button', /^Clear all$/);
         if (!clearBtn) throw new Error('"Clear all" button not found on Allowlist tab — list may be empty');
