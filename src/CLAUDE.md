@@ -169,13 +169,29 @@ Vite dead-code-eliminates it on `build:renderer`.
 - **`report.ts`** — `Report` / `StepResult` types, `summarize`, `renderReportHtml`.
   Produces the JSON report and the standalone HTML screenshot gallery.
 
-### Interaction catalog (`interactions.ts` + `interactionCtx.ts`)
+### Interaction catalog (`interactions/` + `interactionCtx.ts`)
 
 A third catalog — complementing `catalog.ts` (IPC) and `screens.ts` (UI states) — that
 focuses on **user interaction gestures**: what a user taps or types to trigger a feature,
 and what the resulting DOM / call state should be.
 
-- **`interactions.ts`** — `INTERACTIONS: InteractionSpec[]` + `INTERACTIVE_CONTROLS`.
+- **`interactions/`** — the catalog, split **per domain** (was one ~3700-line file). A
+  barrel `index.ts` concatenates the per-domain spec arrays into `INTERACTIONS:
+  InteractionSpec[]` and re-exports `INTERACTIVE_CONTROLS` + the public types, so
+  importers of `./interactions` resolve unchanged. Layout:
+  - `index.ts` — combines the domain arrays into `INTERACTIONS`; re-exports types +
+    `INTERACTIVE_CONTROLS`. **The single entry point** — keep importing `./interactions`.
+  - `types.ts` — `InteractionLayer`, `CallLog`, `InteractionCtx`, `InteractionSpec`.
+  - `helpers.ts` — shared `emitNavState`, `fireInputChange`, `BASE_NAV`.
+  - `controls.ts` — `INTERACTIVE_CONTROLS` (the canonical control-id registry).
+  - one file per domain group, each exporting a `*_INTERACTIONS: InteractionSpec[]`:
+    `toolbar.ts` (toolbar + shieldPopover), `tabs.ts` (tabs + keyboard),
+    `favorites.ts` (favbar + favManager), `sidebar.ts` (history + saved),
+    `settings.ts` (every settings tab), `overlays.ts` (downloads/confirm/error/
+    crash/safety/permission/redirect), `edge.ts`, `combo.ts`, `mobile.ts`.
+  - **Add a spec to its domain file.** A brand-new domain gets a new file + a one-line
+    spread in `index.ts`. A new control id still goes in `controls.ts` (see below).
+
   Each `InteractionSpec` has:
   - `id` — unique dot-namespaced string (e.g. `toolbar.addressBar.navigate`,
     `mobile.bottomBar.saved`)
