@@ -1,8 +1,7 @@
 // src/autopilot/interactions/favorites.ts
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
-import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import type { Favorite } from '../../../shared/types';
-import { nudgeSync, waitFor, fixtureUrl } from './helpers';
+import { nudgeSync, waitFor, fixtureUrl, activeViewId } from './helpers';
 
 export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
   // ─── Task 5: favorites bar/manager + sidebar history ────────────────────
@@ -61,10 +60,12 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
             throw new Error('nav.navigate not called with the favorite url');
           return 'favbar chip → nav.navigate(favorite url)';
         }
-        // Live: poll until the page url carries the favorite's ?ap=favopen marker; then clean up.
+        // Live: poll the ACTIVE view (the one the chip's nav.navigate targets) until its url
+        // carries the favorite's ?ap=favopen marker; then clean up.
+        const vid = await activeViewId(ctx);
         const deadline = Date.now() + 8000;
         while (Date.now() < deadline) {
-          const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+          const { url } = await ctx.aegis.nav.getState(vid);
           if (url.includes('ap=favopen')) {
             const list = await ctx.aegis.favorites.list();
             for (const f of list.filter((f) => f.url.includes('ap=favopen'))) {
@@ -75,7 +76,7 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           }
           await new Promise((r) => setTimeout(r, 400));
         }
-        const now = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        const now = (await ctx.aegis.nav.getState(vid)).url;
         throw new Error(`live: url never carried ?ap=favopen after clicking favorite chip (now ${now})`);
       },
     } satisfies InteractionSpec;

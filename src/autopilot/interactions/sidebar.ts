@@ -1,8 +1,7 @@
 // src/autopilot/interactions/sidebar.ts
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
-import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import type { HistoryEntry, SavedItem } from '../../../shared/types';
-import { nudgeSync, waitFor, fixtureUrl, liveNavigate } from './helpers';
+import { nudgeSync, waitFor, fixtureUrl, liveNavigate, activeViewId } from './helpers';
 
 /** Live-only: remove every saved item whose url matches `url` — clears leftovers a prior
  *  (possibly failed) spec didn't clean up, so each spec starts from a known state. */
@@ -48,7 +47,7 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         await liveNavigate(ctx, CURRENT_URL);
         // Re-reach the sidebar:history screen (nav may have closed it).
         await ctx.reach('sidebar:history');
-        _urlBeforeClick = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        _urlBeforeClick = (await ctx.aegis.nav.getState(await activeViewId(ctx))).url;
         // Click the ENTRY row specifically (NOT the first row — that is CURRENT, the page
         // we are already on, so it would produce no change). Scope by the ?ap=histentry marker.
         const openBtn = await waitFor(
@@ -68,14 +67,15 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         // (or changes to a different page) is a test failure.
         if (_urlBeforeClick === undefined)
           throw new Error('live: _urlBeforeClick was never captured (run() may not have executed)');
+        const vid = await activeViewId(ctx);
         const deadline = Date.now() + 8000;
         while (Date.now() < deadline) {
-          const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+          const { url } = await ctx.aegis.nav.getState(vid);
           if (url !== _urlBeforeClick && url.includes('ap=histentry'))
             return `history row → nav navigated from ${_urlBeforeClick} to ${url}`;
           await new Promise((r) => setTimeout(r, 400));
         }
-        const finalUrl = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        const finalUrl = (await ctx.aegis.nav.getState(vid)).url;
         throw new Error(
           `live: url did not change to ${ENTRY_URL} after clicking history entry (was ${_urlBeforeClick}, now ${finalUrl})`,
         );
@@ -99,8 +99,9 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
           ];
           await ctx.emitHistory?.(SEEDED);
         } else {
-          // Live: navigate to seed the list, then snapshot the length.
-          await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
+          // Live: navigate the ACTIVE (visible) view to seed the list, then snapshot the
+          // length. A background view 1 may not load → the visit wouldn't record.
+          await ctx.aegis.nav.navigate(await activeViewId(ctx), 'https://example.com/');
           await new Promise((r) => setTimeout(r, 1500));
           await ctx.reach('sidebar:history');
           await new Promise((r) => setTimeout(r, 300));
@@ -170,8 +171,9 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         ];
         await ctx.emitHistory?.(SEEDED);
       } else {
-        // Live: ensure history is non-empty so the Clear button is enabled.
-        await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, 'https://example.com/');
+        // Live: ensure history is non-empty so the Clear button is enabled. Navigate the
+        // ACTIVE (visible) view so the visit actually loads and records.
+        await ctx.aegis.nav.navigate(await activeViewId(ctx), 'https://example.com/');
         await new Promise((r) => setTimeout(r, 1500));
         await ctx.reach('sidebar:history');
         await new Promise((r) => setTimeout(r, 300));
@@ -244,7 +246,7 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         await nudgeSync('saved');
         await liveNavigate(ctx, CURRENT_URL);
         await ctx.reach('sidebar:saved');
-        _urlBeforeClick = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        _urlBeforeClick = (await ctx.aegis.nav.getState(await activeViewId(ctx))).url;
         const openBtn = await waitFor(
           () => ctx.bySelector(`.saved-panel__open[aria-label="Open ${SEED_ITEM.url}"]`),
           'saved row for the probe item',
@@ -261,9 +263,10 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         // seed url host — proves the click navigated to the saved entry specifically.
         if (_urlBeforeClick === undefined)
           throw new Error('live: _urlBeforeClick was never captured');
+        const vid = await activeViewId(ctx);
         const deadline = Date.now() + 8000;
         while (Date.now() < deadline) {
-          const { url } = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+          const { url } = await ctx.aegis.nav.getState(vid);
           if (url !== _urlBeforeClick && url.includes('ap=savedopen')) {
             // Clean up the probe saved item.
             await clearSavedProbe(ctx, SEED_ITEM.url);
@@ -272,7 +275,7 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
           }
           await new Promise((r) => setTimeout(r, 400));
         }
-        const finalUrl = (await ctx.aegis.nav.getState(PRIMARY_VIEW_ID)).url;
+        const finalUrl = (await ctx.aegis.nav.getState(vid)).url;
         await clearSavedProbe(ctx, SEED_ITEM.url);
         throw new Error(
           `live: url did not carry ?ap=savedopen after clicking saved row (was ${_urlBeforeClick}, now ${finalUrl})`,

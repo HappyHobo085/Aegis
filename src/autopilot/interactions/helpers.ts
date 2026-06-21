@@ -1,6 +1,6 @@
 // src/autopilot/interactions/helpers.ts
 // Internal helpers shared across the per-domain interaction spec files.
-import type { NavState } from '../../../shared/types';
+import type { NavState, ViewId } from '../../../shared/types';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import type { InteractionCtx } from './types';
 
@@ -87,19 +87,30 @@ export async function nudgeSync(namespace: 'favorites' | 'saved' | 'allowlist'):
   publishSyncChange(namespace, []);
 }
 
-/** Live-only: navigate the content view to `url` and wait until the page has actually
- *  committed AND finished loading. Matching is on the ?ap= marker when present (so two
- *  same-host fixture URLs that differ only by query are distinguished — host-only matching
- *  would return early), else the host. Waiting for isLoading=false guarantees the load
- *  finished, so the core has recorded the visit in history before we navigate away. */
+/** Live-only: the id of the view the chrome is currently driving. App binds
+ *  `useNav(tabs.activeId)`, so the address bar AND the favorites/saved/history "open"
+ *  handlers all navigate the ACTIVE view — which is NOT PRIMARY_VIEW_ID once the
+ *  tab-interaction specs have switched tabs. Any live nav setup/assert must target this
+ *  id, not a hard-coded view 1, or it drives/reads a stale background view (the bug behind
+ *  the favorites/saved/history "url never changed" failures). */
+export async function activeViewId(ctx: InteractionCtx): Promise<ViewId> {
+  return (await ctx.aegis.tabs.list()).activeId;
+}
+
+/** Live-only: navigate the ACTIVE content view to `url` and wait until the page has
+ *  actually committed AND finished loading. Matching is on the ?ap= marker when present
+ *  (so two same-host fixture URLs that differ only by query are distinguished — host-only
+ *  matching would return early), else the host. Waiting for isLoading=false guarantees the
+ *  load finished, so the core has recorded the visit in history before we navigate away. */
 export async function liveNavigate(ctx: InteractionCtx, url: string, timeoutMs = 8000): Promise<void> {
-  await ctx.aegis.nav.navigate(PRIMARY_VIEW_ID, url);
+  const vid = await activeViewId(ctx);
+  await ctx.aegis.nav.navigate(vid, url);
   let token = url;
   const marker = url.match(/[?&]ap=([^&]+)/);
   if (marker) token = 'ap=' + marker[1];
   else { try { token = new URL(url).host; } catch { /* keep raw url as the match token */ } }
   await waitFor(async () => {
-    const s = await ctx.aegis.nav.getState(PRIMARY_VIEW_ID);
+    const s = await ctx.aegis.nav.getState(vid);
     return s.url.includes(token) && !s.isLoading;
   }, `nav → ${url}`, timeoutMs);
 }

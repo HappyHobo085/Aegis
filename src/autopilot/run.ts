@@ -3,7 +3,7 @@
 // every SCREEN (drive control surface -> screenshot) and every CATALOG feature
 // (exercise the real core), runs end-to-end inductions, then writes the report.
 import type { AegisApi } from '../../shared/types';
-import { IPC } from '../../shared/types';
+import { IPC, PRIMARY_VIEW_ID } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { getAutopilotControl, type AutopilotControl } from './control';
 import { SCREENS, type ScreenId } from './screens';
@@ -138,6 +138,21 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
         await leaveScreen(deps.control, screenById(spec.screen), { emitEvent: deps.emitEvent }).catch(() => {});
       }
     }
+  }
+
+  // 2c-cleanup) The interaction tour exercises the tab specs, which can leave a NON-primary
+  // tab active. The ad-block A/B trace below navigates PRIMARY_VIEW_ID and needs it to be the
+  // VISIBLE active view: the WebKit content filter applies to the active content view, so a
+  // backgrounded view 1 would load the fixture's ads UNfiltered and the trace would falsely
+  // fail (off=5, on=5). Close any extra tabs the tour opened — closing the active non-primary
+  // tab re-activates the remaining (primary) one — restoring the trace's precondition.
+  if (deps.live) {
+    try {
+      const { tabs } = await deps.api.tabs.list();
+      if (tabs.some((t) => t.id === PRIMARY_VIEW_ID)) {
+        for (const t of tabs) if (t.id !== PRIMARY_VIEW_ID) await deps.api.tabs.close(t.id);
+      }
+    } catch { /* best effort — the trace still self-reports */ }
   }
 
   // 3) End-to-end ad-block induction. navigateFixture drives a real A/B on the live core:
