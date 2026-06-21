@@ -64,7 +64,13 @@ function liveDeps(): RunDeps {
       await new Promise((r) => setTimeout(r, 2500));
 
       await aegis.adblock.setEnabled(true);
-      await new Promise((r) => setTimeout(r, 600));
+      // setEnabled(true) → install_adblock re-applies the WebKit content filter
+      // ASYNCHRONOUSLY (the filter is added in a store load/save callback on the GTK main
+      // loop). 600ms lost the race after a heavy interaction tour: the ?ab=on page loaded
+      // and fired its ad requests BEFORE the filter landed on the webview's UCM (proven by
+      // the app.log — "[aegis-cf] filter loaded+added" appeared AFTER the ?ab=on counts),
+      // so the ads weren't blocked (off=5/on=5). Wait long enough for the re-apply to land.
+      await new Promise((r) => setTimeout(r, 4000));
       const before = (await aegis.adblock.getState()).sessionBlocked ?? 0;
       await aegis.nav.navigate(1, base + '?ab=on');
       // Poll up to ~12s: the page's external ad requests fire + get counted asynchronously.

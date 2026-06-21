@@ -45,6 +45,14 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         // records them and aegis.history.onChanged re-renders the panel.
         await liveNavigate(ctx, ENTRY_URL);
         await liveNavigate(ctx, CURRENT_URL);
+        // Confirm ENTRY actually recorded BEFORE opening the panel — separates the
+        // "was it recorded?" question from "does the panel show it?", and gives the
+        // App-level useHistory's history.changed refresh time to land (the seq-guarded
+        // refresh ensures the latest list() wins, not a stale concurrent one).
+        await waitFor(
+          async () => (await ctx.aegis.history.list()).some((h) => h.url.includes('ap=histentry')),
+          'histentry to be recorded in history.list()',
+        );
         // Re-reach the sidebar:history screen (nav may have closed it).
         await ctx.reach('sidebar:history');
         _urlBeforeClick = (await ctx.aegis.nav.getState(await activeViewId(ctx))).url;
@@ -52,7 +60,7 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         // we are already on, so it would produce no change). Scope by the ?ap=histentry marker.
         const openBtn = await waitFor(
           () => ctx.bySelector('.history-panel__open[aria-label*="ap=histentry"]'),
-          'history row for ?ap=histentry',
+          'history row for ?ap=histentry (recorded in history.list but absent from the panel — useHistory did not refresh)',
         );
         await ctx.click(openBtn);
       },

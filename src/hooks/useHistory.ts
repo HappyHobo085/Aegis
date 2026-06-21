@@ -28,22 +28,29 @@ export function useHistory(): {
     setQueryState(q);
   }, []);
 
+  // Monotonic token so only the latest-STARTED refresh may apply its (async) result.
+  // Two history.changed events in quick succession (e.g. navigating two pages back to
+  // back) spawn concurrent refreshes; without this an older list()/search() resolving
+  // last clobbers the panel with stale data, dropping the newest visits until the next
+  // change. The autopilot's history-row interaction caught exactly this race.
+  const refreshSeq = useRef(0);
+
   const refresh = useCallback(async (): Promise<void> => {
+    const seq = ++refreshSeq.current;
     const q = queryRef.current.trim();
     const next = q.length > 0 ? await aegis.history.search(q) : await aegis.history.list();
-    setEntries(next);
+    if (seq === refreshSeq.current) setEntries(next);
   }, []);
 
   useEffect(() => {
-    let active = true;
-    void aegis.history.list().then((next) => {
-      if (active) setEntries(next);
-    });
+    // Initial load goes through refresh() so it shares the seq-guard (a slow mount
+    // fetch can't clobber a fast history.changed refresh, or vice versa).
+    void refresh();
     const unsubscribe = aegis.history.onChanged(() => {
       void refresh();
     });
     return () => {
-      active = false;
+      refreshSeq.current++; // invalidate any in-flight refresh on unmount
       unsubscribe();
     };
   }, [refresh]);

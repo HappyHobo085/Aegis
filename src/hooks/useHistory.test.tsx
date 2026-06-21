@@ -145,4 +145,44 @@ describe('useHistory', () => {
     unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
+
+  it('a slow stale refresh cannot clobber a newer one (out-of-order guard)', async () => {
+    // Regression: two history.changed events in quick succession (navigating two pages
+    // back to back) spawn concurrent refreshes. If an OLDER list() resolves LAST it must
+    // not overwrite the newer result. (The autopilot's history-row interaction caught
+    // this: a fresh visit never appeared in the panel.)
+    let pushed: (() => void) | undefined;
+    onChanged.mockImplementation((cb: () => void) => {
+      pushed = cb;
+      return () => {};
+    });
+
+    let resolveStale: (v: HistoryEntry[]) => void = () => {};
+    let resolveFresh: (v: HistoryEntry[]) => void = () => {};
+    const stale = new Promise<HistoryEntry[]>((r) => { resolveStale = r; });
+    const fresh = new Promise<HistoryEntry[]>((r) => { resolveFresh = r; });
+    const staleData = [entry(1, 'https://a.example/', 'A', 1000)];
+    const freshData = [entry(9, 'https://new.example/', 'NEW', 9000), ...seed];
+
+    // mount → list() #1 = seed; 1st onChanged → #2 = the SLOW stale promise (started
+    // first); 2nd onChanged → #3 = the FAST fresh promise (started second).
+    list.mockReset();
+    list.mockResolvedValueOnce(seed).mockReturnValueOnce(stale).mockReturnValueOnce(fresh);
+
+    const { result } = renderHook(() => useHistory());
+    await waitFor(() => expect(pushed).toBeTypeOf('function'));
+    await waitFor(() => expect(result.current.entries).toHaveLength(2)); // seed loaded
+
+    act(() => { pushed!(); pushed!(); }); // fire both refreshes (stale started first)
+
+    // The NEWER refresh resolves FIRST and must apply.
+    await act(async () => { resolveFresh(freshData); await fresh; });
+    await waitFor(() => expect(result.current.entries[0]?.title).toBe('NEW'));
+    expect(result.current.entries).toHaveLength(3);
+
+    // The OLDER (stale) refresh resolves LAST — it must be discarded, not clobber.
+    await act(async () => { resolveStale(staleData); await stale; });
+    expect(result.current.entries).toHaveLength(3);
+    expect(result.current.entries[0].title).toBe('NEW');
+  });
 });
