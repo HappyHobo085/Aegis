@@ -44,15 +44,18 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         // clicking the ENTRY row later produces a real url change. Both load → the core
         // records them and aegis.history.onChanged re-renders the panel.
         await liveNavigate(ctx, ENTRY_URL);
-        await liveNavigate(ctx, CURRENT_URL);
-        // Confirm ENTRY actually recorded BEFORE opening the panel — separates the
-        // "was it recorded?" question from "does the panel show it?", and gives the
-        // App-level useHistory's history.changed refresh time to land (the seq-guarded
-        // refresh ensures the latest list() wins, not a stale concurrent one).
+        // CRITICAL: wait until ENTRY is RECORDED before navigating to CURRENT. For a fast
+        // local page liveNavigate returns as soon as the uri-tracker reports the url
+        // committed + !isLoading, which can PRECEDE the page-load-Finished that records the
+        // visit (nav.rs records on Finished). Navigating away to CURRENT then preempts that
+        // Finished and ENTRY is never recorded — the bug the recording-confirm diagnostic
+        // caught (the page loaded per [aegis-count] but never reached history.list).
+        // Polling here, WITHOUT navigating away, lets Finished fire and record the visit.
         await waitFor(
           async () => (await ctx.aegis.history.list()).some((h) => h.url.includes('ap=histentry')),
-          'histentry to be recorded in history.list()',
+          'histentry to be recorded in history.list() (load-Finished must record it before we navigate away)',
         );
+        await liveNavigate(ctx, CURRENT_URL);
         // Re-reach the sidebar:history screen (nav may have closed it).
         await ctx.reach('sidebar:history');
         _urlBeforeClick = (await ctx.aegis.nav.getState(await activeViewId(ctx))).url;
