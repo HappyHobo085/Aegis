@@ -65,11 +65,19 @@ fn layout_of(app: &AppHandle) -> Layout {
         })
 }
 
+/// The ONE definition of whether the content webview is shown for a given layout:
+/// shown in fullscreen, shown when the sidebar insets it (page stays visible beside
+/// the panel), and shown whenever no full-window overlay is covering it. A full
+/// overlay (settings/downloads/dialogs/…) is the only thing that hides it.
+pub fn content_visible(lay: &Layout) -> bool {
+    lay.fullscreen || lay.sidebar || !lay.overlay
+}
+
 /// Hide the content for a full-window chrome overlay (settings, downloads, …) so the
 /// chrome shows above the opaque content webview. The sidebar is NOT a full overlay — it
 /// insets the content (page stays visible beside it), so it keeps content shown.
 fn apply_visibility(app: &AppHandle, lay: Layout) {
-    let visible = lay.fullscreen || lay.sidebar || !lay.overlay;
+    let visible = content_visible(&lay);
     #[cfg(target_os = "linux")]
     crate::linux_layout::set_content_visible(app, visible);
     // Windows/macOS: Tauri's hide/show work directly. (Mobile is single-webview —
@@ -109,7 +117,7 @@ pub fn apply_inset(app: &AppHandle) {
     // ourselves via the GtkFixed workaround. Other platforms: set_bounds works.
     #[cfg(target_os = "linux")]
     {
-        let content_visible = lay.fullscreen || lay.sidebar || !lay.overlay;
+        let visible = content_visible(&lay);
         crate::linux_layout::layout(
             app,
             left as i32,
@@ -118,7 +126,7 @@ pub fn apply_inset(app: &AppHandle) {
             logical.width as i32,
             logical.height as i32,
             lay.fullscreen,
-            content_visible,
+            visible,
         );
     }
 
@@ -152,7 +160,7 @@ pub fn apply_inset(app: &AppHandle) {
     #[cfg(all(desktop, not(target_os = "linux")))]
     {
         let active = crate::nav::active_content_label(app);
-        let active_visible = lay.fullscreen || lay.sidebar || !lay.overlay;
+        let active_visible = content_visible(&lay);
         for (label, w) in app.webviews() {
             if label.starts_with("content:") {
                 let _ = if label == active && active_visible { w.show() } else { w.hide() };
@@ -168,6 +176,28 @@ fn update<F: FnOnce(&mut Layout)>(app: &AppHandle, f: F) {
     }
     apply_visibility(app, layout_of(app));
     apply_inset(app);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{content_visible, Layout};
+
+    fn lay(overlay: bool, sidebar: bool, fullscreen: bool) -> Layout {
+        Layout { left: 0.0, top: 0.0, right: 0.0, fullscreen, overlay, sidebar }
+    }
+
+    #[test]
+    fn content_visible_truth_table() {
+        // Nothing open → content shown.
+        assert!(content_visible(&lay(false, false, false)));
+        // A full overlay hides the content.
+        assert!(!content_visible(&lay(true, false, false)));
+        // The sidebar insets (does NOT hide) — content stays shown even though
+        // overlay rides true while the sidebar is open.
+        assert!(content_visible(&lay(true, true, false)));
+        // Fullscreen always shows content, even if an overlay flag lingers.
+        assert!(content_visible(&lay(true, false, true)));
+    }
 }
 
 /// Handle `view.*` channels. Returns `None` if not a view channel.
