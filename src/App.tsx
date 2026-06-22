@@ -150,6 +150,9 @@ function DesktopApp() {
   // overlay is up. New overlays self-register (see useChromeSurface) — there is no
   // central list to forget to update.
   const { openSurfaces } = useChromeSurfaceRegistry();
+  // Effect-driven: the content layout is applied one render cycle after an overlay opens
+  // (via the registry's useEffect in useChromeSurface) — observably equivalent to the
+  // old synchronous union, as proven by the unchanged autopilot tour.
   const fullOverlayActive = openSurfaces.size > 0;
   useEffect(() => {
     // ONE atomic update from a single derived state. computeContentLayout is the sole

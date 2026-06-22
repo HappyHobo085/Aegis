@@ -64,4 +64,8 @@ describe('chrome surface registry', () => {
   it('useChromeSurfaceRegistry throws outside the provider', () => {
     expect(() => render(<CountProbe />)).toThrow(/ChromeSurfaceProvider/);
   });
+
+  it('useChromeSurface is a no-op (does not throw) with no provider', () => {
+    expect(() => render(<Surface id="x" active={true} />)).not.toThrow();
+  });
 });

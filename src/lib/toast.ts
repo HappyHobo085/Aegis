@@ -83,27 +83,9 @@ export function registerConfirmHandler(
   confirmHandler = handler;
 }
 
-// Track whether a confirm dialog is open so the shell can treat it as a full
-// overlay (on Tauri the content webview is opaque + on top, so an untracked
-// overlay renders behind the page).
-let confirmOpen = false;
-const confirmOpenListeners = new Set<(open: boolean) => void>();
-function setConfirmOpen(open: boolean): void {
-  confirmOpen = open;
-  for (const l of confirmOpenListeners) l(open);
-}
-export function subscribeConfirmOpen(listener: (open: boolean) => void): () => void {
-  confirmOpenListeners.add(listener);
-  listener(confirmOpen);
-  return () => {
-    confirmOpenListeners.delete(listener);
-  };
-}
-
 export function confirm(message: string): Promise<boolean> {
   if (confirmHandler) {
-    setConfirmOpen(true);
-    return confirmHandler(message).finally(() => setConfirmOpen(false));
+    return confirmHandler(message);
   }
   return Promise.resolve(typeof window !== 'undefined' ? window.confirm(message) : false);
 }
