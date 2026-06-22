@@ -1,5 +1,6 @@
 // src/components/SafetyInterstitial.tsx
 import type { SafetyInterstitialPayload } from '../../shared/types';
+import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
 function safeHost(url: string): string {
   try {
@@ -18,6 +19,7 @@ export function SafetyInterstitial({
   onProceed: (url: string) => void;
   onBack?: () => void;
 }) {
+  useChromeSurface('safetyInterstitial', interstitial !== null);
   if (interstitial === null) return null;
   const host = safeHost(interstitial.url);
   const malware = interstitial.reason === 'malware';

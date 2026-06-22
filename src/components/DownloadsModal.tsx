@@ -4,12 +4,14 @@ import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
 import { DownloadsPanel } from './DownloadsPanel';
 import type { DownloadsPanelProps } from './DownloadsPanel';
+import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
 export interface DownloadsModalProps extends DownloadsPanelProps {
   onClose(): void;
 }
 
 export function DownloadsModal({ onClose, ...panel }: DownloadsModalProps) {
+  useChromeSurface('downloads', true);
   const titleId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
 

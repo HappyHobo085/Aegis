@@ -4,6 +4,7 @@ import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
+import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
 export type SettingsTab =
   | 'appearance'
@@ -80,6 +81,7 @@ export function SettingsModal({
   sync,
   data,
 }: SettingsModalProps) {
+  useChromeSurface('settings', true);
   const titleId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
   const tabsRef = useHorizontalWheel<HTMLDivElement>();

@@ -2,6 +2,7 @@
 import { useEffect, useState, useId, useCallback, useRef } from 'react';
 import { registerConfirmHandler } from '../lib/toast';
 import { useDialog } from '../hooks/useDialog';
+import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
 interface PendingConfirm {
   message: string;
@@ -46,6 +47,7 @@ function Dialog({
 
 export function ConfirmDialog() {
   const [pending, setPending] = useState<PendingConfirm | null>(null);
+  useChromeSurface('confirmDialog', pending !== null);
   // Track the active item in a ref so resolution side effects happen OUTSIDE the
   // state updater. The updater must stay pure: React StrictMode (dev) double-invokes
   // updaters, and an impure one that returns a different value on the second pass

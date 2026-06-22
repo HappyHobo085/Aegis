@@ -2,6 +2,7 @@
 import { useId } from 'react';
 import type { PermissionPrompt } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
+import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
 export interface PermissionPromptDialogProps {
   prompt: PermissionPrompt;
@@ -9,6 +10,7 @@ export interface PermissionPromptDialogProps {
 }
 
 export function PermissionPromptDialog({ prompt, onResolve }: PermissionPromptDialogProps) {
+  useChromeSurface('permissionPrompt', true);
   const msgId = useId();
   // Closing the dialog (Escape / focus-trap dismiss) is treated as a Block.
   const dialogRef = useDialog<HTMLDivElement>(() => onResolve(prompt.requestId, 'deny'));

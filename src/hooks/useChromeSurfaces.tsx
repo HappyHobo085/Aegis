@@ -45,6 +45,8 @@ export function ChromeSurfaceProvider({ children }: { children: ReactNode }): JS
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
+/** Returns the registry, or throws if used outside a `ChromeSurfaceProvider`.
+ *  The compositor in `DesktopApp` uses this; it always runs inside the provider. */
 export function useChromeSurfaceRegistry(): SurfaceRegistry {
   const ctx = useContext(Ctx);
   if (!ctx) {
@@ -53,10 +55,25 @@ export function useChromeSurfaceRegistry(): SurfaceRegistry {
   return ctx;
 }
 
+// A stable no-op registry for components rendered outside the provider (unit tests,
+// Storybook, mobile shell). The functions are module-level constants so their
+// referential identity never changes — safe to pass to useEffect deps.
+const noopRegister = (_id: string): void => {};
+const noopUnregister = (_id: string): void => {};
+const EMPTY_SET: ReadonlySet<string> = new Set();
+const NOOP_REGISTRY: SurfaceRegistry = {
+  register: noopRegister,
+  unregister: noopUnregister,
+  openSurfaces: EMPTY_SET,
+};
+
 /** Register `id` as an open full-window surface while `active` is true; the effect
- *  cleanup unregisters it (on close or unmount). Idempotent per id. */
+ *  cleanup unregisters it (on close or unmount). Idempotent per id.
+ *  When called outside a `ChromeSurfaceProvider` (unit tests, mobile shell), this
+ *  is a safe no-op — it does not throw. */
 export function useChromeSurface(id: string, active: boolean): void {
-  const { register, unregister } = useChromeSurfaceRegistry();
+  const ctx = useContext(Ctx);
+  const { register, unregister } = ctx ?? NOOP_REGISTRY;
   useEffect(() => {
     if (!active) return;
     register(id);

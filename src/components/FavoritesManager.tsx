@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { Trash2, X } from 'lucide-react';
 import type { Favorite } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
+import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
 export interface FavoritesManagerProps {
   favorites: Favorite[];
@@ -66,6 +67,7 @@ export function FavoritesManager({
   update,
   remove,
 }: FavoritesManagerProps) {
+  useChromeSurface('favoritesManager', true);
   const titleId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
 

@@ -4,8 +4,10 @@ import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
 import type { NavCrashed, NavFailed, RedirectBlocked } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
-import { subscribeConfirmOpen, confirm } from './lib/toast';
+import { confirm } from './lib/toast';
 import { REDIRECT_BAR_H } from './lib/layout';
+import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChromeSurfaces';
+import { computeContentLayout } from './lib/contentLayout';
 import { useNav } from './hooks/useNav';
 import { useAdblock } from './hooks/useAdblock';
 import { useFavorites } from './hooks/useFavorites';
@@ -105,7 +107,6 @@ function DesktopApp() {
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  const [confirmOpen, setConfirmOpen] = useState(false);
   // A scripted cross-origin top-frame redirect the native guard cancelled; surfaced as a
   // notification bar (a floating toast can't paint over the opaque content webview).
   const [blockedRedirect, setBlockedRedirect] = useState<RedirectBlocked | null>(null);
@@ -140,42 +141,29 @@ function DesktopApp() {
     });
   }, []);
 
-  // A confirm dialog (e.g. "Clear all history") is a full-window overlay; track it
-  // so the content webview hides behind it (else it renders behind the page).
-  useEffect(() => subscribeConfirmOpen(setConfirmOpen), []);
-
   // Favorites bar is always-on (constant top inset); tab strip adds to the inset on desktop.
   // The redirect-blocked bar, when shown, adds its height so it sits in the visible chrome
   // strip (content insets below it).
   useContentInset(tabs.activeId, !isMobile, blockedRedirect ? REDIRECT_BAR_H : 0);
 
-  // Full-window chrome overlays (settings, favorites manager, permission prompt,
-  // error/crash, downloads, safety) must bring the chrome over the content. The
-  // sidebar is a partial right panel handled separately (setSidebar) so the page
-  // stays visible beside it; on Electron the sidebar still rides the chrome overlay
-  // (the union below preserves the original setChromeOverlay calls), and setSidebar
-  // is a Tauri-only no-op there.
-  const fullOverlayActive =
-    downloadsOpen ||
-    settingsOpen ||
-    managerOpen ||
-    confirmOpen ||
-    permissions.prompt !== null ||
-    failed !== null ||
-    crashed !== null ||
-    safety.interstitial !== null;
+  // Derived, never hand-maintained: any registered full-window surface means a full
+  // overlay is up. New overlays self-register (see useChromeSurface) — there is no
+  // central list to forget to update.
+  const { openSurfaces } = useChromeSurfaceRegistry();
+  const fullOverlayActive = openSurfaces.size > 0;
   useEffect(() => {
-    // ONE atomic update for the overlay + sidebar so the content layout is applied from a
-    // single consistent state. Two separate calls (setChromeOverlay + setSidebar) each
-    // triggered their own layout pass and could apply mid-transition — leaving a full overlay
-    // (e.g. Settings opened while the sidebar was open) rendered behind the content. overlay =
-    // a full overlay OR the sidebar/shield ride the chrome; sidebar = the inset panel, only
-    // when no full overlay is covering it.
-    void aegis.view.setLayout?.(tabs.activeId, {
-      overlay: fullOverlayActive || sidebarOpen || shieldOpen,
-      sidebar: sidebarOpen && !fullOverlayActive,
-      width: sidebarWidth,
-    });
+    // ONE atomic update from a single derived state. computeContentLayout is the sole
+    // place the overlay/sidebar/shield → content-layout mapping lives (mirrored on the
+    // Rust side by view::content_visible).
+    void aegis.view.setLayout?.(
+      tabs.activeId,
+      computeContentLayout({
+        fullOverlay: fullOverlayActive,
+        sidebar: sidebarOpen,
+        shield: shieldOpen,
+        sidebarWidth,
+      }),
+    );
   }, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen, sidebarWidth]);
 
   // Fullscreen: main shrinks chrome to a top-right corner and fills the window
@@ -561,5 +549,10 @@ function DesktopApp() {
 }
 
 export function App() {
-  return isMobile ? <MobileApp /> : <DesktopApp />;
+  if (isMobile) return <MobileApp />;
+  return (
+    <ChromeSurfaceProvider>
+      <DesktopApp />
+    </ChromeSurfaceProvider>
+  );
 }

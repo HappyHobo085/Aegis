@@ -1,5 +1,6 @@
 // src/components/ErrorOverlay.tsx
 import type { NavCrashed, NavFailed } from '../../shared/types';
+import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
 export interface ErrorOverlayProps {
   failed: NavFailed | null;
@@ -9,6 +10,7 @@ export interface ErrorOverlayProps {
 }
 
 export function ErrorOverlay({ failed, crashed, onRetry, onHome }: ErrorOverlayProps) {
+  useChromeSurface('errorOverlay', failed !== null || crashed !== null);
   if (!failed && !crashed) {
     return null;
   }
