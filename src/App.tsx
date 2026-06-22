@@ -1,5 +1,5 @@
 // src/App.tsx
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
 import type { NavCrashed, NavFailed, RedirectBlocked } from '../shared/types';
 import { aegis } from './lib/ipcClient';
@@ -110,6 +110,12 @@ function DesktopApp() {
   // A scripted cross-origin top-frame redirect the native guard cancelled; surfaced as a
   // notification bar (a floating toast can't paint over the opaque content webview).
   const [blockedRedirect, setBlockedRedirect] = useState<RedirectBlocked | null>(null);
+  // Destinations the user has dismissed for the active tab. A malicious page (e.g. streamex)
+  // re-fires the same blocked redirect on a timer AND on the resize the bar itself causes (it
+  // insets the content), so without remembering dismissals the bar is unclosable. Reset on tab
+  // switch (see the onBlocked effect). Ref, not state — the onBlocked callback reads the latest
+  // set without re-subscribing.
+  const dismissedRedirectsRef = useRef<Set<string>>(new Set());
   const update = useUpdate();
   const safety = useSafety();
 
@@ -280,8 +286,13 @@ function DesktopApp() {
   // tab; switching tabs clears any stale bar.
   useEffect(() => {
     setBlockedRedirect(null);
+    dismissedRedirectsRef.current = new Set();
     return aegis.redirect.onBlocked((r) => {
       if (r.viewId !== tabs.activeId) return;
+      // Stay quiet about a destination the user already dismissed — the page keeps re-firing the
+      // same blocked redirect (timer + the bar's own resize), so re-showing it makes the bar
+      // impossible to close. A different destination still surfaces a fresh bar.
+      if (dismissedRedirectsRef.current.has(r.to)) return;
       setBlockedRedirect(r);
     });
   }, [tabs.activeId]);
@@ -416,10 +427,14 @@ function DesktopApp() {
         <RedirectBar
           redirect={blockedRedirect}
           onOpenAnyway={() => {
+            dismissedRedirectsRef.current.add(blockedRedirect.to);
             void tabs.create(blockedRedirect.to, false);
             setBlockedRedirect(null);
           }}
-          onDismiss={() => setBlockedRedirect(null)}
+          onDismiss={() => {
+            dismissedRedirectsRef.current.add(blockedRedirect.to);
+            setBlockedRedirect(null);
+          }}
         />
       )}
       <Sidebar

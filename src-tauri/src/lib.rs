@@ -394,7 +394,8 @@ pub fn run() {
         .manage(safety::SafetyState::default())
         .manage(sync::SyncState::default())
         .manage(redirect_guard::PendingNavs::default())
-        .manage(redirect_guard::NavActions::default());
+        .manage(redirect_guard::NavActions::default())
+        .manage(redirect_guard::Chains::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;
@@ -455,7 +456,16 @@ pub fn run() {
 
             // Tauri child-webview auto-resize is incomplete; recompute bounds on
             // window resize so the content view keeps filling the area below the chrome.
+            // Linux: the content/chrome webviews are sized via size_allocate (not
+            // set_size_request, which pins the window's minimum to its current size so it can't
+            // shrink — see linux_layout's SIZING NOTE). Register the insets state the sizing
+            // handler reads before the first layout pass below.
+            #[cfg(target_os = "linux")]
+            app.manage(linux_layout::LayoutInsets::default());
             if let Some(window) = app.get_window("main") {
+                // A sane floor so the window can shrink (the bug was it couldn't at all) without
+                // collapsing to an unusable size. Effective now that the webviews no longer pin it.
+                let _ = window.set_min_size(Some(tauri::LogicalSize::new(420.0, 320.0)));
                 let handle = app.handle().clone();
                 window.on_window_event(move |event| {
                     if let tauri::WindowEvent::Resized(_) = event {

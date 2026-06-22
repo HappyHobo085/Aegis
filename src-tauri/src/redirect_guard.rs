@@ -1,12 +1,25 @@
 //! Blocks scripted (non-user-gesture) cross-origin top-frame redirects — the
 //! anti-malvertising guard. The POLICY lives here once; each platform's native
-//! nav-policy hook derives the four inputs and calls in. See
+//! nav-policy hook derives the inputs and calls in. See
 //! docs/superpowers/specs/2026-06-18-scripted-redirect-blocker-design.md.
+//!
+//! A navigation is judged by WHO STARTED ITS CHAIN, not by the individual hop.
+//! Malvertising commonly bounces the top frame through a redirect (e.g. streamex's
+//! resize-detection script sends the tab to `google.com`, which 301s to
+//! `www.google.com`). The destination hop carries `is_redirect=true`, so an
+//! is_redirect short-circuit would wave it straight through. Instead we remember the
+//! chain's first (non-redirect) hop — was it scripted? app-initiated? — and apply
+//! that verdict to the final displayable navigation, however many redirect hops it
+//! took. Legit redirect chains (a user-clicked OAuth/shortener bounce, or an
+//! address-bar nav that the server redirects) stay allowed because their chain
+//! ORIGIN was a user gesture or an app-initiated nav.
 use tauri::{AppHandle, Manager, Url};
 
-/// The core test: a script-initiated, cross-origin navigation targeting the top
-/// frame. All four platforms feed it the same inputs. (Freshness — excluding
-/// redirect hops and app-initiated navs — is layered on by `decide`.)
+/// The core cross-origin test, exposed for Android's JNI hook (which has reliable
+/// main-frame + gesture in one place and no redirect chains to track). `scripted`
+/// = no user gesture; `main_frame` = top-frame navigation. (Desktop goes through the
+/// chain-aware hooks instead, so this is only reached on Android + in tests.)
+#[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
 pub fn should_block(current: &str, target: &str, scripted: bool, main_frame: bool) -> bool {
     scripted && main_frame && is_cross_origin_http(current, target)
 }
@@ -28,8 +41,9 @@ use std::sync::Mutex;
 
 /// One expected app-initiated target URL per tab. The app records the URL it is
 /// about to navigate to (address bar, new tab, HTTPS upgrade, Open-anyway, restore)
-/// BEFORE navigating; the guard consumes a match so app navigations are never
-/// blocked. Page-script navigations never match.
+/// BEFORE navigating; the decision phase consumes a match (against the chain's origin target)
+/// so app navigations — and the redirect chains they trigger — are never blocked. Page-script
+/// navigations never match.
 #[derive(Default)]
 pub struct PendingNavs(pub Mutex<HashMap<u32, String>>);
 
@@ -64,50 +78,128 @@ fn same_target(a: &str, b: &str) -> bool {
     }
 }
 
-/// Decide whether to BLOCK this navigation (true = cancel). `is_redirect` marks a
-/// redirect hop continuing an already-vetted navigation.
-pub fn decide(
-    pending: &PendingNavs,
-    tab: u32,
-    current: &str,
-    target: &str,
-    scripted: bool,
-    main_frame: bool,
-    is_redirect: bool,
-) -> bool {
-    if is_redirect {
-        return false; // continuation of a vetted navigation
-    }
-    if pending.take_if_match(tab, target) {
-        return false; // app-initiated
-    }
-    should_block(current, target, scripted, main_frame)
+/// The origin of a navigation chain: the trust inputs of its first (non-redirect) hop, carried
+/// forward through every redirect hop. `from` is the document we are leaving (for the cross-origin
+/// test); `origin_target` is the first hop's URL — what an app-initiated nav registered via
+/// PendingNavs, matched at the decision point even when the server later redirects elsewhere;
+/// `scripted` = the first hop had no user gesture. `app_initiated` is meaningful only on Windows
+/// (`block_at_start` resolves it at the top-frame NavigationStarting); Linux leaves it `false`
+/// here and resolves app-initiated in `decide_at_response` (the one-shot PendingNavs match must
+/// happen once, at the committed Response — WebKit fires NavigationAction repeatedly).
+#[derive(Clone)]
+pub struct ChainStart {
+    pub from: String,
+    pub origin_target: String,
+    pub scripted: bool,
+    // Read only on Windows (`block_at_start`); Linux resolves app-initiated in `decide_at_response`.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    pub app_initiated: bool,
 }
 
-/// Record an app-initiated navigation so the guard won't block it.
+/// Per-tab record of the in-flight navigation chain's origin: seeded at a non-redirect hop
+/// (`note_nav` / `block_at_start`), read by redirect hops (`chain_origin`) so they inherit the
+/// origin, and cleared when the top-frame load resolves (`clear_chain`).
+#[derive(Default)]
+pub struct Chains(pub Mutex<HashMap<u32, ChainStart>>);
+
+/// The core block predicate: a scripted, non-app-initiated navigation that crosses origin from
+/// where its chain started. User-gesture (`scripted=false`) and app-initiated chains pass.
+pub fn should_block_pred(scripted: bool, from: &str, target: &str, app_initiated: bool) -> bool {
+    scripted && !app_initiated && is_cross_origin_http(from, target)
+}
+
+/// Record a chain for the given navigation, keyed by (tab, target) so the Response phase can look
+/// it up. A non-redirect hop seeds `Chains[tab]` so a later redirect hop inherits the chain's
+/// origin. The `app_initiated` field is left unresolved here (false) — it is resolved ONCE, at the
+/// decision point, because WebKit fires `NavigationAction` repeatedly (and for subframes) and the
+/// PendingNavs match is one-shot. Used by Linux's two-phase hook (`decide_at_response` decides).
+pub fn note_nav(app: &AppHandle, tab: u32, from: &str, target: &str, scripted: bool, is_redirect: bool) {
+    let chain = if is_redirect {
+        chain_origin(app, tab).unwrap_or(ChainStart {
+            from: from.to_string(),
+            origin_target: target.to_string(),
+            scripted,
+            app_initiated: false,
+        })
+    } else {
+        let c = ChainStart {
+            from: from.to_string(),
+            origin_target: target.to_string(),
+            scripted,
+            app_initiated: false,
+        };
+        if let Some(s) = app.try_state::<Chains>() {
+            s.0.lock().unwrap().insert(tab, c.clone());
+        }
+        c
+    };
+    record_action(app, tab, target, chain);
+}
+
+/// Linux Response phase: decide whether to CANCEL `final_url`, returning `Some(from)` to block.
+/// Resolves app-initiated HERE — consuming the one-shot PendingNavs match against the chain's
+/// ORIGIN target (the URL the app asked for, which differs from `final_url` when the server
+/// redirected). Doing it at the single committed Response (not per NavigationAction) makes it
+/// robust to WebKit firing NavigationAction several times for one navigation.
+pub fn decide_at_response(app: &AppHandle, tab: u32, final_url: &str) -> Option<String> {
+    let chain = take_action(app, tab, final_url)?;
+    let app_initiated = app
+        .try_state::<PendingNavs>()
+        .is_some_and(|p| p.take_if_match(tab, &chain.origin_target));
+    should_block_pred(chain.scripted, &chain.from, final_url, app_initiated).then(|| chain.from)
+}
+
+/// Windows NavigationStarting phase (top-frame only, fires once per hop): decide whether to
+/// CANCEL `target`, returning `Some(from)` to block. Resolves app-initiated at the non-redirect
+/// hop (consuming the PendingNavs match) and stores the verdict so a following redirect hop
+/// inherits it.
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+pub fn block_at_start(
+    app: &AppHandle,
+    tab: u32,
+    from: &str,
+    target: &str,
+    scripted: bool,
+    is_redirect: bool,
+) -> Option<String> {
+    let chain = if is_redirect {
+        chain_origin(app, tab).unwrap_or_else(|| {
+            let app_initiated =
+                app.try_state::<PendingNavs>().is_some_and(|p| p.take_if_match(tab, target));
+            ChainStart { from: from.to_string(), origin_target: target.to_string(), scripted, app_initiated }
+        })
+    } else {
+        let app_initiated =
+            app.try_state::<PendingNavs>().is_some_and(|p| p.take_if_match(tab, target));
+        let c = ChainStart { from: from.to_string(), origin_target: target.to_string(), scripted, app_initiated };
+        if let Some(s) = app.try_state::<Chains>() {
+            s.0.lock().unwrap().insert(tab, c.clone());
+        }
+        c
+    };
+    should_block_pred(chain.scripted, &chain.from, target, chain.app_initiated).then(|| chain.from)
+}
+
+/// The in-flight chain origin for a redirect hop, if one was recorded for this tab.
+pub fn chain_origin(app: &AppHandle, tab: u32) -> Option<ChainStart> {
+    Some(app.try_state::<Chains>()?.0.lock().unwrap().get(&tab)?.clone())
+}
+
+/// Drop a tab's in-flight chain once its top-frame load resolves.
+pub fn clear_chain(app: &AppHandle, tab: u32) {
+    if let Some(s) = app.try_state::<Chains>() {
+        s.0.lock().unwrap().remove(&tab);
+    }
+}
+
+/// Record an app-initiated navigation so the guard won't block it (or its redirects).
 pub fn expect(app: &AppHandle, tab: u32, url: &str) {
     if let Some(s) = app.try_state::<PendingNavs>() {
         s.expect(tab, url);
     }
 }
 
-/// AppHandle-bound `decide`: pulls the shared registry from Tauri state.
-pub fn decide_for(
-    app: &AppHandle,
-    tab: u32,
-    current: &str,
-    target: &str,
-    scripted: bool,
-    main_frame: bool,
-    is_redirect: bool,
-) -> bool {
-    let Some(s) = app.try_state::<PendingNavs>() else {
-        return false;
-    };
-    decide(s.inner(), tab, current, target, scripted, main_frame, is_redirect)
-}
-
-/// Emit the `redirect.blocked` event so the chrome can raise its toast.
+/// Emit the `redirect.blocked` event so the chrome can raise its notification bar.
 pub fn on_blocked(app: &AppHandle, tab: u32, from: &str, to: &str) {
     if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
         eprintln!("[aegis-redirect] BLOCK {to} (from {from})");
@@ -119,21 +211,13 @@ pub fn on_blocked(app: &AppHandle, tab: u32, from: &str, to: &str) {
     );
 }
 
-/// What a NavigationAction told us, kept so the Response phase (where the main-frame flag is
-/// reliable) can apply the guard with the gesture/redirect info that's only on the action.
-#[derive(Clone)]
-pub struct NavInfo {
-    pub scripted: bool,
-    pub is_redirect: bool,
-    pub current: String,
-}
-
-/// Linux two-phase correlation: the gesture/type live on `NavigationAction`, but reliable
-/// main-frame detection lives on `ResponsePolicyDecision`. We record each NavigationAction by
-/// (tab, normalized-url) here, then look it up at Response time. Linux-only (the other
-/// platforms get gesture + main-frame in one place).
+/// Linux two-phase correlation: the gesture/redirect type live on `NavigationAction`,
+/// but reliable main-frame detection lives on `ResponsePolicyDecision`. We record the
+/// resolved `ChainStart` for each NavigationAction by (tab, normalized-url), then look
+/// it up at the (main-frame) Response. Linux-only — the other platforms get gesture +
+/// main-frame in one place.
 #[derive(Default)]
-pub struct NavActions(pub Mutex<HashMap<(u32, String), NavInfo>>);
+pub struct NavActions(pub Mutex<HashMap<(u32, String), ChainStart>>);
 
 /// Normalize a URL into a stable correlation key (ignore fragment / trailing slash, since the
 /// NavigationAction target and the Response URL can differ in those).
@@ -151,15 +235,15 @@ fn norm_key(url: &str) -> String {
     }
 }
 
-/// Record a NavigationAction (for the Response phase to consume).
-pub fn record_action(app: &AppHandle, tab: u32, target: &str, info: NavInfo) {
+/// Record the `ChainStart` to apply at the Response for `target` (Linux two-phase).
+pub fn record_action(app: &AppHandle, tab: u32, target: &str, chain: ChainStart) {
     if let Some(s) = app.try_state::<NavActions>() {
-        s.0.lock().unwrap().insert((tab, norm_key(target)), info);
+        s.0.lock().unwrap().insert((tab, norm_key(target)), chain);
     }
 }
 
-/// Take the recorded NavigationAction matching `target` for `tab`, if any.
-pub fn take_action(app: &AppHandle, tab: u32, target: &str) -> Option<NavInfo> {
+/// Take the recorded `ChainStart` matching `target` for `tab`, if any.
+pub fn take_action(app: &AppHandle, tab: u32, target: &str) -> Option<ChainStart> {
     let s = app.try_state::<NavActions>()?;
     let info = s.0.lock().unwrap().remove(&(tab, norm_key(target)));
     info
@@ -195,6 +279,7 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_shouldBlock(
 mod tests {
     use super::*;
 
+    // --- should_block (the cross-origin predicate, Android's entry) ---
     #[test]
     fn blocks_scripted_cross_origin_top_frame() {
         assert!(should_block("https://streamex.to/watch", "https://google.com/", true, true));
@@ -227,35 +312,65 @@ mod tests {
         assert!(should_block("https://a.com/", "http://a.com/", true, true)); // scheme differs
         assert!(should_block("https://a.com:8443/", "https://a.com/", true, true)); // port differs
     }
+
+    // --- should_block_pred (the chain verdict applied at the decision point; `from` is the chain
+    //     origin, `target` is the displayable destination, `app_initiated` resolved from pending) ---
     #[test]
-    fn redirect_hop_is_allowed() {
-        let p = PendingNavs::default();
-        assert!(!decide(&p, 1, "https://a.com/", "https://b.com/", true, true, true));
+    fn pred_blocks_scripted_cross_origin_direct() {
+        assert!(should_block_pred(true, "https://streamex.to/watch", "https://google.com/", false));
     }
     #[test]
-    fn app_initiated_is_allowed_and_consumed() {
+    fn pred_blocks_scripted_cross_origin_after_redirect() {
+        // THE BUG: streamex → google.com (scripted) → 301 → www.google.com. The destination
+        // hop carries is_redirect=true, but the chain ORIGIN was scripted + non-app-initiated,
+        // so the displayable destination must still be blocked.
+        assert!(should_block_pred(true, "https://streamex.to/watch", "https://www.google.com/", false));
+    }
+    #[test]
+    fn pred_allows_app_initiated_chain() {
+        // Address-bar nav whose server redirects cross-origin (e.g. youtu.be → youtube.com):
+        // app_initiated=true (the PendingNavs match against the chain's origin target).
+        assert!(!should_block_pred(true, "https://old.example/", "https://www.google.com/", true));
+    }
+    #[test]
+    fn pred_allows_user_gesture_chain() {
+        // A clicked link that bounces through OAuth/shortener redirects (scripted=false).
+        assert!(!should_block_pred(false, "https://app.example/", "https://accounts.google.com/", false));
+    }
+    #[test]
+    fn pred_allows_same_origin() {
+        assert!(!should_block_pred(true, "https://a.com/x", "https://a.com/y", false));
+    }
+    #[test]
+    fn pred_ignores_non_http_target() {
+        assert!(!should_block_pred(true, "https://a.com/", "about:blank", false));
+        assert!(!should_block_pred(true, "https://a.com/", "data:text/html,x", false));
+    }
+    #[test]
+    fn pred_fails_open_on_unparseable_origin() {
+        assert!(!should_block_pred(true, "", "https://b.com/", false));
+    }
+
+    // --- PendingNavs (app-initiated matching) ---
+    #[test]
+    fn pending_match_is_consumed_once() {
         let p = PendingNavs::default();
         p.expect(1, "https://b.com/");
-        assert!(!decide(&p, 1, "https://a.com/", "https://b.com/", true, true, false));
-        // consumed: a second identical scripted nav now blocks
-        assert!(decide(&p, 1, "https://a.com/", "https://b.com/", true, true, false));
+        assert!(p.take_if_match(1, "https://b.com/"));
+        // consumed: a second identical nav no longer matches
+        assert!(!p.take_if_match(1, "https://b.com/"));
     }
     #[test]
-    fn app_initiated_match_ignores_fragment_and_trailing_slash() {
+    fn pending_match_ignores_fragment_and_trailing_slash() {
         let p = PendingNavs::default();
         p.expect(1, "https://b.com/path");
-        assert!(!decide(&p, 1, "https://a.com/", "https://b.com/path/#frag", true, true, false));
-    }
-    #[test]
-    fn fresh_scripted_cross_origin_blocks() {
-        let p = PendingNavs::default();
-        assert!(decide(&p, 1, "https://a.com/", "https://evil.com/", true, true, false));
+        assert!(p.take_if_match(1, "https://b.com/path/#frag"));
     }
     #[test]
     fn pending_is_per_tab() {
         let p = PendingNavs::default();
         p.expect(1, "https://b.com/");
-        // tab 2 has no pending entry → still blocked
-        assert!(decide(&p, 2, "https://a.com/", "https://b.com/", true, true, false));
+        // tab 2 has no pending entry → no match
+        assert!(!p.take_if_match(2, "https://b.com/"));
     }
 }

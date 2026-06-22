@@ -109,10 +109,15 @@ pub fn connect_block_counter(app: &AppHandle, label: &str) {
 /// main-frame via `is_main_frame_main_resource`) access. It runs the shared `decide_navigation`
 /// (the ad-block/malware/HTTPS/overlay policy that used to flow through `on_navigation`) for
 /// NavigationAction, and — at Response time, where the main-frame flag is reliable — cancels a
-/// scripted cross-origin top-frame redirect (the gesture comes from the matching NavigationAction,
-/// recorded by uri). For now (Phase 1) it logs the fields under AEGIS_NAV_DEBUG and does NOT
-/// block redirects; Phase 2 wires `redirect_guard`. Other policy types fall through (`false`) so
-/// WebKit's default handling (downloads/display, new windows) is unchanged.
+/// scripted cross-origin top-frame redirect. Each NavigationAction records the chain it belongs to
+/// by uri (`redirect_guard::note_nav` — begin on a non-redirect hop, inherit the origin on a
+/// redirect hop), WITHOUT consuming the app-initiated PendingNavs match (WebKit fires
+/// NavigationAction repeatedly, so that one-shot match is deferred). The Response phase
+/// (`decide_at_response`) looks the chain up and decides — consuming the PendingNavs match once,
+/// against the chain's ORIGIN target — so a scripted cross-origin nav is cancelled however many
+/// redirect hops it took (e.g. google.com → www.google.com) while user/app-initiated redirect
+/// chains pass. Set AEGIS_NAV_DEBUG to trace the fields. Other policy types fall through (`false`)
+/// so WebKit's default handling (downloads/display, new windows) is unchanged.
 pub fn install_nav_policy(app: &AppHandle, label: &str) {
     let Some(content) = app.get_webview(label) else {
         return;
@@ -182,16 +187,16 @@ pub fn install_nav_policy(app: &AppHandle, label: &str) {
                                     return true; // cancel
                                 }
                             }
-                            // Record for the Response phase (where the main-frame flag is
-                            // reliable), so the redirect guard can cancel a scripted cross-origin
-                            // TOP-frame redirect WITHOUT touching cross-origin SUBframe navs
-                            // (embedded players). `current` = the page we're leaving.
+                            // Resolve the chain this hop belongs to (begin a fresh chain on a
+                            // non-redirect hop, or continue the in-flight one on a redirect hop),
+                            // then record it for the Response phase — where the main-frame flag is
+                            // reliable — so the guard can cancel a scripted cross-origin TOP-frame
+                            // redirect, however many redirect hops it took, WITHOUT touching
+                            // cross-origin SUBframe navs (embedded players). `current` = the page
+                            // we're leaving.
                             let current = wv.uri().map(|s| s.to_string()).unwrap_or_default();
-                            crate::redirect_guard::record_action(
-                                &app,
-                                id,
-                                &target,
-                                crate::redirect_guard::NavInfo { scripted, is_redirect, current },
+                            crate::redirect_guard::note_nav(
+                                &app, id, &current, &target, scripted, is_redirect,
                             );
                         }
                     }
@@ -214,22 +219,13 @@ pub fn install_nav_policy(app: &AppHandle, label: &str) {
                                 .and_then(|r| r.uri())
                                 .map(|s| s.to_string())
                                 .unwrap_or_default();
-                            if let Some(info) = crate::redirect_guard::take_action(&app, id, &url) {
-                                if crate::redirect_guard::decide_for(
-                                    &app,
-                                    id,
-                                    &info.current,
-                                    &url,
-                                    info.scripted,
-                                    true, // reliable main-frame
-                                    info.is_redirect,
-                                ) {
-                                    decision.ignore();
-                                    crate::redirect_guard::on_blocked(&app, id, &info.current, &url);
-                                    return true; // cancel the scripted cross-origin top-frame redirect
-                                }
+                            if let Some(from) = crate::redirect_guard::decide_at_response(&app, id, &url) {
+                                decision.ignore();
+                                crate::redirect_guard::on_blocked(&app, id, &from, &url);
+                                return true; // cancel the scripted cross-origin top-frame redirect
                             }
-                            // Top-frame load resolved → drop this tab's stale recorded actions.
+                            // Top-frame load resolved → drop this tab's in-flight chain + stale actions.
+                            crate::redirect_guard::clear_chain(&app, id);
                             crate::redirect_guard::clear_tab_actions(&app, id);
                         }
                     }
@@ -378,6 +374,45 @@ const FS_EXIT_SIZE: i32 = 34;
 /// Its margin from the top-right corner (px).
 const FS_EXIT_MARGIN: i32 = 8;
 
+/// The effective content insets (left, top, right) from the most recent `layout()` pass.
+/// `size_fixed_children` reads them to re-size the chrome + content webviews when GTK
+/// re-allocates the canonical GtkFixed (e.g. on a window resize) — see the SIZING NOTE on
+/// `layout()`. Managed Tauri state (registered in `lib.rs`).
+#[derive(Default)]
+pub struct LayoutInsets(pub std::sync::Mutex<(i32, i32, i32)>);
+
+/// Connect the canonical GtkFixed's "size-allocate" handler exactly once.
+static FIXED_SIZE_HANDLER: std::sync::Once = std::sync::Once::new();
+
+/// Size the chrome (fill) + content (inset) webviews to the GtkFixed's CURRENT allocation
+/// via `size_allocate`, so no `set_size_request` pins the window's minimum size. Positions
+/// come from each child's existing allocation (set by `layout()`'s `move_`), so a parked
+/// background tab stays offscreen and the active tab stays inset. Connected with `after=true`
+/// so it runs AFTER GtkFixed's own size-allocate (which sizes children to their 0×0 request);
+/// it does NOT call `move_`/`queue_resize`, so it can't loop. The fullscreen-exit button keeps
+/// its own small request and is positioned by `layout()`.
+fn size_fixed_children(app: &AppHandle, fixed: &gtk::Fixed) {
+    let (left, top, right) = app
+        .try_state::<LayoutInsets>()
+        .map(|s| *s.0.lock().unwrap())
+        .unwrap_or((0, 0, 0));
+    let a = fixed.allocation();
+    let (fw, fh) = (a.width(), a.height());
+    for child in fixed.children() {
+        let name = child.widget_name();
+        if name == FS_EXIT_NAME {
+            continue;
+        }
+        let ca = child.allocation();
+        let (w, h) = if name == CONTENT_WIDGET_NAME {
+            ((fw - left - right).max(0), (fh - top).max(0)) // content: inset (full in fullscreen)
+        } else {
+            (fw.max(0), fh.max(0)) // chrome: fill the window behind the content
+        };
+        child.size_allocate(&gtk::gdk::Rectangle::new(ca.x(), ca.y(), w, h));
+    }
+}
+
 /// Find (or create once) the native GTK floating fullscreen-exit button in the
 /// GtkFixed. It's a real GTK widget — not the WebKit chrome — so it paints reliably
 /// over the opaque, edge-to-edge content (a shrunk WebKit chrome wouldn't repaint on
@@ -420,16 +455,31 @@ fn fs_exit_button(fixed: &gtk::Fixed, app: &AppHandle) -> gtk::Widget {
 /// toolbar shows in the gap above it. Fullscreen: the active content fills the whole
 /// window edge-to-edge and a native floating exit button (`fs_exit_button`) is raised
 /// on top in the top-right corner — no top strip, and no WebKit compositing for it.
+///
+/// SIZING NOTE: the chrome + content webviews are sized via `size_allocate` (in
+/// `size_fixed_children`, run from the Fixed's "size-allocate" handler), NOT via
+/// `set_size_request`. In a GtkFixed, `set_size_request(w, h)` sets each child's MINIMUM
+/// size, which GTK propagates up as the WINDOW's minimum — pinning the window to its current
+/// size so it can only ever grow, never shrink (the "can't make the window smaller" bug).
+/// Keeping a (0,0) size request removes that pin; the real size is applied by `size_allocate`.
 pub fn layout(
     app: &AppHandle,
     left: i32,
     top: i32,
     right: i32,
     win_w: i32,
-    win_h: i32,
+    // Window height: the webviews are now sized from the GtkFixed's live allocation (see
+    // size_fixed_children), so layout() no longer uses it directly; kept for caller symmetry.
+    _win_h: i32,
     fullscreen: bool,
     content_visible: bool,
 ) {
+    // Publish the effective insets so the Fixed's size-allocate handler can re-size the
+    // webviews on a window resize (they carry a 0×0 size request so they don't pin the
+    // window minimum — see the SIZING NOTE above).
+    if let Some(s) = app.try_state::<LayoutInsets>() {
+        *s.0.lock().unwrap() = (left, top, right);
+    }
     let active_label = crate::nav::active_content_label(app);
     let Some(active) = app.get_webview(&active_label) else {
         return;
@@ -503,11 +553,22 @@ pub fn layout(
             );
         }
 
-        // The active content fills the window in fullscreen (left/top/right all 0),
-        // else it's inset and the chrome shows in the gap. The floating exit button is
-        // skipped here — it's positioned/raised separately below, not stretched.
-        let cw = (win_w - left - right).max(0);
-        let ch = (win_h - top).max(0);
+        // Re-size the webviews whenever GTK re-allocates the Fixed (window resize) — they
+        // carry a 0×0 size request (so they never pin the window minimum) and are sized by
+        // `size_allocate` here instead. Connected once, AFTER GtkFixed's own size-allocate.
+        FIXED_SIZE_HANDLER.call_once(|| {
+            let app_h = app2.clone();
+            let fixed_h = fixed.clone();
+            fixed.connect_local("size-allocate", true, move |_| {
+                size_fixed_children(&app_h, &fixed_h);
+                None
+            });
+        });
+
+        // The active content fills the window in fullscreen (left/top/right all 0), else it's
+        // inset and the chrome shows in the gap. Sizes are applied by `size_fixed_children`
+        // (above); here we only set the 0×0 request (no window-min pin) + position via `move_`.
+        // The floating exit button is positioned/raised separately below.
         let mut active_window = None;
         let mut chrome_window = None;
         for child in fixed.children() {
@@ -523,7 +584,7 @@ pub fn layout(
                 // the same mechanism that reliably hides background tabs below. Visible +
                 // offscreen = not backgrounded (no redirect) and not covering the chrome.
                 child.set_visible(true);
-                child.set_size_request(cw, ch);
+                child.set_size_request(0, 0); // no window-min pin; sized by size_fixed_children
                 if active_visible {
                     fixed.move_(&child, left, top);
                 } else {
@@ -538,7 +599,7 @@ pub fn layout(
                 fixed.move_(&child, -10000, -10000);
             } else {
                 // the chrome webview: fill the window behind the active content.
-                child.set_size_request(win_w, win_h);
+                child.set_size_request(0, 0); // no window-min pin; sized by size_fixed_children
                 fixed.move_(&child, 0, 0);
                 chrome_window = child.window();
             }

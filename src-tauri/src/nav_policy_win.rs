@@ -51,10 +51,16 @@ unsafe fn handle(
     let mut redirected = windows::core::BOOL::default();
     args.IsRedirected(&mut redirected)?;
     let scripted = !user.as_bool();
-    // NavigationStarting fires for top-frame navigations only, so main_frame = true.
-    if crate::redirect_guard::decide_for(app, id, &current, &target, scripted, true, redirected.as_bool()) {
+    // NavigationStarting fires for top-frame navigations only (main_frame is always
+    // true), and once per redirect hop. Judge the hop by its chain's ORIGIN — begin a
+    // chain on a fresh nav, continue it on a redirect — so a scripted cross-origin
+    // redirect (e.g. google.com → www.google.com) is blocked even though the final hop
+    // looks like "just a redirect", while user/app-initiated redirect chains pass.
+    if let Some(from) =
+        crate::redirect_guard::block_at_start(app, id, &current, &target, scripted, redirected.as_bool())
+    {
         args.SetCancel(true)?;
-        crate::redirect_guard::on_blocked(app, id, &current, &target);
+        crate::redirect_guard::on_blocked(app, id, &from, &target);
     }
     Ok(())
 }

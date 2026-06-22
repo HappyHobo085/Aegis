@@ -329,13 +329,33 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     installs ours: it runs the shared `nav::decide_navigation` (ad-block/malware/HTTPS/overlay)
     for NavigationAction AND the scripted-cross-origin-**top-frame redirect guard**. Reliable
     main-frame detection is NOT on `NavigationAction` (only gesture/type are), so the guard is
-    TWO-PHASE: record gesture/type per-URL at `NavigationAction`, then CANCEL at
-    `ResponsePolicyDecision` where `is_main_frame_main_resource()` (webkit2gtk **`v2_40`** — see
-    Cargo.toml) is reliable AND the response is displayable (so embeds + downloads are skipped).
-    Allowed navs call `use_()`; non-Response / non-blocked fall through (`false`) so
+    TWO-PHASE: at `NavigationAction`, `redirect_guard::note_nav` records the **chain** this hop
+    belongs to per-URL (begin a fresh `ChainStart{from, origin_target, scripted}` on a non-redirect
+    hop, or inherit the in-flight chain's origin on a redirect hop) — but does NOT consume the
+    app-initiated PendingNavs match, because WebKit fires `NavigationAction` REPEATEDLY (and for
+    subframes) for one navigation. Then at `ResponsePolicyDecision` (where `is_main_frame_main_resource()`,
+    webkit2gtk **`v2_40`** — see Cargo.toml — is reliable AND the response is displayable, so embeds +
+    downloads are skipped) `decide_at_response` makes the call: it consumes the PendingNavs match ONCE,
+    against the chain's ORIGIN target, and cancels iff scripted + cross-origin + not-app-initiated.
+    **Judge a redirect by who STARTED its chain, not the hop:** a scripted cross-origin nav is blocked
+    however many redirect hops it took (e.g. malvertising bounces the top frame to `google.com`, which
+    301s to `www.google.com` — the destination hop carries `is_redirect=true`; an `if is_redirect { allow }`
+    short-circuit, the OLD behavior, waved it through). User-gesture and app-initiated (PendingNavs-matched
+    on the origin target) chains pass. **WHY decide at the Response, not the NavigationAction:** doing the
+    one-shot pending match per-NavigationAction falsely blocked legit app navs — WebKit re-fires
+    NavigationAction, the first consumed pending, the repeats saw none → "scripted" → blocked (the
+    autopilot caught this regression: app-initiated `example.com` blocked from `about:blank`). **Live-verified:**
+    real streamex.sh direct case (`BLOCK https://www.google.com/ (from https://streamex.sh/)`, page stays on
+    streamex) AND a synthetic redirect *chain* (`BLOCK …/final (from …/8800)` across a 301), with the
+    full autopilot green (92/0/1, no false blocks). Windows uses `block_at_start` via `NavigationStarting`
+    (top-frame only, fires once per hop → resolves app-initiated at the hop and stores it for redirect
+    hops to inherit). Allowed navs call `use_()`; non-Response / non-blocked fall through (`false`) so
     downloads/new-windows keep WebKit's default handling. A block emits `redirect.blocked` →
     the chrome's `RedirectBar` (a notification bar that adds `REDIRECT_BAR_H` to the content
-    inset; a floating toast can't paint over the opaque content webview). Other platforms keep
+    inset; a floating toast can't paint over the opaque content webview). **That inset RESIZES the
+    content, and a malicious page re-fires the blocked redirect on a TIMER + on that very resize —
+    so `App.tsx` makes dismissal STICKY per destination (`dismissedRedirectsRef`, reset on tab
+    switch); without it the bar is unclosable (re-blocked → re-shown forever).** Other platforms keep
     Tauri's `on_navigation` + their own native top-frame hooks (Windows `NavigationStarting`,
     macOS `WKNavigationDelegate`, Android `shouldOverrideUrlLoading`). The block notification is
     platform-native: desktop shows the `RedirectBar` infobar; **Android shows a Material
@@ -406,3 +426,18 @@ d. **Fullscreen exit button must be the topmost GtkFixed child.** In fullscreen
    mode the exit button must be re-added as the last (topmost z-order) child of
    the `GtkFixed` each layout pass — `raise()` alone is not enough to lift a GTK
    widget above native WebKit windows.
+
+e. **Size the webviews via `size_allocate`, NOT `set_size_request` — or the window
+   can't shrink.** In a `GtkFixed`, `set_size_request(w, h)` sets each child's
+   *minimum* size, which GTK propagates up as the **window's** minimum — so sizing
+   the chrome/content webviews to the window size pins the window's minimum to its
+   current size: it can grow but never shrink ("can't make the window smaller").
+   Fix: the webviews carry a `(0,0)` size request (no pin) and are sized via
+   `size_allocate` from `size_fixed_children`, connected `after=true` on the
+   canonical `GtkFixed`'s "size-allocate" so it runs *after* GtkFixed clobbers
+   children to their 0×0 request (it reads each child's current x,y + the live Fixed
+   allocation, and never calls `move_`/`queue_resize`, so it can't loop). The
+   effective insets are published by `layout()` into managed `LayoutInsets`. A sane
+   floor is set via Tauri `set_min_size` (now effective — only because the webviews
+   no longer pin the minimum). Live-verified: the window resizes to 600×400 and
+   clamps at the 420×320 minimum.

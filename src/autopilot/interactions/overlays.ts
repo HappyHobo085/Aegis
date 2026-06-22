@@ -331,4 +331,49 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
       return 'redirectBar Dismiss → bar removed from DOM';
     },
   },
+
+  {
+    id: 'redirectBar.dismissSticky',
+    domain: 'redirectBar',
+    description:
+      'After dismiss, the SAME destination stays suppressed (a malicious page re-fires it on a ' +
+      'timer + on the bar-resize → the bar must be closable); a DIFFERENT destination still shows',
+    screen: 'home',
+    // vitest-only: same reasoning as redirectBar.dismiss.
+    layers: ['vitest'],
+    run: async (ctx) => {
+      const A: RedirectBlocked = {
+        viewId: 1,
+        from: 'https://streamex.test/',
+        to: 'https://malvertising.test/landing',
+      };
+      await ctx.emitRedirectBlocked?.(A);
+      const dismissBtn = ctx.byLabel(/^Dismiss$/);
+      if (!dismissBtn) throw new Error('"Dismiss" button not found in RedirectBar');
+      await ctx.click(dismissBtn);
+      await new Promise((r) => setTimeout(r, 30));
+      // The page re-fires the SAME blocked redirect (timer / the bar's own resize) — the bar
+      // must NOT reappear, or it would be impossible to close.
+      await ctx.emitRedirectBlocked?.(A);
+      await new Promise((r) => setTimeout(r, 30));
+      if (ctx.bySelector('.redirect-bar'))
+        throw new Error('RedirectBar reappeared after dismissing the SAME destination (unclosable loop)');
+      // A genuinely different destination SHOULD still surface a fresh bar.
+      const B: RedirectBlocked = {
+        viewId: 1,
+        from: 'https://streamex.test/',
+        to: 'https://other-threat.test/x',
+      };
+      await ctx.emitRedirectBlocked?.(B);
+      await new Promise((r) => setTimeout(r, 30));
+    },
+    assert: async (ctx) => {
+      const bar = ctx.bySelector('.redirect-bar');
+      if (!bar)
+        throw new Error('RedirectBar did not surface for a NEW destination after a prior dismissal');
+      if (!bar.textContent?.includes('other-threat.test'))
+        throw new Error('RedirectBar shows the wrong destination after a new block');
+      return 'redirectBar dismiss is sticky per-destination (same suppressed, new shown)';
+    },
+  },
 ];
