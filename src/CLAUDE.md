@@ -37,12 +37,21 @@ Channel and event names, and all payload/return types, are defined once in
 
 ## Conventions & gotchas (verified in code)
 
-- **Chrome overlay z-order.** The content webview is opaque and on top, so
-  full-window chrome (Settings, Downloads, error/crash, safety interstitial,
-  confirm dialog, permission prompt, ad-block shield popover) renders *behind* the
-  page unless raised. `App.tsx` tracks the union of active overlays and calls
-  `aegis.view.setChromeOverlay(viewId, active)`. **If you add a new full-window
-  overlay, add it to that union in `App.tsx` or it will render behind the page.**
+- **Chrome overlay z-order (centralized compositor).** The content webview is opaque
+  and on top, so full-window chrome must lower it. The decision is single-sourced:
+  every content-hiding surface calls `useChromeSurface('<id>', active)`
+  (`src/hooks/useChromeSurfaces.tsx`) to register itself while open; `App.tsx` derives
+  `fullOverlayActive` from the registry and computes the content layout via
+  `computeContentLayout` (`src/lib/contentLayout.ts`), mirrored on the Rust side by
+  `view::content_visible`. **To add a new full-window overlay, call `useChromeSurface`
+  in its component — there is no central union to update.** The sidebar (insets) and
+  shield popover (dropdown) are NOT registry surfaces; they stay as direct `App` state.
+  The `src/autopilot/compositor.test.tsx` drift guard fails the build if an overlay
+  reachable via the autopilot control does not lower the content.
+  `useChromeSurface` is a **no-op** outside a `ChromeSurfaceProvider` (so surfaces
+  also rendered by the mobile shell, which has no provider, are safe); by contrast
+  `useChromeSurfaceRegistry` throws outside a provider — do not call it from a
+  component that may render in the mobile shell.
 - **Sidebar is a right panel,** not an overlay: it calls `view.setSidebar(active,
   width)` so the page insets from the right and stays visible. Width is remembered
   in localStorage.
