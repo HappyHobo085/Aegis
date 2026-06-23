@@ -95,6 +95,7 @@ export async function reachScreen(
       else if (screen.id === 'shieldPopover') control.setShield(true);
       else if (screen.id === 'fullscreen') control.enterFullscreen();
       else if (screen.id === 'confirmDialog') control.openConfirm('Autopilot confirm?');
+      else if (screen.id === 'findBar') control.openFind();
       break;
     case 'sidebarTab':
       // Use flushSync to open the sidebar synchronously so the tab buttons are in the
@@ -138,6 +139,7 @@ export async function leaveScreen(
   else if (screen.id === 'errorOverlay') control.clearError();
   else if (screen.id === 'crashOverlay') control.clearCrash();
   else if (screen.id === 'confirmDialog') clickTabByLabel('Cancel');
+  else if (screen.id === 'findBar') control.closeFind();
   // Event-driven overlays were shown by emitting an event; dismiss them by emitting the
   // SAME event with null (the safety/permission hooks set their state = payload, so null
   // clears it). Otherwise they linger as a full overlay and cancel later content nav.

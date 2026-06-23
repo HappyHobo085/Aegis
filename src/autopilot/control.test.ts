@@ -18,6 +18,8 @@ function fake(): AutopilotControl {
     showCrash: vi.fn(),
     clearCrash: vi.fn(),
     openConfirm: vi.fn(),
+    openFind: vi.fn(),
+    closeFind: vi.fn(),
     setHistoryEntries: vi.fn(),
     setSavedItems: vi.fn(),
     setSitePermissions: vi.fn(),

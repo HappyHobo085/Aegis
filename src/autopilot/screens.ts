@@ -16,7 +16,8 @@ export type OverlayScreenId =
   | 'safetyInterstitial'
   | 'permissionPrompt'
   | 'redirectBar'
-  | 'confirmDialog';
+  | 'confirmDialog'
+  | 'findBar';
 export type ScreenId = OverlayScreenId | SettingsScreenId;
 
 export interface ScreenSpec {
@@ -47,4 +48,5 @@ export const SCREENS: ScreenSpec[] = [
   { id: 'permissionPrompt', label: 'Permission prompt', via: 'event' },
   { id: 'redirectBar', label: 'Redirect-blocked bar', via: 'event' },
   { id: 'confirmDialog', label: 'Confirm dialog', via: 'overlay' },
+  { id: 'findBar', label: 'Find-in-page bar', via: 'overlay' },
 ];

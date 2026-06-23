@@ -19,6 +19,10 @@ export interface AutopilotControl {
   showCrash(c: unknown): void;
   clearCrash(): void;
   openConfirm(message: string): void;
+  /** Open the find bar (same as pressing Ctrl+F in the real UI). */
+  openFind(): void;
+  /** Close the find bar and end the find session. */
+  closeFind(): void;
   /** Directly set the download entries (bypasses async refresh; autopilot vitest seeding only). */
   setDownloadEntries(entries: DownloadEntry[]): void;
   /** Directly set the history entries (bypasses async refresh; autopilot vitest seeding only). */

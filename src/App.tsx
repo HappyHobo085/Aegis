@@ -148,6 +148,8 @@ function DesktopApp() {
       openConfirm: (message) => {
         void confirm(message);
       },
+      openFind: () => find.show(),
+      closeFind: () => find.close(),
       setDownloadEntries: (entries) => downloads._setDownloads(entries),
       setHistoryEntries: (entries) => history._setEntries(entries),
       setSavedItems: (items, tagUnion) => saved._setSavedItems(items, tagUnion),

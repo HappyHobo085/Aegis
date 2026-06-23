@@ -16,6 +16,7 @@ import type {
   SafetyInterstitialPayload,
   PermissionPrompt,
   RedirectBlocked,
+  FindState,
 } from '../../shared/types';
 import type { CallLog, InteractionCtx } from './interactions';
 import type { ScreenId } from './screens';
@@ -133,6 +134,13 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
 
   // (downloads.onChanged callback is NOT captured here — useDownloads._setDownloads is
   // used instead via the control-surface seam, which is synchronous via flushSync.)
+
+  // Capture the find.onState callback (registered by useFind) so find interaction specs
+  // can push a non-zero matchCount and enable the Find next / Find previous buttons.
+  type FindStateMockFn = { mock?: { calls: ((s: FindState) => void)[][] } };
+  const findStateCallback: ((s: FindState) => void) | undefined = aegis.find
+    ? (aegis.find.onState as unknown as FindStateMockFn).mock?.calls?.[0]?.[0]
+    : undefined;
 
   return {
     layer: 'vitest',
@@ -270,6 +278,14 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       // Invoke the onBlocked callback that App's useEffect registered so the
       // RedirectBar renders synchronously.
       if (redirectBlockedCallback) flushSync(() => redirectBlockedCallback(r));
+      return Promise.resolve();
+    },
+    emitFindState: (s: FindState) => {
+      // Push a FindState update into useFind so the FindBar re-renders with the
+      // given matchCount — e.g. enables Find next / Find previous buttons when
+      // matchCount > 0.  Uses flushSync so the DOM updates synchronously before
+      // the next gesture fires (same pattern as emitNavState / emitTabsState).
+      if (findStateCallback) flushSync(() => findStateCallback(s));
       return Promise.resolve();
     },
   };

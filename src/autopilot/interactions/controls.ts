@@ -81,6 +81,12 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'edge.bookmark.doubleClick',
   'combo.settingsOverSidebar',
   'combo.tabSwitchWithModal',
+  // Task 9: find-in-page
+  'find.open',
+  'find.type',
+  'find.next',
+  'find.prev',
+  'find.close',
   // Task 10: mobile-only controls (MobileBottomBar, MobileMenuSheet, MobileTabSwitcher, MobileTopBar)
   // These are exercised in the mobile interaction tour (interactions.mobile.test.tsx).
   // They are NOT reachable in the desktop shell and NOT in the live autopilot run

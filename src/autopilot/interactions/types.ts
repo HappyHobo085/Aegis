@@ -14,6 +14,7 @@ import type {
   SafetyInterstitialPayload,
   PermissionPrompt,
   RedirectBlocked,
+  FindState,
 } from '../../../shared/types';
 import type { ScreenId } from '../screens';
 
@@ -128,6 +129,13 @@ export interface InteractionCtx {
    * via aegis.redirect.onBlocked so the RedirectBar renders.  No-op on live.
    */
   emitRedirectBlocked?(r: RedirectBlocked): Promise<void>;
+  /**
+   * Vitest-only: push a FindState update into useFind so the FindBar re-renders with
+   * the given match count (e.g. enables the Find next / Find previous buttons).
+   * The callback is captured at ctx-creation time, BEFORE calls.reset() clears the
+   * mock's call log.  No-op on live (live state comes from the real core).
+   */
+  emitFindState?(state: FindState): Promise<void>;
 }
 
 export interface InteractionSpec {

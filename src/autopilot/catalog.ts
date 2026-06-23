@@ -503,7 +503,7 @@ export const CATALOG: FeatureCheck[] = [
       assertArray(await a.sync.listDevices());
     },
   },
-  // find-in-page (stub — Task 9 enriches this entry: verify() round-trip + screens.ts + reach.ts + interaction specs)
+  // find-in-page
   {
     id: 'find',
     domain: 'find',
@@ -514,6 +514,26 @@ export const CATALOG: FeatureCheck[] = [
       await a.find.next(V);
       await a.find.prev(V);
       await a.find.close(V);
+    },
+    // find mutates webview search state; the live round-trip navigates to a page with
+    // known text, subscribes to find.state, starts a search, waits for the first match
+    // event, then closes.  Runs ONLY in the live run (RunDeps.live) — skipped by vitest
+    // mock (aegis.find.onState is a vi.fn that never invokes the callback).
+    verify: async (a) => {
+      await a.nav.navigate(V, 'https://example.com/');
+      // example.com contains the word "Example". Subscribe BEFORE searching so we don't
+      // race the event.
+      let got: { matchCount: number } | null = null;
+      const off = a.find.onState((s) => {
+        if (s.viewId === V) got = s;
+      });
+      const deadline = Date.now() + 8000;
+      await a.find.start(V, 'Example');
+      while (Date.now() < deadline && got === null) await new Promise((r) => setTimeout(r, 300));
+      off();
+      await a.find.close(V);
+      if (got === null) throw new Error('find: no find.state event after start');
+      return `find start→state(matchCount=${(got as { matchCount: number }).matchCount})→close ok`;
     },
   },
 ];

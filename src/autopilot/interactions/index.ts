@@ -13,6 +13,7 @@ import { OVERLAY_INTERACTIONS } from './overlays';
 import { EDGE_INTERACTIONS } from './edge';
 import { COMBO_INTERACTIONS } from './combo';
 import { MOBILE_INTERACTIONS } from './mobile';
+import { FIND_INTERACTIONS } from './find';
 
 export type { InteractionLayer, CallLog, InteractionCtx, InteractionSpec } from './types';
 export { INTERACTIVE_CONTROLS } from './controls';
@@ -27,4 +28,5 @@ export const INTERACTIONS: InteractionSpec[] = [
   ...EDGE_INTERACTIONS,
   ...COMBO_INTERACTIONS,
   ...MOBILE_INTERACTIONS,
+  ...FIND_INTERACTIONS,
 ];

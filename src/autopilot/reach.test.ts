@@ -23,6 +23,8 @@ function fake(): AutopilotControl {
       'showCrash',
       'clearCrash',
       'openConfirm',
+      'openFind',
+      'closeFind',
     ].map((k) => [k, f()]),
   ) as unknown as AutopilotControl;
 }
