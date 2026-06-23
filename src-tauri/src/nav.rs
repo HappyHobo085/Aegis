@@ -433,6 +433,10 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         });
     }
 
+    // Replay any session zoom the core holds for this tab (e.g. after a discard→reload),
+    // so the user's zoom survives the webview being rebuilt. No-op at 1.0.
+    crate::zoom::apply_to_tab(app, id);
+
     Ok(())
 }
 

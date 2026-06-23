@@ -16,7 +16,7 @@ pub fn set(pw: &tauri::webview::PlatformWebview, factor: f64) {
     if ptr.is_null() {
         return;
     }
-    // pw.inner() is a borrowed WKWebView pointer (wry owns it) — retain a strong ref.
+    // SAFETY: ptr is non-null and is a valid WKWebView owned by wry.
     if let Some(webview) = unsafe { Retained::retain(ptr) } {
         // setPageZoom takes CGFloat (= f64 on all Apple targets); pass factor directly.
         unsafe { webview.setPageZoom(factor) };

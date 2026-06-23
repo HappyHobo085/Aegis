@@ -42,6 +42,10 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // One native WebView per tab (live tabs); the active one is mirrored into contentWebView
   // so the existing margin/overlay/nav logic keeps targeting "the active tab".
   private val tabWebViews = HashMap<Int, WebView>()
+  // Per-tab zoom (textZoom percent, 100 == 1.0). Session-only (not persisted), matching
+  // the desktop v1 design. Kept on discard so a reactivated tab restores its zoom;
+  // dropped on close (session ends).
+  private val tabZoom = HashMap<Int, Int>()
   private var activeTabId = -1
   // Per-tab current page URL (the ad-block first-party context), read on the network
   // thread in shouldInterceptRequest; concurrent for safe cross-thread reads.
@@ -292,6 +296,9 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     wv.settings.domStorageEnabled = true
     // Anti-fingerprint: present a vanilla mobile Chrome UA (no "; wv" WebView marker).
     wv.settings.userAgentString = CHROME_UA
+    // Replay any session zoom stored for this tab (e.g. after a discard→reactivate) so
+    // the user's zoom survives the WebView being recreated. No-op when unset (first open).
+    tabZoom[id]?.let { wv.settings.textZoom = it }
     // Multi-window support for target=_blank / window.open (Task 9).
     wv.settings.setSupportMultipleWindows(true)
     wv.settings.javaScriptCanOpenWindowsAutomatically = true
@@ -546,6 +553,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         it.destroy()
       }
       pageUrls.remove(id)
+      tabZoom.remove(id) // drop zoom on close; kept on discard so reload restores it
       if (activeTabId == id) { activeTabId = -1; contentWebView = null }
     }
 
@@ -626,6 +634,16 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     fun setFullscreen(on: Boolean) = runOnUiThread {
       fullscreen = on
       applyContentMargins()
+    }
+
+    /** Set page zoom for tab [id] as a percentage (100 == 1.0). Applied to that tab's
+     *  WebView via WebSettings.textZoom. Session-only (not persisted) — matches desktop v1.
+     *  Clamped to [50, 300] to mirror the desktop ZOOM_MIN/ZOOM_MAX (0.5–3.0). */
+    @JavascriptInterface
+    fun setZoom(id: Int, percent: Int) = runOnUiThread {
+      val clamped = percent.coerceIn(50, 300)
+      tabZoom[id] = clamped
+      tabWebViews[id]?.settings?.textZoom = clamped
     }
 
     /** Open a URL in the external browser (used to reach the releases page to install

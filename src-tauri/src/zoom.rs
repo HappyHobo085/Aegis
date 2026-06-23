@@ -51,8 +51,9 @@ fn put(app: &AppHandle, id: u32, factor: f64) -> Value {
 
 /// Re-apply a tab's stored factor to its (re)spawned webview. Called at the end of
 /// `nav::spawn_tab` so a discard→reload keeps the user's zoom. No-op at 1.0.
-// Task 10 wires this into nav::spawn_tab; suppress dead_code until then.
-#[allow(dead_code)]
+// On Android the native Kotlin WebView is not reached via spawn_tab (Android uses
+// its own bridge); suppress the dead_code lint only for that target.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn apply_to_tab(app: &AppHandle, id: u32) {
     let f = factor_of(app, id);
     if (f - 1.0).abs() > f64::EPSILON {
