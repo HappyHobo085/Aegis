@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import type { AutopilotControl } from './control';
 import type { ScreenSpec, ScreenId } from './screens';
 import { IPC, PRIMARY_VIEW_ID } from '../../shared/types';
+import { applyTheme } from '../lib/theme';
 
 export interface ReachDeps {
   emitEvent(channel: string, payload: unknown): void | Promise<void>;
@@ -88,6 +89,9 @@ export async function reachScreen(
       control.setSidebar(false);
       control.setShield(false);
       control.exitFullscreen();
+      if (screen.id === 'theme:dark') applyTheme({ primaryColor: '#3b82f6', themeMode: 'dark' });
+      else if (screen.id === 'theme:light')
+        applyTheme({ primaryColor: '#3b82f6', themeMode: 'light' });
       break;
     case 'overlay':
       if (screen.id === 'downloads') control.openDownloads();
@@ -151,6 +155,9 @@ export async function leaveScreen(
   // it shrinks the content inset, it doesn't cover the page like a full overlay.)
   else if (screen.id === 'redirectBar')
     (document.querySelector('.redirect-bar__dismiss') as HTMLElement | null)?.click();
+  // Restore the dark palette after either theme screenshot (keeps later screens consistent).
+  else if (screen.id === 'theme:dark' || screen.id === 'theme:light')
+    applyTheme({ primaryColor: '#3b82f6', themeMode: 'dark' });
   await tick();
 }
 

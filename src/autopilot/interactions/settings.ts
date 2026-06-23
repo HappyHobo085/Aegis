@@ -55,6 +55,26 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     } satisfies InteractionSpec;
   })(),
 
+  {
+    id: 'settings.appearance.themeMode',
+    domain: 'settings.appearance',
+    description:
+      'Appearance: choose the Light theme via the Theme segmented control → settings.set({themeMode})',
+    screen: 'settings:appearance',
+    layers: ['vitest'] as InteractionLayer[],
+    run: async (ctx: InteractionCtx) => {
+      ctx.calls.reset();
+      const light = ctx.byRole('radio', /^Light$/);
+      if (!light) throw new Error('Theme "Light" radio not found on Appearance tab');
+      await ctx.click(light);
+    },
+    assert: async (ctx: InteractionCtx) => {
+      if (!ctx.calls.called('settings.set'))
+        throw new Error('settings.set not called for themeMode on Appearance tab');
+      return 'Theme mode change → settings.set({themeMode})';
+    },
+  },
+
   // ── Search tab ───────────────────────────────────────────────────────────
 
   (() => {

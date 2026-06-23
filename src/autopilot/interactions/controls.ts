@@ -37,6 +37,7 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'sidebar.saved.filterByTag',
   // Task 7: settings (every tab)
   'settings.appearance.primaryColor',
+  'settings.appearance.themeMode',
   'settings.search.addEngine',
   'settings.search.setDefault',
   'settings.home.homeUrl',
