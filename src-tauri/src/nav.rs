@@ -258,7 +258,9 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
                 mark_tab_has_content(load_id);
             }
             // New top-frame navigation → reset this tab's per-page blocked count (badge).
-            #[cfg(target_os = "linux")]
+            // Desktop-wide: Linux counts via resource-load-started, Windows via the WebView2
+            // interceptor (adblock_win); macOS emits 0 (no native per-block callback there).
+            #[cfg(desktop)]
             if loading {
                 crate::adblock::reset_page(&app_load, load_id);
             }
