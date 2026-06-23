@@ -8,3 +8,5 @@ scripts/autopilot/fixture
 sync-server
 package-lock.json
 *.AppImage
+# Rust-embedded JS assets (include_str!'d + string-matched by cargo tests) — must not be reformatted
+src-tauri/src
