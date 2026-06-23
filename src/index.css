@@ -466,6 +466,80 @@ body.aegis-fullscreen {
   font-style: italic;
 }
 
+/* ─── Zoom indicator ─────────────────────────────────────────────── */
+
+.zoom-indicator {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.zoom-indicator__label {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 6px;
+  border-radius: var(--radius-2);
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.zoom-indicator__label:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+}
+
+.zoom-indicator__popover {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  box-shadow: var(--shadow-modal);
+  padding: 6px 8px;
+  z-index: 5000;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+.zoom-indicator__popover button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: var(--radius-2);
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.zoom-indicator__popover button:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--fg);
+}
+
+.zoom-indicator__value {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg);
+  min-width: 36px;
+  text-align: center;
+}
+
 /* ─── Favorites bar ──────────────────────────────────────────────── */
 
 .favorites-bar {

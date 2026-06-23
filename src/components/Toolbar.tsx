@@ -30,6 +30,8 @@ export interface ToolbarProps {
   fullscreen?: ReactNode;
   /** Optional toolbar slot for the downloads indicator (Phase 5). */
   downloads?: ReactNode;
+  /** Optional toolbar slot for the zoom indicator (between gear and menu). */
+  zoom?: ReactNode;
   /** Optional right-side toolbar slot for the sidebar toggle (restyle). */
   menu?: ReactNode;
 }
@@ -46,6 +48,7 @@ export function Toolbar({
   gear,
   fullscreen,
   downloads,
+  zoom,
   menu,
 }: ToolbarProps) {
   return (
@@ -70,6 +73,7 @@ export function Toolbar({
       {downloads}
       {fullscreen}
       {gear}
+      {zoom}
       {menu}
     </div>
   );
