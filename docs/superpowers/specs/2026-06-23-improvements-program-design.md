@@ -32,7 +32,7 @@ reshaped the plan:
 | WebRTC IP-leak defense | **DONE** | `webrtc_shim.rs` (candidate/SDP filtering) + native backstops (Linux `set_enable_webrtc`, Windows `--force-webrtc-ip-handling-policy`) + `webrtcPolicy` toggle. Worker-bypass is a documented hard limit, not a bug |
 | S1 atomic store writes | **DONE** | `jsonstore::write_atomic` (temp→`sync_all`→rename→dir-fsync + `.bak`); `settings.rs`, `customfilters.rs`, `data.rs:48`, `subs.rs` all route through it |
 | S2 shared crypto | **DONE** | `crypto.rs`: XChaCha20-Poly1305 `seal/open`, HKDF-SHA256, Argon2id (via `sync_keystore`), `zeroize`; deps in `Cargo.toml` |
-| S3 OS keychain | **PARTIAL** | Desktop `keyring` done (`sync_keystore.rs`); **Android hardware Keystore JNI path documented but not connected** (passphrase fallback works) → sub-project **J** |
+| S3 OS keychain | **DESKTOP DONE / ANDROID NEARLY DONE** | Desktop `keyring` done (`sync_keystore.rs`); Android hardware-Keystore JNI path is in fact **wired + device-verified** (commit `03f0012`, `AegisKeystore.kt` does a real KeyGenParameterSpec AES-GCM wrap) — the only gap is preferring **StrongBox** → sub-project **J** (a small hardening task, not a build). *[corrected 2026-06-23 during planning; original spec said "not connected"]* |
 | S4 Android document-start JS injection | **DONE** | `MainActivity.kt` `WebViewCompat.addDocumentStartJavaScript(...)` for ad-block + WebRTC shim, applied per tab |
 | Password vault | **ABSENT** | No vault/credential storage → sub-project **K** |
 | Anti-fingerprinting / farbling | **ABSENT** | No farble module/salt/noise → sub-project **L** |
@@ -146,20 +146,24 @@ execution order is in §5.
 - **Deps:** ideally after the features land. **Acceptance:** owner confirms GUI run, or it
   stays explicitly "CI-build-verified, GUI-pending."
 
-### J — Android hardware-Keystore anchor (finish S3)
-- **Scope:** Connect the Rust JNI path to the existing `AegisKeystore.kt` so the sync/
-  vault seed is hardware-anchored on Android (StrongBox/`KeyGenParameterSpec`), keeping
-  the passphrase fallback. Small.
-- **Files:** `sync_keystore.rs` (android module), `AegisKeystore.kt`.
-- **Deps:** none; precedes K's Android leg. **Acceptance:** Android device wraps/unwraps
-  via hardware Keystore; fallback still works headless.
+### J — Android hardware-Keystore StrongBox hardening (finish S3)
+- **Scope:** The JNI path + `AegisKeystore.kt` already do a real hardware-backed AES-GCM
+  wrap and are device-verified. Remaining work is small: prefer **StrongBox**
+  (`setIsStrongBoxBacked(true)`, guarded by `SDK_INT >= P`, catch
+  `StrongBoxUnavailableException` → retry without), plus Rust unit tests for the
+  backing-selection invariants. No new IPC/UI (`SyncState.vaultBacking` already reports it).
+- **Files:** `AegisKeystore.kt` (StrongBox), `sync_keystore.rs` (tests only).
+- **Deps:** none. **Acceptance:** Android device wraps/unwraps via StrongBox-backed
+  Keystore (or graceful TEE fallback); passphrase fallback still works headless.
 
 ### K — Password vault (Phase A)
 - **Scope:** New `vault.rs` — credential records sealed with the existing `crypto.rs`
   AEAD, master-password Argon2id KDF, lock/unlock, CRUD, search. IPC (`vault.*`) + a
   manage/add UI + a Settings section. **No autofill.** Reuses S2/S3 (and J on Android).
-- **Deps:** A, J (Android). **Acceptance:** create→unlock→add→retrieve→lock roundtrip;
-  data encrypted at rest; locked state zeroizes keys; tests + live.
+- **Deps:** A. *(Not J — the vault derives its key from the master password via Argon2id,
+  not the OS keychain, so it's pure Rust + React with zero platform-gated code. J only
+  hardens the separate sync-seed anchor.)* **Acceptance:** create→unlock→add→retrieve→lock
+  roundtrip; data encrypted at rest; locked state zeroizes keys; tests + live.
 
 ### L — Anti-fingerprinting / farbling
 - **Scope:** New `farble.rs` — a per-session, crypto-derived salt; document-start JS that
@@ -200,7 +204,7 @@ execution order is in §5.
 Phase 0 (fast enablers):        A  → B
 Phase 1 (user-visible):         D, E, F, G, H        (parallelizable; H heaviest)
 Phase 2 (backend hardening):    C
-Phase 3 (new privacy features): J → K ,  L ,  M       (J before K's Android leg)
+Phase 3 (new privacy features): J ,  K ,  L ,  M       (all independent; J is a small hardening task)
 Cross-cutting, hardware-gated:  I  (run once a Mac is available)
 ```
 
