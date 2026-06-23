@@ -137,6 +137,13 @@ vi.mock('../../lib/ipcClient', () => ({
       export: vi.fn().mockResolvedValue({ ok: false }),
       import: vi.fn().mockResolvedValue({ ok: false }),
     },
+    find: {
+      start: vi.fn().mockResolvedValue(undefined),
+      next: vi.fn().mockResolvedValue(undefined),
+      prev: vi.fn().mockResolvedValue(undefined),
+      close: vi.fn().mockResolvedValue(undefined),
+      onState: vi.fn().mockReturnValue(() => {}),
+    },
     safety: {
       getState: vi.fn().mockResolvedValue(null),
       proceed: vi.fn(),

@@ -101,6 +101,7 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'mobile.menu.bookmark',
   'mobile.menu.downloads',
   'mobile.menu.settings',
+  'mobile.menu.find',
   'mobile.tabSwitcher.newTab',
   'mobile.tabSwitcher.switch',
   'mobile.tabSwitcher.close',

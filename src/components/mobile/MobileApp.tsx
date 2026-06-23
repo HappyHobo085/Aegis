@@ -19,8 +19,10 @@ import { useSubscriptions } from '../../hooks/useSubscriptions';
 import { useCustomFilters } from '../../hooks/useCustomFilters';
 import { useDownloads } from '../../hooks/useDownloads';
 import { usePermissions } from '../../hooks/usePermissions';
+import { useFind } from '../../hooks/useFind';
 import { useMobileTabSync } from '../../hooks/useMobileTabSync';
 import { AdblockShield } from '../AdblockShield';
+import { FindBar } from '../FindBar';
 import { HistoryPanel } from '../HistoryPanel';
 import { SavedPanel } from '../SavedPanel';
 import { DownloadsModal } from '../DownloadsModal';
@@ -67,6 +69,7 @@ function hostOf(url: string): string | null {
 export function MobileApp() {
   const tabs = useTabs();
   const nav = useNav(tabs.activeId);
+  const find = useFind(tabs.activeId);
   const adblock = useAdblock(tabs.activeId, nav.state.url);
   useMobileTabSync(tabs.tabs, tabs.activeId);
   const favorites = useFavorites(nav.state.url);
@@ -166,6 +169,15 @@ export function MobileApp() {
           onEnterFullscreen={() => setFullscreen(true)}
         />
       )}
+      {find.open && (
+        <FindBar
+          state={find.state}
+          onQueryChange={find.setQuery}
+          onNext={find.next}
+          onPrev={find.prev}
+          onClose={find.close}
+        />
+      )}
       <div className="content-anchor" />
       {!bottomBarHidden && !fullscreen && (
         <MobileBottomBar
@@ -193,6 +205,10 @@ export function MobileApp() {
           onToggleBookmark={() => {
             if (saved.isCurrentSaved) void saved.removeCurrent();
             else void saved.addCurrent(nav.state.title);
+          }}
+          onFind={() => {
+            find.show();
+            setSheet(null);
           }}
         />
       )}

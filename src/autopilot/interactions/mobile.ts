@@ -385,6 +385,34 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
   },
 
   {
+    id: 'mobile.menu.find',
+    domain: 'mobile.menu',
+    description: 'Open menu sheet → click "Find in page" → FindBar appears',
+    screen: 'home',
+    layers: ['vitest'],
+    mobile: true,
+    run: async (ctx) => {
+      // Open the menu sheet.
+      const menuBtn = ctx.byRole('button', /^Menu$/);
+      if (!menuBtn) throw new Error('Menu button not found in MobileBottomBar');
+      await ctx.click(menuBtn);
+      // Click the "Find in page" item.
+      const findBtn = ctx.byRole('button', /^Find in page$/);
+      if (!findBtn) throw new Error('"Find in page" button not found in MobileMenuSheet');
+      await ctx.click(findBtn);
+    },
+    assert: async (ctx) => {
+      // The FindBar renders an input with aria-label="Find in page".
+      const input = ctx.bySelector('input[aria-label="Find in page"]');
+      if (!input)
+        throw new Error(
+          'FindBar input (aria-label="Find in page") not found after tapping "Find in page" in menu',
+        );
+      return 'MobileMenuSheet "Find in page" → FindBar visible';
+    },
+  },
+
+  {
     id: 'mobile.topBar.hideToolbar',
     domain: 'mobile.topBar',
     description:
