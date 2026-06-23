@@ -1985,6 +1985,66 @@ body.aegis-fullscreen {
   cursor: pointer;
 }
 
+/* Theme segmented radio group (System / Dark / Light) */
+.appearance-tab__theme {
+  border: none;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.appearance-tab__legend {
+  color: var(--fg-muted);
+  font-size: 14px;
+}
+
+.appearance-tab__segments {
+  display: inline-flex;
+  gap: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  overflow: hidden;
+  width: fit-content;
+}
+
+.appearance-tab__segment {
+  display: inline-flex;
+}
+
+/* Hide the native radio dot; the whole segment is the affordance. */
+.appearance-tab__segment input[type='radio'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.appearance-tab__segment span {
+  padding: 6px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-muted);
+  background: var(--bg-input);
+  border-right: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+
+.appearance-tab__segment:last-child span {
+  border-right: none;
+}
+
+.appearance-tab__segment input[type='radio']:checked + span {
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+}
+
+.appearance-tab__segment input[type='radio']:focus-visible + span {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
+}
+
 /* ─── Tabs tab ───────────────────────────────────────────────────── */
 
 .tabs-tab {
