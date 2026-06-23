@@ -63,8 +63,8 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 
 /// Emit a find.state snapshot to the chrome (dotted name; emit_event rewrites .→:).
 /// Called by Tasks 6-8 platform modules once native find delivers match counts.
-// Linux: called by find_linux (Task 6). Windows/macOS stubs not yet wired (Tasks 7/8).
-#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+// Linux: find_linux (Task 6). Windows: find_win (Task 7). macOS: find_mac (Task 8).
+#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
 pub(crate) fn emit_state(
     app: &AppHandle,
     view_id: u32,
