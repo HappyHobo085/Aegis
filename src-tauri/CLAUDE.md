@@ -115,8 +115,9 @@ dotted event name.
   (per-uuid **HLC last-writer-wins** merge with tombstones — the `sync.changed`
   targeted-refetch seam, never a full reload), `sync_envelope.rs` / `sync_identity.rs`
   (record sealing + identity), and `sync_keystore.rs` (root-secret-at-rest: desktop
-  `keyring`, Android hardware-Keystore JNI path **documented but not yet connected**,
-  passphrase-wrapped file fallback). All record crypto is `crypto.rs`:
+  `keyring`, Android hardware-Keystore JNI path **wired + device-verified** (commit
+  `03f0012`; `AegisKeystore.kt` performs a real `KeyGenParameterSpec` AES-GCM wrap;
+  passphrase-wrapped file is the fallback; remaining work = StrongBox preference, sub-project J). All record crypto is `crypto.rs`:
   **XChaCha20-Poly1305** seal/open (24-byte nonce), **HKDF-SHA256** per-namespace keys,
   **Argon2id** passphrase KDF, `zeroize`-on-drop. A self-hosted reference server is the
   standalone `sync-server/` crate. `sync.*` data channels flow on Android for free

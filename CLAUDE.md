@@ -125,7 +125,8 @@ Linux/Windows backstops), the **atomic store-write** path (`jsonstore::write_ato
 the **shared crypto** layer (`crypto.rs` — XChaCha20-Poly1305 / HKDF / Argon2id /
 zeroize), and **Android document-start JS injection** (`MainActivity.kt`
 `addDocumentStartJavaScript`). The **OS-keychain anchor** is desktop-done / Android-
-partial (hardware-Keystore JNI path documented, not yet connected — passphrase
-fallback works). **Remaining roadmap features:** a password vault, anti-fingerprinting
+wired + device-verified (commit `03f0012`; `AegisKeystore.kt` does a real
+`KeyGenParameterSpec` AES-GCM wrap; passphrase-wrapped file is the fallback when
+no keychain is available; only remaining work is preferring StrongBox — sub-project J). **Remaining roadmap features:** a password vault, anti-fingerprinting
 (farbling), and a content-webview proxy — see `docs/FEATURE_ROADMAP.md` and the
 improvements-program decomposition in `docs/superpowers/specs/`.
