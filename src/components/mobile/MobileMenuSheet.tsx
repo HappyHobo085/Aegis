@@ -97,17 +97,32 @@ export function MobileMenuSheet({
             Find in page
           </button>
         </li>
-        <li className="mobile-menu__item mobile-menu__item--zoom">
+        <li className="mobile-menu__item--zoom">
           <span className="mobile-menu__zoom-label">Zoom</span>
           <div className="mobile-menu__zoom-controls">
-            <button type="button" aria-label="Zoom out" onClick={onZoomOut}>
+            <button
+              type="button"
+              className="mobile-menu__item mobile-menu__zoom-btn"
+              aria-label="Zoom out"
+              onClick={onZoomOut}
+            >
               <ZoomOut size={18} aria-hidden="true" />
             </button>
             <span className="mobile-menu__zoom-value">{zoomPercent}</span>
-            <button type="button" aria-label="Zoom in" onClick={onZoomIn}>
+            <button
+              type="button"
+              className="mobile-menu__item mobile-menu__zoom-btn"
+              aria-label="Zoom in"
+              onClick={onZoomIn}
+            >
               <ZoomIn size={18} aria-hidden="true" />
             </button>
-            <button type="button" aria-label="Reset zoom" onClick={onZoomReset}>
+            <button
+              type="button"
+              className="mobile-menu__item mobile-menu__zoom-btn"
+              aria-label="Reset zoom"
+              onClick={onZoomReset}
+            >
               <RotateCcw size={16} aria-hidden="true" />
             </button>
           </div>

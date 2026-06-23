@@ -3920,6 +3920,36 @@ a:focus-visible {
 .mobile-menu__item:disabled {
   color: #666;
 }
+.mobile-menu__item--zoom {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 52px;
+}
+.mobile-menu__zoom-btn {
+  height: 44px;
+  width: 44px;
+  padding: 0;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.mobile-menu__zoom-label {
+  flex: 1;
+  font-size: 16px;
+  color: #e6e6e6;
+}
+.mobile-menu__zoom-value {
+  font-size: 16px;
+  color: #e6e6e6;
+  min-width: 48px;
+  text-align: center;
+}
+.mobile-menu__zoom-controls {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
 
 /* Reused desktop modals go full-screen on mobile. */
 /* SettingsModal: root=.settings-modal (scrim+centering), content card=.settings-modal__content */
