@@ -92,6 +92,8 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'toolbar.zoom.in',
   'toolbar.zoom.out',
   'toolbar.zoom.reset',
+  // Task 11: page zoom (keyboard path — App.tsx window keydown)
+  'toolbar.zoom.keyboard',
   // Task 10: mobile-only controls (MobileBottomBar, MobileMenuSheet, MobileTabSwitcher, MobileTopBar)
   // These are exercised in the mobile interaction tour (interactions.mobile.test.tsx).
   // They are NOT reachable in the desktop shell and NOT in the live autopilot run

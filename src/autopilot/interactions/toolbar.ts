@@ -1,4 +1,5 @@
 // src/autopilot/interactions/toolbar.ts
+import { act } from '@testing-library/react';
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
 import {
   emitNavState,
@@ -373,6 +374,91 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       if (!ctx.calls.called('adblock.toggleAllowlist'))
         throw new Error('adblock.toggleAllowlist not called');
       return 'allowlist checkbox → adblock.toggleAllowlist()';
+    },
+  },
+
+  // ─── Task 11: page zoom — keyboard path (App.tsx window keydown) ────────
+
+  {
+    id: 'toolbar.zoom.keyboard.in',
+    domain: 'toolbar',
+    description: 'Ctrl+= on window → zoom.set called with factor > 1.0 (keyboard zoom-in)',
+    screen: 'home',
+    // live excluded: the live CallLog is inert; can't confirm zoom.set via ctx.calls live.
+    layers: ['vitest'],
+    run: async (_ctx) => {
+      // App.tsx listens on window.addEventListener('keydown', …) for Ctrl+=/+/NumpadAdd.
+      // Dispatch Ctrl+= directly on window so the App handler fires in jsdom.
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: '=',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+    },
+    assert: async (ctx) => {
+      // zoom.zoomIn() calls zoom.set(viewId, factor) with factor stepped up from 1.0 → 1.1.
+      if (!ctx.calls.called('zoom.set', (a) => (a[1] as number) > 1.0))
+        throw new Error('zoom.set not called with factor > 1.0 after Ctrl+=');
+      return 'Ctrl+= → zoom.set(>1.0)';
+    },
+  },
+
+  {
+    id: 'toolbar.zoom.keyboard.out',
+    domain: 'toolbar',
+    description: 'Ctrl+- on window → zoom.set called with factor < 1.0 (keyboard zoom-out)',
+    screen: 'home',
+    // live excluded: the live CallLog is inert; can't confirm zoom.set via ctx.calls live.
+    layers: ['vitest'],
+    run: async (_ctx) => {
+      // App.tsx handles Ctrl+- (e.key === '-') on window.
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: '-',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+    },
+    assert: async (ctx) => {
+      // zoom.zoomOut() calls zoom.set(viewId, factor) with factor stepped down from 1.0 → 0.9.
+      if (!ctx.calls.called('zoom.set', (a) => (a[1] as number) < 1.0))
+        throw new Error('zoom.set not called with factor < 1.0 after Ctrl+-');
+      return 'Ctrl+- → zoom.set(<1.0)';
+    },
+  },
+
+  {
+    id: 'toolbar.zoom.keyboard.reset',
+    domain: 'toolbar',
+    description: 'Ctrl+0 on window → zoom.reset called (keyboard zoom-reset)',
+    screen: 'home',
+    // live excluded: the live CallLog is inert; can't confirm zoom.reset via ctx.calls live.
+    layers: ['vitest'],
+    run: async (_ctx) => {
+      // App.tsx handles Ctrl+0 (e.key === '0') on window.
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: '0',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('zoom.reset')) throw new Error('zoom.reset not called after Ctrl+0');
+      return 'Ctrl+0 → zoom.reset()';
     },
   },
 
