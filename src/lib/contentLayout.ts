@@ -14,6 +14,8 @@ export interface ContentLayoutState {
   sidebar: boolean;
   /** The ad-block shield popover is open (rides the chrome, does not inset). */
   shield: boolean;
+  /** The zoom indicator popover is open (rides the chrome, does not inset). */
+  zoom: boolean;
   /** Current user-resized sidebar width, forwarded so the inset matches exactly. */
   sidebarWidth: number;
 }
@@ -26,7 +28,7 @@ export interface ContentLayout {
 
 export function computeContentLayout(s: ContentLayoutState): ContentLayout {
   return {
-    overlay: s.fullOverlay || s.sidebar || s.shield,
+    overlay: s.fullOverlay || s.sidebar || s.shield || s.zoom,
     sidebar: s.sidebar && !s.fullOverlay,
     width: s.sidebarWidth,
   };

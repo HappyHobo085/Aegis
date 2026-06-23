@@ -10,6 +10,7 @@ import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChro
 import { computeContentLayout } from './lib/contentLayout';
 import { useNav } from './hooks/useNav';
 import { useFind } from './hooks/useFind';
+import { useZoom } from './hooks/useZoom';
 import { useAdblock } from './hooks/useAdblock';
 import { useFavorites } from './hooks/useFavorites';
 import { useHistory } from './hooks/useHistory';
@@ -29,6 +30,7 @@ import { BookmarkButton } from './components/BookmarkButton';
 import { DownloadsIndicator } from './components/DownloadsIndicator';
 import { PickerButton } from './components/PickerButton';
 import { UpdateIndicator } from './components/UpdateIndicator';
+import { ZoomIndicator } from './components/ZoomIndicator';
 import { SafetyInterstitial } from './components/SafetyInterstitial';
 import { FavoritesBar } from './components/FavoritesBar';
 import { FavoritesManager } from './components/FavoritesManager';
@@ -88,6 +90,10 @@ function DesktopApp() {
   // The ad-block shield popover is a chrome dropdown; track it so the content webview
   // is lowered while it's open (Tauri's content view is opaque and on top).
   const [shieldOpen, setShieldOpen] = useState(false);
+  const zoom = useZoom(tabs.activeId);
+  // The zoom indicator popover is a chrome dropdown; like the shield popover, track it so the
+  // content webview is lowered while it's open (Tauri's content view is opaque and on top).
+  const [zoomOpen, setZoomOpen] = useState(false);
   const favorites = useFavorites(nav.state.url);
   const history = useHistory();
   const saved = useSaved(nav.state.url);
@@ -185,10 +191,11 @@ function DesktopApp() {
         fullOverlay: fullOverlayActive,
         sidebar: sidebarOpen,
         shield: shieldOpen,
+        zoom: zoomOpen,
         sidebarWidth,
       }),
     );
-  }, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen, sidebarWidth]);
+  }, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen, zoomOpen, sidebarWidth]);
 
   // Fullscreen: main shrinks chrome to a top-right corner and fills the window
   // with content. Renderer reflects the toggle below (after all hooks).
@@ -298,6 +305,50 @@ function DesktopApp() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [find.show]);
+
+  // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 — page zoom.
+  // Collision check: the Ctrl+1–9 handler above guards `e.key >= '1' && e.key <= '9'`, so
+  // '0' is NOT handled there — Ctrl+0 is free. '+'/'-'/'=' are also untouched by every
+  // existing handler (Tab/T/W/F/digits are the only ones). NumpadAdd/NumpadSubtract/Numpad0
+  // are accepted for full-keyboard coverage. No Shift guard needed: '+' on most layouts IS
+  // Shift+=, but `e.key` gives '+' directly so we don't need to inspect Shift.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey) return;
+      if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
+        e.preventDefault();
+        zoom.zoomIn();
+      } else if (e.key === '-' || e.code === 'NumpadSubtract') {
+        e.preventDefault();
+        zoom.zoomOut();
+      } else if (e.key === '0' || e.code === 'Numpad0') {
+        e.preventDefault();
+        zoom.reset();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [zoom.zoomIn, zoom.zoomOut, zoom.reset]);
+
+  // Ctrl-wheel over the chrome zooms in/out. Must be a non-passive listener to allow
+  // preventDefault (React's synthetic onWheel is always passive in React 17+).
+  //
+  // LIMITATION: the content webview is a separate native webview; wheel events over the
+  // page go directly to that webview and never reach this chrome-level handler. So
+  // Ctrl-wheel zoom only works reliably when the pointer is over chrome (toolbar, bars,
+  // etc.). The keyboard shortcuts (Ctrl+=/−/0) are the guaranteed cross-platform path.
+  // On Linux/Windows/macOS the content webview's own Ctrl-wheel may apply native engine
+  // zoom independently — do not rely on that; it is not wired through useZoom.
+  useEffect(() => {
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey) return;
+      e.preventDefault();
+      if (e.deltaY < 0) zoom.zoomIn();
+      else if (e.deltaY > 0) zoom.zoomOut();
+    };
+    window.addEventListener('wheel', onWheel, { passive: false });
+    return () => window.removeEventListener('wheel', onWheel);
+  }, [zoom.zoomIn, zoom.zoomOut]);
 
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {
@@ -429,6 +480,15 @@ function DesktopApp() {
           >
             <Settings size={18} aria-hidden="true" />
           </button>
+        }
+        zoom={
+          <ZoomIndicator
+            factor={zoom.factor}
+            zoomIn={zoom.zoomIn}
+            zoomOut={zoom.zoomOut}
+            reset={zoom.reset}
+            onOpenChange={setZoomOpen}
+          />
         }
         fullscreen={
           <button

@@ -10,6 +10,9 @@ export interface ZoomIndicatorProps {
   zoomIn(): void;
   zoomOut(): void;
   reset(): void;
+  /** Called when the popover opens or closes; used by the App to raise the chrome above
+   *  the content webview while the dropdown is visible (same mechanism as the shield popover). */
+  onOpenChange?(open: boolean): void;
 }
 
 function Popover({
@@ -63,9 +66,21 @@ function Popover({
   );
 }
 
-export function ZoomIndicator({ factor, zoomIn, zoomOut, reset }: ZoomIndicatorProps) {
+export function ZoomIndicator({
+  factor,
+  zoomIn,
+  zoomOut,
+  reset,
+  onOpenChange,
+}: ZoomIndicatorProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+
+  const handleOpenChange = (next: boolean): void => {
+    setOpen(next);
+    onOpenChange?.(next);
+  };
+
   return (
     <div ref={wrapperRef} className="zoom-indicator">
       <button
@@ -74,7 +89,7 @@ export function ZoomIndicator({ factor, zoomIn, zoomOut, reset }: ZoomIndicatorP
         aria-label="Page zoom"
         aria-haspopup="dialog"
         aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => handleOpenChange(!open)}
       >
         {formatZoom(factor)}
       </button>
@@ -84,7 +99,7 @@ export function ZoomIndicator({ factor, zoomIn, zoomOut, reset }: ZoomIndicatorP
           zoomIn={zoomIn}
           zoomOut={zoomOut}
           reset={reset}
-          onClose={() => setOpen(false)}
+          onClose={() => handleOpenChange(false)}
           wrapperRef={wrapperRef}
         />
       )}
