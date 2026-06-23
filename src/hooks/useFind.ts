@@ -37,12 +37,13 @@ export function useFind(activeViewId: ViewId): {
   // Debounce timer handle for setQuery.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // On tab switch: reset state and close the find session on the outgoing view.
+  // On tab switch: reset state, close the bar, and close the find session on the outgoing view.
   useEffect(() => {
     const prev = prevViewIdRef.current;
     if (prev !== activeViewId) {
       prevViewIdRef.current = activeViewId;
       setState(emptyFindState(activeViewId));
+      setOpen(false);
       void aegis.find.close(prev);
     }
   }, [activeViewId]);

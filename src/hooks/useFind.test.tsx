@@ -163,6 +163,8 @@ describe('useFind', () => {
     // State should reset to empty
     expect(result.current.state.query).toBe('');
     expect(result.current.state.matchCount).toBe(0);
+    // Bar should be closed
+    expect(result.current.open).toBe(false);
     // find.close should have been called for the OLD view id
     expect(findClose).toHaveBeenCalledWith(PRIMARY_VIEW_ID);
   });
