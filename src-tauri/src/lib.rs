@@ -88,6 +88,12 @@ mod find_linux;
 mod find_mac;
 #[cfg(target_os = "windows")]
 mod find_win;
+// Page zoom (zoom.* IPC): session-only per-tab factor, per-platform native setter.
+mod zoom;
+#[cfg(target_os = "macos")]
+mod zoom_mac;
+#[cfg(target_os = "windows")]
+mod zoom_win;
 
 use serde_json::Value;
 use tauri::{Emitter, Manager};
@@ -111,6 +117,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         return result;
     }
     if let Some(result) = find::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = zoom::dispatch(&app, &channel, &payload) {
         return result;
     }
     if let Some(result) = tabs::dispatch(&app, &channel, &payload) {
@@ -422,7 +431,8 @@ pub fn run() {
         .manage(sync::SyncState::default())
         .manage(redirect_guard::PendingNavs::default())
         .manage(redirect_guard::NavActions::default())
-        .manage(redirect_guard::Chains::default());
+        .manage(redirect_guard::Chains::default())
+        .manage(zoom::ZoomStore::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;

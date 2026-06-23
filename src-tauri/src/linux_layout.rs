@@ -365,6 +365,16 @@ pub fn apply_webrtc_policy_label(app: &AppHandle, label: &str, policy: &str) {
     });
 }
 
+/// Set a content webview's WebKitGTK page-zoom level (1.0 == 100%). Per-tab.
+pub fn set_zoom_level_label(app: &AppHandle, label: &str, factor: f64) {
+    let Some(w) = app.get_webview(label) else {
+        return;
+    };
+    let _ = w.with_webview(move |pw| {
+        pw.inner().set_zoom_level(factor);
+    });
+}
+
 /// Stamp a content webview's GTK widget with CONTENT_WIDGET_NAME so layout() can
 /// classify it. Called once per tab from nav::spawn_tab.
 pub fn mark_content_label(app: &AppHandle, label: &str) {
