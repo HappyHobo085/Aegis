@@ -88,10 +88,14 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_WinR
 # tracks same-document History-API/hash navigations that wry's WKNavigationDelegate
 # callbacks don't report — the WKWebView analog of Linux's notify::uri. Versions match
 # tauri/wry's resolved objc2 so PlatformWebview::inner() casts to the same WKWebView.
+# WKFindConfiguration + WKFindResult + block2: required for find_mac.rs
+# (WKWebView::findString:withConfiguration:completionHandler:). These features are off
+# by default in objc2-web-kit 0.3; block2 enables the optional block2 dep so the method
+# binding is compiled in.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = "0.3"
-objc2-web-kit = "0.3"
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKFindConfiguration", "WKFindResult", "block2"] }
 
 # OS keychain for the sync seed at rest (desktop only — keyring 3.x has NO Android backend;
 # Android wraps the seed via the hardware Keystore through JNI). When no secret-service

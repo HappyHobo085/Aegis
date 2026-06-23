@@ -64,7 +64,9 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 /// Emit a find.state snapshot to the chrome (dotted name; emit_event rewrites .→:).
 /// Called by Tasks 6-8 platform modules once native find delivers match counts.
 // Linux: find_linux (Task 6). Windows: find_win (Task 7). macOS: find_mac (Task 8).
-#[cfg_attr(not(any(target_os = "linux", target_os = "windows")), allow(dead_code))]
+// Android: find is handled natively in Kotlin (no Rust caller), so dead_code is
+// expected there; suppress it only on android, not on the three desktop targets.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn emit_state(
     app: &AppHandle,
     view_id: u32,
