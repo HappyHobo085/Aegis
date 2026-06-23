@@ -1,0 +1,10 @@
+dist
+out
+node_modules
+target
+src-tauri/target
+src-tauri/gen
+scripts/autopilot/fixture
+sync-server
+package-lock.json
+*.AppImage
