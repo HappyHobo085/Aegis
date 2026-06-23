@@ -29,6 +29,7 @@ fn defaults() -> Value {
         "httpsOnly": true,
         "tabIdleTimeout": 30,
         "webrtcPolicy": "public-only",
+        "themeMode": "system",
         "syncServerUrl": ""
     })
 }

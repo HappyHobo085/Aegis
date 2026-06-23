@@ -330,6 +330,10 @@ export interface Settings {
    * candidates so calls still work; `'disable'` blocks WebRTC construction entirely
    * (breaks video calls); `'default'` applies no filtering. */
   webrtcPolicy: 'default' | 'public-only' | 'disable';
+  /** Chrome theme: `'system'` (default) follows the OS via `prefers-color-scheme`,
+   * `'dark'` / `'light'` force a palette. Renderer-only — the resolved palette is a
+   * `data-theme` attribute on <html> (see src/lib/theme.ts). */
+  themeMode: 'system' | 'dark' | 'light';
   /** The E2E-encrypted sync server endpoint. Empty = sync not configured (data stays
    * local). Self-hosted: paste your reference-server URL. The server only ever sees
    * opaque ciphertext. */
