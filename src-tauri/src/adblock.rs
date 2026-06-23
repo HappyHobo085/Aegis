@@ -38,10 +38,11 @@ fn active_page_blocked(app: &AppHandle) -> u32 {
     page_map().lock().unwrap().get(&id).copied().unwrap_or(0)
 }
 
-/// Count one blocked subresource on tab `id` and push the running totals to the chrome
-/// badge via `adblock.blockedCount`.
-#[allow(dead_code)] // counting currently hooks the Linux resource-load-started signal; Win/Android is a follow-up
-pub fn note_blocked(app: &AppHandle, id: u32) {
+/// Pure counter update for one blocked subresource on tab `id`: bumps the monotonic
+/// session total and the tab's per-page count, returning `(session, page)`. Split out
+/// from `note_blocked` so the accumulation logic is unit-testable without a Tauri
+/// `AppHandle` (the emit half needs the app; this half does not).
+fn bump_blocked(id: u32) -> (u32, u32) {
     let session = SESSION_BLOCKED.fetch_add(1, Ordering::Relaxed) + 1;
     let page = {
         let mut m = page_map().lock().unwrap();
@@ -49,6 +50,24 @@ pub fn note_blocked(app: &AppHandle, id: u32) {
         *c += 1;
         *c
     };
+    (session, page)
+}
+
+/// Pure per-page reset for tab `id` (zero its page count), returning the unchanged
+/// session total. Split out from `reset_page` for the same testability reason.
+fn zero_page(id: u32) -> u32 {
+    page_map().lock().unwrap().insert(id, 0);
+    session_blocked()
+}
+
+/// Count one blocked subresource on tab `id` and push the running totals to the chrome
+/// badge via `adblock.blockedCount`. Called from each platform's request path: Linux's
+/// `resource-load-started` hook (`linux_layout::connect_block_counter`) and Windows'
+/// WebView2 `WebResourceRequested` handler (`adblock_win`). (Android keeps an equivalent
+/// counter in Kotlin — it has no `AppHandle` and no Tauri event bus on the content side —
+/// and pushes `window.__aegisBlockedCount` directly; see `MainActivity.kt`.)
+pub fn note_blocked(app: &AppHandle, id: u32) {
+    let (session, page) = bump_blocked(id);
     crate::emit_event(
         app,
         "adblock.blockedCount",
@@ -57,14 +76,13 @@ pub fn note_blocked(app: &AppHandle, id: u32) {
 }
 
 /// Reset a tab's per-page blocked count on a new top-frame navigation, and refresh the
-/// badge (page → 0, session unchanged).
-#[allow(dead_code)] // called from the Linux nav path; Win/Android badge counting is a follow-up
+/// badge (page → 0, session unchanged). Called from the desktop nav path (`nav.rs`).
 pub fn reset_page(app: &AppHandle, id: u32) {
-    page_map().lock().unwrap().insert(id, 0);
+    let session = zero_page(id);
     crate::emit_event(
         app,
         "adblock.blockedCount",
-        json!({ "viewId": id, "page": 0, "session": session_blocked() }),
+        json!({ "viewId": id, "page": 0, "session": session }),
     );
 }
 
@@ -257,5 +275,49 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // SESSION_BLOCKED is process-global; these tests reset it and use disjoint tab ids
+    // so they don't interfere. They run single-threaded relative to each other only by
+    // not sharing tab ids — the session counter assertions read deltas, not absolutes.
+    #[test]
+    fn page_count_accumulates_per_tab_and_resets() {
+        let id = 9001; // a tab id no other test uses
+        zero_page(id);
+        let (_s1, p1) = bump_blocked(id);
+        let (_s2, p2) = bump_blocked(id);
+        assert_eq!(p1, 1);
+        assert_eq!(p2, 2, "page count accumulates within a tab");
+        let s = zero_page(id);
+        assert_eq!(page_map().lock().unwrap().get(&id).copied(), Some(0));
+        // zero_page returns the *session* total, which is monotonic and unaffected.
+        let (s_after, p_after) = bump_blocked(id);
+        assert_eq!(p_after, 1, "page count restarts at 1 after a reset");
+        assert!(
+            s_after >= s,
+            "session total is monotonic across a page reset"
+        );
+    }
+
+    #[test]
+    fn session_count_is_shared_across_tabs_and_monotonic() {
+        let (a, b) = (9101, 9102);
+        zero_page(a);
+        zero_page(b);
+        let before = session_blocked();
+        let (sa, pa) = bump_blocked(a);
+        let (sb, pb) = bump_blocked(b);
+        assert_eq!(pa, 1, "tab a's page count is independent");
+        assert_eq!(pb, 1, "tab b's page count is independent");
+        assert!(sb > sa, "session total advances across different tabs");
+        // SESSION_BLOCKED is global — other tests may interleave, so we assert
+        // deltas relative to `before` rather than exact values.
+        assert!(sa >= before + 1, "sa advanced past before");
+        assert!(sb >= before + 2, "sb advanced past sa");
     }
 }
