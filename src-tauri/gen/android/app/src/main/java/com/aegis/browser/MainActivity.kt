@@ -50,6 +50,14 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // Per-tab current page URL (the ad-block first-party context), read on the network
   // thread in shouldInterceptRequest; concurrent for safe cross-thread reads.
   private val pageUrls = java.util.concurrent.ConcurrentHashMap<Int, String>()
+  // Shield badge counters (the Android analog of the Rust adblock.rs counters; there's no
+  // AppHandle in the JNI block path and no Tauri event bus on the content side, so they
+  // live here and push window.__aegisBlockedCount to the chrome). sessionBlocked is the
+  // monotonic session total; pageBlocked is per-tab and reset on each top-frame load.
+  // Touched only from shouldInterceptRequest (a WebView network thread) and onPageStarted
+  // (UI thread), so use thread-safe primitives.
+  private val sessionBlocked = java.util.concurrent.atomic.AtomicInteger(0)
+  private val pageBlocked = java.util.concurrent.ConcurrentHashMap<Int, Int>()
   // The gesture layer that wraps the tab WebViews (edge-swipe + pull-to-refresh); it's
   // the child of the chrome webview's parent that hosts the per-tab content WebViews.
   private var gestureContainer: GestureContainer? = null
@@ -122,11 +130,40 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
   }
 
+  /** Count one blocked ad/tracker subresource on tab [id] and push the running totals to
+   *  the chrome's shield badge via window.__aegisBlockedCount (the Android mirror of the
+   *  Rust adblock::note_blocked → adblock.blockedCount event). Runs on a WebView network
+   *  thread; the JS hop is posted to the chrome webview. */
+  private fun noteBlocked(id: Int) {
+    val session = sessionBlocked.incrementAndGet()
+    val page = pageBlocked.merge(id, 1, Integer::sum) ?: 1
+    pushBlockedCount(id, page, session)
+  }
+
+  /** Reset tab [id]'s per-page count on a new top-frame navigation (badge page → 0,
+   *  session unchanged) and push it — the Android mirror of adblock::reset_page. */
+  private fun resetPageBlocked(id: Int) {
+    pageBlocked[id] = 0
+    pushBlockedCount(id, 0, sessionBlocked.get())
+  }
+
+  /** Push a BlockedCount { viewId, page, session } to the chrome webview's
+   *  window.__aegisBlockedCount (installed by ipcClient.ts on Android). */
+  private fun pushBlockedCount(id: Int, page: Int, session: Int) {
+    val obj = JSONObject()
+      .put("viewId", id)
+      .put("page", page)
+      .put("session", session)
+    val js = "window.__aegisBlockedCount && window.__aegisBlockedCount($obj)"
+    chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
+  }
+
   /** Build a per-tab WebViewClient. All fields (pageUrls, pushNavState) are threaded
    *  through [id] so each tab's navigation events carry the right tab identity. */
   private fun makeContentClient(id: Int): WebViewClient = object : WebViewClient() {
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
       pageUrls[id] = url
+      resetPageBlocked(id)
       pushNavState(id, url, true, view)
     }
 
@@ -160,6 +197,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
           }
           NativeAdblock.shouldBlock(url, firstParty, requestType(url, request)) -> {
             Log.i("AegisAdblock", "BLOCK $url")
+            noteBlocked(id)
             blockedResponse()
           }
           else -> null
@@ -553,12 +591,16 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         it.destroy()
       }
       pageUrls.remove(id)
+      pageBlocked.remove(id)
       tabZoom.remove(id) // drop zoom on close; kept on discard so reload restores it
       if (activeTabId == id) { activeTabId = -1; contentWebView = null }
     }
 
     /** Discard an idle tab (memory reclaim): destroy its WebView; re-activating will
-     *  reload it via activateTab. Same teardown as closeTab. */
+     *  reload it via activateTab. Same teardown as closeTab. Note: dropping the page
+     *  count is correct — re-activating reloads the tab, which triggers onPageStarted
+     *  → resetPageBlocked. A discarded-then-reactivated tab's badge restarts from 0
+     *  until it blocks again (accepted limitation; identical to a fresh load). */
     @JavascriptInterface
     fun discardTab(id: Int) = runOnUiThread {
       tabWebViews.remove(id)?.let {
@@ -567,6 +609,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         it.destroy()
       }
       pageUrls.remove(id)
+      pageBlocked.remove(id)
       if (activeTabId == id) { activeTabId = -1; contentWebView = null }
     }
 
