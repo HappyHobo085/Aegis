@@ -385,6 +385,9 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         crate::adblock_webkit::apply_to_new_tab(app, &label);
         // Count blocked subresources on this tab for the shield badge.
         crate::linux_layout::connect_block_counter(app, &label);
+        // Wire the WebKitFindController found-text / failed-to-find-text signals so
+        // find.start/next/prev push live match counts to the chrome's FindBar.
+        crate::find_linux::install(app, &label);
         // Own the decide-policy signal: disconnect wry's handler and run our own (the shared
         // nav policy + the gesture/frame-aware redirect guard). MUST run after the webview is
         // built (wry connects its handler during build); with_webview here satisfies that.
