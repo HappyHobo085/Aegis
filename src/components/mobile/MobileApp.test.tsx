@@ -1,5 +1,5 @@
 // src/components/mobile/MobileApp.test.tsx
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { NavState, Settings } from '../../../shared/types';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
@@ -21,7 +21,19 @@ const baseSettings: Settings = {
   searchEngines: [],
   hideChromeByDefault: false,
   downloadDir: '',
+  httpsOnly: true,
+  tabIdleTimeout: 30,
+  webrtcPolicy: 'public-only',
+  themeMode: 'system',
 };
+
+// Spy on applyTheme so mount tests can assert it was called with the full settings.
+const applyThemeSpy = vi.fn();
+const watchSystemThemeCleanup = vi.fn();
+vi.mock('../../lib/theme', () => ({
+  applyTheme: (...a: unknown[]) => applyThemeSpy(...a),
+  watchSystemTheme: (_cb: () => void) => watchSystemThemeCleanup,
+}));
 
 vi.mock('../../lib/ipcClient', () => ({
   aegis: {
@@ -245,5 +257,13 @@ describe('MobileApp', () => {
     fireEvent.click(await screen.findByRole('button', { name: /enter fullscreen/i }));
     expect(screen.queryByRole('navigation', { name: /browser actions/i })).toBeNull();
     expect(screen.queryByRole('button', { name: /enter fullscreen/i })).toBeNull();
+  });
+
+  it('calls applyTheme with the full settings (incl. themeMode) on mount', async () => {
+    render(<MobileApp />);
+    // Wait for the mount effect to fire: settings.get resolves and applyTheme is called.
+    await waitFor(() => expect(applyThemeSpy).toHaveBeenCalled());
+    const [called] = applyThemeSpy.mock.calls[0] as [Record<string, unknown>];
+    expect(called).toMatchObject({ primaryColor: '#4f8cff', themeMode: 'system' });
   });
 });

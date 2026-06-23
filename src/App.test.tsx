@@ -1,5 +1,5 @@
 // src/App.test.tsx
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavState, NavFailed, NavCrashed } from '../shared/types';
@@ -32,6 +32,14 @@ const stateCb = (s: NavState): void => {
 vi.mock('./lib/ipcClient', async () =>
   (await import('./testFixtures/aegisMock')).aegisMockModule(),
 );
+
+// Spy on applyTheme so mount tests can assert it was called with the full settings.
+const applyThemeSpy = vi.fn();
+const watchSystemThemeCleanup = vi.fn();
+vi.mock('./lib/theme', () => ({
+  applyTheme: (...a: unknown[]) => applyThemeSpy(...a),
+  watchSystemTheme: (_cb: () => void) => watchSystemThemeCleanup,
+}));
 
 import { App } from './App';
 
@@ -400,5 +408,13 @@ describe('App', () => {
     expect(screen.getByRole('textbox', { name: /address/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /enter fullscreen/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /exit fullscreen/i })).not.toBeInTheDocument();
+  });
+
+  it('calls applyTheme with the full settings (incl. themeMode) on mount', async () => {
+    render(<App />);
+    // Wait for the mount effect to fire: settings.get resolves and applyTheme is called.
+    await waitFor(() => expect(applyThemeSpy).toHaveBeenCalled());
+    const [called] = applyThemeSpy.mock.calls[0] as [Record<string, unknown>];
+    expect(called).toMatchObject({ primaryColor: '#4f8cff', themeMode: 'system' });
   });
 });

@@ -22,6 +22,10 @@ const baseSettings: Settings = {
   searchEngines: [],
   hideChromeByDefault: false,
   downloadDir: '',
+  httpsOnly: true,
+  tabIdleTimeout: 30,
+  webrtcPolicy: 'public-only',
+  themeMode: 'system',
 };
 
 export function aegisMockModule() {
