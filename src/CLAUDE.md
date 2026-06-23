@@ -68,10 +68,23 @@ width)` so the page insets from the right and stays visible. Width is remembered
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.
   Returns `{ open, state, show, setQuery, next, prev, close }` consumed by `FindBar`.
+- **`hooks/useZoom`** — owns page-zoom state for the active view. Seeds from
+  `aegis.zoom.get(activeId)` on mount and on every tab switch; subscribes to
+  `aegis.zoom.onChanged` (filtered by `viewId`). `zoomIn`/`zoomOut` step along the
+  Chrome-style discrete ladder (via `lib/zoom.ts`'s `stepZoom`), apply optimistically,
+  then confirm via `aegis.zoom.set`. `reset` restores 100% via `aegis.zoom.reset`.
+  Returns `{ factor, percent, zoomIn, zoomOut, reset, setFactor }`.
 - **`components/FindBar`** — Ctrl+F infobar (purely presentational): text input,
   match-count display, prev/next nav buttons, and a close button. Auto-focuses on mount.
   Rendered inside `DesktopApp` (and `MobileApp`) keyed on the active view id; shown only
   when `findOpen` is true.
+- **`components/ZoomIndicator`** — toolbar zoom widget. Shows the current zoom percent as
+  a clickable label; clicking opens a popover (role=`dialog`) with Zoom-out / percent /
+  Zoom-in / Reset buttons. Purely presentational; receives `{ factor, zoomIn, zoomOut,
+reset, onOpenChange }` from `useZoom`. `onOpenChange` lets `App.tsx` raise the chrome
+  above the content webview while the popover is open (same mechanism as the shield popover).
+  On Android the `MobileMenuSheet` exposes the same zoom controls via the bridge; there is
+  no separate `ZoomIndicator` in the mobile shell.
 - **`components/TabStrip`** — the top row of the chrome, rendered above the
   toolbar on desktop only (hidden on mobile via `.aegis-mobile`). Shows the tab
   list and drives `tabs.create`/`tabs.activate`/`tabs.close` etc.

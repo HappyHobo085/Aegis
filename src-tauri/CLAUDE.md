@@ -145,6 +145,43 @@ ordinal+1)` → `window.__aegisFindState(…)` in the chrome (mirroring `pushNav
     `__aegisNavState`). **Limit:** Android `findAllAsync` is **case-insensitive only** —
     the `caseSensitive` flag is accepted but ignored by the platform API. No Rust
     involvement for Android find.
+- **Page zoom** (`zoom.rs` + `zoom_{win,mac}.rs` + `linux_layout::set_zoom_level_label`
+  - Android `MainActivity.setZoom`):
+  * `zoom.rs` — dispatcher (`zoom.*` IPC channels: `zoom.get` / `zoom.set` / `zoom.reset`),
+    in-memory per-tab `ZoomStore` (`Mutex<HashMap<u32, f64>>`), `clamp(f)` (pure, unit-tested),
+    `factor_of`, `apply_to_tab` (replays at spawn), and `apply_native` (per-platform fan-out).
+    The `put` helper stores + applies + emits `zoom.changed`.
+    **Session-only** (not persisted, not per-origin): the core is the source of truth so a
+    discarded→reloaded tab keeps its zoom (see `apply_to_tab` called from `nav::spawn_tab`).
+    Per-origin persistence is a forward-compatible v2 that won't change this IPC surface.
+  * `linux_layout::set_zoom_level_label` — looks up the content webview by label and calls
+    webkit2gtk `WebViewExt::set_zoom_level(factor)`. All native — no JS injection.
+  * `zoom_win.rs` — `SetZoomFactor` on the WebView2 `ICoreWebView2Controller` (reached via
+    `PlatformWebview::controller()`). Compile-verified via `cargo check
+--target x86_64-pc-windows-gnu` + CI MSVC; **GUI runtime-verify PENDING** on Windows device.
+  * `zoom_mac.rs` — `WKWebView::setPageZoom(CGFloat)` (content zoom — NOT `setMagnification`,
+    which is the pinch scale). Reached via `PlatformWebview::inner()`. **CI-compile-only**:
+    objc2 cannot be built from Linux; runtime needs a macOS desktop (sub-project I).
+  * **Android** — no Rust involvement: the chrome calls `window.AegisAndroid.setZoom(id,
+percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
+    (where `percent` is `Math.round(factor * 100)`). **Limitation:** `textZoom` is text-size
+    scaling, not true page zoom (images/layout stay fixed-size); a pixel-perfect page-zoom
+    alternative requires Android 9+ `WebView.setDefaultZoom` workarounds. Kotlin compile-verified
+    via `compileUniversalDebugKotlin`; **GUI runtime-verify PENDING** on device.
+  * **Per-platform capability matrix (honest):**
+    - **Linux** (webkit2gtk `set_zoom_level`): full page zoom, exact factor. Cross-check +
+      tests green; **live GUI verify PENDING** user display session.
+    - **Windows** (WebView2 `SetZoomFactor`): full page zoom, exact factor. Compile-verified;
+      **GUI runtime-verify PENDING** user's Windows 11 device.
+    - **macOS** (`WKWebView::setPageZoom`): full page zoom, exact factor. **CI-compile-only;
+      GUI requires a macOS desktop** (sub-project I, hardware-gated).
+    - **Android** (`WebSettings.textZoom`): text-only scaling (not true page zoom). Kotlin +
+      cargo compile clean; **GUI runtime-verify PENDING** device session.
+  * **Ctrl-wheel note:** the Ctrl-wheel handler in `App.tsx` fires on the chrome webview
+    only (not the content webview, which may capture scroll events first). Keyboard shortcuts
+    Ctrl+`+`/`-`/`=`/`0` are the **guaranteed cross-platform zoom path** and are always
+    wired. Ctrl-wheel over the content page may or may not reach the chrome handler depending
+    on the platform/engine — confirm on device.
 - **Security** — `safety.rs` (URLhaus malware host set from `resources/`, JNI
   `isMalwareHost`), `permissions.rs` (site permission prompts).
 - **E2E sync ("F2b") + crypto** — `sync.rs` (per-namespace pull→merge→push over
