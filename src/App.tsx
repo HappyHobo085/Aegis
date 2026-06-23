@@ -5,10 +5,11 @@ import type { NavCrashed, NavFailed, RedirectBlocked } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
 import { confirm } from './lib/toast';
-import { REDIRECT_BAR_H } from './lib/layout';
+import { REDIRECT_BAR_H, FIND_BAR_H } from './lib/layout';
 import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChromeSurfaces';
 import { computeContentLayout } from './lib/contentLayout';
 import { useNav } from './hooks/useNav';
+import { useFind } from './hooks/useFind';
 import { useAdblock } from './hooks/useAdblock';
 import { useFavorites } from './hooks/useFavorites';
 import { useHistory } from './hooks/useHistory';
@@ -56,6 +57,7 @@ import { DataTab } from './components/DataTab';
 import { TabsTab } from './components/TabsTab';
 import { TabStrip } from './components/TabStrip';
 import { RedirectBar } from './components/RedirectBar';
+import { FindBar } from './components/FindBar';
 import { MobileApp } from './components/mobile/MobileApp';
 import { installAutopilotControl } from './autopilot/control';
 
@@ -116,6 +118,7 @@ function DesktopApp() {
   const dismissedRedirectsRef = useRef<Set<string>>(new Set());
   const update = useUpdate();
   const safety = useSafety();
+  const find = useFind(tabs.activeId);
 
   // Dev-only: expose an imperative control surface so the autopilot can reach every
   // overlay/state deterministically. Gated so it can NEVER run in a production build.
@@ -156,7 +159,11 @@ function DesktopApp() {
   // Favorites bar is always-on (constant top inset); tab strip adds to the inset on desktop.
   // The redirect-blocked bar, when shown, adds its height so it sits in the visible chrome
   // strip (content insets below it).
-  useContentInset(tabs.activeId, !isMobile, blockedRedirect ? REDIRECT_BAR_H : 0);
+  useContentInset(
+    tabs.activeId,
+    !isMobile,
+    (blockedRedirect ? REDIRECT_BAR_H : 0) + (find.open ? FIND_BAR_H : 0),
+  );
 
   // Derived, never hand-maintained: any registered full-window surface means a full
   // overlay is up. New overlays self-register (see useChromeSurface) — there is no
@@ -276,6 +283,19 @@ function DesktopApp() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [tabs.tabs, tabs.activeId]);
+
+  // Ctrl+F / Cmd+F opens the find bar (auto-focuses the input via FindBar's useEffect).
+  // Esc closes it from within the FindBar input (handleKeyDown → onClose).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+        e.preventDefault();
+        find.show();
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [find.show]);
 
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {
@@ -449,6 +469,15 @@ function DesktopApp() {
             dismissedRedirectsRef.current.add(blockedRedirect.to);
             setBlockedRedirect(null);
           }}
+        />
+      )}
+      {find.open && (
+        <FindBar
+          state={find.state}
+          onQueryChange={find.setQuery}
+          onNext={find.next}
+          onPrev={find.prev}
+          onClose={find.close}
         />
       )}
       <Sidebar
