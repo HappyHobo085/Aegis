@@ -213,7 +213,24 @@ export const aegis: AegisApi = {
     removeAllowlist: (host) => call<AdblockState>(IPC.adblockRemoveAllowlist, { host }),
     clearAllowlist: () => call<AdblockState>(IPC.adblockClearAllowlist),
     getState: () => call<AdblockState>(IPC.adblockGetState),
-    onBlockedCount: (cb) => on<BlockedCount>(IPC.evtAdblockBlockedCount, cb),
+    onBlockedCount: (cb) => {
+      // Android has no Tauri event bus on the content side; MainActivity pushes
+      // BlockedCount via window.__aegisBlockedCount (set up here), mirroring nav state /
+      // redirect.onBlocked. The desktop path uses the Tauri event.
+      if (androidBridge()) {
+        const w = window as unknown as {
+          __aegisBlockedCountCbs?: Set<(c: BlockedCount) => void>;
+          __aegisBlockedCount?: (c: BlockedCount) => void;
+        };
+        const cbs = (w.__aegisBlockedCountCbs ??= new Set());
+        cbs.add(cb);
+        w.__aegisBlockedCount = (c) => cbs.forEach((f) => f(c));
+        return () => {
+          cbs.delete(cb);
+        };
+      }
+      return on<BlockedCount>(IPC.evtAdblockBlockedCount, cb);
+    },
   },
   redirect: {
     onBlocked: (cb: (r: RedirectBlocked) => void) => {
