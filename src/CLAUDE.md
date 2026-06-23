@@ -67,7 +67,7 @@ width)` so the page insets from the right and stays visible. Width is remembered
 - **`hooks/useFind`** — owns find-in-page UI state for the active view. Subscribes to
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.
-  Returns `{ open, state, setQuery, next, prev, close }` consumed by `FindBar`.
+  Returns `{ open, state, show, setQuery, next, prev, close }` consumed by `FindBar`.
 - **`components/FindBar`** — Ctrl+F infobar (purely presentational): text input,
   match-count display, prev/next nav buttons, and a close button. Auto-focuses on mount.
   Rendered inside `DesktopApp` (and `MobileApp`) keyed on the active view id; shown only
