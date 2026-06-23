@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import type { ReactNode } from 'react';
+import type { ReactElement, ReactNode } from 'react';
 
 // Every full-window, content-hiding chrome surface (Settings, Downloads, dialogs,
 // error/crash, safety, permission prompt, favorites manager) registers itself here
@@ -16,7 +16,7 @@ interface SurfaceRegistry {
 
 const Ctx = createContext<SurfaceRegistry | null>(null);
 
-export function ChromeSurfaceProvider({ children }: { children: ReactNode }): JSX.Element {
+export function ChromeSurfaceProvider({ children }: { children: ReactNode }): ReactElement {
   const [openSurfaces, setOpen] = useState<Set<string>>(() => new Set());
 
   const register = useCallback((id: string) => {

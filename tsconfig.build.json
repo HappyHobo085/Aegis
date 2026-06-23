@@ -1,0 +1,5 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["src", "shared"],
+  "exclude": ["node_modules", "out", "**/*.test.ts", "**/*.test.tsx", "src/testFixtures"]
+}

@@ -18,7 +18,8 @@
     "tauri:build": "APPIMAGE_EXTRACT_AND_RUN=1 NO_STRIP=1 tauri build",
     "android:dev": "tauri android dev",
     "android:build": "tauri android build --apk",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
