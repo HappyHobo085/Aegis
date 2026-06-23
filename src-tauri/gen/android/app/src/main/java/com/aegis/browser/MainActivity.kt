@@ -77,6 +77,11 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   @Volatile private var bottomBarHidden = false
   @Volatile private var fullscreen = false
 
+  // Current find-in-page query on the active tab (set by Bridge.find, cleared by
+  // Bridge.findClose). Android's FindListener doesn't report the query back, so we
+  // cache it here to include in the __aegisFindState push.
+  @Volatile private var currentFindQuery = ""
+
   private fun updateContentVisibility() {
     contentWebView?.visibility = if (hasPage && !overlayHidden) View.VISIBLE else View.GONE
   }
@@ -292,6 +297,15 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     wv.settings.javaScriptCanOpenWindowsAutomatically = true
     wv.webChromeClient = makeChromeClient()
     wv.webViewClient = makeContentClient(id)
+    // Find-in-page: receive match counts from findAllAsync and push them to the chrome
+    // via __aegisFindState. Only push when this tab is the active one (mirroring
+    // pushNavState's active-tab guard). activeOrdinal is 0-based; the chrome shows
+    // 1-based, so we pass activeOrdinal + 1 (clamped to 0 when there are no matches).
+    wv.setFindListener { activeOrdinal, numberOfMatches, isDoneCounting ->
+      if (isDoneCounting && id == activeTabId) {
+        pushFindState(id, numberOfMatches, if (numberOfMatches > 0) activeOrdinal + 1 else 0)
+      }
+    }
     // Inject the pop-under guard + ad-block tier at document-start in the page main world
     // (and all frames), before page scripts run — the Android analog of the desktop
     // initialization_script_for_all_frames. Guarded on the runtime feature (older System
@@ -466,6 +480,20 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
   }
 
+  /** Push find-in-page result state to the chrome's React state (FindState shape, viewId
+   *  = [id]), by calling the global the ipcClient's find.onState installs for Android
+   *  (__aegisFindState). Mirrors the pushNavState / __aegisNavState pattern exactly.
+   *  [matchCount] is the total number of matches; [activeIndex] is 1-based (0 = none). */
+  private fun pushFindState(id: Int, matchCount: Int, activeIndex: Int) {
+    val obj = JSONObject()
+      .put("viewId", id)
+      .put("query", currentFindQuery)
+      .put("matchCount", matchCount)
+      .put("activeMatchIndex", if (matchCount > 0) activeIndex else 0)
+    val js = "window.__aegisFindState && window.__aegisFindState($obj)"
+    chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
+  }
+
   /** The mobile counterpart of the desktop RedirectBar: when the guard cancels a scripted
    *  cross-origin top-frame redirect, show a native Snackbar over the content WebView (a
    *  chrome-layer bar can't paint over the native WebView; a Snackbar floats above it).
@@ -611,6 +639,42 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         )
       } catch (_: Throwable) {
       }
+    }
+
+    // --- Find-in-page bridge (Task 10) ---
+    // Android's WebView.findAllAsync is case-insensitive only; the caseSensitive flag
+    // is accepted for API parity but is silently ignored (there is no case-sensitive
+    // native WebView find API on Android).
+    @JavascriptInterface
+    fun find(query: String, caseSensitive: Boolean) = runOnUiThread {
+      val c = contentWebView ?: return@runOnUiThread
+      currentFindQuery = query
+      if (query.isEmpty()) {
+        c.clearMatches()
+        pushFindState(activeTabId, 0, 0)
+      } else {
+        // findAllAsync triggers the per-tab FindListener once counting completes.
+        @Suppress("UNUSED_VARIABLE") val unused = caseSensitive // documented no-op
+        c.findAllAsync(query)
+      }
+    }
+
+    /** Advance to the next highlighted match (forward). Does NOT re-search; requires
+     *  a prior findAllAsync call. */
+    @JavascriptInterface
+    fun findNext() = runOnUiThread { contentWebView?.findNext(true) }
+
+    /** Go back to the previous highlighted match (backward). Does NOT re-search; requires
+     *  a prior findAllAsync call. */
+    @JavascriptInterface
+    fun findPrev() = runOnUiThread { contentWebView?.findNext(false) }
+
+    /** End the find session: clear all match highlights and push an empty state to the chrome. */
+    @JavascriptInterface
+    fun findClose() = runOnUiThread {
+      currentFindQuery = ""
+      contentWebView?.clearMatches()
+      pushFindState(activeTabId, 0, 0)
     }
   }
 
