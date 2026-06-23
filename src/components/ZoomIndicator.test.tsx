@@ -1,6 +1,6 @@
 // src/components/ZoomIndicator.test.tsx
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ZoomIndicator } from './ZoomIndicator';
 
@@ -40,13 +40,13 @@ describe('ZoomIndicator', () => {
       'aria-expanded',
       'false',
     );
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('opens the popover when the label button is clicked', async () => {
     render(<ZoomIndicator {...props()} />);
     await userEvent.click(screen.getByRole('button', { name: /page zoom/i }));
-    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /page zoom/i })).toHaveAttribute(
       'aria-expanded',
       'true',
@@ -64,8 +64,8 @@ describe('ZoomIndicator', () => {
   it('shows the current zoom percent inside the popover', async () => {
     render(<ZoomIndicator {...props(1.5)} />);
     await userEvent.click(screen.getByRole('button', { name: /page zoom/i }));
-    const menu = screen.getByRole('menu');
-    expect(menu).toHaveTextContent('150%');
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toHaveTextContent('150%');
   });
 
   it('calls zoomOut when the zoom-out button is clicked', async () => {
@@ -96,8 +96,24 @@ describe('ZoomIndicator', () => {
     render(<ZoomIndicator {...props()} />);
     const btn = screen.getByRole('button', { name: /page zoom/i });
     await userEvent.click(btn);
-    expect(screen.getByRole('menu')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
     await userEvent.click(btn);
-    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('closes the popover when Escape is pressed', async () => {
+    render(<ZoomIndicator {...props()} />);
+    await userEvent.click(screen.getByRole('button', { name: /page zoom/i }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('closes the popover on outside pointer-down (pointerdown on document.body)', async () => {
+    render(<ZoomIndicator {...props()} />);
+    await userEvent.click(screen.getByRole('button', { name: /page zoom/i }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 });
