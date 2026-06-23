@@ -12,10 +12,18 @@ use crate::jsonstore;
 
 const MAX_ENTRIES: usize = 5000;
 
+/// Pure predicate: should this (url, owning-tab-privateness) pair be written to history?
+pub fn should_record_visit(url: &str, is_private: bool) -> bool {
+    if is_private {
+        return false;
+    }
+    !(url.is_empty() || url.starts_with("about:") || url.starts_with("data:"))
+}
+
 /// Record a visit (called on top-frame page load). Skips non-web schemes and
-/// de-dups consecutive visits to the same URL.
-pub fn record(app: &AppHandle, url: &str, title: &str) {
-    if url.is_empty() || url.starts_with("about:") || url.starts_with("data:") {
+/// de-dups consecutive visits to the same URL. No-ops for private tabs.
+pub fn record(app: &AppHandle, url: &str, title: &str, is_private: bool) {
+    if !should_record_visit(url, is_private) {
         return;
     }
     let mut items = jsonstore::load(app, "history");
@@ -39,9 +47,15 @@ pub fn record(app: &AppHandle, url: &str, title: &str) {
 /// Fill in the title of the most-recent history entry for `url`. WebKit sets the
 /// page title after the load finishes, so the URL-only visit recorded at page-load
 /// (see nav.rs) gets its title here when the title-changed signal fires.
+/// No-ops for private tabs.
 #[allow(dead_code)] // only called from the Linux WebKit title-changed signal (linux_layout)
-pub fn update_title(app: &AppHandle, url: &str, title: &str) {
-    if url.is_empty() || title.is_empty() || url.starts_with("about:") || url.starts_with("data:") {
+pub fn update_title(app: &AppHandle, url: &str, title: &str, is_private: bool) {
+    if is_private
+        || url.is_empty()
+        || title.is_empty()
+        || url.starts_with("about:")
+        || url.starts_with("data:")
+    {
         return;
     }
     let mut items = jsonstore::load(app, "history");
@@ -123,5 +137,20 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             Some(Ok(Value::Null))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_record_visit;
+
+    #[test]
+    fn skips_non_web_and_private() {
+        assert!(should_record_visit("https://example.com/", false));
+        assert!(!should_record_visit("about:blank", false));
+        assert!(!should_record_visit("data:text/html,x", false));
+        assert!(!should_record_visit("", false));
+        // a private tab never records, even for a real web URL.
+        assert!(!should_record_visit("https://example.com/", true));
     }
 }

@@ -275,7 +275,7 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
                 !u.starts_with("about:"),
             );
             if matches!(event, tauri::webview::PageLoadEvent::Finished) {
-                crate::history::record(&app_load, u, "");
+                crate::history::record(&app_load, u, "", false /* wired in Task 4 */);
             }
         })
         .on_download(move |_webview, event| {

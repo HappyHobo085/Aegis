@@ -31,7 +31,7 @@ pub fn connect_title_label(app: &AppHandle, label: &str) {
                 return;
             }
             let url = wv.uri().map(|s| s.to_string()).unwrap_or_default();
-            crate::history::update_title(&app, &url, &title);
+            crate::history::update_title(&app, &url, &title, false /* wired in Task 5 */);
             if let Some(id) = id {
                 crate::tabs::on_tab_title(&app, id, &title);
             }
