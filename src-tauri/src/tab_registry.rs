@@ -21,6 +21,9 @@ struct Tab {
     history: Vec<String>,
     /// Index into `history` of the currently-displayed page.
     hist_index: usize,
+    /// Private (incognito) tab: its content webview uses an ephemeral data partition
+    /// and its browsing is excluded from history/sync/downloads + the persisted session.
+    private: bool,
 }
 
 #[derive(Clone)]
@@ -39,6 +42,7 @@ pub struct TabMeta {
     pub live: bool,
     pub title: String,
     pub url: String,
+    pub private: bool,
 }
 #[derive(Clone, Serialize, PartialEq, Debug)]
 pub struct TabsState {
@@ -90,6 +94,7 @@ impl Registry {
                 last_active: 0,
                 history: vec![home_url.clone()],
                 hist_index: 0,
+                private: false,
             }],
             active_id: 1,
             closed_stack: Vec::new(),
@@ -116,6 +121,7 @@ impl Registry {
                 pinned: p.pinned,
                 live: p.id == active_id, // only the active tab is eagerly live
                 last_active: 0,
+                private: false, // restored tabs are never private
             })
             .collect();
         let mut r = Registry {
@@ -162,6 +168,7 @@ impl Registry {
                     live: t.live,
                     title: t.title.clone(),
                     url: t.url.clone(),
+                    private: t.private,
                 })
                 .collect(),
             active_id: self.active_id,
@@ -179,6 +186,7 @@ impl Registry {
             tabs: self
                 .tabs
                 .iter()
+                .filter(|t| !t.private) // never persist a private tab
                 .map(|t| PersistedTab {
                     id: t.id,
                     url: t.url.clone(),
@@ -197,6 +205,16 @@ impl Registry {
         background: bool,
         now_ms: u64,
     ) -> (ViewId, String) {
+        self.create_private(url, background, now_ms, false)
+    }
+
+    pub fn create_private(
+        &mut self,
+        url: Option<String>,
+        background: bool,
+        now_ms: u64,
+        private: bool,
+    ) -> (ViewId, String) {
         let id = self.next_id;
         self.next_id += 1;
         let url = url.unwrap_or_else(|| self.home_url.clone());
@@ -209,6 +227,7 @@ impl Registry {
             last_active: now_ms,
             history: vec![url.clone()],
             hist_index: 0,
+            private,
         });
         if !background {
             if let Some(i) = self.idx(self.active_id) {
@@ -217,6 +236,11 @@ impl Registry {
             self.active_id = id;
         }
         (id, url)
+    }
+
+    #[allow(dead_code)] // used by later tasks (ephemeral webview, history/sync/downloads skip)
+    pub fn is_private(&self, id: ViewId) -> Option<bool> {
+        self.idx(id).map(|i| self.tabs[i].private)
     }
 
     /// Make `id` active. Returns Some(url) if its webview must be (re)spawned.
@@ -394,6 +418,7 @@ impl Registry {
                 last_active: now_ms,
                 history: vec![c.url.clone()],
                 hist_index: 0,
+                private: false, // reopened tabs are never private
             },
         );
         if let Some(i) = self.idx(self.active_id) {
@@ -679,5 +704,78 @@ mod tests {
         let meta = &r.tabs_state().tabs[0];
         assert_eq!(meta.url, "https://a.test/");
         assert_eq!(meta.title, "Alpha");
+    }
+
+    #[test]
+    fn create_private_tab_is_marked_private() {
+        let mut r = reg();
+        let (id, _) = r.create_private(Some("https://x.test/".into()), false, 0, true);
+        let meta = r
+            .tabs_state()
+            .tabs
+            .iter()
+            .find(|t| t.id == id)
+            .cloned()
+            .unwrap();
+        assert!(meta.private, "a private tab must report private=true");
+        // a normal tab stays non-private
+        let (n, _) = r.create_private(None, true, 0, false);
+        assert!(
+            !r.tabs_state()
+                .tabs
+                .iter()
+                .find(|t| t.id == n)
+                .unwrap()
+                .private
+        );
+    }
+
+    #[test]
+    fn private_tabs_are_excluded_from_persisted_session() {
+        let mut r = reg(); // tab 1: normal
+        r.create_private(Some("https://normal.test/".into()), true, 0, false); // tab 2: normal
+        let (p, _) = r.create_private(Some("https://secret.test/".into()), true, 0, true); // tab 3: private
+        let session = r.to_persisted();
+        assert!(
+            session.tabs.iter().all(|t| t.id != p),
+            "the private tab must not be persisted"
+        );
+        assert_eq!(session.tabs.len(), 2, "only the two normal tabs persist");
+        // next_id is still advanced past the private tab so a restore can't collide.
+        assert!(session.next_id > p);
+        // Defense: restoring a session that doesn't contain the private tab's active_id
+        // falls back gracefully (no panic).
+        let r2 = Registry::restore(session, "https://home.test/".into());
+        let s2 = r2.tabs_state();
+        assert!(
+            s2.tabs.iter().all(|t| t.id != p),
+            "restored session must not contain the private tab"
+        );
+    }
+
+    #[test]
+    fn is_private_reads_the_flag() {
+        let mut r = reg();
+        let (p, _) = r.create_private(None, true, 0, true);
+        assert_eq!(r.is_private(p), Some(true));
+        assert_eq!(r.is_private(1), Some(false));
+        assert_eq!(r.is_private(9999), None);
+    }
+
+    #[test]
+    fn restored_tabs_are_never_private() {
+        // Defense in depth: even a (hypothetically) malformed session can't resurrect a private tab.
+        let session = PersistedSession {
+            tabs: vec![PersistedTab {
+                id: 5,
+                url: "https://a.test/".into(),
+                title: String::new(),
+                pinned: false,
+            }],
+            active_id: 5,
+            next_id: 6,
+        };
+        let r = Registry::restore(session, "https://home.test/".into());
+        assert!(r.tabs_state().tabs.iter().all(|t| !t.private));
     }
 }
