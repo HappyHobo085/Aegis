@@ -12,7 +12,7 @@ src/
 ├── index.html        # <div id="root">; loads main.tsx; viewport-fit=cover (mobile notches)
 ├── main.tsx          # mounts <App/> inside <ErrorBoundary> + StrictMode; imports index.css
 ├── App.tsx           # root shell: orchestrates chrome, overlays, sidebar, fullscreen z-order
-├── index.css         # global dark theme + chrome layout (desktop chrome + .aegis-mobile shell)
+├── index.css         # global theme (dark default + light palette via `[data-theme]`, selected by `lib/theme.ts`) + chrome layout (desktop chrome + .aegis-mobile shell)
 ├── components/       # presentational components + Settings tabs (+ co-located *.test.tsx)
 ├── hooks/            # one hook per feature domain (useNav, useAdblock, …) (+ tests)
 └── lib/              # IPC client, address parsing, theme, toast, layout consts (+ tests)
@@ -91,6 +91,16 @@ reset, onOpenChange }` from `useZoom`. `onOpenChange` lets `App.tsx` raise the c
 - **`lib/layout.ts`** gained `TABSTRIP_H` (the pixel height reserved for the
   tab strip), used by `useContentInset` to keep the content webview positioned
   below it.
+- **Theme tokens (`index.css` / `lib/theme.ts`).** `index.css` ships two palettes:
+  `[data-theme="dark"]` (the original flat `:root` tokens, moved verbatim — dark look
+  is unchanged) and `[data-theme="light"]` (a parallel white-surface palette). `<html
+data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
+  first-paint flash. `lib/theme.ts` (`applyTheme`, `resolveTheme`, `watchSystemTheme`)
+  reads `Settings.themeMode` (`'system' | 'dark' | 'light'`) and sets the attribute.
+  **Known limitation (documented follow-up, not yet fixed):** two sections are
+  hardcoded-dark and NOT yet tokenized — the Android mobile bottom-sheet
+  (`MobileMenuSheet`) and the desktop `TabStrip`. Both stay dark regardless of the
+  active theme under light/system mode. Tokenizing them is the next theming task.
 
 ## Mobile shell (`components/mobile/`, Android)
 
