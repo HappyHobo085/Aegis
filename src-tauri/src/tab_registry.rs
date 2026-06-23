@@ -270,12 +270,15 @@ impl Registry {
             };
         };
         let t = self.tabs.remove(i);
-        self.closed_stack.push(ClosedTab {
-            url: t.url,
-            title: t.title,
-            position: i,
-            pinned: t.pinned,
-        });
+        // Private tabs are never recoverable — don't record them in the reopen stack.
+        if !t.private {
+            self.closed_stack.push(ClosedTab {
+                url: t.url.clone(),
+                title: t.title.clone(),
+                position: i,
+                pinned: t.pinned,
+            });
+        }
         if self.tabs.is_empty() {
             let (nid, nurl) = self.create(None, false, now_ms);
             return CloseOutcome {
@@ -777,5 +780,63 @@ mod tests {
         };
         let r = Registry::restore(session, "https://home.test/".into());
         assert!(r.tabs_state().tabs.iter().all(|t| !t.private));
+    }
+
+    #[test]
+    fn closing_a_private_tab_does_not_push_to_reopen_stack() {
+        let mut r = reg(); // tab 1: normal (active)
+                           // Create a private tab in the background so tab 1 stays active.
+        let (p, _) = r.create_private(Some("https://secret.test/".into()), true, 0, true);
+        // Close the private tab.
+        r.close(p, 0);
+        // The closed_stack must be empty — the private tab's URL must not be recoverable.
+        assert!(
+            r.reopen_closed(0).is_none(),
+            "closing a private tab must NOT push it to the reopen stack"
+        );
+        // Regression: a normal tab closed afterward IS still reopenable.
+        let (b, _) = r.create(Some("https://b.test/".into()), false, 0);
+        r.close(b, 0);
+        let result = r.reopen_closed(0);
+        assert!(
+            result.is_some(),
+            "a normal closed tab must still be reopenable after a private close"
+        );
+        assert_eq!(result.unwrap().1, "https://b.test/");
+    }
+
+    #[test]
+    fn active_private_tab_restore_falls_back_to_valid_active_id() {
+        let mut r = reg(); // tab 1: normal
+        r.create_private(Some("https://normal.test/".into()), true, 0, false); // tab 2: normal
+        let (p, _) = r.create_private(Some("https://secret.test/".into()), false, 0, true); // tab 3: private, now ACTIVE
+        assert_eq!(
+            r.active_id(),
+            p,
+            "private tab must be active before persisting"
+        );
+        // Persist — private tab is excluded from the tab list but active_id still points to p.
+        let session = r.to_persisted();
+        assert!(
+            session.tabs.iter().all(|t| t.id != p),
+            "private tab must be absent from the persisted tab list"
+        );
+        // Restore — active_id (p) is NOT in the persisted tab list.
+        // Registry::restore must NOT panic and must fall back to a valid, non-private tab.
+        let r2 = Registry::restore(session, "https://home.test/".into());
+        let s2 = r2.tabs_state();
+        assert!(
+            s2.tabs.iter().all(|t| t.id != p),
+            "restored session must not contain the private tab"
+        );
+        assert_ne!(
+            s2.active_id, p,
+            "active_id after restore must not point to the dropped private tab"
+        );
+        // The fallback active must actually be present in the tab list.
+        assert!(
+            s2.tabs.iter().any(|t| t.id == s2.active_id),
+            "the fallback active_id must exist in the restored tab list"
+        );
     }
 }
