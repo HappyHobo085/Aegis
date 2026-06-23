@@ -150,6 +150,7 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
 ///    these are almost always ad pop-unders. No legit "open in new tab" targets
 ///    `about:`/`javascript:`/blank.
 /// 2. An **ad/tracker destination** (honors the on/off toggle + allowlist).
+///
 /// A normal `target=_blank` link (a real http(s) page) is NOT dropped.
 pub fn is_unwanted_popup(url: &str, opener_url: &str) -> bool {
     let u = url.trim();

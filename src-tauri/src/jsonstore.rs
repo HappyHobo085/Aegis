@@ -415,7 +415,7 @@ mod tests {
         let uuid1 = uuid_of(&item).unwrap().to_string();
         assert!(!uuid1.is_empty());
         assert!(item.get("hlc").is_some());
-        assert_eq!(is_deleted(&item), false);
+        assert!(!is_deleted(&item));
         // Idempotent: a second pass changes nothing and keeps the SAME uuid.
         assert!(
             !ensure_sync_meta(&mut item, "node-a", 2000),

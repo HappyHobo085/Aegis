@@ -277,45 +277,6 @@ pub fn merge_remote(app: &AppHandle, remote: &[Value]) -> Vec<String> {
     changed
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn rec(key: &str, wall: i64, value: Value) -> Value {
-        json!({ "key": key, "uuid": key, "value": value,
-            "hlc": { "wall_ms": wall, "counter": 0, "node": "remote" }, "deleted": false })
-    }
-
-    #[test]
-    fn merge_projection_is_per_key_lww() {
-        let local = vec![
-            rec("httpsOnly", 5, json!(false)),
-            rec("primaryColor", 1, json!("#000")),
-        ];
-        let remote = vec![
-            rec("httpsOnly", 2, json!(true)), // older → ignored (keep local false)
-            rec("primaryColor", 9, json!("#fff")), // newer → wins
-            rec("homeUrl", 1, json!("https://x")), // new key → inserted
-        ];
-        let (merged, mut changed) = merge_projection(local, &remote);
-        changed.sort();
-        assert_eq!(
-            changed,
-            vec!["homeUrl".to_string(), "primaryColor".to_string()]
-        );
-        let by_key = |k: &str| {
-            merged
-                .iter()
-                .find(|r| r.get("key").and_then(Value::as_str) == Some(k))
-                .cloned()
-                .unwrap()
-        };
-        assert_eq!(by_key("httpsOnly").get("value"), Some(&json!(false))); // unchanged
-        assert_eq!(by_key("primaryColor").get("value"), Some(&json!("#fff"))); // updated
-        assert_eq!(by_key("homeUrl").get("value"), Some(&json!("https://x"))); // inserted
-    }
-}
-
 /// The per-key sync records (for the merge seam / export). Migrates lazily on first call.
 #[allow(dead_code)] // consumed by the F2b sync merge — dead on the Android cdylib until then
 pub fn sync_records(app: &AppHandle) -> Vec<Value> {
@@ -402,5 +363,44 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             Some(Ok(current))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rec(key: &str, wall: i64, value: Value) -> Value {
+        json!({ "key": key, "uuid": key, "value": value,
+            "hlc": { "wall_ms": wall, "counter": 0, "node": "remote" }, "deleted": false })
+    }
+
+    #[test]
+    fn merge_projection_is_per_key_lww() {
+        let local = vec![
+            rec("httpsOnly", 5, json!(false)),
+            rec("primaryColor", 1, json!("#000")),
+        ];
+        let remote = vec![
+            rec("httpsOnly", 2, json!(true)), // older → ignored (keep local false)
+            rec("primaryColor", 9, json!("#fff")), // newer → wins
+            rec("homeUrl", 1, json!("https://x")), // new key → inserted
+        ];
+        let (merged, mut changed) = merge_projection(local, &remote);
+        changed.sort();
+        assert_eq!(
+            changed,
+            vec!["homeUrl".to_string(), "primaryColor".to_string()]
+        );
+        let by_key = |k: &str| {
+            merged
+                .iter()
+                .find(|r| r.get("key").and_then(Value::as_str) == Some(k))
+                .cloned()
+                .unwrap()
+        };
+        assert_eq!(by_key("httpsOnly").get("value"), Some(&json!(false))); // unchanged
+        assert_eq!(by_key("primaryColor").get("value"), Some(&json!("#fff"))); // updated
+        assert_eq!(by_key("homeUrl").get("value"), Some(&json!("https://x"))); // inserted
     }
 }

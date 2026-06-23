@@ -129,6 +129,7 @@ fn is_content_label(label: &str) -> bool {
 }
 
 /// Install `chunks` as WebKit content filters on one webview's UserContentManager.
+#[allow(clippy::ptr_arg)] // store_dir is cloned into an async closure that must be 'static; &Path can't be moved into it
 fn install_on(content: tauri::Webview, chunks: &[String], store_dir: &PathBuf, cached: bool) {
     let chunks = chunks.to_vec();
     let store_dir = store_dir.clone();

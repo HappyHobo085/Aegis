@@ -327,7 +327,7 @@ a=candidate:3 1 udp 41885439 198.51.100.9 60000 typ relay\r\n";
             "private o= rewritten: {out}"
         );
         assert!(
-            out.contains("typ host") == false,
+            !out.contains("typ host"),
             "private host candidate dropped: {out}"
         );
         assert!(

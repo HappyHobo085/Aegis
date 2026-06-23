@@ -37,7 +37,7 @@ fn state_value(app: &AppHandle) -> Value {
 
 /// Emit `tabs.state` + persist the session.
 fn emit_and_persist(app: &AppHandle) {
-    let _ = crate::emit_event(app, "tabs.state", state_value(app));
+    crate::emit_event(app, "tabs.state", state_value(app));
     persist(app);
 }
 

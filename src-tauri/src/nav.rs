@@ -104,7 +104,7 @@ pub(crate) fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loadi
             (r.can_go_back(id), r.can_go_forward(id))
         })
         .unwrap_or((false, false));
-    let _ = crate::emit_event(
+    crate::emit_event(
         app,
         "nav.state",
         json!({

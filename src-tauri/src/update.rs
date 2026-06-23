@@ -76,7 +76,7 @@ fn set(app: &AppHandle, v: Value) {
     if let Some(s) = app.try_state::<UpdateState>() {
         *s.0.lock().unwrap() = v.clone();
     }
-    let _ = crate::emit_event(app, "update.state", v);
+    crate::emit_event(app, "update.state", v);
 }
 
 /// Handle `update.*` channels. Returns `None` if `channel` is not an update channel.

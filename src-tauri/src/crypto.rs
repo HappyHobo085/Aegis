@@ -4,7 +4,7 @@
 //! the root). HKDF-SHA256 expands it into per-purpose keys so no single derived key reveals
 //! the root or any sibling:
 //!   - `account-id`         → a public, non-reversible account identifier (HKDF output, not
-//!                            the seed) the server keys blobs by.
+//!     the seed) the server keys blobs by.
 //!   - `data-key:{ns}`      → a 256-bit XChaCha20-Poly1305 key per namespace.
 //!   - `device-sign:{salt}` → the per-INSTALL Ed25519 device signing seed (see sync_keystore).
 //!

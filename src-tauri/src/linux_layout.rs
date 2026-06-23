@@ -150,7 +150,7 @@ pub fn install_nav_policy(app: &AppHandle, label: &str) {
         // which would short-circuit the signal before our later-connected handler runs).
         unsafe {
             let signal_id = glib::gobject_ffi::g_signal_lookup(
-                b"decide-policy\0".as_ptr() as *const _,
+                c"decide-policy".as_ptr(),
                 webkit2gtk::WebView::static_type().into_glib(),
             );
             if signal_id != 0 {
@@ -474,6 +474,7 @@ fn fs_exit_button(fixed: &gtk::Fixed, app: &AppHandle) -> gtk::Widget {
 /// size, which GTK propagates up as the WINDOW's minimum — pinning the window to its current
 /// size so it can only ever grow, never shrink (the "can't make the window smaller" bug).
 /// Keeping a (0,0) size request removes that pin; the real size is applied by `size_allocate`.
+#[allow(clippy::too_many_arguments)] // mirrors the GtkFixed geometry call shape; a struct wrap would add churn without clarity
 pub fn layout(
     app: &AppHandle,
     left: i32,

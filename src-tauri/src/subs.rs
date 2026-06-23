@@ -189,7 +189,7 @@ pub fn update_all(app: &AppHandle) -> Value {
     let _ = jsonstore::save(app, "subs", &items);
     if !hashes.is_empty() {
         reinstall_adblock(app);
-        let _ = crate::emit_event(app, "subs.changed", Value::Null);
+        crate::emit_event(app, "subs.changed", Value::Null);
     }
     json!({ "perSource": per_source, "lastUpdated": now })
 }

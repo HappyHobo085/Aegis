@@ -297,7 +297,7 @@ impl Registry {
                 next.push(self.tabs.remove(pos));
             }
         }
-        next.extend(self.tabs.drain(..));
+        next.append(&mut self.tabs);
         self.tabs = next;
         self.resort_pinned();
     }

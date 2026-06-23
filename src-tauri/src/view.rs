@@ -187,35 +187,6 @@ fn update<F: FnOnce(&mut Layout)>(app: &AppHandle, f: F) {
     apply_inset(app);
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{content_visible, Layout};
-
-    fn lay(overlay: bool, sidebar: bool, fullscreen: bool) -> Layout {
-        Layout {
-            left: 0.0,
-            top: 0.0,
-            right: 0.0,
-            fullscreen,
-            overlay,
-            sidebar,
-        }
-    }
-
-    #[test]
-    fn content_visible_truth_table() {
-        // Nothing open → content shown.
-        assert!(content_visible(&lay(false, false, false)));
-        // A full overlay hides the content.
-        assert!(!content_visible(&lay(true, false, false)));
-        // The sidebar insets (does NOT hide) — content stays shown even though
-        // overlay rides true while the sidebar is open.
-        assert!(content_visible(&lay(true, true, false)));
-        // Fullscreen always shows content, even if an overlay flag lingers.
-        assert!(content_visible(&lay(true, false, true)));
-    }
-}
-
 /// Handle `view.*` channels. Returns `None` if not a view channel.
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     let res: Result<Value, String> = match channel {
@@ -315,4 +286,33 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         _ => return None,
     };
     Some(res)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{content_visible, Layout};
+
+    fn lay(overlay: bool, sidebar: bool, fullscreen: bool) -> Layout {
+        Layout {
+            left: 0.0,
+            top: 0.0,
+            right: 0.0,
+            fullscreen,
+            overlay,
+            sidebar,
+        }
+    }
+
+    #[test]
+    fn content_visible_truth_table() {
+        // Nothing open → content shown.
+        assert!(content_visible(&lay(false, false, false)));
+        // A full overlay hides the content.
+        assert!(!content_visible(&lay(true, false, false)));
+        // The sidebar insets (does NOT hide) — content stays shown even though
+        // overlay rides true while the sidebar is open.
+        assert!(content_visible(&lay(true, true, false)));
+        // Fullscreen always shows content, even if an overlay flag lingers.
+        assert!(content_visible(&lay(true, false, true)));
+    }
 }

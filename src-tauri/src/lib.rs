@@ -426,7 +426,7 @@ pub fn run() {
             "tab_prev" => "prev",
             _ => return,
         };
-        let _ = crate::emit_event(app, "tabs.shortcut", s);
+        crate::emit_event(app, "tabs.shortcut", s);
     });
 
     let builder = builder.setup(|app| {
@@ -498,7 +498,7 @@ pub fn run() {
 
         // Emit the restored tabs state so the chrome renders all tabs immediately
         // (belt-and-suspenders: the chrome also calls tabs.list on mount).
-        let _ = crate::emit_event(app.handle(), "tabs.state", {
+        crate::emit_event(app.handle(), "tabs.state", {
             let s = app.state::<tabs::Tabs>().reg.lock().unwrap().tabs_state();
             serde_json::to_value(s).unwrap_or(serde_json::Value::Null)
         });

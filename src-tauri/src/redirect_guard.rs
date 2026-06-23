@@ -153,7 +153,7 @@ pub fn decide_at_response(app: &AppHandle, tab: u32, final_url: &str) -> Option<
     let app_initiated = app
         .try_state::<PendingNavs>()
         .is_some_and(|p| p.take_if_match(tab, &chain.origin_target));
-    should_block_pred(chain.scripted, &chain.from, final_url, app_initiated).then(|| chain.from)
+    should_block_pred(chain.scripted, &chain.from, final_url, app_initiated).then_some(chain.from)
 }
 
 /// Windows NavigationStarting phase (top-frame only, fires once per hop): decide whether to
@@ -196,7 +196,8 @@ pub fn block_at_start(
         }
         c
     };
-    should_block_pred(chain.scripted, &chain.from, target, chain.app_initiated).then(|| chain.from)
+    should_block_pred(chain.scripted, &chain.from, target, chain.app_initiated)
+        .then_some(chain.from)
 }
 
 /// The in-flight chain origin for a redirect hop, if one was recorded for this tab.

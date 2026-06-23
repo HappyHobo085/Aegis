@@ -116,7 +116,7 @@ pub fn on_picked(app: &AppHandle, payload: &str) {
     text.push('\n');
     crate::customfilters::write(app, &text);
     crate::adblock_refresh::refresh(app);
-    let _ = crate::emit_event(app, "picker.picked", json!({ "rule": rule }));
+    crate::emit_event(app, "picker.picked", json!({ "rule": rule }));
     eprintln!("[aegis-picker] added rule: {rule}");
 }
 
