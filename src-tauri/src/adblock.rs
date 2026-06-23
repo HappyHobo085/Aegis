@@ -317,7 +317,7 @@ mod tests {
         assert!(sb > sa, "session total advances across different tabs");
         // SESSION_BLOCKED is global — other tests may interleave, so we assert
         // deltas relative to `before` rather than exact values.
-        assert!(sa >= before + 1, "sa advanced past before");
+        assert!(sa > before, "sa advanced past before");
         assert!(sb >= before + 2, "sb advanced past sa");
     }
 }
