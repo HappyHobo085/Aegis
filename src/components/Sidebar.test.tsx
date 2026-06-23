@@ -31,9 +31,7 @@ describe('Sidebar', () => {
   it('renders the scrim and the right panel when open', () => {
     const { container } = render(<Sidebar {...props()} />);
     expect(container.querySelector('.sidebar__scrim')).toBeInTheDocument();
-    expect(screen.getByRole('complementary', { name: /sidebar/i })).toHaveClass(
-      'sidebar__panel',
-    );
+    expect(screen.getByRole('complementary', { name: /sidebar/i })).toHaveClass('sidebar__panel');
   });
 
   it('clicking the scrim calls onClose', async () => {

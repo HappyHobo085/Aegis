@@ -52,7 +52,10 @@ describe('FilterListsTab', () => {
     const p = props();
     render(<FilterListsTab {...p} />);
     const form = screen.getByRole('group', { name: /add filter list/i });
-    await userEvent.type(within(form).getByRole('textbox', { name: /list url/i }), 'https://lists.example/custom.txt');
+    await userEvent.type(
+      within(form).getByRole('textbox', { name: /list url/i }),
+      'https://lists.example/custom.txt',
+    );
     await userEvent.click(within(form).getByRole('button', { name: /^add list$/i }));
     expect(p.add).toHaveBeenCalledWith('https://lists.example/custom.txt');
   });

@@ -88,7 +88,11 @@ describe('usePermissions', () => {
     const { result } = renderHook(() => usePermissions());
     await waitFor(() => expect(pushed).toBeTypeOf('function'));
     act(() => pushed!({ requestId: 7, origin: 'https://c.example', permission: 'media' }));
-    expect(result.current.prompt).toEqual({ requestId: 7, origin: 'https://c.example', permission: 'media' });
+    expect(result.current.prompt).toEqual({
+      requestId: 7,
+      origin: 'https://c.example',
+      permission: 'media',
+    });
   });
 
   it('prompt.resolve("allow") forwards requestId + decision to aegis and clears the active prompt', async () => {

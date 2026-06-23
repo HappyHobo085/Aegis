@@ -22,25 +22,25 @@ function Dialog({
 
   return (
     <div className="confirm-dialog__scrim">
-    <div
-      ref={dialogRef}
-      role="dialog"
-      aria-modal="true"
-      aria-describedby={msgId}
-      className="confirm-dialog"
-    >
-      <p id={msgId} className="confirm-dialog__message">
-        {pending.message}
-      </p>
-      <div className="confirm-dialog__actions">
-        <button type="button" onClick={() => onResolve(true)}>
-          OK
-        </button>
-        <button type="button" onClick={() => onResolve(false)}>
-          Cancel
-        </button>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-describedby={msgId}
+        className="confirm-dialog"
+      >
+        <p id={msgId} className="confirm-dialog__message">
+          {pending.message}
+        </p>
+        <div className="confirm-dialog__actions">
+          <button type="button" onClick={() => onResolve(true)}>
+            OK
+          </button>
+          <button type="button" onClick={() => onResolve(false)}>
+            Cancel
+          </button>
+        </div>
       </div>
-    </div>
     </div>
   );
 }

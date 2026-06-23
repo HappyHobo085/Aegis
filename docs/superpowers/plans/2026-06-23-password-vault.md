@@ -48,13 +48,13 @@ record is serialized to JSON and sealed with `crypto::seal(&vk, ns, uuid, hlc_by
 
 - `ns` (namespace) = the constant `"vault"`. This is the vault's **own namespace** — distinct
   from the sync data-key namespaces (`favorites`/`saved`/`settings`/…), and distinct from the
-  sync-keystore's internal use of `seal` with `ns="vault", uuid="root"` (which seals the *root
-  seed*, not credential records; our records use real per-record uuids so there is no AAD
+  sync-keystore's internal use of `seal` with `ns="vault", uuid="root"` (which seals the _root
+  seed_, not credential records; our records use real per-record uuids so there is no AAD
   collision). The vault key `vk` is NOT a sync `data_key` — it is Argon2-derived from the user's
   master password, so the vault is gated by something the sync key tree never sees.
 - `uuid` = the record's own v4 UUID (one per credential).
 - `hlc_bytes` = a fixed per-record version tag. v1 uses the record's `updatedAt` epoch-ms as 8
-  big-endian bytes, so the AAD binds the sealed body to *this* record id + *this* version. (No
+  big-endian bytes, so the AAD binds the sealed body to _this_ record id + _this_ version. (No
   HLC/sync engine involvement — the vault is **not synced in Phase A**; it is local-only. The
   bytes just need to be reproducible at open time, which `updatedAt` is, since it's stored
   cleartext alongside the record.)
@@ -72,9 +72,7 @@ spliced under a different uuid, and a tampered ciphertext fails authentication �
   "kdf": "argon2id",
   "salt": "<hex 16 bytes>",
   "verifier": { "nonce": "<hex>", "ct": "<hex>" },
-  "records": [
-    { "uuid": "<v4>", "updatedAt": 1750000000000, "nonce": "<hex>", "ct": "<hex>" }
-  ]
+  "records": [{ "uuid": "<v4>", "updatedAt": 1750000000000, "nonce": "<hex>", "ct": "<hex>" }]
 }
 ```
 
@@ -106,11 +104,11 @@ pub struct Inner {
 ```
 
 - **Locked** is the resting state: `key = None`, `records` empty, every plaintext credential
-  absent from memory. The only thing the app knows while locked is *whether a vault exists*
+  absent from memory. The only thing the app knows while locked is _whether a vault exists_
   (`created`, derived from `vault.json`'s presence — no secret).
 - **Unlock** derives `vk`, opens the verifier (rejecting a wrong password), then opens every
   record into memory. **Lock** sets `key = None` and clears `records`, so the `Zeroizing<[u8;
-  32]>` and the `Zeroize`-implementing `Cred`s are wiped on drop. No timer in v1 (manual
+32]>` and the `Zeroize`-implementing `Cred`s are wiped on drop. No timer in v1 (manual
   Lock button + a documented note that closing the app drops the process memory anyway).
 - **No reads while locked.** `vault.list`/`vault.add`/… all return `Err("vault is locked")`
   when `key` is `None` (mirrors `sync`'s `"sync is locked"` guards), so the renderer can never
@@ -718,16 +716,30 @@ export function useVault(): UseVault {
   const [state, setState] = useState<VaultState>(EMPTY);
   useEffect(() => {
     let active = true;
-    void aegis.vault.getState().then((s) => { if (active) setState(s); });
+    void aegis.vault.getState().then((s) => {
+      if (active) setState(s);
+    });
     const off = aegis.vault.onState((s) => setState(s));
-    return () => { active = false; off(); };
+    return () => {
+      active = false;
+      off();
+    };
   }, []);
-  const create = useCallback(async (pw: string) => { setState(await aegis.vault.create(pw)); }, []);
-  const unlock = useCallback(async (pw: string) => { setState(await aegis.vault.unlock(pw)); }, []);
-  const lock = useCallback(async () => { setState(await aegis.vault.lock()); }, []);
+  const create = useCallback(async (pw: string) => {
+    setState(await aegis.vault.create(pw));
+  }, []);
+  const unlock = useCallback(async (pw: string) => {
+    setState(await aegis.vault.unlock(pw));
+  }, []);
+  const lock = useCallback(async () => {
+    setState(await aegis.vault.lock());
+  }, []);
   const list = useCallback(() => aegis.vault.list(), []);
   const add = useCallback((i: VaultRecordInput) => aegis.vault.add(i), []);
-  const update = useCallback((u: string, p: Partial<VaultRecordInput>) => aegis.vault.update(u, p), []);
+  const update = useCallback(
+    (u: string, p: Partial<VaultRecordInput>) => aegis.vault.update(u, p),
+    [],
+  );
   const remove = useCallback((u: string) => aegis.vault.remove(u), []);
   const search = useCallback((q: string) => aegis.vault.search(q), []);
   return { state, create, unlock, lock, list, add, update, remove, search };
@@ -742,8 +754,9 @@ export function useVault(): UseVault {
 
 **Write first** (`src/components/VaultSettingsTab.test.tsx`): three flows over a mocked
 `UseVault` —
+
 1. **No vault yet** (`exists:false`): renders a "Create vault" form; entering a master password
-   + confirm and submitting calls `create`.
+   - confirm and submitting calls `create`.
 2. **Locked** (`exists:true, unlocked:false`): renders an unlock form; submitting calls
    `unlock`; a wrong-password rejection surfaces the error.
 3. **Unlocked** (`unlocked:true`): renders the list + add form + a "Lock" button; adding calls
@@ -759,8 +772,8 @@ structure + the `run`/`busy`/`error` helper). Key requirements:
 - The list shows site + username; the password is **masked** (`••••••••`) with a per-row Show
   toggle and Copy buttons (`navigator.clipboard.writeText`). All controls carry `aria-label`s
   so the autopilot/interaction tour can target them by role+label (the `byRole` helper).
-- A prominent note in the UI: *"Stored encrypted on this device. Aegis does not autofill — copy
-  the value when you need it."* (matches the locked no-autofill decision; sets user expectation).
+- A prominent note in the UI: _"Stored encrypted on this device. Aegis does not autofill — copy
+  the value when you need it."_ (matches the locked no-autofill decision; sets user expectation).
 - Add/edit form fields: Site (URL), Username, Password, Notes. Edit reuses the form pre-filled.
 
 **Register the tab** in `SettingsModal.tsx`: add `'vault'` to the `SettingsTab` union, to
@@ -859,7 +872,8 @@ spread `...VAULT_INTERACTIONS` into **`interactions/index.ts`**.
 **Acceptance:** `npm test` green — specifically `coverage.test.ts` (every `IPC.vault*` is in a
 catalog entry's `channels`; every `UNTESTED_CHANNELS` member appears in some `channels`),
 `interactions.coverage.test.ts` (every new control id has ≥1 spec; ids unique), and the desktop
-+ mobile interaction tours pass the new specs.
+
+- mobile interaction tours pass the new specs.
 
 ---
 
@@ -868,9 +882,9 @@ catalog entry's `channels`; every `UNTESTED_CHANNELS` member appears in some `ch
 Per §6.3/§6.4. This task is verification, not new code (beyond any fixes the runs surface).
 
 - **Linux live (required):** run `bash scripts/autopilot/run-autopilot.sh`. Confirm `RESULT: …
-  0 failed` (the new `vault.crud` `verify` round-trip passes against the real Rust core on the
+0 failed` (the new `vault.crud` `verify` round-trip passes against the real Rust core on the
   disposable profile), the `settings:vault` screen screenshots, and **`ad-block blocking
-  (trace): PASS`** is unchanged (the vault touches no nav/content path, so the trace must be
+(trace): PASS`** is unchanged (the vault touches no nav/content path, so the trace must be
   untouched). Inspect the report's vault step detail string.
 - **At-rest evidence (manual, once):** after a live add, open `…/app_data/vault.json` and
   confirm it contains only `salt`/`verifier`/`nonce`/`ct` hex — no plaintext site/username/
@@ -895,6 +909,7 @@ desktop-trio green; the at-rest file inspection shows ciphertext only.
 Run this checklist against the merged result before declaring K done.
 
 **At-rest encryption confirmed.**
+
 - Every credential value (`site`/`username`/`password`/`notes`) reaches disk only inside a
   record's sealed `ct` (XChaCha20-Poly1305 via `crypto::seal`), never as a JSON field. The
   file holds `{v, kdf, salt, verifier{nonce,ct}, records[{uuid, updatedAt, nonce, ct}]}` — the
@@ -911,6 +926,7 @@ Run this checklist against the merged result before declaring K done.
   cipher/KDF code. ✅
 
 **No plaintext path.**
+
 - Plaintext credentials exist in exactly two places, both in-process and bounded: (1) in
   `Inner.records: Vec<Cred>` while unlocked, and (2) transiently in the `serde_json` buffer
   during seal/open (wrapped in `Zeroizing`). Neither is written to disk, logged, or emitted.
@@ -925,8 +941,9 @@ Run this checklist against the merged result before declaring K done.
   document-start/injection path. ✅ (Decision §2.1.)
 
 **Locked state safe.**
+
 - Resting state is **locked**: `key = None`, `records` empty. The only knowable fact while
-  locked is *whether a vault exists*. ✅
+  locked is _whether a vault exists_. ✅
 - `vault.lock` sets `key = None` (the `Zeroizing<[u8;32]>` is wiped on drop) and clears
   `records` (each `Cred` is `Zeroize + ZeroizeOnDrop`, wiped on drop). ✅
   `lock_zeroizes_key_and_clears_records`.
@@ -938,6 +955,7 @@ Run this checklist against the merged result before declaring K done.
   unwrapped and never read from a keychain in Phase A. ✅
 
 **Parity + drift guards.**
+
 - Pure Rust core + chrome React UI, **zero platform-gated code** → identical on Linux/Win/mac/
   Android. Linux live-verified; Android/CI build-verified. ✅ §6.4.
 - IPC in all three places (`types.ts`, `vault::dispatch` in `lib.rs`, `ipcClient.ts`); event

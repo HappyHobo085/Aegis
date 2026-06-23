@@ -47,10 +47,11 @@ tombstoned (no longer live) and thus excluded from the next pass.
 
 After `merge_records`: `let losers = duplicate_losers(&merged, key_field_for(name));` then
 `jsonstore::tombstone(&mut merged, |it| losers.contains(uuid_of(it)), app)` (sets `deleted:true`
-+ a fresh HLC that dominates the old record, so the deletion **propagates** on the next push).
-Append `losers` to the returned `changed` list so they (a) get pushed and (b) trigger the UI
-refetch (`emit_changed`) that drops the dupes. `key_field_for(name)`: `"url"` for
-favorites/saved, `"host"` for allowlist.
+
+- a fresh HLC that dominates the old record, so the deletion **propagates** on the next push).
+  Append `losers` to the returned `changed` list so they (a) get pushed and (b) trigger the UI
+  refetch (`emit_changed`) that drops the dupes. `key_field_for(name)`: `"url"` for
+  favorites/saved, `"host"` for allowlist.
 
 ## Scope
 
@@ -74,4 +75,7 @@ partial group either picks the same survivor or defers until the tombstone arriv
 - No duplicates → empty `losers` (no-op).
 - A group whose extras are already tombstoned → empty `losers` (idempotent).
 - Distinct URLs → untouched.
+
+```
+
 ```

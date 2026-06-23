@@ -16,7 +16,12 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
 
 describe('AppearanceTab', () => {
   it('shows the current accent color in the color input', () => {
-    render(<AppearanceTab settings={settings({ primaryColor: '#112233' })} update={vi.fn(async () => {})} />);
+    render(
+      <AppearanceTab
+        settings={settings({ primaryColor: '#112233' })}
+        update={vi.fn(async () => {})}
+      />,
+    );
     expect(screen.getByLabelText(/accent color/i)).toHaveValue('#112233');
   });
 

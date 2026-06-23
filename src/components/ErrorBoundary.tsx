@@ -30,9 +30,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
         <div className="app-error-boundary" role="alert">
           <div className="error-overlay__panel">
             <h1 className="error-overlay__heading">Something went wrong</h1>
-            <p className="error-overlay__body">
-              The browser interface hit an unexpected error.
-            </p>
+            <p className="error-overlay__body">The browser interface hit an unexpected error.</p>
             <pre className="error-overlay__detail">{this.state.error.message}</pre>
             <div className="error-overlay__actions">
               <button type="button" onClick={this.handleReset}>

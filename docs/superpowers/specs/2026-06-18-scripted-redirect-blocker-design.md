@@ -49,7 +49,7 @@ defense-in-depth.
 - Not blocking user-initiated navigation (link clicks, form submits, back/forward,
   reload) or app-initiated navigation (address bar, new tab, HTTPS-Only upgrade,
   session restore, Open-anyway).
-- Not a general HTTP-redirect blocker — redirect *hops* that continue an
+- Not a general HTTP-redirect blocker — redirect _hops_ that continue an
   already-allowed navigation pass through.
 
 ## 4. Architecture overview
@@ -157,6 +157,7 @@ pub fn navigate_tab(app: &AppHandle, tab: u32, url: &Url) {
 ```
 
 Convert existing call sites that do `webview.navigate(...)` for the content webview:
+
 - the `nav.navigate` IPC handler,
 - the HTTPS-Only upgrade re-navigate in `on_navigation` (`nav.rs` ~line 204),
 - tab spawn / restore initial load,
@@ -168,14 +169,15 @@ Convert existing call sites that do `webview.navigate(...)` for the content webv
 
 ### 5.3 Per-platform glue
 
-| Platform | Hook (where) | `scripted` source | `main_frame` source | `is_redirect` | cancel |
-|---|---|---|---|---|---|
-| **Linux** WebKitGTK 2.0.2 | new `connect_redirect_guard()` in `linux_layout.rs`, called per-tab from `nav::spawn_tab` (alongside the other `connect_*`); connects `connect_decide_policy` and casts the `PolicyDecision` to `NavigationPolicyDecision` for `PolicyDecisionType::NavigationAction` | `nav_action.navigation_type()==Other && !nav_action.is_user_gesture()` | **see §8 risk** (spike pins down reliable main-frame detection) | `nav_action.is_redirect()` (v2_20+) | `decision.ignore()` (and return per spike findings) |
-| **Windows** WebView2 | new `add_NavigationStarting` in `adblock_win.rs` install path (same `with_webview` → `controller().CoreWebView2()`). `NavigationStarting` is **top-frame only** by definition (subframes fire `FrameNavigationStarting`, which we do **not** hook) | `!args.IsUserInitiated()` | implicit `true` (event is top-frame) | `args.IsRedirected()` | `args.SetCancel(true)` |
-| **macOS** WKWebView (objc2-web-kit 0.3.2) | new `WKNavigationDelegate.webView:decidePolicyForNavigationAction:decisionHandler:` via `objc2::define_class!` (pattern: existing `nav_url_mac.rs` `UrlObserver`) | `navigationAction.navigationType == .other` (no public gesture API) | `navigationAction.targetFrame?.isMainFrame == true` (nil targetFrame = new window → treat as non-top) | not available → `false` | `decisionHandler(.cancel)` |
-| **Android** | extend `makeContentClient`'s `shouldOverrideUrlLoading` in `MainActivity.kt`; compute inputs from `WebResourceRequest`, call `NativeRedirectGuard.shouldBlock(current, target, scripted, mainFrame)` JNI (single-sourced Rust) | `!request.hasGesture()` | `request.isForMainFrame` | n/a (`loadUrl` bypass) | `return true` |
+| Platform                                  | Hook (where)                                                                                                                                                                                                                                                          | `scripted` source                                                      | `main_frame` source                                                                                   | `is_redirect`                       | cancel                                              |
+| ----------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ----------------------------------- | --------------------------------------------------- |
+| **Linux** WebKitGTK 2.0.2                 | new `connect_redirect_guard()` in `linux_layout.rs`, called per-tab from `nav::spawn_tab` (alongside the other `connect_*`); connects `connect_decide_policy` and casts the `PolicyDecision` to `NavigationPolicyDecision` for `PolicyDecisionType::NavigationAction` | `nav_action.navigation_type()==Other && !nav_action.is_user_gesture()` | **see §8 risk** (spike pins down reliable main-frame detection)                                       | `nav_action.is_redirect()` (v2_20+) | `decision.ignore()` (and return per spike findings) |
+| **Windows** WebView2                      | new `add_NavigationStarting` in `adblock_win.rs` install path (same `with_webview` → `controller().CoreWebView2()`). `NavigationStarting` is **top-frame only** by definition (subframes fire `FrameNavigationStarting`, which we do **not** hook)                    | `!args.IsUserInitiated()`                                              | implicit `true` (event is top-frame)                                                                  | `args.IsRedirected()`               | `args.SetCancel(true)`                              |
+| **macOS** WKWebView (objc2-web-kit 0.3.2) | new `WKNavigationDelegate.webView:decidePolicyForNavigationAction:decisionHandler:` via `objc2::define_class!` (pattern: existing `nav_url_mac.rs` `UrlObserver`)                                                                                                     | `navigationAction.navigationType == .other` (no public gesture API)    | `navigationAction.targetFrame?.isMainFrame == true` (nil targetFrame = new window → treat as non-top) | not available → `false`             | `decisionHandler(.cancel)`                          |
+| **Android**                               | extend `makeContentClient`'s `shouldOverrideUrlLoading` in `MainActivity.kt`; compute inputs from `WebResourceRequest`, call `NativeRedirectGuard.shouldBlock(current, target, scripted, mainFrame)` JNI (single-sourced Rust)                                        | `!request.hasGesture()`                                                | `request.isForMainFrame`                                                                              | n/a (`loadUrl` bypass)              | `return true`                                       |
 
 Notes:
+
 - **Current top URL** per platform: Linux `webview.uri()`; Windows `CoreWebView2.Source`; macOS `webView.URL`; Android the already-tracked `pageUrls[id]`.
 - **macOS** uses a looser heuristic (no gesture/redirect API) so it may over-block;
   acceptable because macOS is CI-only / not yet GUI-verified and Open-anyway covers
@@ -221,7 +223,7 @@ A chrome-side listener subscribes to `redirect.blocked` and raises this toast.
 1. Page script (no gesture) sets `location.href = "https://google.com/"`.
 2. Platform hook fires for the top frame; glue derives
    `(current="https://streamex…", target="https://google.com/", scripted=true,
-   main_frame=true, is_redirect=false)`.
+main_frame=true, is_redirect=false)`.
 3. `evaluate`: not a redirect; no pending app nav matches `google.com`;
    `should_block` → cross-origin + scripted + main-frame → **true**.
 4. Glue cancels the navigation and emits `redirect.blocked {from, to, tabId}`.
@@ -247,7 +249,7 @@ allow → `bit.ly` 302→`dest.com` arrives with `is_redirect=true` → allow.
   a cross-origin iframe embed (e.g. a YouTube embed), an OAuth login flow, and a URL
   shortener all still work.
 - **Windows:** CI compile (`tauri build`) + cross-check `--target
-  x86_64-pc-windows-gnu`; runtime on a Windows desktop.
+x86_64-pc-windows-gnu`; runtime on a Windows desktop.
 - **macOS:** CI compile only (objc2 needs a macOS toolchain — cannot build on Linux).
 - **Android:** `cargo check --target aarch64-linux-android` + Kotlin
   `compileUniversalDebugKotlin` + device-verify on real phone.
@@ -255,7 +257,7 @@ allow → `bit.ly` 302→`dest.com` arrives with `is_redirect=true` → allow.
 ## 8. Risks (flagged, to resolve during implementation — do not assume)
 
 1. **Linux `decide-policy` coexistence (primary risk).** wry already connects a
-   `decide-policy` handler (that's what powers `on_navigation`). Whether a *second*
+   `decide-policy` handler (that's what powers `on_navigation`). Whether a _second_
    handler runs and can cancel depends on GObject's `g_signal_accumulator_true_handled`
    (emission stops at the first handler returning `TRUE`) and on what wry's handler
    returns. **Spike-first:** the first Linux task adds a logging-only `decide-policy`
@@ -268,7 +270,7 @@ allow → `bit.ly` 302→`dest.com` arrives with `is_redirect=true` → allow.
    target URI but **no** main-frame flag. The spike also determines reliable
    discrimination: `frame_name()` empty-by-convention for the main frame (but unnamed
    iframes are also empty), vs. correlating with `ResponsePolicyDecision::
-   is_main_frame_main_resource()`, vs. comparing the navigation against the webview's
+is_main_frame_main_resource()`, vs. comparing the navigation against the webview's
    top `uri()`. Pick the method the spike proves correct on (main frame, named iframe,
    unnamed iframe).
 3. **macOS delegate ownership + heuristic.** wry owns the `WKNavigationDelegate`;

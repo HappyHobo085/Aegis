@@ -42,18 +42,17 @@ server's unauthenticated `GET /healthz`, so it works with no keys.
   a spawned thread (mirroring the existing `http()` thread pattern, since `reqwest::blocking`
   can't run in the command's async context) with a **short 8-second timeout** (interactive;
   the engine's own calls use 30s). Returns `{ok:true, latencyMs}` on a 2xx, else
-  `{ok:false, error}` (a failed probe is a *result*, not a thrown IPC error).
+  `{ok:false, error}` (a failed probe is a _result_, not a thrown IPC error).
 
 ### 3. UI (`SyncSettingsTab.tsx` + `useSync.ts`)
 
 - `useSync`: add `testConnection: (url: string) => aegis.sync.testConnection(url)` to the hook
-  + its `UseSync` type.
+  - its `UseSync` type.
 - `SyncSettingsTab`: a new `const [testStatus, setTestStatus] = useState('')`. A **Test
   connection** button (disabled when `busy` or the URL is empty) that runs inside the existing
   `run()` busy/error wrapper:
   `const r = await sync.testConnection(serverUrl.trim()); setTestStatus(r.ok ? \`Connected — ${r.latencyMs} ms\` : \`Failed: ${r.error ?? 'unreachable'}\`)`.
-  Render `testStatus` as a `<p role="status">` (separate from the existing `error` line). Clear
-  `testStatus` in the URL field's `onChange` so a stale result doesn't linger.
+Render `testStatus`as a`<p role="status">`(separate from the existing`error`line). Clear`testStatus`in the URL field's`onChange` so a stale result doesn't linger.
 
 ## Error handling
 
@@ -75,4 +74,7 @@ React UI. No per-platform work.
   (mock `{ok:true,latencyMs:42}`) and `Failed: …` (mock `{ok:false,error:'…'}`).
 - **Manual:** against the running Docker sync server — good URL → `Connected — N ms`; bad URL
   → `Failed: …`.
+
+```
+
 ```

@@ -6,10 +6,10 @@ Aegis ships an auto-update channel (tauri-plugin-updater + GitHub Releases). Onl
 the **latest released version** receives security updates; older builds are
 expected to auto-update to it. There is no long-term-support branch.
 
-| Version        | Supported                     |
-| -------------- | ----------------------------- |
-| Latest release | ✅                            |
-| Older releases | ❌ (auto-update to latest)    |
+| Version        | Supported                  |
+| -------------- | -------------------------- |
+| Latest release | ✅                         |
+| Older releases | ❌ (auto-update to latest) |
 
 ## Reporting a vulnerability
 

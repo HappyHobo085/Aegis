@@ -48,7 +48,9 @@ export const EDGE_INTERACTIONS: InteractionSpec[] = [
       // So nav.navigate IS called (with an empty-query search URL), NOT blocked.
       // We assert: (1) App is still mounted (no crash), (2) nav.navigate was called.
       if (!ctx.calls.called('nav.navigate'))
-        throw new Error('nav.navigate was not called after empty Enter — expected empty search navigation');
+        throw new Error(
+          'nav.navigate was not called after empty Enter — expected empty search navigation',
+        );
       if (!document.querySelector('.app'))
         throw new Error('App is no longer mounted after empty address bar Enter (crash?)');
       return 'empty address bar Enter → nav.navigate (empty search) + App still mounted';
@@ -79,13 +81,19 @@ export const EDGE_INTERACTIONS: InteractionSpec[] = [
       // The search template produces: https://duckduckgo.com/?q=ht!tp%3A%2F%2Fx
       // (or similar — just check nav.navigate was called to avoid encoding fragility).
       if (!ctx.calls.called('nav.navigate'))
-        throw new Error('nav.navigate not called after malformed-URL Enter — expected search navigation');
+        throw new Error(
+          'nav.navigate not called after malformed-URL Enter — expected search navigation',
+        );
       // Additionally verify it was NOT treated as a navigate-to-literal-URL (that would
       // be a security/crash risk if the scheme were truly malformed).  The call should
       // include encoded form of the input, not the raw 'ht!tp://x' as a literal URL.
-      const calledWithRaw = ctx.calls.of('nav.navigate').some((args) => String(args[1]) === 'ht!tp://x');
+      const calledWithRaw = ctx.calls
+        .of('nav.navigate')
+        .some((args) => String(args[1]) === 'ht!tp://x');
       if (calledWithRaw)
-        throw new Error('nav.navigate was called with the raw malformed URL — expected search encoding');
+        throw new Error(
+          'nav.navigate was called with the raw malformed URL — expected search encoding',
+        );
       if (!document.querySelector('.app'))
         throw new Error('App is no longer mounted after malformed address bar Enter (crash?)');
       return 'malformed URL → nav.navigate(search) + not literal URL + App still mounted';
@@ -160,7 +168,8 @@ export const EDGE_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'edge.tag.whitespace',
       domain: 'edge',
-      description: 'Type a whitespace-only tag and Enter → tag rejected/trimmed, no empty tag in item',
+      description:
+        'Type a whitespace-only tag and Enter → tag rejected/trimmed, no empty tag in item',
       screen: 'sidebar:saved',
       layers: ['vitest'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -229,7 +238,8 @@ export const EDGE_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'edge.bookmark.doubleClick',
       domain: 'edge',
-      description: 'Click the bookmark star twice rapidly → exactly ONE saved.add dispatched (in-flight guard)',
+      description:
+        'Click the bookmark star twice rapidly → exactly ONE saved.add dispatched (in-flight guard)',
       screen: 'home',
       // vitest-only: the live CallLog is inert and we can't observe the call count there.
       // The in-flight guard is in the React layer (useSaved.addCurrent); the live Rust
@@ -241,7 +251,10 @@ export const EDGE_INTERACTIONS: InteractionSpec[] = [
         // Replace the instant saved.add mock with a slow version (never-resolves-until-we-say)
         // so the first click is still in flight when the second click fires.
         (ctx.aegis.saved.add as unknown as SavedAddMock).mockImplementationOnce(
-          () => new Promise<import('../../../shared/types').SavedItem[]>((res) => { _resolveFirst = res; }),
+          () =>
+            new Promise<import('../../../shared/types').SavedItem[]>((res) => {
+              _resolveFirst = res;
+            }),
         );
         const btn = ctx.byRole('button', /save bookmark/i);
         if (!btn) throw new Error('Save bookmark button not found');
@@ -264,7 +277,9 @@ export const EDGE_INTERACTIONS: InteractionSpec[] = [
         if (!document.querySelector('.app'))
           throw new Error('App is no longer mounted after double-click bookmark (crash?)');
         if (addCalls.length < 1)
-          throw new Error('saved.add was never called on double-click — bookmark button appears broken');
+          throw new Error(
+            'saved.add was never called on double-click — bookmark button appears broken',
+          );
         // Regression sentinel: the in-flight guard must prevent the second click from
         // dispatching a second saved.add.  If this fails, the guard was removed or broken.
         if (addCalls.length !== 1)

@@ -16,11 +16,14 @@ export function TabsTab({ settings, update }: TabsTabProps) {
           min={0}
           aria-label="Discard inactive tabs after (minutes)"
           value={settings.tabIdleTimeout}
-          onChange={(e) => void update({ tabIdleTimeout: Math.max(0, Math.floor(Number(e.target.value) || 0)) })}
+          onChange={(e) =>
+            void update({ tabIdleTimeout: Math.max(0, Math.floor(Number(e.target.value) || 0)) })
+          }
         />
       </label>
       <p className="tabs-tab__hint">
-        Inactive background tabs are unloaded to free memory and reloaded when you return to them. Active and pinned tabs are never discarded.
+        Inactive background tabs are unloaded to free memory and reloaded when you return to them.
+        Active and pinned tabs are never discarded.
       </p>
     </div>
   );

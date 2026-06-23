@@ -54,7 +54,10 @@ export default tseslint.config(
       // The codebase has intentional empty catch/else fall-throughs.
       'no-empty': ['warn', { allowEmptyCatch: true }],
       // Allow underscore-prefixed unused args (event handlers, _label in drift tests).
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
       // react-hooks v7 introduced set-state-in-effect + refs as errors; the existing code
       // uses the setState-in-effect pattern intentionally (derived state from event listeners).
       // Downgrade to warn so CI doesn't fail — these are not bugs in the current architecture.

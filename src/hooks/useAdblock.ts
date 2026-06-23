@@ -56,7 +56,9 @@ export function useAdblock(
       setPage(c.page);
       // Mirror the monotonic session total so the popover's "this session"
       // figure stays live without an extra getState round-trip.
-      setState((prev) => (prev.sessionBlocked === c.session ? prev : { ...prev, sessionBlocked: c.session }));
+      setState((prev) =>
+        prev.sessionBlocked === c.session ? prev : { ...prev, sessionBlocked: c.session },
+      );
     });
     // The allowlist is syncable — refetch state (incl. allowlistedHosts) when sync merges it.
     const offSync = onSyncChange('allowlist', () => {
@@ -94,7 +96,14 @@ export function useAdblock(
   }, []);
 
   return {
-    state, page, setEnabled, toggleAllowlist, removeAllowlist, clearAllowlist, updateNow,
-    _setAllowlistedHosts: (hosts: string[]) => setState((prev) => ({ ...prev, allowlistedHosts: hosts })),
+    state,
+    page,
+    setEnabled,
+    toggleAllowlist,
+    removeAllowlist,
+    clearAllowlist,
+    updateNow,
+    _setAllowlistedHosts: (hosts: string[]) =>
+      setState((prev) => ({ ...prev, allowlistedHosts: hosts })),
   };
 }

@@ -11,10 +11,20 @@ vi.mock('../lib/ipcClient', () => ({ activateTab, closeTab, discardTab }));
 
 import { useMobileTabSync } from './useMobileTabSync';
 
-const t = (id: number, over: Partial<TabMeta> = {}): TabMeta =>
-  ({ id, pinned: false, live: true, title: '', url: `https://t${id}.test/`, ...over });
+const t = (id: number, over: Partial<TabMeta> = {}): TabMeta => ({
+  id,
+  pinned: false,
+  live: true,
+  title: '',
+  url: `https://t${id}.test/`,
+  ...over,
+});
 
-beforeEach(() => { activateTab.mockClear(); closeTab.mockClear(); discardTab.mockClear(); });
+beforeEach(() => {
+  activateTab.mockClear();
+  closeTab.mockClear();
+  discardTab.mockClear();
+});
 
 describe('useMobileTabSync', () => {
   it('activates the active tab on mount', () => {

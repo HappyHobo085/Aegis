@@ -26,14 +26,19 @@ export function summarize(results: StepResult[]): Report['summary'] {
 }
 
 function esc(s: string): string {
-  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+  return s.replace(
+    /[&<>"]/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!,
+  );
 }
 
 export function renderReportHtml(report: Report): string {
   const { summary } = report;
   const rows = report.results
     .map((r) => {
-      const shot = r.screenshot ? `<img src="shots/${esc(r.screenshot)}" loading="lazy" width="320">` : '';
+      const shot = r.screenshot
+        ? `<img src="shots/${esc(r.screenshot)}" loading="lazy" width="320">`
+        : '';
       const detail = r.detail ? `<div class="detail">${esc(r.detail)}</div>` : '';
       return `<tr class="${esc(r.status)}"><td>${esc(r.status)}</td><td>${esc(r.kind)}</td><td>${esc(r.title)}${detail}</td><td>${shot}</td></tr>`;
     })

@@ -6,7 +6,9 @@ describe('toast actions', () => {
 
   it('attaches an action to the toast', () => {
     let latest: ToastItem[] = [];
-    const off = subscribeToasts((t) => { latest = t; });
+    const off = subscribeToasts((t) => {
+      latest = t;
+    });
     const onClick = vi.fn();
     toast.info('Blocked a redirect to evil.com', { action: { label: 'Open anyway', onClick } });
     expect(latest).toHaveLength(1);
@@ -20,7 +22,9 @@ describe('toast actions', () => {
   it('respects a custom duration', () => {
     vi.useFakeTimers();
     let latest: ToastItem[] = [];
-    subscribeToasts((t) => { latest = t; });
+    subscribeToasts((t) => {
+      latest = t;
+    });
     toast.info('x', { durationMs: 6000 });
     vi.advanceTimersByTime(4000);
     expect(latest).toHaveLength(1); // not yet dismissed at the old 4s default

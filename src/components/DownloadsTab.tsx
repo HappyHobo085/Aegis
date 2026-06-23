@@ -38,9 +38,7 @@ export function DownloadsTab({ settings, update }: DownloadsTabProps) {
         </button>
       </div>
       {settings.downloadDir.length === 0 && (
-        <p className="downloads-tab__hint">
-          Empty — downloads go to your system Downloads folder.
-        </p>
+        <p className="downloads-tab__hint">Empty — downloads go to your system Downloads folder.</p>
       )}
     </div>
   );

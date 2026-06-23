@@ -23,10 +23,12 @@ Commands: one file → `npx vitest run <path>`; whole suite → `npm test`; andr
 ## File structure
 
 **New (renderer)**
+
 - `src/components/mobile/MobileTabSwitcher.tsx` (+ `.test.tsx`) — the switcher sheet (vertical list).
 - `src/hooks/useMobileTabSync.ts` (+ `.test.ts`) — diffs the tabs state → drives the native bridge.
 
 **Modified (renderer)**
+
 - `src/lib/ipcClient.ts` — `AndroidBridge.activateTab/closeTab/discardTab` + exported helpers; `window.__aegisOpenTab` typing.
 - `src/components/mobile/MobileBottomBar.tsx` (+ test) — slots → `[Saved, History, Tabs(count), Shield, Menu]`.
 - `src/components/mobile/MobileMenuSheet.tsx` (+ test) — items → `[Back, Forward, Home, Bookmark, Downloads, Settings]`.
@@ -34,9 +36,11 @@ Commands: one file → `npx vitest run <path>`; whole suite → `npm test`; andr
 - `src/index.css` — switcher rows + tab-count badge.
 
 **Modified (native)**
+
 - `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt` — `tabId → WebView` map + lifecycle.
 
 **Docs**
+
 - `src/CLAUDE.md`, `src-tauri/CLAUDE.md`.
 
 ---
@@ -46,6 +50,7 @@ Commands: one file → `npx vitest run <path>`; whole suite → `npm test`; andr
 ### Task 1: Bridge tab-lifecycle methods + helpers
 
 **Files:**
+
 - Modify: `src/lib/ipcClient.ts`
 
 - [ ] **Step 1: Add to the `AndroidBridge` interface** — after `setFullscreen(on: boolean): void;`:
@@ -90,6 +95,7 @@ git commit -m "feat(mobile): bridge tab-lifecycle methods (activate/close/discar
 ### Task 2: Rework `MobileBottomBar`
 
 **Files:**
+
 - Modify: `src/components/mobile/MobileBottomBar.tsx`, `src/components/mobile/MobileBottomBar.test.tsx`
 
 - [ ] **Step 1: Replace the test** — `MobileBottomBar.test.tsx`:
@@ -101,8 +107,12 @@ import { MobileBottomBar } from './MobileBottomBar';
 
 function setup(over = {}) {
   const props = {
-    onSaved: vi.fn(), onHistory: vi.fn(), onTabs: vi.fn(), onMenu: vi.fn(),
-    tabCount: 3, shield: <div data-testid="shield" />,
+    onSaved: vi.fn(),
+    onHistory: vi.fn(),
+    onTabs: vi.fn(),
+    onMenu: vi.fn(),
+    tabCount: 3,
+    shield: <div data-testid="shield" />,
     ...over,
   };
   render(<MobileBottomBar {...props} />);
@@ -154,19 +164,36 @@ interface MobileBottomBarProps {
 }
 
 export function MobileBottomBar({
-  onSaved, onHistory, onTabs, tabCount, shield, onMenu,
+  onSaved,
+  onHistory,
+  onTabs,
+  tabCount,
+  shield,
+  onMenu,
 }: MobileBottomBarProps) {
   return (
     <nav className="mobile-bottombar" aria-label="Browser actions">
       <button type="button" className="mobile-bottombar__btn" aria-label="Saved" onClick={onSaved}>
         <Bookmark size={22} aria-hidden="true" />
       </button>
-      <button type="button" className="mobile-bottombar__btn" aria-label="History" onClick={onHistory}>
+      <button
+        type="button"
+        className="mobile-bottombar__btn"
+        aria-label="History"
+        onClick={onHistory}
+      >
         <History size={22} aria-hidden="true" />
       </button>
-      <button type="button" className="mobile-bottombar__btn mobile-bottombar__tabs" aria-label={`Tabs (${tabCount} open)`} onClick={onTabs}>
+      <button
+        type="button"
+        className="mobile-bottombar__btn mobile-bottombar__tabs"
+        aria-label={`Tabs (${tabCount} open)`}
+        onClick={onTabs}
+      >
         <Layers size={20} aria-hidden="true" />
-        <span className="mobile-bottombar__count" aria-hidden="true">{tabCount}</span>
+        <span className="mobile-bottombar__count" aria-hidden="true">
+          {tabCount}
+        </span>
       </button>
       <div className="mobile-bottombar__shield">{shield}</div>
       <button type="button" className="mobile-bottombar__btn" aria-label="Menu" onClick={onMenu}>
@@ -189,6 +216,7 @@ git commit -m "feat(mobile): bottom bar -> Saved/History/Tabs(count)/Shield/Menu
 ### Task 3: Rework `MobileMenuSheet`
 
 **Files:**
+
 - Modify: `src/components/mobile/MobileMenuSheet.tsx`, `src/components/mobile/MobileMenuSheet.test.tsx`
 
 - [ ] **Step 1: Replace the test** — `MobileMenuSheet.test.tsx`:
@@ -200,10 +228,17 @@ import { MobileMenuSheet } from './MobileMenuSheet';
 
 function setup(over = {}) {
   const props = {
-    onClose: vi.fn(), onBack: vi.fn(), onForward: vi.fn(),
-    canGoBack: true, canGoForward: false,
-    onHome: vi.fn(), onDownloads: vi.fn(), onSettings: vi.fn(),
-    isCurrentSaved: false, canBookmark: true, onToggleBookmark: vi.fn(),
+    onClose: vi.fn(),
+    onBack: vi.fn(),
+    onForward: vi.fn(),
+    canGoBack: true,
+    canGoForward: false,
+    onHome: vi.fn(),
+    onDownloads: vi.fn(),
+    onSettings: vi.fn(),
+    isCurrentSaved: false,
+    canBookmark: true,
+    onToggleBookmark: vi.fn(),
     ...over,
   };
   render(<MobileMenuSheet {...props} />);
@@ -262,41 +297,70 @@ interface MobileMenuSheetProps {
 }
 
 export function MobileMenuSheet({
-  onClose, onBack, onForward, canGoBack, canGoForward, onHome,
-  onDownloads, onSettings, isCurrentSaved, canBookmark, onToggleBookmark,
+  onClose,
+  onBack,
+  onForward,
+  canGoBack,
+  canGoForward,
+  onHome,
+  onDownloads,
+  onSettings,
+  isCurrentSaved,
+  canBookmark,
+  onToggleBookmark,
 }: MobileMenuSheetProps) {
   return (
     <MobileSheet title="Menu" onClose={onClose}>
       <ul className="mobile-menu">
         <li>
-          <button type="button" className="mobile-menu__item" disabled={!canGoBack} onClick={onBack}>
-            <ArrowLeft size={20} aria-hidden="true" />Back
+          <button
+            type="button"
+            className="mobile-menu__item"
+            disabled={!canGoBack}
+            onClick={onBack}
+          >
+            <ArrowLeft size={20} aria-hidden="true" />
+            Back
           </button>
         </li>
         <li>
-          <button type="button" className="mobile-menu__item" disabled={!canGoForward} onClick={onForward}>
-            <ArrowRight size={20} aria-hidden="true" />Forward
+          <button
+            type="button"
+            className="mobile-menu__item"
+            disabled={!canGoForward}
+            onClick={onForward}
+          >
+            <ArrowRight size={20} aria-hidden="true" />
+            Forward
           </button>
         </li>
         <li>
           <button type="button" className="mobile-menu__item" onClick={onHome}>
-            <Home size={20} aria-hidden="true" />Home
+            <Home size={20} aria-hidden="true" />
+            Home
           </button>
         </li>
         <li>
-          <button type="button" className="mobile-menu__item" disabled={!canBookmark} onClick={onToggleBookmark}>
+          <button
+            type="button"
+            className="mobile-menu__item"
+            disabled={!canBookmark}
+            onClick={onToggleBookmark}
+          >
             <Star size={20} aria-hidden="true" />
             {isCurrentSaved ? 'Remove bookmark' : 'Bookmark this page'}
           </button>
         </li>
         <li>
           <button type="button" className="mobile-menu__item" onClick={onDownloads}>
-            <Download size={20} aria-hidden="true" />Downloads
+            <Download size={20} aria-hidden="true" />
+            Downloads
           </button>
         </li>
         <li>
           <button type="button" className="mobile-menu__item" onClick={onSettings}>
-            <Settings size={20} aria-hidden="true" />Settings
+            <Settings size={20} aria-hidden="true" />
+            Settings
           </button>
         </li>
       </ul>
@@ -317,6 +381,7 @@ git commit -m "feat(mobile): menu drawer -> Back/Forward/Home/Bookmark/Downloads
 ### Task 4: `MobileTabSwitcher`
 
 **Files:**
+
 - Create: `src/components/mobile/MobileTabSwitcher.tsx`, `src/components/mobile/MobileTabSwitcher.test.tsx`
 
 - [ ] **Step 1: Write the failing test** — `MobileTabSwitcher.test.tsx`:
@@ -334,8 +399,12 @@ const tabs: TabMeta[] = [
 
 function setup(over = {}) {
   const props = {
-    tabs, activeId: 1,
-    onSwitch: vi.fn(), onCloseTab: vi.fn(), onNewTab: vi.fn(), onClose: vi.fn(),
+    tabs,
+    activeId: 1,
+    onSwitch: vi.fn(),
+    onCloseTab: vi.fn(),
+    onNewTab: vi.fn(),
+    onClose: vi.fn(),
     ...over,
   };
   render(<MobileTabSwitcher {...props} />);
@@ -386,28 +455,54 @@ interface MobileTabSwitcherProps {
 
 function label(t: TabMeta): string {
   if (t.title.length > 0) return t.title;
-  try { const h = new URL(t.url).hostname; if (h.length > 0) return h; } catch { /* ignore */ }
+  try {
+    const h = new URL(t.url).hostname;
+    if (h.length > 0) return h;
+  } catch {
+    /* ignore */
+  }
   return t.url || 'New tab';
 }
 
 export function MobileTabSwitcher({
-  tabs, activeId, onSwitch, onCloseTab, onNewTab, onClose,
+  tabs,
+  activeId,
+  onSwitch,
+  onCloseTab,
+  onNewTab,
+  onClose,
 }: MobileTabSwitcherProps) {
   return (
     <MobileSheet title="Tabs" onClose={onClose}>
       <button type="button" className="mobile-tabs__new" onClick={onNewTab}>
-        <Plus size={18} aria-hidden="true" />New tab
+        <Plus size={18} aria-hidden="true" />
+        New tab
       </button>
       <ul className="mobile-tabs">
         {tabs.map((t) => {
           const name = label(t);
           return (
-            <li key={t.id} className={t.id === activeId ? 'mobile-tabs__row mobile-tabs__row--active' : 'mobile-tabs__row'}>
-              <button type="button" className="mobile-tabs__open" aria-label={`Switch to ${name}`} onClick={() => onSwitch(t.id)}>
+            <li
+              key={t.id}
+              className={
+                t.id === activeId ? 'mobile-tabs__row mobile-tabs__row--active' : 'mobile-tabs__row'
+              }
+            >
+              <button
+                type="button"
+                className="mobile-tabs__open"
+                aria-label={`Switch to ${name}`}
+                onClick={() => onSwitch(t.id)}
+              >
                 <Globe size={18} aria-hidden="true" />
                 <span className="mobile-tabs__title">{name}</span>
               </button>
-              <button type="button" className="mobile-tabs__close" aria-label={`Close ${name}`} onClick={() => onCloseTab(t.id)}>
+              <button
+                type="button"
+                className="mobile-tabs__close"
+                aria-label={`Close ${name}`}
+                onClick={() => onCloseTab(t.id)}
+              >
                 <X size={18} aria-hidden="true" />
               </button>
             </li>
@@ -431,6 +526,7 @@ git commit -m "feat(mobile): MobileTabSwitcher (vertical list)"
 ### Task 5: `useMobileTabSync` (diff registry state → native bridge)
 
 **Files:**
+
 - Create: `src/hooks/useMobileTabSync.ts`, `src/hooks/useMobileTabSync.test.ts`
 
 - [ ] **Step 1: Write the failing test** — `useMobileTabSync.test.ts`:
@@ -447,10 +543,20 @@ vi.mock('../lib/ipcClient', () => ({ activateTab, closeTab, discardTab }));
 
 import { useMobileTabSync } from './useMobileTabSync';
 
-const t = (id: number, over: Partial<TabMeta> = {}): TabMeta =>
-  ({ id, pinned: false, live: true, title: '', url: `https://t${id}.test/`, ...over });
+const t = (id: number, over: Partial<TabMeta> = {}): TabMeta => ({
+  id,
+  pinned: false,
+  live: true,
+  title: '',
+  url: `https://t${id}.test/`,
+  ...over,
+});
 
-beforeEach(() => { activateTab.mockClear(); closeTab.mockClear(); discardTab.mockClear(); });
+beforeEach(() => {
+  activateTab.mockClear();
+  closeTab.mockClear();
+  discardTab.mockClear();
+});
 
 describe('useMobileTabSync', () => {
   it('activates the active tab on mount', () => {
@@ -539,6 +645,7 @@ git commit -m "feat(mobile): useMobileTabSync (registry state -> native tab brid
 ### Task 6: Rewire `MobileApp`
 
 **Files:**
+
 - Modify: `src/components/mobile/MobileApp.tsx`, `src/components/mobile/MobileApp.test.tsx`
 
 - [ ] **Step 1: Update the test** — In `MobileApp.test.tsx`, add `activateTab`/`closeTab`/`discardTab` to the `vi.mock('../../lib/ipcClient', ...)` exports (alongside `setBackInterceptActive`/`setBottomBarHidden`/`setFullscreen`):
@@ -556,16 +663,16 @@ git commit -m "feat(mobile): useMobileTabSync (registry state -> native tab brid
 Then replace the "hides the bottom bar" / "enters fullscreen" assertions' siblings with a tabs test (keep the existing top-bar/bottom-bar/menu/fullscreen tests; they still hold). Add:
 
 ```tsx
-  it('opens the tab switcher from the bottom bar', async () => {
-    render(<MobileApp />);
-    fireEvent.click(await screen.findByRole('button', { name: /tabs/i }));
-    expect(await screen.findByRole('dialog', { name: 'Tabs' })).toBeInTheDocument();
-  });
-  it('opens Saved directly from the bottom bar', async () => {
-    render(<MobileApp />);
-    fireEvent.click(await screen.findByRole('button', { name: /saved/i }));
-    expect(await screen.findByRole('dialog', { name: 'Saved' })).toBeInTheDocument();
-  });
+it('opens the tab switcher from the bottom bar', async () => {
+  render(<MobileApp />);
+  fireEvent.click(await screen.findByRole('button', { name: /tabs/i }));
+  expect(await screen.findByRole('dialog', { name: 'Tabs' })).toBeInTheDocument();
+});
+it('opens Saved directly from the bottom bar', async () => {
+  render(<MobileApp />);
+  fireEvent.click(await screen.findByRole('button', { name: /saved/i }));
+  expect(await screen.findByRole('dialog', { name: 'Saved' })).toBeInTheDocument();
+});
 ```
 
 > The existing test "hides the bottom bar via the top-bar toggle" still works. The test that clicked bottom-bar `/menu/i` then `/history/i` must change: History is now opened from the **bottom bar** directly, not the menu — update that test to click `/history/i` (bottom bar) and expect the History dialog.
@@ -603,10 +710,10 @@ type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | 'tabs' | 
 (d) Hooks — replace the single-view nav with tabs + active-id nav, and run the sync:
 
 ```tsx
-  const tabs = useTabs();
-  const nav = useNav(tabs.activeId);
-  const adblock = useAdblock(tabs.activeId, nav.state.url);
-  useMobileTabSync(tabs.tabs, tabs.activeId);
+const tabs = useTabs();
+const nav = useNav(tabs.activeId);
+const adblock = useAdblock(tabs.activeId, nav.state.url);
+useMobileTabSync(tabs.tabs, tabs.activeId);
 ```
 
 (`useFavorites`/`useSaved` stay keyed on `nav.state.url`; everything else unchanged.)
@@ -614,71 +721,87 @@ type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | 'tabs' | 
 (e) `setChromeOverlay` effect — key it on the active id:
 
 ```tsx
-  useEffect(() => {
-    void aegis.view.setChromeOverlay(tabs.activeId, overlayOpen);
-  }, [overlayOpen, tabs.activeId]);
+useEffect(() => {
+  void aegis.view.setChromeOverlay(tabs.activeId, overlayOpen);
+}, [overlayOpen, tabs.activeId]);
 ```
 
 (f) New-tab-from-native — install `__aegisOpenTab` (and the Back precedence already covers `sheet !== null`, which now includes `'tabs'`):
 
 ```tsx
-  useEffect(() => {
-    window.__aegisOpenTab = (url) => { void tabs.create(url); };
-    return () => { delete window.__aegisOpenTab; };
-  }, [tabs]);
+useEffect(() => {
+  window.__aegisOpenTab = (url) => {
+    void tabs.create(url);
+  };
+  return () => {
+    delete window.__aegisOpenTab;
+  };
+}, [tabs]);
 ```
 
 (g) Bottom bar — new props (replace the whole `<MobileBottomBar .../>` block):
 
 ```tsx
-      {!bottomBarHidden && !fullscreen && (
-        <MobileBottomBar
-          onSaved={() => setSheet('saved')}
-          onHistory={() => setSheet('history')}
-          onTabs={() => setSheet('tabs')}
-          tabCount={tabs.tabs.length}
-          shield={shield}
-          onMenu={() => setSheet('menu')}
-        />
-      )}
+{
+  !bottomBarHidden && !fullscreen && (
+    <MobileBottomBar
+      onSaved={() => setSheet('saved')}
+      onHistory={() => setSheet('history')}
+      onTabs={() => setSheet('tabs')}
+      tabCount={tabs.tabs.length}
+      shield={shield}
+      onMenu={() => setSheet('menu')}
+    />
+  );
+}
 ```
 
 (h) Menu sheet — new props (replace the `<MobileMenuSheet .../>` block):
 
 ```tsx
-      {sheet === 'menu' && (
-        <MobileMenuSheet
-          onClose={() => setSheet(null)}
-          onBack={nav.back}
-          onForward={nav.forward}
-          canGoBack={nav.state.canGoBack}
-          canGoForward={nav.state.canGoForward}
-          onHome={nav.home}
-          onDownloads={() => setSheet('downloads')}
-          onSettings={() => setSheet('settings')}
-          isCurrentSaved={saved.isCurrentSaved}
-          canBookmark={host !== null}
-          onToggleBookmark={() => {
-            if (saved.isCurrentSaved) void saved.removeCurrent();
-            else void saved.addCurrent(nav.state.title);
-          }}
-        />
-      )}
+{
+  sheet === 'menu' && (
+    <MobileMenuSheet
+      onClose={() => setSheet(null)}
+      onBack={nav.back}
+      onForward={nav.forward}
+      canGoBack={nav.state.canGoBack}
+      canGoForward={nav.state.canGoForward}
+      onHome={nav.home}
+      onDownloads={() => setSheet('downloads')}
+      onSettings={() => setSheet('settings')}
+      isCurrentSaved={saved.isCurrentSaved}
+      canBookmark={host !== null}
+      onToggleBookmark={() => {
+        if (saved.isCurrentSaved) void saved.removeCurrent();
+        else void saved.addCurrent(nav.state.title);
+      }}
+    />
+  );
+}
 ```
 
 (i) Tab switcher — add the sheet (e.g. right after the menu block):
 
 ```tsx
-      {sheet === 'tabs' && (
-        <MobileTabSwitcher
-          tabs={tabs.tabs}
-          activeId={tabs.activeId}
-          onSwitch={(id) => { void tabs.activate(id); setSheet(null); }}
-          onCloseTab={(id) => void tabs.close(id)}
-          onNewTab={() => { void tabs.create('about:blank'); setSheet(null); }}
-          onClose={() => setSheet(null)}
-        />
-      )}
+{
+  sheet === 'tabs' && (
+    <MobileTabSwitcher
+      tabs={tabs.tabs}
+      activeId={tabs.activeId}
+      onSwitch={(id) => {
+        void tabs.activate(id);
+        setSheet(null);
+      }}
+      onCloseTab={(id) => void tabs.close(id)}
+      onNewTab={() => {
+        void tabs.create('about:blank');
+        setSheet(null);
+      }}
+      onClose={() => setSheet(null)}
+    />
+  );
+}
 ```
 
 > `PRIMARY_VIEW_ID` is no longer used directly in render (active id comes from `tabs.activeId`); keep the import only if still referenced, otherwise drop it to avoid an unused-import lint.
@@ -695,27 +818,81 @@ git commit -m "feat(mobile): MobileApp uses tabs (useTabs + useNav(activeId)) + 
 ### Task 7: Switcher + tab-count CSS
 
 **Files:**
+
 - Modify: `src/index.css`
 
 - [ ] **Step 1: Add the styles** — append to the `===== Mobile (Android) chrome =====` block:
 
 ```css
-.mobile-bottombar__tabs { position: relative; }
-.mobile-bottombar__count { position: absolute; font-size: 10px; line-height: 1; font-weight: 700;
-  color: #e6e6e6; top: 50%; left: 50%; transform: translate(-50%, -45%); }
+.mobile-bottombar__tabs {
+  position: relative;
+}
+.mobile-bottombar__count {
+  position: absolute;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 700;
+  color: #e6e6e6;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -45%);
+}
 
-.mobile-tabs__new { display: flex; align-items: center; gap: 8px; width: 100%; height: 48px;
-  padding: 0 16px; border: 0; border-bottom: 1px solid #2a2a2a; background: transparent;
-  color: #cfcfcf; font-size: 15px; }
-.mobile-tabs { list-style: none; margin: 0; padding: 0; }
-.mobile-tabs__row { display: flex; align-items: center; border-bottom: 1px solid #222; }
-.mobile-tabs__row--active { background: #20232a; }
-.mobile-tabs__open { flex: 1; display: flex; align-items: center; gap: 10px; min-width: 0;
-  height: 52px; padding: 0 12px; border: 0; background: transparent; color: #e6e6e6;
-  font-size: 15px; text-align: left; }
-.mobile-tabs__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.mobile-tabs__close { display: inline-flex; align-items: center; justify-content: center;
-  width: 44px; height: 52px; border: 0; background: transparent; color: #9aa0a6; }
+.mobile-tabs__new {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 48px;
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 1px solid #2a2a2a;
+  background: transparent;
+  color: #cfcfcf;
+  font-size: 15px;
+}
+.mobile-tabs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mobile-tabs__row {
+  display: flex;
+  align-items: center;
+  border-bottom: 1px solid #222;
+}
+.mobile-tabs__row--active {
+  background: #20232a;
+}
+.mobile-tabs__open {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  height: 52px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: #e6e6e6;
+  font-size: 15px;
+  text-align: left;
+}
+.mobile-tabs__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.mobile-tabs__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 52px;
+  border: 0;
+  background: transparent;
+  color: #9aa0a6;
+}
 ```
 
 - [ ] **Step 2: Build** — `npm run build:renderer` → succeeds.
@@ -734,6 +911,7 @@ git commit -m "feat(mobile): tab switcher + tab-count CSS"
 ### Task 8: Per-tab native WebViews
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt`
 
 The current code creates ONE content `WebView` eagerly in `onWebViewCreate` and stores `contentWebView`/`currentPageUrl` as single values. Refactor to a `tabId → WebView` map; the active tab's WebView becomes `contentWebView` (so all existing active-tab logic — margins, overlay, navigate, back/forward — keeps working unchanged).
@@ -926,6 +1104,7 @@ git commit -m "feat(mobile): per-tab native WebViews (activate/close/discard, pe
 ### Task 9: `target=_blank` / `window.open` → background tab (deferrable)
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt`
 
 - [ ] **Step 1: Enable multi-window + handle `onCreateWindow`.** In `createTabWebView`, after the other settings:
@@ -968,6 +1147,7 @@ git commit -m "feat(mobile): target=_blank/window.open opens a background tab"
 ### Task 10: Full gate + CLAUDE.md + finish
 
 **Files:**
+
 - Modify: `src/CLAUDE.md`, `src-tauri/CLAUDE.md`
 
 - [ ] **Step 1: Gate** — `npm test` (whole suite green) + `npm run build:renderer` (succeeds). Paste the summary.

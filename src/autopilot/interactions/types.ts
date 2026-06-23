@@ -2,8 +2,18 @@
 // Public interaction-layer types, shared by every per-domain spec file and the
 // vitest/live ctx factories.  Split out of the former monolithic interactions.ts.
 import type {
-  AegisApi, NavState, TabsState, TabShortcut, Favorite, HistoryEntry, SavedItem,
-  NavFailed, NavCrashed, SafetyInterstitialPayload, PermissionPrompt, RedirectBlocked,
+  AegisApi,
+  NavState,
+  TabsState,
+  TabShortcut,
+  Favorite,
+  HistoryEntry,
+  SavedItem,
+  NavFailed,
+  NavCrashed,
+  SafetyInterstitialPayload,
+  PermissionPrompt,
+  RedirectBlocked,
 } from '../../../shared/types';
 import type { ScreenId } from '../screens';
 
@@ -76,7 +86,9 @@ export interface InteractionCtx {
    * the control-surface seam (setSitePermissions → usePermissions._setPermissions), using
    * flushSync so the DOM updates synchronously before the next gesture fires.  No-op on live.
    */
-  emitSitePermissions?(permissions: import('../../../shared/types').SitePermission[]): Promise<void>;
+  emitSitePermissions?(
+    permissions: import('../../../shared/types').SitePermission[],
+  ): Promise<void>;
   /**
    * Vitest-only: seed the allowlist state in useAdblock by mocking adblock.getState
    * and publishing a syncBus 'allowlist' change (which triggers the hook's onSyncChange

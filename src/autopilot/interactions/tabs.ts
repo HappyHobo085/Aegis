@@ -19,8 +19,7 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
     },
     assert: async (ctx) => {
       if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('tabs.create'))
-          throw new Error('tabs.create not called');
+        if (!ctx.calls.called('tabs.create')) throw new Error('tabs.create not called');
         return 'New tab button → tabs.create()';
       }
       // Live: the tab list should now have one more tab than before.
@@ -83,8 +82,7 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('tabs.activate'))
-            throw new Error('tabs.activate not called');
+          if (!ctx.calls.called('tabs.activate')) throw new Error('tabs.activate not called');
           return 'click second tab → tabs.activate()';
         }
         // Live: activeId must equal the newly-created tab's id — proves the click worked.
@@ -93,7 +91,9 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
         if (_newTabId === undefined)
           throw new Error('live: _newTabId was never captured (run() may not have executed)');
         if (state.activeId !== _newTabId)
-          throw new Error(`live: activeId is ${state.activeId}, expected ${_newTabId} — activate had no effect`);
+          throw new Error(
+            `live: activeId is ${state.activeId}, expected ${_newTabId} — activate had no effect`,
+          );
         // Clean up: close the extra tab.
         await ctx.aegis.tabs.close(_newTabId);
         return `click second tab → activeId became ${_newTabId} (extra tab closed)`;
@@ -139,8 +139,7 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('tabs.close'))
-            throw new Error('tabs.close not called');
+          if (!ctx.calls.called('tabs.close')) throw new Error('tabs.close not called');
           return 'close-tab X → tabs.close()';
         }
         // Live: tab count must have decreased by exactly 1 from the pre-close snapshot.
@@ -174,8 +173,7 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
       await ctx.contextMenu(tab);
     },
     assert: async (ctx) => {
-      if (!ctx.calls.called('tabs.setPinned'))
-        throw new Error('tabs.setPinned not called');
+      if (!ctx.calls.called('tabs.setPinned')) throw new Error('tabs.setPinned not called');
       return 'tab context-menu → tabs.setPinned()';
     },
   },

@@ -25,14 +25,18 @@ describe('TabsTab', () => {
   it('calls update with the new tabIdleTimeout when the input changes', () => {
     const update = vi.fn(async () => {});
     render(<TabsTab settings={settings()} update={update} />);
-    fireEvent.change(screen.getByLabelText(/discard inactive tabs after/i), { target: { value: '60' } });
+    fireEvent.change(screen.getByLabelText(/discard inactive tabs after/i), {
+      target: { value: '60' },
+    });
     expect(update).toHaveBeenLastCalledWith({ tabIdleTimeout: 60 });
   });
 
   it('floors to 0 when the input is set to 0 (never discard)', () => {
     const update = vi.fn(async () => {});
     render(<TabsTab settings={settings()} update={update} />);
-    fireEvent.change(screen.getByLabelText(/discard inactive tabs after/i), { target: { value: '0' } });
+    fireEvent.change(screen.getByLabelText(/discard inactive tabs after/i), {
+      target: { value: '0' },
+    });
     expect(update).toHaveBeenLastCalledWith({ tabIdleTimeout: 0 });
   });
 

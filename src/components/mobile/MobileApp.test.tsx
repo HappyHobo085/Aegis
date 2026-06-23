@@ -54,18 +54,34 @@ vi.mock('../../lib/ipcClient', () => ({
       set: vi.fn(async () => ''),
     },
     adblock: {
-      getState: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-      setEnabled: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-      toggleAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-      removeAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-      clearAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      getState: vi
+        .fn()
+        .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      setEnabled: vi
+        .fn()
+        .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      toggleAllowlist: vi
+        .fn()
+        .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      removeAllowlist: vi
+        .fn()
+        .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+      clearAllowlist: vi
+        .fn()
+        .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
       onBlockedCount: vi.fn().mockReturnValue(() => {}),
     },
     lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
     sync: {
       getState: vi.fn().mockResolvedValue({
-        enabled: false, status: 'disabled', serverUrl: '', lastSyncMs: 0,
-        lastError: '', deviceId: '', accountId: '', vaultBacking: 'none',
+        enabled: false,
+        status: 'disabled',
+        serverUrl: '',
+        lastSyncMs: 0,
+        lastError: '',
+        deviceId: '',
+        accountId: '',
+        vaultBacking: 'none',
       }),
       enableNew: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
       enableFromPhrase: vi.fn().mockResolvedValue({}),
@@ -129,14 +145,38 @@ vi.mock('../../lib/ipcClient', () => ({
       onInterstitial: vi.fn(() => () => {}),
     },
     tabs: {
-      list: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      create: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      close: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      activate: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      reorder: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      setPinned: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      reopenClosed: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-      setTitle: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+      list: vi.fn().mockResolvedValue({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+        activeId: 1,
+      }),
+      create: vi.fn().mockResolvedValue({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+        activeId: 1,
+      }),
+      close: vi.fn().mockResolvedValue({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+        activeId: 1,
+      }),
+      activate: vi.fn().mockResolvedValue({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+        activeId: 1,
+      }),
+      reorder: vi.fn().mockResolvedValue({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+        activeId: 1,
+      }),
+      setPinned: vi.fn().mockResolvedValue({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+        activeId: 1,
+      }),
+      reopenClosed: vi.fn().mockResolvedValue({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+        activeId: 1,
+      }),
+      setTitle: vi.fn().mockResolvedValue({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+        activeId: 1,
+      }),
       onState: vi.fn(() => () => {}),
       onShortcut: vi.fn(() => () => {}),
     },

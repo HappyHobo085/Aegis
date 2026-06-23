@@ -46,8 +46,24 @@ function makeFakePC() {
     getStats() {
       return Promise.resolve(
         new Map<string, Record<string, unknown>>([
-          ['host', { type: 'local-candidate', candidateType: 'host', address: '192.168.1.5', ip: '192.168.1.5' }],
-          ['relay', { type: 'local-candidate', candidateType: 'relay', address: '198.51.100.9', ip: '198.51.100.9' }],
+          [
+            'host',
+            {
+              type: 'local-candidate',
+              candidateType: 'host',
+              address: '192.168.1.5',
+              ip: '192.168.1.5',
+            },
+          ],
+          [
+            'relay',
+            {
+              type: 'local-candidate',
+              candidateType: 'relay',
+              address: '198.51.100.9',
+              ip: '198.51.100.9',
+            },
+          ],
         ]),
       );
     }

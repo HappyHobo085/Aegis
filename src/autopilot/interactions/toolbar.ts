@@ -1,6 +1,14 @@
 // src/autopilot/interactions/toolbar.ts
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
-import { emitNavState, BASE_NAV, nudgeSync, waitFor, fixtureUrl, liveNavigate, activeViewId } from './helpers';
+import {
+  emitNavState,
+  BASE_NAV,
+  nudgeSync,
+  waitFor,
+  fixtureUrl,
+  liveNavigate,
+  activeViewId,
+} from './helpers';
 
 export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
   // ─── existing Task-2 seed ───────────────────────────────────────────────
@@ -12,7 +20,8 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     layers: ['vitest', 'live'],
     mobile: true, // MobileTopBar includes the same AddressBar component
     run: async (ctx) => {
-      const bar = ctx.byRole('textbox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
+      const bar =
+        ctx.byRole('textbox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
       if (!bar) throw new Error('address bar input not found');
       await ctx.type(bar, 'example.com');
       await ctx.press('Enter');
@@ -26,7 +35,8 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       const vid = await activeViewId(ctx);
       const deadline = Date.now() + 8000;
       while (Date.now() < deadline) {
-        if ((await ctx.aegis.nav.getState(vid)).url.includes('example.com')) return 'address bar Enter → page navigated';
+        if ((await ctx.aegis.nav.getState(vid)).url.includes('example.com'))
+          return 'address bar Enter → page navigated';
         await new Promise((r) => setTimeout(r, 400));
       }
       throw new Error('live: url never became example.com');
@@ -51,8 +61,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       await ctx.click(btn);
     },
     assert: async (ctx) => {
-      if (!ctx.calls.called('nav.back'))
-        throw new Error('nav.back not called');
+      if (!ctx.calls.called('nav.back')) throw new Error('nav.back not called');
       return 'Back button → nav.back()';
     },
   },
@@ -73,8 +82,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       await ctx.click(btn);
     },
     assert: async (ctx) => {
-      if (!ctx.calls.called('nav.forward'))
-        throw new Error('nav.forward not called');
+      if (!ctx.calls.called('nav.forward')) throw new Error('nav.forward not called');
       return 'Forward button → nav.forward()';
     },
   },
@@ -95,8 +103,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       await ctx.click(btn);
     },
     assert: async (ctx) => {
-      if (!ctx.calls.called('nav.reloadOrStop'))
-        throw new Error('nav.reloadOrStop not called');
+      if (!ctx.calls.called('nav.reloadOrStop')) throw new Error('nav.reloadOrStop not called');
       return 'Reload button → nav.reloadOrStop()';
     },
   },
@@ -122,8 +129,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('nav.home'))
-            throw new Error('nav.home not called');
+          if (!ctx.calls.called('nav.home')) throw new Error('nav.home not called');
           return 'Home button → nav.home()';
         }
         // Live: poll until the url LEAVES the before-state and lands on home. homeUrl is
@@ -136,11 +142,14 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
         const deadline = Date.now() + 8000;
         while (Date.now() < deadline) {
           const { url } = await ctx.aegis.nav.getState(vid);
-          if (url !== _before && isHome(url)) return `Home button → navigated home (${url || 'about:blank'})`;
+          if (url !== _before && isHome(url))
+            return `Home button → navigated home (${url || 'about:blank'})`;
           await new Promise((r) => setTimeout(r, 300));
         }
         const now = (await ctx.aegis.nav.getState(vid)).url;
-        throw new Error(`live: url did not navigate home (before=${_before}, home=${home}, now=${now || 'about:blank'})`);
+        throw new Error(
+          `live: url did not navigate home (before=${_before}, home=${home}, now=${now || 'about:blank'})`,
+        );
       },
     } satisfies InteractionSpec;
   })(),
@@ -148,7 +157,8 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
   {
     id: 'toolbar.addressBar.search',
     domain: 'toolbar',
-    description: 'Type a search query in the address bar and press Enter → nav.navigate called with search URL',
+    description:
+      'Type a search query in the address bar and press Enter → nav.navigate called with search URL',
     screen: 'home',
     // vitest-only: a dotless/spaced query routes through the configured search engine
     // (DuckDuckGo by default). In the sandboxed live run the external engine never commits
@@ -160,7 +170,8 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     layers: ['vitest'],
     mobile: true, // MobileTopBar includes the same AddressBar component
     run: async (ctx) => {
-      const bar = ctx.byRole('textbox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
+      const bar =
+        ctx.byRole('textbox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
       if (!bar) throw new Error('address bar input not found');
       await ctx.type(bar, 'hello world');
       await ctx.press('Enter');
@@ -189,10 +200,14 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
         // Park on a real, saveable fixture URL that is NOT already saved, then nudge
         // useSaved so isCurrentSaved re-queries → the button reads "Save bookmark".
         const url = fixtureUrl('bookmark');
-        for (const i of (await ctx.aegis.saved.list()).filter((i) => i.url === url)) await ctx.aegis.saved.remove(i.id);
+        for (const i of (await ctx.aegis.saved.list()).filter((i) => i.url === url))
+          await ctx.aegis.saved.remove(i.id);
         await liveNavigate(ctx, url);
         await nudgeSync('saved');
-        const btn = await waitFor(() => ctx.byRole('button', /save bookmark/i), '"Save bookmark" button');
+        const btn = await waitFor(
+          () => ctx.byRole('button', /save bookmark/i),
+          '"Save bookmark" button',
+        );
         await ctx.click(btn);
         return;
       }
@@ -204,8 +219,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     },
     assert: async (ctx) => {
       if (ctx.layer === 'vitest') {
-        if (!ctx.calls.called('saved.add'))
-          throw new Error('saved.add not called');
+        if (!ctx.calls.called('saved.add')) throw new Error('saved.add not called');
         return 'Save bookmark → saved.add()';
       }
       const url = fixtureUrl('bookmark');
@@ -213,7 +227,8 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       while (Date.now() < deadline) {
         if ((await ctx.aegis.saved.list()).some((i) => i.url === url)) {
           // Restore: unsave so the next run starts clean.
-          for (const i of (await ctx.aegis.saved.list()).filter((i) => i.url === url)) await ctx.aegis.saved.remove(i.id);
+          for (const i of (await ctx.aegis.saved.list()).filter((i) => i.url === url))
+            await ctx.aegis.saved.remove(i.id);
           await nudgeSync('saved');
           return `Save bookmark → saved persisted then restored (${url})`;
         }
@@ -244,7 +259,10 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
         await ctx.aegis.saved.add({ url, title: 'AP Bookmark Remove' });
       }
       await nudgeSync('saved');
-      const btn = await waitFor(() => ctx.byRole('button', /remove bookmark/i), '"Remove bookmark" button');
+      const btn = await waitFor(
+        () => ctx.byRole('button', /remove bookmark/i),
+        '"Remove bookmark" button',
+      );
       await ctx.click(btn);
     },
     assert: async (ctx) => {
@@ -257,7 +275,8 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
         await new Promise((r) => setTimeout(r, 300));
       }
       // Safety cleanup so a failure doesn't leak state into later specs.
-      for (const i of (await ctx.aegis.saved.list()).filter((i) => i.url === url)) await ctx.aegis.saved.remove(i.id);
+      for (const i of (await ctx.aegis.saved.list()).filter((i) => i.url === url))
+        await ctx.aegis.saved.remove(i.id);
       throw new Error(`live: ${url} still in saved list after Remove bookmark`);
     },
   },
@@ -277,8 +296,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       await ctx.click(btn);
     },
     assert: async (ctx) => {
-      if (!ctx.calls.called('picker.start'))
-        throw new Error('picker.start not called');
+      if (!ctx.calls.called('picker.start')) throw new Error('picker.start not called');
       return 'Picker button → picker.start()';
     },
   },
@@ -289,7 +307,8 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'shieldPopover.toggleAdblock',
       domain: 'shieldPopover',
-      description: 'Open the ad-block shield popover and toggle the switch → adblock.setEnabled called',
+      description:
+        'Open the ad-block shield popover and toggle the switch → adblock.setEnabled called',
       screen: 'shieldPopover',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -317,7 +336,9 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
         // Live: verify enabled actually flipped from the pre-click value.
         const after = await ctx.aegis.adblock.getState();
         if (_preEnabled !== undefined && after.enabled === _preEnabled)
-          throw new Error(`live: adblock.enabled did not flip (still ${after.enabled} after toggle)`);
+          throw new Error(
+            `live: adblock.enabled did not flip (still ${after.enabled} after toggle)`,
+          );
         // Restore the original enabled state.
         await ctx.aegis.adblock.setEnabled(_preEnabled ?? !after.enabled);
         return `shield toggle → enabled flipped ${_preEnabled}→${after.enabled} (restored)`;
@@ -328,7 +349,8 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
   {
     id: 'shieldPopover.allowlistSite',
     domain: 'shieldPopover',
-    description: 'Open the ad-block shield popover and click the allowlist checkbox → adblock.toggleAllowlist called',
+    description:
+      'Open the ad-block shield popover and click the allowlist checkbox → adblock.toggleAllowlist called',
     screen: 'shieldPopover',
     // live excluded: the allowlist checkbox is disabled on about:blank (no parseable host),
     // and navigating to a real host in the live run makes the assert host-dependent and

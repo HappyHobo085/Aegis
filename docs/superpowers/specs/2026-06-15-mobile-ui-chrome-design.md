@@ -9,10 +9,11 @@
 ## 1. Goal
 
 Make the Android chrome feel like a native mobile browser: a slim top address bar
-+ a compact favourites strip, a thumb-reachable **bottom action bar** that
-auto-hides while scrolling, and phone-friendly **full-screen sheets** for the
-secondary features (Settings / History / Saved / Downloads) instead of the
-cramped desktop modals/sidebar.
+
+- a compact favourites strip, a thumb-reachable **bottom action bar** that
+  auto-hides while scrolling, and phone-friendly **full-screen sheets** for the
+  secondary features (Settings / History / Saved / Downloads) instead of the
+  cramped desktop modals/sidebar.
 
 ## 2. Target & current state
 
@@ -46,9 +47,9 @@ downloads list, the Settings tabs, `AddressBar`, `AdblockShield`, and the hooks
 branches `isMobile ? <MobileShell/> : <existing desktop chrome>`. No desktop
 component changes.
 
-*(Alternatives rejected: cram a bottom bar + sheets into the desktop
+_(Alternatives rejected: cram a bottom bar + sheets into the desktop
 components via CSS — hacky, since the desktop Toolbar/Sidebar are structurally
-different; a fully separate mobile app tree — duplicates orchestration.)*
+different; a fully separate mobile app tree — duplicates orchestration.)_
 
 ### 4.1 New components (`src/components/mobile/`)
 
@@ -85,13 +86,13 @@ current `96px ↔ 96dp` uses.
 
 ### 4.3 Secondary-feature routing (the ☰ menu)
 
-| Menu item | Opens | Reuses |
-|---|---|---|
-| Settings | existing `SettingsModal`, full-screen on mobile | the Settings tab components |
-| Downloads | existing `DownloadsModal`, full-screen on mobile | the downloads list |
-| History | `MobileSheet` | `HistoryPanel` |
-| Saved | `MobileSheet` | `SavedPanel` |
-| ★ Bookmark this page | toggles saved (no sheet) | `useSaved` |
+| Menu item            | Opens                                            | Reuses                      |
+| -------------------- | ------------------------------------------------ | --------------------------- |
+| Settings             | existing `SettingsModal`, full-screen on mobile  | the Settings tab components |
+| Downloads            | existing `DownloadsModal`, full-screen on mobile | the downloads list          |
+| History              | `MobileSheet`                                    | `HistoryPanel`              |
+| Saved                | `MobileSheet`                                    | `SavedPanel`                |
+| ★ Bookmark this page | toggles saved (no sheet)                         | `useSaved`                  |
 
 Only one sheet/menu is open at a time (`MobileShell` state). When any sheet/menu is
 open, the chrome calls the **existing** `aegis.view.setChromeOverlay` →
@@ -105,8 +106,8 @@ All in `MainActivity.kt`; the chrome reuses the existing `AegisAndroid` bridge p
 small additions.
 
 1. **Margins (required).** Content WebView `topMargin` ≈ `MOBILE_ADDRESS_H(48) +
-   MOBILE_FAV_H(24) = 72dp` + status-bar inset; `bottomMargin = MOBILE_BOTTOMBAR_H(56)dp
-   + nav-bar inset`. (Replaces the current `96dp` top / nav-only bottom.)
+MOBILE_FAV_H(24) = 72dp` + status-bar inset; `bottomMargin = MOBILE_BOTTOMBAR_H(56)dp
+   - nav-bar inset`. (Replaces the current `96dp` top / nav-only bottom.)
 
 2. **Android Back handler (required).** Override the activity Back press with this
    precedence: **(a)** if a chrome sheet/menu is open → tell the chrome to close it
@@ -116,11 +117,11 @@ small additions.
      `MobileShell` calls it `true` whenever a sheet/menu is open, `false` when none is.
      The native side reads this flag (UI-thread `@Volatile`) for branch (a).
    - Native → chrome "close the top sheet": `chromeWebView.evaluateJavascript(
-     "window.__aegisMobileBack && window.__aegisMobileBack()")`, which `MobileShell`
+"window.__aegisMobileBack && window.__aegisMobileBack()")`, which `MobileShell`
      installs to pop the open sheet/menu.
 
 3. **Bottom-bar scroll auto-hide (the "if possible" stretch).** Because the bar lives
-   in the *chrome* (behind the native content WebView) and only shows in the gap the
+   in the _chrome_ (behind the native content WebView) and only shows in the gap the
    content leaves, auto-hide animates the content's `bottomMargin`:
    - `content.setOnScrollChangeListener` (or `onScrollChanged`) computes scroll
      **direction** from the `scrollY` delta (with a small threshold to ignore jitter).
@@ -169,6 +170,7 @@ small additions.
 
 Renderer first (unit-testable, desktop unaffected): layout constants → mobile
 components (bottom bar, favourites, top bar, menu sheet, generic sheet) → `MobileShell`
-+ `App.tsx` branch + `.aegis-mobile` CSS (full-screen modals). Then native:
-margins → Back handler (+ `setBackInterceptActive` bridge) → scroll auto-hide (stretch).
-The native layer is GUI-validated on-device at the end.
+
+- `App.tsx` branch + `.aegis-mobile` CSS (full-screen modals). Then native:
+  margins → Back handler (+ `setBackInterceptActive` bridge) → scroll auto-hide (stretch).
+  The native layer is GUI-validated on-device at the end.

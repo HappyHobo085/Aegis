@@ -3,10 +3,21 @@ import { installAutopilotControl, getAutopilotControl, type AutopilotControl } f
 
 function fake(): AutopilotControl {
   return {
-    openSettings: vi.fn(), closeSettings: vi.fn(), openDownloads: vi.fn(), closeDownloads: vi.fn(),
-    openManager: vi.fn(), closeManager: vi.fn(), setSidebar: vi.fn(), setShield: vi.fn(),
-    enterFullscreen: vi.fn(), exitFullscreen: vi.fn(), showError: vi.fn(), clearError: vi.fn(),
-    showCrash: vi.fn(), clearCrash: vi.fn(), openConfirm: vi.fn(),
+    openSettings: vi.fn(),
+    closeSettings: vi.fn(),
+    openDownloads: vi.fn(),
+    closeDownloads: vi.fn(),
+    openManager: vi.fn(),
+    closeManager: vi.fn(),
+    setSidebar: vi.fn(),
+    setShield: vi.fn(),
+    enterFullscreen: vi.fn(),
+    exitFullscreen: vi.fn(),
+    showError: vi.fn(),
+    clearError: vi.fn(),
+    showCrash: vi.fn(),
+    clearCrash: vi.fn(),
+    openConfirm: vi.fn(),
     setHistoryEntries: vi.fn(),
     setSavedItems: vi.fn(),
     setSitePermissions: vi.fn(),
@@ -15,7 +26,9 @@ function fake(): AutopilotControl {
   };
 }
 
-afterEach(() => { delete (window as Record<string, unknown>).__aegisAutopilot; });
+afterEach(() => {
+  delete (window as Record<string, unknown>).__aegisAutopilot;
+});
 
 describe('autopilot control surface', () => {
   it('install exposes the control on window and getter returns it', () => {

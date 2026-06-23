@@ -17,7 +17,12 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
 
 describe('HomeTab', () => {
   it('shows the current home URL', () => {
-    render(<HomeTab settings={settings({ homeUrl: 'https://example.com/' })} update={vi.fn(async () => {})} />);
+    render(
+      <HomeTab
+        settings={settings({ homeUrl: 'https://example.com/' })}
+        update={vi.fn(async () => {})}
+      />,
+    );
     expect(screen.getByRole('textbox', { name: /home url/i })).toHaveValue('https://example.com/');
   });
 

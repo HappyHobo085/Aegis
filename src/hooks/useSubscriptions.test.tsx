@@ -56,7 +56,10 @@ describe('useSubscriptions', () => {
   });
 
   it('setEnabled() calls aegis with id + enabled and refreshes from the result', async () => {
-    const flipped = [seed[0], sub({ listId: 'easyprivacy', url: 'https://example.com/easyprivacy.txt', enabled: true })];
+    const flipped = [
+      seed[0],
+      sub({ listId: 'easyprivacy', url: 'https://example.com/easyprivacy.txt', enabled: true }),
+    ];
     setEnabled.mockResolvedValue(flipped);
     const { result } = renderHook(() => useSubscriptions());
     await waitFor(() => expect(result.current.subs).toHaveLength(2));
@@ -68,7 +71,10 @@ describe('useSubscriptions', () => {
   });
 
   it('add() calls aegis with the url and refreshes from the result', async () => {
-    const added = [...seed, sub({ listId: 'custom', url: 'https://lists.example/custom.txt', enabled: true })];
+    const added = [
+      ...seed,
+      sub({ listId: 'custom', url: 'https://lists.example/custom.txt', enabled: true }),
+    ];
     add.mockResolvedValue(added);
     const { result } = renderHook(() => useSubscriptions());
     await waitFor(() => expect(result.current.subs).toHaveLength(2));

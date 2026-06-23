@@ -19,7 +19,7 @@ GitHub Actions workflows and Dependabot config for Aegis.
   - plus an `android` job → **release** APK (minified; debug-key-signed so it still
     installs — each CI run uses its own debug key, so it's a one-off-install artifact,
     not an update channel). Rust cross-compiled to the 4 Android ABIs.
-  Artifacts retained 14 days; the real signed/update channel is `tauri-release.yml`.
+    Artifacts retained 14 days; the real signed/update channel is `tauri-release.yml`.
 - **`tauri-release.yml`** (Tauri Release) — the auto-update feed. Triggers on a
   `v*` tag. Builds signed bundles + `latest.json` for Linux/Windows/macOS (Intel +
   Apple Silicon) via `tauri-apps/tauri-action`, publishes a **draft** GitHub

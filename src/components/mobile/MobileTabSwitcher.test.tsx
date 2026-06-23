@@ -10,8 +10,12 @@ const tabs: TabMeta[] = [
 
 function setup(over = {}) {
   const props = {
-    tabs, activeId: 1,
-    onSwitch: vi.fn(), onCloseTab: vi.fn(), onNewTab: vi.fn(), onClose: vi.fn(),
+    tabs,
+    activeId: 1,
+    onSwitch: vi.fn(),
+    onCloseTab: vi.fn(),
+    onNewTab: vi.fn(),
+    onClose: vi.fn(),
     ...over,
   };
   render(<MobileTabSwitcher {...props} />);

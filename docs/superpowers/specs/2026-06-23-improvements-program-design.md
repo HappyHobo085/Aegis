@@ -26,17 +26,17 @@ reshaped the plan:
 
 ### 1.1 Corrected current-state baseline (verified, with evidence)
 
-| Roadmap item | Real state | Evidence |
-|---|---|---|
-| E2E sync engine ("F2b") | **DONE** | `src-tauri/src/sync.rs` network pull→merge→push (`reqwest::blocking`, `GET/POST /v1/records`), background loop; `sync_auth.rs` Ed25519 signed tokens; `sync_stores.rs` HLC-LWW merge; IPC in `shared/types.ts` |
-| WebRTC IP-leak defense | **DONE** | `webrtc_shim.rs` (candidate/SDP filtering) + native backstops (Linux `set_enable_webrtc`, Windows `--force-webrtc-ip-handling-policy`) + `webrtcPolicy` toggle. Worker-bypass is a documented hard limit, not a bug |
-| S1 atomic store writes | **DONE** | `jsonstore::write_atomic` (temp→`sync_all`→rename→dir-fsync + `.bak`); `settings.rs`, `customfilters.rs`, `data.rs:48`, `subs.rs` all route through it |
-| S2 shared crypto | **DONE** | `crypto.rs`: XChaCha20-Poly1305 `seal/open`, HKDF-SHA256, Argon2id (via `sync_keystore`), `zeroize`; deps in `Cargo.toml` |
-| S3 OS keychain | **DESKTOP DONE / ANDROID NEARLY DONE** | Desktop `keyring` done (`sync_keystore.rs`); Android hardware-Keystore JNI path is in fact **wired + device-verified** (commit `03f0012`, `AegisKeystore.kt` does a real KeyGenParameterSpec AES-GCM wrap) — the only gap is preferring **StrongBox** → sub-project **J** (a small hardening task, not a build). *[corrected 2026-06-23 during planning; original spec said "not connected"]* |
-| S4 Android document-start JS injection | **DONE** | `MainActivity.kt` `WebViewCompat.addDocumentStartJavaScript(...)` for ad-block + WebRTC shim, applied per tab |
-| Password vault | **ABSENT** | No vault/credential storage → sub-project **K** |
-| Anti-fingerprinting / farbling | **ABSENT** | No farble module/salt/noise → sub-project **L** |
-| VPN / proxy | **ABSENT** | No proxy config → sub-project **M** |
+| Roadmap item                           | Real state                             | Evidence                                                                                                                                                                                                                                                                                                                                                                                      |
+| -------------------------------------- | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E2E sync engine ("F2b")                | **DONE**                               | `src-tauri/src/sync.rs` network pull→merge→push (`reqwest::blocking`, `GET/POST /v1/records`), background loop; `sync_auth.rs` Ed25519 signed tokens; `sync_stores.rs` HLC-LWW merge; IPC in `shared/types.ts`                                                                                                                                                                                |
+| WebRTC IP-leak defense                 | **DONE**                               | `webrtc_shim.rs` (candidate/SDP filtering) + native backstops (Linux `set_enable_webrtc`, Windows `--force-webrtc-ip-handling-policy`) + `webrtcPolicy` toggle. Worker-bypass is a documented hard limit, not a bug                                                                                                                                                                           |
+| S1 atomic store writes                 | **DONE**                               | `jsonstore::write_atomic` (temp→`sync_all`→rename→dir-fsync + `.bak`); `settings.rs`, `customfilters.rs`, `data.rs:48`, `subs.rs` all route through it                                                                                                                                                                                                                                        |
+| S2 shared crypto                       | **DONE**                               | `crypto.rs`: XChaCha20-Poly1305 `seal/open`, HKDF-SHA256, Argon2id (via `sync_keystore`), `zeroize`; deps in `Cargo.toml`                                                                                                                                                                                                                                                                     |
+| S3 OS keychain                         | **DESKTOP DONE / ANDROID NEARLY DONE** | Desktop `keyring` done (`sync_keystore.rs`); Android hardware-Keystore JNI path is in fact **wired + device-verified** (commit `03f0012`, `AegisKeystore.kt` does a real KeyGenParameterSpec AES-GCM wrap) — the only gap is preferring **StrongBox** → sub-project **J** (a small hardening task, not a build). _[corrected 2026-06-23 during planning; original spec said "not connected"]_ |
+| S4 Android document-start JS injection | **DONE**                               | `MainActivity.kt` `WebViewCompat.addDocumentStartJavaScript(...)` for ad-block + WebRTC shim, applied per tab                                                                                                                                                                                                                                                                                 |
+| Password vault                         | **ABSENT**                             | No vault/credential storage → sub-project **K**                                                                                                                                                                                                                                                                                                                                               |
+| Anti-fingerprinting / farbling         | **ABSENT**                             | No farble module/salt/noise → sub-project **L**                                                                                                                                                                                                                                                                                                                                               |
+| VPN / proxy                            | **ABSENT**                             | No proxy config → sub-project **M**                                                                                                                                                                                                                                                                                                                                                           |
 
 **Sub-project B** updates `FEATURE_ROADMAP.md` + the CLAUDE.md files to reflect this.
 
@@ -61,7 +61,8 @@ reshaped the plan:
 Each entry: scope, primary files, dependencies, acceptance criteria. Stable IDs (A–M);
 execution order is in §5.
 
-### A — CI hardening *(enabler)*
+### A — CI hardening _(enabler)_
+
 - **Scope:** Add gates to `.github/workflows/ci.yml`: `cargo test` (the ~119 Rust tests
   run locally-only today), `tsc --noEmit` (scoped to avoid the known test-file noise),
   `cargo clippy -D warnings` + `cargo fmt --check`, and a new ESLint + Prettier setup
@@ -73,12 +74,14 @@ execution order is in §5.
 - **Acceptance:** CI runs all gates green on a clean checkout; a deliberately-broken Rust
   test / type error / lint fails CI locally-reproduced.
 
-### B — Docs/roadmap reconcile *(enabler)*
+### B — Docs/roadmap reconcile _(enabler)_
+
 - **Scope:** Rewrite the stale status in `FEATURE_ROADMAP.md` (sync/WebRTC/S1/S2/S4 done;
   vault/farbling/proxy/J remaining) and align CLAUDE.md status lines.
 - **Deps:** none. **Acceptance:** doc matches §1.1; reviewer confirms.
 
 ### C — Rust core unit tests
+
 - **Scope:** Unit tests for currently-untested modules: `adblock` (enable/allowlist state
   machine), `safety` (malware match + proceed), `permissions` (grant/revoke/reset),
   `data` (export→import roundtrip — prior live-crash history), `history`, `places`,
@@ -88,6 +91,7 @@ execution order is in §5.
   the `data` roundtrip asserts every store survives export→import.
 
 ### D — Find-in-page (Ctrl+F)
+
 - **Scope:** A find bar (chrome UI) + per-engine search: WebKitGTK `WebKitFindController`,
   WebView2 `ICoreWebView2_2` find / `Find` API, WKWebView `find(_:)`/JS fallback, Android
   `WebView.findAllAsync` + `setFindListener`. Match count, next/prev, highlight, Esc/close.
@@ -97,6 +101,7 @@ execution order is in §5.
   closes; works Linux+Android live, Win/mac via CI build + device.
 
 ### E — Page zoom (Ctrl +/−/0, Ctrl-scroll)
+
 - **Scope:** Per-tab zoom factor, persisted per-origin (optional v1: session-only).
   WebKitGTK `set_zoom_level`, WebView2 `ZoomFactor`, WKWebView `pageZoom`/magnification,
   Android `setInitialScale`/text-zoom. Toolbar/menu affordance + keyboard.
@@ -105,6 +110,7 @@ execution order is in §5.
   within a tab; per-platform verified as in D.
 
 ### F — Light / system theme
+
 - **Scope:** Add a light palette to the design tokens; honor `prefers-color-scheme`; an
   Appearance setting: System / Dark / Light. Currently hardcoded dark (`index.css`
   `color-scheme: dark`; Appearance only offers accent color).
@@ -114,6 +120,7 @@ execution order is in §5.
   system mode follows OS; vitest + live screenshots both themes.
 
 ### G — Shield block-counter parity (Windows + Android)
+
 - **Scope:** Wire the block-count badge on Windows + Android (Linux-only today; badge
   shows 0 elsewhere — `adblock.rs:43/61` hooks only the Linux signal). Windows: count in
   the `adblock_win.rs` `WebResourceRequested` handler. Android: count in the
@@ -124,6 +131,7 @@ execution order is in §5.
   Linux unchanged; autopilot ad-block trace still PASS.
 
 ### H — Private / incognito mode (full ephemeral)
+
 - **Scope:** A private window/tab whose content uses an **ephemeral data partition**
   (cookies, storage, cache discarded on close) and which is **excluded from history,
   sync, and the downloads record**. New-private affordance + a clear visual treatment.
@@ -140,6 +148,7 @@ execution order is in §5.
   cookie/storage residue after close (Linux+Android live-verified); normal tabs unchanged.
 
 ### I — macOS GUI runtime verification ⚠️ hardware-gated
+
 - **Scope:** Launch the built macOS app and verify browse + ad-block + the new features
   GUI-run. **Cannot be done from this Linux box** (objc2 needs a macOS toolchain; CI
   builds but never launches). Requires the owner's macOS session or a Mac runner.
@@ -147,6 +156,7 @@ execution order is in §5.
   stays explicitly "CI-build-verified, GUI-pending."
 
 ### J — Android hardware-Keystore StrongBox hardening (finish S3)
+
 - **Scope:** The JNI path + `AegisKeystore.kt` already do a real hardware-backed AES-GCM
   wrap and are device-verified. Remaining work is small: prefer **StrongBox**
   (`setIsStrongBoxBacked(true)`, guarded by `SDK_INT >= P`, catch
@@ -157,15 +167,17 @@ execution order is in §5.
   Keystore (or graceful TEE fallback); passphrase fallback still works headless.
 
 ### K — Password vault (Phase A)
+
 - **Scope:** New `vault.rs` — credential records sealed with the existing `crypto.rs`
   AEAD, master-password Argon2id KDF, lock/unlock, CRUD, search. IPC (`vault.*`) + a
   manage/add UI + a Settings section. **No autofill.** Reuses S2/S3 (and J on Android).
-- **Deps:** A. *(Not J — the vault derives its key from the master password via Argon2id,
+- **Deps:** A. _(Not J — the vault derives its key from the master password via Argon2id,
   not the OS keychain, so it's pure Rust + React with zero platform-gated code. J only
-  hardens the separate sync-seed anchor.)* **Acceptance:** create→unlock→add→retrieve→lock
+  hardens the separate sync-seed anchor.)_ **Acceptance:** create→unlock→add→retrieve→lock
   roundtrip; data encrypted at rest; locked state zeroizes keys; tests + live.
 
 ### L — Anti-fingerprinting / farbling
+
 - **Scope:** New `farble.rs` — a per-session, crypto-derived salt; document-start JS that
   adds deterministic per-eTLD+1 noise to canvas, audio, WebGL, and `navigator`/UA-CH
   surfaces. Settings: Off / Standard / Strict + a per-site allowlist. Two reconciled
@@ -176,9 +188,10 @@ execution order is in §5.
   toggle + allowlist work; live-verified Linux+Android.
 
 ### M — Proxy (Tier-1, "Proxy")
+
 - **Scope:** Per-platform proxy application on the content webview(s): WebKitGTK
   `set_network_proxy_settings`, WebView2 `--proxy-server`, Android `ProxyController.
-  setProxyOverride`, macOS = a hand-rolled Network.framework binding (CI-only, may slip).
+setProxyOverride`, macOS = a hand-rolled Network.framework binding (CI-only, may slip).
   Settings UI + IPC (`proxy.*`). Labeled "Proxy"; depends on the (done) WebRTC fix so it
   isn't leak-hollow.
 - **Deps:** A; WebRTC (done). **Acceptance:** traffic routes via the configured proxy on
@@ -188,13 +201,13 @@ execution order is in §5.
 
 ## 4. Verification reality (applies to every sub-project)
 
-| Platform | What I can do from here | "Done" means |
-|---|---|---|
-| **Linux** | Full runtime + autopilot + ad-block A/B trace | live-verified |
-| **Android** | Emulator/device runtime (per prior sessions) | device-verified |
-| **Windows** | CI build only here; runtime = owner's Windows session | CI-built + device-verified by owner |
-| **macOS** | CI build only (objc2 needs Mac toolchain) | CI-built; **GUI verify = sub-project I, hardware-gated** |
-| **iOS** | Not started; needs macOS + Xcode | out of program scope |
+| Platform    | What I can do from here                               | "Done" means                                             |
+| ----------- | ----------------------------------------------------- | -------------------------------------------------------- |
+| **Linux**   | Full runtime + autopilot + ad-block A/B trace         | live-verified                                            |
+| **Android** | Emulator/device runtime (per prior sessions)          | device-verified                                          |
+| **Windows** | CI build only here; runtime = owner's Windows session | CI-built + device-verified by owner                      |
+| **macOS**   | CI build only (objc2 needs Mac toolchain)             | CI-built; **GUI verify = sub-project I, hardware-gated** |
+| **iOS**     | Not started; needs macOS + Xcode                      | out of program scope                                     |
 
 ---
 

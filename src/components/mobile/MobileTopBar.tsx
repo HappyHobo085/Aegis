@@ -16,8 +16,15 @@ interface MobileTopBarProps {
 }
 
 export function MobileTopBar({
-  url, isLoading, onNavigate, onReloadOrStop, favorites, onOpenFavourite,
-  bottomBarHidden, onToggleBottomBar, onEnterFullscreen,
+  url,
+  isLoading,
+  onNavigate,
+  onReloadOrStop,
+  favorites,
+  onOpenFavourite,
+  bottomBarHidden,
+  onToggleBottomBar,
+  onEnterFullscreen,
 }: MobileTopBarProps) {
   return (
     <div className="mobile-topbar">
@@ -29,7 +36,11 @@ export function MobileTopBar({
           aria-label={isLoading ? 'Stop' : 'Reload'}
           onClick={onReloadOrStop}
         >
-          {isLoading ? <X size={18} aria-hidden="true" /> : <RotateCw size={18} aria-hidden="true" />}
+          {isLoading ? (
+            <X size={18} aria-hidden="true" />
+          ) : (
+            <RotateCw size={18} aria-hidden="true" />
+          )}
         </button>
         <button
           type="button"
@@ -38,7 +49,11 @@ export function MobileTopBar({
           aria-pressed={bottomBarHidden}
           onClick={onToggleBottomBar}
         >
-          {bottomBarHidden ? <ChevronUp size={18} aria-hidden="true" /> : <ChevronDown size={18} aria-hidden="true" />}
+          {bottomBarHidden ? (
+            <ChevronUp size={18} aria-hidden="true" />
+          ) : (
+            <ChevronDown size={18} aria-hidden="true" />
+          )}
         </button>
         <button
           type="button"

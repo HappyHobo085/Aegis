@@ -31,12 +31,18 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         if (ctx.layer === 'vitest') {
           // Seed the history panel with one entry so there is a row to click.
           const SEEDED: HistoryEntry[] = [
-            { id: 1, url: 'https://history-test.test/', title: 'History Test', visitedAt: Date.now() },
+            {
+              id: 1,
+              url: 'https://history-test.test/',
+              title: 'History Test',
+              visitedAt: Date.now(),
+            },
           ];
           await ctx.emitHistory?.(SEEDED);
           // Click the first "Open <url>" button scoped to the history panel.
           const seededBtn = ctx.bySelector('.history-panel__open');
-          if (!seededBtn) throw new Error('No history entry open-button found (panel may be empty)');
+          if (!seededBtn)
+            throw new Error('No history entry open-button found (panel may be empty)');
           await ctx.click(seededBtn);
           return;
         }
@@ -106,7 +112,12 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
       run: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
           const SEEDED: HistoryEntry[] = [
-            { id: 5, url: 'https://history-delete.test/', title: 'To Remove', visitedAt: Date.now() },
+            {
+              id: 5,
+              url: 'https://history-delete.test/',
+              title: 'To Remove',
+              visitedAt: Date.now(),
+            },
           ];
           await ctx.emitHistory?.(SEEDED);
         } else {
@@ -122,7 +133,8 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         // The remove button has class history-panel__remove; scope to avoid
         // matching other "Remove" buttons outside the history panel.
         const removeBtn = ctx.bySelector('.history-panel__remove');
-        if (!removeBtn) throw new Error('No history entry remove-button found (panel may be empty)');
+        if (!removeBtn)
+          throw new Error('No history entry remove-button found (panel may be empty)');
         await ctx.click(removeBtn);
       },
       assert: async (ctx: InteractionCtx) => {
@@ -134,10 +146,11 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         // Live: list length must have decreased by 1.
         await new Promise((r) => setTimeout(r, 500));
         const list = await ctx.aegis.history.list();
-        if (_baseLength === undefined)
-          throw new Error('live: _baseLength was never captured');
+        if (_baseLength === undefined) throw new Error('live: _baseLength was never captured');
         if (list.length !== _baseLength - 1)
-          throw new Error(`live: expected ${_baseLength - 1} entries after remove, got ${list.length}`);
+          throw new Error(
+            `live: expected ${_baseLength - 1} entries after remove, got ${list.length}`,
+          );
         return `history row remove → list shrank from ${_baseLength} to ${list.length}`;
       },
     } satisfies InteractionSpec;
@@ -162,7 +175,9 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
       else await ctx.press('Enter');
     },
     assert: async (ctx) => {
-      if (!ctx.calls.called('history.search', (a) => String(a[0]).toLowerCase().includes('example')))
+      if (
+        !ctx.calls.called('history.search', (a) => String(a[0]).toLowerCase().includes('example'))
+      )
         throw new Error('history.search not called with "example"');
       return 'history search → history.search("example")';
     },
@@ -316,7 +331,8 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
           await ctx.emitSaved?.([SEED_ITEM], []);
           // Only the seeded item exists in vitest → first-match remove button is it.
           const removeBtn = ctx.bySelector('.saved-panel__remove');
-          if (!removeBtn) throw new Error('No saved-panel remove button found (panel may be empty)');
+          if (!removeBtn)
+            throw new Error('No saved-panel remove button found (panel may be empty)');
           await ctx.click(removeBtn);
           return;
         }
@@ -336,8 +352,7 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('saved.remove'))
-            throw new Error('saved.remove not called');
+          if (!ctx.calls.called('saved.remove')) throw new Error('saved.remove not called');
           return 'saved row remove → saved.remove()';
         }
         // Live: the probe itself must be gone (precise — not merely count−1, which a
@@ -347,7 +362,9 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         if (list.some((i) => i.url === SEED_ITEM.url))
           throw new Error(`live: probe ${SEED_ITEM.url} still in saved list after remove`);
         if (_baseLength !== undefined && list.length !== _baseLength - 1)
-          throw new Error(`live: expected ${_baseLength - 1} saved items after remove, got ${list.length}`);
+          throw new Error(
+            `live: expected ${_baseLength - 1} saved items after remove, got ${list.length}`,
+          );
         return `saved row remove → probe removed (list ${_baseLength} → ${list.length})`;
       },
     } satisfies InteractionSpec;
@@ -409,24 +426,29 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
           // saved.update must have been called with the probe tag in the tags array.
-          if (!ctx.calls.called('saved.update', (a) => {
-            const partial = a[1] as { tags?: string[] };
-            return Array.isArray(partial?.tags) && partial.tags.includes(PROBE_TAG);
-          }))
+          if (
+            !ctx.calls.called('saved.update', (a) => {
+              const partial = a[1] as { tags?: string[] };
+              return Array.isArray(partial?.tags) && partial.tags.includes(PROBE_TAG);
+            })
+          )
             throw new Error(`saved.update not called with tags including "${PROBE_TAG}"`);
           return `saved addTag → saved.update({ tags: [..., "${PROBE_TAG}"] })`;
         }
         // Live: the item's tags must now include the probe tag (and it wasn't there before).
-        if (_tagsBefore === undefined)
-          throw new Error('live: _tagsBefore was never captured');
+        if (_tagsBefore === undefined) throw new Error('live: _tagsBefore was never captured');
         if (_tagsBefore.includes(PROBE_TAG))
-          throw new Error(`live: probe tag "${PROBE_TAG}" was already present before addTag — test is not proving the addition`);
+          throw new Error(
+            `live: probe tag "${PROBE_TAG}" was already present before addTag — test is not proving the addition`,
+          );
         await new Promise((r) => setTimeout(r, 500));
         const list = await ctx.aegis.saved.list();
         const item = list.find((i) => i.url === SEED_ITEM.url);
         if (!item) throw new Error(`live: saved item not found after addTag`);
         if (!item.tags.includes(PROBE_TAG))
-          throw new Error(`live: item.tags ${JSON.stringify(item.tags)} does not include "${PROBE_TAG}" after addTag`);
+          throw new Error(
+            `live: item.tags ${JSON.stringify(item.tags)} does not include "${PROBE_TAG}" after addTag`,
+          );
         // Clean up: remove the probe saved item.
         await ctx.aegis.saved.remove(item.id);
         return `saved addTag → item.tags now includes "${PROBE_TAG}" (item cleaned up)`;
@@ -448,7 +470,8 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'sidebar.saved.renameTag',
       domain: 'sidebar.saved',
-      description: 'Open Manage tags, select a tag, enter a new name, click Rename tag → saved.renameTag called',
+      description:
+        'Open Manage tags, select a tag, enter a new name, click Rename tag → saved.renameTag called',
       screen: 'sidebar:saved',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -459,10 +482,17 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
           // Live: add the probe item with the old tag so it enters tagUnion, then nudge
           // the panel to re-fetch so the "Manage tags" section renders.
           await clearSavedProbe(ctx, SEED_ITEM.url);
-          await ctx.aegis.saved.add({ url: SEED_ITEM.url, title: SEED_ITEM.title, tags: [OLD_TAG] });
+          await ctx.aegis.saved.add({
+            url: SEED_ITEM.url,
+            title: SEED_ITEM.title,
+            tags: [OLD_TAG],
+          });
           await nudgeSync('saved');
           await ctx.reach('sidebar:saved');
-          await waitFor(() => ctx.bySelector('.saved-panel__manage-summary'), '"Manage tags" summary');
+          await waitFor(
+            () => ctx.bySelector('.saved-panel__manage-summary'),
+            '"Manage tags" summary',
+          );
         }
         // Open the "Manage tags" details element by clicking its summary.
         const summary = ctx.bySelector('.saved-panel__manage-summary');
@@ -529,10 +559,17 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
           // Live: add the probe item with the probe tag, then nudge the panel to re-fetch
           // so the "Manage tags" section renders the chip.
           await clearSavedProbe(ctx, SEED_ITEM.url);
-          await ctx.aegis.saved.add({ url: SEED_ITEM.url, title: SEED_ITEM.title, tags: [PROBE_TAG] });
+          await ctx.aegis.saved.add({
+            url: SEED_ITEM.url,
+            title: SEED_ITEM.title,
+            tags: [PROBE_TAG],
+          });
           await nudgeSync('saved');
           await ctx.reach('sidebar:saved');
-          await waitFor(() => ctx.bySelector('.saved-panel__manage-summary'), '"Manage tags" summary');
+          await waitFor(
+            () => ctx.bySelector('.saved-panel__manage-summary'),
+            '"Manage tags" summary',
+          );
         }
         // Open the "Manage tags" details element by clicking its summary.
         const summary = ctx.bySelector('.saved-panel__manage-summary');
@@ -604,12 +641,18 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
     assert: async (ctx) => {
       // After clicking the filter chip, only ITEM_WITH_TAG should be visible;
       // ITEM_WITHOUT_TAG should not be in the DOM (filtered out).
-      const matchBtn = ctx.bySelector('.saved-panel__open[aria-label="Open https://saved-filter-match.example/"]');
-      const noMatchBtn = ctx.bySelector('.saved-panel__open[aria-label="Open https://saved-filter-nomatch.example/"]');
+      const matchBtn = ctx.bySelector(
+        '.saved-panel__open[aria-label="Open https://saved-filter-match.example/"]',
+      );
+      const noMatchBtn = ctx.bySelector(
+        '.saved-panel__open[aria-label="Open https://saved-filter-nomatch.example/"]',
+      );
       if (!matchBtn)
         throw new Error('Matching saved row not found after filterByTag — row should be visible');
       if (noMatchBtn)
-        throw new Error('Non-matching saved row is still visible after filterByTag — filter had no effect');
+        throw new Error(
+          'Non-matching saved row is still visible after filterByTag — filter had no effect',
+        );
       return 'filterByTag → matching row visible, non-matching row hidden';
     },
   },

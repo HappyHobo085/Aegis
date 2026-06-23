@@ -9,7 +9,7 @@
 
 ## Goal
 
-Add a Ctrl+F **find bar** to the Aegis chrome that searches the *content* webview for a
+Add a Ctrl+F **find bar** to the Aegis chrome that searches the _content_ webview for a
 term, shows a **match count**, cycles **next/prev**, **highlights** matches, and closes on
 **Esc**. Wire it through new `find.*` IPC channels to a **real per-engine find** on all four
 platforms — WebKitGTK (`WebKitFindController`), WebView2 (`ICoreWebView2Find`), WKWebView
@@ -77,7 +77,7 @@ macOS get a `cargo check --target …` compile gate here plus a documented manua
    `ipc()` dispatcher in `src-tauri/src/lib.rs` (a `mod find;` + a `find::dispatch(...)` arm
    before the fallthrough; `find::dispatch` returns `None` for non-`find.*` channels), and
    **(3)** `src/lib/ipcClient.ts` (`call<T>(IPC.x, payload)` for commands; `on<T>(IPC.evtX,
-   cb)` for the event). The `shared/types.ts` `types.test.ts` invariant rejects a
+cb)` for the event). The `shared/types.ts` `types.test.ts` invariant rejects a
    malformed/duplicate channel name.
 2. **Event names: dotted logically, `.`→`:` at the boundary.** The `find.state` event is
    declared dotted (`evtFindState: 'find.state'`). Rust emits it **only** via
@@ -179,6 +179,7 @@ find: {
 ```
 
 **Steps (one action each):**
+
 1. Write a test in `shared/types.test.ts` asserting `IPC.findStart === 'find.start'` and
    the four other names exist and are dot-separated (the existing uniqueness invariant
    already covers collisions). Run `npm test` — RED (names absent).
@@ -186,10 +187,11 @@ find: {
    namespace to `AegisApi`. Run `npm test` — GREEN.
 
 **Note:** `activeMatchIndex` is best-effort. WebKitGTK's `found-text` signal gives the
-*count* but not the active index; Windows `ICoreWebView2Find` gives BOTH (`ActiveMatchIndex`
-+ `add_ActiveMatchIndexChanged`); Android's `FindListener` gives both
-(`activeMatchOrdinal` + `numberOfMatches`); macOS gives NEITHER reliably (see Task 8). So
-`activeMatchIndex: 0` is a legal "unknown" everywhere.
+_count_ but not the active index; Windows `ICoreWebView2Find` gives BOTH (`ActiveMatchIndex`
+
+- `add_ActiveMatchIndexChanged`); Android's `FindListener` gives both
+  (`activeMatchOrdinal` + `numberOfMatches`); macOS gives NEITHER reliably (see Task 8). So
+  `activeMatchIndex: 0` is a legal "unknown" everywhere.
 
 ---
 
@@ -211,8 +213,9 @@ findClose(): void;
 ```
 
 **Steps:**
+
 1. Write a test that `aegis.find.start(1, 'foo')` calls `call(IPC.findStart, {viewId:1,
-   query:'foo', caseSensitive:false})` (mock `call`). RED.
+query:'foo', caseSensitive:false})` (mock `call`). RED.
 2. Implement the desktop branch:
    ```ts
    find: {
@@ -261,15 +264,17 @@ findClose(): void;
 `src/lib/layout.ts` (add `FIND_BAR_H`), `src/index.css` (`.find-bar` styles).
 
 **Interface:**
+
 ```ts
 export function FindBar(props: {
   state: FindState;
-  onQueryChange(q: string): void;   // debounced 'find.start' caller in App
+  onQueryChange(q: string): void; // debounced 'find.start' caller in App
   onNext(): void;
   onPrev(): void;
-  onClose(): void;                   // also bound to Esc
+  onClose(): void; // also bound to Esc
 }): React.JSX.Element;
 ```
+
 Mirror `RedirectBar.tsx` structure. Controls (each with an `aria-label` the autopilot keys
 on): a text input `aria-label="Find in page"`, a `"<count> / <total>"` status span
 (`role="status"`), buttons `aria-label="Find previous"` / `"Find next"` (disabled when
@@ -278,6 +283,7 @@ on): a text input `aria-label="Find in page"`, a `"<count> / <total>"` status sp
 mount (`useRef` + `useEffect(() => ref.current?.focus(), [])`), like a real browser.
 
 **Steps:**
+
 1. Add `export const FIND_BAR_H = 40;` to `lib/layout.ts` with a doc comment mirroring
    `REDIRECT_BAR_H`.
 2. Write `FindBar.test.tsx` (jsdom + `@testing-library/react`):
@@ -298,17 +304,19 @@ mount (`useRef` + `useEffect(() => ref.current?.focus(), [])`), like a real brow
 (MOD), `src/components/FindBar.tsx` already done.
 
 **Interface:**
+
 ```ts
 export function useFind(activeViewId: ViewId): {
   open: boolean;
   state: FindState;
-  show(): void;                 // open the bar
-  close(): void;                // close + aegis.find.close
-  setQuery(q: string): void;    // debounced aegis.find.start
-  next(): void;                 // aegis.find.next
-  prev(): void;                 // aegis.find.prev
+  show(): void; // open the bar
+  close(): void; // close + aegis.find.close
+  setQuery(q: string): void; // debounced aegis.find.start
+  next(): void; // aegis.find.next
+  prev(): void; // aegis.find.prev
 };
 ```
+
 Subscribe to `aegis.find.onState`, filtering on `s.viewId === activeViewId` (exactly like
 `useNav`/`App`'s `onFailed` viewId guard). On tab switch (`activeViewId` change) reset the
 state to empty and call `aegis.find.close` for the old view (so highlights don't linger on a
@@ -316,17 +324,19 @@ background tab). Debounce `setQuery` ~120 ms before calling `aegis.find.start` s
 keystroke doesn't restart the native search.
 
 **App.tsx wiring (mirror the `RedirectBar` block + the existing keydown effects):**
+
 - A `window` `keydown` effect: `if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==='f')
-  { e.preventDefault(); find.show(); }`. (Guard against the Windows tab-shortcut effect —
+{ e.preventDefault(); find.show(); }`. (Guard against the Windows tab-shortcut effect —
   `f` is not used there, no conflict.)
 - Render `{find.open && <FindBar state={find.state} onQueryChange={find.setQuery}
-  onNext={find.next} onPrev={find.prev} onClose={find.close} />}` right after the
+onNext={find.next} onPrev={find.prev} onClose={find.close} />}` right after the
   `{blockedRedirect && <RedirectBar/>}` block.
 - Add the bar's height to the content inset when open, mirroring the redirect bar:
   `useContentInset(tabs.activeId, !isMobile, (blockedRedirect ? REDIRECT_BAR_H : 0) +
-  (find.open ? FIND_BAR_H : 0));`
+(find.open ? FIND_BAR_H : 0));`
 
 **Steps:**
+
 1. `useFind.test.ts`: mount the hook with a mocked `aegis`; assert `setQuery('x')` →
    (after debounce/`act`) `aegis.find.start` called with the active viewId + `'x'`; assert
    an `onState` event with a non-matching `viewId` is ignored; assert tab switch resets +
@@ -347,6 +357,7 @@ stays green incrementally.
 **Files:** `src-tauri/src/find.rs` (NEW), `src-tauri/src/lib.rs` (MOD).
 
 **Interface (exact Rust signatures):**
+
 ```rust
 // find.rs
 use serde_json::Value;
@@ -390,6 +401,7 @@ fn next(app: &AppHandle, id: u32)  { /* cfg-routed like start */ }
 fn prev(app: &AppHandle, id: u32)  { /* cfg-routed like start */ }
 fn close(app: &AppHandle, id: u32) { /* cfg-routed like start */ }
 ```
+
 For the **active-id helper**, do NOT invent a new `crate::tabs_active_id`; reuse the existing
 read used across the codebase: `app.try_state::<crate::tabs::Tabs>().map(|s|
 s.reg.lock().unwrap().active_id()).unwrap_or(1)`. Inline it (it's the same expression
@@ -398,24 +410,28 @@ should be empty `fn`s (the `#[cfg]` calls simply don't expand) — the module st
 every target.
 
 **lib.rs additions:**
+
 ```rust
 mod find;
 #[cfg(target_os = "linux")]   mod find_linux;
 #[cfg(target_os = "windows")] mod find_win;
 #[cfg(target_os = "macos")]   mod find_mac;
 ```
+
 and in `ipc()`, add **before** the fallthrough match (after `nav::dispatch`, grouped with the
 other view-ish dispatchers):
+
 ```rust
 if let Some(result) = find::dispatch(&app, &channel, &payload) { return result; }
 ```
 
 **Steps:**
+
 1. Add a `find.rs` unit test asserting `dispatch(app, "settings.get", &json!({}))` is `None`
    and `dispatch` returns `Some(Ok(Null))` for `find.close` (a no-op path needs no webview).
-   *(If an AppHandle is awkward in a unit test, test the pure helper: factor the
+   _(If an AppHandle is awkward in a unit test, test the pure helper: factor the
    "is this a find channel" match into a `pub fn is_find_channel(&str) -> bool` and unit-test
-   THAT instead — mirror how other modules keep AppHandle-free testable cores.)* RED.
+   THAT instead — mirror how other modules keep AppHandle-free testable cores.)_ RED.
 2. Implement `find.rs` + the `lib.rs` `mod` lines + the dispatch arm. Run
    `cargo test` (locally) — the find module test GREEN; `cargo check` GREEN (no-op platform
    bodies). Run `npm test` — unaffected, GREEN.
@@ -435,6 +451,7 @@ BACKWARDS}` (a `bitflags` u32). `search`/`count_matches` take the raw `u32`
 (`options.bits()`).
 
 **Interface (exact):**
+
 ```rust
 // find_linux.rs
 use gtk::prelude::*;
@@ -512,15 +529,17 @@ pub fn close(app: &AppHandle, id: u32) {
 > the count back — do not try to read the count synchronously.
 
 **nav.rs (spawn_tab Linux block) — add one line** next to `connect_block_counter`:
+
 ```rust
 crate::find_linux::install(app, &label);
 ```
 
 **Steps:**
+
 1. Unit-test the pure bit math: a `pub fn options_bits(case_sensitive: bool) -> u32` that
    returns `WRAP_AROUND | CASE_INSENSITIVE` when insensitive, `WRAP_AROUND` when sensitive;
    assert the two distinct values. (The signal/IPC path is covered live, not in `cargo
-   test`.) RED → implement → GREEN (`cargo test`).
+test`.) RED → implement → GREEN (`cargo test`).
 2. Implement `find_linux.rs` + the `spawn_tab` install line. `cargo check` GREEN.
 3. **LIVE:** `bash scripts/autopilot/run-autopilot.sh`. After the autopilot lands its find
    interaction (Task 9), confirm `RESULT: … 0 failed` and `ad-block blocking (trace): PASS`.
@@ -537,13 +556,14 @@ existing Windows `with_webview` block in `spawn_tab`, alongside `adblock_win::in
 `nav_url_win::install`).
 
 **Verified API (Appendix A.2):**
+
 - Get the find object: `core.cast::<ICoreWebView2_28>()?.Find()? -> ICoreWebView2Find`.
 - `ICoreWebView2Find::{Start(options: ICoreWebView2FindOptions, handler:
-  ICoreWebView2FindStartCompletedHandler), FindNext(), FindPrevious(), Stop(),
-  MatchCount(*mut i32), ActiveMatchIndex(*mut i32), add_MatchCountChanged(handler, *mut i64),
-  add_ActiveMatchIndexChanged(handler, *mut i64)}`.
+ICoreWebView2FindStartCompletedHandler), FindNext(), FindPrevious(), Stop(),
+MatchCount(*mut i32), ActiveMatchIndex(*mut i32), add_MatchCountChanged(handler, *mut i64),
+add_ActiveMatchIndexChanged(handler, *mut i64)}`.
 - Options factory: `environment.cast::<ICoreWebView2Environment15>()?.CreateFindOptions()?
-  -> ICoreWebView2FindOptions`; setters `SetFindTerm(PCWSTR/HSTRING)`,
+-> ICoreWebView2FindOptions`; setters `SetFindTerm(PCWSTR/HSTRING)`,
   `SetIsCaseSensitive(bool)`, `SetShouldHighlightAllMatches(bool)`,
   `SetSuppressDefaultFindDialog(bool)`.
 - High-level callback wrappers (in `webview2-com`): `FindStartCompletedHandler::new(closure)`
@@ -554,6 +574,7 @@ existing Windows `with_webview` block in `spawn_tab`, alongside `adblock_win::in
   `webview2-com-0.38.2/src/callback.rs` lines 655–680 before writing the closure.
 
 **Interface (exact shape — mirror `adblock_win.rs::install` signature):**
+
 ```rust
 // find_win.rs
 use webview2_com::Microsoft::Web::WebView2::Win32::{
@@ -588,6 +609,7 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
     }
 }
 ```
+
 > **VERIFY-FIRST (the implementing agent MUST do this before writing the body):** confirm the
 > EXACT constructor for `FindMatchCountChangedEventHandler` (is it `::create(Box::new(...))`
 > like the `#[event_callback]` handlers in `callback.rs`, and what are the closure's two
@@ -622,11 +644,13 @@ fn with_find(app: &AppHandle, id: u32, g: impl FnOnce(&ICoreWebView2Find) + Send
 ```
 
 **nav.rs (spawn_tab Windows `with_webview` block) — add one line:**
+
 ```rust
 crate::find_win::install(&pw, app_find, id); // app_find = app.clone() above
 ```
 
 **Steps:**
+
 1. `cargo check --target x86_64-pc-windows-gnu` (needs mingw, see [[aegis-build-gates...]]).
    Fix any binding mismatch revealed (HSTRING vs PCWSTR for `SetFindTerm`; the `cast` import
    path; the handler constructor). RED→GREEN.
@@ -655,26 +679,30 @@ Fn(NonNull<WKFindResult>)>)`. `WKFindConfiguration::{setBackwards, setCaseSensit
 setWraps}`. `WKFindResult::matchFound() -> bool`.
 **`WKFindResult` exposes ONLY `matchFound` (a bool) — NO match count, and `findString:` does
 NOT highlight all matches** (it selects/scrolls to one result). So on macOS via this API:
+
 - `start` selects the first match; `next`/`prev` re-issue `findString:` with
   `setBackwards(true/false)`; the bar shows `matchCount = matchFound ? 1 : 0`, `active = 0`
   ("unknown count"). This is an honest, working-but-degraded find.
 - **To get a real count + highlight on macOS** you'd inject a JS find shim (like the desktop
   inject tier). That is OUT of this task's minimum scope; record it as a documented
   follow-up. The contract already allows `matchCount` to be approximate and `activeMatchIndex
-  = 0`.
+= 0`.
 
 **Cargo.toml change (REQUIRED — features are off by default in `objc2-web-kit = "0.3"`):**
+
 ```toml
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKFindConfiguration", "WKFindResult"] }
 ```
+
 > VERIFY: `nav_url_mac.rs` already uses `WKWebView` from this crate, so the `WKWebView`
 > feature is implicitly available today; adding it explicitly + the two `WKFind*` features is
 > additive. Confirm the feature NAMES against `objc2-web-kit-0.3.2/Cargo.toml` (`grep
-> '^WKFind' Cargo.toml`) before committing — if a feature is named differently, use the real
+'^WKFind' Cargo.toml`) before committing — if a feature is named differently, use the real
 > name. (Flagged: exact feature-flag names not re-verified in this plan — the agent checks.)
 
 **Interface (exact, mirroring `nav_url_mac.rs::install`'s retain pattern):**
+
 ```rust
 // find_mac.rs
 use objc2::rc::Retained;
@@ -722,6 +750,7 @@ pub fn next(app: &AppHandle, id: u32) { /* re-run last query forward — store l
 pub fn prev(app: &AppHandle, id: u32) { /* re-run last query backward */ }
 pub fn close(app: &AppHandle, id: u32) { crate::find::emit_state(app, id, "", 0, 0); }
 ```
+
 > VERIFY-FIRST: (a) the `MainThreadMarker` acquisition for `WKFindConfiguration::new(mtm)` —
 > `nav_url_mac.rs` shows the objc2 0.6 idioms in use; check how a `MainThreadMarker` is
 > obtained there or via `MainThreadMarker::new_unchecked()` inside a `with_webview` (already
@@ -731,6 +760,7 @@ pub fn close(app: &AppHandle, id: u32) { crate::find::emit_state(app, id, "", 0,
 > `OnceLock`, set on `start`. These are flagged as agent-resolves-on-Mac/CI items.
 
 **Steps:**
+
 1. Add the Cargo feature flags + `find_mac.rs`. There is NO local `cargo check` for macOS
    ([[aegis-macos-crosscompile]]) — gate is **CI build green** on macos-latest.
 2. Push → confirm `tauri-build-check.yml` macos-latest passes (compiles + bundles the .app).
@@ -752,6 +782,7 @@ registered, so do this in lockstep with the UI/IPC.
 `src/autopilot/interactions/controls.ts`.
 
 **(a) catalog.ts — one `FeatureCheck` covering all five channels:**
+
 ```ts
 { id: 'find.search', domain: 'find', title: 'Find in page',
   channels: [IPC.findStart, IPC.findNext, IPC.findPrev, IPC.findClose],
@@ -775,42 +806,60 @@ registered, so do this in lockstep with the UI/IPC.
     return `find start→state(matchCount=${(got as {matchCount:number}).matchCount})→close ok`;
   } },
 ```
+
 > Note: `IPC.evtFindState` is an **event**, not a command channel; the IPC drift guard
-> (`coverage.test.ts`) only requires *command* channels to appear in `channels[]`. Mirror how
+> (`coverage.test.ts`) only requires _command_ channels to appear in `channels[]`. Mirror how
 > existing event-only channels (`evtNavState`, `evtAdblockBlockedCount`) are handled — they
 > are NOT listed in any `channels[]`. Confirm the guard's exact rule in `coverage.test.ts`
 > before relying on this; if it DOES require events, add `IPC.evtFindState` to `channels`.
 
 **(b) screens.ts — add `'findBar'` to `OverlayScreenId` + a `SCREENS` entry:**
+
 ```ts
 { id: 'findBar', label: 'Find-in-page bar', via: 'overlay' },
 ```
+
 **(c) reach.ts — open/close it through the autopilot control.** The find bar opens via Ctrl+F,
 which is App-internal state. Add `openFind`/`closeFind` to `AutopilotControl` (in `control.ts`)
 and wire them in `App.tsx`'s `installAutopilotControl` block (mirroring `openDownloads`), then
 in `reach.ts`:
+
 ```ts
 // in reachScreen 'overlay':
 else if (screen.id === 'findBar') control.openFind();
 // in leaveScreen:
 else if (screen.id === 'findBar') control.closeFind();
 ```
+
 > This is the SAME mechanism `downloads`/`favoritesManager` use — a control method calling the
 > real setState. Add the two methods to the `AutopilotControl` interface + its mock in
 > `control.test.ts`.
 
 **(d) interactions/find.ts — real-gesture specs (vitest; desktop):**
+
 ```ts
 export const FIND_INTERACTIONS: InteractionSpec[] = [
-  { id: 'find.open', domain: 'find', description: 'Ctrl+F opens the find bar',
-    screen: 'home', layers: ['vitest'],
-    run: async (ctx) => { await ctx.press('Control>{f}'); /* or fire a keydown with ctrlKey */ },
+  {
+    id: 'find.open',
+    domain: 'find',
+    description: 'Ctrl+F opens the find bar',
+    screen: 'home',
+    layers: ['vitest'],
+    run: async (ctx) => {
+      await ctx.press('Control>{f}'); /* or fire a keydown with ctrlKey */
+    },
     assert: async (ctx) => {
-      if (!ctx.bySelector('input[aria-label="Find in page"]')) throw new Error('find bar not shown');
+      if (!ctx.bySelector('input[aria-label="Find in page"]'))
+        throw new Error('find bar not shown');
       return 'Ctrl+F → find bar visible';
-    } },
-  { id: 'find.type', domain: 'find', description: 'Typing a term calls find.start',
-    screen: 'findBar', layers: ['vitest'],
+    },
+  },
+  {
+    id: 'find.type',
+    domain: 'find',
+    description: 'Typing a term calls find.start',
+    screen: 'findBar',
+    layers: ['vitest'],
     run: async (ctx) => {
       const input = ctx.bySelector('input[aria-label="Find in page"]')!;
       await ctx.type(input, 'lorem');
@@ -819,43 +868,74 @@ export const FIND_INTERACTIONS: InteractionSpec[] = [
       if (!ctx.calls.called('find.start', (a) => String(a[1]).includes('lorem')))
         throw new Error('find.start not called with lorem');
       return 'type → find.start(lorem)';
-    } },
-  { id: 'find.next', domain: 'find', description: 'Find-next button calls find.next',
-    screen: 'findBar', layers: ['vitest'],
-    run: async (ctx) => { await ctx.click(ctx.byRole('button', /Find next/)!); },
-    assert: async (ctx) => { if (!ctx.calls.called('find.next')) throw new Error('find.next not called'); return 'next → find.next'; } },
-  { id: 'find.prev', domain: 'find', description: 'Find-previous button calls find.prev',
-    screen: 'findBar', layers: ['vitest'],
-    run: async (ctx) => { await ctx.click(ctx.byRole('button', /Find previous/)!); },
-    assert: async (ctx) => { if (!ctx.calls.called('find.prev')) throw new Error('find.prev not called'); return 'prev → find.prev'; } },
-  { id: 'find.close', domain: 'find', description: 'Esc closes the find bar + calls find.close',
-    screen: 'findBar', layers: ['vitest'],
+    },
+  },
+  {
+    id: 'find.next',
+    domain: 'find',
+    description: 'Find-next button calls find.next',
+    screen: 'findBar',
+    layers: ['vitest'],
+    run: async (ctx) => {
+      await ctx.click(ctx.byRole('button', /Find next/)!);
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('find.next')) throw new Error('find.next not called');
+      return 'next → find.next';
+    },
+  },
+  {
+    id: 'find.prev',
+    domain: 'find',
+    description: 'Find-previous button calls find.prev',
+    screen: 'findBar',
+    layers: ['vitest'],
+    run: async (ctx) => {
+      await ctx.click(ctx.byRole('button', /Find previous/)!);
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('find.prev')) throw new Error('find.prev not called');
+      return 'prev → find.prev';
+    },
+  },
+  {
+    id: 'find.close',
+    domain: 'find',
+    description: 'Esc closes the find bar + calls find.close',
+    screen: 'findBar',
+    layers: ['vitest'],
     run: async (ctx) => {
       const input = ctx.bySelector('input[aria-label="Find in page"]')!;
       await ctx.press('{Escape}'); // dispatched on the focused find input
     },
     assert: async (ctx) => {
-      if (ctx.bySelector('input[aria-label="Find in page"]')) throw new Error('find bar still shown');
+      if (ctx.bySelector('input[aria-label="Find in page"]'))
+        throw new Error('find bar still shown');
       if (!ctx.calls.called('find.close')) throw new Error('find.close not called');
       return 'Esc → bar closed + find.close';
-    } },
+    },
+  },
 ];
 ```
+
 > VERIFY-FIRST: the exact `ctx.press`/keyboard helper for a Ctrl+F chord — read
 > `interactionCtx.ts` + an existing keyboard spec in `interactions/tabs.ts` (`keyboard.newTab`)
 > to copy the real chord-firing form (it may dispatch a `KeyboardEvent` with `ctrlKey:true`
 > rather than userEvent `press`). Use whatever those specs use; don't invent a helper.
 
 **(e) controls.ts — add the ids (same commit):**
+
 ```ts
 'find.open', 'find.type', 'find.next', 'find.prev', 'find.close',
 ```
-(The drift guard maps each `INTERACTIVE_CONTROLS` id to a spec whose `id` *starts with* that
+
+(The drift guard maps each `INTERACTIVE_CONTROLS` id to a spec whose `id` _starts with_ that
 string, so these line up 1:1 with the spec ids above.)
 
 **(f) index.ts — spread it:** add `...FIND_INTERACTIONS` to the `INTERACTIONS` concat + import.
 
 **Steps:**
+
 1. Add the catalog entry → run `npm test` → `coverage.test.ts` now GREEN for the 4 command
    channels (RED before).
 2. Add the screen + reach + control methods → `tour.test.tsx` walks `findBar` without crash.
@@ -884,14 +964,17 @@ verification needed.)
 
 1. In `createTabWebView(id, url)`, after setting the clients, register a find listener that
    pushes results to the chrome (only when this tab is active — like `pushNavState`):
+
    ```kotlin
    wv.setFindListener { activeOrdinal, numberOfMatches, isDoneCounting ->
      if (isDoneCounting && id == activeTabId) pushFindState(id, numberOfMatches, activeOrdinal + 1)
    }
    ```
+
    (`activeMatchOrdinal` is 0-based; the chrome shows 1-based, so `+1` when matches > 0.)
 
 2. Add a `pushFindState` helper next to `pushNavState`:
+
    ```kotlin
    private fun pushFindState(id: Int, matchCount: Int, activeIndex: Int) {
      val obj = JSONObject()
@@ -926,6 +1009,7 @@ verification needed.)
    > search), matching the desktop next/prev semantics.
 
 **Steps:**
+
 1. Kotlin gate: `JAVA_HOME=~/development/android-studio/jbr ./gradlew compileUniversalDebugKotlin`
    (or the project's android build), green. Also `cargo check --target aarch64-linux-android`
    green (no Rust change here, but confirm nothing else broke — gotcha 10).
@@ -946,10 +1030,11 @@ menu row), and reuse `FindBar.tsx` (it already renders fine in the mobile chrome
 just an infobar).
 
 **Steps:**
+
 1. Add a "Find in page" row to `MobileMenuSheet` (Search/MagnifyingGlass lucide icon) that
    calls a `useFind(activeId).show()` passed down from `MobileApp`.
 2. In `MobileApp`, instantiate `useFind(tabs.activeId)` and render `{find.open && <FindBar
-   …/>}` in the top chrome (above the content; the native WebView is below the chrome margins,
+…/>}` in the top chrome (above the content; the native WebView is below the chrome margins,
    so the bar paints in the chrome layer fine — no overlay routing needed since the bar doesn't
    cover the content). Close via the bar's X / Esc.
 3. The mobile interaction tour: add a `mobile.menu.find` control + a `['vitest'], mobile:true`
@@ -993,8 +1078,8 @@ just an infobar).
   `lib.rs` `mod`+arm), Task 2 (`ipcClient.ts`). The event uses `emit_event` (Task 5) →
   `tauriInvoke.on()` reversal — never a raw dotted emit. ✔
 - **All four engines implemented, not Linux-only?** Linux (Task 6, live), Windows (Task 7, CI
-  + device), macOS (Task 8, CI + device), Android (Task 10/11, live). Mobile parity is its own
-  task. ✔ — matches §4.
+  - device), macOS (Task 8, CI + device), Android (Task 10/11, live). Mobile parity is its own
+    task. ✔ — matches §4.
 - **Native APIs verified, not invented?** Linux `WebKitFindController` (read
   webkit2gtk-2.0.2/src/auto/find_controller.rs + flags.rs + web_view.rs — exact method &
   flag names quoted). Windows `ICoreWebView2Find`/`ICoreWebView2_28::Find`/
@@ -1038,17 +1123,19 @@ just an infobar).
 ## Appendix A — Verified native API references (read directly from installed crates)
 
 **A.1 Linux — webkit2gtk 2.0.2** (`~/.cargo/.../webkit2gtk-2.0.2/src/auto/`)
+
 - `web_view.rs`: `WebViewExt::find_controller(&self) -> Option<FindController>`.
 - `find_controller.rs` `FindControllerExt`: `search(&self, search_text:&str,
-  find_options:u32, max_match_count:u32)`, `search_next(&self)`, `search_previous(&self)`,
+find_options:u32, max_match_count:u32)`, `search_next(&self)`, `search_previous(&self)`,
   `search_finish(&self)`, `count_matches(&self, &str, u32, u32)`, `search_text(&self) ->
-  Option<GString>`, `connect_found_text<F: Fn(&Self, u32)>(&self, F)`,
+Option<GString>`, `connect_found_text<F: Fn(&Self, u32)>(&self, F)`,
   `connect_failed_to_find_text<F: Fn(&Self)>(&self, F)`,
   `connect_counted_matches<F: Fn(&Self, u32)>(&self, F)`.
 - `flags.rs`: `FindOptions: u32` bitflags — `CASE_INSENSITIVE`, `BACKWARDS`, `WRAP_AROUND`
   (use `.bits()` for the `u32` arg). Requires feature `v2_40` (already enabled in Cargo.toml).
 
 **A.2 Windows — webview2-com 0.38.2 / -sys 0.38.2** (`src/bindings.rs`)
+
 - `ICoreWebView2_28::Find(&self) -> Result<ICoreWebView2Find>` (line 42531).
 - `ICoreWebView2Find`: `Start(options, handler)`, `FindNext()`, `FindPrevious()`, `Stop()`,
   `MatchCount(*mut i32)`, `ActiveMatchIndex(*mut i32)`,
@@ -1066,10 +1153,11 @@ just an infobar).
   `adblock_win.rs`/`nav_url_win.rs`.
 
 **A.3 macOS — objc2-web-kit 0.3.2** (`src/generated/`)
+
 - `WKWebView.rs` (814–824): `findString_withConfiguration_completionHandler(&self, string:
-  &NSString, configuration: Option<&WKFindConfiguration>, completion_handler:
-  &block2::DynBlock<dyn Fn(NonNull<WKFindResult>)>)`. Gated on features `WKFindConfiguration`
-  + `WKFindResult` (NOT enabled in Aegis's Cargo.toml today — Task 8 adds them).
+&NSString, configuration: Option<&WKFindConfiguration>, completion_handler:
+&block2::DynBlock<dyn Fn(NonNull<WKFindResult>)>)`. Gated on features `WKFindConfiguration`
+  - `WKFindResult` (NOT enabled in Aegis's Cargo.toml today — Task 8 adds them).
 - `WKFindConfiguration.rs`: `setBackwards(bool)`, `setCaseSensitive(bool)`, `setWraps(bool)`,
   `new(MainThreadMarker)`.
 - `WKFindResult.rs`: `matchFound(&self) -> bool` — **the ONLY accessor; no count**.
@@ -1077,6 +1165,7 @@ just an infobar).
   `nav_url_mac.rs`.
 
 **A.4 Android — platform SDK** (`MainActivity.kt` is the host)
+
 - `WebView.findAllAsync(String)`, `WebView.setFindListener(WebView.FindListener)` →
   `onFindResultReceived(int activeMatchOrdinal, int numberOfMatches, boolean isDoneCounting)`,
   `WebView.findNext(boolean forward)`, `WebView.clearMatches()`. Case-insensitive only.

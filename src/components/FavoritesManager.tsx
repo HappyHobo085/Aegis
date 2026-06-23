@@ -83,48 +83,48 @@ export function FavoritesManager({
 
   return (
     <div className="favorites-manager__scrim">
-    <div
-      ref={dialogRef}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby={titleId}
-      className="favorites-manager"
-    >
-      <div className="favorites-manager__header">
-        <h2 id={titleId} className="favorites-manager__title">
-          Manage favorites
-        </h2>
-        <button type="button" aria-label="Close" onClick={onClose}>
-          <X size={18} aria-hidden="true" />
-        </button>
-      </div>
+      <div
+        ref={dialogRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={titleId}
+        className="favorites-manager"
+      >
+        <div className="favorites-manager__header">
+          <h2 id={titleId} className="favorites-manager__title">
+            Manage favorites
+          </h2>
+          <button type="button" aria-label="Close" onClick={onClose}>
+            <X size={18} aria-hidden="true" />
+          </button>
+        </div>
 
-      <ul className="favorites-manager__list">
-        {favorites.map((f) => (
-          <FavoriteRow key={f.id} favorite={f} update={update} remove={remove} />
-        ))}
-      </ul>
+        <ul className="favorites-manager__list">
+          {favorites.map((f) => (
+            <FavoriteRow key={f.id} favorite={f} update={update} remove={remove} />
+          ))}
+        </ul>
 
-      <div className="favorites-manager__add" role="group" aria-label="Add favorite">
-        <input
-          type="text"
-          aria-label="New favorite name"
-          placeholder="Hacker News"
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-        />
-        <input
-          type="text"
-          aria-label="New favorite URL"
-          placeholder="https://news.ycombinator.com"
-          value={newUrl}
-          onChange={(e) => setNewUrl(e.target.value)}
-        />
-        <button type="button" onClick={handleAdd}>
-          Add favorite
-        </button>
+        <div className="favorites-manager__add" role="group" aria-label="Add favorite">
+          <input
+            type="text"
+            aria-label="New favorite name"
+            placeholder="Hacker News"
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+          />
+          <input
+            type="text"
+            aria-label="New favorite URL"
+            placeholder="https://news.ycombinator.com"
+            value={newUrl}
+            onChange={(e) => setNewUrl(e.target.value)}
+          />
+          <button type="button" onClick={handleAdd}>
+            Add favorite
+          </button>
+        </div>
       </div>
-    </div>
     </div>
   );
 }

@@ -10,9 +10,9 @@
 
 ## Global Constraints
 
-*(From spec §6 — every task implicitly includes these.)*
+_(From spec §6 — every task implicitly includes these.)_
 
-- **IPC in three places (when adding a channel):** a new channel goes in `shared/types.ts` (`IPC` const), the Rust `ipc()` dispatcher, and `src/lib/ipcClient.ts`. **This sub-project adds NO new channel** — `themeMode` is a *settings field*, which per `shared/CLAUDE.md` needs no channel: add it to `settings.rs defaults()` + the `Settings` interface; `settings.set` shallow-merges it.
+- **IPC in three places (when adding a channel):** a new channel goes in `shared/types.ts` (`IPC` const), the Rust `ipc()` dispatcher, and `src/lib/ipcClient.ts`. **This sub-project adds NO new channel** — `themeMode` is a _settings field_, which per `shared/CLAUDE.md` needs no channel: add it to `settings.rs defaults()` + the `Settings` interface; `settings.set` shallow-merges it.
 - **Event names stay dotted logically**, translated `.`↔`:` at the boundary. (Not exercised here — no events added.)
 - **Autopilot coverage in the same commit (drift-guarded):** a new UI screen/overlay → `screens.ts` (+ `reach.ts`); a new interactive control → an interaction test driving the real UI. The drift-guard tests (`src/autopilot/coverage.test.ts`, `src/autopilot/interactions.coverage.test.ts`) fail the build otherwise. **No new IPC channel here, so `catalog.ts` is untouched** (settings channels already have a catalog entry).
 - **Gate per sub-project:** `npm test` green; for runtime-touching changes, the live autopilot `RESULT: … 0 failed` and `ad-block blocking (trace): PASS` on Linux.
@@ -29,6 +29,7 @@
 - **The CSS refactor (`index.css`)** can't be unit-tested headlessly (no rendered browser in jsdom asserts computed colors reliably for a 3700-line sheet). Its "test" is: the `theme.ts` unit tests prove the `data-theme` attribute is set correctly, and the **live autopilot** (`screens.ts` `theme:dark` / `theme:light`) screenshots both palettes for owner eyeball confirmation. Per `[[test-after-every-change]]` the owner does the on-screen confirmation.
 
 Verification commands used throughout:
+
 - JS (one file): `npx vitest run <path>`
 - JS (whole suite): `npm test`
 - Rust compile: `cargo check --manifest-path src-tauri/Cargo.toml`
@@ -41,7 +42,7 @@ Verification commands used throughout:
 
 **New files**
 
-*(none — every change extends an existing file)*
+_(none — every change extends an existing file)_
 
 **Modified files**
 
@@ -65,10 +66,12 @@ Verification commands used throughout:
 ## Task 1: Add the `themeMode` settings field to the contract + Rust default
 
 **Files:**
+
 - Modify: `shared/types.ts` (the `Settings` interface, ~line 293–298)
 - Modify: `src-tauri/src/settings.rs` (`defaults()`, ~line 14–31)
 
 **Interfaces:**
+
 - Produces: `Settings.themeMode: 'system' | 'dark' | 'light'` — consumed by every later task (`theme.ts`, `useSettings`, `AppearanceTab`, both shells). Default value `'system'`.
 
 - [ ] **Step 1: Add the field to the `Settings` interface**
@@ -76,10 +79,10 @@ Verification commands used throughout:
 In `shared/types.ts`, inside `export interface Settings { … }`, add the field right after the `webrtcPolicy` field and before `syncServerUrl?`:
 
 ```ts
-  /** Chrome theme: `'system'` (default) follows the OS via `prefers-color-scheme`,
-   * `'dark'` / `'light'` force a palette. Renderer-only — the resolved palette is a
-   * `data-theme` attribute on <html> (see src/lib/theme.ts). */
-  themeMode: 'system' | 'dark' | 'light';
+/** Chrome theme: `'system'` (default) follows the OS via `prefers-color-scheme`,
+ * `'dark'` / `'light'` force a palette. Renderer-only — the resolved palette is a
+ * `data-theme` attribute on <html> (see src/lib/theme.ts). */
+themeMode: 'system' | 'dark' | 'light';
 ```
 
 - [ ] **Step 2: Add the default on the Rust side**
@@ -114,10 +117,12 @@ git commit -m "feat(theme): add themeMode settings field (system/dark/light)"
 ## Task 2: Theme resolution + DOM application in `src/lib/theme.ts`
 
 **Files:**
+
 - Modify: `src/lib/theme.ts`
 - Test: `src/lib/theme.test.ts`
 
 **Interfaces:**
+
 - Consumes: `Settings.themeMode` (Task 1), `Settings.primaryColor` (existing).
 - Produces:
   - `export type ThemeMode = 'system' | 'dark' | 'light'`
@@ -150,7 +155,10 @@ function mockMatchMedia(prefersDark: boolean) {
     addListener: (cb: () => void) => listeners.add(cb),
     removeListener: (cb: () => void) => listeners.delete(cb),
   };
-  vi.stubGlobal('matchMedia', vi.fn(() => mql));
+  vi.stubGlobal(
+    'matchMedia',
+    vi.fn(() => mql),
+  );
   return { fire: () => listeners.forEach((cb) => cb()), listenerCount: () => listeners.size };
 }
 
@@ -282,7 +290,9 @@ export function prefersDarkScheme(): boolean {
  * (`data-theme` attribute, read by the [data-theme="…"] token blocks in index.css)
  * + the matching `color-scheme` (so native form controls / scrollbars match). A caller
  * that omits `themeMode` (legacy accent-only callers) is treated as `'system'`. */
-export function applyTheme(s: Pick<Settings, 'primaryColor'> & Partial<Pick<Settings, 'themeMode'>>): void {
+export function applyTheme(
+  s: Pick<Settings, 'primaryColor'> & Partial<Pick<Settings, 'themeMode'>>,
+): void {
   const root = document.documentElement;
   root.style.setProperty('--accent-color', s.primaryColor);
   const resolved = resolveTheme(s.themeMode ?? 'system', prefersDarkScheme());
@@ -317,9 +327,11 @@ git commit -m "feat(theme): resolveTheme + applyTheme writes data-theme/color-sc
 ## Task 3: Re-apply the resolved theme on settings updates (`useSettings`)
 
 **Files:**
+
 - Modify: `src/hooks/useSettings.ts`
 
 **Interfaces:**
+
 - Consumes: `applyTheme` (Task 2, now takes `themeMode`), `Settings.themeMode` (Task 1).
 - Produces: nothing new — extends the existing `useSettings()` hook so a `themeMode` edit (or a synced `themeMode`/`primaryColor` change) re-applies the full theme live.
 
@@ -340,15 +352,15 @@ In `src/hooks/useSettings.ts`, in the `emptySettings` object, add the field (aft
 In the `onSyncChange('settings', …)` callback (currently line 35–41), change the `applyTheme` call to pass the whole settings object (so a synced `themeMode` OR `primaryColor` recolors live):
 
 ```ts
-    const off = onSyncChange('settings', () => {
-      void aegis.settings.get().then((s) => {
-        if (!active) return;
-        setSettings(s);
-        // Re-apply the resolved theme (accent + palette) so a synced primaryColor OR
-        // themeMode recolors the chrome without a reload.
-        applyTheme(s);
-      });
-    });
+const off = onSyncChange('settings', () => {
+  void aegis.settings.get().then((s) => {
+    if (!active) return;
+    setSettings(s);
+    // Re-apply the resolved theme (accent + palette) so a synced primaryColor OR
+    // themeMode recolors the chrome without a reload.
+    applyTheme(s);
+  });
+});
 ```
 
 - [ ] **Step 3: Re-apply on a local update when accent OR theme mode changed**
@@ -356,10 +368,10 @@ In the `onSyncChange('settings', …)` callback (currently line 35–41), change
 Change the `update` callback's re-apply guard (currently line 51–54) to:
 
 ```ts
-    // Theme re-applies live when the accent color OR theme mode was part of this edit.
-    if (partial.primaryColor !== undefined || partial.themeMode !== undefined) {
-      applyTheme(next);
-    }
+// Theme re-applies live when the accent color OR theme mode was part of this edit.
+if (partial.primaryColor !== undefined || partial.themeMode !== undefined) {
+  applyTheme(next);
+}
 ```
 
 - [ ] **Step 4: Run the settings hook tests**
@@ -379,10 +391,12 @@ git commit -m "feat(theme): re-apply resolved theme on themeMode/primaryColor ch
 ## Task 4: The Theme segmented control in `AppearanceTab`
 
 **Files:**
+
 - Modify: `src/components/AppearanceTab.tsx`
 - Test: `src/components/AppearanceTab.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `Settings.themeMode` (Task 1), the existing `AppearanceTabProps { settings, update }`.
 - Produces: a radio group (`role="radiogroup"`, `aria-label="Theme"`) with three radios — **System / Dark / Light** — each calling `update({ themeMode })`. The checked radio reflects `settings.themeMode`. Control id for the autopilot: `settings.appearance.themeMode` (Task 7).
 
@@ -414,7 +428,12 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
 
 describe('AppearanceTab — accent color', () => {
   it('shows the current accent color in the color input', () => {
-    render(<AppearanceTab settings={settings({ primaryColor: '#112233' })} update={vi.fn(async () => {})} />);
+    render(
+      <AppearanceTab
+        settings={settings({ primaryColor: '#112233' })}
+        update={vi.fn(async () => {})}
+      />,
+    );
     expect(screen.getByLabelText(/accent color/i)).toHaveValue('#112233');
   });
 
@@ -437,7 +456,9 @@ describe('AppearanceTab — theme mode', () => {
   });
 
   it('marks the current themeMode radio as checked', () => {
-    render(<AppearanceTab settings={settings({ themeMode: 'light' })} update={vi.fn(async () => {})} />);
+    render(
+      <AppearanceTab settings={settings({ themeMode: 'light' })} update={vi.fn(async () => {})} />,
+    );
     expect(screen.getByRole('radio', { name: /light/i })).toBeChecked();
     expect(screen.getByRole('radio', { name: /system/i })).not.toBeChecked();
   });
@@ -480,7 +501,11 @@ const THEME_OPTIONS: { value: Settings['themeMode']; label: string }[] = [
 export function AppearanceTab({ settings, update }: AppearanceTabProps) {
   return (
     <div className="appearance-tab">
-      <fieldset className="appearance-tab__field appearance-tab__theme" role="radiogroup" aria-label="Theme">
+      <fieldset
+        className="appearance-tab__field appearance-tab__theme"
+        role="radiogroup"
+        aria-label="Theme"
+      >
         <span className="appearance-tab__legend">Theme</span>
         <div className="appearance-tab__segments">
           {THEME_OPTIONS.map((opt) => (
@@ -549,7 +574,7 @@ In `src/index.css`, in the `─── Appearance tab ───` section (after t
 }
 
 /* Hide the native radio dot; the whole segment is the affordance. */
-.appearance-tab__segment input[type="radio"] {
+.appearance-tab__segment input[type='radio'] {
   position: absolute;
   width: 1px;
   height: 1px;
@@ -572,12 +597,12 @@ In `src/index.css`, in the `─── Appearance tab ───` section (after t
   border-right: none;
 }
 
-.appearance-tab__segment input[type="radio"]:checked + span {
+.appearance-tab__segment input[type='radio']:checked + span {
   background: var(--accent-color);
   color: var(--text-on-accent);
 }
 
-.appearance-tab__segment input[type="radio"]:focus-visible + span {
+.appearance-tab__segment input[type='radio']:focus-visible + span {
   outline: 2px solid var(--accent-color);
   outline-offset: -2px;
 }
@@ -600,17 +625,19 @@ git commit -m "feat(theme): Theme segmented control (System/Dark/Light) in Appea
 ## Task 5: Refactor `index.css` tokens into dark + light palettes
 
 **Files:**
+
 - Modify: `src/index.css` (the top `:root` block, lines 2–28)
 
 **Interfaces:**
+
 - Consumes: the `data-theme` attribute written by `applyTheme` (Task 2).
-- Produces: a `[data-theme="dark"]` color-token block (the current values, byte-for-byte) + a `[data-theme="light"]` block (the same token NAMES, light values). Every existing `var(--bg)` / `var(--fg)` / etc. rule in the sheet is **untouched** — this is the key decision: refactor the *definitions*, not the ~700 *usages*.
+- Produces: a `[data-theme="dark"]` color-token block (the current values, byte-for-byte) + a `[data-theme="light"]` block (the same token NAMES, light values). Every existing `var(--bg)` / `var(--fg)` / etc. rule in the sheet is **untouched** — this is the key decision: refactor the _definitions_, not the ~700 _usages_.
 
   **The refactor approach (read this before editing):** Today there is ONE flat `:root { color-scheme: dark; --accent-color; --bg; … }`. Split it into three:
   1. A base `:root` that keeps the **non-color, theme-independent** tokens (radii, shadows) and a sensible default so an un-attributed `<html>` still renders (default to the dark palette — Aegis's historic look — by setting `data-theme="dark"` as the document default in `src/index.html`'s `<html>` tag, Step 4).
   2. `[data-theme="dark"]` — every color token at its CURRENT value (copied verbatim from the existing block so dark is pixel-identical to today).
   3. `[data-theme="light"]` — the same token names with light values.
-  The static `color-scheme: dark` is **removed** from `:root` — `applyTheme` now sets `color-scheme` per resolved theme on `<html>` inline (Task 2). `--accent-color` stays defined in BOTH palettes as the fallback, but `applyTheme` overrides it inline from `primaryColor` regardless, so it is theme-independent in practice (it's the user's accent).
+     The static `color-scheme: dark` is **removed** from `:root` — `applyTheme` now sets `color-scheme` per resolved theme on `<html>` inline (Task 2). `--accent-color` stays defined in BOTH palettes as the fallback, but `applyTheme` overrides it inline from `primaryColor` regardless, so it is theme-independent in practice (it's the user's accent).
 
 - [ ] **Step 1: Replace the flat `:root` block with the three-block structure**
 
@@ -634,15 +661,15 @@ In `src/index.css`, replace lines 2–28 (the entire current `:root { … }` blo
 
 /* ── Dark palette (default; pixel-identical to the pre-refactor look) ── */
 :root,
-[data-theme="dark"] {
+[data-theme='dark'] {
   color-scheme: dark;
-  --bg: #121212;               /* app base / scrollbar track */
-  --bg-elevated: #1f1f1f;      /* header, sidebar, modals, toasts */
-  --bg-input: #2a2a2a;         /* inputs, cards/list rows, chips, hover */
-  --fg: #e0e0e0;               /* primary text */
-  --fg-muted: #888;            /* muted text, icons, placeholders */
-  --border: #333;              /* default borders */
-  --border-2: #444;            /* secondary border: search field, dividers, scrollbar hover */
+  --bg: #121212; /* app base / scrollbar track */
+  --bg-elevated: #1f1f1f; /* header, sidebar, modals, toasts */
+  --bg-input: #2a2a2a; /* inputs, cards/list rows, chips, hover */
+  --fg: #e0e0e0; /* primary text */
+  --fg-muted: #888; /* muted text, icons, placeholders */
+  --border: #333; /* default borders */
+  --border-2: #444; /* secondary border: search field, dividers, scrollbar hover */
   --danger: #ff5d5d;
   --success: #22c55e;
   --shadow-modal: 0 10px 25px rgba(0, 0, 0, 0.5);
@@ -650,15 +677,15 @@ In `src/index.css`, replace lines 2–28 (the entire current `:root { … }` blo
 }
 
 /* ── Light palette ── */
-[data-theme="light"] {
+[data-theme='light'] {
   color-scheme: light;
-  --bg: #f5f5f7;               /* app base / scrollbar track */
-  --bg-elevated: #ffffff;      /* header, sidebar, modals, toasts */
-  --bg-input: #ececef;         /* inputs, cards/list rows, chips, hover */
-  --fg: #1c1c1e;               /* primary text */
-  --fg-muted: #6b6b70;         /* muted text, icons, placeholders */
-  --border: #d6d6db;           /* default borders */
-  --border-2: #c2c2c8;         /* secondary border: search field, dividers, scrollbar hover */
+  --bg: #f5f5f7; /* app base / scrollbar track */
+  --bg-elevated: #ffffff; /* header, sidebar, modals, toasts */
+  --bg-input: #ececef; /* inputs, cards/list rows, chips, hover */
+  --fg: #1c1c1e; /* primary text */
+  --fg-muted: #6b6b70; /* muted text, icons, placeholders */
+  --border: #d6d6db; /* default borders */
+  --border-2: #c2c2c8; /* secondary border: search field, dividers, scrollbar hover */
   --danger: #d92d2d;
   --success: #1a9e4b;
   --shadow-modal: 0 10px 25px rgba(0, 0, 0, 0.18);
@@ -666,7 +693,7 @@ In `src/index.css`, replace lines 2–28 (the entire current `:root { … }` blo
 }
 ```
 
-  **Why `:root, [data-theme="dark"]`:** the bare `:root` selector seeds the dark palette even if `data-theme` is somehow absent (e.g. before `applyTheme` runs on first paint), so there is never an unstyled flash; the explicit `[data-theme="dark"]` then matches once the attribute is set. The `[data-theme="light"]` block has higher specificity than the bare `:root` for the same tokens (attribute selector > pseudo-class on the universal `:root`), so light correctly wins when selected.
+**Why `:root, [data-theme="dark"]`:** the bare `:root` selector seeds the dark palette even if `data-theme` is somehow absent (e.g. before `applyTheme` runs on first paint), so there is never an unstyled flash; the explicit `[data-theme="dark"]` then matches once the attribute is set. The `[data-theme="light"]` block has higher specificity than the bare `:root` for the same tokens (attribute selector > pseudo-class on the universal `:root`), so light correctly wins when selected.
 
 - [ ] **Step 2: Audit for hardcoded dark colors that won't flip with the palette**
 
@@ -676,7 +703,7 @@ Run: `grep -n 'rgba(255, 255, 255\|color: #fff\|color: #ffffff' src/index.css`
 
 Fix these specific occurrences (leave `color: #fff` that sits on the **accent fill** — e.g. `.skip-link:focus`, `.tag-filter__chip[aria-pressed="true"]`, `.saved-panel__add-save`, `.tag-filter` active — those are text-on-accent and correct in both themes):
 
-  - The icon-button hover backgrounds `background: rgba(255, 255, 255, 0.08)` (toolbar buttons line ~254, shield button ~371, sidebar close ~820, settings close ~1668, downloads close ~1803) and `rgba(255, 255, 255, 0.12)` (tag-input chip remove ~625) and `rgba(255, 255, 255, 0.06)` (favorites-bar manage ~510): replace each with `var(--bg-input)` so the hover is visible on a light surface. Example:
+- The icon-button hover backgrounds `background: rgba(255, 255, 255, 0.08)` (toolbar buttons line ~254, shield button ~371, sidebar close ~820, settings close ~1668, downloads close ~1803) and `rgba(255, 255, 255, 0.12)` (tag-input chip remove ~625) and `rgba(255, 255, 255, 0.06)` (favorites-bar manage ~510): replace each with `var(--bg-input)` so the hover is visible on a light surface. Example:
 
 ```css
 .nav-controls button:hover:not(:disabled),
@@ -692,19 +719,19 @@ Fix these specific occurrences (leave `color: #fff` that sits on the **accent fi
 }
 ```
 
-  - `.address-bar input { … color: #fff; }` (line ~316) and `.fullscreen-exit:hover { color: #fff; }` (~281): change `color: #fff` to `color: var(--fg)` (the address-bar input sits on `--bg-input`, which is light in the light theme).
+- `.address-bar input { … color: #fff; }` (line ~316) and `.fullscreen-exit:hover { color: #fff; }` (~281): change `color: #fff` to `color: var(--fg)` (the address-bar input sits on `--bg-input`, which is light in the light theme).
 
-  **Note:** This step is bounded — it touches only surface-background hovers and the two `--fg`-should-be-token cases above. The scrim overlays (`rgba(0,0,0,0.5)` / `0.85`) intentionally stay dark in both themes (a dim scrim over content reads correctly either way), so leave them.
+**Note:** This step is bounded — it touches only surface-background hovers and the two `--fg`-should-be-token cases above. The scrim overlays (`rgba(0,0,0,0.5)` / `0.85`) intentionally stay dark in both themes (a dim scrim over content reads correctly either way), so leave them.
 
 - [ ] **Step 3: Default `<html>` to the dark palette so first paint is never unstyled**
 
 In `src/index.html`, add `data-theme="dark"` to the `<html>` tag so the very first frame (before React mounts and `applyTheme` runs) uses the dark palette:
 
 ```html
-<html lang="en" data-theme="dark">
+<html lang="en" data-theme="dark"></html>
 ```
 
-  (`applyTheme` overwrites this on mount with the resolved theme. Defaulting to dark matches Aegis's historic look and `prefersDarkScheme()`'s unavailable-default.)
+(`applyTheme` overwrites this on mount with the resolved theme. Defaulting to dark matches Aegis's historic look and `prefersDarkScheme()`'s unavailable-default.)
 
 - [ ] **Step 4: Verify the renderer still builds**
 
@@ -728,10 +755,12 @@ git commit -m "refactor(theme): split CSS tokens into [data-theme] dark + light 
 ## Task 6: Apply + live-watch the theme in both shells (`App` + `MobileApp`)
 
 **Files:**
+
 - Modify: `src/App.tsx` (the `applyTheme` effect, ~line 198–200)
 - Modify: `src/components/mobile/MobileApp.tsx` (the `applyTheme` effect, line 76)
 
 **Interfaces:**
+
 - Consumes: `applyTheme` + `watchSystemTheme` (Task 2).
 - Produces: on mount each shell applies the resolved theme AND installs `watchSystemTheme` so **System** re-resolves when the OS flips, without a reload. (The component re-fetches `settings` on the OS change so the resolve uses the current `themeMode`.)
 
@@ -750,15 +779,15 @@ import { applyTheme, watchSystemTheme } from './lib/theme';
 Effect (replace lines 198–200):
 
 ```ts
-  // Apply the resolved theme on mount, and re-resolve when the OS color scheme flips
-  // (so themeMode === 'system' follows the OS live). Re-fetch settings on each OS change
-  // so the resolve uses the user's current themeMode + accent.
-  useEffect(() => {
+// Apply the resolved theme on mount, and re-resolve when the OS color scheme flips
+// (so themeMode === 'system' follows the OS live). Re-fetch settings on each OS change
+// so the resolve uses the user's current themeMode + accent.
+useEffect(() => {
+  void aegis.settings.get().then((s) => applyTheme(s));
+  return watchSystemTheme(() => {
     void aegis.settings.get().then((s) => applyTheme(s));
-    return watchSystemTheme(() => {
-      void aegis.settings.get().then((s) => applyTheme(s));
-    });
-  }, []);
+  });
+}, []);
 ```
 
 - [ ] **Step 2: Update the mobile shell effect**
@@ -774,12 +803,12 @@ import { applyTheme, watchSystemTheme } from '../../lib/theme';
 Effect (replace line 76):
 
 ```ts
-  useEffect(() => {
+useEffect(() => {
+  void aegis.settings.get().then((s) => applyTheme(s));
+  return watchSystemTheme(() => {
     void aegis.settings.get().then((s) => applyTheme(s));
-    return watchSystemTheme(() => {
-      void aegis.settings.get().then((s) => applyTheme(s));
-    });
-  }, []);
+  });
+}, []);
 ```
 
 - [ ] **Step 3: Run the desktop + mobile tours (both shells still mount + theme applies)**
@@ -799,12 +828,14 @@ git commit -m "feat(theme): apply resolved theme + watch OS scheme in App and Mo
 ## Task 7: Autopilot — screen states + interaction spec
 
 **Files:**
+
 - Modify: `src/autopilot/screens.ts` (`OverlayScreenId` + `SCREENS`)
 - Modify: `src/autopilot/reach.ts` (`reachScreen` / `leaveScreen`)
 - Modify: `src/autopilot/interactions/controls.ts` (`INTERACTIVE_CONTROLS`)
 - Modify: `src/autopilot/interactions/settings.ts` (`SETTINGS_INTERACTIONS`)
 
 **Interfaces:**
+
 - Consumes: `applyTheme` (Task 2), the `data-theme` attribute, the AppearanceTab Theme control (Task 4).
 - Produces:
   - Two `'state'` screens `theme:dark` / `theme:light` — captured screenshots of each palette. `reachScreen` applies the palette by calling `applyTheme({ primaryColor, themeMode })`; `leaveScreen` restores dark.
@@ -891,16 +922,17 @@ In `src/autopilot/interactions/settings.ts`, add this spec to the `SETTINGS_INTE
   },
 ```
 
-  **Note:** `screen: 'settings:appearance'` reaches the Appearance settings tab via the existing `reachScreen` `settingsTab` path. `layers: ['vitest']` matches the existing accent spec (the Appearance control isn't exercised in the live desktop step, only the vitest tours). `mobile: true` lets the mobile interaction tour run it too — the Appearance tab renders identically in `MobileApp`'s `SettingsModal`. The accent spec restores state in a live layer; this spec is vitest-only, so no restore is needed (the mocked `settings.set` is inert).
+**Note:** `screen: 'settings:appearance'` reaches the Appearance settings tab via the existing `reachScreen` `settingsTab` path. `layers: ['vitest']` matches the existing accent spec (the Appearance control isn't exercised in the live desktop step, only the vitest tours). `mobile: true` lets the mobile interaction tour run it too — the Appearance tab renders identically in `MobileApp`'s `SettingsModal`. The accent spec restores state in a live layer; this spec is vitest-only, so no restore is needed (the mocked `settings.set` is inert).
 
 - [ ] **Step 5: Run the drift guards + interaction tours**
 
 Run: `npx vitest run src/autopilot/screens.test.ts src/autopilot/coverage.test.ts src/autopilot/interactions.coverage.test.ts src/autopilot/interactions.test.tsx src/autopilot/interactions.mobile.test.tsx`
 Expected: PASS —
-  - `coverage.test.ts` (IPC drift) is unaffected (no new channel).
-  - `interactions.coverage.test.ts` now sees a spec for `settings.appearance.themeMode` (the control id has a matching spec id) → green.
-  - The interaction tours run the new spec and assert `settings.set` was called.
-  - `screens.test.ts` accepts the two new `'state'` entries.
+
+- `coverage.test.ts` (IPC drift) is unaffected (no new channel).
+- `interactions.coverage.test.ts` now sees a spec for `settings.appearance.themeMode` (the control id has a matching spec id) → green.
+- The interaction tours run the new spec and assert `settings.set` was called.
+- `screens.test.ts` accepts the two new `'state'` entries.
 
 - [ ] **Step 6: Run the run-orchestration test (reach/leave for the new screens)**
 
@@ -941,11 +973,12 @@ Expected: compiles clean (the `defaults()` change is one JSON key).
 
 Run: `npm run tauri:dev`
 Then in the running app: open **Settings → Appearance**, and for each of **System / Dark / Light** click the segment. Expected on-screen:
-  - **Dark** → the chrome is the current dark look (toolbar `#1f1f1f`, page text light) — unchanged from before.
-  - **Light** → the chrome flips to the light palette instantly (toolbar white `#ffffff`, dark text on `#f5f5f7` base) with no reload; the accent color and all icon hovers stay legible.
-  - **System** → matches the OS setting; change the OS theme (KDE: System Settings → Appearance) and confirm the chrome flips live without re-opening Settings.
 
-  Per `[[aegis-live-testing-setup]]`, capture with `spectacle` for the record.
+- **Dark** → the chrome is the current dark look (toolbar `#1f1f1f`, page text light) — unchanged from before.
+- **Light** → the chrome flips to the light palette instantly (toolbar white `#ffffff`, dark text on `#f5f5f7` base) with no reload; the accent color and all icon hovers stay legible.
+- **System** → matches the OS setting; change the OS theme (KDE: System Settings → Appearance) and confirm the chrome flips live without re-opening Settings.
+
+Per `[[aegis-live-testing-setup]]`, capture with `spectacle` for the record.
 
 - [ ] **Step 5: Run the live autopilot (Linux, needs a display)**
 
@@ -974,22 +1007,22 @@ Run against the spec (§6, sub-project **F**) with fresh eyes.
 
 **1. Spec coverage**
 
-| Spec requirement (sub-project F / §6) | Task |
-|---|---|
-| "Add a light palette to the design tokens" | Task 5 (`[data-theme="light"]` block, full token set) |
-| "honor `prefers-color-scheme`" | Task 2 (`prefersDarkScheme` reads the media query) + Task 6 (`watchSystemTheme` live re-resolve) |
-| "an Appearance setting: System / Dark / Light" | Task 4 (segmented control) |
-| "settings field `themeMode`" | Task 1 (`Settings.themeMode` + Rust default) |
-| "the mobile shell" | Task 6 (`MobileApp` effect) + Task 4 control renders in the mobile `SettingsModal` |
-| "toggling re-themes chrome instantly" | Task 3 (`useSettings.update` re-applies on `themeMode` change) |
-| "system mode follows OS" | Task 2 + Task 6 (`watchSystemTheme`) |
-| "vitest + live screenshots both themes" | Task 2/4 vitest tests + Task 7 (`theme:dark`/`theme:light` screens) + Task 8 step 5 |
-| §6.1 IPC-in-three-places | N/A by design — settings *field*, no channel (documented in Global Constraints); contract still updated in `shared/types.ts` (Task 1) |
-| §6.2 autopilot coverage same commit, drift-guarded | Task 7 (screens + interaction) — committed; drift guards run in Task 7 step 5 |
-| §6.3 gate (`npm test` + live autopilot) | Task 8 |
-| §6.4 parity (Linux/Win/mac/Android) | Renderer-only → identical on all; Task 8 steps 4–6 cover Linux live + Android device; Win/mac inherit via CI build (no platform code) |
+| Spec requirement (sub-project F / §6)              | Task                                                                                                                                  |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| "Add a light palette to the design tokens"         | Task 5 (`[data-theme="light"]` block, full token set)                                                                                 |
+| "honor `prefers-color-scheme`"                     | Task 2 (`prefersDarkScheme` reads the media query) + Task 6 (`watchSystemTheme` live re-resolve)                                      |
+| "an Appearance setting: System / Dark / Light"     | Task 4 (segmented control)                                                                                                            |
+| "settings field `themeMode`"                       | Task 1 (`Settings.themeMode` + Rust default)                                                                                          |
+| "the mobile shell"                                 | Task 6 (`MobileApp` effect) + Task 4 control renders in the mobile `SettingsModal`                                                    |
+| "toggling re-themes chrome instantly"              | Task 3 (`useSettings.update` re-applies on `themeMode` change)                                                                        |
+| "system mode follows OS"                           | Task 2 + Task 6 (`watchSystemTheme`)                                                                                                  |
+| "vitest + live screenshots both themes"            | Task 2/4 vitest tests + Task 7 (`theme:dark`/`theme:light` screens) + Task 8 step 5                                                   |
+| §6.1 IPC-in-three-places                           | N/A by design — settings _field_, no channel (documented in Global Constraints); contract still updated in `shared/types.ts` (Task 1) |
+| §6.2 autopilot coverage same commit, drift-guarded | Task 7 (screens + interaction) — committed; drift guards run in Task 7 step 5                                                         |
+| §6.3 gate (`npm test` + live autopilot)            | Task 8                                                                                                                                |
+| §6.4 parity (Linux/Win/mac/Android)                | Renderer-only → identical on all; Task 8 steps 4–6 cover Linux live + Android device; Win/mac inherit via CI build (no platform code) |
 
-No gaps found. Currently-dark-only CSS tokens are handled by **Task 5's refactor**: the existing flat `:root` color tokens move verbatim into `[data-theme="dark"]` (so dark stays pixel-identical), a parallel `[data-theme="light"]` block redefines the same token *names*, and the ~700 `var(--…)` usages across the 3700-line sheet are left untouched — only the definitions move. Step 2 of Task 5 additionally retokenizes the handful of hardcoded `#fff` / `rgba(255,255,255,…)` surface hovers that would otherwise read wrong on a light surface (leaving text-on-accent `#fff` alone). `<html data-theme="dark">` in `index.html` + the bare-`:root` dark seed prevent any unstyled first-paint flash.
+No gaps found. Currently-dark-only CSS tokens are handled by **Task 5's refactor**: the existing flat `:root` color tokens move verbatim into `[data-theme="dark"]` (so dark stays pixel-identical), a parallel `[data-theme="light"]` block redefines the same token _names_, and the ~700 `var(--…)` usages across the 3700-line sheet are left untouched — only the definitions move. Step 2 of Task 5 additionally retokenizes the handful of hardcoded `#fff` / `rgba(255,255,255,…)` surface hovers that would otherwise read wrong on a light surface (leaving text-on-accent `#fff` alone). `<html data-theme="dark">` in `index.html` + the bare-`:root` dark seed prevent any unstyled first-paint flash.
 
 **2. Placeholder scan**
 

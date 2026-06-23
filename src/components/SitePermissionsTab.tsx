@@ -31,10 +31,7 @@ export function SitePermissionsTab({ permissions, remove, clear }: SitePermissio
       ) : (
         <ul className="site-permissions-tab__list">
           {permissions.map((p) => (
-            <li
-              key={`${p.origin}|${p.permission}`}
-              className="site-permissions-tab__row"
-            >
+            <li key={`${p.origin}|${p.permission}`} className="site-permissions-tab__row">
               <span className="site-permissions-tab__origin">{p.origin}</span>
               <span className="site-permissions-tab__permission">{p.permission}</span>
               <span className="site-permissions-tab__decision">{p.decision}</span>

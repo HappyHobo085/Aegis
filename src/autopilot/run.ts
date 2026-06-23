@@ -45,9 +45,14 @@ function liveDeps(): RunDeps {
       const base = (import.meta.env.VITE_AEGIS_AUTOPILOT_FIXTURE as string) || '';
       if (!base) return null;
       // A covering overlay cancels content navigation — return to a clean state first.
-      control.closeSettings(); control.closeDownloads(); control.closeManager();
-      control.setSidebar(false); control.setShield(false); control.exitFullscreen();
-      control.clearError(); control.clearCrash();
+      control.closeSettings();
+      control.closeDownloads();
+      control.closeManager();
+      control.setSidebar(false);
+      control.setShield(false);
+      control.exitFullscreen();
+      control.clearError();
+      control.clearCrash();
       // Event-driven overlays (safety interstitial / permission prompt) shown during the
       // screen walk aren't control-owned; clear them too, or a lingering full overlay
       // cancels the fixture nav — exactly what produced nav=https://malware.test/.
@@ -98,13 +103,41 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
     try {
       await reachScreen(deps.control, screen, { emitEvent: deps.emitEvent });
       if (deps.hasDisplay) {
-        try { await deps.screenshot(screen.id); results.push({ id: `screen:${screen.id}`, kind: 'visual', title: screen.label, status: 'pass', screenshot: `${screen.id}.png` }); }
-        catch (e) { results.push({ id: `screen:${screen.id}`, kind: 'visual', title: screen.label, status: 'fail', detail: String(e) }); }
+        try {
+          await deps.screenshot(screen.id);
+          results.push({
+            id: `screen:${screen.id}`,
+            kind: 'visual',
+            title: screen.label,
+            status: 'pass',
+            screenshot: `${screen.id}.png`,
+          });
+        } catch (e) {
+          results.push({
+            id: `screen:${screen.id}`,
+            kind: 'visual',
+            title: screen.label,
+            status: 'fail',
+            detail: String(e),
+          });
+        }
       } else {
-        results.push({ id: `screen:${screen.id}`, kind: 'visual', title: screen.label, status: 'skip', detail: 'no display' });
+        results.push({
+          id: `screen:${screen.id}`,
+          kind: 'visual',
+          title: screen.label,
+          status: 'skip',
+          detail: 'no display',
+        });
       }
     } catch (e) {
-      results.push({ id: `screen:${screen.id}`, kind: 'visual', title: screen.label, status: 'fail', detail: String(e) });
+      results.push({
+        id: `screen:${screen.id}`,
+        kind: 'visual',
+        title: screen.label,
+        status: 'fail',
+        detail: String(e),
+      });
     } finally {
       await leaveScreen(deps.control, screen, { emitEvent: deps.emitEvent }).catch(() => {});
     }
@@ -112,8 +145,12 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
 
   // 2) Feature exercise (real core)
   for (const f of CATALOG) {
-    try { await f.exercise(deps.api); results.push({ id: f.id, kind: 'core', title: f.title, status: 'pass' }); }
-    catch (e) { results.push({ id: f.id, kind: 'core', title: f.title, status: 'fail', detail: String(e) }); }
+    try {
+      await f.exercise(deps.api);
+      results.push({ id: f.id, kind: 'core', title: f.title, status: 'pass' });
+    } catch (e) {
+      results.push({ id: f.id, kind: 'core', title: f.title, status: 'fail', detail: String(e) });
+    }
   }
 
   // 2b) Functional verification — real round-trips against the real core (LIVE ONLY).
@@ -122,8 +159,24 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
   if (deps.live) {
     for (const f of CATALOG) {
       if (!f.verify) continue;
-      try { const detail = await f.verify(deps.api); results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'pass', detail }); }
-      catch (e) { results.push({ id: `verify:${f.id}`, kind: 'core', title: `Verify ${f.title}`, status: 'fail', detail: String(e) }); }
+      try {
+        const detail = await f.verify(deps.api);
+        results.push({
+          id: `verify:${f.id}`,
+          kind: 'core',
+          title: `Verify ${f.title}`,
+          status: 'pass',
+          detail,
+        });
+      } catch (e) {
+        results.push({
+          id: `verify:${f.id}`,
+          kind: 'core',
+          title: `Verify ${f.title}`,
+          status: 'fail',
+          detail: String(e),
+        });
+      }
     }
   }
 
@@ -131,17 +184,33 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
   if (deps.live) {
     const { INTERACTIONS } = await import('./interactions');
     const { makeLiveCtx } = await import('./interactionCtx');
-    const ctx = makeLiveCtx(deps.api, (s) => reachScreen(deps.control, screenById(s), { emitEvent: deps.emitEvent }));
+    const ctx = makeLiveCtx(deps.api, (s) =>
+      reachScreen(deps.control, screenById(s), { emitEvent: deps.emitEvent }),
+    );
     for (const spec of INTERACTIONS.filter((s) => s.layers.includes('live'))) {
       try {
         await ctx.reach(spec.screen);
         await spec.run(ctx);
         const detail = await spec.assert(ctx);
-        results.push({ id: `interaction:${spec.id}`, kind: 'interaction', title: spec.description, status: 'pass', detail });
+        results.push({
+          id: `interaction:${spec.id}`,
+          kind: 'interaction',
+          title: spec.description,
+          status: 'pass',
+          detail,
+        });
       } catch (e) {
-        results.push({ id: `interaction:${spec.id}`, kind: 'interaction', title: spec.description, status: 'fail', detail: String(e) });
+        results.push({
+          id: `interaction:${spec.id}`,
+          kind: 'interaction',
+          title: spec.description,
+          status: 'fail',
+          detail: String(e),
+        });
       } finally {
-        await leaveScreen(deps.control, screenById(spec.screen), { emitEvent: deps.emitEvent }).catch(() => {});
+        await leaveScreen(deps.control, screenById(spec.screen), {
+          emitEvent: deps.emitEvent,
+        }).catch(() => {});
       }
     }
   }
@@ -158,7 +227,9 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
       if (tabs.some((t) => t.id === PRIMARY_VIEW_ID)) {
         for (const t of tabs) if (t.id !== PRIMARY_VIEW_ID) await deps.api.tabs.close(t.id);
       }
-    } catch { /* best effort — the trace still self-reports */ }
+    } catch {
+      /* best effort — the trace still self-reports */
+    }
   }
 
   // 3) End-to-end ad-block induction. navigateFixture drives a real A/B on the live core:
@@ -173,16 +244,57 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
   //     [aegis-count] A/B trace: ad subresources load with ad-block OFF and vanish with it ON.
   try {
     const r = await deps.navigateFixture();
-    if (!r) results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block live shield count', status: 'skip', detail: 'no fixture url' });
-    else if (r.after > r.before) results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block live shield count', status: 'pass', detail: `count rose ${r.before} -> ${r.after}` });
-    else results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block live shield count', status: 'skip', detail: `count did not rise (${r.before} -> ${r.after}); nav=${r.url ?? '?'} — the content filter blocks these hosts before the counter signal fires, so blocking is proven from the launcher's A/B trace check + adblock_engine unit tests, not the badge` });
+    if (!r)
+      results.push({
+        id: 'induction:adblock',
+        kind: 'core',
+        title: 'Ad-block live shield count',
+        status: 'skip',
+        detail: 'no fixture url',
+      });
+    else if (r.after > r.before)
+      results.push({
+        id: 'induction:adblock',
+        kind: 'core',
+        title: 'Ad-block live shield count',
+        status: 'pass',
+        detail: `count rose ${r.before} -> ${r.after}`,
+      });
+    else
+      results.push({
+        id: 'induction:adblock',
+        kind: 'core',
+        title: 'Ad-block live shield count',
+        status: 'skip',
+        detail: `count did not rise (${r.before} -> ${r.after}); nav=${r.url ?? '?'} — the content filter blocks these hosts before the counter signal fires, so blocking is proven from the launcher's A/B trace check + adblock_engine unit tests, not the badge`,
+      });
   } catch (e) {
-    results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block live shield count', status: 'fail', detail: String(e) });
+    results.push({
+      id: 'induction:adblock',
+      kind: 'core',
+      title: 'Ad-block live shield count',
+      status: 'fail',
+      detail: String(e),
+    });
   }
 
-  const report: Report = { startedAt, finishedAt: deps.now(), display: deps.hasDisplay, results, summary: summarize(results) };
-  try { await deps.writeReport(report, renderReportHtml(report)); } catch { /* ignore in unit tests */ }
-  try { await deps.done(); } catch { /* ignore */ }
+  const report: Report = {
+    startedAt,
+    finishedAt: deps.now(),
+    display: deps.hasDisplay,
+    results,
+    summary: summarize(results),
+  };
+  try {
+    await deps.writeReport(report, renderReportHtml(report));
+  } catch {
+    /* ignore in unit tests */
+  }
+  try {
+    await deps.done();
+  } catch {
+    /* ignore */
+  }
   return report;
 }
 
@@ -190,7 +302,17 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
 // so guard so a missing control surface doesn't throw when fully overridden.
 function liveDepsSafe(partial?: Partial<RunDeps>): RunDeps {
   // Keep this list in sync with the RunDeps interface — a missing key here silently falls through to liveDeps().
-  const required: Array<keyof RunDeps> = ['api','control','screenshot','emitEvent','writeReport','done','hasDisplay','now','navigateFixture'];
+  const required: Array<keyof RunDeps> = [
+    'api',
+    'control',
+    'screenshot',
+    'emitEvent',
+    'writeReport',
+    'done',
+    'hasDisplay',
+    'now',
+    'navigateFixture',
+  ];
   if (partial && required.every((k) => k in partial)) return partial as RunDeps;
   return liveDeps();
 }

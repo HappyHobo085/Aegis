@@ -125,10 +125,12 @@ describe('useDownloads', () => {
   });
 
   it('cancel() delegates to aegis.downloads.cancel with the id and re-fetches the list', async () => {
-    list.mockResolvedValueOnce(seed).mockResolvedValue([
-      dl({ id: 2, filename: 'b.zip', state: 'cancelled', receivedBytes: 500, totalBytes: 1000 }),
-      seed[1],
-    ]);
+    list
+      .mockResolvedValueOnce(seed)
+      .mockResolvedValue([
+        dl({ id: 2, filename: 'b.zip', state: 'cancelled', receivedBytes: 500, totalBytes: 1000 }),
+        seed[1],
+      ]);
     const { result } = renderHook(() => useDownloads());
     await waitFor(() => expect(result.current.downloads).toHaveLength(2));
     await act(async () => {

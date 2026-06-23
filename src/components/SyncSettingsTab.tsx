@@ -63,8 +63,8 @@ export function SyncSettingsTab({
       <div className="sync-tab">
         <h3>Sync server</h3>
         <p>
-          End-to-end encrypted sync across your devices. The server only ever stores encrypted
-          data &mdash; it can&apos;t read your bookmarks, saved items, or allowlist.
+          End-to-end encrypted sync across your devices. The server only ever stores encrypted data
+          &mdash; it can&apos;t read your bookmarks, saved items, or allowlist.
         </p>
         <label className="sync-tab__field">
           <span>Server URL</span>
@@ -73,7 +73,10 @@ export function SyncSettingsTab({
             value={serverUrl}
             placeholder="https://your-sync-server.example"
             aria-label="Sync server URL"
-            onChange={(e) => { setServerUrl(e.target.value); setTestStatus(''); }}
+            onChange={(e) => {
+              setServerUrl(e.target.value);
+              setTestStatus('');
+            }}
             onBlur={() => onSetServerUrl(serverUrl.trim())}
           />
         </label>
@@ -83,7 +86,9 @@ export function SyncSettingsTab({
           onClick={() =>
             void run(async () => {
               const r = await sync.testConnection(serverUrl.trim());
-              setTestStatus(r.ok ? `Connected — ${r.latencyMs} ms` : `Failed: ${r.error ?? 'unreachable'}`);
+              setTestStatus(
+                r.ok ? `Connected — ${r.latencyMs} ms` : `Failed: ${r.error ?? 'unreachable'}`,
+              );
             })
           }
         >
@@ -189,7 +194,9 @@ export function SyncSettingsTab({
               <button
                 type="button"
                 disabled={busy}
-                onClick={() => void run(async () => setDevices(await sync.removeDevice(d.deviceId)))}
+                onClick={() =>
+                  void run(async () => setDevices(await sync.removeDevice(d.deviceId)))
+                }
               >
                 Remove
               </button>

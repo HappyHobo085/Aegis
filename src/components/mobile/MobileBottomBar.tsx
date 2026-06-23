@@ -11,19 +11,36 @@ interface MobileBottomBarProps {
 }
 
 export function MobileBottomBar({
-  onSaved, onHistory, onTabs, tabCount, shield, onMenu,
+  onSaved,
+  onHistory,
+  onTabs,
+  tabCount,
+  shield,
+  onMenu,
 }: MobileBottomBarProps) {
   return (
     <nav className="mobile-bottombar" aria-label="Browser actions">
       <button type="button" className="mobile-bottombar__btn" aria-label="Saved" onClick={onSaved}>
         <Bookmark size={22} aria-hidden="true" />
       </button>
-      <button type="button" className="mobile-bottombar__btn" aria-label="History" onClick={onHistory}>
+      <button
+        type="button"
+        className="mobile-bottombar__btn"
+        aria-label="History"
+        onClick={onHistory}
+      >
         <History size={22} aria-hidden="true" />
       </button>
-      <button type="button" className="mobile-bottombar__btn mobile-bottombar__tabs" aria-label={`Tabs (${tabCount} open)`} onClick={onTabs}>
+      <button
+        type="button"
+        className="mobile-bottombar__btn mobile-bottombar__tabs"
+        aria-label={`Tabs (${tabCount} open)`}
+        onClick={onTabs}
+      >
         <Layers size={20} aria-hidden="true" />
-        <span className="mobile-bottombar__count" aria-hidden="true">{tabCount}</span>
+        <span className="mobile-bottombar__count" aria-hidden="true">
+          {tabCount}
+        </span>
       </button>
       <div className="mobile-bottombar__shield">{shield}</div>
       <button type="button" className="mobile-bottombar__btn" aria-label="Menu" onClick={onMenu}>

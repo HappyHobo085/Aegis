@@ -7,7 +7,23 @@ import { IPC } from '../../shared/types';
 function fake(): AutopilotControl {
   const f = () => vi.fn();
   return Object.fromEntries(
-    ['openSettings','closeSettings','openDownloads','closeDownloads','openManager','closeManager','setSidebar','setShield','enterFullscreen','exitFullscreen','showError','clearError','showCrash','clearCrash','openConfirm'].map((k) => [k, f()]),
+    [
+      'openSettings',
+      'closeSettings',
+      'openDownloads',
+      'closeDownloads',
+      'openManager',
+      'closeManager',
+      'setSidebar',
+      'setShield',
+      'enterFullscreen',
+      'exitFullscreen',
+      'showError',
+      'clearError',
+      'showCrash',
+      'clearCrash',
+      'openConfirm',
+    ].map((k) => [k, f()]),
   ) as unknown as AutopilotControl;
 }
 
@@ -18,15 +34,21 @@ describe('reachScreen', () => {
     expect(c.openDownloads).toHaveBeenCalled();
   });
   it('emits the nav.failed event for the error overlay', async () => {
-    const c = fake(); const emitEvent = vi.fn();
+    const c = fake();
+    const emitEvent = vi.fn();
     await reachScreen(c, { id: 'errorOverlay', label: 'E', via: 'event' }, { emitEvent });
-    expect(emitEvent).toHaveBeenCalledWith(IPC.evtNavFailed, expect.objectContaining({ viewId: expect.any(Number) }));
+    expect(emitEvent).toHaveBeenCalledWith(
+      IPC.evtNavFailed,
+      expect.objectContaining({ viewId: expect.any(Number) }),
+    );
   });
 });
 
 describe('leaveScreen', () => {
   it('dismisses confirmDialog without throwing (no real dialog in jsdom)', async () => {
     const c = fake();
-    await expect(leaveScreen(c, { id: 'confirmDialog', label: 'Confirm', via: 'overlay' })).resolves.toBeUndefined();
+    await expect(
+      leaveScreen(c, { id: 'confirmDialog', label: 'Confirm', via: 'overlay' }),
+    ).resolves.toBeUndefined();
   });
 });

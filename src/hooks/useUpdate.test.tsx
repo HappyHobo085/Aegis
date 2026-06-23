@@ -22,7 +22,11 @@ vi.mock('../lib/ipcClient', () => ({
 import { useUpdate } from './useUpdate';
 
 const st = (over: Partial<UpdateState> = {}): UpdateState => ({
-  status: 'idle', version: null, percent: 0, error: null, ...over,
+  status: 'idle',
+  version: null,
+  percent: 0,
+  error: null,
+  ...over,
 });
 
 beforeEach(() => {

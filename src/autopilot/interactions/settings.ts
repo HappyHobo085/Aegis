@@ -31,10 +31,12 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('settings.set', (a) => {
-            const p = a[0] as Partial<AegisSettings>;
-            return p?.primaryColor !== undefined;
-          }))
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return p?.primaryColor !== undefined;
+            })
+          )
             throw new Error('settings.set not called with primaryColor on Appearance tab');
           return 'Accent color change → settings.set({primaryColor})';
         }
@@ -42,9 +44,12 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         await new Promise((r) => setTimeout(r, 400));
         const after = await ctx.aegis.settings.get();
         if (after.primaryColor === _originalColor)
-          throw new Error(`live: primaryColor did not change from "${_originalColor}" after change`);
+          throw new Error(
+            `live: primaryColor did not change from "${_originalColor}" after change`,
+          );
         // Restore the original color.
-        if (_originalColor !== undefined) await ctx.aegis.settings.set({ primaryColor: _originalColor });
+        if (_originalColor !== undefined)
+          await ctx.aegis.settings.set({ primaryColor: _originalColor });
         return `Accent color → changed from "${_originalColor}" to "${after.primaryColor}" (restored)`;
       },
     } satisfies InteractionSpec;
@@ -59,7 +64,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'settings.search.addEngine',
       domain: 'settings.search',
-      description: 'Fill engine id/name/template and click "Add engine" → settings.set({searchEngines}) called',
+      description:
+        'Fill engine id/name/template and click "Add engine" → settings.set({searchEngines}) called',
       screen: 'settings:search',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -78,10 +84,12 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('settings.set', (a) => {
-            const p = a[0] as Partial<AegisSettings>;
-            return Array.isArray(p?.searchEngines);
-          }))
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return Array.isArray(p?.searchEngines);
+            })
+          )
             throw new Error('settings.set not called with searchEngines after Add engine');
           return 'Add engine → settings.set({searchEngines:[…]})';
         }
@@ -121,7 +129,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'settings.search.setDefault',
       domain: 'settings.search',
-      description: 'Click the "Default search engine" radio for an engine → settings.set({defaultSearchTemplate}) called',
+      description:
+        'Click the "Default search engine" radio for an engine → settings.set({defaultSearchTemplate}) called',
       screen: 'settings:search',
       // vitest excluded: the mock returns searchEngines:[] so no engine rows render
       // and no "Default search engine" radio is available.  The live run has real engines.
@@ -137,16 +146,21 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         // Find an engine whose template differs from the current default.
         const alternate = allEngines.find((e) => e.template !== _originalTemplate);
         if (allEngines.length === 0)
-          throw new Error('No "Default search engine" radio found — searchEngines list may be empty');
+          throw new Error(
+            'No "Default search engine" radio found — searchEngines list may be empty',
+          );
         // Need an engine with a DIFFERENT template so the click produces an observable change;
         // otherwise re-selecting the current default is a no-op the assert can't verify.
         if (!alternate)
-          throw new Error('All search engines share the current default template — no observable change possible');
+          throw new Error(
+            'All search engines share the current default template — no observable change possible',
+          );
         // Click the radio for the alternate engine.
         const targetName = alternate.name;
         _selectedEngineTemplate = alternate.template;
         const radio = ctx.byLabel(new RegExp(`^Default search engine ${targetName}$`));
-        if (!radio) throw new Error(`No "Default search engine" radio found for engine "${targetName}"`);
+        if (!radio)
+          throw new Error(`No "Default search engine" radio found for engine "${targetName}"`);
         await ctx.click(radio);
       },
       assert: async (ctx: InteractionCtx) => {
@@ -154,8 +168,13 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         await new Promise((r) => setTimeout(r, 400));
         const s = await ctx.aegis.settings.get();
         if (!s.defaultSearchTemplate)
-          throw new Error('live: defaultSearchTemplate is empty after clicking default-engine radio');
-        if (_selectedEngineTemplate !== undefined && s.defaultSearchTemplate !== _selectedEngineTemplate)
+          throw new Error(
+            'live: defaultSearchTemplate is empty after clicking default-engine radio',
+          );
+        if (
+          _selectedEngineTemplate !== undefined &&
+          s.defaultSearchTemplate !== _selectedEngineTemplate
+        )
           throw new Error(
             `live: defaultSearchTemplate is "${s.defaultSearchTemplate}", expected "${_selectedEngineTemplate}" for the selected engine`,
           );
@@ -193,10 +212,12 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('settings.set', (a) => {
-            const p = a[0] as Partial<AegisSettings>;
-            return p?.homeUrl !== undefined;
-          }))
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return p?.homeUrl !== undefined;
+            })
+          )
             throw new Error('settings.set not called with homeUrl on Home tab');
           return `Home URL save → settings.set({homeUrl:"${NEW_HOME}"})`;
         }
@@ -204,7 +225,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         const s = await ctx.aegis.settings.get();
         if (s.homeUrl !== NEW_HOME)
           throw new Error(`live: homeUrl is "${s.homeUrl}", expected "${NEW_HOME}"`);
-        if (_originalHomeUrl !== undefined) await ctx.aegis.settings.set({ homeUrl: _originalHomeUrl });
+        if (_originalHomeUrl !== undefined)
+          await ctx.aegis.settings.set({ homeUrl: _originalHomeUrl });
         return `Home URL save → homeUrl="${NEW_HOME}" (restored)`;
       },
     } satisfies InteractionSpec;
@@ -218,7 +240,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'settings.tabs.idleTimeout',
       domain: 'settings.tabs',
-      description: 'Change the idle-discard timeout number input → settings.set({tabIdleTimeout}) called',
+      description:
+        'Change the idle-discard timeout number input → settings.set({tabIdleTimeout}) called',
       screen: 'settings:tabs',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -231,10 +254,12 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('settings.set', (a) => {
-            const p = a[0] as Partial<AegisSettings>;
-            return p?.tabIdleTimeout !== undefined;
-          }))
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return p?.tabIdleTimeout !== undefined;
+            })
+          )
             throw new Error('settings.set not called with tabIdleTimeout on Tabs tab');
           return 'Tabs idle-timeout change → settings.set({tabIdleTimeout})';
         }
@@ -242,7 +267,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         const s = await ctx.aegis.settings.get();
         if (s.tabIdleTimeout === _originalTimeout)
           throw new Error(`live: tabIdleTimeout did not change from ${_originalTimeout}`);
-        if (_originalTimeout !== undefined) await ctx.aegis.settings.set({ tabIdleTimeout: _originalTimeout });
+        if (_originalTimeout !== undefined)
+          await ctx.aegis.settings.set({ tabIdleTimeout: _originalTimeout });
         return `Tabs idle-timeout → tabIdleTimeout changed (restored to ${_originalTimeout})`;
       },
     } satisfies InteractionSpec;
@@ -261,7 +287,11 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     // FIX: mock subs.add to return a probe sub so the list re-renders with it.
     // Then click the Enable switch for it.
     type SubsMockFn = { mockResolvedValue(v: unknown[]): void };
-    const PROBE_SUB = { listId: 'ap7-easylist', url: 'https://ap7.example/list.txt', enabled: true };
+    const PROBE_SUB = {
+      listId: 'ap7-easylist',
+      url: 'https://ap7.example/list.txt',
+      enabled: true,
+    };
     // Closure: capture the sub's enabled state BEFORE the toggle so assert can verify the flip.
     let _targetListId: string | undefined;
     let _preEnabled: boolean | undefined;
@@ -299,7 +329,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
             await new Promise((r) => setTimeout(r, 800));
             toggle = ctx.byRole('switch', /^Enable list /);
           }
-          if (!toggle) throw new Error('No filter-list Enable switch found after trying to add one');
+          if (!toggle)
+            throw new Error('No filter-list Enable switch found after trying to add one');
           // Extract the listId from the aria-label "Enable list <listId>" to read pre-toggle state.
           const ariaLabel = toggle.getAttribute('aria-label') ?? '';
           const listIdMatch = ariaLabel.match(/^Enable list (.+)$/);
@@ -326,7 +357,9 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         const sub = subs.find((s) => s.listId === _targetListId);
         if (!sub) throw new Error(`live: subscription "${_targetListId}" not found after toggle`);
         if (_preEnabled !== undefined && sub.enabled === _preEnabled)
-          throw new Error(`live: sub "${_targetListId}" enabled did not flip (still ${sub.enabled} after toggle)`);
+          throw new Error(
+            `live: sub "${_targetListId}" enabled did not flip (still ${sub.enabled} after toggle)`,
+          );
         return `filter list toggle → "${_targetListId}" enabled flipped ${_preEnabled}→${sub.enabled}`;
       },
     } satisfies InteractionSpec;
@@ -366,7 +399,11 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
 
   (() => {
     type SubsMockFn = { mockResolvedValue(v: unknown[]): void };
-    const PROBE_SUB = { listId: 'ap7-remove', url: 'https://ap7remove.example/list.txt', enabled: true };
+    const PROBE_SUB = {
+      listId: 'ap7-remove',
+      url: 'https://ap7remove.example/list.txt',
+      enabled: true,
+    };
     return {
       id: 'settings.filterLists.removeList',
       domain: 'settings.filterLists',
@@ -442,7 +479,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'settings.myFilters.save',
       domain: 'settings.myFilters',
-      description: 'Edit the custom filters textarea and click Save → customFilters.set called with the text',
+      description:
+        'Edit the custom filters textarea and click Save → customFilters.set called with the text',
       screen: 'settings:myFilters',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -466,7 +504,9 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         await new Promise((r) => setTimeout(r, 400));
         const got = await ctx.aegis.customFilters.get();
         if (!got.includes('ap7test'))
-          throw new Error(`live: customFilters.get() does not contain "ap7test" after save (got: "${got}")`);
+          throw new Error(
+            `live: customFilters.get() does not contain "ap7test" after save (got: "${got}")`,
+          );
         // Restore original filters.
         if (_originalFilters !== undefined) await ctx.aegis.customFilters.set(_originalFilters);
         return `My Filters save → customFilters persisted "ap7test…" (restored)`;
@@ -502,7 +542,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
           // it when absent — the old code passed a full URL, which stores the wrong string
           // so the host never matches. Then nudge useAdblock to re-fetch the tab.
           const st = await ctx.aegis.adblock.getState();
-          if (!st.allowlistedHosts.includes(PROBE_HOST)) await ctx.aegis.adblock.toggleAllowlist(PROBE_HOST);
+          if (!st.allowlistedHosts.includes(PROBE_HOST))
+            await ctx.aegis.adblock.toggleAllowlist(PROBE_HOST);
           await nudgeSync('allowlist');
           await ctx.reach('settings:allowlist');
           await waitFor(
@@ -512,7 +553,10 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         }
         // Find the "Remove <host> from allowlist" button.
         const removeBtn = ctx.byLabel(new RegExp(`Remove ${PROBE_HOST} from allowlist`));
-        if (!removeBtn) throw new Error(`"Remove ${PROBE_HOST} from allowlist" button not found — allowlist may be empty`);
+        if (!removeBtn)
+          throw new Error(
+            `"Remove ${PROBE_HOST} from allowlist" button not found — allowlist may be empty`,
+          );
         await ctx.click(removeBtn);
       },
       assert: async (ctx: InteractionCtx) => {
@@ -548,7 +592,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
           // bug) so the list is non-empty, then nudge useAdblock and wait until the host
           // makes the "Clear all" button enabled (it is disabled on an empty list).
           const st = await ctx.aegis.adblock.getState();
-          if (!st.allowlistedHosts.includes(PROBE_HOST)) await ctx.aegis.adblock.toggleAllowlist(PROBE_HOST);
+          if (!st.allowlistedHosts.includes(PROBE_HOST))
+            await ctx.aegis.adblock.toggleAllowlist(PROBE_HOST);
           await nudgeSync('allowlist');
           await ctx.reach('settings:allowlist');
           await waitFor(() => {
@@ -557,7 +602,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
           }, 'enabled "Clear all" button');
         }
         const clearBtn = ctx.byRole('button', /^Clear all$/);
-        if (!clearBtn) throw new Error('"Clear all" button not found on Allowlist tab — list may be empty');
+        if (!clearBtn)
+          throw new Error('"Clear all" button not found on Allowlist tab — list may be empty');
         await ctx.click(clearBtn);
       },
       assert: async (ctx: InteractionCtx) => {
@@ -570,7 +616,9 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         await new Promise((r) => setTimeout(r, 400));
         const state = await ctx.aegis.adblock.getState();
         if (state.allowlistedHosts.length > 0)
-          throw new Error(`live: allowlist still has ${state.allowlistedHosts.length} hosts after clearAllowlist`);
+          throw new Error(
+            `live: allowlist still has ${state.allowlistedHosts.length} hosts after clearAllowlist`,
+          );
         return 'allowlist Clear all → allowlistedHosts is now empty (live)';
       },
     } satisfies InteractionSpec;
@@ -584,7 +632,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'settings.downloads.saveDir',
       domain: 'settings.downloads',
-      description: 'Type a download folder path and click "Save download folder" → settings.set({downloadDir}) called',
+      description:
+        'Type a download folder path and click "Save download folder" → settings.set({downloadDir}) called',
       screen: 'settings:downloads',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -600,10 +649,12 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('settings.set', (a) => {
-            const p = a[0] as Partial<AegisSettings>;
-            return p?.downloadDir !== undefined;
-          }))
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return p?.downloadDir !== undefined;
+            })
+          )
             throw new Error('settings.set not called with downloadDir after save');
           return `Downloads save folder → settings.set({downloadDir:"${NEW_DIR}"})`;
         }
@@ -636,10 +687,12 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('settings.set', (a) => {
-            const p = a[0] as Partial<AegisSettings>;
-            return p?.downloadDir === '';
-          }))
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return p?.downloadDir === '';
+            })
+          )
             throw new Error('settings.set not called with downloadDir="" after Use default');
           return 'Downloads Use default → settings.set({downloadDir:""})';
         }
@@ -664,7 +717,11 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
   // same re-reach pattern as the allowlist: mock list to return the probe, re-reach.
 
   (() => {
-    const PROBE = { origin: 'https://ap7perm.example', permission: 'camera', decision: 'allow' as const };
+    const PROBE = {
+      origin: 'https://ap7perm.example',
+      permission: 'camera',
+      decision: 'allow' as const,
+    };
     return {
       id: 'settings.sitePermissions.revoke',
       domain: 'settings.sitePermissions',
@@ -679,11 +736,17 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         // → setSitePermissions → usePermissions._setPermissions → React state update).
         await ctx.emitSitePermissions?.([PROBE]);
         const revokeBtn = ctx.byLabel(new RegExp(`Revoke ${PROBE.permission} for ${PROBE.origin}`));
-        if (!revokeBtn) throw new Error(`"Revoke ${PROBE.permission} for ${PROBE.origin}" button not found`);
+        if (!revokeBtn)
+          throw new Error(`"Revoke ${PROBE.permission} for ${PROBE.origin}" button not found`);
         await ctx.click(revokeBtn);
       },
       assert: async (ctx) => {
-        if (!ctx.calls.called('permissions.remove', (a) => a[0] === PROBE.origin && a[1] === PROBE.permission))
+        if (
+          !ctx.calls.called(
+            'permissions.remove',
+            (a) => a[0] === PROBE.origin && a[1] === PROBE.permission,
+          )
+        )
           throw new Error('permissions.remove not called with the probe origin/permission');
         return `sitePermissions revoke → permissions.remove("${PROBE.origin}", "${PROBE.permission}")`;
       },
@@ -691,7 +754,11 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
   })(),
 
   (() => {
-    const PROBE = { origin: 'https://ap7clearall.example', permission: 'microphone', decision: 'allow' as const };
+    const PROBE = {
+      origin: 'https://ap7clearall.example',
+      permission: 'microphone',
+      decision: 'allow' as const,
+    };
     return {
       id: 'settings.sitePermissions.clearAll',
       domain: 'settings.sitePermissions',
@@ -738,10 +805,12 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('settings.set', (a) => {
-            const p = a[0] as Partial<AegisSettings>;
-            return p?.httpsOnly !== undefined;
-          }))
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return p?.httpsOnly !== undefined;
+            })
+          )
             throw new Error('settings.set not called with httpsOnly after toggle');
           return 'HTTPS-Only toggle → settings.set({httpsOnly})';
         }
@@ -750,7 +819,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         if (s.httpsOnly === _originalHttpsOnly)
           throw new Error(`live: httpsOnly did not flip (still ${s.httpsOnly})`);
         // Restore.
-        if (_originalHttpsOnly !== undefined) await ctx.aegis.settings.set({ httpsOnly: _originalHttpsOnly });
+        if (_originalHttpsOnly !== undefined)
+          await ctx.aegis.settings.set({ httpsOnly: _originalHttpsOnly });
         return `HTTPS-Only toggle → httpsOnly flipped ${_originalHttpsOnly}→${s.httpsOnly} (restored)`;
       },
     } satisfies InteractionSpec;
@@ -775,10 +845,12 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('settings.set', (a) => {
-            const p = a[0] as Partial<AegisSettings>;
-            return p?.webrtcPolicy !== undefined;
-          }))
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return p?.webrtcPolicy !== undefined;
+            })
+          )
             throw new Error('settings.set not called with webrtcPolicy after change');
           return 'WebRTC policy change → settings.set({webrtcPolicy})';
         }
@@ -787,7 +859,9 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         if (s.webrtcPolicy === _originalPolicy)
           throw new Error(`live: webrtcPolicy did not change from "${_originalPolicy}"`);
         if (_originalPolicy !== undefined)
-          await ctx.aegis.settings.set({ webrtcPolicy: _originalPolicy as AegisSettings['webrtcPolicy'] });
+          await ctx.aegis.settings.set({
+            webrtcPolicy: _originalPolicy as AegisSettings['webrtcPolicy'],
+          });
         return `WebRTC policy → changed from "${_originalPolicy}" to "${s.webrtcPolicy}" (restored)`;
       },
     } satisfies InteractionSpec;
@@ -814,11 +888,15 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     },
     assert: async (ctx) => {
       // onSetServerUrl calls settings.update({syncServerUrl:…}) which calls settings.set.
-      if (!ctx.calls.called('settings.set', (a) => {
-        const p = a[0] as Partial<AegisSettings>;
-        return p?.syncServerUrl !== undefined;
-      }))
-        throw new Error('settings.set not called with syncServerUrl after blur on Sync server URL input');
+      if (
+        !ctx.calls.called('settings.set', (a) => {
+          const p = a[0] as Partial<AegisSettings>;
+          return p?.syncServerUrl !== undefined;
+        })
+      )
+        throw new Error(
+          'settings.set not called with syncServerUrl after blur on Sync server URL input',
+        );
       return 'Sync server URL blur → settings.set({syncServerUrl})';
     },
   },
@@ -862,7 +940,8 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     layers: ['vitest'],
     run: async (ctx) => {
       const btn = ctx.byRole('button', /^Start new sync$/);
-      if (!btn) throw new Error('"Start new sync" button not found on Sync tab (sync may be enabled)');
+      if (!btn)
+        throw new Error('"Start new sync" button not found on Sync tab (sync may be enabled)');
       await ctx.click(btn);
       // Let the async run() + enableNew mock settle.
       await new Promise((r) => setTimeout(r, 100));
@@ -884,7 +963,10 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     run: async (ctx) => {
       const textarea = ctx.byLabel(/^Recovery phrase$/i);
       if (!textarea) throw new Error('"Recovery phrase" textarea not found on Sync tab');
-      await ctx.type(textarea, 'word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24');
+      await ctx.type(
+        textarea,
+        'word1 word2 word3 word4 word5 word6 word7 word8 word9 word10 word11 word12 word13 word14 word15 word16 word17 word18 word19 word20 word21 word22 word23 word24',
+      );
       const restoreBtn = ctx.byRole('button', /^Restore$/);
       if (!restoreBtn) throw new Error('"Restore" button not found on Sync tab');
       await ctx.click(restoreBtn);
@@ -910,8 +992,9 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       layers: ['vitest'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          (ctx.aegis.data.export as unknown as { mockResolvedValue(v: unknown): void })
-            .mockResolvedValue({ ok: true, path: '/tmp/aegis-export.json' });
+          (
+            ctx.aegis.data.export as unknown as { mockResolvedValue(v: unknown): void }
+          ).mockResolvedValue({ ok: true, path: '/tmp/aegis-export.json' });
         }
         const exportBtn = ctx.byRole('button', /^Export$/);
         if (!exportBtn) throw new Error('"Export" button not found on Data tab');
@@ -967,10 +1050,14 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     },
     assert: async (ctx) => {
       // The "Replace" radio must now be checked.
-      const replaceRadio = ctx.bySelector('input[type="radio"][value="replace"]') as HTMLInputElement | null;
+      const replaceRadio = ctx.bySelector(
+        'input[type="radio"][value="replace"]',
+      ) as HTMLInputElement | null;
       if (!replaceRadio) throw new Error('"Replace" radio not found during assert');
       if (!replaceRadio.checked)
-        throw new Error('"Replace" radio is not checked after clicking it — mode change had no effect');
+        throw new Error(
+          '"Replace" radio is not checked after clicking it — mode change had no effect',
+        );
       return 'Data import mode → "replace" radio is now checked';
     },
   },

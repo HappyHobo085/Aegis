@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a third enumerable catalog of *user interactions* (real gestures on real
+**Goal:** Add a third enumerable catalog of _user interactions_ (real gestures on real
 controls) that drives the chrome UI the way a user does and asserts the effect — run in
 both a continuous vitest tour (mocked core) and the live autopilot (real core) — so the
 tests catch UI-wiring / validation / combination bugs a real user would hit.
@@ -47,33 +47,35 @@ installed — DO NOT add a dependency), the existing autopilot harness.
 
 ## File Structure
 
-| File | Responsibility |
-|---|---|
-| `src/autopilot/interactions.ts` (create) | `InteractionSpec`/`InteractionLayer`/`InteractionCtx`/`CallLog` types + `INTERACTIONS` array + `INTERACTIVE_CONTROLS` registry. |
-| `src/autopilot/interactionCtx.ts` (create) | `makeVitestCtx(...)` + `makeLiveCtx(...)` factories; gesture + query + CallLog implementations per layer. |
-| `src/autopilot/interactions.test.tsx` (create) | Desktop vitest interaction tour (iterates `'vitest'` entries against real `<App/>` + mock). |
-| `src/autopilot/interactions.mobile.test.tsx` (create) | Mobile-shell interaction tour. |
-| `src/autopilot/interactions.coverage.test.ts` (create) | Drift guard for interactions + `INTERACTIVE_CONTROLS`. |
-| `src/autopilot/interactionCtx.test.tsx` (create) | Unit tests for the ctx factories + CallLog. |
-| `src/autopilot/run.ts` (modify) | Step 2c: run `'live'` interactions → `interaction:<id>` result rows. |
-| `src/autopilot/report.ts` (modify) | Add `'interaction'` to `StepResult.kind`. |
-| Component files (modify, as needed) | Add `aria-label`s where a control has no accessible name. |
-| `src/CLAUDE.md`, `scripts/CLAUDE.md` (modify) | Document the third catalog. |
+| File                                                   | Responsibility                                                                                                                  |
+| ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `src/autopilot/interactions.ts` (create)               | `InteractionSpec`/`InteractionLayer`/`InteractionCtx`/`CallLog` types + `INTERACTIONS` array + `INTERACTIVE_CONTROLS` registry. |
+| `src/autopilot/interactionCtx.ts` (create)             | `makeVitestCtx(...)` + `makeLiveCtx(...)` factories; gesture + query + CallLog implementations per layer.                       |
+| `src/autopilot/interactions.test.tsx` (create)         | Desktop vitest interaction tour (iterates `'vitest'` entries against real `<App/>` + mock).                                     |
+| `src/autopilot/interactions.mobile.test.tsx` (create)  | Mobile-shell interaction tour.                                                                                                  |
+| `src/autopilot/interactions.coverage.test.ts` (create) | Drift guard for interactions + `INTERACTIVE_CONTROLS`.                                                                          |
+| `src/autopilot/interactionCtx.test.tsx` (create)       | Unit tests for the ctx factories + CallLog.                                                                                     |
+| `src/autopilot/run.ts` (modify)                        | Step 2c: run `'live'` interactions → `interaction:<id>` result rows.                                                            |
+| `src/autopilot/report.ts` (modify)                     | Add `'interaction'` to `StepResult.kind`.                                                                                       |
+| Component files (modify, as needed)                    | Add `aria-label`s where a control has no accessible name.                                                                       |
+| `src/CLAUDE.md`, `scripts/CLAUDE.md` (modify)          | Document the third catalog.                                                                                                     |
 
 ---
 
 ### Task 1: Interaction catalog types + ctx factories + CallLog
 
 **Files:**
+
 - Create: `src/autopilot/interactions.ts`
 - Create: `src/autopilot/interactionCtx.ts`
 - Test: `src/autopilot/interactionCtx.test.tsx`
 
 **Interfaces:**
+
 - Produces: `InteractionSpec`, `InteractionLayer` (`'vitest'|'live'`), `InteractionCtx`,
   `CallLog`, `INTERACTIONS: InteractionSpec[]` (empty for now), `INTERACTIVE_CONTROLS:
-  Set<string>` (empty for now); `makeVitestCtx(root: HTMLElement, aegis: AegisApi,
-  reach): InteractionCtx`, `makeLiveCtx(aegis: AegisApi, reach): InteractionCtx`.
+Set<string>` (empty for now); `makeVitestCtx(root: HTMLElement, aegis: AegisApi,
+reach): InteractionCtx`, `makeLiveCtx(aegis: AegisApi, reach): InteractionCtx`.
 
 - [ ] **Step 1: Write `interactions.ts` types + empty registries**
 
@@ -140,12 +142,16 @@ type Reach = (screen: SID) => Promise<void>;
 
 /** Resolve a dotted path ('favorites.add') against an object; undefined if absent. */
 function resolve(obj: unknown, path: string): unknown {
-  return path.split('.').reduce<unknown>((o, k) => (o == null ? o : (o as Record<string, unknown>)[k]), obj);
+  return path
+    .split('.')
+    .reduce<unknown>((o, k) => (o == null ? o : (o as Record<string, unknown>)[k]), obj);
 }
 
 /** CallLog over a vitest-mocked aegis (every method is a vi.fn with a `.mock.calls`). */
 function vitestCallLog(aegis: AegisApi): CallLog {
-  const fn = (path: string): { mock?: { calls: unknown[][] }; mockClear?: () => void } | undefined =>
+  const fn = (
+    path: string,
+  ): { mock?: { calls: unknown[][] }; mockClear?: () => void } | undefined =>
     resolve(aegis, path) as never;
   return {
     of: (path) => fn(path)?.mock?.calls ?? [],
@@ -158,7 +164,8 @@ function vitestCallLog(aegis: AegisApi): CallLog {
       const walk = (o: unknown) => {
         if (o && typeof o === 'object') {
           for (const v of Object.values(o)) {
-            if (typeof v === 'function' && (v as { mockClear?: () => void }).mockClear) (v as { mockClear: () => void }).mockClear();
+            if (typeof v === 'function' && (v as { mockClear?: () => void }).mockClear)
+              (v as { mockClear: () => void }).mockClear();
             else if (v && typeof v === 'object') walk(v);
           }
         }
@@ -175,14 +182,19 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
   const user = userEvent.setup();
   const q = within(root);
   const keyMap: Record<string, string> = {
-    Enter: '{Enter}', Escape: '{Escape}',
-    'ctrl+t': '{Control>}t{/Control}', 'ctrl+w': '{Control>}w{/Control}',
+    Enter: '{Enter}',
+    Escape: '{Escape}',
+    'ctrl+t': '{Control>}t{/Control}',
+    'ctrl+w': '{Control>}w{/Control}',
     'ctrl+shift+t': '{Control>}{Shift>}t{/Shift}{/Control}',
   };
   return {
     layer: 'vitest',
     click: (el) => user.click(el),
-    type: async (el, text) => { await user.clear(el); await user.type(el, text); },
+    type: async (el, text) => {
+      await user.clear(el);
+      await user.type(el, text);
+    },
     press: (key) => user.keyboard(keyMap[key]),
     byRole: (role, name) => q.queryByRole(role, name ? { name } : undefined) as HTMLElement | null,
     byText: (text) => q.queryByText(text) as HTMLElement | null,
@@ -197,14 +209,21 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
 export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
   const root = document.body;
   const setNativeValue = (el: Element, value: string) => {
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const proto =
+      el instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value')?.set?.call(el, value);
   };
   const fire = (el: Element, key: string, mods: Partial<KeyboardEventInit> = {}) =>
-    el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...mods }));
+    el.dispatchEvent(
+      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...mods }),
+    );
   return {
     layer: 'live',
-    click: async (el) => { (el as HTMLElement).click(); },
+    click: async (el) => {
+      (el as HTMLElement).click();
+    },
     type: async (el, text) => {
       (el as HTMLElement).focus();
       setNativeValue(el, text);
@@ -220,19 +239,36 @@ export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
     },
     byRole: (role, name) => {
       // Minimal live role lookup: buttons + links + textboxes by accessible name.
-      const sel = role === 'button' ? 'button,[role="button"]' : role === 'textbox' ? 'input,textarea' : `[role="${role}"]`;
+      const sel =
+        role === 'button'
+          ? 'button,[role="button"]'
+          : role === 'textbox'
+            ? 'input,textarea'
+            : `[role="${role}"]`;
       const els = Array.from(root.querySelectorAll(sel)) as HTMLElement[];
       if (!name) return els[0] ?? null;
       const re = name instanceof RegExp ? name : new RegExp(`^${name}$`);
-      return els.find((e) => re.test((e.getAttribute('aria-label') || e.textContent || '').trim())) ?? null;
+      return (
+        els.find((e) => re.test((e.getAttribute('aria-label') || e.textContent || '').trim())) ??
+        null
+      );
     },
     byText: (text) => {
-      const re = text instanceof RegExp ? text : new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      return (Array.from(root.querySelectorAll('*')) as HTMLElement[]).find((e) => e.children.length === 0 && re.test(e.textContent || '')) ?? null;
+      const re =
+        text instanceof RegExp ? text : new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      return (
+        (Array.from(root.querySelectorAll('*')) as HTMLElement[]).find(
+          (e) => e.children.length === 0 && re.test(e.textContent || ''),
+        ) ?? null
+      );
     },
     byLabel: (label) => {
       const re = label instanceof RegExp ? label : new RegExp(`^${label}$`);
-      return (Array.from(root.querySelectorAll('[aria-label]')) as HTMLElement[]).find((e) => re.test(e.getAttribute('aria-label') || '')) ?? null;
+      return (
+        (Array.from(root.querySelectorAll('[aria-label]')) as HTMLElement[]).find((e) =>
+          re.test(e.getAttribute('aria-label') || ''),
+        ) ?? null
+      );
     },
     bySelector: (sel) => root.querySelector(sel),
     aegis,
@@ -256,7 +292,9 @@ describe('makeVitestCtx', () => {
     const fakeAegis = { favorites: { add: vi.fn(async () => []) } } as never;
     const { container } = render(
       <div>
-        <button aria-label="Add" onClick={onClick}>+</button>
+        <button aria-label="Add" onClick={onClick}>
+          +
+        </button>
         <input aria-label="URL" defaultValue="" />
       </div>,
     );
@@ -281,22 +319,26 @@ describe('makeVitestCtx', () => {
 ### Task 2: Tour runner + drift guard + live step 2c + first interaction
 
 **Files:**
+
 - Create: `src/autopilot/interactions.test.tsx`
 - Create: `src/autopilot/interactions.coverage.test.ts`
 - Modify: `src/autopilot/interactions.ts` (add the first interaction + control)
 - Modify: `src/autopilot/run.ts` (step 2c), `src/autopilot/report.ts` (`'interaction'` kind)
 
 **Interfaces:**
+
 - Consumes: `INTERACTIONS`, `makeVitestCtx`, `makeLiveCtx`, `reachScreen`, `RunDeps.live`.
 - Produces: the running tours + the `interaction:<id>` report rows.
 
 - [ ] **Step 1: Add `'interaction'` to `report.ts` `StepResult.kind`**
 
 In `src/autopilot/report.ts`, change the `kind` union to include `'interaction'`:
+
 ```ts
 // find:    kind: 'visual' | 'core';
 // replace: kind: 'visual' | 'core' | 'interaction';
 ```
+
 (Apply to the `StepResult` interface and any `summarize` typing that enumerates kinds.)
 
 - [ ] **Step 2: Add the first interaction (address bar → navigate) to `interactions.ts`**
@@ -330,6 +372,7 @@ In `src/autopilot/report.ts`, change the `kind` union to include `'interaction'`
   },
 },
 ```
+
 And add `'toolbar.addressBar'` to `INTERACTIVE_CONTROLS`.
 
 > NOTE for the implementer: open `src/components/Toolbar.tsx` + `AddressBar.tsx` and confirm
@@ -348,12 +391,23 @@ import { reachScreen } from './reach';
 import { getAutopilotControl } from './control';
 import { SCREENS, type ScreenId } from './screens';
 
-vi.mock('../lib/ipcClient', async () => (await import('../testFixtures/aegisMock')).aegisMockModule());
+vi.mock('../lib/ipcClient', async () =>
+  (await import('../testFixtures/aegisMock')).aegisMockModule(),
+);
 
 const screenById = (id: ScreenId) => SCREENS.find((s) => s.id === id)!;
 
-beforeEach(() => { vi.stubEnv('VITE_AEGIS_AUTOPILOT', '1'); vi.spyOn(window, 'confirm').mockReturnValue(true); });
-afterEach(() => { cleanup(); delete (window as Record<string, unknown>).__aegisAutopilot; vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.resetModules(); });
+beforeEach(() => {
+  vi.stubEnv('VITE_AEGIS_AUTOPILOT', '1');
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+});
+afterEach(() => {
+  cleanup();
+  delete (window as Record<string, unknown>).__aegisAutopilot;
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  vi.resetModules();
+});
 
 describe('desktop interaction tour', () => {
   for (const spec of INTERACTIONS.filter((s) => s.layers.includes('vitest'))) {
@@ -362,15 +416,22 @@ describe('desktop interaction tour', () => {
       const { aegis } = await import('../lib/ipcClient');
       const { container } = render(<App />);
       const control = getAutopilotControl()!;
-      const ctx = makeVitestCtx(container, aegis, (s) => reachScreen(control, screenById(s), { emitEvent: vi.fn() }));
-      await act(async () => { await ctx.reach(spec.screen); });
+      const ctx = makeVitestCtx(container, aegis, (s) =>
+        reachScreen(control, screenById(s), { emitEvent: vi.fn() }),
+      );
+      await act(async () => {
+        await ctx.reach(spec.screen);
+      });
       ctx.calls.reset();
-      await act(async () => { await spec.run(ctx); });
+      await act(async () => {
+        await spec.run(ctx);
+      });
       await expect(spec.assert(ctx), spec.id).resolves.toBeTruthy();
     });
   }
 });
 ```
+
 > Note: event-driven screens (errorOverlay, safety, permission, redirectBar) won't render
 > from `reachScreen` here because the tour passes a no-op `emitEvent` — those interactions
 > are handled specially in Task 8 (the `emitViaMock` helper), so Task 3–7 interactions
@@ -386,7 +447,9 @@ import { SCREENS } from './screens';
 
 describe('interaction coverage drift guard', () => {
   const ids = INTERACTIONS.map((i) => i.id);
-  it('interaction ids are unique', () => { expect(new Set(ids).size).toBe(ids.length); });
+  it('interaction ids are unique', () => {
+    expect(new Set(ids).size).toBe(ids.length);
+  });
   it('every interaction targets a real screen and declares ≥1 layer', () => {
     const screens = new Set(SCREENS.map((s) => s.id));
     for (const i of INTERACTIONS) {
@@ -396,7 +459,10 @@ describe('interaction coverage drift guard', () => {
   });
   it('every registered interactive control has ≥1 interaction', () => {
     for (const control of INTERACTIVE_CONTROLS)
-      expect(ids.some((id) => id.startsWith(control)), `control ${control} has no interaction`).toBe(true);
+      expect(
+        ids.some((id) => id.startsWith(control)),
+        `control ${control} has no interaction`,
+      ).toBe(true);
   });
 });
 ```
@@ -404,26 +470,44 @@ describe('interaction coverage drift guard', () => {
 - [ ] **Step 5: Wire live step 2c in `run.ts`**
 
 After the "2b) Functional verification" block, add (live-only):
+
 ```ts
-  // 2c) Interaction tour (LIVE ONLY): drive real gestures on the real chrome UI.
-  if (deps.live) {
-    const { INTERACTIONS } = await import('./interactions');
-    const { makeLiveCtx } = await import('./interactionCtx');
-    const ctx = makeLiveCtx(deps.api, (s) => reachScreen(deps.control, screenById(s), { emitEvent: deps.emitEvent }));
-    for (const spec of INTERACTIONS.filter((s) => s.layers.includes('live'))) {
-      try {
-        await ctx.reach(spec.screen);
-        await spec.run(ctx);
-        const detail = await spec.assert(ctx);
-        results.push({ id: `interaction:${spec.id}`, kind: 'interaction', title: spec.description, status: 'pass', detail });
-      } catch (e) {
-        results.push({ id: `interaction:${spec.id}`, kind: 'interaction', title: spec.description, status: 'fail', detail: String(e) });
-      } finally {
-        await leaveScreen(deps.control, screenById(spec.screen), { emitEvent: deps.emitEvent }).catch(() => {});
-      }
+// 2c) Interaction tour (LIVE ONLY): drive real gestures on the real chrome UI.
+if (deps.live) {
+  const { INTERACTIONS } = await import('./interactions');
+  const { makeLiveCtx } = await import('./interactionCtx');
+  const ctx = makeLiveCtx(deps.api, (s) =>
+    reachScreen(deps.control, screenById(s), { emitEvent: deps.emitEvent }),
+  );
+  for (const spec of INTERACTIONS.filter((s) => s.layers.includes('live'))) {
+    try {
+      await ctx.reach(spec.screen);
+      await spec.run(ctx);
+      const detail = await spec.assert(ctx);
+      results.push({
+        id: `interaction:${spec.id}`,
+        kind: 'interaction',
+        title: spec.description,
+        status: 'pass',
+        detail,
+      });
+    } catch (e) {
+      results.push({
+        id: `interaction:${spec.id}`,
+        kind: 'interaction',
+        title: spec.description,
+        status: 'fail',
+        detail: String(e),
+      });
+    } finally {
+      await leaveScreen(deps.control, screenById(spec.screen), { emitEvent: deps.emitEvent }).catch(
+        () => {},
+      );
     }
   }
+}
 ```
+
 Add a `screenById` helper in `run.ts`: `const screenById = (id: ScreenId) => SCREENS.find((s) => s.id === id)!;` (import `SCREENS` + `ScreenId`).
 
 - [ ] **Step 6: Run** — `npm test` — Expected: PASS (new tour has 1 interaction; coverage + run.test.ts green).
@@ -474,22 +558,24 @@ Add a `screenById` helper in `run.ts`: `const screenById = (id: ScreenId) => SCR
 > branch degrade to a returned skip-detail rather than throw.
 
 #### Task 3: toolbar + shield popover
+
 **Screen:** `home` (toolbar), `shieldPopover`. Add interactions + controls:
 
-| id | gesture | expected effect (vitest call / live state) | layers |
-|---|---|---|---|
-| `toolbar.back` | click Back (`aria-label="Back"`) | `nav.back` called | both |
-| `toolbar.forward` | click Forward | `nav.forward` called | both |
-| `toolbar.reload` | click Reload/Stop | `nav.reloadOrStop` called | both |
-| `toolbar.home` | click Home | `nav.home` called | both |
-| `toolbar.addressBar.search` | type `hello world` + Enter | `nav.navigate` called with a search URL containing `hello` | both |
-| `toolbar.bookmarkStar.add` | click star | `favorites.add` called; live: `favorites.list()` contains the current url | both |
-| `toolbar.bookmarkStar.remove` | click star again | `favorites.remove` called; live: url gone from list | both |
-| `toolbar.picker` | click picker | `picker.start` called | vitest |
-| `shieldPopover.toggleAdblock` | open popover → click toggle | `adblock.setEnabled` called | both |
-| `shieldPopover.allowlistSite` | open popover → click allowlist | `adblock.toggleAllowlist` called | both |
+| id                            | gesture                          | expected effect (vitest call / live state)                                | layers |
+| ----------------------------- | -------------------------------- | ------------------------------------------------------------------------- | ------ |
+| `toolbar.back`                | click Back (`aria-label="Back"`) | `nav.back` called                                                         | both   |
+| `toolbar.forward`             | click Forward                    | `nav.forward` called                                                      | both   |
+| `toolbar.reload`              | click Reload/Stop                | `nav.reloadOrStop` called                                                 | both   |
+| `toolbar.home`                | click Home                       | `nav.home` called                                                         | both   |
+| `toolbar.addressBar.search`   | type `hello world` + Enter       | `nav.navigate` called with a search URL containing `hello`                | both   |
+| `toolbar.bookmarkStar.add`    | click star                       | `favorites.add` called; live: `favorites.list()` contains the current url | both   |
+| `toolbar.bookmarkStar.remove` | click star again                 | `favorites.remove` called; live: url gone from list                       | both   |
+| `toolbar.picker`              | click picker                     | `picker.start` called                                                     | vitest |
+| `shieldPopover.toggleAdblock` | open popover → click toggle      | `adblock.setEnabled` called                                               | both   |
+| `shieldPopover.allowlistSite` | open popover → click allowlist   | `adblock.toggleAllowlist` called                                          | both   |
 
 Full example (`toolbar.bookmarkStar.add`):
+
 ```ts
 {
   id: 'toolbar.bookmarkStar.add', domain: 'toolbar',
@@ -511,22 +597,24 @@ Full example (`toolbar.bookmarkStar.add`):
   },
 },
 ```
+
 > The bookmark `add`/`remove` pair must run in sequence and clean up (live: ensure the
 > probe favorite is removed at the end). Confirm the star's `aria-label` in
 > `BookmarkButton.tsx`; add one if missing.
 
 #### Task 4: tabs + keyboard shortcuts
+
 **Screen:** `home`. Controls: TabStrip new/activate/close/pin/reorder + Ctrl+T/W/Shift+T.
 
-| id | gesture | expected | layers |
-|---|---|---|---|
-| `tabs.newButton` | click `+` (`aria-label="New tab"`) | `tabs.create` called; live: tab count +1 | both |
-| `tabs.activate` | click a second tab | `tabs.activate` called | both |
-| `tabs.close` | click a tab's X | `tabs.close` called; live: count −1 | both |
-| `tabs.setPinned` | pin via context/menu | `tabs.setPinned` called | vitest |
-| `keyboard.newTab` | `press('ctrl+t')` | `tabs.create` called OR `tabs.shortcut` path | both |
-| `keyboard.closeTab` | `press('ctrl+w')` | close path invoked | vitest |
-| `keyboard.reopenTab` | `press('ctrl+shift+t')` | `tabs.reopenClosed` path | vitest |
+| id                   | gesture                            | expected                                     | layers |
+| -------------------- | ---------------------------------- | -------------------------------------------- | ------ |
+| `tabs.newButton`     | click `+` (`aria-label="New tab"`) | `tabs.create` called; live: tab count +1     | both   |
+| `tabs.activate`      | click a second tab                 | `tabs.activate` called                       | both   |
+| `tabs.close`         | click a tab's X                    | `tabs.close` called; live: count −1          | both   |
+| `tabs.setPinned`     | pin via context/menu               | `tabs.setPinned` called                      | vitest |
+| `keyboard.newTab`    | `press('ctrl+t')`                  | `tabs.create` called OR `tabs.shortcut` path | both   |
+| `keyboard.closeTab`  | `press('ctrl+w')`                  | close path invoked                           | vitest |
+| `keyboard.reopenTab` | `press('ctrl+shift+t')`            | `tabs.reopenClosed` path                     | vitest |
 
 > Implementer: confirm how the desktop tab shortcuts are delivered to the chrome (native
 > accelerator vs a DOM key handler). In vitest there is no native layer, so a shortcut that
@@ -535,18 +623,19 @@ Full example (`toolbar.bookmarkStar.add`):
 > `App.tsx`/`TabStrip.tsx` before choosing layers; do not guess.
 
 #### Task 5: favorites bar/manager + sidebar history
+
 **Screens:** `home` (favbar), `favoritesManager`, `sidebar:history`.
 
-| id | gesture | expected | layers |
-|---|---|---|---|
-| `favbar.openFavorite` | click a favorite chip | `nav.navigate` to its url | both |
-| `favManager.add` | open manager → add | `favorites.add` called | both |
-| `favManager.rename` | edit a name → save | `favorites.update` called; live: name changed | both |
-| `favManager.delete` | click delete | `favorites.remove` called; live: gone | both |
-| `sidebar.history.openEntry` | click a history row | `nav.navigate` | both |
-| `sidebar.history.deleteEntry` | click row delete | `history.remove` called | both |
-| `sidebar.history.search` | type in search box | `history.search` called with the query | both |
-| `sidebar.history.clear` | click Clear (confirm) | `history.clear` called | both |
+| id                            | gesture               | expected                                      | layers |
+| ----------------------------- | --------------------- | --------------------------------------------- | ------ |
+| `favbar.openFavorite`         | click a favorite chip | `nav.navigate` to its url                     | both   |
+| `favManager.add`              | open manager → add    | `favorites.add` called                        | both   |
+| `favManager.rename`           | edit a name → save    | `favorites.update` called; live: name changed | both   |
+| `favManager.delete`           | click delete          | `favorites.remove` called; live: gone         | both   |
+| `sidebar.history.openEntry`   | click a history row   | `nav.navigate`                                | both   |
+| `sidebar.history.deleteEntry` | click row delete      | `history.remove` called                       | both   |
+| `sidebar.history.search`      | type in search box    | `history.search` called with the query        | both   |
+| `sidebar.history.clear`       | click Clear (confirm) | `history.clear` called                        | both   |
 
 > Seeding: in the live run, history/favorites may be empty when the sidebar opens. For
 > `openEntry`/`deleteEntry`, first ensure a row exists (navigate, or `favorites.add`) then
@@ -554,16 +643,17 @@ Full example (`toolbar.bookmarkStar.add`):
 > `favorites.list`/`history.list` return ≥1 row, or seed via the mock before rendering.
 
 #### Task 6: sidebar saved + tags
+
 **Screen:** `sidebar:saved`. Controls: saved add/edit/delete + tag add/rename/delete + tag-chip filter.
 
-| id | gesture | expected | layers |
-|---|---|---|---|
-| `sidebar.saved.openEntry` | click a saved row | `nav.navigate` | both |
-| `sidebar.saved.delete` | click delete | `saved.remove` called | both |
-| `sidebar.saved.addTag` | add a tag to an item | `saved.update` called with the new tags | both |
-| `sidebar.saved.renameTag` | rename a tag | `saved.renameTag` called | both |
-| `sidebar.saved.deleteTag` | delete a tag | `saved.deleteTag` called | both |
-| `sidebar.saved.filterByTag` | click a tag chip | list filters (UI assertion: only matching rows visible) | vitest |
+| id                          | gesture              | expected                                                | layers |
+| --------------------------- | -------------------- | ------------------------------------------------------- | ------ |
+| `sidebar.saved.openEntry`   | click a saved row    | `nav.navigate`                                          | both   |
+| `sidebar.saved.delete`      | click delete         | `saved.remove` called                                   | both   |
+| `sidebar.saved.addTag`      | add a tag to an item | `saved.update` called with the new tags                 | both   |
+| `sidebar.saved.renameTag`   | rename a tag         | `saved.renameTag` called                                | both   |
+| `sidebar.saved.deleteTag`   | delete a tag         | `saved.deleteTag` called                                | both   |
+| `sidebar.saved.filterByTag` | click a tag chip     | list filters (UI assertion: only matching rows visible) | vitest |
 
 > The tag-edit UI affordances live in `SavedPanel.tsx`. Open it and confirm the exact
 > controls (an input + add button? inline chips with an X?) before writing selectors; add
@@ -571,22 +661,23 @@ Full example (`toolbar.bookmarkStar.add`):
 > call — assert via `ctx.byText`/row count.
 
 #### Task 7: settings (every tab)
+
 **Screens:** `settings:<tab>` for each `SettingsTab` in `TAB_ORDER`. One interaction per
 control. Representative set (add ALL controls on each tab):
 
-| id | gesture | expected | layers |
-|---|---|---|---|
-| `settings.appearance.primaryColor` | change color input | `settings.set({primaryColor})` | both |
-| `settings.search.engine` | pick an engine / set template | `settings.set` | both |
-| `settings.home.homeUrl` | type a home URL | `settings.set({homeUrl})` | both |
-| `settings.tabs.idleTimeout` | change timeout | `settings.set({tabIdleTimeout})` | both |
-| `settings.filterLists.toggleSub` | toggle a subscription | `subs.setEnabled` | both |
-| `settings.myFilters.save` | edit textarea + Save | `customFilters.set` with the text | both |
-| `settings.allowlist.add` | type host + Add | `adblock.toggleAllowlist` | both |
-| `settings.allowlist.remove` | click remove on a host | `adblock.removeAllowlist` | both |
-| `settings.security.httpsOnly` | toggle | `settings.set({httpsOnly})` | both |
-| `settings.security.webrtc` | change policy | `settings.set({webrtcPolicy})` | both |
-| `settings.data.export` | click Export | `data.export` called | both |
+| id                                 | gesture                       | expected                          | layers |
+| ---------------------------------- | ----------------------------- | --------------------------------- | ------ |
+| `settings.appearance.primaryColor` | change color input            | `settings.set({primaryColor})`    | both   |
+| `settings.search.engine`           | pick an engine / set template | `settings.set`                    | both   |
+| `settings.home.homeUrl`            | type a home URL               | `settings.set({homeUrl})`         | both   |
+| `settings.tabs.idleTimeout`        | change timeout                | `settings.set({tabIdleTimeout})`  | both   |
+| `settings.filterLists.toggleSub`   | toggle a subscription         | `subs.setEnabled`                 | both   |
+| `settings.myFilters.save`          | edit textarea + Save          | `customFilters.set` with the text | both   |
+| `settings.allowlist.add`           | type host + Add               | `adblock.toggleAllowlist`         | both   |
+| `settings.allowlist.remove`        | click remove on a host        | `adblock.removeAllowlist`         | both   |
+| `settings.security.httpsOnly`      | toggle                        | `settings.set({httpsOnly})`       | both   |
+| `settings.security.webrtc`         | change policy                 | `settings.set({webrtcPolicy})`    | both   |
+| `settings.data.export`             | click Export                  | `data.export` called              | both   |
 
 > Reach each tab with `screen: 'settings:<tab>'` (the existing `reachScreen` opens Settings
 > and clicks the tab). Confirm each control's accessible name in its `*Tab.tsx` component.
@@ -594,22 +685,23 @@ control. Representative set (add ALL controls on each tab):
 > handler fires) and do not trigger a real import live.
 
 #### Task 8: overlays
+
 **Screens:** `downloads`, `confirmDialog`, `errorOverlay`, `crashOverlay`,
 `safetyInterstitial`, `permissionPrompt`, `redirectBar`.
 
-| id | gesture | expected | layers |
-|---|---|---|---|
-| `downloads.clear` | open modal → Clear | `downloads.clear` called | vitest |
-| `confirm.confirm` | open confirm → OK | the confirm resolver runs (UI closes) | vitest |
-| `confirm.cancel` | open confirm → Cancel | dialog closes, no action | vitest |
-| `errorOverlay.retry` | emit nav.failed → click Retry | `nav.reloadOrStop`/reload path | vitest |
-| `crashOverlay.reload` | emit nav.crashed → click Reload | reload path | vitest |
-| `safety.proceed` | emit interstitial → Proceed | `safety.proceed` called | vitest |
-| `safety.back` | emit interstitial → Back | `nav.back`/dismiss | vitest |
-| `permission.allow` | emit prompt → Allow | `permissions.resolve(allow)` | vitest |
-| `permission.deny` | emit prompt → Deny | `permissions.resolve(deny)` | vitest |
-| `redirectBar.openAnyway` | emit redirect.blocked → Open anyway | `tabs.create(to)` called | vitest |
-| `redirectBar.dismiss` | emit redirect.blocked → X | bar hidden (UI assertion) | vitest |
+| id                       | gesture                             | expected                              | layers |
+| ------------------------ | ----------------------------------- | ------------------------------------- | ------ |
+| `downloads.clear`        | open modal → Clear                  | `downloads.clear` called              | vitest |
+| `confirm.confirm`        | open confirm → OK                   | the confirm resolver runs (UI closes) | vitest |
+| `confirm.cancel`         | open confirm → Cancel               | dialog closes, no action              | vitest |
+| `errorOverlay.retry`     | emit nav.failed → click Retry       | `nav.reloadOrStop`/reload path        | vitest |
+| `crashOverlay.reload`    | emit nav.crashed → click Reload     | reload path                           | vitest |
+| `safety.proceed`         | emit interstitial → Proceed         | `safety.proceed` called               | vitest |
+| `safety.back`            | emit interstitial → Back            | `nav.back`/dismiss                    | vitest |
+| `permission.allow`       | emit prompt → Allow                 | `permissions.resolve(allow)`          | vitest |
+| `permission.deny`        | emit prompt → Deny                  | `permissions.resolve(deny)`           | vitest |
+| `redirectBar.openAnyway` | emit redirect.blocked → Open anyway | `tabs.create(to)` called              | vitest |
+| `redirectBar.dismiss`    | emit redirect.blocked → X           | bar hidden (UI assertion)             | vitest |
 
 > These are mostly `['vitest']`: their preconditions are synthesized events the live core
 > won't emit on demand. In vitest, the tour's `reachScreen` for these event-screens calls
@@ -625,17 +717,18 @@ control. Representative set (add ALL controls on each tab):
 > event-screen interactions. Verify each hook's subscription method name before wiring.
 
 #### Task 9: edge/error inputs + state combinations
+
 **Screens:** various. These assert graceful handling (no crash, no bad call).
 
-| id | gesture | expected | layers |
-|---|---|---|---|
-| `edge.addressBar.empty` | focus address bar, clear, Enter | NO `nav.navigate` (or navigate to home), no crash | both |
-| `edge.addressBar.malformed` | type `ht!tp://x`, Enter | navigates as search or no-op, no crash | both |
-| `edge.favorite.duplicate` | bookmark the same url twice | only one favorite (live: list has 1) | live |
-| `edge.tag.whitespace` | add a `'   '` tag | tag rejected/trimmed (no empty tag) | both |
-| `edge.bookmark.doubleClick` | click star twice rapidly | net toggle correct (not double-add) | vitest |
-| `combo.settingsOverSidebar` | open sidebar, then Settings | both states correct, no crash | vitest |
-| `combo.tabSwitchWithModal` | open downloads modal, switch tab | modal state consistent | vitest |
+| id                          | gesture                          | expected                                          | layers |
+| --------------------------- | -------------------------------- | ------------------------------------------------- | ------ |
+| `edge.addressBar.empty`     | focus address bar, clear, Enter  | NO `nav.navigate` (or navigate to home), no crash | both   |
+| `edge.addressBar.malformed` | type `ht!tp://x`, Enter          | navigates as search or no-op, no crash            | both   |
+| `edge.favorite.duplicate`   | bookmark the same url twice      | only one favorite (live: list has 1)              | live   |
+| `edge.tag.whitespace`       | add a `'   '` tag                | tag rejected/trimmed (no empty tag)               | both   |
+| `edge.bookmark.doubleClick` | click star twice rapidly         | net toggle correct (not double-add)               | vitest |
+| `combo.settingsOverSidebar` | open sidebar, then Settings      | both states correct, no crash                     | vitest |
+| `combo.tabSwitchWithModal`  | open downloads modal, switch tab | modal state consistent                            | vitest |
 
 > Each `assert` checks the absence of a bad effect (e.g. `ctx.calls.of('nav.navigate')`
 > length is 0 for empty input) AND that `<App/>` is still mounted (`document.querySelector('.app')`).
@@ -645,28 +738,29 @@ control. Representative set (add ALL controls on each tab):
 ### Task 10: mobile interactions + docs + final drift-guard enforcement
 
 **Files:**
+
 - Create: `src/autopilot/interactions.mobile.test.tsx`
 - Modify: `src/autopilot/interactions.ts` (mobile-only controls if any), `src/CLAUDE.md`,
   `scripts/CLAUDE.md`
 
 - [ ] **Step 1:** Write `interactions.mobile.test.tsx` mirroring `interactions.test.tsx` but
-  rendering the mobile shell (set the `.aegis-mobile` path as `tour.mobile.test.tsx` does —
-  open that file and copy its mobile-bootstrap). Run only interactions whose `screen`/control
-  exists on mobile (filter by a `mobile?: boolean` flag added to the relevant specs, or a
-  `domain` allowlist). Add mobile-only controls (bottom bar, menu sheet, tab switcher) as
-  new interactions if not already covered.
+      rendering the mobile shell (set the `.aegis-mobile` path as `tour.mobile.test.tsx` does —
+      open that file and copy its mobile-bootstrap). Run only interactions whose `screen`/control
+      exists on mobile (filter by a `mobile?: boolean` flag added to the relevant specs, or a
+      `domain` allowlist). Add mobile-only controls (bottom bar, menu sheet, tab switcher) as
+      new interactions if not already covered.
 - [ ] **Step 2:** Document the third catalog in `src/CLAUDE.md` (a new "Interactions" bullet
-  in the autopilot section: `interactions.ts` + `interactionCtx.ts` + the two tours + the
-  drift guard + live step 2c) and in `scripts/CLAUDE.md` (the live run now also reports
-  `interaction:*` rows).
+      in the autopilot section: `interactions.ts` + `interactionCtx.ts` + the two tours + the
+      drift guard + live step 2c) and in `scripts/CLAUDE.md` (the live run now also reports
+      `interaction:*` rows).
 - [ ] **Step 3:** Confirm `INTERACTIVE_CONTROLS` lists every interactive control across all
-  domains and the drift guard passes; if any control is intentionally not interaction-tested
-  (truly OS/dialog-bound), document why in a comment next to the registry (mirroring
-  `UNTESTED_CHANNELS`).
+      domains and the drift guard passes; if any control is intentionally not interaction-tested
+      (truly OS/dialog-bound), document why in a comment next to the registry (mirroring
+      `UNTESTED_CHANNELS`).
 - [ ] **Step 4:** Run `npm test` — Expected: all green.
 - [ ] **Step 5: Live verification** — `bash scripts/autopilot/run-autopilot.sh` — Expected:
-  `RESULT: … 0 failed`, the new `interaction:*` rows pass, `ad-block blocking (trace): PASS`.
-  Paste the result. Any failing `interaction:*` row is a real bug — triage before final commit.
+      `RESULT: … 0 failed`, the new `interaction:*` rows pass, `ad-block blocking (trace): PASS`.
+      Paste the result. Any failing `interaction:*` row is a real bug — triage before final commit.
 - [ ] **Step 6: Commit** — `git add -A && git commit -m "feat(autopilot): mobile interactions + docs + drift-guard enforcement"`
 
 ---

@@ -30,6 +30,7 @@ A survey established the real state, correcting the spec's §1.1 line ("document
 3. **The Android keystore connection was already fixed and device-verified** at commit `03f0012` ("fix(android): sync Restore/enable aborts the app — capture JavaVM in JNI_OnLoad", on a Galaxy S23) — that is what made the spec's "documented but not connected" line stale. So sub-project J is **finish + harden + re-verify**, NOT build-from-scratch.
 
 **Therefore the genuine remaining work is exactly:**
+
 - (J1) Make the Kotlin keygen prefer **StrongBox**, retrying without it when the device lacks a Secure Element (so `Keychain` means the strongest hardware the device has).
 - (J2) Add Rust **unit-test coverage** for the backing-selection invariants that are testable off-device (the `VaultBacking` enum contract + passphrase round-trip already partly covered — extend, don't duplicate).
 - (J3) Run the **two compile gates** (`cargo check --target aarch64-linux-android`, `compileUniversalDebugKotlin`) and the **manual device** wrap/unwrap verify, and confirm the autopilot/IPC drift-guard needs no new entry.
@@ -38,10 +39,10 @@ A survey established the real state, correcting the spec's §1.1 line ("document
 
 ## File Structure
 
-| File | Responsibility | Change |
-|---|---|---|
-| `src-tauri/gen/android/app/src/main/java/com/aegis/browser/AegisKeystore.kt` | Hardware wrap/unwrap of the seed via `AndroidKeyStore`. | **Modify** — make `secretKey()` prefer StrongBox with a TEE fallback; keep the exact `wrap([B)…`/`unwrap(…)[B` JvmStatic signatures + null-on-failure contract. |
-| `src-tauri/src/sync_keystore.rs` | Seed-at-rest selection (`store_root`/`load_root`/`has_stored_root`/`clear_root`), the `android_keystore` JNI up-call, `VaultBacking`, passphrase wrap/unwrap. | **Modify** — add `#[test]`s for the platform-agnostic invariants (`VaultBacking::as_str` mapping, passphrase round-trip tamper-rejection). The android JNI code is already correct — do **not** touch its signatures or the `JNI_OnLoad`/`catch_unwind` structure. |
+| File                                                                         | Responsibility                                                                                                                                                | Change                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `src-tauri/gen/android/app/src/main/java/com/aegis/browser/AegisKeystore.kt` | Hardware wrap/unwrap of the seed via `AndroidKeyStore`.                                                                                                       | **Modify** — make `secretKey()` prefer StrongBox with a TEE fallback; keep the exact `wrap([B)…`/`unwrap(…)[B` JvmStatic signatures + null-on-failure contract.                                                                                                    |
+| `src-tauri/src/sync_keystore.rs`                                             | Seed-at-rest selection (`store_root`/`load_root`/`has_stored_root`/`clear_root`), the `android_keystore` JNI up-call, `VaultBacking`, passphrase wrap/unwrap. | **Modify** — add `#[test]`s for the platform-agnostic invariants (`VaultBacking::as_str` mapping, passphrase round-trip tamper-rejection). The android JNI code is already correct — do **not** touch its signatures or the `JNI_OnLoad`/`catch_unwind` structure. |
 
 No other files change. No new module, no new IPC channel, no UI, no autopilot catalog/screen entry (confirmed in Task 4).
 
@@ -50,9 +51,11 @@ No other files change. No new module, no new IPC channel, no UI, no autopilot ca
 ### Task 1: Make the Android keystore prefer StrongBox (graceful TEE fallback)
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/AegisKeystore.kt` (the `secretKey()` private fn)
 
 **Interfaces:**
+
 - Consumes: nothing new — `secretKey()` is private and is already called by `wrap`/`unwrap`.
 - Produces: unchanged public surface — `@JvmStatic fun wrap(data: ByteArray): String?` and `@JvmStatic fun unwrap(blob: String): ByteArray?`, both on `object AegisKeystore` in package `com.aegis.browser`, both returning `null` on any failure. The Rust descriptors `([B)Ljava/lang/String;` / `(Ljava/lang/String;)[B` MUST keep matching — do not rename or re-sign these methods.
 
@@ -109,6 +112,7 @@ Replace the entire existing `private fun secretKey(): SecretKey { … }` block w
 ```
 
 Notes for the implementer:
+
 - `setIsStrongBoxBacked` is guarded by `SDK_INT >= P` (API 28) because it doesn't exist below P; `minSdk` is 24, so this guard is required to compile-and-run on 24–27.
 - `StrongBoxUnavailableException` is `android.security.keystore.StrongBoxUnavailableException` (API 28+). Catching it inside the `>= P` branch is safe — that class is only referenced where the SDK guarantees it.
 - Do **not** add `setUserAuthenticationRequired(true)`: the seed must unwrap at boot with no user present (`sync::start` → `load_root(app, None)` auto-unlocks). Requiring auth would break headless boot auto-unlock — which is exactly the fail-safe-to-passphrase path we are trying to make unnecessary on Android.
@@ -140,9 +144,11 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ### Task 2: Rust unit tests for the platform-agnostic backing invariants
 
 **Files:**
+
 - Modify: `src-tauri/src/sync_keystore.rs` (the existing `#[cfg(test)] mod tests` block at the bottom)
 
 **Interfaces:**
+
 - Consumes: `VaultBacking` (the `Keychain | Passphrase | None` enum and its `as_str()`), `wrap_with_passphrase`, `unwrap_with_passphrase`, `RootSecret` — all already in this file (RootSecret re-exported via `use super::*`).
 - Produces: nothing consumed downstream; pure test coverage.
 
@@ -286,6 +292,7 @@ adb logcat | grep -iE "aegis|keystore|AndroidKeyStore|StrongBox|SIGABRT|ndk"
 ```
 
 Then, in the app: **Settings → Sync → Start new sync** (this calls `store_root` → `android_keystore::wrap` → `AegisKeystore.wrap`). Expected, on a real device:
+
 - The app does **NOT** close/crash (the `03f0012` JNI_OnLoad fix prevents the old SIGABRT; this task confirms the StrongBox change didn't reintroduce a crash). No `ndk_context`/`SIGABRT` in logcat.
 - The UI shows the sync backing as **keychain** (driven by `SyncState.vaultBacking`), confirming `store_root` returned `VaultBacking::Keychain` (i.e. `wrap` succeeded and `sync-keystore-vault.json` was written) rather than falling through to passphrase/none.
 - **Auto-unlock round-trip:** force-stop and relaunch the app. `sync::start` → `has_stored_root` (sees `sync-keystore-vault.json`) → `load_root(app, None)` → `android_keystore::unwrap` → `AegisKeystore.unwrap` must return the same 32 bytes, so sync re-enables at boot with no passphrase. Confirm sync shows enabled/keychain after relaunch.
@@ -311,6 +318,7 @@ If no doc line needs changing (B already handled it), skip the commit and note t
 ## Self-Review
 
 **1. Spec coverage (§ J — "Connect the Rust JNI path to the existing `AegisKeystore.kt` so the sync/vault seed is hardware-anchored on Android (StrongBox/`KeyGenParameterSpec`), keeping the passphrase fallback. Acceptance: Android device wraps/unwraps via hardware Keystore; fallback still works headless"):**
+
 - "Hardware-anchored on Android (StrongBox/KeyGenParameterSpec)" → **Task 1** adds `setIsStrongBoxBacked(true)` with the TEE fallback; the existing `KeyGenParameterSpec` is retained.
 - "Connect the Rust JNI path" → the survey established it is **already connected** (callers in `sync.rs`, `JNI_OnLoad` capture, matching descriptors); the plan documents this in "Current-state findings" and Task 3 compile-verifies the android Rust path. No re-wiring needed (verified, not assumed).
 - "keeping the passphrase fallback" → **Task 1** Step 3 note (no `setUserAuthenticationRequired`, StrongBox→TEE retry) preserves it; **Task 2** unit-tests the passphrase fallback round-trip + tamper rejection.

@@ -64,7 +64,7 @@ surface through the real Rust core in an isolated, disposable environment.
 - **`summarize.mjs`** — prints the run summary and computes the **authoritative ad-block
   blocking verdict** from the `[aegis-count]` A/B trace in `app.log`. The live shield
   COUNT can't prove blocking for well-known hosts (the WebKit content filter cancels a
-  matched request *before* `resource-load-started` fires, so the counter never sees it —
+  matched request _before_ `resource-load-started` fires, so the counter never sees it —
   see `src-tauri/src/linux_layout.rs`). Instead the fixture is loaded twice — ad-block
   OFF (`?ab=off`, filter removed) then ON (`?ab=on`, filter active) — and the verdict is
   PASS when ad subresources fire in the OFF phase and **vanish** in the ON phase, FAIL if

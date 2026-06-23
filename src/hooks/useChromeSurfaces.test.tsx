@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { ChromeSurfaceProvider, useChromeSurface, useChromeSurfaceRegistry } from './useChromeSurfaces';
+import {
+  ChromeSurfaceProvider,
+  useChromeSurface,
+  useChromeSurfaceRegistry,
+} from './useChromeSurfaces';
 
 function CountProbe() {
   const { openSurfaces } = useChromeSurfaceRegistry();

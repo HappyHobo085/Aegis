@@ -1,6 +1,11 @@
 // src/components/mobile/MobileApp.tsx
 import { useEffect, useState } from 'react';
-import { aegis, setBackInterceptActive, setBottomBarHidden as setNativeBottomBarHidden, setFullscreen as setNativeFullscreen } from '../../lib/ipcClient';
+import {
+  aegis,
+  setBackInterceptActive,
+  setBottomBarHidden as setNativeBottomBarHidden,
+  setFullscreen as setNativeFullscreen,
+} from '../../lib/ipcClient';
 import { applyTheme } from '../../lib/theme';
 import { useTabs } from '../../hooks/useTabs';
 import { useNav } from '../../hooks/useNav';
@@ -51,7 +56,12 @@ declare global {
 type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | 'tabs' | null;
 
 function hostOf(url: string): string | null {
-  try { const h = new URL(url).hostname; return h.length > 0 ? h : null; } catch { return null; }
+  try {
+    const h = new URL(url).hostname;
+    return h.length > 0 ? h : null;
+  } catch {
+    return null;
+  }
 }
 
 export function MobileApp() {
@@ -73,15 +83,21 @@ export function MobileApp() {
   const [bottomBarHidden, setBottomBarHidden] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
 
-  useEffect(() => { void aegis.settings.get().then((s) => applyTheme(s)); }, []);
+  useEffect(() => {
+    void aegis.settings.get().then((s) => applyTheme(s));
+  }, []);
 
   // Manual bottom-bar toggle (the top-bar button): tell the native side to hide/show the
   // bar so the content webview reclaims (or restores) the bar's bottom-margin gap.
-  useEffect(() => { setNativeBottomBarHidden(bottomBarHidden); }, [bottomBarHidden]);
+  useEffect(() => {
+    setNativeBottomBarHidden(bottomBarHidden);
+  }, [bottomBarHidden]);
 
   // Chrome-hiding fullscreen (the top-bar Maximize button; desktop parity): native drops
   // the top + bottom content margins so the page fills the safe area; React hides the bars.
-  useEffect(() => { setNativeFullscreen(fullscreen); }, [fullscreen]);
+  useEffect(() => {
+    setNativeFullscreen(fullscreen);
+  }, [fullscreen]);
 
   const overlayOpen = sheet !== null || shieldOpen;
   useEffect(() => {
@@ -93,7 +109,9 @@ export function MobileApp() {
       if (sheet !== null) setSheet(null);
       else if (fullscreen) setFullscreen(false);
     };
-    return () => { delete window.__aegisMobileBack; };
+    return () => {
+      delete window.__aegisMobileBack;
+    };
   }, [sheet, fullscreen]);
 
   // Allow native Android code to open a URL in a new tab (target=_blank / window.open).
@@ -102,8 +120,12 @@ export function MobileApp() {
   // useTabs), not the whole `tabs` object — which is re-created every render and would
   // reinstall this each render.
   useEffect(() => {
-    window.__aegisOpenTab = (url) => { void tabs.create(url, true); };
-    return () => { delete window.__aegisOpenTab; };
+    window.__aegisOpenTab = (url) => {
+      void tabs.create(url, true);
+    };
+    return () => {
+      delete window.__aegisOpenTab;
+    };
   }, [tabs.create]);
 
   // On Android the Rust core can't observe the content WebView's title (there's no
@@ -179,9 +201,15 @@ export function MobileApp() {
         <MobileTabSwitcher
           tabs={tabs.tabs}
           activeId={tabs.activeId}
-          onSwitch={(id) => { void tabs.activate(id); setSheet(null); }}
+          onSwitch={(id) => {
+            void tabs.activate(id);
+            setSheet(null);
+          }}
           onCloseTab={(id) => void tabs.close(id)}
-          onNewTab={() => { void tabs.create('about:blank'); setSheet(null); }}
+          onNewTab={() => {
+            void tabs.create('about:blank');
+            setSheet(null);
+          }}
           onClose={() => setSheet(null)}
         />
       )}
@@ -195,7 +223,10 @@ export function MobileApp() {
             search={history.search}
             remove={history.remove}
             clear={history.clear}
-            onOpen={(url) => { void nav.navigate(url); setSheet(null); }}
+            onOpen={(url) => {
+              void nav.navigate(url);
+              setSheet(null);
+            }}
           />
         </MobileSheet>
       )}
@@ -212,7 +243,10 @@ export function MobileApp() {
             update={(id, partial) => void saved.update(id, partial)}
             renameTag={(oldT, newT) => void saved.renameTag(oldT, newT)}
             deleteTag={(tag) => void saved.deleteTag(tag)}
-            onOpen={(url) => { void nav.navigate(url); setSheet(null); }}
+            onOpen={(url) => {
+              void nav.navigate(url);
+              setSheet(null);
+            }}
           />
         </MobileSheet>
       )}

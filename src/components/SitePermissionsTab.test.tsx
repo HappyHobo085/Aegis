@@ -41,9 +41,7 @@ describe('SitePermissionsTab', () => {
     render(
       <SitePermissionsTab
         {...props({
-          permissions: [
-            perm({ origin: 'https://a.test', permission: 'media', decision: 'deny' }),
-          ],
+          permissions: [perm({ origin: 'https://a.test', permission: 'media', decision: 'deny' })],
         })}
       />,
     );

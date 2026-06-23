@@ -79,8 +79,7 @@ export function AdblockShield(props: AdblockShieldProps) {
 
   // Blocking is effectively active for this host only when the global toggle is
   // on AND the host isn't allowlisted.
-  const allowlisted =
-    props.host !== null && props.state.allowlistedHosts.includes(props.host);
+  const allowlisted = props.host !== null && props.state.allowlistedHosts.includes(props.host);
   const blockingActive = props.state.enabled && !allowlisted;
   const ShieldIcon = blockingActive ? Shield : ShieldOff;
 

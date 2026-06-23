@@ -56,7 +56,10 @@ describe('SettingsModal', () => {
 
   it('shows the Appearance panel by default and marks its tab selected', () => {
     render(<SettingsModal {...props()} />);
-    expect(screen.getByRole('tab', { name: /appearance/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /appearance/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(screen.getByTestId('panel-appearance')).toBeInTheDocument();
     expect(screen.queryByTestId('panel-search')).not.toBeInTheDocument();
   });
@@ -64,7 +67,10 @@ describe('SettingsModal', () => {
   it('switches to another tab on click', async () => {
     render(<SettingsModal {...props()} />);
     await userEvent.click(screen.getByRole('tab', { name: /filter lists/i }));
-    expect(screen.getByRole('tab', { name: /filter lists/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /filter lists/i })).toHaveAttribute(
+      'aria-selected',
+      'true',
+    );
     expect(screen.getByTestId('panel-filterLists')).toBeInTheDocument();
     expect(screen.queryByTestId('panel-appearance')).not.toBeInTheDocument();
   });

@@ -19,7 +19,7 @@ Android (iOS is a future, macOS/Xcode-gated tier).
 - The **Rust core is NOT standalone** — Tauri serves the built React UI. From
   `src-tauri/tauri.conf.json`: `frontendDist: "../dist"` and
   `beforeBuildCommand: "npm run build:renderer"`. Deleting the frontend breaks
-  the build. The frontend *is* part of the Rust implementation.
+  the build. The frontend _is_ part of the Rust implementation.
 - Desktop runs **one chrome webview + one content webview per tab** via Tauri's
   unstable `Window::add_child`. The active tab's webview is visible; background
   tabs are hidden; idle tabs are discarded and reloaded on next activation.
@@ -28,19 +28,19 @@ Android (iOS is a future, macOS/Xcode-gated tier).
 
 ## Folder map
 
-| Folder       | What it is                          | Has its own CLAUDE.md |
-|--------------|-------------------------------------|-----------------------|
-| `src/`       | React renderer (the UI / "chrome")  | yes                   |
-| `src-tauri/` | Rust core + native platform code    | yes                   |
-| `shared/`    | `types.ts` — the IPC contract       | yes                   |
-| `scripts/`   | npm-audit CI gate (Node ESM)        | yes                   |
-| `sync-server/` | Self-hosted E2E sync server (Rust/axum, standalone) | yes |
-| `.github/`   | CI workflows + Dependabot           | yes                   |
-| `dist/`      | Vite build output (gitignored)      | generated, no docs    |
-| `node_modules/` | npm deps (gitignored)            | generated, no docs    |
+| Folder          | What it is                                          | Has its own CLAUDE.md |
+| --------------- | --------------------------------------------------- | --------------------- |
+| `src/`          | React renderer (the UI / "chrome")                  | yes                   |
+| `src-tauri/`    | Rust core + native platform code                    | yes                   |
+| `shared/`       | `types.ts` — the IPC contract                       | yes                   |
+| `scripts/`      | npm-audit CI gate (Node ESM)                        | yes                   |
+| `sync-server/`  | Self-hosted E2E sync server (Rust/axum, standalone) | yes                   |
+| `.github/`      | CI workflows + Dependabot                           | yes                   |
+| `dist/`         | Vite build output (gitignored)                      | generated, no docs    |
+| `node_modules/` | npm deps (gitignored)                               | generated, no docs    |
 
 > **The `CLAUDE.md` files are living docs.** Every folder's `CLAUDE.md` (this one
-> included) documents *current* behavior — when a change makes one stale, update it
+> included) documents _current_ behavior — when a change makes one stale, update it
 > in the same commit. Treat them as part of the code, not a one-time snapshot.
 
 ## Commands
@@ -103,7 +103,7 @@ only in dev (`VITE_AEGIS_AUTOPILOT`) and is dead-code-eliminated from production
     interaction tour (continuous) and, for Linux-runtime behavior, the live autopilot.
   - **Gate:** `npm test` green, and run `bash scripts/autopilot/run-autopilot.sh` (Linux)
     for any change that touches runtime behavior — `RESULT: … 0 failed` and `ad-block
-    blocking (trace): PASS`. A push that adds a capability without its autopilot coverage
+blocking (trace): PASS`. A push that adds a capability without its autopilot coverage
     is incomplete.
 
 ## Status (as of the Tauri migration branch)
@@ -111,7 +111,7 @@ only in dev (`VITE_AEGIS_AUTOPILOT`) and is dead-code-eliminated from production
 Linux desktop is verified on real hardware. Windows desktop is verified on real
 hardware (Windows 11): browses and ad-blocks — both the WebView2 network tier
 (`adblock_win`) and the injected tier — with no crash, and the CI-built portable
-exe behaves identically to a local build. (The shield block-*counter* is still
+exe behaves identically to a local build. (The shield block-_counter_ is still
 Linux-only; ad-block works on Windows, it just isn't counted on the badge — see the
 adblock note in `src-tauri/CLAUDE.md`.) Android browses + ad-blocks + is secure
 (verified on emulator). macOS compiles + bundles green in CI but is not yet

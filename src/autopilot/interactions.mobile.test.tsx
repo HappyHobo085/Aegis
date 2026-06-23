@@ -21,7 +21,9 @@ import { render, act, cleanup } from '@testing-library/react';
 import { INTERACTIONS } from './interactions';
 import { makeVitestCtx } from './interactionCtx';
 
-vi.mock('../lib/ipcClient', async () => (await import('../testFixtures/aegisMock')).aegisMockModule());
+vi.mock('../lib/ipcClient', async () =>
+  (await import('../testFixtures/aegisMock')).aegisMockModule(),
+);
 
 // Filter: mobile specs only (marked mobile: true) that run in vitest.
 const MOBILE_SPECS = INTERACTIONS.filter((s) => s.mobile === true && s.layers.includes('vitest'));
@@ -54,7 +56,9 @@ describe('mobile interaction tour', () => {
       const ctx = makeVitestCtx(container, aegis, async () => {});
       // No reachScreen call needed: mobile specs start from the rendered home state.
       ctx.calls.reset();
-      await act(async () => { await spec.run(ctx); });
+      await act(async () => {
+        await spec.run(ctx);
+      });
       await expect(spec.assert(ctx), spec.id).resolves.toBeTruthy();
     });
   }

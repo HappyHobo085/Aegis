@@ -35,7 +35,9 @@ const KEY = '__aegisAutopilot';
 
 export function installAutopilotControl(c: AutopilotControl): () => void {
   (window as unknown as Record<string, AutopilotControl>)[KEY] = c;
-  return () => { delete (window as unknown as Record<string, unknown>)[KEY]; };
+  return () => {
+    delete (window as unknown as Record<string, unknown>)[KEY];
+  };
 }
 
 export function getAutopilotControl(): AutopilotControl | undefined {

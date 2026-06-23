@@ -159,8 +159,12 @@ describe('useHistory', () => {
 
     let resolveStale: (v: HistoryEntry[]) => void = () => {};
     let resolveFresh: (v: HistoryEntry[]) => void = () => {};
-    const stale = new Promise<HistoryEntry[]>((r) => { resolveStale = r; });
-    const fresh = new Promise<HistoryEntry[]>((r) => { resolveFresh = r; });
+    const stale = new Promise<HistoryEntry[]>((r) => {
+      resolveStale = r;
+    });
+    const fresh = new Promise<HistoryEntry[]>((r) => {
+      resolveFresh = r;
+    });
     const staleData = [entry(1, 'https://a.example/', 'A', 1000)];
     const freshData = [entry(9, 'https://new.example/', 'NEW', 9000), ...seed];
 
@@ -173,15 +177,24 @@ describe('useHistory', () => {
     await waitFor(() => expect(pushed).toBeTypeOf('function'));
     await waitFor(() => expect(result.current.entries).toHaveLength(2)); // seed loaded
 
-    act(() => { pushed!(); pushed!(); }); // fire both refreshes (stale started first)
+    act(() => {
+      pushed!();
+      pushed!();
+    }); // fire both refreshes (stale started first)
 
     // The NEWER refresh resolves FIRST and must apply.
-    await act(async () => { resolveFresh(freshData); await fresh; });
+    await act(async () => {
+      resolveFresh(freshData);
+      await fresh;
+    });
     await waitFor(() => expect(result.current.entries[0]?.title).toBe('NEW'));
     expect(result.current.entries).toHaveLength(3);
 
     // The OLDER (stale) refresh resolves LAST — it must be discarded, not clobber.
-    await act(async () => { resolveStale(staleData); await stale; });
+    await act(async () => {
+      resolveStale(staleData);
+      await stale;
+    });
     expect(result.current.entries).toHaveLength(3);
     expect(result.current.entries[0].title).toBe('NEW');
   });

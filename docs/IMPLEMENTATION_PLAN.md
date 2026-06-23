@@ -10,11 +10,11 @@ This plan folds in every adversarial-review correction. Where a reviewer marked 
 
 ### 1.1 The three deliverables
 
-| # | Deliverable | What it is |
-|---|-------------|------------|
-| **F0** | **Shared foundation** | Atomic durable writes for every JSON/text store; `adblock_inject::script()` refactored `&'static str` → owned `String`; a real Android document-start injection path (today Android injects *nothing*) + the missing pop-under guard on Android; the worked 3-places IPC/settings/event pattern as the template for F1/F2. |
-| **F1** | **WebRTC IP-leak defense** | A tri-state `webrtcPolicy` setting (`'default' | 'public-only' | 'disable'`, default `'public-only'`) implemented as a per-session document-start JS shim (RTCPeerConnection wrap + ICE-candidate filter + SDP rewrite, keeping TURN/relay) plus per-platform native backstops, a per-site escape hatch reusing the adblock allowlist, and an honest worker-bypass residual matrix. |
-| **F2** | **E2E-encrypted sync** | Two halves: **F2a** the sync **data-layer retrofit** (uuid + HLC + tombstones across every store + the in-memory allowlist; per-key settings; atomic writes already from F0; lazy on-disk migration; cross-platform post-merge adblock refresh) and **F2b** the sync **engine** (crypto key tree, restored Ed25519 signed-token auth, pull/merge/push client, device pairing, the full IPC surface, OS-keychain seed anchoring, export exclusion, `useSync` hook + Sync settings tab). |
+| #      | Deliverable                | What it is                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| ------ | -------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **F0** | **Shared foundation**      | Atomic durable writes for every JSON/text store; `adblock_inject::script()` refactored `&'static str` → owned `String`; a real Android document-start injection path (today Android injects _nothing_) + the missing pop-under guard on Android; the worked 3-places IPC/settings/event pattern as the template for F1/F2.                                                                                                                                                             |
+| **F1** | **WebRTC IP-leak defense** | A tri-state `webrtcPolicy` setting (`'default'                                                                                                                                                                                                                                                                                                                                                                                                                                         | 'public-only' | 'disable'`, default `'public-only'`) implemented as a per-session document-start JS shim (RTCPeerConnection wrap + ICE-candidate filter + SDP rewrite, keeping TURN/relay) plus per-platform native backstops, a per-site escape hatch reusing the adblock allowlist, and an honest worker-bypass residual matrix. |
+| **F2** | **E2E-encrypted sync**     | Two halves: **F2a** the sync **data-layer retrofit** (uuid + HLC + tombstones across every store + the in-memory allowlist; per-key settings; atomic writes already from F0; lazy on-disk migration; cross-platform post-merge adblock refresh) and **F2b** the sync **engine** (crypto key tree, restored Ed25519 signed-token auth, pull/merge/push client, device pairing, the full IPC surface, OS-keychain seed anchoring, export exclusion, `useSync` hook + Sync settings tab). |
 
 ### 1.2 Dependency graph
 
@@ -45,17 +45,17 @@ This plan folds in every adversarial-review correction. Where a reviewer marked 
 
 Key facts driving the order (all verified against the code):
 
-- **F0 must land first.** F1 bakes its WebRTC shim into the `String` that F0's refactored `script()` returns and into the Android doc-start path F0 builds. F2a needs F0's atomic-write primitive *with the concurrency fix* (see §2.1) because F2b's sync thread and the IPC thread both write the same stores. F1 and F2a are independent of each other and can proceed in parallel after F0.
+- **F0 must land first.** F1 bakes its WebRTC shim into the `String` that F0's refactored `script()` returns and into the Android doc-start path F0 builds. F2a needs F0's atomic-write primitive _with the concurrency fix_ (see §2.1) because F2b's sync thread and the IPC thread both write the same stores. F1 and F2a are independent of each other and can proceed in parallel after F0.
 - **F2b is a hard contract against F2a** (reviewer: "a contract against vapor" today — grep confirms zero uuid/hlc/tombstone infra exists). F2b's `sync.rs` references `SyncRecord`/`Hlc`/`apply_remote`/`local_changes_since`/`cursor`. **F2a must land with the exact signatures named in §4 before F2b is implemented**, or F2b inherits silent data-loss bugs no F2b test can catch (its tests use a fake store).
 
 ### 1.3 Phased build order + effort
 
-| Phase | Deliverable | Effort | Gating notes |
-|-------|-------------|--------|--------------|
-| **Phase 0** | F0 Foundation | **M** | No new top-level Cargo deps. Android `cargo check --target aarch64-linux-android` + JDK-21 build are HARD gates (not checkable on this Linux host). |
-| **Phase 1** | F1 WebRTC | **L** | Parallelizable with Phase 2 after Phase 0. Linux GUI-leak-verified on real HW; Win/mac/Android via CI-compile + on-device follow-up. |
-| **Phase 2** | F2a Sync data-layer | **L** | Must precede Phase 3. `adblock_engine.rs` pulled into scope for `reload_lists` (see §4 fix). |
-| **Phase 3** | F2b Sync engine | **XL** | Hard dep on Phase 2 contract. Crypto deps cross-compile gate on windows-gnu + aarch64-linux-android. Android Keystore JNI device-only-verifiable. |
+| Phase       | Deliverable         | Effort | Gating notes                                                                                                                                        |
+| ----------- | ------------------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Phase 0** | F0 Foundation       | **M**  | No new top-level Cargo deps. Android `cargo check --target aarch64-linux-android` + JDK-21 build are HARD gates (not checkable on this Linux host). |
+| **Phase 1** | F1 WebRTC           | **L**  | Parallelizable with Phase 2 after Phase 0. Linux GUI-leak-verified on real HW; Win/mac/Android via CI-compile + on-device follow-up.                |
+| **Phase 2** | F2a Sync data-layer | **L**  | Must precede Phase 3. `adblock_engine.rs` pulled into scope for `reload_lists` (see §4 fix).                                                        |
+| **Phase 3** | F2b Sync engine     | **XL** | Hard dep on Phase 2 contract. Crypto deps cross-compile gate on windows-gnu + aarch64-linux-android. Android Keystore JNI device-only-verifiable.   |
 
 Total: roughly **M + L + L + XL**. Phases 1 and 2 overlap; Phase 3 is the long pole and cannot start until Phase 2's record model is frozen.
 
@@ -126,16 +126,16 @@ pub fn read_text_with_backup(path: &std::path::Path) -> Option<String> {
 
 Rewrite `save()` to build `txt` then `write_atomic(&p, txt.as_bytes()).map_err(|e| e.to_string())`. Rewrite `load()` to source via `read_with_backup(&p)` instead of the bare `read_to_string`. `next_id` (line 38) and `now_ms` are unchanged.
 
-> ⚠️ **Reviewer "atomicity" wording fix:** `std::fs::rename`'s own docs do *not* guarantee an atomic replace and do *not* name `MoveFileEx/REPLACE_EXISTING`. State only what's true: temp-then-rename in the **same directory** (tmp is a sibling of the target) replaces an existing file and is the standard durable-write idiom — strictly better than truncate-then-write. Don't overclaim atomicity in comments.
+> ⚠️ **Reviewer "atomicity" wording fix:** `std::fs::rename`'s own docs do _not_ guarantee an atomic replace and do _not_ name `MoveFileEx/REPLACE_EXISTING`. State only what's true: temp-then-rename in the **same directory** (tmp is a sibling of the target) replaces an existing file and is the standard durable-write idiom — strictly better than truncate-then-write. Don't overclaim atomicity in comments.
 
 ### 2.2 Route the other stores through the helpers
 
 Open each file and match by string (line numbers drift; reviewer found the `settings.set` block mis-cited):
 
-- **`settings.rs`** — `write()` (~37-44), the `settings.set` dispatch write block (**real range ~107-126**, *not* 112-124), and `load()`'s `read_to_string` (~line 85). `write()` and the dispatch arm use `crate::jsonstore::write_atomic(&p, …)`; `load()` uses `read_with_backup` (settings is an object — the helper validates generic JSON, so it works). The defaults overlay is unchanged: a corrupt `settings.json` now recovers from `settings.json.bak` instead of resetting every key.
+- **`settings.rs`** — `write()` (~37-44), the `settings.set` dispatch write block (**real range ~107-126**, _not_ 112-124), and `load()`'s `read_to_string` (~line 85). `write()` and the dispatch arm use `crate::jsonstore::write_atomic(&p, …)`; `load()` uses `read_with_backup` (settings is an object — the helper validates generic JSON, so it works). The defaults overlay is unchanged: a corrupt `settings.json` now recovers from `settings.json.bak` instead of resetting every key.
 - **`customfilters.rs`** — `write()` (~24-31) and the `customFilters.set` write (~line 42) → `write_atomic`. `load()` (~line 19) → `read_text_with_backup` (custom-filters.txt is plain filter text, NOT JSON).
 - **`data.rs`** — export write (~line 42) → `write_atomic` (keep the `Ok(())`/`Err(e)` match). The export path is same-dir-rename so cross-fs is not a concern. Export is a user artifact, not an app store → no `.bak` desired; pass through `write_atomic` but the implementer may add a `write_atomic_no_backup` variant if a stray `.bak` next to a user's download is undesirable (cosmetic).
-- **`subs.rs`** — the two cache writes (lines **103 and 152**, verified) → `write_atomic` (these run on spawned threads but for *distinct* `list_id` paths, so they don't collide; the process-unique tmp suffix from §2.1 makes this airtight).
+- **`subs.rs`** — the two cache writes (lines **103 and 152**, verified) → `write_atomic` (these run on spawned threads but for _distinct_ `list_id` paths, so they don't collide; the process-unique tmp suffix from §2.1 makes this airtight).
 
 ### 2.3 Refactor `adblock_inject::script()` to owned `String`
 
@@ -271,7 +271,7 @@ pub fn apply_webrtc_policy_label(app: &AppHandle, label: &str, policy: &str) {
 }
 ```
 
-`set_enable_webrtc` is all-or-nothing, so it only backstops `'disable'`; `'public-only'`/`'default'` leave it `true` and rely on the shim. Call it from `nav.rs` spawn_tab's Linux arm after the other `connect_*_label` calls, gated on `!host_allowlisted`.
+`set_enable_webrtc` is all-or-nothing, so it only backstops `'disable'`; `'public-only'`/`'default'` leave it `true` and rely on the shim. Call it from `nav.rs` spawn*tab's Linux arm after the other `connect*\*\_label`calls, gated on`!host_allowlisted`.
 
 **Windows** (`nav.rs` spawn_tab WebviewBuilder, ~118-123): map `'disable'` → `disable_non_proxied_udp`, `'public-only'` → `default_public_interface_only`, `'default'` → omit, via `--force-webrtc-ip-handling-policy`. ⚠️ **CRITICAL (verified):** `additional_browser_args` **replaces** wry's default `--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection` (wry-0.55.1 webview2/mod.rs:294-297), so re-include it:
 
@@ -306,10 +306,10 @@ In `nav.rs` spawn_tab, derive the tab host from the url arg and check `AdblockSt
 
 Document (code comment in `webrtc_shim.rs` + SecurityTab help text): document-start injection covers page + iframe frames, **not** Web Worker / SharedWorker scopes, where `RTCPeerConnection` also exists — so a page constructing a peer connection in a Worker bypasses the `'public-only'` shim. The native levers ARE engine-wide (incl. workers). Honest coverage:
 
-| Policy | Linux | Windows | macOS | Android |
-|--------|-------|---------|-------|---------|
-| `disable` | native (set_enable_webrtc) — worker-tight | native — worker-tight | shim-only — workers leak | shim-only — workers leak |
-| `public-only` | shim-only — workers leak | native (default_public_interface_only) — worker-tight | shim-only — workers leak | shim-only — workers leak |
+| Policy        | Linux                                     | Windows                                               | macOS                    | Android                  |
+| ------------- | ----------------------------------------- | ----------------------------------------------------- | ------------------------ | ------------------------ |
+| `disable`     | native (set_enable_webrtc) — worker-tight | native — worker-tight                                 | shim-only — workers leak | shim-only — workers leak |
+| `public-only` | shim-only — workers leak                  | native (default_public_interface_only) — worker-tight | shim-only — workers leak | shim-only — workers leak |
 
 macOS is weakest (shim-only both modes). The plan states the matrix; it does not claim a worker fix it cannot deliver.
 
@@ -417,10 +417,12 @@ None of the ~413 vitest tests change (mocked IPC; reviewer-confirmed the `toEqua
 `src-tauri/Cargo.toml`: `chacha20poly1305 = "0.10"` (XChaCha20Poly1305, 24-byte nonce + AAD via the `Payload{msg,aad}` struct — needs `use chacha20poly1305::aead::{Aead, KeyInit, Payload, AeadCore}`), `hkdf = "0.12"`, `ed25519-dalek = { version = "2", features = ["rand_core","zeroize"] }` (`SigningKey::from_bytes(&[u8;32])` is **infallible**; `.sign()` needs `use ed25519_dalek::Signer`; `verify_strict` resists malleability), `bip39 = { version = "2", default-features = false, features = ["std"] }` (`from_entropy` returns `Result`; handle the Err arm), `argon2 = "0.5"`. Promote `getrandom = "0.2"` (⚠️ **FIX (reviewer):** uuid 1.23.3 pulls getrandom **0.4.2**, NOT 0.2.17 — three majors coexist; the direct `getrandom="0.2"` resolves to 0.2.17 and its API is `getrandom::getrandom(&mut buf)`; 0.3+ renamed it to `fill`), `sha2 = "0.10"`, `zeroize = { version = "1", features = ["derive"] }`.
 
 Keychain (desktop-only — keyring 3.x has **no** Android backend, reviewer-confirmed):
+
 ```toml
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
 keyring = { version = "3", features = ["linux-native-sync-persistent","windows-native","apple-native"] }
 ```
+
 ⚠️ **HARD gate:** actually run `cargo check`, `cargo check --target x86_64-pc-windows-gnu`, `cargo check --target aarch64-linux-android` to prove the new graph (incl. keyring's zbus/secret-service) cross-compiles — assertion is not verification.
 
 ### 5.2 `crypto.rs` — key tree, accountId, seal/open, zeroize
@@ -470,21 +472,21 @@ Ensure `mod sync/crypto/sync_auth/sync_keystore` are ungated (compiled into `lib
 
 ## 6. Consolidated IPC & settings appendix
 
-| Name | Kind | PLACE 1 `shared/types.ts` | PLACE 2 Rust | PLACE 3 `ipcClient.ts` |
-|------|------|---------------------------|--------------|------------------------|
-| `webrtcPolicy` | setting-field | `Settings.webrtcPolicy: 'default'|'public-only'|'disable'` (~256-267) | `settings.rs defaults()` += `"webrtcPolicy":"public-only"`; reader `webrtc_policy(app)`; **no dispatch arm** (shallow-merge) | none (rides `settings.set`) |
-| `AegisAndroid.setWebrtcPolicy` | native bridge (NOT a Tauri channel) | not in `IPC`; add to `AndroidBridge` iface (~32-56) + exported helper | JNI/Kotlin bridge method in MainActivity; not in `ipc()` | thin helper alongside `setFullscreen` |
-| `syncServerUrl` | setting-field | `Settings.syncServerUrl?: string` | `settings.rs defaults()` += `"syncServerUrl":""` | none (rides `settings.set`) |
-| `sync.getState` | command | `syncGetState` + `getState():Promise<SyncState>` | `sync::dispatch` arm | `call<SyncState>(IPC.syncGetState)` |
-| `sync.enableNew` | command | `syncEnableNew` + `enableNew(opts):Promise<{recoveryPhrase}>` | gen root, vault, register, start loop | `call<{recoveryPhrase}>(…,{...opts})` |
-| `sync.enableFromPhrase` | command | `syncEnableFromPhrase` + `enableFromPhrase(opts):Promise<SyncState>` | phrase→root, vault, register, start | `call<SyncState>(…,{...opts})` |
-| `sync.disable` | command | `syncDisable` + `disable(opts?):Promise<SyncState>` | stop loop, zeroize root, opt clear | `call<SyncState>(…,{...(opts??{})})` |
-| `sync.syncNow` | command | `syncNow` + `syncNow():Promise<SyncState>` | one `sync_once` | `call<SyncState>(IPC.syncNow)` |
-| `sync.getRecoveryPhrase` | command | `syncGetRecoveryPhrase` + `getRecoveryPhrase({confirm}):Promise<{recoveryPhrase}>` | **gated** on confirm + unlocked; never logged | `call<{recoveryPhrase}>(…,{...opts})` |
-| `sync.listDevices` | command | `syncListDevices` + `listDevices():Promise<SyncDevice[]>` | GET `/v1/devices` | `call<SyncDevice[]>(…)` |
-| `sync.removeDevice` | command | `syncRemoveDevice` + `removeDevice(id):Promise<SyncDevice[]>` | POST remove (revoke pubkey) | `call<SyncDevice[]>(…,{deviceId:id})` |
-| `sync.state` | event | `evtSyncState` + `onState(cb)` | `emit_event(app,"sync.state",…)` (.→:) | `on<SyncState>(IPC.evtSyncState,cb)` |
-| `sync.changed` | event | `evtSyncChanged` + `onChanged(cb)` + `SyncChanged{namespace,changedUuids}` | `emit_event` per ns after `merge_into`; **targeted, never reload** | `on<SyncChanged>(…)` → `syncBus` → per-hook refetch |
+| Name                           | Kind                                | PLACE 1 `shared/types.ts`                                                          | PLACE 2 Rust                                                       | PLACE 3 `ipcClient.ts`                              |
+| ------------------------------ | ----------------------------------- | ---------------------------------------------------------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `webrtcPolicy`                 | setting-field                       | `Settings.webrtcPolicy: 'default'                                                  | 'public-only'                                                      | 'disable'` (~256-267)                               | `settings.rs defaults()` += `"webrtcPolicy":"public-only"`; reader `webrtc_policy(app)`; **no dispatch arm** (shallow-merge) | none (rides `settings.set`) |
+| `AegisAndroid.setWebrtcPolicy` | native bridge (NOT a Tauri channel) | not in `IPC`; add to `AndroidBridge` iface (~32-56) + exported helper              | JNI/Kotlin bridge method in MainActivity; not in `ipc()`           | thin helper alongside `setFullscreen`               |
+| `syncServerUrl`                | setting-field                       | `Settings.syncServerUrl?: string`                                                  | `settings.rs defaults()` += `"syncServerUrl":""`                   | none (rides `settings.set`)                         |
+| `sync.getState`                | command                             | `syncGetState` + `getState():Promise<SyncState>`                                   | `sync::dispatch` arm                                               | `call<SyncState>(IPC.syncGetState)`                 |
+| `sync.enableNew`               | command                             | `syncEnableNew` + `enableNew(opts):Promise<{recoveryPhrase}>`                      | gen root, vault, register, start loop                              | `call<{recoveryPhrase}>(…,{...opts})`               |
+| `sync.enableFromPhrase`        | command                             | `syncEnableFromPhrase` + `enableFromPhrase(opts):Promise<SyncState>`               | phrase→root, vault, register, start                                | `call<SyncState>(…,{...opts})`                      |
+| `sync.disable`                 | command                             | `syncDisable` + `disable(opts?):Promise<SyncState>`                                | stop loop, zeroize root, opt clear                                 | `call<SyncState>(…,{...(opts??{})})`                |
+| `sync.syncNow`                 | command                             | `syncNow` + `syncNow():Promise<SyncState>`                                         | one `sync_once`                                                    | `call<SyncState>(IPC.syncNow)`                      |
+| `sync.getRecoveryPhrase`       | command                             | `syncGetRecoveryPhrase` + `getRecoveryPhrase({confirm}):Promise<{recoveryPhrase}>` | **gated** on confirm + unlocked; never logged                      | `call<{recoveryPhrase}>(…,{...opts})`               |
+| `sync.listDevices`             | command                             | `syncListDevices` + `listDevices():Promise<SyncDevice[]>`                          | GET `/v1/devices`                                                  | `call<SyncDevice[]>(…)`                             |
+| `sync.removeDevice`            | command                             | `syncRemoveDevice` + `removeDevice(id):Promise<SyncDevice[]>`                      | POST remove (revoke pubkey)                                        | `call<SyncDevice[]>(…,{deviceId:id})`               |
+| `sync.state`                   | event                               | `evtSyncState` + `onState(cb)`                                                     | `emit_event(app,"sync.state",…)` (.→:)                             | `on<SyncState>(IPC.evtSyncState,cb)`                |
+| `sync.changed`                 | event                               | `evtSyncChanged` + `onChanged(cb)` + `SyncChanged{namespace,changedUuids}`         | `emit_event` per ns after `merge_into`; **targeted, never reload** | `on<SyncChanged>(…)` → `syncBus` → per-hook refetch |
 
 New interfaces: `SyncState{enabled,status,serverUrl,lastSyncMs,lastError,deviceId,accountId,vaultBacking:'keychain'|'passphrase'|'none'}`, `SyncDevice{deviceId,label,lastSeenMs,isThisDevice}`, `SyncChanged{namespace,changedUuids}`.
 
@@ -493,16 +495,19 @@ New interfaces: `SyncState{enabled,status,serverUrl,lastSyncMs,lastError,deviceI
 ## 7. Consolidated test plan
 
 **Rust-unit (`cargo test`):**
+
 - F0: `write_atomic`/`read_with_backup`/`read_text_with_backup` (corrupt-primary→.bak recovery, missing-both→None) using a tempdir; updated `script(&InjectConfig::default())` popup-guard test; whole-crate regression (adblock_inject + nav + tab_registry 24 all green).
 - F1: `keep_candidate`/`filter_sdp`/`shim_for` incl. IPv6 forms + fail-open fuzz (random/truncated lines) — testing the **shipped JS artifact**, not a parallel copy.
 - F2a: HLC `tick`/`observe` monotonicity + tie-break (~8); jsonstore meta helpers `ensure_sync_meta`/`stamp_new`/`tombstone`/`touch`/`live`/`load_synced` (~10); places tombstone+revive+persist-returns-live (~6); history clear/remove/dup-guard (~4); settings per-key projection incl. the resurrection-trap fix (~5); allowlist persistence + restart-seed (~4); `sync_stores::merge_into` LWW over tombstones + changed-store report (~8); `adblock_engine` new `Reload` message.
 - F2b: crypto seal/open round-trip + AAD binding (wrong ns/uuid/hlc fails) + phrase↔root + accountId determinism + distinct data keys; `sync_auth` mint→verify, tampered/expired/wrong-key fail, `device_id==hex(vk)`; passphrase argon2 wrap/unwrap; `data.export` contains no seed material.
 
 **Vitest (`npm test`, ~413 stay green unchanged):**
+
 - F1: SecurityTab select + useSettings.
 - F2b: useSync (mount getState, onState, onChanged→targeted refetch, unsubscribe, phrase-once); the 6 domain hooks refetch on matching `syncBus` namespace and ignore others; SyncSettingsTab + SettingsModal tab; `shared/types.test.ts` accepts the new dotted channels (+ the new dot-separated/unique invariant from F0).
 
 **Manual-device:**
+
 - F0: `cargo check --target aarch64-linux-android` + JDK-21 build (HARD gate); Android pages get popup guard + injected ad-block (previously nothing), `setOf("*")` accepted, DOCUMENT_START fires pre-page-script.
 - F1: Linux real-HW leak-test (all 3 policies via browserleaks/self-hosted ICE dump, spectacle capture) + Worker scope-test recording the §3.7 matrix; Win/mac/Android via CI-compile + cross-`cargo check`, GUI follow-up.
 - F2a: install over a pre-envelope profile (Linux HW + Android emulator) — data lists intact (lazy migration), remove→on-disk `deleted=true` + list omits, allowlist survives restart, sub change re-applies ad-block on every platform.

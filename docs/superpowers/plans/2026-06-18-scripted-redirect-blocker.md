@@ -31,23 +31,23 @@
 
 ## File structure
 
-| File | Create/Modify | Responsibility |
-|---|---|---|
-| `src-tauri/src/redirect_guard.rs` | **Create** | Pure `should_block` + `is_cross_origin_http`; `PendingNavs` registry; `decide`; app-level `expect`/`decide_for`/`on_blocked`; Android JNI export. |
-| `src-tauri/src/nav.rs` | Modify | `navigate_tab` helper; route the 5 `.navigate()` call sites + `spawn_tab` initial load; wire per-platform glue into `spawn_tab`. |
-| `src-tauri/src/linux_layout.rs` | Modify | `connect_redirect_guard` (`decide-policy` hook). |
-| `src-tauri/src/nav_policy_win.rs` | **Create** | Windows `add_NavigationStarting` handler. |
-| `src-tauri/src/nav_policy_mac.rs` | **Create** | macOS `WKNavigationDelegate` (`decidePolicyForNavigationAction`). |
-| `src-tauri/src/lib.rs` | Modify | `mod` decls; `.manage(PendingNavs::default())`. |
-| `src-tauri/gen/android/.../MainActivity.kt` | Modify | Redirect guard in `shouldOverrideUrlLoading` + `window.__aegisRedirectBlocked` bridge. |
-| `src-tauri/gen/android/.../NativeRedirectGuard.kt` | **Create** | Kotlin `external fun shouldBlock`. |
-| `shared/types.ts` | Modify | `evtRedirectBlocked` channel + `RedirectBlocked` type + `AegisApi.redirect.onBlocked`. |
-| `src/lib/ipcClient.ts` | Modify | `redirect.onBlocked` subscription (+ Android bridge branch). |
-| `src/lib/toast.ts` | Modify | Optional `action` on toasts; `info(msg, opts)` signature. |
-| `src/components/Toaster.tsx` | Modify | Render the action button. |
-| `src/App.tsx` | Modify | `redirect.onBlocked` listener → toast with "Open anyway". |
-| `src-tauri/CLAUDE.md`, `shared/CLAUDE.md` | Modify | Document the new hook + event. |
-| Test files | Create | `redirect_guard` cargo tests (in-file); `src/lib/toast.test.ts`; `src/components/Toaster.test.tsx`. |
+| File                                               | Create/Modify | Responsibility                                                                                                                                    |
+| -------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src-tauri/src/redirect_guard.rs`                  | **Create**    | Pure `should_block` + `is_cross_origin_http`; `PendingNavs` registry; `decide`; app-level `expect`/`decide_for`/`on_blocked`; Android JNI export. |
+| `src-tauri/src/nav.rs`                             | Modify        | `navigate_tab` helper; route the 5 `.navigate()` call sites + `spawn_tab` initial load; wire per-platform glue into `spawn_tab`.                  |
+| `src-tauri/src/linux_layout.rs`                    | Modify        | `connect_redirect_guard` (`decide-policy` hook).                                                                                                  |
+| `src-tauri/src/nav_policy_win.rs`                  | **Create**    | Windows `add_NavigationStarting` handler.                                                                                                         |
+| `src-tauri/src/nav_policy_mac.rs`                  | **Create**    | macOS `WKNavigationDelegate` (`decidePolicyForNavigationAction`).                                                                                 |
+| `src-tauri/src/lib.rs`                             | Modify        | `mod` decls; `.manage(PendingNavs::default())`.                                                                                                   |
+| `src-tauri/gen/android/.../MainActivity.kt`        | Modify        | Redirect guard in `shouldOverrideUrlLoading` + `window.__aegisRedirectBlocked` bridge.                                                            |
+| `src-tauri/gen/android/.../NativeRedirectGuard.kt` | **Create**    | Kotlin `external fun shouldBlock`.                                                                                                                |
+| `shared/types.ts`                                  | Modify        | `evtRedirectBlocked` channel + `RedirectBlocked` type + `AegisApi.redirect.onBlocked`.                                                            |
+| `src/lib/ipcClient.ts`                             | Modify        | `redirect.onBlocked` subscription (+ Android bridge branch).                                                                                      |
+| `src/lib/toast.ts`                                 | Modify        | Optional `action` on toasts; `info(msg, opts)` signature.                                                                                         |
+| `src/components/Toaster.tsx`                       | Modify        | Render the action button.                                                                                                                         |
+| `src/App.tsx`                                      | Modify        | `redirect.onBlocked` listener → toast with "Open anyway".                                                                                         |
+| `src-tauri/CLAUDE.md`, `shared/CLAUDE.md`          | Modify        | Document the new hook + event.                                                                                                                    |
+| Test files                                         | Create        | `redirect_guard` cargo tests (in-file); `src/lib/toast.test.ts`; `src/components/Toaster.test.tsx`.                                               |
 
 ---
 
@@ -56,6 +56,7 @@
 ### Task 1: `redirect_guard::should_block` + `is_cross_origin_http`
 
 **Files:**
+
 - Create: `src-tauri/src/redirect_guard.rs`
 - Test: same file, `#[cfg(test)] mod tests`
 
@@ -153,6 +154,7 @@ git commit -m "feat(redirect-guard): pure cross-origin top-frame predicate"
 ### Task 2: `PendingNavs` registry + `decide`
 
 **Files:**
+
 - Modify: `src-tauri/src/redirect_guard.rs`
 
 - [ ] **Step 1: Add the registry, `same_target`, and `decide` with failing tests**
@@ -275,6 +277,7 @@ git commit -m "feat(redirect-guard): app-initiated nav registry + decide()"
 ### Task 3: App-level glue (`expect`/`decide_for`/`on_blocked`) + state registration
 
 **Files:**
+
 - Modify: `src-tauri/src/redirect_guard.rs`, `src-tauri/src/lib.rs`
 
 - [ ] **Step 1: Add the AppHandle wrappers to `redirect_guard.rs`**
@@ -333,7 +336,9 @@ In `src-tauri/src/lib.rs`, in the `.manage(...)` chain (`lib.rs:380-384`), add a
 ```rust
         .manage(sync::SyncState::default());
 ```
+
 becomes:
+
 ```rust
         .manage(sync::SyncState::default())
         .manage(redirect_guard::PendingNavs::default());
@@ -358,6 +363,7 @@ git commit -m "feat(redirect-guard): app-level expect/decide_for/on_blocked + ma
 ### Task 4: `nav::navigate_tab` + route all app navigations through it
 
 **Files:**
+
 - Modify: `src-tauri/src/nav.rs` (helper + call sites `214`, `418`, `430`, `440`, `452`, and `spawn_tab`)
 
 - [ ] **Step 1: Add the `navigate_tab` helper + a `label_id` helper**
@@ -385,12 +391,15 @@ pub fn navigate_tab(app: &AppHandle, id: u32, url: Url) {
 - [ ] **Step 2: Route the HTTPS-Only upgrade (`nav.rs:204-214`)**
 
 The upgrade currently does (inside `run_on_main_thread`, ~`nav.rs:210-214`):
+
 ```rust
             if let (Some(w), Ok(p)) = (app_main.get_webview(&lbl), Url::parse(&https)) {
                 let _ = w.navigate(p);
             }
 ```
+
 Replace with (register before navigating; `nav_id` is in scope here):
+
 ```rust
             if let Ok(p) = Url::parse(&https) {
                 crate::redirect_guard::expect(&app_main, nav_id, p.as_str());
@@ -421,6 +430,7 @@ In `dispatch` (`nav.rs:406`), these arms call `w.navigate(...)` on `content` for
 ```
 
 For `nav.back` (`nav.rs:430`) and `nav.forward` (`nav.rs:440`), each has `if let Ok(u) = Url::parse(&url) { let _ = w.navigate(u); }` — change to:
+
 ```rust
             if let Ok(u) = Url::parse(&url) {
                 crate::redirect_guard::expect(app, label_id(&label), u.as_str());
@@ -429,6 +439,7 @@ For `nav.back` (`nav.rs:430`) and `nav.forward` (`nav.rs:440`), each has `if let
 ```
 
 For `nav.home` (`nav.rs:452`) `let _ = w.navigate(crate::settings::home_url(app));` — change to:
+
 ```rust
             let home = crate::settings::home_url(app);
             crate::redirect_guard::expect(app, label_id(&label), home.as_str());
@@ -438,9 +449,11 @@ For `nav.home` (`nav.rs:452`) `let _ = w.navigate(crate::settings::home_url(app)
 - [ ] **Step 4: Register the initial load in `spawn_tab` (`nav.rs:104`)**
 
 Near the top of `spawn_tab`, right after `let label = content_label(id);`, add:
+
 ```rust
     crate::redirect_guard::expect(app, id, url.as_str());
 ```
+
 (The initial page load reaches the policy hook as a gesture-less navigation; this exempts it.)
 
 - [ ] **Step 5: Build & run existing tests**
@@ -464,6 +477,7 @@ git commit -m "feat(redirect-guard): route all app navigations through navigate_
 **Goal:** Empirically determine, before building blocking logic: (a) a second `connect_decide_policy` handler RUNS alongside wry's; (b) it sees `NavigationAction` with gesture/type/target; (c) `decision.ignore()` actually cancels; (d) the reliable main-frame discriminator. **This is investigative, not TDD.**
 
 **Files:**
+
 - Modify: `src-tauri/src/linux_layout.rs` (temporary logging hook), `src-tauri/src/nav.rs` (call it for Linux)
 
 - [ ] **Step 1: Add a logging-only `decide-policy` handler**
@@ -503,6 +517,7 @@ pub fn spike_decide_policy(app: &AppHandle, label: &str) {
 ```
 
 Call it in `spawn_tab`'s Linux block (`nav.rs:344`), after `connect_block_counter`:
+
 ```rust
         crate::linux_layout::spike_decide_policy(app, &label);
 ```
@@ -513,6 +528,7 @@ Run: `cd /home/happyhobo/Documents/AI_Apps/Aegis && AEGIS_NAV_DEBUG=1 npm run ta
 Then, in the running browser: (1) load a normal page and click a link; (2) load a page with a cross-origin iframe (e.g. a YouTube embed); (3) load streamex and let it attempt its redirect; (4) type a URL in the address bar.
 
 Record in the commit message / a scratch note:
+
 - Does `[aegis-spike]` print at all? (→ a second handler runs.)
 - For the streamex redirect: `type=Other gesture=false`? For a link click: `type=LinkClicked gesture=true`?
 - `frame_name` value for the **main frame** vs an **iframe** navigation (this decides main-frame detection).
@@ -521,6 +537,7 @@ Record in the commit message / a scratch note:
 - [ ] **Step 3: Decide main-frame detection + cancel semantics**
 
 From the observations, choose:
+
 - `MAIN_FRAME_EXPR` — e.g. `action.frame_name().is_none()` if iframes reliably report a name / differ; otherwise the spike's proven alternative.
 - The handler return contract — whether returning `true` after `decision.ignore()` is required to cancel.
 
@@ -529,6 +546,7 @@ Write the two decisions into the Task 6 implementation. If the spike shows a sec
 - [ ] **Step 4: Remove the spike, commit the findings**
 
 Delete `spike_decide_policy` and its call. Commit:
+
 ```bash
 git add src-tauri/src/linux_layout.rs src-tauri/src/nav.rs
 git commit -m "chore(redirect-guard): Linux decide-policy spike findings (see message)
@@ -542,6 +560,7 @@ main-frame detection=<expr>; scripted redirect shows type=Other gesture=false."
 ### Task 6: Linux `connect_redirect_guard` (real blocking)
 
 **Files:**
+
 - Modify: `src-tauri/src/linux_layout.rs`, `src-tauri/src/nav.rs:344` (Linux block)
 
 > Use `MAIN_FRAME_EXPR` and the cancel contract determined in Task 5. The code below assumes the spike confirmed `frame_name().is_none()` for the main frame and that `{ ignore(); true }` cancels — adjust to the spike's actual findings.
@@ -588,6 +607,7 @@ pub fn connect_redirect_guard(app: &AppHandle, label: &str) {
 - [ ] **Step 2: Wire it into `spawn_tab` Linux block (`nav.rs:344`)**
 
 After `crate::linux_layout::connect_block_counter(app, &label);` add:
+
 ```rust
         crate::linux_layout::connect_redirect_guard(app, &label);
 ```
@@ -596,6 +616,7 @@ After `crate::linux_layout::connect_block_counter(app, &label);` add:
 
 Run: `cd src-tauri && cargo build`, then `cd .. && AEGIS_NAV_DEBUG=1 npm run tauri:dev`.
 Verify:
+
 - streamex no longer bounces to `google.com`; `[aegis-redirect] BLOCK …` logs.
 - Address-bar navigation, link clicks, a cross-origin iframe embed, and a URL shortener all still work (no false block).
 
@@ -613,12 +634,14 @@ git commit -m "feat(redirect-guard): Linux decide-policy blocking + event"
 ### Task 7: Toast action support (`toast.ts`)
 
 **Files:**
+
 - Modify: `src/lib/toast.ts`
 - Test: `src/lib/toast.test.ts` (create)
 
 - [ ] **Step 1: Write failing tests**
 
 Create `src/lib/toast.test.ts`:
+
 ```ts
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { toast, subscribeToasts, __resetToasts, type ToastItem } from './toast';
@@ -628,7 +651,9 @@ describe('toast actions', () => {
 
   it('attaches an action to the toast', () => {
     let latest: ToastItem[] = [];
-    const off = subscribeToasts((t) => { latest = t; });
+    const off = subscribeToasts((t) => {
+      latest = t;
+    });
     const onClick = vi.fn();
     toast.info('Blocked a redirect to evil.com', { action: { label: 'Open anyway', onClick } });
     expect(latest).toHaveLength(1);
@@ -642,7 +667,9 @@ describe('toast actions', () => {
   it('respects a custom duration', () => {
     vi.useFakeTimers();
     let latest: ToastItem[] = [];
-    subscribeToasts((t) => { latest = t; });
+    subscribeToasts((t) => {
+      latest = t;
+    });
     toast.info('x', { durationMs: 6000 });
     vi.advanceTimersByTime(4000);
     expect(latest).toHaveLength(1); // not yet dismissed at the old 4s default
@@ -661,7 +688,9 @@ Expected: FAIL (`toast.info` takes one arg; no `action` on `ToastItem`).
 - [ ] **Step 3: Implement**
 
 In `src/lib/toast.ts`:
+
 - Add the action type + field:
+
 ```ts
 export interface ToastAction {
   label: string;
@@ -675,7 +704,9 @@ export interface ToastItem {
   action?: ToastAction;
 }
 ```
+
 - Change `push` to accept options:
+
 ```ts
 interface PushOpts {
   action?: ToastAction;
@@ -694,11 +725,17 @@ function push(kind: ToastKind, message: string, opts: PushOpts = {}): void {
   dismissTimers.set(item.id, handle);
 }
 ```
+
 - Update the public API so `info` accepts options (keep `success`/`error` as-is):
+
 ```ts
 export const toast = {
-  success(m: string): void { push('success', m); },
-  error(m: string): void { push('error', m); },
+  success(m: string): void {
+    push('success', m);
+  },
+  error(m: string): void {
+    push('error', m);
+  },
   info(m: string, opts?: { action?: ToastAction; durationMs?: number }): void {
     push('info', m, opts);
   },
@@ -722,12 +759,14 @@ git commit -m "feat(toast): optional action button + custom duration"
 ### Task 8: Render the action in `<Toaster>`
 
 **Files:**
+
 - Modify: `src/components/Toaster.tsx`
 - Test: `src/components/Toaster.test.tsx` (create)
 
 - [ ] **Step 1: Write failing test**
 
 Create `src/components/Toaster.test.tsx`:
+
 ```tsx
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
@@ -736,7 +775,10 @@ import { Toaster } from './Toaster';
 import { toast, __resetToasts } from '../lib/toast';
 
 describe('Toaster action', () => {
-  beforeEach(() => { __resetToasts(); cleanup(); });
+  beforeEach(() => {
+    __resetToasts();
+    cleanup();
+  });
 
   it('renders the action button and fires onClick', async () => {
     render(<Toaster />);
@@ -748,6 +790,7 @@ describe('Toaster action', () => {
   });
 });
 ```
+
 > If `@testing-library/user-event` isn't a dependency, use `fireEvent.click` from `@testing-library/react` instead (check how other `src/**/*.test.tsx` files click).
 
 - [ ] **Step 2: Run — expect FAIL**
@@ -758,21 +801,20 @@ Expected: FAIL (no button rendered).
 - [ ] **Step 3: Implement**
 
 Replace the `.map` body in `src/components/Toaster.tsx`:
+
 ```tsx
-      {toasts.map((t) => (
-        <div key={t.id} className={`toast toast--${t.kind}`}>
-          <span className="toast__message">{t.message}</span>
-          {t.action && (
-            <button
-              type="button"
-              className="toast__action"
-              onClick={() => t.action?.onClick()}
-            >
-              {t.action.label}
-            </button>
-          )}
-        </div>
-      ))}
+{
+  toasts.map((t) => (
+    <div key={t.id} className={`toast toast--${t.kind}`}>
+      <span className="toast__message">{t.message}</span>
+      {t.action && (
+        <button type="button" className="toast__action" onClick={() => t.action?.onClick()}>
+          {t.action.label}
+        </button>
+      )}
+    </div>
+  ));
+}
 ```
 
 - [ ] **Step 4: Run — expect PASS**
@@ -783,6 +825,7 @@ Expected: PASS.
 - [ ] **Step 5: (Optional) style the button**
 
 Add to `src/index.css` near the existing `.toast` rules:
+
 ```css
 .toast__action {
   margin-left: 12px;
@@ -808,15 +851,19 @@ git commit -m "feat(toast): render action button in Toaster"
 ### Task 9: `redirect.blocked` event wiring (types + ipcClient + App listener)
 
 **Files:**
+
 - Modify: `shared/types.ts`, `src/lib/ipcClient.ts`, `src/App.tsx`
 
 - [ ] **Step 1: Add the channel + type + API in `shared/types.ts`**
 
 In the `IPC` const, in the events section (near `evtAdblockBlockedCount`, `shared/types.ts:~60`), add:
+
 ```ts
   evtRedirectBlocked: 'redirect.blocked',
 ```
+
 Add the payload interface (near `BlockedCount`, `shared/types.ts:222`):
+
 ```ts
 export interface RedirectBlocked {
   viewId: ViewId;
@@ -824,17 +871,21 @@ export interface RedirectBlocked {
   to: string;
 }
 ```
+
 Add to the `AegisApi` interface a `redirect` group (near the `adblock` group):
+
 ```ts
   redirect: {
     onBlocked(cb: (r: RedirectBlocked) => void): () => void;
   };
 ```
+
 > Make sure `RedirectBlocked` is exported and imported where `AegisApi` is declared (same file).
 
 - [ ] **Step 2: Add the subscription in `src/lib/ipcClient.ts`**
 
 Import `RedirectBlocked` in the type import list, then add a `redirect` group (mirror `adblock.onBlockedCount` at `ipcClient.ts:199`, and the Android-bridge branch from `nav.onState` at `ipcClient.ts:114`):
+
 ```ts
   redirect: {
     onBlocked: (cb: (r: RedirectBlocked) => void) => {
@@ -854,24 +905,36 @@ Import `RedirectBlocked` in the type import list, then add a `redirect` group (m
     },
   },
 ```
+
 > Use the exact name of the existing Android-detection helper (`androidBridge()` per `ipcClient.ts:114`); confirm its name when editing.
 
 - [ ] **Step 3: Add the listener in `src/App.tsx`**
 
 Near the other event `useEffect`s (e.g. `nav.onFailed` at `App.tsx:~234`), add a new effect. Ensure `toast` and `aegis`/`tabs` are imported (they are — `toast` from `./lib/toast`, tabs API in scope):
+
 ```tsx
-  useEffect(() => {
-    return aegis.redirect.onBlocked((r) => {
-      if (r.viewId !== tabs.activeId) return;
-      let host = r.to;
-      try { host = new URL(r.to).hostname; } catch { /* keep raw */ }
-      toast.info(`Blocked a redirect to ${host}`, {
-        durationMs: 6000,
-        action: { label: 'Open anyway', onClick: () => { void tabs.create(r.to, false); } },
-      });
+useEffect(() => {
+  return aegis.redirect.onBlocked((r) => {
+    if (r.viewId !== tabs.activeId) return;
+    let host = r.to;
+    try {
+      host = new URL(r.to).hostname;
+    } catch {
+      /* keep raw */
+    }
+    toast.info(`Blocked a redirect to ${host}`, {
+      durationMs: 6000,
+      action: {
+        label: 'Open anyway',
+        onClick: () => {
+          void tabs.create(r.to, false);
+        },
+      },
     });
-  }, [tabs.activeId]);
+  });
+}, [tabs.activeId]);
 ```
+
 > Use the same handle the file already uses for the API object (the explorer saw `aegis.nav.onFailed(...)`); match it (`aegis` vs `ipcClient`). Confirm the toast import exists; add `import { toast } from './lib/toast';` if not.
 
 - [ ] **Step 4: Run the TS test suite + typecheck the touched files**
@@ -893,6 +956,7 @@ git commit -m "feat(redirect-guard): redirect.blocked event + Open-anyway toast"
 ### Task 10: Windows `NavigationStarting` handler
 
 **Files:**
+
 - Create: `src-tauri/src/nav_policy_win.rs`
 - Modify: `src-tauri/src/lib.rs` (mod decl), `src-tauri/src/nav.rs:376-383` (Windows block)
 
@@ -956,11 +1020,13 @@ unsafe fn handle(
     Ok(())
 }
 ```
+
 > If `Source`, `Uri`, `IsUserInitiated`, `IsRedirected`, `SetCancel`, or `NavigationStartingEventHandler` resolve to a different path/signature, adjust to the bindings in `webview2-com` (the same crate `adblock_win.rs` imports from). The cross-check compile in Step 4 will surface any mismatch.
 
 - [ ] **Step 2: Add the mod decl in `lib.rs`**
 
 Next to `#[cfg(target_os = "windows")] mod nav_url_win;` (`lib.rs:~9`):
+
 ```rust
 #[cfg(target_os = "windows")]
 mod nav_policy_win;
@@ -969,6 +1035,7 @@ mod nav_policy_win;
 - [ ] **Step 3: Wire into `spawn_tab` Windows block (`nav.rs:376-383`)**
 
 Inside the existing `with_webview` closure (after `crate::nav_url_win::install(&pw, app_url, id);`), add — note it needs its own `app` clone since `app_url` is moved:
+
 ```rust
     #[cfg(target_os = "windows")]
     if let Some(content) = app.get_webview(&label) {
@@ -1001,6 +1068,7 @@ git commit -m "feat(redirect-guard): Windows NavigationStarting blocking"
 ### Task 11: macOS `WKNavigationDelegate`
 
 **Files:**
+
 - Create: `src-tauri/src/nav_policy_mac.rs`
 - Modify: `src-tauri/src/lib.rs` (mod decl), `src-tauri/src/nav.rs:388-394` (macOS block)
 
@@ -1096,11 +1164,13 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
     std::mem::forget(delegate);
 }
 ```
+
 > The `block2` crate is used for the decision-handler block; if it isn't already a transitive dep, add `block2 = "0.6"` to the `[target.'cfg(target_os = "macos")'.dependencies]` block in `src-tauri/Cargo.toml` (next to `objc2-web-kit`). The method names (`targetFrame`, `isMainFrame`, `navigationType`, `request`, `setNavigationDelegate`) and `WKNavigationType::Other` must match objc2-web-kit 0.3.2. Since this can't compile on this Linux host, the CI build (Step 4) is authoritative — iterate via CI if it fails.
 
 - [ ] **Step 2: Add the mod decl in `lib.rs`**
 
 Next to `#[cfg(target_os = "macos")] mod nav_url_mac;` (`lib.rs:~11`):
+
 ```rust
 #[cfg(target_os = "macos")]
 mod nav_policy_mac;
@@ -1139,6 +1209,7 @@ git commit -m "feat(redirect-guard): macOS WKNavigationDelegate blocking (CI-ver
 ### Task 12: Android JNI export + Kotlin binding
 
 **Files:**
+
 - Modify: `src-tauri/src/redirect_guard.rs` (JNI export)
 - Create: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/NativeRedirectGuard.kt`
 
@@ -1169,6 +1240,7 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_shouldBlock(
 - [ ] **Step 2: Create the Kotlin binding**
 
 Create `NativeRedirectGuard.kt` (mirror `NativeAdblock.kt`):
+
 ```kotlin
 package com.aegis.browser
 
@@ -1209,6 +1281,7 @@ git commit -m "feat(redirect-guard): Android JNI shouldBlock + Kotlin binding"
 ### Task 13: Android `shouldOverrideUrlLoading` guard + chrome event bridge
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt`
 
 - [ ] **Step 1: Add the guard in `shouldOverrideUrlLoading` (`MainActivity.kt:166-183`)**
@@ -1261,6 +1334,7 @@ Find `pushNavState` in `MainActivity.kt` (it evaluates JS on the CHROME webview 
     }
   }
 ```
+
 > Use the exact chrome-webview field name and threading helper that `pushNavState` uses (the field may be named differently than `chromeWebView`); copy its mechanism verbatim. This is the same bridge the `ipcClient.redirect.onBlocked` Android branch (Task 9 Step 2) reads.
 
 - [ ] **Step 3: Compile the Kotlin gate**
@@ -1286,6 +1360,7 @@ git commit -m "feat(redirect-guard): Android shouldOverrideUrlLoading guard + ch
 ### Task 14: Documentation + full-suite parity check
 
 **Files:**
+
 - Modify: `src-tauri/CLAUDE.md`, `shared/CLAUDE.md`
 
 - [ ] **Step 1: Document the feature in `src-tauri/CLAUDE.md`**
@@ -1299,6 +1374,7 @@ Add `redirect.blocked` (`evtRedirectBlocked`, payload `RedirectBlocked { viewId,
 - [ ] **Step 3: Run the full test suites**
 
 Run:
+
 ```bash
 cd src-tauri && cargo test
 cd .. && npm test
@@ -1306,6 +1382,7 @@ cd src-tauri && cargo check --target x86_64-pc-windows-gnu
 cd src-tauri && cargo check --target aarch64-linux-android   # with NDK env
 cd src-tauri/gen/android && ./gradlew compileUniversalDebugKotlin
 ```
+
 Expected: cargo tests green (incl. the 12 `redirect_guard` tests); vitest green (baseline + toast/Toaster tests); Windows + Android Rust check green; Kotlin compile green. macOS verified separately via CI.
 
 - [ ] **Step 4: Verify the parity checklist (spec §9)**

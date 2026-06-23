@@ -24,7 +24,7 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
   - `tabs.state` event (emitted on every structural change) + `tabs.shortcut`
     event (Ctrl+T/W/Shift+T from native accelerator/GTK hook).
   - `redirect.blocked` event (`evtRedirectBlocked`, payload `RedirectBlocked { viewId,
-    from, to }`) — the native redirect guard cancelled a scripted cross-origin top-frame
+from, to }`) — the native redirect guard cancelled a scripted cross-origin top-frame
     redirect. The chrome surfaces it (desktop `RedirectBar` infobar / Android Material
     Snackbar) with "Open anyway" → opens `to` in a new tab (`tabs.create` desktop /
     `__aegisOpenTab` Android). Emitted per-platform from the native nav-policy hook; see
@@ -51,7 +51,7 @@ dot-separated and unique, so a malformed/colliding name fails the test):
 3. **PLACE 3 — `src/lib/ipcClient.ts`:** `call<T>(IPC.x, payload)` for commands;
    `on<T>(IPC.evtX, cb)` for events (tauriInvoke.ts reverses `:`→`.`).
 
-**Settings-field shortcut.** A new *settings field* needs **no new channel** — add it
+**Settings-field shortcut.** A new _settings field_ needs **no new channel** — add it
 to `settings.rs defaults()` + the `Settings` interface here; `settings.set`
 shallow-merges it. A Rust reader (mirror `https_only()`) exposes it to the core.
 

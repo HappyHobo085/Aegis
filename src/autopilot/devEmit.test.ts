@@ -13,7 +13,10 @@ describe('devEmit', () => {
   });
   it('emitEvent invokes the dev command', async () => {
     await emitEvent('nav.failed', { viewId: 1 });
-    expect(invoke).toHaveBeenCalledWith('autopilot_emit_event', { name: 'nav.failed', payload: { viewId: 1 } });
+    expect(invoke).toHaveBeenCalledWith('autopilot_emit_event', {
+      name: 'nav.failed',
+      payload: { viewId: 1 },
+    });
   });
   it('writeReport invokes the dev command', async () => {
     const minimalReport: Report = {

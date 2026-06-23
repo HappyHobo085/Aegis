@@ -7,7 +7,13 @@ import type { SavedItem } from '../../shared/types';
 import { SavedPanel } from './SavedPanel';
 
 const items: SavedItem[] = [
-  { id: 2, url: 'https://docs.example/', title: 'Docs', tags: ['reference', 'work'], savedAt: 1_700_000_000_000 },
+  {
+    id: 2,
+    url: 'https://docs.example/',
+    title: 'Docs',
+    tags: ['reference', 'work'],
+    savedAt: 1_700_000_000_000,
+  },
   { id: 1, url: 'https://blog.example/', title: '', tags: ['reading'], savedAt: 1_600_000_000_000 },
 ];
 
@@ -40,7 +46,9 @@ describe('SavedPanel', () => {
 
   it('falls back to the URL as the label when an item has no title', () => {
     render(<SavedPanel {...props()} />);
-    expect(screen.getByRole('button', { name: /open https:\/\/blog\.example/i })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: /open https:\/\/blog\.example/i }),
+    ).toBeInTheDocument();
   });
 
   it('clicking an item calls onOpen with its url', async () => {
@@ -164,7 +172,11 @@ describe('SavedPanel', () => {
       await userEvent.type(screen.getByRole('textbox', { name: /url to save/i }), 'example.com');
       await userEvent.type(screen.getByRole('textbox', { name: /title \(optional\)/i }), 'My Site');
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
-      expect(p.add).toHaveBeenCalledWith({ url: 'https://example.com', title: 'My Site', tags: [] });
+      expect(p.add).toHaveBeenCalledWith({
+        url: 'https://example.com',
+        title: 'My Site',
+        tags: [],
+      });
     });
 
     it('saves the tags added in the form', async () => {
@@ -174,14 +186,21 @@ describe('SavedPanel', () => {
       await userEvent.type(screen.getByRole('textbox', { name: /url to save/i }), 'example.com');
       await userEvent.type(screen.getByRole('textbox', { name: /add tag/i }), 'fresh{Enter}');
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
-      expect(p.add).toHaveBeenCalledWith({ url: 'https://example.com', title: '', tags: ['fresh'] });
+      expect(p.add).toHaveBeenCalledWith({
+        url: 'https://example.com',
+        title: '',
+        tags: ['fresh'],
+      });
     });
 
     it('saves with an empty title when none is given', async () => {
       const p = props();
       render(<SavedPanel {...p} />);
       await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
-      await userEvent.type(screen.getByRole('textbox', { name: /url to save/i }), 'https://docs.example/{Enter}');
+      await userEvent.type(
+        screen.getByRole('textbox', { name: /url to save/i }),
+        'https://docs.example/{Enter}',
+      );
       expect(p.add).toHaveBeenCalledWith({ url: 'https://docs.example/', title: '', tags: [] });
     });
 
@@ -211,7 +230,10 @@ describe('SavedPanel', () => {
       const p = props();
       render(<SavedPanel {...p} />);
       await userEvent.click(screen.getByRole('button', { name: /add a page/i }));
-      await userEvent.type(screen.getByRole('textbox', { name: /url to save/i }), 'example.com{Escape}');
+      await userEvent.type(
+        screen.getByRole('textbox', { name: /url to save/i }),
+        'example.com{Escape}',
+      );
       expect(p.add).not.toHaveBeenCalled();
       expect(screen.queryByRole('textbox', { name: /url to save/i })).not.toBeInTheDocument();
     });
@@ -232,7 +254,10 @@ describe('SavedPanel', () => {
       const input = screen.getByRole('textbox', { name: /edit title/i });
       await userEvent.clear(input);
       await userEvent.type(input, 'Documentation{Enter}');
-      expect(p.update).toHaveBeenCalledWith(2, { title: 'Documentation', tags: ['reference', 'work'] });
+      expect(p.update).toHaveBeenCalledWith(2, {
+        title: 'Documentation',
+        tags: ['reference', 'work'],
+      });
     });
 
     it('changing the title and clicking Save calls update with the new title and tags', async () => {
@@ -243,7 +268,10 @@ describe('SavedPanel', () => {
       await userEvent.clear(input);
       await userEvent.type(input, 'Documentation');
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
-      expect(p.update).toHaveBeenCalledWith(2, { title: 'Documentation', tags: ['reference', 'work'] });
+      expect(p.update).toHaveBeenCalledWith(2, {
+        title: 'Documentation',
+        tags: ['reference', 'work'],
+      });
     });
 
     it('adding a tag in edit mode includes it in the update call', async () => {
@@ -276,7 +304,9 @@ describe('SavedPanel', () => {
       await userEvent.type(input, 'Changed{Escape}');
       expect(p.update).not.toHaveBeenCalled();
       // Back to the display row.
-      expect(screen.getByRole('button', { name: /open https:\/\/docs\.example/i })).toBeInTheDocument();
+      expect(
+        screen.getByRole('button', { name: /open https:\/\/docs\.example/i }),
+      ).toBeInTheDocument();
     });
   });
 

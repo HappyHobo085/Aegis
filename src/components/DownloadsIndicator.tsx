@@ -9,8 +9,7 @@ export interface DownloadsIndicatorProps {
 }
 
 export function DownloadsIndicator({ activeCount, onOpen }: DownloadsIndicatorProps) {
-  const label =
-    activeCount > 0 ? `Downloads (${activeCount} active)` : 'Downloads';
+  const label = activeCount > 0 ? `Downloads (${activeCount} active)` : 'Downloads';
   return (
     <button
       type="button"

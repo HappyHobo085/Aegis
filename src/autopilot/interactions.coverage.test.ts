@@ -7,7 +7,9 @@ import { SCREENS } from './screens';
 
 describe('interaction coverage drift guard', () => {
   const ids = INTERACTIONS.map((i) => i.id);
-  it('interaction ids are unique', () => { expect(new Set(ids).size).toBe(ids.length); });
+  it('interaction ids are unique', () => {
+    expect(new Set(ids).size).toBe(ids.length);
+  });
   it('every interaction targets a real screen and declares ≥1 layer', () => {
     const screens = new Set(SCREENS.map((s) => s.id));
     for (const i of INTERACTIONS) {
@@ -17,6 +19,9 @@ describe('interaction coverage drift guard', () => {
   });
   it('every registered interactive control has ≥1 interaction', () => {
     for (const control of INTERACTIVE_CONTROLS)
-      expect(ids.some((id) => id.startsWith(control)), `control ${control} has no interaction`).toBe(true);
+      expect(
+        ids.some((id) => id.startsWith(control)),
+        `control ${control} has no interaction`,
+      ).toBe(true);
   });
 });

@@ -10,27 +10,46 @@ import { reachScreen } from './reach';
 import { getAutopilotControl } from './control';
 import { SCREENS, type ScreenId } from './screens';
 
-vi.mock('../lib/ipcClient', async () => (await import('../testFixtures/aegisMock')).aegisMockModule());
+vi.mock('../lib/ipcClient', async () =>
+  (await import('../testFixtures/aegisMock')).aegisMockModule(),
+);
 
 const screenById = (id: ScreenId) => SCREENS.find((s) => s.id === id)!;
 
-beforeEach(() => { vi.stubEnv('VITE_AEGIS_AUTOPILOT', '1'); vi.spyOn(window, 'confirm').mockReturnValue(true); });
-afterEach(() => { cleanup(); delete (window as Record<string, unknown>).__aegisAutopilot; vi.unstubAllEnvs(); vi.restoreAllMocks(); vi.resetModules(); });
+beforeEach(() => {
+  vi.stubEnv('VITE_AEGIS_AUTOPILOT', '1');
+  vi.spyOn(window, 'confirm').mockReturnValue(true);
+});
+afterEach(() => {
+  cleanup();
+  delete (window as Record<string, unknown>).__aegisAutopilot;
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+  vi.resetModules();
+});
 
 describe('desktop interaction tour', () => {
   // Exclude mobile-only specs (domain 'mobile.*'): those run in interactions.mobile.test.tsx
   // against the MobileApp shell. Cross-platform specs (mobile: true on desktop-domain specs)
   // ARE included here because their controls exist in both shells.
-  for (const spec of INTERACTIONS.filter((s) => s.layers.includes('vitest') && !s.domain.startsWith('mobile.'))) {
+  for (const spec of INTERACTIONS.filter(
+    (s) => s.layers.includes('vitest') && !s.domain.startsWith('mobile.'),
+  )) {
     it(`interaction: ${spec.id}`, async () => {
       const { App } = await import('../App');
       const { aegis } = await import('../lib/ipcClient');
       const { container } = render(<App />);
       const control = getAutopilotControl()!;
-      const ctx = makeVitestCtx(container, aegis, (s) => reachScreen(control, screenById(s), { emitEvent: vi.fn() }));
-      await act(async () => { await ctx.reach(spec.screen); });
+      const ctx = makeVitestCtx(container, aegis, (s) =>
+        reachScreen(control, screenById(s), { emitEvent: vi.fn() }),
+      );
+      await act(async () => {
+        await ctx.reach(spec.screen);
+      });
       ctx.calls.reset();
-      await act(async () => { await spec.run(ctx); });
+      await act(async () => {
+        await spec.run(ctx);
+      });
       await expect(spec.assert(ctx), spec.id).resolves.toBeTruthy();
     });
   }

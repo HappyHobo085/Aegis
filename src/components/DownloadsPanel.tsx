@@ -68,10 +68,7 @@ export function DownloadsPanel({
                     aria-valuenow={pct}
                     className="downloads-panel__progress"
                   >
-                    <span
-                      className="downloads-panel__progress-fill"
-                      style={{ width: `${pct}%` }}
-                    />
+                    <span className="downloads-panel__progress-fill" style={{ width: `${pct}%` }} />
                   </div>
                 )}
                 <div className="downloads-panel__actions">

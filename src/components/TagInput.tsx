@@ -42,11 +42,7 @@ export function TagInput({ tags, suggestions, onChange }: TagInputProps) {
           {tags.map((tag) => (
             <li key={tag} className="tag-input__chip">
               <span>{tag}</span>
-              <button
-                type="button"
-                aria-label={`Remove tag ${tag}`}
-                onClick={() => removeTag(tag)}
-              >
+              <button type="button" aria-label={`Remove tag ${tag}`} onClick={() => removeTag(tag)}>
                 <X size={12} aria-hidden="true" />
               </button>
             </li>

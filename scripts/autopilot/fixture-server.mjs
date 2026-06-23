@@ -13,14 +13,19 @@ const server = createServer(async (req, res) => {
   const rel = urlPath === '/' ? 'index.html' : urlPath.replace(/^\/+/, '');
   const path = resolve(root, normalize(rel));
   if (path !== root && !path.startsWith(root + sep)) {
-    res.writeHead(403); res.end('forbidden'); return;
+    res.writeHead(403);
+    res.end('forbidden');
+    return;
   }
   try {
     const body = await readFile(path);
-    res.writeHead(200, { 'content-type': path.endsWith('.html') ? 'text/html' : 'application/octet-stream' });
+    res.writeHead(200, {
+      'content-type': path.endsWith('.html') ? 'text/html' : 'application/octet-stream',
+    });
     res.end(body);
   } catch {
-    res.writeHead(404); res.end('not found');
+    res.writeHead(404);
+    res.end('not found');
   }
 });
 server.listen(port, '127.0.0.1', () => console.log(`fixture http://127.0.0.1:${port}/`));

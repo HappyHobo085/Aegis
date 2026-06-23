@@ -21,11 +21,12 @@ export async function emitNavState(ctx: InteractionCtx, state: NavState): Promis
  * This uses the React testing pattern: override via the descriptor + dispatch change event.
  */
 export function fireInputChange(el: Element, value: string): void {
-  const proto = el instanceof HTMLSelectElement
-    ? HTMLSelectElement.prototype
-    : el instanceof HTMLInputElement
-      ? HTMLInputElement.prototype
-      : HTMLTextAreaElement.prototype;
+  const proto =
+    el instanceof HTMLSelectElement
+      ? HTMLSelectElement.prototype
+      : el instanceof HTMLInputElement
+        ? HTMLInputElement.prototype
+        : HTMLTextAreaElement.prototype;
   const descriptor = Object.getOwnPropertyDescriptor(proto, 'value');
   descriptor?.set?.call(el, value);
   el.dispatchEvent(new Event('change', { bubbles: true }));
@@ -68,7 +69,11 @@ export function fixtureUrl(marker: string): string {
 
 /** Live-only: poll `fn` until it returns a truthy value or `timeoutMs` elapses.
  *  Returns the value, or throws `live: timed out waiting for <label>`. */
-export async function waitFor<T>(fn: () => T | Promise<T>, label: string, timeoutMs = 8000): Promise<NonNullable<T>> {
+export async function waitFor<T>(
+  fn: () => T | Promise<T>,
+  label: string,
+  timeoutMs = 8000,
+): Promise<NonNullable<T>> {
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     const v = await fn();
@@ -102,15 +107,29 @@ export async function activeViewId(ctx: InteractionCtx): Promise<ViewId> {
  *  (so two same-host fixture URLs that differ only by query are distinguished — host-only
  *  matching would return early), else the host. Waiting for isLoading=false guarantees the
  *  load finished, so the core has recorded the visit in history before we navigate away. */
-export async function liveNavigate(ctx: InteractionCtx, url: string, timeoutMs = 8000): Promise<void> {
+export async function liveNavigate(
+  ctx: InteractionCtx,
+  url: string,
+  timeoutMs = 8000,
+): Promise<void> {
   const vid = await activeViewId(ctx);
   await ctx.aegis.nav.navigate(vid, url);
   let token = url;
   const marker = url.match(/[?&]ap=([^&]+)/);
   if (marker) token = 'ap=' + marker[1];
-  else { try { token = new URL(url).host; } catch { /* keep raw url as the match token */ } }
-  await waitFor(async () => {
-    const s = await ctx.aegis.nav.getState(vid);
-    return s.url.includes(token) && !s.isLoading;
-  }, `nav → ${url}`, timeoutMs);
+  else {
+    try {
+      token = new URL(url).host;
+    } catch {
+      /* keep raw url as the match token */
+    }
+  }
+  await waitFor(
+    async () => {
+      const s = await ctx.aegis.nav.getState(vid);
+      return s.url.includes(token) && !s.isLoading;
+    },
+    `nav → ${url}`,
+    timeoutMs,
+  );
 }

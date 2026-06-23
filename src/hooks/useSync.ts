@@ -53,9 +53,12 @@ export function useSync(): UseSync {
     return r.recoveryPhrase;
   }, []);
 
-  const enableFromPhrase = useCallback(async (phrase: string, passphrase?: string): Promise<void> => {
-    setState(await aegis.sync.enableFromPhrase({ phrase, passphrase }));
-  }, []);
+  const enableFromPhrase = useCallback(
+    async (phrase: string, passphrase?: string): Promise<void> => {
+      setState(await aegis.sync.enableFromPhrase({ phrase, passphrase }));
+    },
+    [],
+  );
 
   const disable = useCallback(async (forget?: boolean): Promise<void> => {
     setState(await aegis.sync.disable({ forget }));
@@ -65,10 +68,7 @@ export function useSync(): UseSync {
     setState(await aegis.sync.syncNow());
   }, []);
 
-  const testConnection = useCallback(
-    (url: string) => aegis.sync.testConnection(url),
-    [],
-  );
+  const testConnection = useCallback((url: string) => aegis.sync.testConnection(url), []);
 
   const getRecoveryPhrase = useCallback(async (): Promise<string> => {
     const r = await aegis.sync.getRecoveryPhrase({ confirm: true });

@@ -25,9 +25,13 @@ let crashedCb: ((c: NavCrashed) => void) | undefined;
 // Multiple hooks (useNav) subscribe to onState.
 // We fan out to all registered callbacks so firing stateCb drives all of them.
 const stateCbs: Array<(s: NavState) => void> = [];
-const stateCb = (s: NavState): void => { stateCbs.forEach((cb) => cb(s)); };
+const stateCb = (s: NavState): void => {
+  stateCbs.forEach((cb) => cb(s));
+};
 
-vi.mock('./lib/ipcClient', async () => (await import('./testFixtures/aegisMock')).aegisMockModule());
+vi.mock('./lib/ipcClient', async () =>
+  (await import('./testFixtures/aegisMock')).aegisMockModule(),
+);
 
 import { App } from './App';
 
@@ -42,34 +46,57 @@ beforeEach(async () => {
   const { aegis } = await import('./lib/ipcClient');
 
   // View spy aliases — point our file-level fns at the mock fns so assertions work.
-  (aegis.view.setContentVisible as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setContentVisible(...(a as Parameters<typeof setContentVisible>)));
-  (aegis.view.setContentInset as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setContentInset(...(a as Parameters<typeof setContentInset>)));
-  (aegis.view.setChromeOverlay as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setChromeOverlay(...(a as Parameters<typeof setChromeOverlay>)));
-  (aegis.view.setLayout as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setLayout(...(a as Parameters<typeof setLayout>)));
-  (aegis.view.setFullscreen as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => setFullscreen(...(a as Parameters<typeof setFullscreen>)));
+  (aegis.view.setContentVisible as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) =>
+    setContentVisible(...(a as Parameters<typeof setContentVisible>)),
+  );
+  (aegis.view.setContentInset as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) =>
+    setContentInset(...(a as Parameters<typeof setContentInset>)),
+  );
+  (aegis.view.setChromeOverlay as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) =>
+    setChromeOverlay(...(a as Parameters<typeof setChromeOverlay>)),
+  );
+  (aegis.view.setLayout as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) =>
+    setLayout(...(a as Parameters<typeof setLayout>)),
+  );
+  (aegis.view.setFullscreen as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) =>
+    setFullscreen(...(a as Parameters<typeof setFullscreen>)),
+  );
 
   // Nav reloadOrStop alias.
-  (aegis.nav.reloadOrStop as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) => reloadOrStop(...(a as Parameters<typeof reloadOrStop>)));
+  (aegis.nav.reloadOrStop as ReturnType<typeof vi.fn>).mockImplementation((...a: unknown[]) =>
+    reloadOrStop(...(a as Parameters<typeof reloadOrStop>)),
+  );
 
   // Callback capture: onState fans out to stateCbs; onFailed/onCrashed capture the cb.
-  (aegis.nav.onState as ReturnType<typeof vi.fn>).mockImplementation((cb: (s: NavState) => void) => {
-    stateCbs.push(cb);
-    return () => { const i = stateCbs.indexOf(cb); if (i !== -1) stateCbs.splice(i, 1); };
-  });
-  (aegis.nav.onFailed as ReturnType<typeof vi.fn>).mockImplementation((cb: (f: NavFailed) => void) => {
-    failedCb = cb;
-    return () => {};
-  });
-  (aegis.nav.onCrashed as ReturnType<typeof vi.fn>).mockImplementation((cb: (c: NavCrashed) => void) => {
-    crashedCb = cb;
-    return () => {};
-  });
+  (aegis.nav.onState as ReturnType<typeof vi.fn>).mockImplementation(
+    (cb: (s: NavState) => void) => {
+      stateCbs.push(cb);
+      return () => {
+        const i = stateCbs.indexOf(cb);
+        if (i !== -1) stateCbs.splice(i, 1);
+      };
+    },
+  );
+  (aegis.nav.onFailed as ReturnType<typeof vi.fn>).mockImplementation(
+    (cb: (f: NavFailed) => void) => {
+      failedCb = cb;
+      return () => {};
+    },
+  );
+  (aegis.nav.onCrashed as ReturnType<typeof vi.fn>).mockImplementation(
+    (cb: (c: NavCrashed) => void) => {
+      crashedCb = cb;
+      return () => {};
+    },
+  );
 });
 
 describe('App', () => {
   it('renders the toolbar address bar', async () => {
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('textbox', { name: /address/i })).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('textbox', { name: /address/i })).toBeInTheDocument(),
+    );
   });
 
   it('shows the ErrorOverlay when a nav.failed event arrives', async () => {
@@ -161,37 +188,64 @@ describe('App', () => {
   it('drives view.setChromeOverlay false on mount (no overlay active)', async () => {
     render(<App />);
     await waitFor(() =>
-      expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })),
+      expect(setLayout).toHaveBeenCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: false }),
+      ),
     );
   });
 
   it('brings chrome on top when the sidebar opens', async () => {
     render(<App />);
-    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
+    await waitFor(() =>
+      expect(setLayout).toHaveBeenCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: false }),
+      ),
+    );
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(screen.getByRole('button', { name: /toggle sidebar/i }));
     await waitFor(() =>
-      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
+      expect(setLayout).toHaveBeenLastCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: true }),
+      ),
     );
   });
 
   it('brings chrome on top when the Settings modal opens', async () => {
     render(<App />);
-    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
+    await waitFor(() =>
+      expect(setLayout).toHaveBeenCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: false }),
+      ),
+    );
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(screen.getByRole('button', { name: /open settings/i }));
     await waitFor(() =>
-      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
+      expect(setLayout).toHaveBeenLastCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: true }),
+      ),
     );
   });
 
   it('brings chrome on top when the favorites manager opens', async () => {
     render(<App />);
-    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
+    await waitFor(() =>
+      expect(setLayout).toHaveBeenCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: false }),
+      ),
+    );
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(await screen.findByRole('button', { name: /manage favorites/i }));
     await waitFor(() =>
-      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
+      expect(setLayout).toHaveBeenLastCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: true }),
+      ),
     );
   });
 
@@ -206,12 +260,20 @@ describe('App', () => {
     );
     render(<App />);
     await waitFor(() => expect(promptCb).toBeTypeOf('function'));
-    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
+    await waitFor(() =>
+      expect(setLayout).toHaveBeenCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: false }),
+      ),
+    );
     act(() =>
       promptCb!({ requestId: 1, origin: 'https://example.com', permission: 'geolocation' }),
     );
     await waitFor(() =>
-      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
+      expect(setLayout).toHaveBeenLastCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: true }),
+      ),
     );
   });
 
@@ -224,7 +286,9 @@ describe('App', () => {
 
   it('does not mount the Settings modal until the gear is clicked', async () => {
     render(<App />);
-    await waitFor(() => expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument());
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument(),
+    );
     expect(screen.queryByRole('dialog', { name: /settings/i })).not.toBeInTheDocument();
   });
 
@@ -262,11 +326,19 @@ describe('App', () => {
 
   it('brings chrome on top when the Downloads modal opens', async () => {
     render(<App />);
-    await waitFor(() => expect(setLayout).toHaveBeenCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: false })));
+    await waitFor(() =>
+      expect(setLayout).toHaveBeenCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: false }),
+      ),
+    );
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(await screen.findByRole('button', { name: /^downloads$/i }));
     await waitFor(() =>
-      expect(setLayout).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, expect.objectContaining({ overlay: true })),
+      expect(setLayout).toHaveBeenLastCalledWith(
+        PRIMARY_VIEW_ID,
+        expect.objectContaining({ overlay: true }),
+      ),
     );
   });
 
@@ -301,9 +373,7 @@ describe('App', () => {
 
   it('drives view.setFullscreen false on mount', async () => {
     render(<App />);
-    await waitFor(() =>
-      expect(setFullscreen).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false),
-    );
+    await waitFor(() => expect(setFullscreen).toHaveBeenCalledWith(PRIMARY_VIEW_ID, false));
   });
 
   it('entering fullscreen hides the chrome and shows the corner exit button; exiting restores it', async () => {
@@ -316,9 +386,7 @@ describe('App', () => {
 
     // Enter fullscreen.
     await userEvent.click(enter);
-    await waitFor(() =>
-      expect(setFullscreen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true),
-    );
+    await waitFor(() => expect(setFullscreen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true));
 
     // Chrome (toolbar/favbar) is gone; only the corner exit button renders.
     expect(screen.queryByRole('textbox', { name: /address/i })).not.toBeInTheDocument();
@@ -328,9 +396,7 @@ describe('App', () => {
 
     // Exit fullscreen restores the normal chrome.
     await userEvent.click(exit);
-    await waitFor(() =>
-      expect(setFullscreen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, false),
-    );
+    await waitFor(() => expect(setFullscreen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, false));
     expect(screen.getByRole('textbox', { name: /address/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /enter fullscreen/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /exit fullscreen/i })).not.toBeInTheDocument();

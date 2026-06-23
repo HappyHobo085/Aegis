@@ -13,7 +13,13 @@ export interface NavControlsProps {
 export function NavControls({ state, back, forward, reloadOrStop, home }: NavControlsProps) {
   return (
     <div className="nav-controls">
-      <button type="button" aria-label="Back" title="Back" disabled={!state.canGoBack} onClick={back}>
+      <button
+        type="button"
+        aria-label="Back"
+        title="Back"
+        disabled={!state.canGoBack}
+        onClick={back}
+      >
         <ArrowLeft size={18} aria-hidden="true" />
       </button>
       <button

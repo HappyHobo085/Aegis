@@ -31,7 +31,8 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
     assert: async (ctx) => {
       // The Saved sheet renders a dialog with aria-label="Saved".
       const sheet = ctx.bySelector('[role="dialog"][aria-label="Saved"]');
-      if (!sheet) throw new Error('Saved sheet (dialog aria-label="Saved") not found after clicking Saved');
+      if (!sheet)
+        throw new Error('Saved sheet (dialog aria-label="Saved") not found after clicking Saved');
       return 'MobileBottomBar Saved → Saved sheet opened';
     },
   },
@@ -51,7 +52,10 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
     assert: async (ctx) => {
       // The History sheet renders a dialog with aria-label="History".
       const sheet = ctx.bySelector('[role="dialog"][aria-label="History"]');
-      if (!sheet) throw new Error('History sheet (dialog aria-label="History") not found after clicking History');
+      if (!sheet)
+        throw new Error(
+          'History sheet (dialog aria-label="History") not found after clicking History',
+        );
       return 'MobileBottomBar History → History sheet opened';
     },
   },
@@ -66,13 +70,19 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
     run: async (ctx) => {
       // The Tabs button aria-label is "Tabs (N open)".
       const btn = ctx.byRole('button', /^Tabs \(\d+ open\)$/);
-      if (!btn) throw new Error('Tabs button not found in MobileBottomBar (expected aria-label "Tabs (N open)")');
+      if (!btn)
+        throw new Error(
+          'Tabs button not found in MobileBottomBar (expected aria-label "Tabs (N open)")',
+        );
       await ctx.click(btn);
     },
     assert: async (ctx) => {
       // The tab switcher renders a dialog with aria-label="Tabs".
       const sheet = ctx.bySelector('[role="dialog"][aria-label="Tabs"]');
-      if (!sheet) throw new Error('Tabs sheet (dialog aria-label="Tabs") not found after clicking Tabs button');
+      if (!sheet)
+        throw new Error(
+          'Tabs sheet (dialog aria-label="Tabs") not found after clicking Tabs button',
+        );
       return 'MobileBottomBar Tabs → Tab switcher sheet opened';
     },
   },
@@ -92,7 +102,8 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
     assert: async (ctx) => {
       // The menu sheet renders a dialog with aria-label="Menu".
       const sheet = ctx.bySelector('[role="dialog"][aria-label="Menu"]');
-      if (!sheet) throw new Error('Menu sheet (dialog aria-label="Menu") not found after clicking Menu');
+      if (!sheet)
+        throw new Error('Menu sheet (dialog aria-label="Menu") not found after clicking Menu');
       return 'MobileBottomBar Menu → Menu sheet opened';
     },
   },
@@ -200,7 +211,9 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
     },
     assert: async (ctx) => {
       if (!ctx.calls.called('saved.add'))
-        throw new Error('saved.add not called after clicking "Bookmark this page" in MobileMenuSheet');
+        throw new Error(
+          'saved.add not called after clicking "Bookmark this page" in MobileMenuSheet',
+        );
       return 'MobileMenuSheet "Bookmark this page" → saved.add()';
     },
   },
@@ -229,7 +242,10 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
       // Actually DownloadsModal is reused directly in MobileApp — it uses its own
       // .downloads-modal element.  Assert the downloads modal div is in the DOM.
       const modal = ctx.bySelector('.downloads-modal');
-      if (!modal) throw new Error('Downloads modal (.downloads-modal) not found after clicking Downloads in MobileMenuSheet');
+      if (!modal)
+        throw new Error(
+          'Downloads modal (.downloads-modal) not found after clicking Downloads in MobileMenuSheet',
+        );
       return 'MobileMenuSheet Downloads → downloads modal opened';
     },
   },
@@ -254,7 +270,10 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
     assert: async (ctx) => {
       // The SettingsModal renders with class .settings-modal.
       const modal = ctx.bySelector('.settings-modal');
-      if (!modal) throw new Error('Settings modal (.settings-modal) not found after clicking Settings in MobileMenuSheet');
+      if (!modal)
+        throw new Error(
+          'Settings modal (.settings-modal) not found after clicking Settings in MobileMenuSheet',
+        );
       return 'MobileMenuSheet Settings → settings modal opened';
     },
   },
@@ -311,7 +330,10 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
       await ctx.emitTabsState?.(TWO_TABS);
       // Open the tab switcher.
       const tabsBtn = ctx.byRole('button', /^Tabs \(2 open\)$/);
-      if (!tabsBtn) throw new Error('Tabs button not found in MobileBottomBar — emitTabsState may not have updated the count yet');
+      if (!tabsBtn)
+        throw new Error(
+          'Tabs button not found in MobileBottomBar — emitTabsState may not have updated the count yet',
+        );
       await ctx.click(tabsBtn);
       // Click "Switch to Tab 2" in the switcher.
       const switchBtn = ctx.byRole('button', /^Switch to Tab 2$/);
@@ -320,7 +342,9 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
     },
     assert: async (ctx) => {
       if (!ctx.calls.called('tabs.activate'))
-        throw new Error('tabs.activate not called after clicking Switch to Tab 2 in MobileTabSwitcher');
+        throw new Error(
+          'tabs.activate not called after clicking Switch to Tab 2 in MobileTabSwitcher',
+        );
       return 'MobileTabSwitcher switch tab → tabs.activate()';
     },
   },
@@ -363,7 +387,8 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
   {
     id: 'mobile.topBar.hideToolbar',
     domain: 'mobile.topBar',
-    description: 'Click "Hide toolbar" toggle in MobileTopBar → toolbar toggles (setBottomBarHidden called)',
+    description:
+      'Click "Hide toolbar" toggle in MobileTopBar → toolbar toggles (setBottomBarHidden called)',
     screen: 'home',
     layers: ['vitest'],
     mobile: true,
@@ -380,7 +405,10 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
       if (bottomBar) throw new Error('MobileBottomBar still in DOM after clicking "Hide toolbar"');
       // The toggle button should now show "Show toolbar" (bottomBarHidden=true).
       const showBtn = ctx.byRole('button', /^Show toolbar$/);
-      if (!showBtn) throw new Error('"Show toolbar" button not found after hiding toolbar — toggle did not work');
+      if (!showBtn)
+        throw new Error(
+          '"Show toolbar" button not found after hiding toolbar — toggle did not work',
+        );
       return 'MobileTopBar "Hide toolbar" → bottom bar hidden, button changed to "Show toolbar"';
     },
   },

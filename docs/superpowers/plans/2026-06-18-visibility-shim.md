@@ -26,6 +26,7 @@
 ## Task 1: the shim JS + vitest test
 
 **Files:**
+
 - Create: `src-tauri/src/visibility_shim.js`
 - Test: `src/lib/visibilityShim.test.ts`
 
@@ -41,19 +42,25 @@
   try {
     Object.defineProperty(document, 'visibilityState', {
       configurable: true,
-      get: function () { return 'visible'; },
+      get: function () {
+        return 'visible';
+      },
     });
   } catch (e) {}
   try {
     Object.defineProperty(document, 'hidden', {
       configurable: true,
-      get: function () { return false; },
+      get: function () {
+        return false;
+      },
     });
   } catch (e) {}
   try {
     Object.defineProperty(document, 'onvisibilitychange', {
       configurable: true,
-      get: function () { return null; },
+      get: function () {
+        return null;
+      },
       set: function () {},
     });
   } catch (e) {}
@@ -74,10 +81,7 @@ import { readFileSync } from 'fs';
 import { resolve } from 'path';
 import { describe, it, expect, vi } from 'vitest';
 
-const shimSrc = readFileSync(
-  resolve(__dirname, '../../src-tauri/src/visibility_shim.js'),
-  'utf8',
-);
+const shimSrc = readFileSync(resolve(__dirname, '../../src-tauri/src/visibility_shim.js'), 'utf8');
 
 function runShim() {
   // Execute the SHIPPED shim bytes against the jsdom globals (authoritative).
@@ -119,6 +123,7 @@ git commit -m "feat(adblock): visibility shim JS — keep content pages reportin
 ## Task 2: wire `VISIBILITY_GUARD` into the injection (all platforms)
 
 **Files:**
+
 - Modify: `src-tauri/src/adblock_inject.rs`
 
 - [ ] **Step 1: Write the failing Rust test**
@@ -195,4 +200,7 @@ git commit -m "feat(adblock): ship the visibility shim on all platforms (compose
 - [ ] **Android parity:** `cargo check --target aarch64-linux-android` (NDK env: `ANDROID_NDK_HOME` + `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER`/`CC_aarch64_linux_android` = `…/aarch64-linux-android24-clang`) — the Android builder concatenation compiles.
 - [ ] **Confirm the real fix (the whole point):** build the AppImage (`npm run tauri:build`), load streamex, open+close Settings, and confirm the tab no longer redirects to `https://www.google.com/`. If it STILL redirects, the trigger was window `blur`/`focus` rather than the Visibility API — report that (do NOT claim success); the shim is then a no-op for this case and we revisit per the spec.
 - [ ] Update memory: visibility shim shipped (and whether the streamex repro confirmed it).
+
+```
+
 ```

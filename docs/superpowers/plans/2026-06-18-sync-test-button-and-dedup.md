@@ -29,6 +29,7 @@
 ## Task A1: Rust — `healthz_url` + `sync.testConnection` handler
 
 **Files:**
+
 - Modify: `src-tauri/src/sync.rs`
 
 - [ ] **Step 1: Write the failing test**
@@ -129,6 +130,7 @@ git commit -m "feat(sync): sync.testConnection IPC — probe server /healthz"
 ## Task A2: IPC contract + hook wiring
 
 **Files:**
+
 - Modify: `shared/types.ts`
 - Modify: `src/lib/ipcClient.ts`
 - Modify: `src/hooks/useSync.ts`
@@ -161,10 +163,7 @@ testConnection: (url: string) =>
 Add a `useCallback` next to the existing `syncNow` action:
 
 ```ts
-const testConnection = useCallback(
-  (url: string) => aegis.sync.testConnection(url),
-  [],
-);
+const testConnection = useCallback((url: string) => aegis.sync.testConnection(url), []);
 ```
 
 Then add `testConnection` to BOTH the object the hook returns AND the `UseSync` type/interface (mirror exactly how `syncNow` appears in each — `testConnection: (url: string) => Promise<{ ok: boolean; latencyMs?: number; error?: string }>;` in the type).
@@ -188,6 +187,7 @@ git commit -m "feat(sync): wire testConnection through the IPC client + useSync"
 ## Task A3: UI button (`SyncSettingsTab`)
 
 **Files:**
+
 - Modify: `src/components/SyncSettingsTab.tsx`
 - Test: `src/components/SyncSettingsTab.test.tsx`
 
@@ -265,12 +265,14 @@ onChange={(e) => { setServerUrl(e.target.value); setTestStatus(''); }}
   }
 >
   Test connection
-</button>
-{testStatus && (
-  <p className="sync-tab__status" role="status">
-    {testStatus}
-  </p>
-)}
+</button>;
+{
+  testStatus && (
+    <p className="sync-tab__status" role="status">
+      {testStatus}
+    </p>
+  );
+}
 ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -292,6 +294,7 @@ git commit -m "feat(sync): Test connection button in the Sync setup form"
 ## Task B1: pure `duplicate_losers` + normalization
 
 **Files:**
+
 - Modify: `src-tauri/src/sync_stores.rs`
 
 - [ ] **Step 1: Write the failing tests**
@@ -457,6 +460,7 @@ git commit -m "feat(sync): pure duplicate_losers + url/host normalization"
 ## Task B2: wire dedup into `merge_into`
 
 **Files:**
+
 - Modify: `src-tauri/src/sync_stores.rs`
 
 - [ ] **Step 1: Write the failing test**
@@ -555,4 +559,7 @@ git commit -m "feat(sync): dedup duplicate records during merge_into"
 - [ ] Manual smoke (dedup): add the same bookmark on two devices/profiles pointed at the same server → after sync, it appears once.
 - [ ] Build a fresh **release** APK (android fix + both features) for the device: `JAVA_HOME=<jbr-21> NDK_HOME=<ndk> npm run android:build -- --target aarch64`, then `adb install -r` the universal APK. (Note: debug installs as `com.aegis.browser.debug`; release as `com.aegis.browser`.)
 - [ ] Update memory: note the test-connection button + auto-dedup shipped on `main`.
+
+```
+
 ```

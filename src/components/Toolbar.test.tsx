@@ -89,22 +89,14 @@ describe('Toolbar', () => {
 
   it('renders the optional bookmark slot when provided', () => {
     render(
-      <Toolbar
-        state={state}
-        {...handlers()}
-        bookmark={<button type="button">Save page</button>}
-      />,
+      <Toolbar state={state} {...handlers()} bookmark={<button type="button">Save page</button>} />,
     );
     expect(screen.getByRole('button', { name: /save page/i })).toBeInTheDocument();
   });
 
   it('renders the optional gear slot when provided', () => {
     render(
-      <Toolbar
-        state={state}
-        {...handlers()}
-        gear={<button type="button">Open settings</button>}
-      />,
+      <Toolbar state={state} {...handlers()} gear={<button type="button">Open settings</button>} />,
     );
     expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument();
   });

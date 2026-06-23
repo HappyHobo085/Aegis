@@ -32,7 +32,9 @@ export function SafetyInterstitial({
     >
       <div className="interstitial__panel">
         <h1 id="interstitial-title" className="interstitial__title">
-          {malware ? 'Dangerous site blocked' : "This site isn’t available over a secure connection"}
+          {malware
+            ? 'Dangerous site blocked'
+            : 'This site isn’t available over a secure connection'}
         </h1>
         <p className="interstitial__body">
           {malware ? (
@@ -43,8 +45,9 @@ export function SafetyInterstitial({
           ) : (
             <>
               Aegis tried to load <strong>{host}</strong> securely over HTTPS, but the secure
-              connection failed. Continuing will load this site over an unencrypted <strong>HTTP</strong>{' '}
-              connection, which others on your network may be able to read or modify.
+              connection failed. Continuing will load this site over an unencrypted{' '}
+              <strong>HTTP</strong> connection, which others on your network may be able to read or
+              modify.
             </>
           )}
         </p>

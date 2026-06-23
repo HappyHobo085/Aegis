@@ -12,14 +12,14 @@
 Add an opt-in anti-fingerprinting ("farbling") layer that perturbs the browser-fingerprint
 read surfaces — **canvas**, **audio**, **WebGL**, and **navigator / UA-Client-Hints** — with
 **deterministic, per-frame-origin, per-session noise**, so the same site sees a stable
-fingerprint within a session but a *different* one than other sites (and than other sessions),
+fingerprint within a session but a _different_ one than other sites (and than other sessions),
 while the values stay individually plausible. Three levels (`off` / `standard` / `strict`) plus
 a per-site allowlist that disables farbling for sites it breaks. The noise seed is derived from
 a **crypto-strong, one-way** per-session salt so the salt can never be brute-forced back out of
 observed farbled values (the "super-cookie" trap the roadmap flags).
 
 This is **opt-in, default `off`**, because canvas/audio noise is actively flagged by anti-bot/
-CAPTCHA vendors and a hand-written same-world JS shim is *detectable* — see the Global
+CAPTCHA vendors and a hand-written same-world JS shim is _detectable_ — see the Global
 Constraints honest-limit note. The win is a meaningful, Brave-shaped reduction in passive
 fingerprint stability for users who turn it on, not in-engine invisibility (which a shell
 cannot reach).
@@ -61,10 +61,10 @@ settings + allowlist:
 2. The salt is **never shipped to the page.** Rust derives a 16-byte **per-session public seed**
    `SEED = HKDF-SHA256(salt, info="aegis-farble-seed-v1")[..16]` and bakes only `SEED` into the JS
    as a hex literal. Because HKDF is a one-way KDF, a page that observes `SEED` (or any farbled
-   value) cannot recover `salt`, and cannot derive the seed for any *other* session.
+   value) cannot recover `salt`, and cannot derive the seed for any _other_ session.
 3. In-page, the shim computes a per-origin sub-seed `perOrigin = SHA-256(SEED ++ location.origin)[..8]`
    using a tiny self-contained SHA-256 in the shim (no Web Crypto dependency, so it works
-   synchronously at document-start and is identical across engines). This is *also* one-way:
+   synchronously at document-start and is identical across engines). This is _also_ one-way:
    observing `perOrigin` for site A reveals nothing about `SEED` (so nothing about site B's
    sub-seed). The per-origin sub-seed feeds a deterministic xoshiro128 PRNG that drives every
    surface's noise. **Determinism guarantee:** same `SEED` + same `origin` ⇒ identical noise for
@@ -72,14 +72,14 @@ settings + allowlist:
    jitter, which would itself be a tell and would break re-render comparisons).
 
 Why this is strictly better than the roadmap-flagged naive design: the original sketch fed a
-CSPRNG salt through a *non-crypto* JS hash (fnv/xorshift), which is **invertible** — a site could
+CSPRNG salt through a _non-crypto_ JS hash (fnv/xorshift), which is **invertible** — a site could
 brute-force the 64-bit salt offline and predict other origins' noise (a cross-site super-cookie).
 Here the page only ever sees a one-way HKDF output and one-way SHA-256 sub-seeds; the 256-bit
 session salt is never exposed and never reconstructible. (Self-Review item 2.)
 
-**Per-frame-origin, not per-top-eTLD+1 (honest, documented).** Brave seeds farbling by the *top*
+**Per-frame-origin, not per-top-eTLD+1 (honest, documented).** Brave seeds farbling by the _top_
 frame's eTLD+1 so a site and its sub-resources farble consistently. In a shell the all-frames
-document-start script *does* run in cross-origin iframes, but a cross-origin child **cannot read
+document-start script _does_ run in cross-origin iframes, but a cross-origin child **cannot read
 `window.top`'s origin** in JS (same-origin policy) — so Brave's "seed by top eTLD+1" is
 unreachable. We therefore seed by **each frame's own `location.origin`** and document that as the
 real, weaker behavior (a cross-origin iframe gets its own noise stream, not the top frame's). We do
@@ -88,15 +88,16 @@ copy and `src-tauri/CLAUDE.md`. (Roadmap §3.2 "Cross-origin iframe seeding (cor
 
 **JS shim surfaces (what each level patches):**
 
-| Surface | `standard` | `strict` | Technique (fail-open) |
-|---|---|---|---|
-| **Canvas** | yes | yes | Wrap `CanvasRenderingContext2D.getImageData`, `HTMLCanvasElement.toDataURL`/`toBlob` to flip ≤ a few LSBs of a deterministic subset of pixels (perceptually invisible, breaks hash). |
-| **Audio** | yes | yes | Wrap `AnalyserNode.getFloatFrequencyData`/`getByteFrequencyData` + `AudioBuffer.getChannelData` to add ≈1e-7 deterministic noise to samples. |
-| **WebGL** | no | yes | Wrap `WebGLRenderingContext.getParameter`/`WebGL2…` for `UNMASKED_RENDERER_WEBGL`/`UNMASKED_VENDOR_WEBGL` + a few precision/extension reads, returning a deterministic-but-plausible value; perturb `readPixels` LSBs. (strict only — highest breakage risk.) |
-| **navigator / UA-CH** | yes | yes | Normalize `navigator.hardwareConcurrency`, `deviceMemory`, `navigator.plugins`/`mimeTypes` length, and keep `navigator.userAgentData.brands` **consistent with `CONTENT_UA` (Chrome 148)** so the UA-CH brands can't go stale and become a tell. No randomization here — *consistency cleanup*, the most defensible win. |
-| `Function.prototype.toString` | yes | yes | Patch the wrapped fns to report `[native code]` (reduces, never removes, detectability — documented). |
+| Surface                       | `standard` | `strict` | Technique (fail-open)                                                                                                                                                                                                                                                                                                    |
+| ----------------------------- | ---------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **Canvas**                    | yes        | yes      | Wrap `CanvasRenderingContext2D.getImageData`, `HTMLCanvasElement.toDataURL`/`toBlob` to flip ≤ a few LSBs of a deterministic subset of pixels (perceptually invisible, breaks hash).                                                                                                                                     |
+| **Audio**                     | yes        | yes      | Wrap `AnalyserNode.getFloatFrequencyData`/`getByteFrequencyData` + `AudioBuffer.getChannelData` to add ≈1e-7 deterministic noise to samples.                                                                                                                                                                             |
+| **WebGL**                     | no         | yes      | Wrap `WebGLRenderingContext.getParameter`/`WebGL2…` for `UNMASKED_RENDERER_WEBGL`/`UNMASKED_VENDOR_WEBGL` + a few precision/extension reads, returning a deterministic-but-plausible value; perturb `readPixels` LSBs. (strict only — highest breakage risk.)                                                            |
+| **navigator / UA-CH**         | yes        | yes      | Normalize `navigator.hardwareConcurrency`, `deviceMemory`, `navigator.plugins`/`mimeTypes` length, and keep `navigator.userAgentData.brands` **consistent with `CONTENT_UA` (Chrome 148)** so the UA-CH brands can't go stale and become a tell. No randomization here — _consistency cleanup_, the most defensible win. |
+| `Function.prototype.toString` | yes        | yes      | Patch the wrapped fns to report `[native code]` (reduces, never removes, detectability — documented).                                                                                                                                                                                                                    |
 
 **Injection on each engine** (reuses S4, already done):
+
 - **Desktop (Linux/Windows/macOS):** `farble::shim_for(level, salt, host_allowlisted)` returns the
   shim string (or `""` when off/allowlisted). `adblock_inject::compose` appends it after the
   WebRTC shim + pop-under guard, so it ships through the **same** `initialization_script_for_all_frames`
@@ -107,13 +108,14 @@ copy and `src-tauri/CLAUDE.md`. (Roadmap §3.2 "Cross-origin iframe seeding (cor
   `WebViewCompat.addDocumentStartJavaScript(wv, farble, setOf("*"))`.
 
 **Settings / allowlist:**
+
 - `antiFingerprint: 'off'|'standard'|'strict'` is a **settings field** (rides `settings.get/set`,
   no new channel — per the shared/ "settings-field shortcut"). Reader `farble::level(app)` mirrors
   `settings::webrtc_policy`.
 - Per-site allowlist gets its **own** dispatch module `farble.rs` with channels
   `fingerprint.toggleAllowlist` / `fingerprint.removeAllowlist` / `fingerprint.clearAllowlist` /
   `fingerprint.getState`, backed by a persisted **syncable** store `fp-allowlist` (mirrors the
-  ad-block allowlist `jsonstore::load_synced`/`stamp_new`/`tombstone` pattern). It is a *separate*
+  ad-block allowlist `jsonstore::load_synced`/`stamp_new`/`tombstone` pattern). It is a _separate_
   list from the ad-block allowlist (a user may want ads blocked but farbling off on a banking site,
   or vice-versa). `farble::host_allowlisted(app, host)` (exact + subdomain match) is the desktop
   escape hatch consumed by `adblock_inject::script`.
@@ -124,8 +126,8 @@ copy and `src-tauri/CLAUDE.md`. (Roadmap §3.2 "Cross-origin iframe seeding (cor
   `sha2 0.10` (one-way SEED derivation). No new crate. `serde_json` for the allowlist store /
   state JSON. (`Cargo.toml` already carries all three — verified.)
 - **Shim JS:** shipped as `src-tauri/src/farble.standard.js` / `farble.strict.js`, `include_str!`'d
-  by `farble.rs` and executed verbatim by a vitest runtime test — the *exact same single-tested-artifact
-  pattern* as `webrtc_shim.public-only.js` + `src/lib/webrtcShim.test.ts`. The Rust composes the
+  by `farble.rs` and executed verbatim by a vitest runtime test — the _exact same single-tested-artifact
+  pattern_ as `webrtc_shim.public-only.js` + `src/lib/webrtcShim.test.ts`. The Rust composes the
   shim by prepending a `var __aegisFarbleSeed="<hex>";` line to the chosen artifact (so the test can
   inject its own seed and assert determinism).
 - **TS/React:** `SecurityTab.tsx` gets the level `<select>` + the allowlist list UI;
@@ -142,7 +144,7 @@ From the master design §6 (cross-cutting), the roadmap, and the repo CLAUDE.md 
 
 1. **IPC in three places.** The `fingerprint.*` channels go in `shared/types.ts` (`IPC` const +
    `AegisApi.fingerprint`), the Rust `ipc()` dispatcher (`farble::dispatch` arm in `lib.rs`), and
-   `src/lib/ipcClient.ts`. The `antiFingerprint` *setting* needs NO channel (settings shortcut),
+   `src/lib/ipcClient.ts`. The `antiFingerprint` _setting_ needs NO channel (settings shortcut),
    only the `Settings` interface + `settings.rs defaults()` + a Rust reader. Event names stay dotted
    logically; there is no new event in this sub-project.
 2. **Autopilot coverage in the same commit (drift-guarded).** The new `fingerprint.*` channels MUST
@@ -152,7 +154,7 @@ From the master design §6 (cross-cutting), the roadmap, and the repo CLAUDE.md 
    `INTERACTIVE_CONTROLS` ids in the same commit (the `interactions.coverage.test.ts` guard).
 3. **Gate per task.** `npm test` green; for the injection / runtime tasks,
    `bash scripts/autopilot/run-autopilot.sh` → `RESULT: … 0 failed` and `ad-block blocking
-   (trace): PASS` on Linux. A capability without its autopilot coverage is incomplete.
+(trace): PASS` on Linux. A capability without its autopilot coverage is incomplete.
 4. **Parity before "done."** Linux (live), Android (device), Windows (CI build + owner runtime),
    macOS (CI build; GUI-verify is hardware-gated sub-project I). Do NOT ship Linux-only. The shim is
    one artifact run on all four engines; the Android JNI getter + Kotlin registration is the genuine
@@ -165,7 +167,7 @@ From the master design §6 (cross-cutting), the roadmap, and the repo CLAUDE.md 
    one-way `SEED` is exposed to the page. (Self-Review item 2.)
 7. **No new trust boundary.** The shim is a one-way injected string + a public seed literal; content
    tabs have no `addJavascriptInterface` and gain none here — the no-page→core invariant is preserved
-   (only sync/WebRTC/farbling features that *don't* break it; autofill is the only one that does, and
+   (only sync/WebRTC/farbling features that _don't_ break it; autofill is the only one that does, and
    it's out of scope).
 
 ### The honest documented limit (must be written into `src-tauri/CLAUDE.md` + the UI + the plan's Self-Review)
@@ -175,17 +177,17 @@ engines, and it is **detectable and potentially net-negative**:
 
 - **Detectable.** `Function.prototype.toString` tampering, `Proxy`/getter-trap probing, and
   pristine-prototype comparison via a fresh `<iframe>` can all reveal that canvas/audio/WebGL are
-  patched. A determined fingerprinter can detect *the presence of Aegis farbling* and fingerprint on
-  *that* — and on a tiny user population this can make a user **more** identifiable, not less. That is
+  patched. A determined fingerprinter can detect _the presence of Aegis farbling_ and fingerprint on
+  _that_ — and on a tiny user population this can make a user **more** identifiable, not less. That is
   why this ships **default-off** with a per-site escape hatch.
 - **The two-engine consistency trap.** One shim must emit self-consistent values on a **WebKit**
   baseline (Linux/macOS) and a **Chromium** baseline (Windows/Android) while matching a Chrome-148 UA
-  that *already lies about the engine on WebKit*. A `Chrome` UA + a WebKit-only quirk + farbled WebGL
+  that _already lies about the engine on WebKit_. A `Chrome` UA + a WebKit-only quirk + farbled WebGL
   is a unique, stable Aegis signature — engine-quirk detection defeats the UA spoof regardless of the
   shim. We minimize, not eliminate, this; `strict`/WebGL is the riskiest and is opt-in within opt-in.
 - **Per-frame-origin, not per-top-origin** (above) — weaker than Brave by design, not a bug.
 - **Web-compat.** Canvas/audio noise is flagged by anti-bot/CAPTCHA vendors and can get users
-  *challenged more*. Default-off + per-site disable is the mitigation.
+  _challenged more_. Default-off + per-site disable is the mitigation.
 
 This plan does NOT claim engine-level (Brave/Blink) farbling. It claims a meaningful, opt-in,
 per-session/per-origin passive-fingerprint reduction with the salt provably one-way — and documents
@@ -234,6 +236,7 @@ src/
 ### Task 1 — One-way session salt + public SEED derivation (Rust `#[test]`)
 
 **Test first** (`farble.rs` `#[cfg(test)] mod tests`):
+
 - `init_session_salt` is idempotent and the salt is non-zero after init.
 - `public_seed()` is **deterministic for a given salt** (`expand` is a pure HKDF) and **16 bytes**.
 - `public_seed` for two different salts differ.
@@ -320,25 +323,34 @@ const read = (n: string) => readFileSync(join(process.cwd(), 'src-tauri/src', n)
 const STANDARD = read('farble.standard.js');
 
 // Compose like Rust does: prepend the public-seed literal, then the shipped artifact.
-const withSeed = (js: string, hex: string) => `var __aegisFarbleSeed=${JSON.stringify(hex)};\n${js}`;
+const withSeed = (js: string, hex: string) =>
+  `var __aegisFarbleSeed=${JSON.stringify(hex)};\n${js}`;
 const SEED_A = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const SEED_B = '00112233445566778899aabbccddeeff';
 
 function run(js: string, hex: string, origin = 'https://example.com') {
   // jsdom lets us set location via the constructor; emulate origin for the shim's read.
-  Object.defineProperty(window, 'location', { value: { origin, href: origin + '/' }, configurable: true });
+  Object.defineProperty(window, 'location', {
+    value: { origin, href: origin + '/' },
+    configurable: true,
+  });
   // The shim is an IIFE; run it in global scope (it patches window/navigator prototypes).
   new Function(withSeed(js, hex))();
 }
 
-afterEach(() => { /* jsdom resets per-file; nothing persisted */ });
+afterEach(() => {
+  /* jsdom resets per-file; nothing persisted */
+});
 
 describe('farble shim (standard) — shipped JS, runtime', () => {
   it('perturbs canvas getImageData but stays within a few LSBs (plausible)', () => {
     run(STANDARD, SEED_A);
-    const c = document.createElement('canvas'); c.width = 8; c.height = 8;
+    const c = document.createElement('canvas');
+    c.width = 8;
+    c.height = 8;
     const ctx = c.getContext('2d')!;
-    ctx.fillStyle = '#808080'; ctx.fillRect(0, 0, 8, 8);
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(0, 0, 8, 8);
     const a = ctx.getImageData(0, 0, 8, 8).data;
     const b = ctx.getImageData(0, 0, 8, 8).data;
     // DETERMINISTIC: two reads in the SAME session+origin are identical (no per-read jitter).
@@ -349,21 +361,33 @@ describe('farble shim (standard) — shipped JS, runtime', () => {
 
   it('noise is DETERMINISTIC per seed+origin, DIFFERENT across origins', () => {
     run(STANDARD, SEED_A, 'https://a.example');
-    const sig = (o: string) => { /* render+toDataURL helper */ return ''; };
+    const sig = (o: string) => {
+      /* render+toDataURL helper */ return '';
+    };
     // (helper renders a fixed scene and returns toDataURL; asserted equal on re-run, ≠ across origin)
   });
 
-  it('noise DIFFERS across sessions (different seed)', () => { /* SEED_A vs SEED_B → different toDataURL */ });
+  it('noise DIFFERS across sessions (different seed)', () => {
+    /* SEED_A vs SEED_B → different toDataURL */
+  });
 
-  it('audio getChannelData is perturbed deterministically and bounded (~1e-7)', () => { /* … */ });
+  it('audio getChannelData is perturbed deterministically and bounded (~1e-7)', () => {
+    /* … */
+  });
 
-  it('navigator.userAgentData.brands stay consistent with the Chrome-148 UA (no stale tell)', () => { /* … */ });
+  it('navigator.userAgentData.brands stay consistent with the Chrome-148 UA (no stale tell)', () => {
+    /* … */
+  });
 
-  it('FAIL-OPEN: a surface that throws leaves the original value', () => { /* monkeypatch a getter to throw */ });
+  it('FAIL-OPEN: a surface that throws leaves the original value', () => {
+    /* monkeypatch a getter to throw */
+  });
 
   it('patched fn toString reports [native code]', () => {
     run(STANDARD, SEED_A);
-    expect(Function.prototype.toString.call(HTMLCanvasElement.prototype.toDataURL)).toContain('[native code]');
+    expect(Function.prototype.toString.call(HTMLCanvasElement.prototype.toDataURL)).toContain(
+      '[native code]',
+    );
   });
 });
 ```
@@ -377,42 +401,93 @@ placeholders for the load-bearing parts; full bodies written during implementati
 // value, and nothing throws at document-start. Seed literal `__aegisFarbleSeed` (hex) is
 // prepended by Rust; it is HKDF(salt) — one-way, never the raw salt. Per-FRAME-origin: a
 // cross-origin iframe seeds on its own location.origin (window.top is unreadable cross-origin).
-(function(){
+(function () {
   try {
-    var SEEDHEX = (typeof __aegisFarbleSeed === 'string') ? __aegisFarbleSeed : '';
-    if (!SEEDHEX) return;                       // no seed → no-op (fail-open)
-    function hexToBytes(h){ var a=[]; for(var i=0;i<h.length;i+=2) a.push(parseInt(h.substr(i,2),16)); return a; }
+    var SEEDHEX = typeof __aegisFarbleSeed === 'string' ? __aegisFarbleSeed : '';
+    if (!SEEDHEX) return; // no seed → no-op (fail-open)
+    function hexToBytes(h) {
+      var a = [];
+      for (var i = 0; i < h.length; i += 2) a.push(parseInt(h.substr(i, 2), 16));
+      return a;
+    }
     // --- tiny self-contained SHA-256 (sync, engine-identical; no Web Crypto async dependency) ---
-    function sha256(bytes){ /* standard 64-round SHA-256 over a byte array → 32-byte array */ }
+    function sha256(bytes) {
+      /* standard 64-round SHA-256 over a byte array → 32-byte array */
+    }
     var origin = '';
-    try { origin = String(location.origin || ''); } catch(e) {}
+    try {
+      origin = String(location.origin || '');
+    } catch (e) {}
     // per-ORIGIN one-way sub-seed = SHA-256(SEED ++ origin)[..8]; reveals nothing about SEED.
-    var sub = sha256(hexToBytes(SEEDHEX).concat(Array.prototype.map.call(origin, function(c){return c.charCodeAt(0)&255;}))).slice(0,8);
+    var sub = sha256(
+      hexToBytes(SEEDHEX).concat(
+        Array.prototype.map.call(origin, function (c) {
+          return c.charCodeAt(0) & 255;
+        }),
+      ),
+    ).slice(0, 8);
     // --- xoshiro128** PRNG seeded from sub (deterministic noise stream) ---
-    var s0=(sub[0]|sub[1]<<8|sub[2]<<16|sub[3]<<24)>>>0, s1=(sub[4]|sub[5]<<8|sub[6]<<16|sub[7]<<24)>>>0, s2=0x9e3779b9, s3=0x243f6a88;
-    function rotl(x,k){ return ((x<<k)|(x>>>(32-k)))>>>0; }
-    function next(){ var r=(rotl((s1*5)>>>0,7)*9)>>>0; var t=(s1<<9)>>>0; s2^=s0; s3^=s1; s1^=s2; s0^=s3; s2^=t; s3=rotl(s3,11); return r; }
-    function nextFloat(){ return next()/4294967296; }            // [0,1)
-    function noiseByte(){ return (next()%3)-1; }                  // -1,0,+1 (a single LSB step)
+    var s0 = (sub[0] | (sub[1] << 8) | (sub[2] << 16) | (sub[3] << 24)) >>> 0,
+      s1 = (sub[4] | (sub[5] << 8) | (sub[6] << 16) | (sub[7] << 24)) >>> 0,
+      s2 = 0x9e3779b9,
+      s3 = 0x243f6a88;
+    function rotl(x, k) {
+      return ((x << k) | (x >>> (32 - k))) >>> 0;
+    }
+    function next() {
+      var r = (rotl((s1 * 5) >>> 0, 7) * 9) >>> 0;
+      var t = (s1 << 9) >>> 0;
+      s2 ^= s0;
+      s3 ^= s1;
+      s1 ^= s2;
+      s0 ^= s3;
+      s2 ^= t;
+      s3 = rotl(s3, 11);
+      return r;
+    }
+    function nextFloat() {
+      return next() / 4294967296;
+    } // [0,1)
+    function noiseByte() {
+      return (next() % 3) - 1;
+    } // -1,0,+1 (a single LSB step)
 
-    function markNative(fn){ try{ fn.toString = function(){ return 'function '+(fn.name||'')+'() { [native code] }'; }; }catch(e){} return fn; }
+    function markNative(fn) {
+      try {
+        fn.toString = function () {
+          return 'function ' + (fn.name || '') + '() { [native code] }';
+        };
+      } catch (e) {}
+      return fn;
+    }
 
     // ---- CANVAS ----
     try {
       var gid = CanvasRenderingContext2D.prototype.getImageData;
-      CanvasRenderingContext2D.prototype.getImageData = markNative(function(){
+      CanvasRenderingContext2D.prototype.getImageData = markNative(function () {
         var img = gid.apply(this, arguments);
-        try { var d = img.data; for (var i=0;i<d.length;i+=4){ d[i]=Math.max(0,Math.min(255,d[i]+noiseByte())); } } catch(e){}
+        try {
+          var d = img.data;
+          for (var i = 0; i < d.length; i += 4) {
+            d[i] = Math.max(0, Math.min(255, d[i] + noiseByte()));
+          }
+        } catch (e) {}
         return img;
       });
-      ['toDataURL','toBlob'].forEach(function(m){
-        var o = HTMLCanvasElement.prototype[m]; if (typeof o!=='function') return;
-        HTMLCanvasElement.prototype[m] = markNative(function(){
-          try { var ctx=this.getContext('2d'); if(ctx){ /* re-noise a deterministic pixel subset before serialize */ } } catch(e){}
+      ['toDataURL', 'toBlob'].forEach(function (m) {
+        var o = HTMLCanvasElement.prototype[m];
+        if (typeof o !== 'function') return;
+        HTMLCanvasElement.prototype[m] = markNative(function () {
+          try {
+            var ctx = this.getContext('2d');
+            if (ctx) {
+              /* re-noise a deterministic pixel subset before serialize */
+            }
+          } catch (e) {}
           return o.apply(this, arguments);
         });
       });
-    } catch(e){}
+    } catch (e) {}
 
     // ---- AUDIO ----   (AnalyserNode.getFloatFrequencyData / AudioBuffer.getChannelData, +~1e-7)
     // ---- NAVIGATOR / UA-CH ---- (normalize hardwareConcurrency/deviceMemory; keep UA-CH brands == Chrome 148)
@@ -442,7 +517,7 @@ still fail-open. Assert `standard` does NOT patch WebGL (so the level gradient i
 
 **Implement** `farble.strict.js`: concatenation-friendly — emit the shared canvas/audio/navigator
 block plus a WebGL block. To avoid divergence, factor the shared block into a string both artifacts
-build from at *Rust* compose time is overkill; instead duplicate-by-include is fine since the vitest
+build from at _Rust_ compose time is overkill; instead duplicate-by-include is fine since the vitest
 test runs both. (Decide during impl; the test pins behavior either way.)
 
 **Verify:** `npm test src/lib/farbleShim.test.ts` green for both `standard` and `strict` describes.
@@ -457,6 +532,7 @@ that `defaults()` carries `"antiFingerprint":"off"` and `level(app)` returns the
 small `#[test]` for the new reader in `farble.rs`.)
 
 **Implement:**
+
 - `shared/types.ts`: add `antiFingerprint: 'off' | 'standard' | 'strict';` to `Settings` (with the
   doc comment explaining opt-in + detectability).
 - `settings.rs defaults()`: add `"antiFingerprint": "off"`.
@@ -482,6 +558,7 @@ empty/unlisted; the dispatch toggles a host on→off and `getState` reflects it.
 `"fp-allowlist"`.)
 
 **Implement** in `farble.rs`:
+
 - `pub fn host_allowlisted(app, host) -> bool` (exact + `.host` subdomain match; the desktop escape
   hatch), `#[cfg_attr(target_os="android", allow(dead_code))]` (desktop-only escape hatch in v1, like
   the WebRTC one).
@@ -506,10 +583,11 @@ similar), and `compose("", "")` is unchanged from today — so an `off`/allowlis
 farble. Keep the existing pop-under-guard/WebRTC assertions passing.
 
 **Implement:**
+
 - `adblock_inject.rs`: extend `script(app, host_allowlisted)` to also compute
   `let farble = crate::farble::shim_for(&crate::farble::level(app), crate::farble::host_allowlisted(app, /*tab host*/));`
   — **note:** `script` currently only knows the ad-block-allowlist flag; the farble allowlist is a
-  *separate* list, so resolve the tab host and call `farble::host_allowlisted` here. (The tab host is
+  _separate_ list, so resolve the tab host and call `farble::host_allowlisted` here. (The tab host is
   already derivable where `script` is called in `nav::spawn_tab`; thread the host through if not
   already — confirm against `nav::spawn_tab` and pass the host, defaulting empty if unknown.)
 - `compose(webrtc, farble)`: append `farble` after the pop-under guard (and after the non-Linux
@@ -533,6 +611,7 @@ JNI export `Java_com_aegis_browser_NativeFarble_farbleScript` that returns
 matching the WebRTC getter's `host_allowlisted=false`). Null jstring on failure (Kotlin skips).
 
 **Implement:**
+
 - `src-tauri/src/farble.rs`: the JNI export (copy `webrtc_shim`'s `Java_..._NativeWebrtc_shimScript`
   shape exactly).
 - `gen/android/app/src/main/java/com/aegis/browser/NativeFarble.kt`: copy `NativeWebrtc.kt`, rename to
@@ -558,6 +637,7 @@ hosts from `getState`, and clicking "Remove" calls `removeAllowlist(host)` and d
 the existing HTTP-exceptions list test pattern in this file).
 
 **Implement:**
+
 - `shared/types.ts`: `IPC.fingerprintGetState/ToggleAllowlist/RemoveAllowlist/ClearAllowlist` +
   `AegisApi.fingerprint = { getState, toggleAllowlist, removeAllowlist, clearAllowlist }` returning
   `{ level: string; allowlistedHosts: string[] }`.
@@ -580,12 +660,13 @@ the existing HTTP-exceptions list test pattern in this file).
 (`coverage.test.ts`) FAILS until a catalog entry lists them — that red is the test-first signal.
 
 **Implement:**
+
 - `src/autopilot/catalog.ts`: a `fingerprint` entry —
   `{ id: 'fingerprint.allowlist', domain: 'fingerprint', title: 'Anti-fingerprint level + allowlist',
-    channels: [IPC.fingerprintGetState, IPC.fingerprintToggleAllowlist, IPC.fingerprintRemoveAllowlist, IPC.fingerprintClearAllowlist],
-    exercise: a => a.fingerprint.getState(),
-    verify: async a => { /* getState → toggleAllowlist('probe.test') → assert present → removeAllowlist → assert gone */ } }`.
-  The `antiFingerprint` *setting* is already covered by the existing `settings.getset` entry (it rides
+channels: [IPC.fingerprintGetState, IPC.fingerprintToggleAllowlist, IPC.fingerprintRemoveAllowlist, IPC.fingerprintClearAllowlist],
+exercise: a => a.fingerprint.getState(),
+verify: async a => { /* getState → toggleAllowlist('probe.test') → assert present → removeAllowlist → assert gone */ } }`.
+  The `antiFingerprint` _setting_ is already covered by the existing `settings.getset` entry (it rides
   `settings.set`), so no extra channel coverage is needed for it — but add an assertion in that
   entry's `verify` that set/restore of `antiFingerprint` round-trips, OR add it to the fingerprint
   entry's verify (set standard → assert getState.level → restore off).
@@ -603,6 +684,7 @@ new controls.
 ### Task 10 — Docs, parity sweep, and the live/runtime gate
 
 **Implement:**
+
 - `src-tauri/CLAUDE.md`: add a "Anti-fingerprinting / farbling" module bullet (the surfaces, the
   one-way salt→SEED→per-origin-sub-seed model, the per-frame-origin limit, the
   default-off/detectability honest limit, the desktop-only allowlist hatch in v1) — the same
@@ -613,6 +695,7 @@ new controls.
   `settings.json`) and the `fp-allowlist` store rides the existing syncable-store machinery.
 
 **Verify (the parity + runtime gate):**
+
 - Linux live: `bash scripts/autopilot/run-autopilot.sh` → `RESULT: … 0 failed` +
   `ad-block blocking (trace): PASS`. Plus a manual probe: navigate to a canvas-fingerprint probe with
   `antiFingerprint=standard` and observe the canvas hash differs from `off` (and is stable on reload,
@@ -630,13 +713,13 @@ Run this checklist before declaring sub-project L complete:
 1. **Every surface covered.** `farble.standard.js` patches **canvas** (`getImageData`/`toDataURL`/
    `toBlob`), **audio** (`getFloatFrequencyData`/`getChannelData`), and **navigator/UA-CH**
    (`hardwareConcurrency`/`deviceMemory`/`userAgentData.brands` kept consistent with Chrome 148);
-   `farble.strict.js` adds **WebGL** (`getParameter` UNMASKED_*/`readPixels`). The vitest
+   `farble.strict.js` adds **WebGL** (`getParameter` UNMASKED\_\*/`readPixels`). The vitest
    `farbleShim.test.ts` asserts each surface is perturbed-but-plausible. **PASS criterion:** a test
    exists and passes for every row of the surfaces table; `strict` demonstrably patches WebGL and
    `standard` demonstrably does not.
 2. **Salt is one-way.** The 256-bit `SESSION_SALT` is a `OnceLock` filled by `getrandom`, never
    persisted, never in `settings.json`/`data.export`. The page receives only `public_seed =
-   HKDF-SHA256(salt)[..16]`; per-origin sub-seeds are `SHA-256(SEED ++ origin)[..8]` — both one-way.
+HKDF-SHA256(salt)[..16]`; per-origin sub-seeds are `SHA-256(SEED ++ origin)[..8]` — both one-way.
    The Task 1 Rust test asserts `public_seed != salt[..16]`; no non-crypto/invertible hash is used on
    the seed path. **PASS criterion:** no code path exposes the raw salt to JS or disk, and the
    one-way assertion test passes.
@@ -655,6 +738,7 @@ Run this checklist before declaring sub-project L complete:
    `0 failed` + ad-block trace PASS, Android build compiles, Win/macOS CI green.
 
 ### Honest limits restated (not resolved, by design)
+
 - Same-world JS shim → **detectable** (toString/Proxy/pristine-iframe probing); on a tiny user
   population farbling can be net-negative, hence **default-off + per-site hatch**.
 - **Per-frame-origin** seeding (cross-origin iframes can't read the top origin), not Brave's
@@ -663,4 +747,7 @@ Run this checklist before declaring sub-project L complete:
   defeats the spoof regardless of the shim. We minimize, never eliminate, the resulting Aegis
   signature; `strict`/WebGL is the riskiest and is opt-in-within-opt-in.
 - This is **not** engine-level (Blink) farbling and the plan never claims to be.
+
+```
+
 ```

@@ -46,9 +46,7 @@ export function addressParse(
   };
 }
 
-export type NormalizeSavedUrlResult =
-  | { ok: true; url: string }
-  | { ok: false; reason: string };
+export type NormalizeSavedUrlResult = { ok: true; url: string } | { ok: false; reason: string };
 
 /**
  * Normalises free-typed input into a saveable URL. Unlike addressParse, there is

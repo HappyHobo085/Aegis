@@ -10,10 +10,21 @@ describe('SCREENS', () => {
   it('covers both sidebar tabs and the core overlays', () => {
     const ids = new Set(SCREENS.map((s) => s.id));
     for (const id of [
-      'sidebar:history', 'sidebar:saved', 'downloads', 'favoritesManager',
-      'shieldPopover', 'fullscreen', 'errorOverlay', 'crashOverlay',
-      'safetyInterstitial', 'permissionPrompt', 'redirectBar', 'confirmDialog', 'home',
-    ]) expect(ids.has(id)).toBe(true);
+      'sidebar:history',
+      'sidebar:saved',
+      'downloads',
+      'favoritesManager',
+      'shieldPopover',
+      'fullscreen',
+      'errorOverlay',
+      'crashOverlay',
+      'safetyInterstitial',
+      'permissionPrompt',
+      'redirectBar',
+      'confirmDialog',
+      'home',
+    ])
+      expect(ids.has(id)).toBe(true);
   });
   it('has unique ids', () => {
     expect(new Set(SCREENS.map((s) => s.id)).size).toBe(SCREENS.length);

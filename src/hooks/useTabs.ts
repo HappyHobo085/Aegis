@@ -18,17 +18,43 @@ export function useTabs(): {
 
   useEffect(() => {
     let active = true;
-    void aegis.tabs.list().then((s) => { if (active) setState(s); });
+    void aegis.tabs.list().then((s) => {
+      if (active) setState(s);
+    });
     const off = aegis.tabs.onState((s) => setState(s));
-    return () => { active = false; off(); };
+    return () => {
+      active = false;
+      off();
+    };
   }, []);
 
-  const create = useCallback(async (url?: string, background?: boolean) => { setState(await aegis.tabs.create(url, background)); }, []);
-  const close = useCallback(async (id: ViewId) => { setState(await aegis.tabs.close(id)); }, []);
-  const activate = useCallback(async (id: ViewId) => { setState(await aegis.tabs.activate(id)); }, []);
-  const reorder = useCallback(async (ids: ViewId[]) => { setState(await aegis.tabs.reorder(ids)); }, []);
-  const setPinned = useCallback(async (id: ViewId, pinned: boolean) => { setState(await aegis.tabs.setPinned(id, pinned)); }, []);
-  const reopenClosed = useCallback(async () => { setState(await aegis.tabs.reopenClosed()); }, []);
+  const create = useCallback(async (url?: string, background?: boolean) => {
+    setState(await aegis.tabs.create(url, background));
+  }, []);
+  const close = useCallback(async (id: ViewId) => {
+    setState(await aegis.tabs.close(id));
+  }, []);
+  const activate = useCallback(async (id: ViewId) => {
+    setState(await aegis.tabs.activate(id));
+  }, []);
+  const reorder = useCallback(async (ids: ViewId[]) => {
+    setState(await aegis.tabs.reorder(ids));
+  }, []);
+  const setPinned = useCallback(async (id: ViewId, pinned: boolean) => {
+    setState(await aegis.tabs.setPinned(id, pinned));
+  }, []);
+  const reopenClosed = useCallback(async () => {
+    setState(await aegis.tabs.reopenClosed());
+  }, []);
 
-  return { tabs: state.tabs, activeId: state.activeId, create, close, activate, reorder, setPinned, reopenClosed };
+  return {
+    tabs: state.tabs,
+    activeId: state.activeId,
+    create,
+    close,
+    activate,
+    reorder,
+    setPinned,
+    reopenClosed,
+  };
 }

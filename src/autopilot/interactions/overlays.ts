@@ -1,6 +1,12 @@
 // src/autopilot/interactions/overlays.ts
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
-import type { NavFailed, NavCrashed, SafetyInterstitialPayload, PermissionPrompt, RedirectBlocked } from '../../../shared/types';
+import type {
+  NavFailed,
+  NavCrashed,
+  SafetyInterstitialPayload,
+  PermissionPrompt,
+  RedirectBlocked,
+} from '../../../shared/types';
 
 export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
   // ─── Task 8: overlays ───────────────────────────────────────────────────
@@ -30,7 +36,10 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
         // Seed the list via the control-surface seam (same as emitHistory for history panel).
         await ctx.emitDownloadsChanged?.([SEED_DOWNLOAD]);
         const clearBtn = ctx.byRole('button', /^Clear all downloads$/);
-        if (!clearBtn) throw new Error('"Clear all downloads" button not found in DownloadsPanel (button may still be disabled)');
+        if (!clearBtn)
+          throw new Error(
+            '"Clear all downloads" button not found in DownloadsPanel (button may still be disabled)',
+          );
         // Clicking the button calls handleClear() → confirm() → setPending (async React update).
         // userEvent.click in the vitest ctx wraps in act(), which flushes the state update.
         await ctx.click(clearBtn);
@@ -179,7 +188,10 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
     // real URL; the live autopilot cannot navigate to a real malware URL safely.
     layers: ['vitest'],
     run: async (ctx) => {
-      const PAYLOAD: SafetyInterstitialPayload = { url: 'https://malware.test/', reason: 'malware' };
+      const PAYLOAD: SafetyInterstitialPayload = {
+        url: 'https://malware.test/',
+        reason: 'malware',
+      };
       // Render the interstitial by invoking the onInterstitial callback useSafety registered.
       await ctx.emitSafetyInterstitial?.(PAYLOAD);
       // The continue button text for malware is "Continue anyway (not recommended)".
@@ -204,7 +216,10 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
     // vitest-only: same reasoning as safety.proceed.
     layers: ['vitest'],
     run: async (ctx) => {
-      const PAYLOAD: SafetyInterstitialPayload = { url: 'https://malware.test/', reason: 'malware' };
+      const PAYLOAD: SafetyInterstitialPayload = {
+        url: 'https://malware.test/',
+        reason: 'malware',
+      };
       // Render the interstitial by invoking the onInterstitial callback useSafety registered.
       await ctx.emitSafetyInterstitial?.(PAYLOAD);
       // The "Go back" button is provided by SafetyInterstitial when onBack is passed.
@@ -230,7 +245,11 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
     // a content webview; the live autopilot cannot safely trigger a geolocation prompt.
     layers: ['vitest'],
     run: async (ctx) => {
-      const PROMPT: PermissionPrompt = { requestId: 1, origin: 'https://example.com', permission: 'geolocation' };
+      const PROMPT: PermissionPrompt = {
+        requestId: 1,
+        origin: 'https://example.com',
+        permission: 'geolocation',
+      };
       // Render the permission dialog by invoking the onPrompt callback usePermissions registered.
       await ctx.emitPermissionPrompt?.(PROMPT);
       const allowBtn = ctx.byRole('button', /^Allow$/);
@@ -255,7 +274,11 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
     // vitest-only: same reasoning as permission.allow.
     layers: ['vitest'],
     run: async (ctx) => {
-      const PROMPT: PermissionPrompt = { requestId: 2, origin: 'https://example.com', permission: 'microphone' };
+      const PROMPT: PermissionPrompt = {
+        requestId: 2,
+        origin: 'https://example.com',
+        permission: 'microphone',
+      };
       // Render the permission dialog by invoking the onPrompt callback usePermissions registered.
       await ctx.emitPermissionPrompt?.(PROMPT);
       // The deny button is labelled "Block" in PermissionPromptDialog.
@@ -357,7 +380,9 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
       await ctx.emitRedirectBlocked?.(A);
       await new Promise((r) => setTimeout(r, 30));
       if (ctx.bySelector('.redirect-bar'))
-        throw new Error('RedirectBar reappeared after dismissing the SAME destination (unclosable loop)');
+        throw new Error(
+          'RedirectBar reappeared after dismissing the SAME destination (unclosable loop)',
+        );
       // A genuinely different destination SHOULD still surface a fresh bar.
       const B: RedirectBlocked = {
         viewId: 1,
@@ -370,7 +395,9 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
     assert: async (ctx) => {
       const bar = ctx.bySelector('.redirect-bar');
       if (!bar)
-        throw new Error('RedirectBar did not surface for a NEW destination after a prior dismissal');
+        throw new Error(
+          'RedirectBar did not surface for a NEW destination after a prior dismissal',
+        );
       if (!bar.textContent?.includes('other-threat.test'))
         throw new Error('RedirectBar shows the wrong destination after a new block');
       return 'redirectBar dismiss is sticky per-destination (same suppressed, new shown)';

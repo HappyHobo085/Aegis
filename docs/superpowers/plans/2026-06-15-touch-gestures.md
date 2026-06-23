@@ -25,12 +25,15 @@ Commands: compile-build (owner or agent) → the `android:build` line above; ren
 ## File structure
 
 **New (native)**
+
 - `src-tauri/gen/android/app/src/main/java/com/aegis/browser/GestureContainer.kt` — the gesture layer: touch arbitration, the two gesture state machines, indicator drawing, and the `GestureHost` interface. One focused file (~170 lines).
 
 **Modified (native)**
+
 - `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt` — create + wire the `GestureContainer`, re-parent tab WebViews into it, retarget `applyContentMargins()`, implement `GestureHost`, and call `gestureContainer.stopRefresh()` from the active tab's `onPageFinished`.
 
 **Docs**
+
 - `src-tauri/CLAUDE.md` — document the gesture layer in the Android section.
 
 No renderer, `shared/types.ts`, or IPC changes.
@@ -42,6 +45,7 @@ No renderer, `shared/types.ts`, or IPC changes.
 ### Task 1: `GestureContainer` scaffold + re-parent the tab WebViews
 
 **Files:**
+
 - Create: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/GestureContainer.kt`
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt`
 
@@ -148,15 +152,19 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
 - [ ] **Step 2: In `MainActivity.kt`, declare the host + a field for the container.** Change the class declaration to implement the interface and add a field near `contentParent`:
 
 Class header — from:
+
 ```kotlin
 class MainActivity : TauriActivity() {
 ```
+
 to:
+
 ```kotlin
 class MainActivity : TauriActivity(), GestureContainer.GestureHost {
 ```
 
 Add the field next to `private var contentParent: ViewGroup? = null`:
+
 ```kotlin
   // The gesture layer that wraps the tab WebViews (edge-swipe + pull-to-refresh).
   private var gestureContainer: GestureContainer? = null
@@ -165,6 +173,7 @@ Add the field next to `private var contentParent: ViewGroup? = null`:
 - [ ] **Step 3: Create the container in `onWebViewCreate` and re-parent through it.** In the `webView.post { ... }` block, after `contentParent = parent` and the height caching, create the container and add it to the parent:
 
 Find:
+
 ```kotlin
       contentParent = parent
       val density = resources.displayMetrics.density
@@ -173,7 +182,9 @@ Find:
       topChromePx = top
       bottomBarPx = bottomBar
 ```
+
 and add immediately after it:
+
 ```kotlin
       val gc = GestureContainer(this, this)
       val gcLp = FrameLayout.LayoutParams(
@@ -189,6 +200,7 @@ and add immediately after it:
 - [ ] **Step 4: Re-parent tab WebViews into the container (no per-WebView margins).** In `createTabWebView`, replace the margin'd add to `contentParent`:
 
 Find:
+
 ```kotlin
     val lp = FrameLayout.LayoutParams(
       FrameLayout.LayoutParams.MATCH_PARENT,
@@ -199,7 +211,9 @@ Find:
     wv.visibility = View.GONE
     contentParent?.addView(wv, lp)
 ```
+
 and replace with (WebView fills the container; the container carries the margins):
+
 ```kotlin
     val lp = FrameLayout.LayoutParams(
       FrameLayout.LayoutParams.MATCH_PARENT,
@@ -214,6 +228,7 @@ and replace with (WebView fills the container; the container carries the margins
 - [ ] **Step 6: Retarget `applyContentMargins()` to the container.** Replace the whole method:
 
 Find:
+
 ```kotlin
   private fun applyContentMargins() {
     val c = contentWebView ?: return
@@ -224,7 +239,9 @@ Find:
     }
   }
 ```
+
 with (margins now live on the single container; tab WebViews fill it):
+
 ```kotlin
   private fun applyContentMargins() {
     val gc = gestureContainer ?: return
@@ -249,9 +266,11 @@ with (margins now live on the single container; tab WebViews fill it):
 ```
 
 - [ ] **Step 8: Compile-build.** Run:
+
 ```
 JAVA_HOME=/home/happyhobo/development/android-studio/jbr npm run android:build -- --target aarch64
 ```
+
 Expected: `BUILD SUCCESSFUL` / `Finished 1 APK at … app-universal-debug.apk`. Fix any Kotlin compile error (e.g. a missed `contentParent`→`gestureContainer` rename) before continuing.
 
 - [ ] **Step 9: Owner GUI-validation.** Owner installs (`adb install -r …app-universal-debug.apk`) and confirms **browsing is unchanged**: pages load, the address bar tracks, tabs open/switch/close, ad-block works, and the content sits correctly under the top chrome + above the bottom bar in normal, bottom-bar-hidden, and chrome-hiding-fullscreen modes (i.e. the margins moved cleanly to the container). No gestures yet. Paste the build result / a device confirmation.
@@ -273,6 +292,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ### Task 2: Edge-swipe back/forward (arbitration + arrow indicator)
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/GestureContainer.kt`
 
 - [ ] **Step 1: Replace `onInterceptTouchEvent`** with the arming + horizontal steal logic (the pull-to-refresh branch is added in Task 3):
@@ -333,6 +353,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 4: Update `onDraw` to render the arrow, and add `drawArrow`:**
 
 Replace `onDraw`:
+
 ```kotlin
   override fun onDraw(canvas: Canvas) {
     super.onDraw(canvas)
@@ -342,7 +363,9 @@ Replace `onDraw`:
     }
   }
 ```
+
 Add the helper:
+
 ```kotlin
   private fun drawArrow(canvas: Canvas) {
     val travel = if (mode == Mode.BACK) curX - startX else startX - curX
@@ -377,6 +400,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ### Task 3: Pull-to-refresh (top-overscroll + spinner)
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/GestureContainer.kt`
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt`
 
@@ -423,7 +447,9 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
     }
   }
 ```
+
 Add:
+
 ```kotlin
   private fun drawSpinner(canvas: Canvas) {
     val r = 16f * density
@@ -449,10 +475,13 @@ Add:
 - [ ] **Step 4: Hide the spinner when the active tab finishes loading.** In `MainActivity.kt`, in `makeContentClient(id)`, update `onPageFinished` to also stop the spinner when this tab is the active one:
 
 Find:
+
 ```kotlin
     override fun onPageFinished(view: WebView, url: String) = pushNavState(id, url, false, view)
 ```
+
 Replace with:
+
 ```kotlin
     override fun onPageFinished(view: WebView, url: String) {
       pushNavState(id, url, false, view)
@@ -481,6 +510,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ### Task 4: On-device tuning pass + docs + finish
 
 **Files:**
+
 - Modify (as needed): `src-tauri/gen/android/app/src/main/java/com/aegis/browser/GestureContainer.kt`
 - Modify: `src-tauri/CLAUDE.md`
 
@@ -489,7 +519,7 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
   - `hDistance()` (back/forward commit distance, default `min(0.25f*width, 96f*density)`) — raise to require a longer swipe.
   - `pullThreshold()` (refresh commit distance, default `96f * density`) and the `* 0.5f` pull damping — adjust pull resistance.
   - Arrow/spinner sizes (`18f`/`16f * density`) and the disc colour (`#1f6feb`).
-  Commit any change with `fix(mobile): tune gesture <constant>`. If the feel is already good, skip this step (no empty commit).
+    Commit any change with `fix(mobile): tune gesture <constant>`. If the feel is already good, skip this step (no empty commit).
 
 - [ ] **Step 2: Renderer gate.** Confirm the chrome is untouched: `npm test`. Expected: `Tests 461 passed`. (No renderer files changed, so this is a guard, not a new test.)
 
@@ -532,6 +562,6 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 
 Three divergences from the steps above, discovered during execution + on-device validation:
 
-1. **Indicator draws in `dispatchDraw()`, not `onDraw()`.** On-device the arrow was invisible: a `ViewGroup`'s `onDraw()` paints *behind* its children, so the indicator was occluded by the opaque `MATCH_PARENT` content WebView. Fixed by drawing in `dispatchDraw()` after `super.dispatchDraw()` (and dropping the now-pointless `setWillNotDraw(false)`). Tasks 2 & 3's draw dispatch use `dispatchDraw`. (Captured as gotcha 11 in `src-tauri/CLAUDE.md`.)
+1. **Indicator draws in `dispatchDraw()`, not `onDraw()`.** On-device the arrow was invisible: a `ViewGroup`'s `onDraw()` paints _behind_ its children, so the indicator was occluded by the opaque `MATCH_PARENT` content WebView. Fixed by drawing in `dispatchDraw()` after `super.dispatchDraw()` (and dropping the now-pointless `setWillNotDraw(false)`). Tasks 2 & 3's draw dispatch use `dispatchDraw`. (Captured as gotcha 11 in `src-tauri/CLAUDE.md`.)
 2. **Defensive `mode` guards** added to `onInterceptTouchEvent`: an `ACTION_CANCEL -> { mode = Mode.NONE }` arm, and the `ACTION_DOWN` reset guarded as `if (!refreshing) mode = Mode.NONE` — the latter fixes a defect where touching the screen during an in-flight pull-to-refresh reload reset `mode` away from `REFRESH`, freezing/hiding the spinner until the load finished.
 3. **Known follow-up gaps (accepted, not fixed):** a stalled load that never fires `onPageFinished` leaves the refresh spinner spinning indefinitely (matches platform `SwipeRefreshLayout`); switching tabs mid-refresh clears the spinner via the new active tab's page-finish rather than the originating tab's. Both are benign (`stopRefresh()` is idempotent) — candidates for a future timeout / `onReceivedError` stop.

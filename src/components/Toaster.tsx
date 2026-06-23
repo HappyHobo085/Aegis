@@ -13,11 +13,7 @@ export function Toaster() {
         <div key={t.id} className={`toast toast--${t.kind}`}>
           <span className="toast__message">{t.message}</span>
           {t.action && (
-            <button
-              type="button"
-              className="toast__action"
-              onClick={() => t.action?.onClick()}
-            >
+            <button type="button" className="toast__action" onClick={() => t.action?.onClick()}>
               {t.action.label}
             </button>
           )}

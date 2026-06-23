@@ -6,7 +6,7 @@
 
 ## Problem
 
-On a malvertising streaming site (streamex), opening then closing **Settings** caused the *same tab* to redirect to `https://www.google.com/`. Confirmed: Aegis does NOT navigate the content webview on overlay open/close — `view.rs` only toggles visibility (`set_content_visible`), no `navigate`/`load`. The redirect comes from the **page**: hiding the content webview for an overlay fires the page's `visibilitychange`→hidden, which arms an ad script's pop-under; Aegis's `POPUP_GUARD` blocks the cross-origin `window.open`, so the script falls back to a top-frame `location` redirect (bare `www.google.com/` = the classic blocked-popup bounce). A top-frame self-redirect to a non-ad domain can't be blocked without breaking legitimate navigation.
+On a malvertising streaming site (streamex), opening then closing **Settings** caused the _same tab_ to redirect to `https://www.google.com/`. Confirmed: Aegis does NOT navigate the content webview on overlay open/close — `view.rs` only toggles visibility (`set_content_visible`), no `navigate`/`load`. The redirect comes from the **page**: hiding the content webview for an overlay fires the page's `visibilitychange`→hidden, which arms an ad script's pop-under; Aegis's `POPUP_GUARD` blocks the cross-origin `window.open`, so the script falls back to a top-frame `location` redirect (bare `www.google.com/` = the classic blocked-popup bounce). A top-frame self-redirect to a non-ad domain can't be blocked without breaking legitimate navigation.
 
 ## Decision
 
@@ -15,6 +15,7 @@ Inject a document-start **visibility shim** that makes content pages always repo
 ## Behavior
 
 The shim, running before any page script:
+
 - `document.visibilityState` getter → always `'visible'`
 - `document.hidden` getter → always `false`
 - `visibilitychange` events are swallowed so page/ad handlers never observe a hidden transition

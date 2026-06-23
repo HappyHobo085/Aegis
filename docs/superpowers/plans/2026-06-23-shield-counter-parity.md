@@ -8,16 +8,16 @@
 **Goal**
 
 Make the ad-block shield badge increment on **Windows** and **Android** for the ad/tracker
-requests those platforms actually block, emitting the *same* `adblock.blockedCount` event
+requests those platforms actually block, emitting the _same_ `adblock.blockedCount` event
 the Linux path already uses. Linux is unchanged. The autopilot ad-block A/B trace must still
 PASS.
 
 **Non-goal / honesty constraint (read first):** The badge does **NOT** equal "true blocks"
-on any platform. On Linux the WebKit content filter cancels well-known hosts *before* the
+on any platform. On Linux the WebKit content filter cancels well-known hosts _before_ the
 counting signal fires, so the count is known-incomplete; the autopilot proves blocking by an
 OFF/ON A/B trace, not by the count (`src-tauri/CLAUDE.md` → Linux section + gotcha 6). This
 plan brings Windows and Android to the **same semantics**: count the blocks each platform's
-request path *sees and blocks*, no more. We never claim badge == real blocks.
+request path _sees and blocks_, no more. We never claim badge == real blocks.
 
 **Architecture**
 
@@ -42,7 +42,7 @@ shows 0 there.
    into `install` (exactly like the sibling `nav_url_win::install(&pw, app, id)` already
    does) and call `adblock::note_blocked(&app, id)` inside the block branch. `reset_page`
    is already wired on the desktop nav path — but it is currently `#[cfg(target_os =
-   "linux")]`-gated in `nav.rs`; we widen that gate to all desktop so Windows zeroes the
+"linux")]`-gated in `nav.rs`; we widen that gate to all desktop so Windows zeroes the
    page count on each top-frame load.
 
 2. **Android** — the JNI `should_block` runs with **no `AppHandle`**, and Android has **no
@@ -73,9 +73,9 @@ shows 0 there.
 
 1. **IPC in three places — N/A here, no new channel.** `adblock.blockedCount` /
    `BlockedCount` already exist in all three places (`shared/types.ts` `evtAdblockBlockedCount`
-   + `BlockedCount`; Rust emits via `emit_event`; `ipcClient.ts onBlockedCount`). We add an
-   **Android transport branch** to the existing `onBlockedCount`, not a new channel. **Do not
-   add a channel; do not rename the event or change the payload shape.**
+   - `BlockedCount`; Rust emits via `emit_event`; `ipcClient.ts onBlockedCount`). We add an
+     **Android transport branch** to the existing `onBlockedCount`, not a new channel. **Do not
+     add a channel; do not rename the event or change the payload shape.**
 2. **Autopilot coverage in the same commit (drift-guarded).** No new IPC channel and no new
    UI screen → the IPC drift guard (`coverage.test.ts`) and screen catalog are already
    satisfied (the `adblock` catalog entry already lists `IPC.evtAdblockBlockedCount` via its
@@ -123,7 +123,7 @@ is "a follow-up". After this sub-project they have real callers on every desktop
 via the Kotlin mirror) Android, so the allow attribute is no longer accurate. Adding a unit
 test for the page/session accumulation logic is the testable core of G.
 
-The accumulation math currently lives *inside* `note_blocked`/`reset_page`, which take an
+The accumulation math currently lives _inside_ `note_blocked`/`reset_page`, which take an
 `AppHandle` and emit — not unit-testable in isolation. **Step 1a** extracts the pure
 counter mutation into a free function so a `#[test]` can assert it without Tauri.
 
@@ -340,6 +340,7 @@ and pass it:
 ```
 
 **Interfaces (Windows):** the handler emits the **existing** event, unchanged —
+
 - event name: `adblock.blockedCount` (rewritten to `adblock:blockedCount` by `emit_event`)
 - payload: `{ "viewId": id, "page": page, "session": session }` (matches `BlockedCount`).
 
@@ -495,6 +496,7 @@ That's an accepted, documented limitation: a discarded-then-reactivated Android 
 restarts from 0 until it blocks again, identical to a fresh load. Note it in the verification.)
 
 **Interfaces (Android):**
+
 - JS global the chrome installs: `window.__aegisBlockedCount(c)` where
   `c = { viewId: number, page: number, session: number }` (the `BlockedCount` shape).
 - No Tauri event, no IPC channel — the established Android bridge pattern.
@@ -639,7 +641,7 @@ documents, which is why it's an honest skip).
 2. `cargo check -p app` (Linux) + `cargo check --target x86_64-pc-windows-gnu -p app`
    (Windows cross) + `cargo check --target aarch64-linux-android -p app` (Android) — all clean.
 3. Kotlin gate: `JAVA_HOME=~/development/android-studio/jbr npm run android:build -- --target
-   aarch64` → `compileUniversalDebugKotlin` green.
+aarch64` → `compileUniversalDebugKotlin` green.
 4. Linux live autopilot: `bash scripts/autopilot/run-autopilot.sh` → `RESULT: … 0 failed` and
    `ad-block blocking (trace): PASS` (proves no Linux regression).
 5. Manual device-verify entries recorded for Windows (owner session) and Android
@@ -648,7 +650,7 @@ documents, which is why it's an honest skip).
 6. Update the status docs in the **same commit** (living-docs rule): `src-tauri/CLAUDE.md`
    — change the "Counting is wired on **Linux** only so far … Win/Android is a follow-up" line
    (adblock.rs section + gotcha 6) to record Windows + Android now count; and the top-level
-   `CLAUDE.md` Status note "(The shield block-*counter* is still Linux-only …)".
+   `CLAUDE.md` Status note "(The shield block-_counter_ is still Linux-only …)".
 
 ---
 
@@ -665,7 +667,7 @@ The spec flags this; here is the honest assessment per platform:
   (`adblock_inject.rs`) blocks `fetch`/`XHR` in the page and does **not** call `note_blocked`,
   and the `on_new_window` pop-under drop is a separate window-open path, not a subresource.
   So a given blocked subresource is counted at most once. Risk: a request the engine blocks
-  that the page then *retries* (different request → counted again) — this matches Linux/real
+  that the page then _retries_ (different request → counted again) — this matches Linux/real
   browser-extension semantics (each blocked request is an event) and is acceptable; the badge
   is "ads blocked", not "distinct ad URLs".
 - **Android.** Counted exactly once, in `shouldInterceptRequest`'s ad-block branch. The
@@ -707,14 +709,14 @@ total blocks.
   blocking on the A/B trace, not the count. The Android discard→reactivate count-restart and
   the macOS "no native per-block callback" ceiling are documented, not hidden.
 - **Three-places rule:** correctly identified as **N/A** — `adblock.blockedCount`/`BlockedCount`
-  already exist in all three places; the change is an Android *transport branch* on the
+  already exist in all three places; the change is an Android _transport branch_ on the
   existing `onBlockedCount`, not a new channel. Drift guards remain satisfied; Task 6 adds the
   interaction coverage the living-docs/coverage rules require.
 - **Testability:** the pure accumulation logic is unit-tested via the extracted
   `bump_blocked`/`zero_page` `#[test]`s (the testable core); the event/payload shape is
   asserted by the renderer test (Task 5) + the interaction spec (Task 6). Windows/Android
   runtime is compile-gated (cross + Kotlin compile, both runnable on this Linux host per memory)
-  + manual device-verify, exactly as §4's verification reality prescribes.
+  - manual device-verify, exactly as §4's verification reality prescribes.
 - **Parity:** Linux ✔ (already) / Windows ✔ / Android ✔ / macOS documented ceiling (injected JS
   tier has no native per-block callback) / iOS out of scope. Matches the spec scoping G to
   "Windows + Android".

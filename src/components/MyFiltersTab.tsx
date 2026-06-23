@@ -24,7 +24,9 @@ export function MyFiltersTab({ text, save }: MyFiltersTabProps) {
         id="my-filters-tab-text"
         aria-label="Custom filters"
         className="my-filters-tab__textarea"
-        placeholder={"! One filter per line. Examples:\n||ads.example.com^\nexample.com##.ad-banner"}
+        placeholder={
+          '! One filter per line. Examples:\n||ads.example.com^\nexample.com##.ad-banner'
+        }
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
         rows={12}

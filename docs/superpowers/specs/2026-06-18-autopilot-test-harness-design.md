@@ -124,7 +124,7 @@ Activated **only** from `src/main.tsx`:
 
 ```ts
 if (import.meta.env.DEV && import.meta.env.VITE_AEGIS_AUTOPILOT) {
-  import('./autopilot/run').then(m => m.runAutopilot());
+  import('./autopilot/run').then((m) => m.runAutopilot());
 }
 ```
 
@@ -132,6 +132,7 @@ In a production `tauri build`, `import.meta.env.DEV` is the literal `false`, so 
 dead-code-eliminates the branch **and** the dynamic import — the autopilot never ships.
 
 The runner:
+
 1. **Screen walk** — for each `SCREENS` entry, drive the control surface to show it,
    call the dev-only screenshot command, record.
 2. **Feature exercise** — run each `CATALOG.exercise(aegis)` against the real core;
@@ -161,6 +162,7 @@ brittleness, while still exercising the real React handlers.
 
 Gated `#[cfg(debug_assertions)]`; the IPC dispatcher registers its channels only under
 that cfg, so release builds don't even compile it. Commands:
+
 - `autopilot_screenshot(name)` — `spectacle -a -b -n -o <out>/shots/<name>.png` (active
   window). Best-effort: failure logs a warning, doesn't fail the step.
 - `autopilot_write_report(json)` — write `report.json` / `report.html` to the output dir.
@@ -188,12 +190,13 @@ ad page. Windows/macOS/Android launchers are documented as thin follow-ons.
 
 Mounts the real `<DesktopApp/>` and `<MobileApp/>` with a mock `aegis`. For each
 `SCREENS` entry and each `CATALOG.exercise(mock)`:
+
 - asserts the screen renders without crashing,
 - asserts the expected IPC method fired with the right shape,
 - walks the meaningful state **combinations** (see Coverage scope) the per-component
   tests can't reach.
-Runs in the vitest `dom` project under `npm test`. Complements, not duplicates, the
-existing ~50 per-component tests (this is the integration/combination layer).
+  Runs in the vitest `dom` project under `npm test`. Complements, not duplicates, the
+  existing ~50 per-component tests (this is the integration/combination layer).
 
 ### G. `src/autopilot/coverage.test.ts` — the drift guard
 
@@ -241,13 +244,14 @@ launcher.sh
 ## Coverage scope ("every combination", honestly)
 
 Full Cartesian is thousands of states. Covered:
+
 - **Every** screen / overlay / Settings tab (12) / sidebar tab (2) individually.
 - **Meaningful pairwise combos**: theme (light/dark) × each modal; sidebar-open ×
   settings-open; fullscreen; adblock on/off × shield popover; the four event-driven
   overlays (error, crash, safety interstitial, permission prompt).
 - **Every** IPC feature-domain exercised against the real core (live) and asserted
   against the mock (vitest).
-The report states this scope explicitly; it does not claim exhaustive Cartesian coverage.
+  The report states this scope explicitly; it does not claim exhaustive Cartesian coverage.
 
 ## Testing / verification of the harness itself
 

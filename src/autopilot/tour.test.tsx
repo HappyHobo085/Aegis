@@ -9,7 +9,9 @@ import { CATALOG } from './catalog';
 import { reachScreen } from './reach';
 import { getAutopilotControl } from './control';
 
-vi.mock('../lib/ipcClient', async () => (await import('../testFixtures/aegisMock')).aegisMockModule());
+vi.mock('../lib/ipcClient', async () =>
+  (await import('../testFixtures/aegisMock')).aegisMockModule(),
+);
 
 beforeEach(() => {
   vi.stubEnv('VITE_AEGIS_AUTOPILOT', '1');
@@ -30,7 +32,9 @@ describe('desktop autopilot tour', () => {
     const control = getAutopilotControl();
     expect(control).toBeDefined();
     for (const screen of SCREENS) {
-      await act(async () => { await reachScreen(control!, screen, { emitEvent: vi.fn() }); });
+      await act(async () => {
+        await reachScreen(control!, screen, { emitEvent: vi.fn() });
+      });
       // App still mounted (no throw / unmount) after reaching the screen.
       expect(document.querySelector('.app, .fullscreen-exit')).toBeTruthy();
     }

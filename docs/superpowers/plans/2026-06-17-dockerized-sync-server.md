@@ -42,6 +42,7 @@ type Db = Arc<Mutex<Store>>;
 ## Task 1: Persistence data model (`Snapshot`)
 
 **Files:**
+
 - Modify: `sync-server/src/main.rs` (the `Device` derive near the store section; add new structs after the `Store` definition, before `type Db`)
 - Test: `sync-server/src/main.rs` (the existing `#[cfg(test)] mod tests`)
 
@@ -178,6 +179,7 @@ git commit -m "feat(sync-server): add JSON Snapshot model for the store"
 ## Task 2: Disk save/load (atomic write, fail-loud on corrupt)
 
 **Files:**
+
 - Modify: `sync-server/src/main.rs` (add `use` for path/io at top; add functions after the `Snapshot` impl)
 - Test: `sync-server/src/main.rs` (`mod tests`)
 
@@ -293,6 +295,7 @@ git commit -m "feat(sync-server): atomic JSON save + fail-loud load"
 ## Task 3: `AppState` + wire persistence into handlers and `main`
 
 **Files:**
+
 - Modify: `sync-server/src/main.rs` (replace `type Db` usage in state; add `AppState`; update all 5 handlers, `app()`, and `main()`)
 - Test: `sync-server/src/main.rs` (`mod tests`)
 
@@ -552,6 +555,7 @@ git commit -m "feat(sync-server): persist store to disk via AppState (env AEGIS_
 ## Task 4: `/healthz` endpoint
 
 **Files:**
+
 - Modify: `sync-server/src/main.rs` (add handler; add route in `app()`)
 - Test: `sync-server/src/main.rs` (`mod tests`)
 
@@ -615,6 +619,7 @@ git commit -m "feat(sync-server): add unauthenticated /healthz probe"
 ## Task 5: Docs — README, crate CLAUDE.md, root folder map
 
 **Files:**
+
 - Modify: `sync-server/README.md` (replace the in-memory paragraph)
 - Create: `sync-server/CLAUDE.md`
 - Modify: `CLAUDE.md` (root — add a `sync-server/` row to the folder map table)
@@ -722,6 +727,7 @@ git commit -m "docs(sync-server): document AEGIS_SYNC_DATA persistence + add CLA
 ## Task 6: Dockerfile + .dockerignore
 
 **Files:**
+
 - Create: `sync-server/Dockerfile`
 - Create: `sync-server/.dockerignore`
 
@@ -772,12 +778,14 @@ Expected: build succeeds, ending with `naming to docker.io/library/aegis-sync-se
 - [ ] **Step 4: Smoke-test the image (verification)**
 
 Run:
+
 ```bash
 docker run -d --rm -p 8787:8787 --name aegis-sync-smoke aegis-sync-server
 sleep 1
 curl -fsS http://localhost:8787/healthz
 docker stop aegis-sync-smoke
 ```
+
 Expected: `curl` prints `{"ok":true}`.
 
 - [ ] **Step 5: Commit**
@@ -792,6 +800,7 @@ git commit -m "feat(sync-server): multi-stage Alpine Dockerfile + dockerignore"
 ## Task 7: docker-compose.yml + .env.example + DOCKER.md
 
 **Files:**
+
 - Create: `sync-server/docker-compose.yml`
 - Create: `sync-server/.env.example`
 - Create: `sync-server/DOCKER.md`
@@ -805,14 +814,14 @@ services:
     image: aegis-sync-server
     restart: unless-stopped
     ports:
-      - "${AEGIS_SYNC_PORT:-8787}:8787"
+      - '${AEGIS_SYNC_PORT:-8787}:8787'
     environment:
       - AEGIS_SYNC_ADDR=0.0.0.0:8787
       - AEGIS_SYNC_DATA=/data/aegis-sync.json
     volumes:
       - aegis-sync-data:/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8787/healthz']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -918,11 +927,13 @@ Then use `https://sync.example.com` as the Aegis Server URL.
 - [ ] **Step 4: Bring it up (verification)**
 
 Run:
+
 ```bash
 docker compose -f sync-server/docker-compose.yml up -d --build
 sleep 2
 curl -fsS http://localhost:8787/healthz
 ```
+
 Expected: `{"ok":true}`.
 (If `docker` is unavailable, note it and defer to the operator — do not fabricate output.)
 
@@ -941,6 +952,7 @@ docker compose -f sync-server/docker-compose.yml exec sync ls -la /data   # file
 curl -fsS http://localhost:8787/healthz                                   # {"ok":true}
 docker compose -f sync-server/docker-compose.yml down
 ```
+
 Expected: `/data/aegis-sync.json` is present before and after the restart; healthz ok.
 For a true data round-trip, register a device + sync a bookmark from two Aegis clients
 pointed at `http://<host>:8787`, restart the container, and confirm the bookmark is still
@@ -962,4 +974,7 @@ git commit -m "feat(sync-server): docker-compose + .env.example + DOCKER.md guid
 - [ ] `curl http://localhost:8787/healthz` returns `{"ok":true}` from the running container.
 - [ ] The `AegisSig` auth `canonical()` shape in `sync-server/src/main.rs` is unchanged (the round-trip test still passes), so all Aegis clients remain compatible — no per-platform work needed.
 - [ ] Update memory (`aegis-webrtc-sync-initiative`) to note the Dockerized durable sync server.
+
+```
+
 ```

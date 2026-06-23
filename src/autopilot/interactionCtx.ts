@@ -2,7 +2,21 @@
 import { within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { flushSync } from 'react-dom';
-import type { AegisApi, NavState, TabsState, TabShortcut, Favorite, HistoryEntry, SavedItem, SitePermission, NavFailed, NavCrashed, SafetyInterstitialPayload, PermissionPrompt, RedirectBlocked } from '../../shared/types';
+import type {
+  AegisApi,
+  NavState,
+  TabsState,
+  TabShortcut,
+  Favorite,
+  HistoryEntry,
+  SavedItem,
+  SitePermission,
+  NavFailed,
+  NavCrashed,
+  SafetyInterstitialPayload,
+  PermissionPrompt,
+  RedirectBlocked,
+} from '../../shared/types';
 import type { CallLog, InteractionCtx } from './interactions';
 import type { ScreenId } from './screens';
 import { getAutopilotControl } from './control';
@@ -11,12 +25,16 @@ type Reach = (screen: ScreenId) => Promise<void>;
 
 /** Resolve a dotted path ('favorites.add') against an object; undefined if absent. */
 function resolve(obj: unknown, path: string): unknown {
-  return path.split('.').reduce<unknown>((o, k) => (o == null ? o : (o as Record<string, unknown>)[k]), obj);
+  return path
+    .split('.')
+    .reduce<unknown>((o, k) => (o == null ? o : (o as Record<string, unknown>)[k]), obj);
 }
 
 /** CallLog over a vitest-mocked aegis (every method is a vi.fn with a `.mock.calls`). */
 function vitestCallLog(aegis: AegisApi): CallLog {
-  const fn = (path: string): { mock?: { calls: unknown[][] }; mockClear?: () => void } | undefined =>
+  const fn = (
+    path: string,
+  ): { mock?: { calls: unknown[][] }; mockClear?: () => void } | undefined =>
     resolve(aegis, path) as never;
   return {
     of: (path) => fn(path)?.mock?.calls ?? [],
@@ -29,7 +47,8 @@ function vitestCallLog(aegis: AegisApi): CallLog {
       const walk = (o: unknown) => {
         if (o && typeof o === 'object') {
           for (const v of Object.values(o)) {
-            if (typeof v === 'function' && (v as { mockClear?: () => void }).mockClear) (v as { mockClear: () => void }).mockClear();
+            if (typeof v === 'function' && (v as { mockClear?: () => void }).mockClear)
+              (v as { mockClear: () => void }).mockClear();
             else if (v && typeof v === 'object') walk(v);
           }
         }
@@ -46,8 +65,10 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
   const user = userEvent.setup();
   const q = within(root);
   const keyMap: Record<string, string> = {
-    Enter: '{Enter}', Escape: '{Escape}',
-    'ctrl+t': '{Control>}t{/Control}', 'ctrl+w': '{Control>}w{/Control}',
+    Enter: '{Enter}',
+    Escape: '{Escape}',
+    'ctrl+t': '{Control>}t{/Control}',
+    'ctrl+w': '{Control>}w{/Control}',
     'ctrl+shift+t': '{Control>}{Shift>}t{/Shift}{/Control}',
   };
 
@@ -55,44 +76,41 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
   // App mounts synchronously in render(), so onState is called before makeVitestCtx.
   // Guard: aegis.nav may be absent in unit-test fakes that only stub a single domain.
   type NavStateMockFn = { mock?: { calls: ((s: NavState) => void)[][] } };
-  const navStateCallback: ((s: NavState) => void) | undefined =
-    aegis.nav
-      ? (aegis.nav.onState as unknown as NavStateMockFn).mock?.calls?.[0]?.[0]
-      : undefined;
+  const navStateCallback: ((s: NavState) => void) | undefined = aegis.nav
+    ? (aegis.nav.onState as unknown as NavStateMockFn).mock?.calls?.[0]?.[0]
+    : undefined;
 
   // Capture the tabs.onState callback (used by useTabs) to emit a TabsState
   // without touching the aegis mock — same pattern as navStateCallback.
   type TabsStateMockFn = { mock?: { calls: ((s: TabsState) => void)[][] } };
-  const tabsStateCallback: ((s: TabsState) => void) | undefined =
-    aegis.tabs
-      ? (aegis.tabs.onState as unknown as TabsStateMockFn).mock?.calls?.[0]?.[0]
-      : undefined;
+  const tabsStateCallback: ((s: TabsState) => void) | undefined = aegis.tabs
+    ? (aegis.tabs.onState as unknown as TabsStateMockFn).mock?.calls?.[0]?.[0]
+    : undefined;
 
   // Capture the tabs.onShortcut callback (registered by App's useEffect) so
   // keyboard-shortcut interactions can invoke it directly — there is no DOM
   // keydown handler for Ctrl+T/W/Shift+T on Linux/macOS (native-only accelerator).
   type TabsShortcutMockFn = { mock?: { calls: ((s: TabShortcut) => void)[][] } };
-  const tabsShortcutCallback: ((s: TabShortcut) => void) | undefined =
-    aegis.tabs
-      ? (aegis.tabs.onShortcut as unknown as TabsShortcutMockFn).mock?.calls?.[0]?.[0]
-      : undefined;
+  const tabsShortcutCallback: ((s: TabShortcut) => void) | undefined = aegis.tabs
+    ? (aegis.tabs.onShortcut as unknown as TabsShortcutMockFn).mock?.calls?.[0]?.[0]
+    : undefined;
 
   // Capture the nav.onFailed / nav.onCrashed callbacks (registered by App's useEffect) so
   // the errorOverlay / crashOverlay interactions can render those overlays synchronously.
   type NavFailedMockFn = { mock?: { calls: ((f: NavFailed) => void)[][] } };
   type NavCrashedMockFn = { mock?: { calls: ((c: NavCrashed) => void)[][] } };
-  const navFailedCallback: ((f: NavFailed) => void) | undefined =
-    aegis.nav
-      ? (aegis.nav.onFailed as unknown as NavFailedMockFn).mock?.calls?.[0]?.[0]
-      : undefined;
-  const navCrashedCallback: ((c: NavCrashed) => void) | undefined =
-    aegis.nav
-      ? (aegis.nav.onCrashed as unknown as NavCrashedMockFn).mock?.calls?.[0]?.[0]
-      : undefined;
+  const navFailedCallback: ((f: NavFailed) => void) | undefined = aegis.nav
+    ? (aegis.nav.onFailed as unknown as NavFailedMockFn).mock?.calls?.[0]?.[0]
+    : undefined;
+  const navCrashedCallback: ((c: NavCrashed) => void) | undefined = aegis.nav
+    ? (aegis.nav.onCrashed as unknown as NavCrashedMockFn).mock?.calls?.[0]?.[0]
+    : undefined;
 
   // Capture the safety.onInterstitial callback (registered by useSafety) so
   // the safetyInterstitial interaction can render the interstitial overlay.
-  type SafetyInterstitialMockFn = { mock?: { calls: ((p: SafetyInterstitialPayload | null) => void)[][] } };
+  type SafetyInterstitialMockFn = {
+    mock?: { calls: ((p: SafetyInterstitialPayload | null) => void)[][] };
+  };
   const safetyInterstitialCallback: ((p: SafetyInterstitialPayload | null) => void) | undefined =
     aegis.safety
       ? (aegis.safety.onInterstitial as unknown as SafetyInterstitialMockFn).mock?.calls?.[0]?.[0]
@@ -109,10 +127,9 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
   // Capture the redirect.onBlocked callback (registered by App's useEffect) so
   // the redirectBar interaction can render the redirect bar.
   type RedirectBlockedMockFn = { mock?: { calls: ((r: RedirectBlocked) => void)[][] } };
-  const redirectBlockedCallback: ((r: RedirectBlocked) => void) | undefined =
-    aegis.redirect
-      ? (aegis.redirect.onBlocked as unknown as RedirectBlockedMockFn).mock?.calls?.[0]?.[0]
-      : undefined;
+  const redirectBlockedCallback: ((r: RedirectBlocked) => void) | undefined = aegis.redirect
+    ? (aegis.redirect.onBlocked as unknown as RedirectBlockedMockFn).mock?.calls?.[0]?.[0]
+    : undefined;
 
   // (downloads.onChanged callback is NOT captured here — useDownloads._setDownloads is
   // used instead via the control-surface seam, which is synchronous via flushSync.)
@@ -120,9 +137,14 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
   return {
     layer: 'vitest',
     click: (el) => user.click(el),
-    type: async (el, text) => { await user.clear(el); await user.type(el, text); },
+    type: async (el, text) => {
+      await user.clear(el);
+      await user.type(el, text);
+    },
     press: (key) => user.keyboard(keyMap[key]),
-    contextMenu: async (el) => { fireEvent.contextMenu(el); },
+    contextMenu: async (el) => {
+      fireEvent.contextMenu(el);
+    },
     byRole: (role, name) => q.queryByRole(role, name ? { name } : undefined) as HTMLElement | null,
     byText: (text) => q.queryByText(text) as HTMLElement | null,
     byLabel: (label) => q.queryByLabelText(label) as HTMLElement | null,
@@ -256,14 +278,21 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
 export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
   const root = document.body;
   const setNativeValue = (el: Element, value: string) => {
-    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+    const proto =
+      el instanceof HTMLTextAreaElement
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
     Object.getOwnPropertyDescriptor(proto, 'value')?.set?.call(el, value);
   };
   const fire = (el: Element, key: string, mods: Partial<KeyboardEventInit> = {}) =>
-    el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...mods }));
+    el.dispatchEvent(
+      new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true, ...mods }),
+    );
   return {
     layer: 'live',
-    click: async (el) => { (el as HTMLElement).click(); },
+    click: async (el) => {
+      (el as HTMLElement).click();
+    },
     type: async (el, text) => {
       (el as HTMLElement).focus();
       setNativeValue(el, text);
@@ -282,21 +311,35 @@ export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
     },
     byRole: (role, name) => {
       // Minimal live role lookup: buttons + links + textboxes by accessible name.
-      const sel = role === 'button' ? 'button,[role="button"]' : role === 'textbox' ? 'input,textarea' : `[role="${role}"]`;
+      const sel =
+        role === 'button'
+          ? 'button,[role="button"]'
+          : role === 'textbox'
+            ? 'input,textarea'
+            : `[role="${role}"]`;
       const els = Array.from(root.querySelectorAll(sel)) as HTMLElement[];
       if (!name) return els[0] ?? null;
       const re = name instanceof RegExp ? name : new RegExp(`^${name}$`);
-      return els.find((e) => re.test((e.getAttribute('aria-label') || e.textContent || '').trim())) ?? null;
+      return (
+        els.find((e) => re.test((e.getAttribute('aria-label') || e.textContent || '').trim())) ??
+        null
+      );
     },
     byText: (text) => {
-      const re = text instanceof RegExp ? text : new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
-      return (Array.from(root.querySelectorAll('*')) as HTMLElement[]).find((e) => e.children.length === 0 && re.test(e.textContent || '')) ?? null;
+      const re =
+        text instanceof RegExp ? text : new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+      return (
+        (Array.from(root.querySelectorAll('*')) as HTMLElement[]).find(
+          (e) => e.children.length === 0 && re.test(e.textContent || ''),
+        ) ?? null
+      );
     },
     byLabel: (label) => {
       const re = label instanceof RegExp ? label : new RegExp(`^${label}$`);
       // 1. aria-label attribute (buttons, chips, icon controls).
-      const byAria = (Array.from(root.querySelectorAll('[aria-label]')) as HTMLElement[])
-        .find((e) => re.test(e.getAttribute('aria-label') || ''));
+      const byAria = (Array.from(root.querySelectorAll('[aria-label]')) as HTMLElement[]).find(
+        (e) => re.test(e.getAttribute('aria-label') || ''),
+      );
       if (byAria) return byAria;
       // 2. <label> association — `<label for=id>` or a wrapping `<label>` — so form
       //    inputs labelled the accessible way (not via aria-label) are also found.
@@ -317,4 +360,3 @@ export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
     reach: (s) => reach(s),
   };
 }
-

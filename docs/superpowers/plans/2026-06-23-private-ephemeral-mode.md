@@ -395,7 +395,7 @@ discarded-and-reloaded, which would both lose its session and re-create a fresh 
 partition). Implement this in the registry's `sweep_idle` (Task 3a below), so respawn paths only
 ever see non-private discarded tabs, and `reopen_closed` already creates non-private tabs.
 
-For `open_background` (target=_blank / window.open): a popup from a private tab should inherit
+For `open_background` (target=\_blank / window.open): a popup from a private tab should inherit
 privateness. Capture the opener's privateness:
 
 ```rust
@@ -569,7 +569,7 @@ pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf, is_pr
 ```
 
 > Honest note for code + CLAUDE.md: the downloaded **file itself** lands on disk in a private
-> session (the user explicitly asked to save it) — only the *downloads-list record* is omitted.
+> session (the user explicitly asked to save it) — only the _downloads-list record_ is omitted.
 > This matches mainstream browsers (Chrome/Firefox incognito downloads persist the file, drop
 > the history entry). Document it; don't pretend the file evaporates.
 
@@ -706,13 +706,17 @@ else if (k === 'n' && e.shiftKey) { e.preventDefault(); createPrivateTab(); }
    swap the favicon glyph to an incognito icon (lucide `EyeOff` / a mask glyph). `index.css`:
 
 ```css
-.tab--private { background: var(--aegis-private-bg, #2a2440); }
-.tab--private .tab__icon { color: var(--aegis-private-accent, #b794f6); }
+.tab--private {
+  background: var(--aegis-private-bg, #2a2440);
+}
+.tab--private .tab__icon {
+  color: var(--aegis-private-accent, #b794f6);
+}
 ```
 
-   The treatment must be unmistakable at a glance (distinct tint + icon), per the spec's
-   "clear visual treatment". On mobile (`MobileApp` shell + Android), surface the same private
-   indicator in the tab switcher; pass `private` through the tab list the mobile shell renders.
+The treatment must be unmistakable at a glance (distinct tint + icon), per the spec's
+"clear visual treatment". On mobile (`MobileApp` shell + Android), surface the same private
+indicator in the tab switcher; pass `private` through the tab list the mobile shell renders.
 
 **Gate:** `npm test` (component/interaction tests, incl. Task 11).
 
@@ -796,12 +800,12 @@ status line**. Verify parity: Linux live (autopilot), Windows owner-device, macO
 
 ## Verification matrix (per §4)
 
-| Platform | Ephemeral mechanism (verified) | "Done" gate here |
-|---|---|---|
-| **Linux** | `WebContext::new_ephemeral()` via `incognito(true)` | live autopilot + manual: cookie/storage/history residue check after close |
-| **Android** | best-effort: 3p-cookie refuse + close-time cookie/cache/storage flush | device run: no cookie after private close; weaker, documented |
-| **Windows** | WebView2 `SetIsInPrivateModeEnabled(true)` via `incognito(true)` (≥101.0.1210.39) | `cargo check --target …-windows-gnu` + owner device run |
-| **macOS** | WKWebView `nonPersistentDataStore` via `incognito(true)` | CI build only (objc2 needs Mac toolchain); GUI = sub-project I |
+| Platform    | Ephemeral mechanism (verified)                                                    | "Done" gate here                                                          |
+| ----------- | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------- |
+| **Linux**   | `WebContext::new_ephemeral()` via `incognito(true)`                               | live autopilot + manual: cookie/storage/history residue check after close |
+| **Android** | best-effort: 3p-cookie refuse + close-time cookie/cache/storage flush             | device run: no cookie after private close; weaker, documented             |
+| **Windows** | WebView2 `SetIsInPrivateModeEnabled(true)` via `incognito(true)` (≥101.0.1210.39) | `cargo check --target …-windows-gnu` + owner device run                   |
+| **macOS**   | WKWebView `nonPersistentDataStore` via `incognito(true)`                          | CI build only (objc2 needs Mac toolchain); GUI = sub-project I            |
 
 ---
 
@@ -822,16 +826,16 @@ status line**. Verify parity: Linux live (autopilot), Windows owner-device, macO
 
 **Is every persistence write-path guarded?** I enumerated them by tracing callers (not guessing):
 
-| Write-path | Reached from | Guarded? |
-|---|---|---|
-| `history::record` (page visit) | `nav.rs on_page_load` (`load_id` in scope) | YES — `is_private(load_id)` early-return |
-| `history::update_title` (title fill) | `linux_layout connect_title_label` (`id` in scope) | YES — `is_private(id)` early-return |
-| `downloads::on_requested` (download row) | `nav.rs on_download` (`dl_id` captured) | YES — record skipped; file still saved (intended) |
-| `tabs.json` session (`to_persisted`) | `tabs::persist` on every tab/nav change | YES — `to_persisted` filters out private tabs |
-| Idle sweep discard/respawn | `start_idle_sweep` → `sweep_idle` | YES — private tabs exempt (can't faithfully respawn an ephemeral partition) |
+| Write-path                                      | Reached from                                           | Guarded?                                                                                                                                           |
+| ----------------------------------------------- | ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `history::record` (page visit)                  | `nav.rs on_page_load` (`load_id` in scope)             | YES — `is_private(load_id)` early-return                                                                                                           |
+| `history::update_title` (title fill)            | `linux_layout connect_title_label` (`id` in scope)     | YES — `is_private(id)` early-return                                                                                                                |
+| `downloads::on_requested` (download row)        | `nav.rs on_download` (`dl_id` captured)                | YES — record skipped; file still saved (intended)                                                                                                  |
+| `tabs.json` session (`to_persisted`)            | `tabs::persist` on every tab/nav change                | YES — `to_persisted` filters out private tabs                                                                                                      |
+| Idle sweep discard/respawn                      | `start_idle_sweep` → `sweep_idle`                      | YES — private tabs exempt (can't faithfully respawn an ephemeral partition)                                                                        |
 | Syncable stores `favorites`/`saved`/`allowlist` | explicit user actions only (not browsing side-effects) | N/A — no implicit write during private browsing; UI won't offer save/favorite from a private tab; `SYNCABLE` excludes history/downloads (verified) |
-| Android history | — | N/A — Android never calls `history::record` (verified: no JNI history path) |
-| Android downloads | — | N/A — Android has no download handler (verified) |
+| Android history                                 | —                                                      | N/A — Android never calls `history::record` (verified: no JNI history path)                                                                        |
+| Android downloads                               | —                                                      | N/A — Android has no download handler (verified)                                                                                                   |
 
 **Per-platform ephemeral-partition API confirmation (the key risk, all confirmed in installed
 source — none invented):**

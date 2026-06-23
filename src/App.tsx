@@ -60,14 +60,12 @@ import { MobileApp } from './components/mobile/MobileApp';
 import { installAutopilotControl } from './autopilot/control';
 
 const isMobile =
-  typeof document !== 'undefined' &&
-  document.documentElement.classList.contains('aegis-mobile');
+  typeof document !== 'undefined' && document.documentElement.classList.contains('aegis-mobile');
 
 // Windows hides the native "Tabs" menu bar (redundant with the tab strip), which drops
 // its keyboard accelerators — so the chrome handles the tab shortcuts itself there. macOS
 // keeps the menu (in the system menu bar), so it handles them natively; don't double-fire.
-const isWindows =
-  typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
+const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
 
@@ -134,11 +132,19 @@ function DesktopApp() {
       setShield: (open) => setShieldOpen(open),
       enterFullscreen: () => setFullscreen(true),
       exitFullscreen: () => setFullscreen(false),
-      showError: (f) => { setCrashed(null); setFailed(f as NavFailed); },
+      showError: (f) => {
+        setCrashed(null);
+        setFailed(f as NavFailed);
+      },
       clearError: () => setFailed(null),
-      showCrash: (c) => { setFailed(null); setCrashed(c as NavCrashed); },
+      showCrash: (c) => {
+        setFailed(null);
+        setCrashed(c as NavCrashed);
+      },
       clearCrash: () => setCrashed(null),
-      openConfirm: (message) => { void confirm(message); },
+      openConfirm: (message) => {
+        void confirm(message);
+      },
       setDownloadEntries: (entries) => downloads._setDownloads(entries),
       setHistoryEntries: (entries) => history._setEntries(entries),
       setSavedItems: (items, tagUnion) => saved._setSavedItems(items, tagUnion),
@@ -256,9 +262,16 @@ function DesktopApp() {
         return;
       }
       const k = e.key.toLowerCase();
-      if (k === 't' && e.shiftKey) { e.preventDefault(); void tabs.reopenClosed(); }
-      else if (k === 't') { e.preventDefault(); void tabs.create(); }
-      else if (k === 'w') { e.preventDefault(); void tabs.close(tabs.activeId); }
+      if (k === 't' && e.shiftKey) {
+        e.preventDefault();
+        void tabs.reopenClosed();
+      } else if (k === 't') {
+        e.preventDefault();
+        void tabs.create();
+      } else if (k === 'w') {
+        e.preventDefault();
+        void tabs.close(tabs.activeId);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -315,9 +328,7 @@ function DesktopApp() {
     nav.home();
   };
 
-  const activeDownloads = downloads.downloads.filter(
-    (d) => d.state === 'progressing',
-  ).length;
+  const activeDownloads = downloads.downloads.filter((d) => d.state === 'progressing').length;
 
   // Fullscreen render: ALL hooks above must run on every render (rule of hooks).
   // In fullscreen the chrome is shrunk to a top-right corner by main; render only
@@ -375,7 +386,10 @@ function DesktopApp() {
         }
         downloads={
           <>
-            <UpdateIndicator state={update.state} onRestart={() => void update.restartToInstall()} />
+            <UpdateIndicator
+              state={update.state}
+              onRestart={() => void update.restartToInstall()}
+            />
             <PickerButton />
             <DownloadsIndicator
               activeCount={activeDownloads}
@@ -468,12 +482,7 @@ function DesktopApp() {
         }
       />
       <div id={CONTENT_ANCHOR_ID} className="content-anchor" tabIndex={-1} />
-      <ErrorOverlay
-        failed={failed}
-        crashed={crashed}
-        onRetry={handleRetry}
-        onHome={handleHome}
-      />
+      <ErrorOverlay failed={failed} crashed={crashed} onRetry={handleRetry} onHome={handleHome} />
       <SafetyInterstitial
         interstitial={safety.interstitial}
         onProceed={(u) => void safety.proceed(u)}

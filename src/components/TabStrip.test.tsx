@@ -10,9 +10,13 @@ const tabs: TabMeta[] = [
 
 function setup(over: Partial<React.ComponentProps<typeof TabStrip>> = {}) {
   const props = {
-    tabs, activeId: 1,
-    onActivate: vi.fn(), onClose: vi.fn(), onCreate: vi.fn(),
-    onReorder: vi.fn(), onSetPinned: vi.fn(),
+    tabs,
+    activeId: 1,
+    onActivate: vi.fn(),
+    onClose: vi.fn(),
+    onCreate: vi.fn(),
+    onReorder: vi.fn(),
+    onSetPinned: vi.fn(),
     ...over,
   };
   render(<TabStrip {...props} />);

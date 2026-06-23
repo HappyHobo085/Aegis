@@ -23,6 +23,7 @@ Commands: JS one file → `npx vitest run <path>`; whole suite → `npm test`; A
 ## File structure
 
 **New (renderer, `src/components/mobile/`)**
+
 - `MobileApp.tsx` — the mobile orchestrator (hooks + shell + sheet routing). Rendered by `App` when `isMobile`.
 - `MobileTopBar.tsx` — slim address bar (reuses `AddressBar`) + reload/stop + the favourites strip.
 - `MobileFavourites.tsx` — 24dp horizontal favourites chips (reuses `useFavorites` data).
@@ -32,6 +33,7 @@ Commands: JS one file → `npx vitest run <path>`; whole suite → `npm test`; A
 - Co-located `*.test.tsx` for each.
 
 **Modified**
+
 - `src/App.tsx` — rename the current `App` body to `DesktopApp`; new `App` = `isMobile ? <MobileApp/> : <DesktopApp/>`.
 - `src/lib/layout.ts` — add `MOBILE_ADDRESS_H` / `MOBILE_FAV_H` / `MOBILE_BOTTOMBAR_H`.
 - `src/lib/ipcClient.ts` — `AndroidBridge.setBackInterceptActive` + an exported `setBackInterceptActive()` helper.
@@ -46,6 +48,7 @@ Commands: JS one file → `npx vitest run <path>`; whole suite → `npm test`; A
 ### Task 1: Mobile layout constants + the Back-intercept bridge
 
 **Files:**
+
 - Modify: `src/lib/layout.ts`
 - Modify: `src/lib/ipcClient.ts`
 - Test: `src/lib/layout.test.ts` (create if absent)
@@ -125,6 +128,7 @@ git commit -m "feat(mobile): mobile chrome layout constants + back-intercept bri
 ### Task 2: `MobileBottomBar`
 
 **Files:**
+
 - Create: `src/components/mobile/MobileBottomBar.tsx`, `src/components/mobile/MobileBottomBar.test.tsx`
 
 - [ ] **Step 1: Write the failing test**
@@ -136,8 +140,12 @@ import { MobileBottomBar } from './MobileBottomBar';
 
 function setup(over = {}) {
   const props = {
-    canGoBack: true, canGoForward: false,
-    onBack: vi.fn(), onForward: vi.fn(), onHome: vi.fn(), onMenu: vi.fn(),
+    canGoBack: true,
+    canGoForward: false,
+    onBack: vi.fn(),
+    onForward: vi.fn(),
+    onHome: vi.fn(),
+    onMenu: vi.fn(),
     shield: <div data-testid="shield" />,
     ...over,
   };
@@ -191,14 +199,32 @@ interface MobileBottomBarProps {
 }
 
 export function MobileBottomBar({
-  canGoBack, canGoForward, onBack, onForward, onHome, onMenu, shield,
+  canGoBack,
+  canGoForward,
+  onBack,
+  onForward,
+  onHome,
+  onMenu,
+  shield,
 }: MobileBottomBarProps) {
   return (
     <nav className="mobile-bottombar" aria-label="Browser actions">
-      <button type="button" className="mobile-bottombar__btn" aria-label="Back" disabled={!canGoBack} onClick={onBack}>
+      <button
+        type="button"
+        className="mobile-bottombar__btn"
+        aria-label="Back"
+        disabled={!canGoBack}
+        onClick={onBack}
+      >
         <ArrowLeft size={22} aria-hidden="true" />
       </button>
-      <button type="button" className="mobile-bottombar__btn" aria-label="Forward" disabled={!canGoForward} onClick={onForward}>
+      <button
+        type="button"
+        className="mobile-bottombar__btn"
+        aria-label="Forward"
+        disabled={!canGoForward}
+        onClick={onForward}
+      >
         <ArrowRight size={22} aria-hidden="true" />
       </button>
       <button type="button" className="mobile-bottombar__btn" aria-label="Home" onClick={onHome}>
@@ -228,6 +254,7 @@ git commit -m "feat(mobile): MobileBottomBar"
 ### Task 3: `MobileFavourites`
 
 **Files:**
+
 - Create: `src/components/mobile/MobileFavourites.tsx`, `src/components/mobile/MobileFavourites.test.tsx`
 
 - [ ] **Step 1: Write the failing test**
@@ -307,6 +334,7 @@ git commit -m "feat(mobile): MobileFavourites strip"
 ### Task 4: `MobileSheet` (generic full-screen sheet)
 
 **Files:**
+
 - Create: `src/components/mobile/MobileSheet.tsx`, `src/components/mobile/MobileSheet.test.tsx`
 
 - [ ] **Step 1: Write the failing test**
@@ -319,7 +347,11 @@ import { MobileSheet } from './MobileSheet';
 describe('MobileSheet', () => {
   it('renders the title + body and closes via the back button', () => {
     const onClose = vi.fn();
-    render(<MobileSheet title="History" onClose={onClose}><p>body</p></MobileSheet>);
+    render(
+      <MobileSheet title="History" onClose={onClose}>
+        <p>body</p>
+      </MobileSheet>,
+    );
     expect(screen.getByRole('dialog', { name: 'History' })).toBeInTheDocument();
     expect(screen.getByText('body')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /back/i }));
@@ -375,6 +407,7 @@ git commit -m "feat(mobile): MobileSheet full-screen wrapper"
 ### Task 5: `MobileMenuSheet` (the ☰ drawer)
 
 **Files:**
+
 - Create: `src/components/mobile/MobileMenuSheet.tsx`, `src/components/mobile/MobileMenuSheet.test.tsx`
 
 - [ ] **Step 1: Write the failing test**
@@ -386,8 +419,14 @@ import { MobileMenuSheet } from './MobileMenuSheet';
 
 function setup(over = {}) {
   const props = {
-    onClose: vi.fn(), onSettings: vi.fn(), onHistory: vi.fn(), onSaved: vi.fn(), onDownloads: vi.fn(),
-    isCurrentSaved: false, canBookmark: true, onToggleBookmark: vi.fn(),
+    onClose: vi.fn(),
+    onSettings: vi.fn(),
+    onHistory: vi.fn(),
+    onSaved: vi.fn(),
+    onDownloads: vi.fn(),
+    isCurrentSaved: false,
+    canBookmark: true,
+    onToggleBookmark: vi.fn(),
     ...over,
   };
   render(<MobileMenuSheet {...props} />);
@@ -443,36 +482,51 @@ interface MobileMenuSheetProps {
 }
 
 export function MobileMenuSheet({
-  onClose, onSettings, onHistory, onSaved, onDownloads,
-  isCurrentSaved, canBookmark, onToggleBookmark,
+  onClose,
+  onSettings,
+  onHistory,
+  onSaved,
+  onDownloads,
+  isCurrentSaved,
+  canBookmark,
+  onToggleBookmark,
 }: MobileMenuSheetProps) {
   return (
     <MobileSheet title="Menu" onClose={onClose}>
       <ul className="mobile-menu">
         <li>
-          <button type="button" className="mobile-menu__item" disabled={!canBookmark} onClick={onToggleBookmark}>
+          <button
+            type="button"
+            className="mobile-menu__item"
+            disabled={!canBookmark}
+            onClick={onToggleBookmark}
+          >
             <Star size={20} aria-hidden="true" />
             {isCurrentSaved ? 'Remove bookmark' : 'Bookmark this page'}
           </button>
         </li>
         <li>
           <button type="button" className="mobile-menu__item" onClick={onSaved}>
-            <Bookmark size={20} aria-hidden="true" />Saved
+            <Bookmark size={20} aria-hidden="true" />
+            Saved
           </button>
         </li>
         <li>
           <button type="button" className="mobile-menu__item" onClick={onHistory}>
-            <History size={20} aria-hidden="true" />History
+            <History size={20} aria-hidden="true" />
+            History
           </button>
         </li>
         <li>
           <button type="button" className="mobile-menu__item" onClick={onDownloads}>
-            <Download size={20} aria-hidden="true" />Downloads
+            <Download size={20} aria-hidden="true" />
+            Downloads
           </button>
         </li>
         <li>
           <button type="button" className="mobile-menu__item" onClick={onSettings}>
-            <Settings size={20} aria-hidden="true" />Settings
+            <Settings size={20} aria-hidden="true" />
+            Settings
           </button>
         </li>
       </ul>
@@ -496,6 +550,7 @@ git commit -m "feat(mobile): MobileMenuSheet drawer"
 ### Task 6: `MobileTopBar` (address bar + reload + favourites)
 
 **Files:**
+
 - Create: `src/components/mobile/MobileTopBar.tsx`, `src/components/mobile/MobileTopBar.test.tsx`
 
 - [ ] **Step 1: Write the failing test**
@@ -510,9 +565,12 @@ const favs: Favorite[] = [{ id: 1, name: 'Home', url: 'https://home.test/', posi
 
 function setup(over = {}) {
   const props = {
-    url: 'https://example.com/', isLoading: false,
-    onNavigate: vi.fn(), onReloadOrStop: vi.fn(),
-    favorites: favs, onOpenFavourite: vi.fn(),
+    url: 'https://example.com/',
+    isLoading: false,
+    onNavigate: vi.fn(),
+    onReloadOrStop: vi.fn(),
+    favorites: favs,
+    onOpenFavourite: vi.fn(),
     ...over,
   };
   render(<MobileTopBar {...props} />);
@@ -561,7 +619,12 @@ interface MobileTopBarProps {
 }
 
 export function MobileTopBar({
-  url, isLoading, onNavigate, onReloadOrStop, favorites, onOpenFavourite,
+  url,
+  isLoading,
+  onNavigate,
+  onReloadOrStop,
+  favorites,
+  onOpenFavourite,
 }: MobileTopBarProps) {
   return (
     <div className="mobile-topbar">
@@ -573,7 +636,11 @@ export function MobileTopBar({
           aria-label={isLoading ? 'Stop' : 'Reload'}
           onClick={onReloadOrStop}
         >
-          {isLoading ? <X size={18} aria-hidden="true" /> : <RotateCw size={18} aria-hidden="true" />}
+          {isLoading ? (
+            <X size={18} aria-hidden="true" />
+          ) : (
+            <RotateCw size={18} aria-hidden="true" />
+          )}
         </button>
       </div>
       <MobileFavourites favorites={favorites} onOpen={onOpenFavourite} />
@@ -601,6 +668,7 @@ git commit -m "feat(mobile): MobileTopBar"
 ### Task 7: `MobileApp` orchestrator
 
 **Files:**
+
 - Create: `src/components/mobile/MobileApp.tsx`, `src/components/mobile/MobileApp.test.tsx`
 
 - [ ] **Step 1: Write the failing test**
@@ -682,13 +750,20 @@ import { MobileMenuSheet } from './MobileMenuSheet';
 import { MobileSheet } from './MobileSheet';
 
 declare global {
-  interface Window { __aegisMobileBack?: () => void }
+  interface Window {
+    __aegisMobileBack?: () => void;
+  }
 }
 
 type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | null;
 
 function hostOf(url: string): string | null {
-  try { const h = new URL(url).hostname; return h.length > 0 ? h : null; } catch { return null; }
+  try {
+    const h = new URL(url).hostname;
+    return h.length > 0 ? h : null;
+  } catch {
+    return null;
+  }
 }
 
 export function MobileApp() {
@@ -705,7 +780,9 @@ export function MobileApp() {
   const [sheet, setSheet] = useState<Sheet>(null);
   const [shieldOpen, setShieldOpen] = useState(false);
 
-  useEffect(() => { void aegis.settings.get().then((s) => applyTheme(s)); }, []);
+  useEffect(() => {
+    void aegis.settings.get().then((s) => applyTheme(s));
+  }, []);
 
   // Any sheet/menu (or the shield popover) covers the page: lower the native content
   // via the existing overlay bridge, and tell the native Back handler to close it first.
@@ -716,7 +793,9 @@ export function MobileApp() {
   useEffect(() => {
     setBackInterceptActive(sheet !== null);
     window.__aegisMobileBack = () => setSheet(null);
-    return () => { delete window.__aegisMobileBack; };
+    return () => {
+      delete window.__aegisMobileBack;
+    };
   }, [sheet]);
 
   const host = hostOf(nav.state.url);
@@ -777,7 +856,10 @@ export function MobileApp() {
             search={history.search}
             remove={history.remove}
             clear={history.clear}
-            onOpen={(url) => { void nav.navigate(url); setSheet(null); }}
+            onOpen={(url) => {
+              void nav.navigate(url);
+              setSheet(null);
+            }}
           />
         </MobileSheet>
       )}
@@ -794,7 +876,10 @@ export function MobileApp() {
             update={(id, partial) => void saved.update(id, partial)}
             renameTag={(oldT, newT) => void saved.renameTag(oldT, newT)}
             deleteTag={(tag) => void saved.deleteTag(tag)}
-            onOpen={(url) => { void nav.navigate(url); setSheet(null); }}
+            onOpen={(url) => {
+              void nav.navigate(url);
+              setSheet(null);
+            }}
           />
         </MobileSheet>
       )}
@@ -890,6 +975,7 @@ git commit -m "feat(mobile): MobileApp shell orchestrator"
 ### Task 8: `App` branch + mobile CSS
 
 **Files:**
+
 - Modify: `src/App.tsx`
 - Modify: `src/index.css`
 
@@ -911,47 +997,170 @@ In `src/index.css`, REPLACE the dead `.aegis-mobile .toolbar` / `.address-bar` (
 
 ```css
 /* ===== Mobile (Android) chrome — the MobileApp shell ===== */
-.aegis-mobile .address-bar input { font-size: 16px; height: 38px; } /* no focus-zoom, touch height */
+.aegis-mobile .address-bar input {
+  font-size: 16px;
+  height: 38px;
+} /* no focus-zoom, touch height */
 
-.mobile-topbar { position: fixed; top: 0; left: 0; right: 0; z-index: 10;
-  background: #1b1b1b; border-bottom: 1px solid #2a2a2a;
-  padding: env(safe-area-inset-top) calc(8px + env(safe-area-inset-right)) 0 calc(8px + env(safe-area-inset-left)); }
-.mobile-topbar__row { display: flex; align-items: center; gap: 6px; height: 48px; }
-.mobile-topbar__reload { display: inline-flex; align-items: center; justify-content: center;
-  width: 38px; height: 38px; border: 0; background: transparent; color: #cfcfcf; border-radius: 8px; }
-.mobile-favourites { display: flex; gap: 6px; height: 24px; overflow-x: auto; align-items: center;
-  scrollbar-width: none; }
-.mobile-favourites::-webkit-scrollbar { display: none; }
-.mobile-favourites__chip { flex: 0 0 auto; height: 22px; padding: 0 8px; font-size: 12px; line-height: 22px;
-  border: 0; border-radius: 11px; background: #2a2a2a; color: #cfcfcf; white-space: nowrap; }
+.mobile-topbar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  background: #1b1b1b;
+  border-bottom: 1px solid #2a2a2a;
+  padding: env(safe-area-inset-top) calc(8px + env(safe-area-inset-right)) 0
+    calc(8px + env(safe-area-inset-left));
+}
+.mobile-topbar__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 48px;
+}
+.mobile-topbar__reload {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  border: 0;
+  background: transparent;
+  color: #cfcfcf;
+  border-radius: 8px;
+}
+.mobile-favourites {
+  display: flex;
+  gap: 6px;
+  height: 24px;
+  overflow-x: auto;
+  align-items: center;
+  scrollbar-width: none;
+}
+.mobile-favourites::-webkit-scrollbar {
+  display: none;
+}
+.mobile-favourites__chip {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 12px;
+  line-height: 22px;
+  border: 0;
+  border-radius: 11px;
+  background: #2a2a2a;
+  color: #cfcfcf;
+  white-space: nowrap;
+}
 
-.mobile-bottombar { position: fixed; left: 0; right: 0; bottom: 0; z-index: 10; height: 56px;
-  display: flex; align-items: center; justify-content: space-around;
-  background: #1b1b1b; border-top: 1px solid #2a2a2a;
-  padding-bottom: env(safe-area-inset-bottom); }
-.mobile-bottombar__btn { display: inline-flex; align-items: center; justify-content: center;
-  width: 48px; height: 48px; border: 0; background: transparent; color: #e6e6e6; border-radius: 10px; }
-.mobile-bottombar__btn:disabled { color: #555; }
-.mobile-bottombar__shield { display: inline-flex; align-items: center; }
+.mobile-bottombar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  height: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  background: #1b1b1b;
+  border-top: 1px solid #2a2a2a;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.mobile-bottombar__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  border: 0;
+  background: transparent;
+  color: #e6e6e6;
+  border-radius: 10px;
+}
+.mobile-bottombar__btn:disabled {
+  color: #555;
+}
+.mobile-bottombar__shield {
+  display: inline-flex;
+  align-items: center;
+}
 
-.mobile-sheet { position: fixed; inset: 0; z-index: 50; display: flex; flex-direction: column;
-  background: #161616; padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
-.mobile-sheet__bar { display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 8px;
-  border-bottom: 1px solid #2a2a2a; }
-.mobile-sheet__back { display: inline-flex; align-items: center; justify-content: center;
-  width: 40px; height: 40px; border: 0; background: transparent; color: #e6e6e6; border-radius: 10px; }
-.mobile-sheet__title { font-size: 17px; margin: 0; color: #fff; }
-.mobile-sheet__body { flex: 1; overflow: auto; }
+.mobile-sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: #161616;
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+.mobile-sheet__bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 52px;
+  padding: 0 8px;
+  border-bottom: 1px solid #2a2a2a;
+}
+.mobile-sheet__back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border: 0;
+  background: transparent;
+  color: #e6e6e6;
+  border-radius: 10px;
+}
+.mobile-sheet__title {
+  font-size: 17px;
+  margin: 0;
+  color: #fff;
+}
+.mobile-sheet__body {
+  flex: 1;
+  overflow: auto;
+}
 
-.mobile-menu { list-style: none; margin: 0; padding: 8px; }
-.mobile-menu__item { display: flex; align-items: center; gap: 12px; width: 100%; height: 52px;
-  padding: 0 12px; border: 0; background: transparent; color: #e6e6e6; font-size: 16px; text-align: left; }
-.mobile-menu__item:disabled { color: #666; }
+.mobile-menu {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+}
+.mobile-menu__item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  height: 52px;
+  padding: 0 12px;
+  border: 0;
+  background: transparent;
+  color: #e6e6e6;
+  font-size: 16px;
+  text-align: left;
+}
+.mobile-menu__item:disabled {
+  color: #666;
+}
 
 /* Reused desktop modals go full-screen on mobile. */
-.aegis-mobile .settings-modal, .aegis-mobile .downloads-modal { inset: 0; }
-.aegis-mobile .settings-modal__content, .aegis-mobile .downloads-modal__content {
-  width: 100%; height: 100%; max-width: none; max-height: none; border-radius: 0; }
+.aegis-mobile .settings-modal,
+.aegis-mobile .downloads-modal {
+  inset: 0;
+}
+.aegis-mobile .settings-modal__content,
+.aegis-mobile .downloads-modal__content {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+}
 ```
 
 > Verify the exact class names of `SettingsModal`/`DownloadsModal`'s root + content (`settings-modal`, `settings-modal__content`, and the downloads modal's equivalents) by opening those components; adjust the last block to match.
@@ -980,6 +1189,7 @@ git commit -m "feat(mobile): render MobileApp on Android; mobile chrome CSS"
 ### Task 9: Content-WebView margins (slim top + bottom-bar gap)
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt`
 
 - [ ] **Step 1: Change the margins**
@@ -1024,6 +1234,7 @@ git commit -m "feat(mobile): android content-webview margins for the new chrome"
 ### Task 10: Android Back closes an open sheet
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt`
 
 - [ ] **Step 1: Add the flag + bridge method + back override**
@@ -1076,6 +1287,7 @@ git commit -m "feat(mobile): android back closes an open chrome sheet"
 ### Task 11: Bottom-bar scroll auto-hide (stretch)
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt`
 
 - [ ] **Step 1: Animate the content bottom margin on scroll direction**
@@ -1136,6 +1348,7 @@ git commit -m "feat(mobile): auto-hide the bottom bar on content scroll"
 ### Task 12: Full gate + CLAUDE.md
 
 **Files:**
+
 - Modify: `src/CLAUDE.md`, `src-tauri/CLAUDE.md`
 
 - [ ] **Step 1: Run the gate**

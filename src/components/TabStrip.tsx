@@ -12,7 +12,11 @@ interface TabStripProps {
 }
 
 function hostOf(url: string): string {
-  try { return new URL(url).hostname; } catch { return ''; }
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return '';
+  }
 }
 
 function labelFor(tab: TabMeta): string {
@@ -23,7 +27,13 @@ function labelFor(tab: TabMeta): string {
 }
 
 export function TabStrip({
-  tabs, activeId, onActivate, onClose, onCreate, onReorder, onSetPinned,
+  tabs,
+  activeId,
+  onActivate,
+  onClose,
+  onCreate,
+  onReorder,
+  onSetPinned,
 }: TabStripProps) {
   return (
     <div className="tabstrip" role="tablist" aria-label="Open tabs">
@@ -42,7 +52,9 @@ export function TabStrip({
               isActive ? 'tab--active' : '',
               t.live ? '' : 'tab--asleep',
               t.pinned ? 'tab--pinned' : '',
-            ].filter(Boolean).join(' ')}
+            ]
+              .filter(Boolean)
+              .join(' ')}
             draggable
             onClick={() => onActivate(t.id)}
             onDragStart={(e) => e.dataTransfer.setData('text/tab-id', String(t.id))}
@@ -56,8 +68,13 @@ export function TabStrip({
               order.splice(at, 0, dragged);
               onReorder(order);
             }}
-            onAuxClick={(e) => { if (e.button === 1) onClose(t.id); }}
-            onContextMenu={(e) => { e.preventDefault(); onSetPinned(t.id, !t.pinned); }}
+            onAuxClick={(e) => {
+              if (e.button === 1) onClose(t.id);
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              onSetPinned(t.id, !t.pinned);
+            }}
           >
             <Globe size={13} aria-hidden="true" className="tab__icon" />
             {!t.pinned && <span className="tab__title">{title}</span>}
@@ -67,7 +84,10 @@ export function TabStrip({
                 className="tab__close"
                 aria-label={`Close ${title}`}
                 title="Close tab"
-                onClick={(e) => { e.stopPropagation(); onClose(t.id); }}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onClose(t.id);
+                }}
               >
                 <X size={12} aria-hidden="true" />
               </button>
@@ -75,7 +95,13 @@ export function TabStrip({
           </div>
         );
       })}
-      <button type="button" className="tabstrip__new" aria-label="New tab" title="New tab" onClick={onCreate}>
+      <button
+        type="button"
+        className="tabstrip__new"
+        aria-label="New tab"
+        title="New tab"
+        onClick={onCreate}
+      >
         <Plus size={16} aria-hidden="true" />
       </button>
     </div>

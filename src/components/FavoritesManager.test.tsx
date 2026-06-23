@@ -47,7 +47,10 @@ describe('FavoritesManager', () => {
     const p = props();
     render(<FavoritesManager {...p} />);
     await userEvent.type(screen.getByRole('textbox', { name: /new favorite name/i }), 'Gamma');
-    await userEvent.type(screen.getByRole('textbox', { name: /new favorite url/i }), 'https://gamma.example/');
+    await userEvent.type(
+      screen.getByRole('textbox', { name: /new favorite url/i }),
+      'https://gamma.example/',
+    );
     await userEvent.click(screen.getByRole('button', { name: /^add favorite$/i }));
     expect(p.add).toHaveBeenCalledWith({ name: 'Gamma', url: 'https://gamma.example/' });
   });

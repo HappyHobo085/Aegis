@@ -61,7 +61,9 @@ const REPORT = {
 
 describe('collectBlockingAdvisories', () => {
   it('collects only high/critical advisory objects, deduped by source', () => {
-    const sources = collectBlockingAdvisories(REPORT).map((a) => a.source).sort((x, y) => x - y);
+    const sources = collectBlockingAdvisories(REPORT)
+      .map((a) => a.source)
+      .sort((x, y) => x - y);
     expect(sources).toEqual([1065, 1179]);
   });
 
@@ -73,7 +75,11 @@ describe('collectBlockingAdvisories', () => {
     const report = {
       vulnerabilities: {
         a: { name: 'a', severity: 'high', via: [{ severity: 'high', name: 'a', title: 'one' }] },
-        b: { name: 'b', severity: 'critical', via: [{ severity: 'critical', name: 'b', title: 'two' }] },
+        b: {
+          name: 'b',
+          severity: 'critical',
+          via: [{ severity: 'critical', name: 'b', title: 'two' }],
+        },
       },
     };
     expect(collectBlockingAdvisories(report).length).toBe(2);

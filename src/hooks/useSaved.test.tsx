@@ -39,7 +39,13 @@ const item = (over: Partial<SavedItem> = {}): SavedItem => ({
 });
 
 const seed: SavedItem[] = [
-  item({ id: 1, url: 'https://example.com/', title: 'Example', tags: ['news', 'tech'], savedAt: 2000 }),
+  item({
+    id: 1,
+    url: 'https://example.com/',
+    title: 'Example',
+    tags: ['news', 'tech'],
+    savedAt: 2000,
+  }),
   item({ id: 2, url: 'https://other.example/', title: 'Other', tags: ['tech'], savedAt: 1000 }),
 ];
 
@@ -185,7 +191,13 @@ describe('useSaved', () => {
 
   it('update(id, partial) calls aegis.saved.update with title + tags and refreshes items', async () => {
     const updated: SavedItem[] = [
-      item({ id: 1, url: 'https://example.com/', title: 'Renamed', tags: ['fresh'], savedAt: 2000 }),
+      item({
+        id: 1,
+        url: 'https://example.com/',
+        title: 'Renamed',
+        tags: ['fresh'],
+        savedAt: 2000,
+      }),
       seed[1],
     ];
     update.mockResolvedValue(updated);
@@ -212,8 +224,20 @@ describe('useSaved', () => {
 
   it('renameTag(old, new) calls aegis.saved.renameTag and refreshes items + tagUnion', async () => {
     const renamed: SavedItem[] = [
-      item({ id: 1, url: 'https://example.com/', title: 'Example', tags: ['news', 'technology'], savedAt: 2000 }),
-      item({ id: 2, url: 'https://other.example/', title: 'Other', tags: ['technology'], savedAt: 1000 }),
+      item({
+        id: 1,
+        url: 'https://example.com/',
+        title: 'Example',
+        tags: ['news', 'technology'],
+        savedAt: 2000,
+      }),
+      item({
+        id: 2,
+        url: 'https://other.example/',
+        title: 'Other',
+        tags: ['technology'],
+        savedAt: 1000,
+      }),
     ];
     renameTag.mockResolvedValue(renamed);
     tagUnion.mockResolvedValueOnce(seedUnion).mockResolvedValue(['news', 'technology']);
@@ -229,7 +253,13 @@ describe('useSaved', () => {
 
   it('renameTag remaps an active filter to the new tag name (does not drop it)', async () => {
     const renamed: SavedItem[] = [
-      item({ id: 1, url: 'https://example.com/', title: 'Example', tags: ['technology'], savedAt: 2000 }),
+      item({
+        id: 1,
+        url: 'https://example.com/',
+        title: 'Example',
+        tags: ['technology'],
+        savedAt: 2000,
+      }),
     ];
     renameTag.mockResolvedValue(renamed);
     tagUnion.mockResolvedValueOnce(seedUnion).mockResolvedValue(['technology']);
@@ -249,7 +279,12 @@ describe('useSaved', () => {
   it('addCurrent() in-flight guard: rapid double-call results in exactly ONE saved.add IPC call', async () => {
     // Simulate a slow saved.add so the second call arrives while the first is still in flight.
     let resolveFirst!: (v: SavedItem[]) => void;
-    add.mockImplementationOnce(() => new Promise<SavedItem[]>((res) => { resolveFirst = res; }));
+    add.mockImplementationOnce(
+      () =>
+        new Promise<SavedItem[]>((res) => {
+          resolveFirst = res;
+        }),
+    );
     has.mockResolvedValue(false);
     const { result } = renderHook(() => useSaved('https://example.com/'));
     await waitFor(() => expect(result.current.items).toHaveLength(2));

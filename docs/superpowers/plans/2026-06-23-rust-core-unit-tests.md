@@ -25,9 +25,11 @@
 ## File Structure
 
 **Create:**
+
 - `src-tauri/src/test_support.rs` — `#[cfg(test)]` crate-wide helper: `with_tmp_app(|app| { … })` (serialized, XDG-redirected mock app with `AdblockState`/`SafetyState`/`SyncState` managed). Declared in `lib.rs` as `#[cfg(test)] mod test_support;`.
 
 **Modify (add a `#[cfg(test)] mod tests` block at the end of each; add nothing else):**
+
 - `src-tauri/src/tabs.rs` — session-persistence helpers (`load_session`/`save_session` are AppHandle-bound; the registry is already tested in `tab_registry.rs`, so here we cover the `tabs.json` (de)serialization through the app + the `dispatch` list/create/activate/close surface).
 - `src-tauri/src/history.rs`
 - `src-tauri/src/places.rs`
@@ -39,6 +41,7 @@
 - `src-tauri/src/data.rs`
 
 **Modify (build wiring + module decl):**
+
 - `src-tauri/Cargo.toml` — add `[dev-dependencies] tauri = { version = "2.11.2", features = ["test"] }`.
 - `src-tauri/src/lib.rs` — add `#[cfg(test)] mod test_support;` near the other `mod` lines (~line 64).
 
@@ -49,11 +52,13 @@
 This is the enabler every later task depends on. It establishes the **one** pattern for an AppHandle-backed unit test in this repo.
 
 **Files:**
+
 - Modify: `src-tauri/Cargo.toml`
 - Create: `src-tauri/src/test_support.rs`
 - Modify: `src-tauri/src/lib.rs`
 
 **Interfaces produced:**
+
 - `test_support::with_tmp_app<T>(f: impl FnOnce(&tauri::AppHandle) -> T) -> T` — runs `f` with a freshly-built `mock_app()` whose data/cache/config dirs are an empty temp dir, with `AdblockState`/`SafetyState`/`SyncState` managed, under a global serialization lock. Cleans the temp dir afterward.
 
 - [ ] **Step 1: Add the dev-dependency**
@@ -180,8 +185,9 @@ mod tests {
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml test_support::`
 Expected on first run: **compile error or test failure**. The most likely first failure modes and their fixes:
+
 - `cannot find function mock_builder in module tauri::test` → the `[dev-dependencies] tauri … features=["test"]` line (Step 1) is missing or the version mismatches; fix and re-run.
-- `AdblockState`/`SafetyState`/`SyncState` not public → confirm they are `pub struct` in their modules (they are: `adblock.rs:71`, `safety.rs:32`, `sync.rs:46`); if a `Default` impl is missing, do **not** add one — `AdblockState`/`SafetyState`/`SyncState` already derive/impl `Default` (verified). 
+- `AdblockState`/`SafetyState`/`SyncState` not public → confirm they are `pub struct` in their modules (they are: `adblock.rs:71`, `safety.rs:32`, `sync.rs:46`); if a `Default` impl is missing, do **not** add one — `AdblockState`/`SafetyState`/`SyncState` already derive/impl `Default` (verified).
 - a panic building the mock app → read the panic; `mock_context(noop_assets())` needs no `tauri.conf.json`, so a panic means a managed-state constructor itself paniced (none should).
 
 Iterate until both tests **PASS** against the real code.
@@ -728,7 +734,7 @@ git commit -m "test(safety): malware-host match, session-exception unblock, proc
 
 **Functions under test:** `adblock::dispatch(app, "adblock.{getState,setEnabled,toggleAllowlist,removeAllowlist,clearAllowlist}", payload)`, `adblock::host_allowlisted(app, host)`, `adblock::load_allowlist_hosts(app)`, the counter functions `session_blocked`/`note_blocked`/`reset_page`. Real behavior to pin: default `enabled=true`, empty allowlist; `setEnabled` flips and persists in-memory state; `toggleAllowlist` adds then removes a host (persisted to the `allowlist` store); `removeAllowlist`/`clearAllowlist` tombstone; `host_allowlisted` covers subdomains; `getState` reflects `enabled`/`allowlistedHosts`.
 
-> **Counter caveat (process-global statics):** `SESSION_BLOCKED` / `PAGE_BLOCKED` are process-wide and persist across tests in the same binary. We assert `note_blocked` *increments* (delta), not an absolute value, and the counter test runs under the `with_tmp_app` lock so it doesn't interleave. `note_blocked`/`reset_page` emit `adblock.blockedCount` via `emit_event` — with a mock app this is a no-op event (no listener) and won't panic.
+> **Counter caveat (process-global statics):** `SESSION_BLOCKED` / `PAGE_BLOCKED` are process-wide and persist across tests in the same binary. We assert `note_blocked` _increments_ (delta), not an absolute value, and the counter test runs under the `with_tmp_app` lock so it doesn't interleave. `note_blocked`/`reset_page` emit `adblock.blockedCount` via `emit_event` — with a mock app this is a no-op event (no listener) and won't panic.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1107,12 +1113,13 @@ mod tests {
 }
 ```
 
-> **Why a fresh app for import:** exporting and re-importing into the *same* app could pass even if import were a no-op (the data is already there). Importing the captured bundle into a **second, empty** `with_tmp_app` proves import actually writes every store. The bundle text crosses between the two `with_tmp_app` calls as a `String` (no shared filesystem needed). `crate::settings::write`/`customfilters::write`/`adblock::load_allowlist_hosts` are confirmed `pub`.
+> **Why a fresh app for import:** exporting and re-importing into the _same_ app could pass even if import were a no-op (the data is already there). Importing the captured bundle into a **second, empty** `with_tmp_app` proves import actually writes every store. The bundle text crosses between the two `with_tmp_app` calls as a `String` (no shared filesystem needed). `crate::settings::write`/`customfilters::write`/`adblock::load_allowlist_hosts` are confirmed `pub`.
 
 - [ ] **Step 2: Run, expecting failure first**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml data::tests`
 Expected: first run may surface real issues:
+
 - `crate::places`/`history`/`downloads`/`adblock`/`settings`/`customfilters` must be reachable as `crate::…` from within `data`'s test module — they are sibling modules in the same crate (all `mod …;` in `lib.rs`), so `crate::places::dispatch` resolves.
 - If `customfilters::write`/`load` or `settings::write`/`all` are not `pub`, the test won't compile — verify with `grep -n "pub fn" src-tauri/src/customfilters.rs src-tauri/src/settings.rs`; they are `pub` (settings.rs:34/39, customfilters.rs:29/107).
 - If `import` paniced on a missing webview during `adblock_refresh::refresh` → see the Linux-host note; it's detached. If a panic surfaces synchronously, it's a real bug → Task 11.
@@ -1132,7 +1139,7 @@ git commit -m "test(data): export bundle shape + export→import roundtrip resto
 
 If any task above produced a **synchronous panic or wrong result that is a genuine source bug** (not a test mistake), fix it here — test-first, scoped to the one function. The most likely candidates, ranked by what the code review surfaced:
 
-1. **`adblock.setEnabled`/`subs`/`data.import` panicking on a mock app** (no content webview). `apply_filters` iterates `app.webviews()` (empty → fine) and `install_adblock` spawns a detached thread, so this *should* be panic-free — but `adblock_webkit::remove_all` (called by `setEnabled(false)` on Linux) was not read in full here. If it `.unwrap()`s on a missing webview, that's a real robustness gap.
+1. **`adblock.setEnabled`/`subs`/`data.import` panicking on a mock app** (no content webview). `apply_filters` iterates `app.webviews()` (empty → fine) and `install_adblock` spawns a detached thread, so this _should_ be panic-free — but `adblock_webkit::remove_all` (called by `setEnabled(false)` on Linux) was not read in full here. If it `.unwrap()`s on a missing webview, that's a real robustness gap.
 2. **`safety.proceed` / `data.import` reaching into managed state that a real (non-mock) boot guarantees but a mock doesn't.** If found, the fix is to make the function tolerate the absent piece (it already uses `try_state` in most places).
 
 - [ ] **Step 1: Reproduce** — quote the exact panic/assertion from the failing task's `cargo test` output. If no task panicked synchronously, **skip this entire task** (mark it N/A in the commit log) — do not invent a fix.
@@ -1187,16 +1194,19 @@ git commit -m "docs(core): document the test_support mock-app harness + new modu
 ## Self-Review
 
 **Does the plan meet sub-project C's acceptance criteria?**
+
 - ✅ **Every named module gets meaningful `#[test]` coverage:** adblock (Task 7), safety (6), permissions (5), data (10), history (2), places (3), downloads (4), tabs (9), subs (8). Each test names the **real** functions under test (`dispatch` channels, `record`, `on_requested`, `is_blocked`, `host_allowlisted`, `enabled_text`, the pure helpers) and asserts real behavior, not shapes.
-- ✅ **The `data` roundtrip asserts every store survives:** Task 10's roundtrip test imports into a *fresh* app and asserts favorites, saved, history, downloads, allowlist, settings, AND customFilters all survive — the strongest form of the requirement (a same-app re-import could false-pass; a cross-app import can't).
+- ✅ **The `data` roundtrip asserts every store survives:** Task 10's roundtrip test imports into a _fresh_ app and asserts favorites, saved, history, downloads, allowlist, settings, AND customFilters all survive — the strongest form of the requirement (a same-app re-import could false-pass; a cross-app import can't).
 - ✅ **`cargo test` will gate in CI** (sub-project A) — all tests are standard `#[test]`s in `#[cfg(test)]` modules.
 
 **The AppHandle problem — handled per the repo's real constraints, not invented:**
+
 - The repo's existing Rust tests test **only AppHandle-free** functions; there was no mock-app pattern. I verified `tauri::test::mock_app` exists in the pinned `tauri-2.11.2` but is behind the crate's `test` feature (not currently enabled) → the plan adds it as a **dev-dependency** (Task 1), which is the correct, release-safe idiom.
 - I verified (by reading `dirs-6.0.0/src/lin.rs` + tauri's `path/desktop.rs`) that `app_data_dir()`/`app_cache_dir()` resolve from `$XDG_DATA_HOME`/`$XDG_CACHE_HOME` on Linux and that a mock app's identifier is empty — so redirecting those env vars cleanly sandboxes all store IO. This is a verified mechanism, not a guess.
 - I caught that env vars are process-global + cargo is multithreaded → the harness serializes with a `static Mutex` (no `serial_test` dep, since the repo has none).
 
 **Real bugs / risks surfaced while reading (flagged, not hidden):**
+
 1. **`crate::sync::nudge` uses `app.state::<SyncState>()` (not `try_state`) and panics if unmanaged** (`sync.rs:390`). `places::persist`, adblock allowlist, and `data.import` all reach it. The harness manages `SyncState::default()` (enabled=false → `nudge` returns before spawning). This is a latent fragility (a non-boot caller of `nudge` would panic) but in-product `nudge` is only ever reached after `setup()` manages `SyncState`, so it's not a product bug — only a test constraint, handled.
 2. **Linux test host runs `install_adblock` (detached WebKit thread) on `setEnabled`/`subs`/`import`.** It no-ops without content webviews and is detached, so it can't fail the synchronous test — but `adblock_webkit::remove_all` was not fully read; if it `.unwrap()`s on a missing webview it's a real robustness bug. **Task 11 is the test-first escape valve** for exactly this, and Task 7/8/10's "run, expecting failure first" steps will surface it if real.
 3. **Process-global counters** (`SESSION_BLOCKED`, `PAGE_BLOCKED`) + **`sync_identity::NODE_ID` `OnceLock`** persist across tests in one binary. The plan asserts the counters by **delta** (not absolute) and serializes all AppHandle tests, so a leaked global can't cause a false failure. `NODE_ID` initializing once under the first test's `$XDG_DATA_HOME` then being reused is harmless (it's just a node id string).

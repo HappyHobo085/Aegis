@@ -156,31 +156,19 @@ export function SavedPanel({
             <button type="submit" className="saved-panel__add-save">
               Save
             </button>
-            <button
-              type="button"
-              className="saved-panel__add-cancel"
-              onClick={cancelAdd}
-            >
+            <button type="button" className="saved-panel__add-cancel" onClick={cancelAdd}>
               Cancel
             </button>
           </div>
         </form>
       ) : (
-        <button
-          type="button"
-          className="saved-panel__add-toggle"
-          onClick={openAdd}
-        >
+        <button type="button" className="saved-panel__add-toggle" onClick={openAdd}>
           <Plus size={14} aria-hidden="true" />
           <span>Add a page</span>
         </button>
       )}
       {items.length > 0 && (
-        <form
-          className="saved-panel__search"
-          role="search"
-          onSubmit={(e) => e.preventDefault()}
-        >
+        <form className="saved-panel__search" role="search" onSubmit={(e) => e.preventDefault()}>
           <label htmlFor={searchId} className="saved-panel__search-label">
             Search saved
           </label>
@@ -205,7 +193,9 @@ export function SavedPanel({
         <div className="saved-panel__empty">
           <Bookmark size={32} aria-hidden="true" />
           <span>Nothing saved yet.</span>
-          <span className="saved-panel__empty-hint">Save the current page with the bookmark button.</span>
+          <span className="saved-panel__empty-hint">
+            Save the current page with the bookmark button.
+          </span>
         </div>
       ) : filtered.length === 0 ? (
         <div className="saved-panel__nomatch">No matches.</div>
@@ -243,11 +233,7 @@ export function SavedPanel({
                       >
                         Save
                       </button>
-                      <button
-                        type="button"
-                        className="saved-panel__cancel"
-                        onClick={cancelEdit}
-                      >
+                      <button type="button" className="saved-panel__cancel" onClick={cancelEdit}>
                         Cancel
                       </button>
                     </div>
@@ -300,11 +286,7 @@ export function SavedPanel({
         <details className="saved-panel__manage">
           <summary className="saved-panel__manage-summary">Manage tags</summary>
           <div className="saved-panel__manage-body" role="group" aria-label="Manage tags">
-            <div
-              className="saved-panel__manage-tags"
-              role="group"
-              aria-label="Tag to manage"
-            >
+            <div className="saved-panel__manage-tags" role="group" aria-label="Tag to manage">
               {tagUnion.map((t) => (
                 <button
                   key={t}

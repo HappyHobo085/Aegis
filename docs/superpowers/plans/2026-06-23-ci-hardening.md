@@ -10,12 +10,12 @@
 
 ## Global Constraints
 
-Per the repo's enforced conventions (CLAUDE.md + spec §6). This sub-project is **CI/tooling only** — it adds *no* IPC channels and *no* user-facing runtime behavior — so several cross-cutting rules are satisfied vacuously; they are restated so the implementer confirms, not assumes:
+Per the repo's enforced conventions (CLAUDE.md + spec §6). This sub-project is **CI/tooling only** — it adds _no_ IPC channels and _no_ user-facing runtime behavior — so several cross-cutting rules are satisfied vacuously; they are restated so the implementer confirms, not assumes:
 
 1. **IPC in three places:** a new channel goes in `shared/types.ts` (`IPC` const), the Rust `ipc()` dispatcher, and `src/lib/ipcClient.ts`. **This plan adds none** — there is nothing to wire. (Confirm: no edit in this plan touches `shared/types.ts`, `src-tauri/src/lib.rs`'s dispatcher, or `src/lib/ipcClient.ts`.)
 2. **Autopilot coverage in the same commit (drift-guarded):** new channel → `catalog.ts`; new UI screen/overlay → `screens.ts` (+ `reach.ts`); new interactive control → an interaction test. **This plan adds none of those** — no new channel, screen, overlay, or control. The autopilot catalogs are **not touched**; the drift-guard tests (`src/autopilot/coverage.test.ts`, `interactions.coverage.test.ts`) are expected to pass **unchanged**.
-3. **Gate per sub-project:** `npm test` green; for runtime-touching changes, the live autopilot `RESULT: … 0 failed` and `ad-block blocking (trace): PASS` on Linux. **This sub-project changes no runtime behavior** (it only adds CI config + lint/format config + a build tsconfig + a normalize/triage pass that must be byte-equivalent in *behavior*). Therefore the binding gate here is: **`npm test` green AND every new CI gate green locally** (Task 8). The live autopilot is **not required** by §6 for a no-runtime-change sub-project; run it once at the end only if the Rust baseline-format normalize (Task 4) touched any file under `src-tauri/src/` that the autopilot exercises, to confirm formatting alone changed nothing — see Task 8 Step 4.
-4. **Parity before "done" (§4):** CI gates are platform-agnostic (they run on the Ubuntu CI runner and gate code for all targets equally). There is no per-OS parity gap to close here — the gate guards Linux/Windows/macOS/Android code identically because it type-checks/lints/tests the shared source. (The native *build* matrix in `tauri-build-check.yml` already covers Win/macOS/Android compilation; this plan does not regress it.)
+3. **Gate per sub-project:** `npm test` green; for runtime-touching changes, the live autopilot `RESULT: … 0 failed` and `ad-block blocking (trace): PASS` on Linux. **This sub-project changes no runtime behavior** (it only adds CI config + lint/format config + a build tsconfig + a normalize/triage pass that must be byte-equivalent in _behavior_). Therefore the binding gate here is: **`npm test` green AND every new CI gate green locally** (Task 8). The live autopilot is **not required** by §6 for a no-runtime-change sub-project; run it once at the end only if the Rust baseline-format normalize (Task 4) touched any file under `src-tauri/src/` that the autopilot exercises, to confirm formatting alone changed nothing — see Task 8 Step 4.
+4. **Parity before "done" (§4):** CI gates are platform-agnostic (they run on the Ubuntu CI runner and gate code for all targets equally). There is no per-OS parity gap to close here — the gate guards Linux/Windows/macOS/Android code identically because it type-checks/lints/tests the shared source. (The native _build_ matrix in `tauri-build-check.yml` already covers Win/macOS/Android compilation; this plan does not regress it.)
 5. **Living docs, enforced:** update `.github/CLAUDE.md` (the CI workflow descriptions) and `scripts/CLAUDE.md` if the audit gate gains a sibling, in the same commit as the workflow change (Task 7).
 6. **No source-logic change.** The only edits to files under `src/` or `src-tauri/src/` permitted by this plan are (a) the single pre-existing `JSX.Element` → `React.JSX.Element` one-token fix in `src/hooks/useChromeSurfaces.tsx` (Task 2, required to make the scoped `tsc` gate green) and (b) a one-time, formatting-only `cargo fmt` normalization (Task 4) and clippy-triage `#[allow]`/mechanical fixes (Task 5) that must not alter behavior. No feature logic, no IPC, no events.
 
@@ -23,19 +23,19 @@ Per the repo's enforced conventions (CLAUDE.md + spec §6). This sub-project is 
 
 ## File Structure
 
-| File | Responsibility | Action |
-|---|---|---|
-| `tsconfig.build.json` | A tsconfig that `extends` the base but **excludes** `**/*.test.ts(x)` + `src/testFixtures` so `tsc --noEmit` type-checks production source only (the test-file noise is the known issue per spec §3.A). | Create |
-| `src/hooks/useChromeSurfaces.tsx` | One-token fix: `JSX.Element` → `React.JSX.Element` (the lone non-test production type error; see Task 2). | Modify |
-| `eslint.config.mjs` | ESLint 10 **flat config** (ESM `.mjs` because `package.json` has no `"type":"module"`). Idiomatic React 19 + TS + Vite ruleset, baseline-clean (see Task 3 for the rule downgrades). | Create |
-| `.prettierrc.json` | Prettier 3 formatting options (matches the existing code's 2-space / single-quote / semicolon / 100-col style). | Create |
-| `.prettierignore` | Excludes generated/vendored dirs (`dist`, `target`, `node_modules`, `src-tauri/gen`, the autopilot fixture HTML). | Create |
-| `.eslintignore` is **not used** | ESLint 9+/flat config ignores via the `ignores` key inside `eslint.config.mjs`; a separate `.eslintignore` is deprecated. | (n/a — handled in config) |
-| `rustfmt.toml` | Pin rustfmt to defaults explicitly (edition 2021) so `cargo fmt --check` is deterministic across CI's toolchain and a dev box. | Create |
-| `src-tauri/.cargo/audit.toml` | (Optional gate) `cargo-audit` config: ignore-list for any advisory we consciously accept, mirroring the npm-audit allowlist pattern. | Create |
-| `package.json` | Add devDependencies (eslint stack + prettier) and `scripts`: `lint`, `lint:fix`, `format`, `format:check`, `typecheck`. | Modify |
-| `.github/workflows/ci.yml` | Split `verify` into a `web` job (typecheck + lint + format:check + test + npm-audit) and a `rust` job (fmt --check + clippy + test + optional audit). | Modify |
-| `.github/CLAUDE.md` | Update the `ci.yml` description to document the new gates/jobs. | Modify |
+| File                              | Responsibility                                                                                                                                                                                          | Action                    |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| `tsconfig.build.json`             | A tsconfig that `extends` the base but **excludes** `**/*.test.ts(x)` + `src/testFixtures` so `tsc --noEmit` type-checks production source only (the test-file noise is the known issue per spec §3.A). | Create                    |
+| `src/hooks/useChromeSurfaces.tsx` | One-token fix: `JSX.Element` → `React.JSX.Element` (the lone non-test production type error; see Task 2).                                                                                               | Modify                    |
+| `eslint.config.mjs`               | ESLint 10 **flat config** (ESM `.mjs` because `package.json` has no `"type":"module"`). Idiomatic React 19 + TS + Vite ruleset, baseline-clean (see Task 3 for the rule downgrades).                    | Create                    |
+| `.prettierrc.json`                | Prettier 3 formatting options (matches the existing code's 2-space / single-quote / semicolon / 100-col style).                                                                                         | Create                    |
+| `.prettierignore`                 | Excludes generated/vendored dirs (`dist`, `target`, `node_modules`, `src-tauri/gen`, the autopilot fixture HTML).                                                                                       | Create                    |
+| `.eslintignore` is **not used**   | ESLint 9+/flat config ignores via the `ignores` key inside `eslint.config.mjs`; a separate `.eslintignore` is deprecated.                                                                               | (n/a — handled in config) |
+| `rustfmt.toml`                    | Pin rustfmt to defaults explicitly (edition 2021) so `cargo fmt --check` is deterministic across CI's toolchain and a dev box.                                                                          | Create                    |
+| `src-tauri/.cargo/audit.toml`     | (Optional gate) `cargo-audit` config: ignore-list for any advisory we consciously accept, mirroring the npm-audit allowlist pattern.                                                                    | Create                    |
+| `package.json`                    | Add devDependencies (eslint stack + prettier) and `scripts`: `lint`, `lint:fix`, `format`, `format:check`, `typecheck`.                                                                                 | Modify                    |
+| `.github/workflows/ci.yml`        | Split `verify` into a `web` job (typecheck + lint + format:check + test + npm-audit) and a `rust` job (fmt --check + clippy + test + optional audit).                                                   | Modify                    |
+| `.github/CLAUDE.md`               | Update the `ci.yml` description to document the new gates/jobs.                                                                                                                                         | Modify                    |
 
 **Final CI gate set** (all on `ci.yml`, Ubuntu): `npm run typecheck` (scoped tsc), `npm run lint` (ESLint), `npm run format:check` (Prettier), `npm test` (vitest, unchanged), `node scripts/check-npm-audit.mjs` (unchanged), `cargo fmt --check`, `cargo clippy`, `cargo test`, and (optional) `cargo audit`.
 
@@ -44,13 +44,15 @@ Per the repo's enforced conventions (CLAUDE.md + spec §6). This sub-project is 
 ### Task 1: Scoped `tsc --noEmit` — create the build tsconfig + npm script
 
 **Files:**
+
 - Create: `tsconfig.build.json`
 - Modify: `package.json` (add `typecheck` script)
 
 **Interfaces:**
+
 - Produces: `npm run typecheck` → `tsc --noEmit -p tsconfig.build.json`, which type-checks `src` + `shared` **excluding** test files and `src/testFixtures`.
 
-**Why scoped:** Running plain `tsc --noEmit` against the base `tsconfig.json` reports **29 errors across 22 files** today. Verified breakdown: every one is in a `*.test.ts(x)` file, `src/testFixtures/aegisMock.ts`, or the single production file `src/hooks/useChromeSurfaces.tsx` (fixed in Task 2). The test/fixture errors are the "known test-file noise" the spec calls out (stale `Settings` partials in test props, `as Record<string,unknown>` casts of `window`, vitest `Mock` typing) — they are test-only and do not affect shipped code. The gate therefore checks **production source** via a `tsconfig.build.json` that excludes them. (Test files are still type-aware-checked at runtime by vitest + the `dom`/`node` projects via the base config during `npm test`; the gate just doesn't *fail the build* on their type noise.)
+**Why scoped:** Running plain `tsc --noEmit` against the base `tsconfig.json` reports **29 errors across 22 files** today. Verified breakdown: every one is in a `*.test.ts(x)` file, `src/testFixtures/aegisMock.ts`, or the single production file `src/hooks/useChromeSurfaces.tsx` (fixed in Task 2). The test/fixture errors are the "known test-file noise" the spec calls out (stale `Settings` partials in test props, `as Record<string,unknown>` casts of `window`, vitest `Mock` typing) — they are test-only and do not affect shipped code. The gate therefore checks **production source** via a `tsconfig.build.json` that excludes them. (Test files are still type-aware-checked at runtime by vitest + the `dom`/`node` projects via the base config during `npm test`; the gate just doesn't _fail the build_ on their type noise.)
 
 - [ ] **Step 1: Create the build tsconfig**
 
@@ -70,9 +72,11 @@ Create `tsconfig.build.json` at the repo root:
 
 Run: `npx tsc --noEmit -p tsconfig.build.json`
 Expected (BEFORE Task 2): **exactly one** error —
+
 ```
 src/hooks/useChromeSurfaces.tsx(19,79): error TS2503: Cannot find namespace 'JSX'.
 ```
+
 This is the lone production-source error; everything else is excluded. Task 2 fixes it. (This step proves the scope is correct: no test/fixture error leaks through.)
 
 - [ ] **Step 3: Add the `typecheck` npm script**
@@ -96,6 +100,7 @@ Expected: still the single `useChromeSurfaces.tsx` error. **Leave it failing for
 ### Task 2: Fix the lone production type error (`JSX.Element` → `React.JSX.Element`)
 
 **Files:**
+
 - Modify: `src/hooks/useChromeSurfaces.tsx` (line 19)
 
 **Interfaces:** none (a one-token type-annotation fix; the runtime value is unchanged).
@@ -163,15 +168,17 @@ git commit -m "ci: scoped tsc --noEmit gate (tsconfig.build.json) + fix lone JSX
 ### Task 3: ESLint flat config (baseline-clean) + Prettier
 
 **Files:**
+
 - Create: `eslint.config.mjs`
 - Create: `.prettierrc.json`
 - Create: `.prettierignore`
 - Modify: `package.json` (devDependencies + `lint`/`lint:fix`/`format`/`format:check` scripts)
 
 **Interfaces:**
+
 - Produces: `npm run lint` (ESLint over `src` + `shared` + `scripts`), `npm run format:check` (Prettier `--check`), `npm run format` (Prettier `--write`), `npm run lint:fix` (ESLint `--fix`).
 
-**Baseline strategy (decision):** ESLint has never run on this tree (187 `.ts`/`.tsx` source files + the `scripts/*.mjs`). To guarantee the gate is **green on first run** without a giant code-churn pass, the config uses the **non-type-aware** recommended sets (`@eslint/js` recommended + `typescript-eslint` *recommended*, NOT `recommendedTypeChecked` — the latter needs full type info and would flood the existing code with `no-unsafe-*` findings). A small set of rules that the existing code legitimately trips (e.g. `@typescript-eslint/no-explicit-any` in IPC-boundary casts, `no-empty` in catch fall-throughs) are downgraded to `'warn'` or `'off'` so they don't *fail* CI, while still surfacing. **`eslint-config-prettier` is applied last** to turn off every formatting rule (Prettier owns formatting; ESLint owns correctness). After the config is in place, Step 4 runs ESLint against the real tree and the implementer triages any remaining **errors** to zero (downgrade or fix), so the committed gate starts green — this is verified, not assumed.
+**Baseline strategy (decision):** ESLint has never run on this tree (187 `.ts`/`.tsx` source files + the `scripts/*.mjs`). To guarantee the gate is **green on first run** without a giant code-churn pass, the config uses the **non-type-aware** recommended sets (`@eslint/js` recommended + `typescript-eslint` _recommended_, NOT `recommendedTypeChecked` — the latter needs full type info and would flood the existing code with `no-unsafe-*` findings). A small set of rules that the existing code legitimately trips (e.g. `@typescript-eslint/no-explicit-any` in IPC-boundary casts, `no-empty` in catch fall-throughs) are downgraded to `'warn'` or `'off'` so they don't _fail_ CI, while still surfacing. **`eslint-config-prettier` is applied last** to turn off every formatting rule (Prettier owns formatting; ESLint owns correctness). After the config is in place, Step 4 runs ESLint against the real tree and the implementer triages any remaining **errors** to zero (downgrade or fix), so the committed gate starts green — this is verified, not assumed.
 
 - [ ] **Step 1: Add the devDependencies**
 
@@ -251,7 +258,10 @@ export default tseslint.config(
       // The codebase has intentional empty catch/else fall-throughs.
       'no-empty': ['warn', { allowEmptyCatch: true }],
       // Allow underscore-prefixed unused args (event handlers, _label in drift tests).
-      '@typescript-eslint/no-unused-vars': ['warn', { argsIgnorePattern: '^_', varsIgnorePattern: '^_' }],
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_' },
+      ],
     },
   },
 
@@ -305,10 +315,11 @@ package-lock.json
 - [ ] **Step 4: Run ESLint against the real tree and DRIVE ERRORS TO ZERO**
 
 Run: `npx eslint .`
-Expected on first run: some **warnings** (acceptable) and possibly a few **errors**. The gate (`npm run lint`, Step 6) fails on errors, not warnings — so triage every *error*:
+Expected on first run: some **warnings** (acceptable) and possibly a few **errors**. The gate (`npm run lint`, Step 6) fails on errors, not warnings — so triage every _error_:
+
 - If an error is a genuine bug, fix it.
 - If it's a false positive for this codebase's style, downgrade that rule to `'warn'` in `eslint.config.mjs` (add it to the appropriate `rules` block with a one-line comment).
-Re-run `npx eslint .` until it reports **0 errors** (warnings allowed). Record the warning count in the commit message so drift is visible.
+  Re-run `npx eslint .` until it reports **0 errors** (warnings allowed). Record the warning count in the commit message so drift is visible.
 
 > Do NOT add `--max-warnings 0` to the gate yet — warnings are the migration backlog; failing on them would block this enabler. A follow-up (sub-project B docs note) can tighten to `--max-warnings 0` once the backlog is burned down.
 
@@ -316,6 +327,7 @@ Re-run `npx eslint .` until it reports **0 errors** (warnings allowed). Record t
 
 Run: `npx prettier --check .`
 Expected: it will list files that don't match (the repo has never been Prettier-formatted). Two acceptable resolutions:
+
 - (Chosen) Run `npx prettier --write .` once to normalize all non-ignored files to the configured style, making `--check` green. This is a **formatting-only** change (no logic). Verify nothing broke: `npm test` (Expected: PASS) and `npm run typecheck` (Expected: PASS).
 - Re-run `npx prettier --check .` → Expected: "All matched files use Prettier code style!" (exit 0).
 
@@ -354,10 +366,12 @@ git commit -m "style: prettier --write the tree once so format:check passes (no 
 ### Task 4: `cargo fmt --check` gate (one-time normalize first)
 
 **Files:**
+
 - Create: `rustfmt.toml`
 - (Possibly) Modify: many files under `src-tauri/src/**` — **formatting only**, from a single `cargo fmt` run.
 
 **Interfaces:**
+
 - Produces: a deterministic `cargo fmt --check --manifest-path src-tauri/Cargo.toml` gate.
 
 **Baseline strategy:** rustfmt has likely never been enforced, so `cargo fmt --check` may report diffs on existing code. The standard way to introduce the gate without it failing on day one is a **one-time `cargo fmt` normalization commit**: run the formatter once (it only reflows whitespace/wrapping — no semantics), commit that, and from then on the `--check` gate stays green. `rustfmt.toml` pins the edition so CI and a dev box format identically.
@@ -376,7 +390,7 @@ edition = "2021"
 
 Run: `cargo fmt --check --manifest-path src-tauri/Cargo.toml`
 
-> If the active toolchain is missing the component, install it: `rustup component add rustfmt`. (Verified at plan time: a `rustfmt-x86_64-unknown-linux-gnu` component is installed for *a* toolchain but not necessarily the active `stable`; CI's `dtolnay/rust-toolchain@stable` includes `rustfmt` by default.)
+> If the active toolchain is missing the component, install it: `rustup component add rustfmt`. (Verified at plan time: a `rustfmt-x86_64-unknown-linux-gnu` component is installed for _a_ toolchain but not necessarily the active `stable`; CI's `dtolnay/rust-toolchain@stable` includes `rustfmt` by default.)
 
 Expected: either exit 0 (already conformant — then skip Step 3) **or** a non-zero exit with a diff (the existing code needs formatting — proceed to Step 3). **Do not assume which** — read the real output.
 
@@ -407,9 +421,11 @@ git commit -m "ci: cargo fmt --check gate + one-time rustfmt normalization (form
 ### Task 5: `cargo clippy` gate (triage-then-strict)
 
 **Files:**
+
 - (Possibly) Modify: files under `src-tauri/src/**` — mechanical clippy fixes and/or `#[allow]` annotations as needed to reach a clean run.
 
 **Interfaces:**
+
 - Produces: a `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` gate that passes on the current tree.
 
 **Baseline strategy (decision):** The spec wants `cargo clippy -D warnings`. Existing code has never been clippy-gated, so a cold `-D warnings` run will almost certainly fail on lints like `clippy::needless_return`, `clippy::redundant_clone`, etc. The plan does **not** guess the findings — it runs clippy, then resolves each finding by (a) applying the mechanical fix (`cargo clippy --fix` for the autofixable ones) or (b) adding a scoped `#[allow(clippy::<lint>)]` with a one-line justification where the lint is a false positive for this code (e.g. the `!Send` engine thread patterns, the unsafe COM blocks). Only after the local run is clean is the `-D warnings` flag locked into CI — so the committed gate is green by construction, verified not assumed.
@@ -430,6 +446,7 @@ This applies clippy's machine-applicable suggestions only (idiomatic rewrites �
 - [ ] **Step 3: Resolve the rest by fix or scoped allow**
 
 For each remaining finding:
+
 - If it's a clear improvement and safe, hand-fix it.
 - If it's a false positive for an intentional pattern (the dedicated `!Send` adblock-engine thread, the `unsafe` WebView2 COM in `adblock_win.rs`, the JNI up-call patterns), add a **scoped** allow at the narrowest site, e.g.:
 
@@ -461,9 +478,11 @@ git commit -m "ci: make src-tauri clippy-clean (autofixes + scoped #[allow]s) fo
 ### Task 6: Wire the gates into `ci.yml` (web + rust jobs)
 
 **Files:**
+
 - Modify: `.github/workflows/ci.yml`
 
 **Interfaces:**
+
 - Consumes: the npm scripts from Tasks 1+3 (`typecheck`, `lint`, `format:check`) and the cargo gates from Tasks 4+5; the unchanged `npm test` + `node scripts/check-npm-audit.mjs`.
 - Produces: a `web` job and a `rust` job, both gating every PR + the weekly schedule + manual dispatch (the existing triggers — unchanged).
 
@@ -538,8 +557,9 @@ jobs:
 ```
 
 > Notes grounding the YAML in this repo's reality:
+>
 > - The `web` job is the old `verify` job plus the three new Node steps; `npm test` + the npm-audit gate are byte-identical to today's.
-> - The `rust` job installs the **same** Linux webkit deps as `tauri-build-check.yml` (without the GStreamer codec packages — `cargo test`/`clippy` only need the crate to *compile/link*, not to bundle media). `cargo clippy --all-targets` compiles the test targets too, so it also implicitly type-checks the Rust test code.
+> - The `rust` job installs the **same** Linux webkit deps as `tauri-build-check.yml` (without the GStreamer codec packages — `cargo test`/`clippy` only need the crate to _compile/link_, not to bundle media). `cargo clippy --all-targets` compiles the test targets too, so it also implicitly type-checks the Rust test code.
 > - `cargo test` for `src-tauri` builds the desktop `cfg(target_os = "linux")` paths only; the Android/Windows/macOS `#[cfg]` blocks are not compiled here (they're covered by `tauri-build-check.yml`'s per-OS matrix). The 119 tests live in the platform-agnostic + Linux modules, so this gates them.
 > - `if: ${{ !cancelled() }}` on later steps mirrors the existing audit step so one failure still reports the others (don't short-circuit on the first red gate).
 > - The `rust` job has **no** `timeout-minutes: 15` — a cold cargo compile of `src-tauri` exceeds 15 min; `30` matches the heavier build-check job's headroom while the cargo cache makes warm runs fast.
@@ -549,12 +569,12 @@ jobs:
 The spec marks `cargo-audit` optional "for the crypto/keyring surface." The crate pulls `chacha20poly1305`, `argon2`, `ed25519-dalek`, `keyring`, `rustls`, `reqwest` — a real crypto/network surface npm-audit can't see. **Include it**, but make it **non-blocking initially** (advisory) so a transitive Rust advisory we can't immediately fix doesn't wedge the always-on gate — matching how npm-audit started. Add, at the end of the `rust` job's `steps:`:
 
 ```yaml
-      - name: cargo audit (advisory — crypto/keyring/TLS surface)
-        if: ${{ !cancelled() }}
-        continue-on-error: true
-        run: |
-          cargo install cargo-audit --locked
-          cargo audit --file src-tauri/Cargo.lock
+- name: cargo audit (advisory — crypto/keyring/TLS surface)
+  if: ${{ !cancelled() }}
+  continue-on-error: true
+  run: |
+    cargo install cargo-audit --locked
+    cargo audit --file src-tauri/Cargo.lock
 ```
 
 > `continue-on-error: true` makes it report findings without failing the build (advisory). To promote it to a hard gate later, drop that line and add a `src-tauri/.cargo/audit.toml` ignore-list for any consciously-accepted advisory (created in Task 7 Step 2, mirroring `.audit-allowlist.json`'s justify-in-commit pattern). `--file src-tauri/Cargo.lock` points it at the app's lockfile (the repo has no root Cargo workspace; `sync-server/` has its own lockfile and is out of scope).
@@ -567,6 +587,7 @@ Expected: `YAML OK` (well-formed). (If `actionlint` is available, also run `acti
 - [ ] **Step 4: Locally reproduce each gate green (the spec's acceptance criterion)**
 
 Run each, expecting exit 0:
+
 ```bash
 npm run typecheck
 npm run lint
@@ -577,6 +598,7 @@ cargo fmt --check --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
 Expected: all green. This is the "CI runs all gates green on a clean checkout" acceptance, reproduced locally.
 
 - [ ] **Step 5: Commit**
@@ -591,6 +613,7 @@ git commit -m "ci: gate PRs on tsc/eslint/prettier + cargo fmt/clippy/test (+ ad
 ### Task 7: Prove the gates actually catch regressions + update living docs
 
 **Files:**
+
 - Create: `src-tauri/.cargo/audit.toml` (the cargo-audit ignore-list scaffold, for when the gate is promoted to blocking)
 - Modify: `.github/CLAUDE.md` (document the new jobs/gates)
 
@@ -664,7 +687,7 @@ In `.github/CLAUDE.md`, replace the `ci.yml` bullet (the one starting **"`ci.yml
     `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` (the 119
     `src-tauri` unit tests, Linux-cfg paths) for `src-tauri/Cargo.toml`, plus an
     advisory (non-blocking) `cargo audit` over the crypto/keyring/TLS deps.
-  The standalone `sync-server/` crate is NOT gated here (separate non-workspace crate).
+    The standalone `sync-server/` crate is NOT gated here (separate non-workspace crate).
 ```
 
 - [ ] **Step 7: Commit**
@@ -687,6 +710,7 @@ git commit -m "ci: cargo-audit ignore scaffold + document the new CI gates in .g
 ```bash
 npm run typecheck && npm run lint && npm run format:check && npm test && node scripts/check-npm-audit.mjs
 ```
+
 Expected: every command exit 0.
 
 - [ ] **Step 2: Run the entire rust gate set clean**
@@ -696,6 +720,7 @@ cargo fmt --check --manifest-path src-tauri/Cargo.toml \
   && cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings \
   && cargo test --manifest-path src-tauri/Cargo.toml
 ```
+
 Expected: every command exit 0 (119 Rust tests pass).
 
 - [ ] **Step 3: Confirm the autopilot drift guards still pass (no catalog/screen change was made)**
@@ -722,12 +747,13 @@ Expected: clean working tree (all gate-verification breaks from Task 7 were reve
 ## Self-Review
 
 **1. Spec coverage (sub-project A acceptance criteria + §6).**
-- *"Add gates to `ci.yml`: cargo test, tsc --noEmit (scoped), cargo clippy -D warnings + cargo fmt --check, ESLint + Prettier, optionally cargo-audit"* → all present: `cargo test` (Task 6 rust job + Tasks 4/5 prove it green), scoped `tsc` (Tasks 1-2, scope **verified** to isolate exactly one fixable error), clippy `-D warnings` (Task 5 triage-then-strict + Task 6), `cargo fmt --check` (Task 4 normalize-first), ESLint flat config + Prettier (Task 3 baseline-clean), `cargo audit` included as advisory (Task 6 Step 2).
-- *"the ~119 Rust tests run locally-only today — verify where they live"* → **verified**: `grep` found 119 `#[test]` across 20 modules in `src-tauri/src/` (no root workspace; `sync-server/` is a separate crate, correctly excluded).
-- *"scope it to avoid the known pre-existing test-file type noise — investigate tsconfig and decide a non-failing scope"* → **investigated**: full `tsc` = 29 errors / 22 files; all are test/fixture files plus one production wart (`useChromeSurfaces.tsx`). Decision: `tsconfig.build.json` excludes `**/*.test.ts(x)` + `src/testFixtures`; the single production wart is fixed (Task 2, a no-behavior one-token change). Probe-confirmed this leaves the scoped gate at **zero** errors.
-- *"decide how to keep clippy/eslint from failing on the existing code (baseline-clean ruleset or -W then tighten)"* → explicit per gate: ESLint = non-type-aware recommended + downgrade-to-warn for the rules existing code trips + triage-to-zero-errors (Task 3); clippy = `--fix` autofixes + scoped `#[allow]` triage **before** flipping `-D warnings` (Task 5); fmt = one-time normalize commit (Task 4). None assumes the existing code already conforms.
-- *§6 cross-cutting* → Global Constraints section copies all four rules and resolves each: no IPC (1), no autopilot catalog change (2), gate = `npm test` + all new gates green, live autopilot only conditionally (3), CI is platform-agnostic so no parity gap (4); living docs updated (Task 7 Step 6).
-- *No existing eslint/prettier config* → **confirmed** by directory scan (no `eslint.config.*`, `.eslintrc*`, `.prettierrc*`, `rustfmt.toml`, `clippy.toml`); the plan creates them.
+
+- _"Add gates to `ci.yml`: cargo test, tsc --noEmit (scoped), cargo clippy -D warnings + cargo fmt --check, ESLint + Prettier, optionally cargo-audit"_ → all present: `cargo test` (Task 6 rust job + Tasks 4/5 prove it green), scoped `tsc` (Tasks 1-2, scope **verified** to isolate exactly one fixable error), clippy `-D warnings` (Task 5 triage-then-strict + Task 6), `cargo fmt --check` (Task 4 normalize-first), ESLint flat config + Prettier (Task 3 baseline-clean), `cargo audit` included as advisory (Task 6 Step 2).
+- _"the ~119 Rust tests run locally-only today — verify where they live"_ → **verified**: `grep` found 119 `#[test]` across 20 modules in `src-tauri/src/` (no root workspace; `sync-server/` is a separate crate, correctly excluded).
+- _"scope it to avoid the known pre-existing test-file type noise — investigate tsconfig and decide a non-failing scope"_ → **investigated**: full `tsc` = 29 errors / 22 files; all are test/fixture files plus one production wart (`useChromeSurfaces.tsx`). Decision: `tsconfig.build.json` excludes `**/*.test.ts(x)` + `src/testFixtures`; the single production wart is fixed (Task 2, a no-behavior one-token change). Probe-confirmed this leaves the scoped gate at **zero** errors.
+- _"decide how to keep clippy/eslint from failing on the existing code (baseline-clean ruleset or -W then tighten)"_ → explicit per gate: ESLint = non-type-aware recommended + downgrade-to-warn for the rules existing code trips + triage-to-zero-errors (Task 3); clippy = `--fix` autofixes + scoped `#[allow]` triage **before** flipping `-D warnings` (Task 5); fmt = one-time normalize commit (Task 4). None assumes the existing code already conforms.
+- _§6 cross-cutting_ → Global Constraints section copies all four rules and resolves each: no IPC (1), no autopilot catalog change (2), gate = `npm test` + all new gates green, live autopilot only conditionally (3), CI is platform-agnostic so no parity gap (4); living docs updated (Task 7 Step 6).
+- _No existing eslint/prettier config_ → **confirmed** by directory scan (no `eslint.config.*`, `.eslintrc*`, `.prettierrc*`, `rustfmt.toml`, `clippy.toml`); the plan creates them.
 
 **2. Placeholder scan.** No "TBD"/"add appropriate config"/"handle edge cases". Every config file has its full literal contents; every npm/cargo command is real and exact; version numbers are the actual latest verified on npm at plan time; the YAML is complete and was structured against the real current `ci.yml`. The two places the plan says "possibly modify many files" (Tasks 4/5) are honest — I could not run rustfmt/clippy on the active toolchain to enumerate the diff, so the plan instructs the implementer to **run the tool and read the real output** before/after, with a concrete fix strategy either way (this is "verify, don't guess," not a deferral). The "deliberately break it" steps (Task 7) use concrete, named breaks per gate.
 

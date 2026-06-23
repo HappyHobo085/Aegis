@@ -10,7 +10,12 @@ describe('update IPC contract', () => {
   });
 
   it('UpdateState carries status/version/percent/error', () => {
-    const sample: UpdateState = { status: 'downloaded', version: '0.2.0', percent: 100, error: null };
+    const sample: UpdateState = {
+      status: 'downloaded',
+      version: '0.2.0',
+      percent: 100,
+      error: null,
+    };
     expect(sample.status).toBe('downloaded');
     expect(sample.percent).toBe(100);
   });

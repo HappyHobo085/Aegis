@@ -68,11 +68,21 @@ export function aegisMockModule() {
         set: vi.fn(async () => ''),
       },
       adblock: {
-        getState: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-        setEnabled: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-        toggleAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-        removeAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
-        clearAllowlist: vi.fn().mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+        getState: vi
+          .fn()
+          .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+        setEnabled: vi
+          .fn()
+          .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+        toggleAllowlist: vi
+          .fn()
+          .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+        removeAllowlist: vi
+          .fn()
+          .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+        clearAllowlist: vi
+          .fn()
+          .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
         onBlockedCount: vi.fn().mockReturnValue(() => {}),
       },
       redirect: {
@@ -81,13 +91,21 @@ export function aegisMockModule() {
       lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
       sync: (() => {
         const baseSyncState = {
-          enabled: false, status: 'disabled' as const, serverUrl: '', lastSyncMs: 0,
-          lastError: '', deviceId: '', accountId: '', vaultBacking: 'none' as const,
+          enabled: false,
+          status: 'disabled' as const,
+          serverUrl: '',
+          lastSyncMs: 0,
+          lastError: '',
+          deviceId: '',
+          accountId: '',
+          vaultBacking: 'none' as const,
         };
         return {
           getState: vi.fn().mockResolvedValue(baseSyncState),
           enableNew: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
-          enableFromPhrase: vi.fn().mockResolvedValue({ ...baseSyncState, enabled: true, status: 'idle' as const }),
+          enableFromPhrase: vi
+            .fn()
+            .mockResolvedValue({ ...baseSyncState, enabled: true, status: 'idle' as const }),
           disable: vi.fn().mockResolvedValue(baseSyncState),
           syncNow: vi.fn().mockResolvedValue({ ...baseSyncState, lastSyncMs: Date.now() }),
           testConnection: vi.fn().mockResolvedValue({ ok: true, latencyMs: 5 }),
@@ -146,7 +164,9 @@ export function aegisMockModule() {
         start: vi.fn().mockResolvedValue({ ok: false }),
       },
       update: {
-        getState: vi.fn().mockResolvedValue({ status: 'idle', version: null, percent: 0, error: null }),
+        getState: vi
+          .fn()
+          .mockResolvedValue({ status: 'idle', version: null, percent: 0, error: null }),
         checkNow: vi.fn().mockResolvedValue(undefined),
         restartToInstall: vi.fn().mockResolvedValue(undefined),
         onState: vi.fn().mockReturnValue(() => {}),
@@ -159,14 +179,38 @@ export function aegisMockModule() {
         onInterstitial: vi.fn(() => () => {}),
       },
       tabs: {
-        list: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-        create: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-        close: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-        activate: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-        reorder: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-        setPinned: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-        reopenClosed: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
-        setTitle: vi.fn().mockResolvedValue({ tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }], activeId: 1 }),
+        list: vi.fn().mockResolvedValue({
+          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          activeId: 1,
+        }),
+        create: vi.fn().mockResolvedValue({
+          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          activeId: 1,
+        }),
+        close: vi.fn().mockResolvedValue({
+          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          activeId: 1,
+        }),
+        activate: vi.fn().mockResolvedValue({
+          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          activeId: 1,
+        }),
+        reorder: vi.fn().mockResolvedValue({
+          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          activeId: 1,
+        }),
+        setPinned: vi.fn().mockResolvedValue({
+          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          activeId: 1,
+        }),
+        reopenClosed: vi.fn().mockResolvedValue({
+          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          activeId: 1,
+        }),
+        setTitle: vi.fn().mockResolvedValue({
+          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          activeId: 1,
+        }),
         onState: vi.fn(() => () => {}),
         onShortcut: vi.fn(() => () => {}),
       },

@@ -29,7 +29,9 @@ export const COMBO_INTERACTIONS: InteractionSpec[] = [
       // view.setLayout must have been called (the overlay/sidebar state update fires on mount
       // and on every state change — at least one call should exist).
       if (!ctx.calls.called('view.setLayout'))
-        throw new Error('view.setLayout not called — overlay/sidebar state was not reported to the core');
+        throw new Error(
+          'view.setLayout not called — overlay/sidebar state was not reported to the core',
+        );
       return 'sidebar + Settings open together → modal present, view.setLayout called, App mounted';
     },
   },
@@ -41,7 +43,8 @@ export const COMBO_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'combo.tabSwitchWithModal',
       domain: 'combo',
-      description: 'Open the downloads modal, then switch to a second tab → modal state consistent, no crash',
+      description:
+        'Open the downloads modal, then switch to a second tab → modal state consistent, no crash',
       screen: 'home',
       // vitest-only: the live run would need a real second tab and a downloads modal
       // that is hard to trigger without a real download; the vitest path fully covers
@@ -67,10 +70,15 @@ export const COMBO_INTERACTIONS: InteractionSpec[] = [
       assert: async (ctx) => {
         // The downloads modal should still be in the DOM (tab switch does not close it).
         const modal = ctx.bySelector('.downloads-modal');
-        if (!modal) throw new Error('Downloads modal not found after tab switch — modal was unexpectedly closed');
+        if (!modal)
+          throw new Error(
+            'Downloads modal not found after tab switch — modal was unexpectedly closed',
+          );
         // tabs.activate must have been called (the tab click fired).
         if (!ctx.calls.called('tabs.activate'))
-          throw new Error('tabs.activate not called after clicking second tab with downloads modal open');
+          throw new Error(
+            'tabs.activate not called after clicking second tab with downloads modal open',
+          );
         // App must still be mounted.
         if (!document.querySelector('.app'))
           throw new Error('App is no longer mounted after tabSwitch+modal combo (crash?)');

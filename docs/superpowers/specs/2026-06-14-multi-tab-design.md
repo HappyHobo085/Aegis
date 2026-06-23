@@ -60,13 +60,13 @@ Aegis runs a **chrome** webview (the React UI in `src/`) plus, on desktop, exact
 
 ### Verified Tauri 2.11.2 APIs this design relies on
 
-| Need | API (verified in the installed crate) |
-|---|---|
-| Discard a tab and free its memory | `Webview::close()` (`webview/mod.rs:1502`) |
-| Create tabs on demand | `Window::add_child` (already used by `spawn_content`) |
-| Show/hide, reposition, navigate, reload | `Webview::{hide,show,set_bounds,navigate,reload,eval}` |
-| Open-in-new-tab / fix `target=_blank` | `WebviewBuilder::on_new_window(Fn(Url, NewWindowFeatures) -> NewWindowResponse)`; `NewWindowResponse::{Allow, Create{window}, Deny}` (`webview/mod.rs:585,239`) |
-| App-level shortcuts (even when content is focused) | Menu accelerators + `on_menu_event` (`app.rs:808`); the app defines no menu today |
+| Need                                               | API (verified in the installed crate)                                                                                                                           |
+| -------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Discard a tab and free its memory                  | `Webview::close()` (`webview/mod.rs:1502`)                                                                                                                      |
+| Create tabs on demand                              | `Window::add_child` (already used by `spawn_content`)                                                                                                           |
+| Show/hide, reposition, navigate, reload            | `Webview::{hide,show,set_bounds,navigate,reload,eval}`                                                                                                          |
+| Open-in-new-tab / fix `target=_blank`              | `WebviewBuilder::on_new_window(Fn(Url, NewWindowFeatures) -> NewWindowResponse)`; `NewWindowResponse::{Allow, Create{window}, Deny}` (`webview/mod.rs:585,239`) |
+| App-level shortcuts (even when content is focused) | Menu accelerators + `on_menu_event` (`app.rs:808`); the app defines no menu today                                                                               |
 
 ## 4. Requirements summary
 
@@ -128,14 +128,14 @@ Bounded RAM by **inactivity time**, not a count cap.
 - **Create:** assign id, spawn a webview at the home URL, make it active. No
   eviction on create (that was the count-cap model — removed).
 - **Activate:** if `live` → show it, hide the others; if discarded → `add_child`
-  again, `navigate` to the stored URL, then show. Switching *away* stamps the
+  again, `navigate` to the stored URL, then show. Switching _away_ stamps the
   now-background tab's `last_active`.
 - **Close:** `close()` if live, remove from the registry, push
   `{ url, title, position, pinned }` onto `closed_stack`, activate a neighbor.
 - The `live` flag in `tabs.state` lets the strip render **discarded tabs as
   "asleep"** (dimmed) — a cue that returning will reload them.
 
-**Accepted trade-offs:** (1) without a count cap, opening many tabs *within* the
+**Accepted trade-offs:** (1) without a count cap, opening many tabs _within_ the
 idle window keeps them all live — peak RAM scales with activity, by design.
 (2) A backgrounded tab playing audio/video is still discarded at the timeout
 (WebKit doesn't cheaply expose "audible"); audible-tab exemption is a future
@@ -185,7 +185,7 @@ Per the three-place rule (types.ts, Rust dispatcher, `ipcClient.ts`):
 - `Settings` gains `tabIdleTimeout: number` (minutes).
 - `AegisApi` gains a `tabs` namespace:
   `create(url?) / close(id) / activate(id) / reorder(ids) / setPinned(id, pinned)
-  / reopenClosed() / list()` plus `onState(cb)`.
+/ reopenClosed() / list()` plus `onState(cb)`.
 
 ### 5.6 Rust backend
 

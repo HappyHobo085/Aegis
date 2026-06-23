@@ -41,17 +41,17 @@ The **chrome coordinates; the registry is the model; native owns the per-tab Web
 - **The registry is unchanged.** `tab_registry.rs` already returns every lifecycle
   decision; `tabs.*` IPC + the Rust `start_idle_sweep` thread already run on Android
   (they just drive no native views today).
-- **The chrome** switches `MobileApp` from `useNav(PRIMARY_VIEW_ID)` to **`useTabs()`
-  + `useNav(activeId)`** — the same hooks desktop uses. Every chrome feature (address
-  bar, ad-block shield, overlays) keys on the **active tab id**.
+- **The chrome** switches `MobileApp` from `useNav(PRIMARY_VIEW_ID)` to \*\*`useTabs()`
+  - `useNav(activeId)`** — the same hooks desktop uses. Every chrome feature (address
+    bar, ad-block shield, overlays) keys on the **active tab id\*\*.
 - **Native owns the WebViews.** Rust cannot touch native Android views, so
   `MainActivity` keeps a **`Map<tabId, WebView>`** and the chrome drives that map
   through new `AegisAndroid` bridge calls as the registry state changes. The
-  registry decides *what* the tabs are; the chrome *relays* those decisions to native.
+  registry decides _what_ the tabs are; the chrome _relays_ those decisions to native.
 
-*(Alternatives rejected: a single WebView that reloads on switch — loses live state,
+_(Alternatives rejected: a single WebView that reloads on switch — loses live state,
 the user explicitly chose live tabs; managing native WebViews from Rust — impossible,
-Rust has no handle to the Android views.)*
+Rust has no handle to the Android views.)_
 
 ### 4.1 New / changed units
 
@@ -106,7 +106,7 @@ WebView.
   - **Tabs** shows the **open-tab count** and opens `MobileTabSwitcher`.
   - Shield and Menu unchanged.
 - **☰ Menu drawer (`MobileMenuSheet`)** → `Back, Forward, Home, Bookmark this page,
-  Downloads, Settings`.
+Downloads, Settings`.
   - Back/Forward added as the **just-in-case fallback** (gestures are primary).
   - Saved/History **removed** (now on the bar); Home stays here.
 - **`MobileTabSwitcher`** — a full-screen sheet (reusing `MobileSheet`):
@@ -147,7 +147,7 @@ WebView.
 - **On-device (owner):** the native multi-WebView lifecycle (create/show-one/hide/
   discard/recreate, per-tab live state, `target=_blank` → background tab, memory under
   many tabs, per-tab ad-block) is GUI-validated on the device after `npm run
-  android:build` (JDK 21). This is the part that can't be headless-tested.
+android:build` (JDK 21). This is the part that can't be headless-tested.
 
 ## 9. Risks
 
@@ -162,15 +162,16 @@ WebView.
 4. **Per-tab nav-state routing** — multiple WebViews each push nav-state; the mobile
    `__aegisNavState` path must carry `viewId` so `useNav(activeId)` filters correctly
    (today there's only one, so it's unfiltered).
-5. **`target=_blank` loop/foreground** — new-window must open a *background* tab and not
+5. **`target=_blank` loop/foreground** — new-window must open a _background_ tab and not
    steal focus or recurse.
 
 ## 10. Build order (for the plan)
 
 Chrome first (jsdom-testable, desktop unaffected): `MobileTabSwitcher` → reworked
 `MobileBottomBar` + `MobileMenuSheet` → `MobileApp` rewire to `useTabs`/`useNav(activeId)`
-+ the `useMobileTabSync` diff-and-sync (driving a mock bridge in tests). Then native
-(`MainActivity.kt`): the `tabId → WebView` map + `activateTab`/`closeTab`/`discardTab` +
-per-WebView `WebViewClient` (per-tab `currentPageUrl` + tab-id nav-state) + active-target
-`navigate`/`back`/`forward`/`reload` + `onCreateWindow` background tab. The native layer
-is GUI-validated on-device at the end (JDK-21 build).
+
+- the `useMobileTabSync` diff-and-sync (driving a mock bridge in tests). Then native
+  (`MainActivity.kt`): the `tabId → WebView` map + `activateTab`/`closeTab`/`discardTab` +
+  per-WebView `WebViewClient` (per-tab `currentPageUrl` + tab-id nav-state) + active-target
+  `navigate`/`back`/`forward`/`reload` + `onCreateWindow` background tab. The native layer
+  is GUI-validated on-device at the end (JDK-21 build).

@@ -22,12 +22,15 @@ describe('adblockVerdictFromLog', () => {
   });
 
   it('FAILS when ad subresources still load in the ON phase (a real regression)', () => {
-    const leaky = REAL_TRACE + '\n[aegis-count] block=true page=http://127.0.0.1:8137/?ab=on url=https://ib.adnxs.com/pixel.gif?cb=2-0';
+    const leaky =
+      REAL_TRACE +
+      '\n[aegis-count] block=true page=http://127.0.0.1:8137/?ab=on url=https://ib.adnxs.com/pixel.gif?cb=2-0';
     expect(adblockVerdictFromLog(leaky)).toMatchObject({ status: 'fail', off: 5, on: 1 });
   });
 
   it('SKIPS when the OFF phase shows no ad traffic (markers absent / vacuous)', () => {
-    const noOff = '[aegis-count] block=false page=http://127.0.0.1:8137/ url=http://127.0.0.1:8137/';
+    const noOff =
+      '[aegis-count] block=false page=http://127.0.0.1:8137/ url=http://127.0.0.1:8137/';
     expect(adblockVerdictFromLog(noOff)).toMatchObject({ status: 'skip', off: 0 });
   });
 
@@ -37,7 +40,11 @@ describe('adblockVerdictFromLog', () => {
 
   it('honors a non-default fixture origin', () => {
     const t = REAL_TRACE.replaceAll('127.0.0.1:8137', '127.0.0.1:9001');
-    expect(adblockVerdictFromLog(t, 'http://127.0.0.1:9001/')).toMatchObject({ status: 'pass', off: 5, on: 0 });
+    expect(adblockVerdictFromLog(t, 'http://127.0.0.1:9001/')).toMatchObject({
+      status: 'pass',
+      off: 5,
+      on: 0,
+    });
   });
 });
 
@@ -55,13 +62,18 @@ describe('summarize', () => {
   });
 
   it('exit 1 when blocking regresses even if report.json has no failures', () => {
-    const leaky = REAL_TRACE + '\n[aegis-count] block=true page=http://127.0.0.1:8137/?ab=on url=https://ib.adnxs.com/x?cb=9';
+    const leaky =
+      REAL_TRACE +
+      '\n[aegis-count] block=true page=http://127.0.0.1:8137/?ab=on url=https://ib.adnxs.com/x?cb=9';
     const { exitCode } = summarize(report, leaky, undefined, '/out/report.html');
     expect(exitCode).toBe(1);
   });
 
   it('exit 1 when report.json has a failure', () => {
-    const failing = { summary: { pass: 1, fail: 1, skip: 0 }, results: [{ id: 'y', title: 'Y', status: 'fail', detail: 'boom' }] };
+    const failing = {
+      summary: { pass: 1, fail: 1, skip: 0 },
+      results: [{ id: 'y', title: 'Y', status: 'fail', detail: 'boom' }],
+    };
     const { exitCode, lines } = summarize(failing, REAL_TRACE, undefined, '/out/report.html');
     expect(exitCode).toBe(1);
     expect(lines.join('\n')).toContain('FAIL Y: boom');

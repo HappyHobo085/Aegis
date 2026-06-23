@@ -88,6 +88,7 @@ sync-server/
   ```
 
   `Snapshot::from(&Store)` flattens; `Store::from(Snapshot)` rebuilds the maps.
+
 - **Load on boot:** if `AEGIS_SYNC_DATA` is set and the file exists, deserialize
   into the `Store`. A missing file is fine (fresh start). A corrupt/unparseable
   file is a hard error at boot (fail loud rather than silently start empty).
@@ -99,6 +100,7 @@ sync-server/
 
   Releasing the lock before disk I/O keeps requests from blocking on `fsync`.
   No-op stale POSTs (records that lose LWW) do **not** trigger a rewrite.
+
 - **Concurrency note:** two mutations could race on the temp file. Use a
   per-path write guard (a dedicated `Mutex<()>` for the writer, or include the
   PID/sequence in the temp name) so concurrent atomic writes don't clobber each
@@ -134,14 +136,14 @@ services:
     image: aegis-sync-server
     restart: unless-stopped
     ports:
-      - "${AEGIS_SYNC_PORT:-8787}:8787"
+      - '${AEGIS_SYNC_PORT:-8787}:8787'
     environment:
       - AEGIS_SYNC_ADDR=0.0.0.0:8787
       - AEGIS_SYNC_DATA=/data/aegis-sync.json
     volumes:
       - aegis-sync-data:/data
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8787/healthz']
       interval: 30s
       timeout: 3s
       retries: 3
@@ -172,10 +174,11 @@ which sets it), and point to `DOCKER.md`.
 
 Short folder doc per repo convention: what the crate is (standalone reference
 E2E-sync server, ciphertext-only), the persistence model + `AEGIS_SYNC_DATA`/
-`AEGIS_SYNC_ADDR` envs, the `/healthz` route, the **hard rule that `canonical()`
-+ token shape must stay byte-identical to `src-tauri/src/sync_auth.rs`**, and the
-Docker workflow. Also add `sync-server/` to the folder map in the root `CLAUDE.md`
-(it predates this crate and omits it).
+`AEGIS_SYNC_ADDR` envs, the `/healthz` route, the \*\*hard rule that `canonical()`
+
+- token shape must stay byte-identical to `src-tauri/src/sync_auth.rs`\*\*, and the
+  Docker workflow. Also add `sync-server/` to the folder map in the root `CLAUDE.md`
+  (it predates this crate and omits it).
 
 ## Testing
 

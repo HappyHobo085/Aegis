@@ -40,7 +40,12 @@ describe('SecurityTab', () => {
 
   it('shows malicious-site protection as on (always)', () => {
     render(
-      <SecurityTab settings={baseSettings} update={vi.fn()} listExceptions={async () => []} removeException={vi.fn()} />,
+      <SecurityTab
+        settings={baseSettings}
+        update={vi.fn()}
+        listExceptions={async () => []}
+        removeException={vi.fn()}
+      />,
     );
     expect(screen.getByText(/malicious-site protection/i)).toBeInTheDocument();
     expect(screen.getByText(/\bon\b/i)).toBeInTheDocument();

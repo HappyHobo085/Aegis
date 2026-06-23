@@ -9,7 +9,9 @@ describe('makeVitestCtx', () => {
     const fakeAegis = { favorites: { add: vi.fn(async () => []) } } as never;
     const { container } = render(
       <div>
-        <button aria-label="Add" onClick={onClick}>+</button>
+        <button aria-label="Add" onClick={onClick}>
+          +
+        </button>
         <input aria-label="URL" defaultValue="" />
       </div>,
     );

@@ -33,7 +33,9 @@ export function SecurityTab({
           onChange={(e) => update({ httpsOnly: e.target.checked })}
           aria-label="HTTPS-Only mode"
         />
-        <span>HTTPS-Only mode — upgrade sites to a secure connection and warn before using HTTP</span>
+        <span>
+          HTTPS-Only mode — upgrade sites to a secure connection and warn before using HTTP
+        </span>
       </label>
 
       <h3>Sites allowed over HTTP</h3>
@@ -72,16 +74,16 @@ export function SecurityTab({
       </label>
       <p>
         WebRTC can leak your device&apos;s local-network IP to websites, even over a VPN.
-        &ldquo;Hide my local IP&rdquo; filters out private/loopback addresses while keeping
-        relay candidates so video and voice calls still work. &ldquo;Disable&rdquo; turns
-        WebRTC off entirely (calls won&apos;t work). Changes apply to new tabs &mdash;
-        reload open tabs to apply.
+        &ldquo;Hide my local IP&rdquo; filters out private/loopback addresses while keeping relay
+        candidates so video and voice calls still work. &ldquo;Disable&rdquo; turns WebRTC off
+        entirely (calls won&apos;t work). Changes apply to new tabs &mdash; reload open tabs to
+        apply.
       </p>
 
       <h3>Malicious-site protection</h3>
       <p>
-        On &mdash; known malware and phishing sites are blocked with a warning. This protection is always
-        active and can&apos;t be turned off.
+        On &mdash; known malware and phishing sites are blocked with a warning. This protection is
+        always active and can&apos;t be turned off.
       </p>
     </div>
   );

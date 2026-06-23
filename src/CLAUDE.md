@@ -53,7 +53,7 @@ Channel and event names, and all payload/return types, are defined once in
   `useChromeSurfaceRegistry` throws outside a provider — do not call it from a
   component that may render in the mobile shell.
 - **Sidebar is a right panel,** not an overlay: it calls `view.setSidebar(active,
-  width)` so the page insets from the right and stays visible. Width is remembered
+width)` so the page insets from the right and stays visible. Width is remembered
   in localStorage.
 - **Content inset** is set deterministically from layout constants in `lib/layout.ts`
   (toolbar + favbar height), via `hooks/useContentInset.ts` — no DOM measurement.
@@ -162,7 +162,7 @@ Vite dead-code-eliminates it on `build:renderer`.
   (reach → screenshot → leave), exercises every `CATALOG` entry against the real core,
   runs each entry's optional `verify(api)` functional round-trip, then the ad-block
   induction — an A/B navigation of the fixture (ad-block OFF then ON) that records the
-  live shield count (an honest *skip* when it doesn't rise: well-known hosts are blocked
+  live shield count (an honest _skip_ when it doesn't rise: well-known hosts are blocked
   by the WebKit content filter before the counter signal fires; blocking itself is proven
   by the launcher's A/B trace check — `summarize.mjs`). Finally calls
   `devEmit.writeReport` + `devEmit.done`. Dependency-injected
@@ -186,7 +186,7 @@ and what the resulting DOM / call state should be.
 
 - **`interactions/`** — the catalog, split **per domain** (was one ~3700-line file). A
   barrel `index.ts` concatenates the per-domain spec arrays into `INTERACTIONS:
-  InteractionSpec[]` and re-exports `INTERACTIVE_CONTROLS` + the public types, so
+InteractionSpec[]` and re-exports `INTERACTIVE_CONTROLS` + the public types, so
   importers of `./interactions` resolve unchanged. Layout:
   - `index.ts` — combines the domain arrays into `INTERACTIONS`; re-exports types +
     `INTERACTIVE_CONTROLS`. **The single entry point** — keep importing `./interactions`.
@@ -215,12 +215,12 @@ and what the resulting DOM / call state should be.
     and are EXCLUDED from the desktop tour.
   - `run(ctx)` — async gesture: fires the interaction (click, type, etc.)
   - `assert(ctx)` — async assertion: returns a truthy string on success, throws on failure
-  `INTERACTIVE_CONTROLS` is the canonical string array of every interactive control id.
-  The drift-guard test asserts every entry has at least one `InteractionSpec`.
-  **Add a new control to `INTERACTIVE_CONTROLS` in the same commit as its spec.**
+    `INTERACTIVE_CONTROLS` is the canonical string array of every interactive control id.
+    The drift-guard test asserts every entry has at least one `InteractionSpec`.
+    **Add a new control to `INTERACTIVE_CONTROLS` in the same commit as its spec.**
 
 - **`interactionCtx.ts`** — `InteractionCtx` interface + `makeVitestCtx(container,
-  aegis, reachFn)`. Provides:
+aegis, reachFn)`. Provides:
   - `byRole(role, name)` — `container.querySelector([role="…"][aria-label~="…"])` helper
   - `click(el)` — `userEvent.click(el)` wrapped in `act()`
   - `reach(screen)` — calls `reachFn` (desktop: `reachScreen`; mobile: no-op)
@@ -240,7 +240,7 @@ and what the resulting DOM / call state should be.
     `emitTabsState` in the same async `act()` body.
   - For nav-property state (canGoBack/canGoForward): open the interactive sheet FIRST
     (so it is already mounted), THEN call `emitNavState` to re-render with the new state.
-  This ordering is enforced in all mobile specs that need non-default state.
+    This ordering is enforced in all mobile specs that need non-default state.
 
 ### Tests in this folder
 
@@ -264,7 +264,7 @@ and what the resulting DOM / call state should be.
   2. Every spec has a valid `screen` (from `SCREENS`) and at least one `layer`.
   3. Every string in `INTERACTIVE_CONTROLS` has at least one `InteractionSpec` whose
      `id` starts with that control string.
-  Fails the build when you add a control to `INTERACTIVE_CONTROLS` without a spec.
+     Fails the build when you add a control to `INTERACTIVE_CONTROLS` without a spec.
 - **`coverage.test.ts`** — **IPC drift guard**. Asserts every `IPC.*` channel exported
   from `shared/types.ts` appears in `CATALOG[*].channels` (failing the build when a new
   feature is added without a catalog entry). Also asserts every `UNTESTED_CHANNELS`

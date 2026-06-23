@@ -26,7 +26,9 @@ describe('AllowlistTab', () => {
   it('removes a host via its Remove button', async () => {
     const p = props();
     render(<AllowlistTab {...p} />);
-    await userEvent.click(screen.getByRole('button', { name: /remove news\.example from allowlist/i }));
+    await userEvent.click(
+      screen.getByRole('button', { name: /remove news\.example from allowlist/i }),
+    );
     expect(p.removeAllowlist).toHaveBeenCalledWith('news.example');
   });
 

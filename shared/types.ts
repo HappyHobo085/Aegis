@@ -162,9 +162,20 @@ export interface TabsState {
 }
 
 export type TabShortcut =
-  | 'new' | 'close' | 'next' | 'prev' | 'reopen'
-  | 'jump1' | 'jump2' | 'jump3' | 'jump4' | 'jump5'
-  | 'jump6' | 'jump7' | 'jump8' | 'jumpLast';
+  | 'new'
+  | 'close'
+  | 'next'
+  | 'prev'
+  | 'reopen'
+  | 'jump1'
+  | 'jump2'
+  | 'jump3'
+  | 'jump4'
+  | 'jump5'
+  | 'jump6'
+  | 'jump7'
+  | 'jump8'
+  | 'jumpLast';
 
 // ---- places data model (Phase 3) ----
 export interface Favorite {
@@ -243,7 +254,14 @@ export interface ListUpdateResult {
 }
 
 export interface UpdateState {
-  status: 'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+  status:
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error';
   version: string | null; // available/downloaded version, else null
   percent: number; // download progress 0..100
   error: string | null; // last error message, else null
@@ -440,7 +458,10 @@ export interface AegisApi {
   };
   data: {
     export(): Promise<{ ok: boolean; path?: string }>;
-    import(mode: ImportMode, source?: { text?: string }): Promise<{ ok: boolean; counts?: unknown }>;
+    import(
+      mode: ImportMode,
+      source?: { text?: string },
+    ): Promise<{ ok: boolean; counts?: unknown }>;
   };
   picker: {
     start(): Promise<{ ok: boolean; rule?: string }>;

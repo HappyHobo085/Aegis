@@ -4,7 +4,7 @@
 
 **Goal:** Replace the scattered, manually-maintained content-visibility/z-order logic (the `App.tsx` overlay union + the thrice-duplicated visibility predicate in `view.rs`) with a single declarative source of truth on each side, plus auto-registering chrome surfaces, so the "forgot to register a new overlay → it renders behind the page" class of bug becomes structurally impossible.
 
-**Architecture:** Keep the exact two-webview layout (chrome webview + opaque native content webview) and the exact pixel layout. Change only *how the composition is decided*: (1) a pure `computeContentLayout()` function on the renderer replaces the inline boolean soup; (2) a `ChromeSurfaceProvider` registry lets every full-window surface register itself while open, so `fullOverlayActive` is *derived*, never hand-maintained; (3) a single `content_visible(&Layout)` function on the Rust side replaces the three duplicated predicates; (4) a drift-guard test asserts every overlay lowers the content. This is a **pure refactor** — the IPC calls emitted must be byte-identical to today's, proven by the existing autopilot tour passing unchanged.
+**Architecture:** Keep the exact two-webview layout (chrome webview + opaque native content webview) and the exact pixel layout. Change only _how the composition is decided_: (1) a pure `computeContentLayout()` function on the renderer replaces the inline boolean soup; (2) a `ChromeSurfaceProvider` registry lets every full-window surface register itself while open, so `fullOverlayActive` is _derived_, never hand-maintained; (3) a single `content_visible(&Layout)` function on the Rust side replaces the three duplicated predicates; (4) a drift-guard test asserts every overlay lowers the content. This is a **pure refactor** — the IPC calls emitted must be byte-identical to today's, proven by the existing autopilot tour passing unchanged.
 
 **Tech Stack:** React 19 + TypeScript (renderer), Vitest (jsdom) for renderer tests, Rust + Tauri 2 (`view.rs`), `cargo test` for Rust tests.
 
@@ -21,23 +21,23 @@
 
 ## File Structure
 
-| File | Responsibility | Action |
-|---|---|---|
-| `src/lib/contentLayout.ts` | Pure `computeContentLayout(state) → {overlay, sidebar, width}`. The single renderer-side derivation. | Create |
-| `src/lib/contentLayout.test.ts` | Truth-table tests for `computeContentLayout`. | Create |
-| `src/hooks/useChromeSurfaces.tsx` | `ChromeSurfaceProvider` + `useChromeSurfaceRegistry()` + `useChromeSurface(id, active)`. The auto-registering surface set. | Create |
-| `src/hooks/useChromeSurfaces.test.tsx` | Registry register/unregister + hook lifecycle tests. | Create |
-| `src/App.tsx` | Wrap `DesktopApp` in the provider; derive `fullOverlayActive` from the registry; compute the layout via `computeContentLayout`; delete the manual `||` union. | Modify |
-| `src/components/SettingsModal.tsx` | Self-register `'settings'` while mounted. | Modify |
-| `src/components/DownloadsModal.tsx` | Self-register `'downloads'` while mounted. | Modify |
-| `src/components/FavoritesManager.tsx` | Self-register `'favoritesManager'` while mounted. | Modify |
-| `src/components/PermissionPromptDialog.tsx` | Self-register `'permissionPrompt'` while mounted. | Modify |
-| `src/components/ErrorOverlay.tsx` | Self-register `'errorOverlay'` while `failed||crashed`. | Modify |
-| `src/components/SafetyInterstitial.tsx` | Self-register `'safetyInterstitial'` while interstitial present. | Modify |
-| `src/components/ConfirmDialog.tsx` | Self-register `'confirmDialog'` while open. | Modify |
-| `src/autopilot/compositor.test.tsx` | Drift guard: every overlay opened via the autopilot control lowers the content (`setLayout overlay:true`). | Create |
-| `src-tauri/src/view.rs` | Extract `content_visible(&Layout) -> bool`; replace the 3 duplicated predicates; add a unit-test module. | Modify |
-| `src/CLAUDE.md` | Document the compositor + the registration rule (replaces the "add it to the union in App.tsx" instruction). | Modify |
+| File                                        | Responsibility                                                                                                                                      | Action |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | --------- | ------ |
+| `src/lib/contentLayout.ts`                  | Pure `computeContentLayout(state) → {overlay, sidebar, width}`. The single renderer-side derivation.                                                | Create |
+| `src/lib/contentLayout.test.ts`             | Truth-table tests for `computeContentLayout`.                                                                                                       | Create |
+| `src/hooks/useChromeSurfaces.tsx`           | `ChromeSurfaceProvider` + `useChromeSurfaceRegistry()` + `useChromeSurface(id, active)`. The auto-registering surface set.                          | Create |
+| `src/hooks/useChromeSurfaces.test.tsx`      | Registry register/unregister + hook lifecycle tests.                                                                                                | Create |
+| `src/App.tsx`                               | Wrap `DesktopApp` in the provider; derive `fullOverlayActive` from the registry; compute the layout via `computeContentLayout`; delete the manual ` |        | ` union.  | Modify |
+| `src/components/SettingsModal.tsx`          | Self-register `'settings'` while mounted.                                                                                                           | Modify |
+| `src/components/DownloadsModal.tsx`         | Self-register `'downloads'` while mounted.                                                                                                          | Modify |
+| `src/components/FavoritesManager.tsx`       | Self-register `'favoritesManager'` while mounted.                                                                                                   | Modify |
+| `src/components/PermissionPromptDialog.tsx` | Self-register `'permissionPrompt'` while mounted.                                                                                                   | Modify |
+| `src/components/ErrorOverlay.tsx`           | Self-register `'errorOverlay'` while `failed                                                                                                        |        | crashed`. | Modify |
+| `src/components/SafetyInterstitial.tsx`     | Self-register `'safetyInterstitial'` while interstitial present.                                                                                    | Modify |
+| `src/components/ConfirmDialog.tsx`          | Self-register `'confirmDialog'` while open.                                                                                                         | Modify |
+| `src/autopilot/compositor.test.tsx`         | Drift guard: every overlay opened via the autopilot control lowers the content (`setLayout overlay:true`).                                          | Create |
+| `src-tauri/src/view.rs`                     | Extract `content_visible(&Layout) -> bool`; replace the 3 duplicated predicates; add a unit-test module.                                            | Modify |
+| `src/CLAUDE.md`                             | Document the compositor + the registration rule (replaces the "add it to the union in App.tsx" instruction).                                        | Modify |
 
 **Surfaces covered by the registry** (exactly today's `fullOverlayActive` members — full-window, content-hiding): `settings`, `downloads`, `favoritesManager`, `permissionPrompt`, `errorOverlay`, `crashOverlay`/`errorOverlay` (same component), `confirmDialog`, `safetyInterstitial`. **NOT** in the registry (unchanged, stay as direct `App` state because they do not hide content): the **sidebar** (insets) and the **shield popover** (a dropdown that rides the chrome but leaves content visible).
 
@@ -46,10 +46,12 @@
 ### Task 1: Single-source the Rust visibility predicate
 
 **Files:**
+
 - Modify: `src-tauri/src/view.rs` (lines 71-81, 110-123, 152-161)
 - Test: `src-tauri/src/view.rs` (new `#[cfg(test)] mod tests`)
 
 **Interfaces:**
+
 - Produces: `pub fn content_visible(lay: &Layout) -> bool` — the ONE definition of "is the content webview shown", consumed by `apply_visibility` and both branches of `apply_inset`.
 
 - [ ] **Step 1: Write the failing test**
@@ -176,10 +178,12 @@ git commit -m "refactor(view): single-source content_visible predicate (was dupl
 ### Task 2: Pure `computeContentLayout` on the renderer
 
 **Files:**
+
 - Create: `src/lib/contentLayout.ts`
 - Test: `src/lib/contentLayout.test.ts`
 
 **Interfaces:**
+
 - Produces:
   - `interface ContentLayoutState { fullOverlay: boolean; sidebar: boolean; shield: boolean; sidebarWidth: number }`
   - `interface ContentLayout { overlay: boolean; sidebar: boolean; width: number }`
@@ -195,28 +199,38 @@ import { computeContentLayout } from './contentLayout';
 
 describe('computeContentLayout', () => {
   it('nothing open → content shown, no inset', () => {
-    expect(computeContentLayout({ fullOverlay: false, sidebar: false, shield: false, sidebarWidth: 280 }))
-      .toEqual({ overlay: false, sidebar: false, width: 280 });
+    expect(
+      computeContentLayout({
+        fullOverlay: false,
+        sidebar: false,
+        shield: false,
+        sidebarWidth: 280,
+      }),
+    ).toEqual({ overlay: false, sidebar: false, width: 280 });
   });
 
   it('a full overlay rides the chrome over the content', () => {
-    expect(computeContentLayout({ fullOverlay: true, sidebar: false, shield: false, sidebarWidth: 280 }))
-      .toEqual({ overlay: true, sidebar: false, width: 280 });
+    expect(
+      computeContentLayout({ fullOverlay: true, sidebar: false, shield: false, sidebarWidth: 280 }),
+    ).toEqual({ overlay: true, sidebar: false, width: 280 });
   });
 
   it('the sidebar insets the content (overlay rides true, sidebar inset true)', () => {
-    expect(computeContentLayout({ fullOverlay: false, sidebar: true, shield: false, sidebarWidth: 300 }))
-      .toEqual({ overlay: true, sidebar: true, width: 300 });
+    expect(
+      computeContentLayout({ fullOverlay: false, sidebar: true, shield: false, sidebarWidth: 300 }),
+    ).toEqual({ overlay: true, sidebar: true, width: 300 });
   });
 
   it('the shield popover rides the chrome but does NOT inset', () => {
-    expect(computeContentLayout({ fullOverlay: false, sidebar: false, shield: true, sidebarWidth: 280 }))
-      .toEqual({ overlay: true, sidebar: false, width: 280 });
+    expect(
+      computeContentLayout({ fullOverlay: false, sidebar: false, shield: true, sidebarWidth: 280 }),
+    ).toEqual({ overlay: true, sidebar: false, width: 280 });
   });
 
   it('a full overlay suppresses the sidebar inset (overlay wins)', () => {
-    expect(computeContentLayout({ fullOverlay: true, sidebar: true, shield: false, sidebarWidth: 280 }))
-      .toEqual({ overlay: true, sidebar: false, width: 280 });
+    expect(
+      computeContentLayout({ fullOverlay: true, sidebar: true, shield: false, sidebarWidth: 280 }),
+    ).toEqual({ overlay: true, sidebar: false, width: 280 });
   });
 });
 ```
@@ -283,10 +297,12 @@ git commit -m "refactor(chrome): extract pure computeContentLayout (mirrors App.
 ### Task 3: Auto-registering chrome-surface registry
 
 **Files:**
+
 - Create: `src/hooks/useChromeSurfaces.tsx`
 - Test: `src/hooks/useChromeSurfaces.test.tsx`
 
 **Interfaces:**
+
 - Produces:
   - `function ChromeSurfaceProvider({ children }: { children: ReactNode }): JSX.Element`
   - `function useChromeSurfaceRegistry(): { register(id: string): void; unregister(id: string): void; openSurfaces: ReadonlySet<string> }`
@@ -300,7 +316,11 @@ Create `src/hooks/useChromeSurfaces.test.tsx`:
 import { describe, it, expect } from 'vitest';
 import { render, screen, act } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { ChromeSurfaceProvider, useChromeSurface, useChromeSurfaceRegistry } from './useChromeSurfaces';
+import {
+  ChromeSurfaceProvider,
+  useChromeSurface,
+  useChromeSurfaceRegistry,
+} from './useChromeSurfaces';
 
 function CountProbe() {
   const { openSurfaces } = useChromeSurfaceRegistry();
@@ -467,10 +487,12 @@ git commit -m "feat(chrome): auto-registering chrome-surface registry (replaces 
 ### Task 4: Wire `App.tsx` + make every full-window surface self-register
 
 **Files:**
+
 - Modify: `src/App.tsx` (lines 82, 158-179, 563-565)
 - Modify: `src/components/SettingsModal.tsx`, `DownloadsModal.tsx`, `FavoritesManager.tsx`, `PermissionPromptDialog.tsx`, `ErrorOverlay.tsx`, `SafetyInterstitial.tsx`, `ConfirmDialog.tsx`
 
 **Interfaces:**
+
 - Consumes: `computeContentLayout` (Task 2); `ChromeSurfaceProvider`, `useChromeSurface`, `useChromeSurfaceRegistry` (Task 3).
 - Produces: identical `aegis.view.setLayout` payloads to today's (verified by the unchanged tour).
 
@@ -561,48 +583,47 @@ import { computeContentLayout } from './lib/contentLayout';
 In `DesktopApp`, delete the hand-maintained union (old lines 158-166):
 
 ```tsx
-  const fullOverlayActive =
-    downloadsOpen ||
-    settingsOpen ||
-    managerOpen ||
-    confirmOpen ||
-    permissions.prompt !== null ||
-    failed !== null ||
-    crashed !== null ||
-    safety.interstitial !== null;
+const fullOverlayActive =
+  downloadsOpen ||
+  settingsOpen ||
+  managerOpen ||
+  confirmOpen ||
+  permissions.prompt !== null ||
+  failed !== null ||
+  crashed !== null ||
+  safety.interstitial !== null;
 ```
 
 Replace it with a derivation from the registry:
 
 ```tsx
-  // Derived, never hand-maintained: any registered full-window surface means a full
-  // overlay is up. New overlays self-register (see useChromeSurface) — there is no
-  // central list to forget to update.
-  const { openSurfaces } = useChromeSurfaceRegistry();
-  const fullOverlayActive = openSurfaces.size > 0;
+// Derived, never hand-maintained: any registered full-window surface means a full
+// overlay is up. New overlays self-register (see useChromeSurface) — there is no
+// central list to forget to update.
+const { openSurfaces } = useChromeSurfaceRegistry();
+const fullOverlayActive = openSurfaces.size > 0;
 ```
 
 Then replace the layout effect (old lines 167-179) with the pure-function form:
 
 ```tsx
-  useEffect(() => {
-    // ONE atomic update from a single derived state. computeContentLayout is the sole
-    // place the overlay/sidebar/shield → content-layout mapping lives (mirrored on the
-    // Rust side by view::content_visible).
-    void aegis.view.setLayout?.(
-      tabs.activeId,
-      computeContentLayout({
-        fullOverlay: fullOverlayActive,
-        sidebar: sidebarOpen,
-        shield: shieldOpen,
-        sidebarWidth,
-      }),
-    );
-  }, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen, sidebarWidth]);
+useEffect(() => {
+  // ONE atomic update from a single derived state. computeContentLayout is the sole
+  // place the overlay/sidebar/shield → content-layout mapping lives (mirrored on the
+  // Rust side by view::content_visible).
+  void aegis.view.setLayout?.(
+    tabs.activeId,
+    computeContentLayout({
+      fullOverlay: fullOverlayActive,
+      sidebar: sidebarOpen,
+      shield: shieldOpen,
+      sidebarWidth,
+    }),
+  );
+}, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen, sidebarWidth]);
 ```
 
-> The `confirmOpen` local state and its `subscribeConfirmOpen` effect (old lines 108,
-> 145) are now redundant for layout — `ConfirmDialog` self-registers. Leave `confirmOpen`
+> The `confirmOpen` local state and its `subscribeConfirmOpen` effect (old lines 108, 145) are now redundant for layout — `ConfirmDialog` self-registers. Leave `confirmOpen`
 > ONLY if something else reads it; grep first: `grep -n confirmOpen src/App.tsx`. If the
 > sole use was the union, delete the `confirmOpen` state + its `subscribeConfirmOpen`
 > effect. (The `ConfirmDialog` component manages its own visibility independently.)
@@ -632,9 +653,11 @@ git commit -m "refactor(chrome): derive overlay state from self-registering surf
 ### Task 5: Drift-guard test — every overlay lowers the content
 
 **Files:**
+
 - Create: `src/autopilot/compositor.test.tsx`
 
 **Interfaces:**
+
 - Consumes: the dev autopilot control (`installAutopilotControl` is wired in `DesktopApp`, exposing `window.__aegisAutopilot` with `openSettings`/`openDownloads`/`openManager`/`openConfirm`/`showError`/`showCrash`, etc. — see `src/autopilot/control.ts`), and the mocked `aegis` (the jsdom tests mock the IPC client).
 
 - [ ] **Step 1: Write the failing test**
@@ -665,26 +688,34 @@ describe('compositor drift guard: overlays lower the content', () => {
   });
 
   // Each entry: a human label + how the autopilot control opens that overlay.
-  const overlays: Array<[string, (c: NonNullable<ReturnType<typeof getAutopilotControl>>) => void]> = [
+  const overlays: Array<
+    [string, (c: NonNullable<ReturnType<typeof getAutopilotControl>>) => void]
+  > = [
     ['settings', (c) => c.openSettings()],
     ['downloads', (c) => c.openDownloads()],
     ['favoritesManager', (c) => c.openManager()],
     ['confirmDialog', (c) => c.openConfirm('are you sure?')],
-    ['errorOverlay', (c) => c.showError({ viewId: 1, url: 'https://x', code: 0, description: 'fail' })],
+    [
+      'errorOverlay',
+      (c) => c.showError({ viewId: 1, url: 'https://x', code: 0, description: 'fail' }),
+    ],
     ['crashOverlay', (c) => c.showCrash({ viewId: 1, url: 'https://x' })],
   ];
 
-  it.each(overlays)('opening %s lowers the content (setLayout overlay:true)', async (_label, open) => {
-    render(<App />);
-    // Let DesktopApp mount + register its autopilot control.
-    const control = await vi.waitFor(() => {
-      const c = getAutopilotControl();
-      if (!c) throw new Error('control not installed yet');
-      return c;
-    });
-    act(() => open(control));
-    expect(lastSetLayout()?.overlay).toBe(true);
-  });
+  it.each(overlays)(
+    'opening %s lowers the content (setLayout overlay:true)',
+    async (_label, open) => {
+      render(<App />);
+      // Let DesktopApp mount + register its autopilot control.
+      const control = await vi.waitFor(() => {
+        const c = getAutopilotControl();
+        if (!c) throw new Error('control not installed yet');
+        return c;
+      });
+      act(() => open(control));
+      expect(lastSetLayout()?.overlay).toBe(true);
+    },
+  );
 });
 ```
 
@@ -716,13 +747,14 @@ git commit -m "test(chrome): drift guard — every overlay lowers the content we
 ### Task 6: Update living docs + run the live autopilot gate
 
 **Files:**
+
 - Modify: `src/CLAUDE.md` (the "Chrome overlay z-order" bullet)
 
 **Interfaces:** none (docs + verification).
 
 - [ ] **Step 1: Replace the stale z-order instruction in `src/CLAUDE.md`**
 
-Find the bullet that currently reads (paraphrased): *"If you add a new full-window overlay, add it to that union in `App.tsx` or it will render behind the page."* Replace it with:
+Find the bullet that currently reads (paraphrased): _"If you add a new full-window overlay, add it to that union in `App.tsx` or it will render behind the page."_ Replace it with:
 
 ```markdown
 - **Chrome overlay z-order (centralized compositor).** The content webview is opaque
@@ -773,11 +805,12 @@ git commit -m "docs(chrome): document the centralized content compositor + regis
 
 This plan deliberately keeps the current compositing model (opaque native content webview on top; chrome lowered/parked when an overlay covers it). A more radical alternative — **layer inversion** — was considered and rejected for now:
 
-**What it is:** flip the stack so the **content webview sits at the bottom, full-window, and never moves**, and the **chrome webview floats on top, transparent except where UI is drawn**. Overlays and the sidebar then become ordinary opaque DOM in the always-on-top chrome layer — they render *over* the content with no native restacking, and the content webview is never resized/parked for an overlay. This would make the "sidebar over content" idea natural and delete the entire reposition-the-native-webview bug class at its root.
+**What it is:** flip the stack so the **content webview sits at the bottom, full-window, and never moves**, and the **chrome webview floats on top, transparent except where UI is drawn**. Overlays and the sidebar then become ordinary opaque DOM in the always-on-top chrome layer — they render _over_ the content with no native restacking, and the content webview is never resized/parked for an overlay. This would make the "sidebar over content" idea natural and delete the entire reposition-the-native-webview bug class at its root.
 
 **What it would entail:**
+
 - A transparent, full-window chrome webview kept above the content webview on every platform (WebView2 / WKWebView / WebKitGTK transparency each behave differently).
 - **The hard part — input pass-through:** where the chrome is transparent, mouse/keyboard must reach the content behind it; where the toolbar/sidebar/overlay are drawn, the chrome must capture them. There is no clean cross-platform primitive for per-region hit-testing between two overlapping child webviews. It would require dynamically toggling cursor-event ignoring based on pointer position (e.g. wry's `set_ignore_cursor_events`), which is janky and platform-divergent — trading the z-order problem for an equally platform-specific click-through problem.
 - Rework of `view.rs`/`linux_layout.rs` from "move/park the content for overlays" to "content fixed; toggle chrome transparency + input regions."
 
-**Why it's deferred:** it's a research spike, not a refactor — uncertain payoff, new platform-divergent risk, and it touches the same native code this plan stabilizes. Do the centralized compositor first (low-risk, keeps layout identical, kills the *recurring* nature of the bugs). Only pursue layer inversion if, after this, you still want the content to never move for a sidebar/overlay — and budget it as a spike with a Linux + Windows + macOS input-pass-through proof before committing.
+**Why it's deferred:** it's a research spike, not a refactor — uncertain payoff, new platform-divergent risk, and it touches the same native code this plan stabilizes. Do the centralized compositor first (low-risk, keeps layout identical, kills the _recurring_ nature of the bugs). Only pursue layer inversion if, after this, you still want the content to never move for a sidebar/overlay — and budget it as a spike with a Linux + Windows + macOS input-pass-through proof before committing.

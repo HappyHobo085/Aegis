@@ -39,7 +39,9 @@ describe('PickerButton', () => {
   it('reports the created rule via a success toast', async () => {
     render(<PickerButton />);
     await userEvent.click(screen.getByRole('button', { name: /pick element to hide/i }));
-    await waitFor(() => expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('example.com##.ad')));
+    await waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith(expect.stringContaining('example.com##.ad')),
+    );
   });
 
   it('does not toast success when the pick is cancelled', async () => {

@@ -242,7 +242,8 @@ export const aegis: AegisApi = {
   },
   permissions: {
     list: () => call<SitePermission[]>(IPC.permissionsList),
-    remove: (origin, permission) => call<SitePermission[]>(IPC.permissionsRemove, { origin, permission }),
+    remove: (origin, permission) =>
+      call<SitePermission[]>(IPC.permissionsRemove, { origin, permission }),
     clear: () => call<SitePermission[]>(IPC.permissionsClear),
     resolve: (requestId, decision) => call(IPC.permissionsResolve, { requestId, decision }),
     onPrompt: (cb) => on<PermissionPrompt>(IPC.evtPermissionsPrompt, cb),
@@ -301,7 +302,8 @@ export const aegis: AegisApi = {
     syncNow: () => call<SyncState>(IPC.syncNow),
     testConnection: (url: string) =>
       call<{ ok: boolean; latencyMs?: number; error?: string }>(IPC.syncTestConnection, { url }),
-    getRecoveryPhrase: (opts) => call<{ recoveryPhrase: string }>(IPC.syncGetRecoveryPhrase, { ...opts }),
+    getRecoveryPhrase: (opts) =>
+      call<{ recoveryPhrase: string }>(IPC.syncGetRecoveryPhrase, { ...opts }),
     listDevices: () => call<SyncDevice[]>(IPC.syncListDevices),
     removeDevice: (deviceId) => call<SyncDevice[]>(IPC.syncRemoveDevice, { deviceId }),
     onState: (cb) => on<SyncState>(IPC.evtSyncState, cb),

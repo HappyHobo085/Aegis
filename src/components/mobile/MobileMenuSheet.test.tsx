@@ -4,10 +4,17 @@ import { MobileMenuSheet } from './MobileMenuSheet';
 
 function setup(over = {}) {
   const props = {
-    onClose: vi.fn(), onBack: vi.fn(), onForward: vi.fn(),
-    canGoBack: true, canGoForward: false,
-    onHome: vi.fn(), onDownloads: vi.fn(), onSettings: vi.fn(),
-    isCurrentSaved: false, canBookmark: true, onToggleBookmark: vi.fn(),
+    onClose: vi.fn(),
+    onBack: vi.fn(),
+    onForward: vi.fn(),
+    canGoBack: true,
+    canGoForward: false,
+    onHome: vi.fn(),
+    onDownloads: vi.fn(),
+    onSettings: vi.fn(),
+    isCurrentSaved: false,
+    canBookmark: true,
+    onToggleBookmark: vi.fn(),
     ...over,
   };
   render(<MobileMenuSheet {...props} />);

@@ -25,6 +25,7 @@
 ## File Structure
 
 **Create (renderer autopilot core — `src/autopilot/`):**
+
 - `screens.ts` — `ScreenId`, `ScreenSpec`, `SCREENS` (every overlay/tab/state vector).
 - `catalog.ts` — `FeatureCheck`, `CATALOG` (every IPC-backed feature + the channels it covers + an `exercise(api)`).
 - `report.ts` — `StepStatus`, `StepResult`, `Report`, `renderReportHtml(report)`.
@@ -35,14 +36,17 @@
 - Co-located tests: `screens.test.ts`, `catalog`-side `coverage.test.ts`, `report.test.ts`, `control.test.ts`, `reach.test.ts`, `devEmit.test.ts`, `run.test.ts`, `tour.test.tsx`, `tour.mobile.test.tsx`.
 
 **Create (Rust dev-only support):**
+
 - `src-tauri/src/autopilot.rs` — `#[cfg(debug_assertions)]` `#[tauri::command]` fns.
 
 **Create (launcher — `scripts/autopilot/`):**
+
 - `run-autopilot.sh` — the Linux launcher.
 - `fixture-server.mjs` — tiny static http server.
 - `fixture/index.html` — ad-laden probe page.
 
 **Modify:**
+
 - `src/components/SettingsModal.tsx` — export `TAB_ORDER` and `SettingsTab`.
 - `src/App.tsx` — register the dev-only control surface in `DesktopApp`.
 - `src/main.tsx` — dev-only bootstrap of the autopilot.
@@ -54,11 +58,13 @@
 ## Task 1: Screen model + Settings exports
 
 **Files:**
+
 - Modify: `src/components/SettingsModal.tsx:8` (export `SettingsTab`), `:37` (export `TAB_ORDER`)
 - Create: `src/autopilot/screens.ts`
 - Test: `src/autopilot/screens.test.ts`
 
 **Interfaces:**
+
 - Consumes: `TAB_ORDER`, `SettingsTab` from `SettingsModal.tsx`.
 - Produces: `type ScreenId`, `interface ScreenSpec { id: ScreenId; label: string; via: 'overlay' | 'settingsTab' | 'sidebarTab' | 'event' | 'state' }`, `const SCREENS: ScreenSpec[]`, `const SETTINGS_SCREENS: ScreenSpec[]`.
 
@@ -82,10 +88,20 @@ describe('SCREENS', () => {
   it('covers both sidebar tabs and the core overlays', () => {
     const ids = new Set(SCREENS.map((s) => s.id));
     for (const id of [
-      'sidebar:history', 'sidebar:saved', 'downloads', 'favoritesManager',
-      'shieldPopover', 'fullscreen', 'errorOverlay', 'crashOverlay',
-      'safetyInterstitial', 'permissionPrompt', 'confirmDialog', 'home',
-    ]) expect(ids.has(id)).toBe(true);
+      'sidebar:history',
+      'sidebar:saved',
+      'downloads',
+      'favoritesManager',
+      'shieldPopover',
+      'fullscreen',
+      'errorOverlay',
+      'crashOverlay',
+      'safetyInterstitial',
+      'permissionPrompt',
+      'confirmDialog',
+      'home',
+    ])
+      expect(ids.has(id)).toBe(true);
   });
   it('has unique ids', () => {
     expect(new Set(SCREENS.map((s) => s.id)).size).toBe(SCREENS.length);
@@ -168,10 +184,12 @@ git commit -m "feat(autopilot): screen model + export Settings tab metadata"
 ## Task 2: Feature catalog + drift guard
 
 **Files:**
+
 - Create: `src/autopilot/catalog.ts`
 - Test: `src/autopilot/coverage.test.ts`
 
 **Interfaces:**
+
 - Consumes: `AegisApi`, `IPC`, `PRIMARY_VIEW_ID` from `shared/types`.
 - Produces: `interface FeatureCheck { id: string; domain: string; title: string; channels: string[]; exercise(api: AegisApi): Promise<void> }`, `const CATALOG: FeatureCheck[]`, `const UNTESTED_CHANNELS: Set<string>`.
 
@@ -194,16 +212,13 @@ const COMMAND_CHANNELS = Object.entries(IPC)
 describe('catalog drift guard', () => {
   it('every command channel is covered by a catalog entry or explicitly excused', () => {
     const covered = new Set(CATALOG.flatMap((c) => c.channels));
-    const missing = COMMAND_CHANNELS.filter(
-      (ch) => !covered.has(ch) && !UNTESTED_CHANNELS.has(ch),
-    );
+    const missing = COMMAND_CHANNELS.filter((ch) => !covered.has(ch) && !UNTESTED_CHANNELS.has(ch));
     expect(missing, `uncovered IPC channels: ${missing.join(', ')}`).toEqual([]);
   });
   it('catalog entries have unique ids and reference real channels', () => {
     const all = new Set<string>(Object.values(IPC));
     expect(new Set(CATALOG.map((c) => c.id)).size).toBe(CATALOG.length);
-    for (const c of CATALOG)
-      for (const ch of c.channels) expect(all.has(ch), ch).toBe(true);
+    for (const c of CATALOG) for (const ch of c.channels) expect(all.has(ch), ch).toBe(true);
   });
 });
 ```
@@ -241,99 +256,306 @@ function assertObject(x: unknown): void {
 
 export const CATALOG: FeatureCheck[] = [
   // nav
-  { id: 'nav.getState', domain: 'nav', title: 'Get nav state', channels: [IPC.navGetState],
-    exercise: async (a) => { assertObject(await a.nav.getState(V)); } },
-  { id: 'nav.navigate', domain: 'nav', title: 'Navigate', channels: [IPC.navNavigate],
-    exercise: async (a) => { await a.nav.navigate(V, 'https://example.com/'); } },
-  { id: 'nav.controls', domain: 'nav', title: 'Back/forward/reload/home',
+  {
+    id: 'nav.getState',
+    domain: 'nav',
+    title: 'Get nav state',
+    channels: [IPC.navGetState],
+    exercise: async (a) => {
+      assertObject(await a.nav.getState(V));
+    },
+  },
+  {
+    id: 'nav.navigate',
+    domain: 'nav',
+    title: 'Navigate',
+    channels: [IPC.navNavigate],
+    exercise: async (a) => {
+      await a.nav.navigate(V, 'https://example.com/');
+    },
+  },
+  {
+    id: 'nav.controls',
+    domain: 'nav',
+    title: 'Back/forward/reload/home',
     channels: [IPC.navBack, IPC.navForward, IPC.navReloadOrStop, IPC.navHome],
-    exercise: async (a) => { await a.nav.back(V); await a.nav.forward(V); await a.nav.reloadOrStop(V); await a.nav.home(V); } },
+    exercise: async (a) => {
+      await a.nav.back(V);
+      await a.nav.forward(V);
+      await a.nav.reloadOrStop(V);
+      await a.nav.home(V);
+    },
+  },
   // tabs
-  { id: 'tabs.list', domain: 'tabs', title: 'List tabs', channels: [IPC.tabsList],
-    exercise: async (a) => { assertObject(await a.tabs.list()); } },
-  { id: 'tabs.lifecycle', domain: 'tabs', title: 'Create/activate/close/reopen',
-    channels: [IPC.tabsCreate, IPC.tabsActivate, IPC.tabsClose, IPC.tabsReopenClosed, IPC.tabsReorder, IPC.tabsSetPinned, IPC.tabsSetTitle],
+  {
+    id: 'tabs.list',
+    domain: 'tabs',
+    title: 'List tabs',
+    channels: [IPC.tabsList],
+    exercise: async (a) => {
+      assertObject(await a.tabs.list());
+    },
+  },
+  {
+    id: 'tabs.lifecycle',
+    domain: 'tabs',
+    title: 'Create/activate/close/reopen',
+    channels: [
+      IPC.tabsCreate,
+      IPC.tabsActivate,
+      IPC.tabsClose,
+      IPC.tabsReopenClosed,
+      IPC.tabsReorder,
+      IPC.tabsSetPinned,
+      IPC.tabsSetTitle,
+    ],
     exercise: async (a) => {
       assertObject(await a.tabs.create('https://example.org/', true));
-      await a.tabs.reorder([V]); await a.tabs.setPinned(V, true); await a.tabs.setPinned(V, false);
-      await a.tabs.setTitle(V, 'AP'); await a.tabs.activate(V); await a.tabs.reopenClosed();
-    } },
+      await a.tabs.reorder([V]);
+      await a.tabs.setPinned(V, true);
+      await a.tabs.setPinned(V, false);
+      await a.tabs.setTitle(V, 'AP');
+      await a.tabs.activate(V);
+      await a.tabs.reopenClosed();
+    },
+  },
   // view
-  { id: 'view.layout', domain: 'view', title: 'Content visibility/inset/overlay/sidebar/layout/fullscreen',
-    channels: [IPC.viewSetContentVisible, IPC.viewSetContentInset, IPC.viewSetChromeOverlay, IPC.viewSetSidebar, IPC.viewSetLayout, IPC.viewSetFullscreen],
+  {
+    id: 'view.layout',
+    domain: 'view',
+    title: 'Content visibility/inset/overlay/sidebar/layout/fullscreen',
+    channels: [
+      IPC.viewSetContentVisible,
+      IPC.viewSetContentInset,
+      IPC.viewSetChromeOverlay,
+      IPC.viewSetSidebar,
+      IPC.viewSetLayout,
+      IPC.viewSetFullscreen,
+    ],
     exercise: async (a) => {
-      await a.view.setContentVisible(V, true); await a.view.setContentInset(V, { top: 0, right: 0, bottom: 0, left: 0 });
-      await a.view.setChromeOverlay(V, false); await a.view.setSidebar(V, false, 280);
-      await a.view.setLayout?.(V, { overlay: false, sidebar: false, width: 280 }); await a.view.setFullscreen(V, false);
-    } },
+      await a.view.setContentVisible(V, true);
+      await a.view.setContentInset(V, { top: 0, right: 0, bottom: 0, left: 0 });
+      await a.view.setChromeOverlay(V, false);
+      await a.view.setSidebar(V, false, 280);
+      await a.view.setLayout?.(V, { overlay: false, sidebar: false, width: 280 });
+      await a.view.setFullscreen(V, false);
+    },
+  },
   // favorites
-  { id: 'favorites.crud', domain: 'favorites', title: 'Favorites list/add/update/remove/reorder',
-    channels: [IPC.favoritesList, IPC.favoritesAdd, IPC.favoritesUpdate, IPC.favoritesRemove, IPC.favoritesReorder],
+  {
+    id: 'favorites.crud',
+    domain: 'favorites',
+    title: 'Favorites list/add/update/remove/reorder',
+    channels: [
+      IPC.favoritesList,
+      IPC.favoritesAdd,
+      IPC.favoritesUpdate,
+      IPC.favoritesRemove,
+      IPC.favoritesReorder,
+    ],
     exercise: async (a) => {
       assertArray(await a.favorites.list());
       assertArray(await a.favorites.add({ name: 'AP', url: 'https://ap.test/' }));
       assertArray(await a.favorites.reorder([]));
-    } },
+    },
+  },
   // history
-  { id: 'history.crud', domain: 'history', title: 'History list/search/remove/clear',
+  {
+    id: 'history.crud',
+    domain: 'history',
+    title: 'History list/search/remove/clear',
     channels: [IPC.historyList, IPC.historySearch, IPC.historyRemove, IPC.historyClear],
-    exercise: async (a) => { assertArray(await a.history.list({})); assertArray(await a.history.search('a')); } },
+    exercise: async (a) => {
+      assertArray(await a.history.list({}));
+      assertArray(await a.history.search('a'));
+    },
+  },
   // saved
-  { id: 'saved.crud', domain: 'saved', title: 'Saved list/add/remove/has/update/tags',
-    channels: [IPC.savedList, IPC.savedAdd, IPC.savedRemove, IPC.savedHas, IPC.savedUpdate, IPC.savedRenameTag, IPC.savedDeleteTag, IPC.savedTagUnion],
+  {
+    id: 'saved.crud',
+    domain: 'saved',
+    title: 'Saved list/add/remove/has/update/tags',
+    channels: [
+      IPC.savedList,
+      IPC.savedAdd,
+      IPC.savedRemove,
+      IPC.savedHas,
+      IPC.savedUpdate,
+      IPC.savedRenameTag,
+      IPC.savedDeleteTag,
+      IPC.savedTagUnion,
+    ],
     exercise: async (a) => {
-      assertArray(await a.saved.list()); assertArray(await a.saved.add({ url: 'https://s.test/', title: 'S', tags: ['t'] }));
-      await a.saved.has('https://s.test/'); assertArray(await a.saved.tagUnion());
-    } },
+      assertArray(await a.saved.list());
+      assertArray(await a.saved.add({ url: 'https://s.test/', title: 'S', tags: ['t'] }));
+      await a.saved.has('https://s.test/');
+      assertArray(await a.saved.tagUnion());
+    },
+  },
   // settings
-  { id: 'settings.getset', domain: 'settings', title: 'Settings get/set',
+  {
+    id: 'settings.getset',
+    domain: 'settings',
+    title: 'Settings get/set',
     channels: [IPC.settingsGet, IPC.settingsSet],
-    exercise: async (a) => { const s = await a.settings.get(); assertObject(s); assertObject(await a.settings.set({ primaryColor: s.primaryColor })); } },
-  // adblock
-  { id: 'adblock.toggle', domain: 'adblock', title: 'Ad-block enable/allowlist/state',
-    channels: [IPC.adblockSetEnabled, IPC.adblockToggleAllowlist, IPC.adblockRemoveAllowlist, IPC.adblockClearAllowlist, IPC.adblockGetState],
     exercise: async (a) => {
-      assertObject(await a.adblock.getState()); assertObject(await a.adblock.setEnabled(true));
-      assertObject(await a.adblock.toggleAllowlist('ap.test')); assertObject(await a.adblock.removeAllowlist('ap.test'));
+      const s = await a.settings.get();
+      assertObject(s);
+      assertObject(await a.settings.set({ primaryColor: s.primaryColor }));
+    },
+  },
+  // adblock
+  {
+    id: 'adblock.toggle',
+    domain: 'adblock',
+    title: 'Ad-block enable/allowlist/state',
+    channels: [
+      IPC.adblockSetEnabled,
+      IPC.adblockToggleAllowlist,
+      IPC.adblockRemoveAllowlist,
+      IPC.adblockClearAllowlist,
+      IPC.adblockGetState,
+    ],
+    exercise: async (a) => {
+      assertObject(await a.adblock.getState());
+      assertObject(await a.adblock.setEnabled(true));
+      assertObject(await a.adblock.toggleAllowlist('ap.test'));
+      assertObject(await a.adblock.removeAllowlist('ap.test'));
       assertObject(await a.adblock.clearAllowlist());
-    } },
+    },
+  },
   // lists
-  { id: 'lists.updateNow', domain: 'lists', title: 'Update filter lists', channels: [IPC.listsUpdateNow],
-    exercise: async (a) => { assertObject(await a.lists.updateNow()); } },
+  {
+    id: 'lists.updateNow',
+    domain: 'lists',
+    title: 'Update filter lists',
+    channels: [IPC.listsUpdateNow],
+    exercise: async (a) => {
+      assertObject(await a.lists.updateNow());
+    },
+  },
   // subs
-  { id: 'subs.crud', domain: 'subs', title: 'Subscriptions list/setEnabled/add/remove',
+  {
+    id: 'subs.crud',
+    domain: 'subs',
+    title: 'Subscriptions list/setEnabled/add/remove',
     channels: [IPC.subsList, IPC.subsSetEnabled, IPC.subsAdd, IPC.subsRemove],
-    exercise: async (a) => { assertArray(await a.subs.list()); } },
+    exercise: async (a) => {
+      assertArray(await a.subs.list());
+    },
+  },
   // customFilters
-  { id: 'customFilters.getset', domain: 'customFilters', title: 'Custom filters get/set',
+  {
+    id: 'customFilters.getset',
+    domain: 'customFilters',
+    title: 'Custom filters get/set',
     channels: [IPC.customFiltersGet, IPC.customFiltersSet],
-    exercise: async (a) => { const t = await a.customFilters.get(); if (typeof t !== 'string') throw new Error('string'); await a.customFilters.set(t); } },
+    exercise: async (a) => {
+      const t = await a.customFilters.get();
+      if (typeof t !== 'string') throw new Error('string');
+      await a.customFilters.set(t);
+    },
+  },
   // downloads
-  { id: 'downloads.crud', domain: 'downloads', title: 'Downloads list/remove/clear (+ file ops)',
-    channels: [IPC.downloadsList, IPC.downloadsRemove, IPC.downloadsClear, IPC.downloadsOpenFile, IPC.downloadsShowInFolder, IPC.downloadsCancel],
-    exercise: async (a) => { assertArray(await a.downloads.list()); } },
+  {
+    id: 'downloads.crud',
+    domain: 'downloads',
+    title: 'Downloads list/remove/clear (+ file ops)',
+    channels: [
+      IPC.downloadsList,
+      IPC.downloadsRemove,
+      IPC.downloadsClear,
+      IPC.downloadsOpenFile,
+      IPC.downloadsShowInFolder,
+      IPC.downloadsCancel,
+    ],
+    exercise: async (a) => {
+      assertArray(await a.downloads.list());
+    },
+  },
   // permissions
-  { id: 'permissions.crud', domain: 'permissions', title: 'Permissions list/remove/clear/resolve',
-    channels: [IPC.permissionsList, IPC.permissionsRemove, IPC.permissionsClear, IPC.permissionsResolve],
-    exercise: async (a) => { assertArray(await a.permissions.list()); } },
+  {
+    id: 'permissions.crud',
+    domain: 'permissions',
+    title: 'Permissions list/remove/clear/resolve',
+    channels: [
+      IPC.permissionsList,
+      IPC.permissionsRemove,
+      IPC.permissionsClear,
+      IPC.permissionsResolve,
+    ],
+    exercise: async (a) => {
+      assertArray(await a.permissions.list());
+    },
+  },
   // data
-  { id: 'data.export', domain: 'data', title: 'Data export', channels: [IPC.dataExport, IPC.dataImport],
-    exercise: async (a) => { assertObject(await a.data.export()); } },
+  {
+    id: 'data.export',
+    domain: 'data',
+    title: 'Data export',
+    channels: [IPC.dataExport, IPC.dataImport],
+    exercise: async (a) => {
+      assertObject(await a.data.export());
+    },
+  },
   // picker
-  { id: 'picker.start', domain: 'picker', title: 'Element picker', channels: [IPC.pickerStart],
-    exercise: async (a) => { assertObject(await a.picker.start()); } },
+  {
+    id: 'picker.start',
+    domain: 'picker',
+    title: 'Element picker',
+    channels: [IPC.pickerStart],
+    exercise: async (a) => {
+      assertObject(await a.picker.start());
+    },
+  },
   // update
-  { id: 'update.state', domain: 'update', title: 'Update get/check',
+  {
+    id: 'update.state',
+    domain: 'update',
+    title: 'Update get/check',
     channels: [IPC.updateGetState, IPC.updateCheckNow, IPC.updateRestartToInstall],
-    exercise: async (a) => { assertObject(await a.update.getState()); await a.update.checkNow(); } },
+    exercise: async (a) => {
+      assertObject(await a.update.getState());
+      await a.update.checkNow();
+    },
+  },
   // safety
-  { id: 'safety.state', domain: 'safety', title: 'Safety get/exceptions',
-    channels: [IPC.safetyGetState, IPC.safetyProceed, IPC.safetyListExceptions, IPC.safetyRemoveException],
-    exercise: async (a) => { await a.safety.getState(); assertArray(await a.safety.listExceptions()); } },
+  {
+    id: 'safety.state',
+    domain: 'safety',
+    title: 'Safety get/exceptions',
+    channels: [
+      IPC.safetyGetState,
+      IPC.safetyProceed,
+      IPC.safetyListExceptions,
+      IPC.safetyRemoveException,
+    ],
+    exercise: async (a) => {
+      await a.safety.getState();
+      assertArray(await a.safety.listExceptions());
+    },
+  },
   // sync
-  { id: 'sync.state', domain: 'sync', title: 'Sync get/test/devices',
-    channels: [IPC.syncGetState, IPC.syncEnableNew, IPC.syncEnableFromPhrase, IPC.syncDisable, IPC.syncNow, IPC.syncTestConnection, IPC.syncGetRecoveryPhrase, IPC.syncListDevices, IPC.syncRemoveDevice],
-    exercise: async (a) => { assertObject(await a.sync.getState()); assertArray(await a.sync.listDevices()); } },
+  {
+    id: 'sync.state',
+    domain: 'sync',
+    title: 'Sync get/test/devices',
+    channels: [
+      IPC.syncGetState,
+      IPC.syncEnableNew,
+      IPC.syncEnableFromPhrase,
+      IPC.syncDisable,
+      IPC.syncNow,
+      IPC.syncTestConnection,
+      IPC.syncGetRecoveryPhrase,
+      IPC.syncListDevices,
+      IPC.syncRemoveDevice,
+    ],
+    exercise: async (a) => {
+      assertObject(await a.sync.getState());
+      assertArray(await a.sync.listDevices());
+    },
+  },
 ];
 
 // Channels intentionally not exercised by a catalog `exercise` (destructive,
@@ -341,18 +563,38 @@ export const CATALOG: FeatureCheck[] = [
 // component tests). Kept explicit so the drift guard still forces a decision.
 export const UNTESTED_CHANNELS = new Set<string>([
   // file/OS-bound — exercised live only, would mutate the host in vitest:
-  IPC.downloadsOpenFile, IPC.downloadsShowInFolder, IPC.downloadsCancel,
-  IPC.dataImport, IPC.permissionsResolve, IPC.safetyProceed,
-  IPC.updateRestartToInstall, IPC.permissionsRemove, IPC.permissionsClear,
-  IPC.safetyRemoveException, IPC.historyRemove, IPC.historyClear,
-  IPC.favoritesUpdate, IPC.favoritesRemove, IPC.savedRemove, IPC.savedUpdate,
-  IPC.savedRenameTag, IPC.savedDeleteTag, IPC.subsSetEnabled, IPC.subsAdd,
-  IPC.subsRemove, IPC.syncEnableNew, IPC.syncEnableFromPhrase, IPC.syncDisable,
-  IPC.syncNow, IPC.syncTestConnection, IPC.syncGetRecoveryPhrase, IPC.syncRemoveDevice,
+  IPC.downloadsOpenFile,
+  IPC.downloadsShowInFolder,
+  IPC.downloadsCancel,
+  IPC.dataImport,
+  IPC.permissionsResolve,
+  IPC.safetyProceed,
+  IPC.updateRestartToInstall,
+  IPC.permissionsRemove,
+  IPC.permissionsClear,
+  IPC.safetyRemoveException,
+  IPC.historyRemove,
+  IPC.historyClear,
+  IPC.favoritesUpdate,
+  IPC.favoritesRemove,
+  IPC.savedRemove,
+  IPC.savedUpdate,
+  IPC.savedRenameTag,
+  IPC.savedDeleteTag,
+  IPC.subsSetEnabled,
+  IPC.subsAdd,
+  IPC.subsRemove,
+  IPC.syncEnableNew,
+  IPC.syncEnableFromPhrase,
+  IPC.syncDisable,
+  IPC.syncNow,
+  IPC.syncTestConnection,
+  IPC.syncGetRecoveryPhrase,
+  IPC.syncRemoveDevice,
 ]);
 ```
 
-(Note: `UNTESTED_CHANNELS` lists channels referenced in a `channels:` array but whose *destructive/OS-bound* call is skipped inside `exercise`. The guard only requires each command channel appear in **some** entry's `channels` OR in `UNTESTED_CHANNELS`. The entries above already list these channels, so the guard passes; `UNTESTED_CHANNELS` documents the ones whose effect is deferred to the live run. If the guard reports a genuinely uncovered channel during implementation, add it to a catalog entry — do NOT pad `UNTESTED_CHANNELS` to silence it.)
+(Note: `UNTESTED_CHANNELS` lists channels referenced in a `channels:` array but whose _destructive/OS-bound_ call is skipped inside `exercise`. The guard only requires each command channel appear in **some** entry's `channels` OR in `UNTESTED_CHANNELS`. The entries above already list these channels, so the guard passes; `UNTESTED_CHANNELS` documents the ones whose effect is deferred to the live run. If the guard reports a genuinely uncovered channel during implementation, add it to a catalog entry — do NOT pad `UNTESTED_CHANNELS` to silence it.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -371,10 +613,12 @@ git commit -m "feat(autopilot): feature catalog + drift-guard test"
 ## Task 3: Report model + HTML gallery
 
 **Files:**
+
 - Create: `src/autopilot/report.ts`
 - Test: `src/autopilot/report.test.ts`
 
 **Interfaces:**
+
 - Produces: `type StepStatus = 'pass' | 'fail' | 'skip'`, `interface StepResult { id: string; kind: 'core' | 'visual'; title: string; status: StepStatus; detail?: string; screenshot?: string }`, `interface Report { startedAt: number; finishedAt: number; display: boolean; results: StepResult[]; summary: { pass: number; fail: number; skip: number } }`, `function summarize(results): Report['summary']`, `function renderReportHtml(report): string`.
 
 - [ ] **Step 1: Write the failing test**
@@ -387,7 +631,14 @@ import { summarize, renderReportHtml, type StepResult } from './report';
 const results: StepResult[] = [
   { id: 'a', kind: 'core', title: 'A', status: 'pass' },
   { id: 'b', kind: 'core', title: 'B', status: 'fail', detail: 'boom' },
-  { id: 'c', kind: 'visual', title: 'C', status: 'skip', detail: 'no display', screenshot: 'c.png' },
+  {
+    id: 'c',
+    kind: 'visual',
+    title: 'C',
+    status: 'skip',
+    detail: 'no display',
+    screenshot: 'c.png',
+  },
 ];
 
 describe('report', () => {
@@ -396,7 +647,11 @@ describe('report', () => {
   });
   it('renders html with counts, failure detail, and screenshot refs', () => {
     const html = renderReportHtml({
-      startedAt: 0, finishedAt: 1, display: true, results, summary: summarize(results),
+      startedAt: 0,
+      finishedAt: 1,
+      display: true,
+      results,
+      summary: summarize(results),
     });
     expect(html).toContain('1 passed');
     expect(html).toContain('1 failed');
@@ -443,14 +698,19 @@ export function summarize(results: StepResult[]): Report['summary'] {
 }
 
 function esc(s: string): string {
-  return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!));
+  return s.replace(
+    /[&<>"]/g,
+    (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]!,
+  );
 }
 
 export function renderReportHtml(report: Report): string {
   const { summary } = report;
   const rows = report.results
     .map((r) => {
-      const shot = r.screenshot ? `<img src="shots/${esc(r.screenshot)}" loading="lazy" width="320">` : '';
+      const shot = r.screenshot
+        ? `<img src="shots/${esc(r.screenshot)}" loading="lazy" width="320">`
+        : '';
       const detail = r.detail ? `<div class="detail">${esc(r.detail)}</div>` : '';
       return `<tr class="${r.status}"><td>${esc(r.status)}</td><td>${esc(r.kind)}</td><td>${esc(r.title)}${detail}</td><td>${shot}</td></tr>`;
     })
@@ -486,10 +746,12 @@ git commit -m "feat(autopilot): report model + html gallery"
 ## Task 4: Control surface
 
 **Files:**
+
 - Create: `src/autopilot/control.ts`
 - Test: `src/autopilot/control.test.ts`
 
 **Interfaces:**
+
 - Produces: `interface AutopilotControl { openSettings(): void; closeSettings(): void; openDownloads(): void; closeDownloads(): void; openManager(): void; closeManager(): void; setSidebar(open: boolean): void; setShield(open: boolean): void; enterFullscreen(): void; exitFullscreen(): void; showError(f: unknown): void; clearError(): void; showCrash(c: unknown): void; clearCrash(): void; openConfirm(message: string): void }`, `function installAutopilotControl(c: AutopilotControl): () => void`, `function getAutopilotControl(): AutopilotControl | undefined`.
 - Consumed by: `App.tsx` (Task 5), `reach.ts` (Task 5b/6), `run.ts` (Task 8).
 
@@ -502,14 +764,27 @@ import { installAutopilotControl, getAutopilotControl, type AutopilotControl } f
 
 function fake(): AutopilotControl {
   return {
-    openSettings: vi.fn(), closeSettings: vi.fn(), openDownloads: vi.fn(), closeDownloads: vi.fn(),
-    openManager: vi.fn(), closeManager: vi.fn(), setSidebar: vi.fn(), setShield: vi.fn(),
-    enterFullscreen: vi.fn(), exitFullscreen: vi.fn(), showError: vi.fn(), clearError: vi.fn(),
-    showCrash: vi.fn(), clearCrash: vi.fn(), openConfirm: vi.fn(),
+    openSettings: vi.fn(),
+    closeSettings: vi.fn(),
+    openDownloads: vi.fn(),
+    closeDownloads: vi.fn(),
+    openManager: vi.fn(),
+    closeManager: vi.fn(),
+    setSidebar: vi.fn(),
+    setShield: vi.fn(),
+    enterFullscreen: vi.fn(),
+    exitFullscreen: vi.fn(),
+    showError: vi.fn(),
+    clearError: vi.fn(),
+    showCrash: vi.fn(),
+    clearCrash: vi.fn(),
+    openConfirm: vi.fn(),
   };
 }
 
-afterEach(() => { delete (window as Record<string, unknown>).__aegisAutopilot; });
+afterEach(() => {
+  delete (window as Record<string, unknown>).__aegisAutopilot;
+});
 
 describe('autopilot control surface', () => {
   it('install exposes the control on window and getter returns it', () => {
@@ -556,7 +831,9 @@ const KEY = '__aegisAutopilot';
 
 export function installAutopilotControl(c: AutopilotControl): () => void {
   (window as unknown as Record<string, AutopilotControl>)[KEY] = c;
-  return () => { delete (window as unknown as Record<string, unknown>)[KEY]; };
+  return () => {
+    delete (window as unknown as Record<string, unknown>)[KEY];
+  };
 }
 
 export function getAutopilotControl(): AutopilotControl | undefined {
@@ -581,10 +858,12 @@ git commit -m "feat(autopilot): dev-only control surface"
 ## Task 5: Register the control surface in DesktopApp
 
 **Files:**
+
 - Modify: `src/App.tsx` (imports + a dev-only effect inside `DesktopApp`, after the existing state declarations ~line 107)
 - Test: `src/App.test.tsx` is unaffected; add `src/autopilot/registration.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `installAutopilotControl`, `AutopilotControl` from `control.ts`; the `DesktopApp` setState fns + `confirm` from `lib/toast`.
 
 - [ ] **Step 1: Write the failing test**
@@ -594,10 +873,17 @@ git commit -m "feat(autopilot): dev-only control surface"
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 // Reuse the App test's mock by importing it is not possible; mock minimally here.
-vi.mock('../lib/ipcClient', async () => (await import('../testFixtures/aegisMock')).aegisMockModule());
+vi.mock('../lib/ipcClient', async () =>
+  (await import('../testFixtures/aegisMock')).aegisMockModule(),
+);
 
-beforeEach(() => { (import.meta as unknown as { env: Record<string, unknown> }).env.VITE_AEGIS_AUTOPILOT = '1'; });
-afterEach(() => { delete (window as Record<string, unknown>).__aegisAutopilot; vi.resetModules(); });
+beforeEach(() => {
+  (import.meta as unknown as { env: Record<string, unknown> }).env.VITE_AEGIS_AUTOPILOT = '1';
+});
+afterEach(() => {
+  delete (window as Record<string, unknown>).__aegisAutopilot;
+  vi.resetModules();
+});
 
 describe('control surface registration', () => {
   it('registers window.__aegisAutopilot when dev + flag set', async () => {
@@ -634,35 +920,48 @@ import { confirm } from './lib/toast';
 Then, inside `DesktopApp`, immediately after the `const safety = useSafety();` line (~107) and before the first `useEffect`, add:
 
 ```ts
-  // Dev-only: expose an imperative control surface so the autopilot can reach every
-  // overlay/state deterministically. Gated so it can NEVER run in a production build.
-  useEffect(() => {
-    if (!import.meta.env.DEV || !import.meta.env.VITE_AEGIS_AUTOPILOT) return;
-    return installAutopilotControl({
-      openSettings: () => setSettingsOpen(true),
-      closeSettings: () => setSettingsOpen(false),
-      openDownloads: () => setDownloadsOpen(true),
-      closeDownloads: () => setDownloadsOpen(false),
-      openManager: () => setManagerOpen(true),
-      closeManager: () => setManagerOpen(false),
-      setSidebar: (open) => setSidebarOpen(open),
-      setShield: (open) => setShieldOpen(open),
-      enterFullscreen: () => setFullscreen(true),
-      exitFullscreen: () => setFullscreen(false),
-      showError: (f) => { setCrashed(null); setFailed(f as NavFailed); },
-      clearError: () => setFailed(null),
-      showCrash: (c) => { setFailed(null); setCrashed(c as NavCrashed); },
-      clearCrash: () => setCrashed(null),
-      openConfirm: (message) => { void confirm(message); },
-    });
-  }, []);
+// Dev-only: expose an imperative control surface so the autopilot can reach every
+// overlay/state deterministically. Gated so it can NEVER run in a production build.
+useEffect(() => {
+  if (!import.meta.env.DEV || !import.meta.env.VITE_AEGIS_AUTOPILOT) return;
+  return installAutopilotControl({
+    openSettings: () => setSettingsOpen(true),
+    closeSettings: () => setSettingsOpen(false),
+    openDownloads: () => setDownloadsOpen(true),
+    closeDownloads: () => setDownloadsOpen(false),
+    openManager: () => setManagerOpen(true),
+    closeManager: () => setManagerOpen(false),
+    setSidebar: (open) => setSidebarOpen(open),
+    setShield: (open) => setShieldOpen(open),
+    enterFullscreen: () => setFullscreen(true),
+    exitFullscreen: () => setFullscreen(false),
+    showError: (f) => {
+      setCrashed(null);
+      setFailed(f as NavFailed);
+    },
+    clearError: () => setFailed(null),
+    showCrash: (c) => {
+      setFailed(null);
+      setCrashed(c as NavCrashed);
+    },
+    clearCrash: () => setCrashed(null),
+    openConfirm: (message) => {
+      void confirm(message);
+    },
+  });
+}, []);
 ```
 
 > Add a TS ambient declaration so `import.meta.env.VITE_AEGIS_AUTOPILOT` typechecks: create `src/vite-env.d.ts` with:
+>
 > ```ts
 > /// <reference types="vite/client" />
-> interface ImportMetaEnv { readonly VITE_AEGIS_AUTOPILOT?: string }
-> interface ImportMeta { readonly env: ImportMetaEnv }
+> interface ImportMetaEnv {
+>   readonly VITE_AEGIS_AUTOPILOT?: string;
+> }
+> interface ImportMeta {
+>   readonly env: ImportMetaEnv;
+> }
 > ```
 
 - [ ] **Step 4: Run tests to verify they pass**
@@ -682,10 +981,12 @@ git commit -m "feat(autopilot): register dev-only control surface in DesktopApp"
 ## Task 6: Screen-reaching (`reach.ts`)
 
 **Files:**
+
 - Create: `src/autopilot/reach.ts`
 - Test: `src/autopilot/reach.test.ts`
 
 **Interfaces:**
+
 - Consumes: `AutopilotControl` from `control.ts`, `ScreenSpec` from `screens.ts`, `IPC` from `shared/types`.
 - Produces: `interface ReachDeps { emitEvent(channel: string, payload: unknown): void | Promise<void> }`, `async function reachScreen(control: AutopilotControl, screen: ScreenSpec, deps: ReachDeps): Promise<void>`, `async function leaveScreen(control: AutopilotControl, screen: ScreenSpec): Promise<void>`, `function clickTabByLabel(label: string): boolean`.
 
@@ -703,7 +1004,23 @@ import { IPC } from '../../shared/types';
 function fake(): AutopilotControl {
   const f = () => vi.fn();
   return Object.fromEntries(
-    ['openSettings','closeSettings','openDownloads','closeDownloads','openManager','closeManager','setSidebar','setShield','enterFullscreen','exitFullscreen','showError','clearError','showCrash','clearCrash','openConfirm'].map((k) => [k, f()]),
+    [
+      'openSettings',
+      'closeSettings',
+      'openDownloads',
+      'closeDownloads',
+      'openManager',
+      'closeManager',
+      'setSidebar',
+      'setShield',
+      'enterFullscreen',
+      'exitFullscreen',
+      'showError',
+      'clearError',
+      'showCrash',
+      'clearCrash',
+      'openConfirm',
+    ].map((k) => [k, f()]),
   ) as unknown as AutopilotControl;
 }
 
@@ -714,9 +1031,13 @@ describe('reachScreen', () => {
     expect(c.openDownloads).toHaveBeenCalled();
   });
   it('emits the nav.failed event for the error overlay', async () => {
-    const c = fake(); const emitEvent = vi.fn();
+    const c = fake();
+    const emitEvent = vi.fn();
     await reachScreen(c, { id: 'errorOverlay', label: 'E', via: 'event' }, { emitEvent });
-    expect(emitEvent).toHaveBeenCalledWith(IPC.evtNavFailed, expect.objectContaining({ viewId: expect.any(Number) }));
+    expect(emitEvent).toHaveBeenCalledWith(
+      IPC.evtNavFailed,
+      expect.objectContaining({ viewId: expect.any(Number) }),
+    );
   });
 });
 ```
@@ -744,31 +1065,64 @@ const V = PRIMARY_VIEW_ID;
 export function clickTabByLabel(label: string): boolean {
   const els = Array.from(document.querySelectorAll('button,[role="tab"]')) as HTMLElement[];
   const el = els.find((e) => e.textContent?.trim() === label);
-  if (el) { el.click(); return true; }
+  if (el) {
+    el.click();
+    return true;
+  }
   return false;
 }
 
 const SETTINGS_TAB_LABEL: Record<string, string> = {
-  appearance: 'Appearance', search: 'Search', home: 'Home', tabs: 'Tabs',
-  filterLists: 'Filter Lists', myFilters: 'My Filters', allowlist: 'Allowlist',
-  downloads: 'Downloads', sitePermissions: 'Site permissions', security: 'Security',
-  sync: 'Sync', data: 'Data',
+  appearance: 'Appearance',
+  search: 'Search',
+  home: 'Home',
+  tabs: 'Tabs',
+  filterLists: 'Filter Lists',
+  myFilters: 'My Filters',
+  allowlist: 'Allowlist',
+  downloads: 'Downloads',
+  sitePermissions: 'Site permissions',
+  security: 'Security',
+  sync: 'Sync',
+  data: 'Data',
 };
 
 // Representative payloads. TS will flag any field mismatch against shared/types.ts
 // (NavFailed/NavCrashed/PermissionPrompt/SafetyInterstitialPayload) — align then.
 const EVENT_PAYLOAD: Partial<Record<ScreenId, { channel: string; payload: unknown }>> = {
-  errorOverlay: { channel: IPC.evtNavFailed, payload: { viewId: V, url: 'https://invalid.invalid/', errorCode: -105, errorDescription: 'NAME_NOT_RESOLVED' } },
+  errorOverlay: {
+    channel: IPC.evtNavFailed,
+    payload: {
+      viewId: V,
+      url: 'https://invalid.invalid/',
+      errorCode: -105,
+      errorDescription: 'NAME_NOT_RESOLVED',
+    },
+  },
   crashOverlay: { channel: IPC.evtNavCrashed, payload: { viewId: V, reason: 'crashed' } },
-  permissionPrompt: { channel: IPC.evtPermissionsPrompt, payload: { requestId: 'ap-1', origin: 'https://example.com', permission: 'geolocation' } },
-  safetyInterstitial: { channel: IPC.evtSafetyInterstitial, payload: { kind: 'malware', host: 'malware.test', url: 'https://malware.test/' } },
+  permissionPrompt: {
+    channel: IPC.evtPermissionsPrompt,
+    payload: { requestId: 'ap-1', origin: 'https://example.com', permission: 'geolocation' },
+  },
+  safetyInterstitial: {
+    channel: IPC.evtSafetyInterstitial,
+    payload: { kind: 'malware', host: 'malware.test', url: 'https://malware.test/' },
+  },
 };
 
-export async function reachScreen(control: AutopilotControl, screen: ScreenSpec, deps: ReachDeps): Promise<void> {
+export async function reachScreen(
+  control: AutopilotControl,
+  screen: ScreenSpec,
+  deps: ReachDeps,
+): Promise<void> {
   switch (screen.via) {
     case 'state':
-      control.closeSettings(); control.closeDownloads(); control.closeManager();
-      control.setSidebar(false); control.setShield(false); control.exitFullscreen();
+      control.closeSettings();
+      control.closeDownloads();
+      control.closeManager();
+      control.setSidebar(false);
+      control.setShield(false);
+      control.exitFullscreen();
       break;
     case 'overlay':
       if (screen.id === 'downloads') control.openDownloads();
@@ -804,7 +1158,8 @@ export async function leaveScreen(control: AutopilotControl, screen: ScreenSpec)
   else if (screen.id === 'favoritesManager') control.closeManager();
   else if (screen.id === 'shieldPopover') control.setShield(false);
   else if (screen.id === 'fullscreen') control.exitFullscreen();
-  else if (screen.id === 'sidebar:history' || screen.id === 'sidebar:saved') control.setSidebar(false);
+  else if (screen.id === 'sidebar:history' || screen.id === 'sidebar:saved')
+    control.setSidebar(false);
   else if (screen.id === 'errorOverlay') control.clearError();
   else if (screen.id === 'crashOverlay') control.clearCrash();
   await tick();
@@ -832,10 +1187,12 @@ git commit -m "feat(autopilot): shared screen-reaching"
 ## Task 7: Dev-only Rust commands
 
 **Files:**
+
 - Create: `src-tauri/src/autopilot.rs`
 - Modify: `src-tauri/src/lib.rs` (`#[cfg(debug_assertions)] mod autopilot;` near the other `mod` lines ~71; cfg-split `invoke_handler` at line 521)
 
 **Interfaces:**
+
 - Produces (dev-only Tauri commands): `autopilot_screenshot(app, name: String)`, `autopilot_write_report(app, report_json: String, html: String)`, `autopilot_done(app)`, `autopilot_emit_event(app, name: String, payload: serde_json::Value)`. Output dir read from env `AEGIS_AUTOPILOT_OUT` (fallback `std::env::temp_dir()/aegis-autopilot`).
 
 - [ ] **Step 1: Implement `autopilot.rs`**
@@ -962,10 +1319,12 @@ git commit -m "feat(autopilot): dev-only Rust commands (screenshot/report/emit)"
 ## Task 8: Live runner (`run.ts`) + dev-emit wrappers (`devEmit.ts`)
 
 **Files:**
+
 - Create: `src/autopilot/devEmit.ts`, `src/autopilot/run.ts`
 - Test: `src/autopilot/devEmit.test.ts`, `src/autopilot/run.test.ts`
 
 **Interfaces:**
+
 - `devEmit.ts` produces: `async function screenshot(name): Promise<void>`, `async function writeReport(report, html): Promise<void>`, `async function done(): Promise<void>`, `async function emitEvent(channel, payload): Promise<void>` — each wraps `invoke('autopilot_*', …)` from `@tauri-apps/api/core`.
 - `run.ts` produces: `async function runAutopilot(deps?: Partial<RunDeps>): Promise<Report>`, where `interface RunDeps { api: AegisApi; control: AutopilotControl; screenshot(name): Promise<void>; emitEvent(ch, p): Promise<void>; writeReport(r, h): Promise<void>; done(): Promise<void>; hasDisplay: boolean; now(): number; navigateFixture(): Promise<{ before: number; after: number } | null> }`.
 
@@ -986,7 +1345,10 @@ describe('devEmit', () => {
   });
   it('emitEvent invokes the dev command', async () => {
     await emitEvent('nav.failed', { viewId: 1 });
-    expect(invoke).toHaveBeenCalledWith('autopilot_emit_event', { name: 'nav.failed', payload: { viewId: 1 } });
+    expect(invoke).toHaveBeenCalledWith('autopilot_emit_event', {
+      name: 'nav.failed',
+      payload: { viewId: 1 },
+    });
   });
 });
 ```
@@ -1030,38 +1392,71 @@ import type { AutopilotControl } from './control';
 
 function fakeControl(): AutopilotControl {
   return Object.fromEntries(
-    ['openSettings','closeSettings','openDownloads','closeDownloads','openManager','closeManager','setSidebar','setShield','enterFullscreen','exitFullscreen','showError','clearError','showCrash','clearCrash','openConfirm'].map((k) => [k, vi.fn()]),
+    [
+      'openSettings',
+      'closeSettings',
+      'openDownloads',
+      'closeDownloads',
+      'openManager',
+      'closeManager',
+      'setSidebar',
+      'setShield',
+      'enterFullscreen',
+      'exitFullscreen',
+      'showError',
+      'clearError',
+      'showCrash',
+      'clearCrash',
+      'openConfirm',
+    ].map((k) => [k, vi.fn()]),
   ) as unknown as AutopilotControl;
 }
 
 // Minimal faithful-shape fake of the api (returns shapes the catalog asserts).
-const api = new Proxy({}, {
-  get: () => new Proxy({}, { get: () => async () => [] }),
-}) as never;
+const api = new Proxy(
+  {},
+  {
+    get: () => new Proxy({}, { get: () => async () => [] }),
+  },
+) as never;
 
 describe('runAutopilot', () => {
   it('produces a result per screen and per catalog entry', async () => {
     const screenshot = vi.fn(async () => {});
     const report = await runAutopilot({
-      api, control: fakeControl(), screenshot, emitEvent: vi.fn(async () => {}),
-      writeReport: vi.fn(async () => {}), done: vi.fn(async () => {}),
-      hasDisplay: true, now: () => 0, navigateFixture: async () => null,
+      api,
+      control: fakeControl(),
+      screenshot,
+      emitEvent: vi.fn(async () => {}),
+      writeReport: vi.fn(async () => {}),
+      done: vi.fn(async () => {}),
+      hasDisplay: true,
+      now: () => 0,
+      navigateFixture: async () => null,
     });
     expect(report.results.length).toBeGreaterThanOrEqual(SCREENS.length + CATALOG.length);
-    expect(report.summary.pass + report.summary.fail + report.summary.skip).toBe(report.results.length);
+    expect(report.summary.pass + report.summary.fail + report.summary.skip).toBe(
+      report.results.length,
+    );
   });
   it('marks screenshots skipped when no display', async () => {
     const report = await runAutopilot({
-      api, control: fakeControl(), screenshot: vi.fn(async () => {}), emitEvent: vi.fn(async () => {}),
-      writeReport: vi.fn(async () => {}), done: vi.fn(async () => {}),
-      hasDisplay: false, now: () => 0, navigateFixture: async () => null,
+      api,
+      control: fakeControl(),
+      screenshot: vi.fn(async () => {}),
+      emitEvent: vi.fn(async () => {}),
+      writeReport: vi.fn(async () => {}),
+      done: vi.fn(async () => {}),
+      hasDisplay: false,
+      now: () => 0,
+      navigateFixture: async () => null,
     });
     expect(report.results.some((r) => r.kind === 'visual' && r.status === 'skip')).toBe(true);
   });
 });
 ```
 
-> The proxy-based `api` returns `[]` for everything; catalog entries that assert `assertObject` on a list call will fail in this unit test. That's fine — the test asserts *structure of the report* (a result per entry, counts add up), not all-pass. If you prefer all-pass here, pass a richer fake; not required.
+> The proxy-based `api` returns `[]` for everything; catalog entries that assert `assertObject` on a list call will fail in this unit test. That's fine — the test asserts _structure of the report_ (a result per entry, counts add up), not all-pass. If you prefer all-pass here, pass a richer fake; not required.
 
 - [ ] **Step 4: Run + verify fail; implement `run.ts`**
 
@@ -1128,13 +1523,41 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
     try {
       await reachScreen(deps.control, screen, { emitEvent: deps.emitEvent });
       if (deps.hasDisplay) {
-        try { await deps.screenshot(screen.id); results.push({ id: `screen:${screen.id}`, kind: 'visual', title: screen.label, status: 'pass', screenshot: `${screen.id}.png` }); }
-        catch (e) { results.push({ id: `screen:${screen.id}`, kind: 'visual', title: screen.label, status: 'fail', detail: String(e) }); }
+        try {
+          await deps.screenshot(screen.id);
+          results.push({
+            id: `screen:${screen.id}`,
+            kind: 'visual',
+            title: screen.label,
+            status: 'pass',
+            screenshot: `${screen.id}.png`,
+          });
+        } catch (e) {
+          results.push({
+            id: `screen:${screen.id}`,
+            kind: 'visual',
+            title: screen.label,
+            status: 'fail',
+            detail: String(e),
+          });
+        }
       } else {
-        results.push({ id: `screen:${screen.id}`, kind: 'visual', title: screen.label, status: 'skip', detail: 'no display' });
+        results.push({
+          id: `screen:${screen.id}`,
+          kind: 'visual',
+          title: screen.label,
+          status: 'skip',
+          detail: 'no display',
+        });
       }
     } catch (e) {
-      results.push({ id: `screen:${screen.id}`, kind: 'visual', title: screen.label, status: 'fail', detail: String(e) });
+      results.push({
+        id: `screen:${screen.id}`,
+        kind: 'visual',
+        title: screen.label,
+        status: 'fail',
+        detail: String(e),
+      });
     } finally {
       await leaveScreen(deps.control, screen).catch(() => {});
     }
@@ -1142,30 +1565,85 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
 
   // 2) Feature exercise (real core)
   for (const f of CATALOG) {
-    try { await f.exercise(deps.api); results.push({ id: f.id, kind: 'core', title: f.title, status: 'pass' }); }
-    catch (e) { results.push({ id: f.id, kind: 'core', title: f.title, status: 'fail', detail: String(e) }); }
+    try {
+      await f.exercise(deps.api);
+      results.push({ id: f.id, kind: 'core', title: f.title, status: 'pass' });
+    } catch (e) {
+      results.push({ id: f.id, kind: 'core', title: f.title, status: 'fail', detail: String(e) });
+    }
   }
 
   // 3) End-to-end induction: ad-block actually blocks on a real page
   try {
     const r = await deps.navigateFixture();
-    if (!r) results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block blocks on fixture page', status: 'skip', detail: 'no fixture url' });
-    else if (r.after > r.before) results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block blocks on fixture page', status: 'pass', detail: `blocked ${r.after - r.before}` });
-    else results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block blocks on fixture page', status: 'fail', detail: `count did not rise (${r.before} -> ${r.after})` });
+    if (!r)
+      results.push({
+        id: 'induction:adblock',
+        kind: 'core',
+        title: 'Ad-block blocks on fixture page',
+        status: 'skip',
+        detail: 'no fixture url',
+      });
+    else if (r.after > r.before)
+      results.push({
+        id: 'induction:adblock',
+        kind: 'core',
+        title: 'Ad-block blocks on fixture page',
+        status: 'pass',
+        detail: `blocked ${r.after - r.before}`,
+      });
+    else
+      results.push({
+        id: 'induction:adblock',
+        kind: 'core',
+        title: 'Ad-block blocks on fixture page',
+        status: 'fail',
+        detail: `count did not rise (${r.before} -> ${r.after})`,
+      });
   } catch (e) {
-    results.push({ id: 'induction:adblock', kind: 'core', title: 'Ad-block blocks on fixture page', status: 'fail', detail: String(e) });
+    results.push({
+      id: 'induction:adblock',
+      kind: 'core',
+      title: 'Ad-block blocks on fixture page',
+      status: 'fail',
+      detail: String(e),
+    });
   }
 
-  const report: Report = { startedAt, finishedAt: deps.now(), display: deps.hasDisplay, results, summary: summarize(results) };
-  try { await deps.writeReport(report, renderReportHtml(report)); } catch { /* ignore in unit tests */ }
-  try { await deps.done(); } catch { /* ignore */ }
+  const report: Report = {
+    startedAt,
+    finishedAt: deps.now(),
+    display: deps.hasDisplay,
+    results,
+    summary: summarize(results),
+  };
+  try {
+    await deps.writeReport(report, renderReportHtml(report));
+  } catch {
+    /* ignore in unit tests */
+  }
+  try {
+    await deps.done();
+  } catch {
+    /* ignore */
+  }
   return report;
 }
 
 // liveDeps() touches `aegis`/import.meta; in unit tests `partial` overrides everything,
 // so guard so a missing control surface doesn't throw when fully overridden.
 function liveDepsSafe(partial?: Partial<RunDeps>): RunDeps {
-  const required: Array<keyof RunDeps> = ['api','control','screenshot','emitEvent','writeReport','done','hasDisplay','now','navigateFixture'];
+  const required: Array<keyof RunDeps> = [
+    'api',
+    'control',
+    'screenshot',
+    'emitEvent',
+    'writeReport',
+    'done',
+    'hasDisplay',
+    'now',
+    'navigateFixture',
+  ];
   if (partial && required.every((k) => k in partial)) return partial as RunDeps;
   return liveDeps();
 }
@@ -1187,6 +1665,7 @@ git commit -m "feat(autopilot): live runner + dev-emit wrappers"
 ## Task 9: Bootstrap in `main.tsx`
 
 **Files:**
+
 - Modify: `src/main.tsx`
 
 - [ ] **Step 1: Add the dev-only bootstrap**
@@ -1208,10 +1687,12 @@ if (import.meta.env.DEV && import.meta.env.VITE_AEGIS_AUTOPILOT) {
 - [ ] **Step 2: Verify production build excludes the autopilot**
 
 Run:
+
 ```bash
 npm run build:renderer
 grep -rl "runAutopilot\|__aegisAutopilot\|autopilot_screenshot" dist/ || echo "ABSENT (good)"
 ```
+
 Expected: `ABSENT (good)` — no autopilot symbols in the production bundle. If any appear, the `import.meta.env.DEV` gating is wrong.
 
 - [ ] **Step 3: Commit**
@@ -1226,6 +1707,7 @@ git commit -m "feat(autopilot): dev-only bootstrap (DCE'd from production)"
 ## Task 10: Fixture page + server
 
 **Files:**
+
 - Create: `scripts/autopilot/fixture/index.html`, `scripts/autopilot/fixture-server.mjs`
 
 - [ ] **Step 1: Create the ad-laden probe page**
@@ -1233,16 +1715,18 @@ git commit -m "feat(autopilot): dev-only bootstrap (DCE'd from production)"
 ```html
 <!-- scripts/autopilot/fixture/index.html -->
 <!doctype html>
-<meta charset="utf-8">
+<meta charset="utf-8" />
 <title>Aegis autopilot fixture</title>
 <h1>Autopilot ad-block fixture</h1>
-<p>This page references known-blocked ad/tracker hosts so the autopilot can verify
-real network ad-blocking on the live content webview.</p>
+<p>
+  This page references known-blocked ad/tracker hosts so the autopilot can verify real network
+  ad-blocking on the live content webview.
+</p>
 <!-- Hosts present in the bundled EasyList/EasyPrivacy/Peter Lowe sets. -->
-<img src="https://ib.adnxs.com/pixel.gif" alt="" width="1" height="1">
+<img src="https://ib.adnxs.com/pixel.gif" alt="" width="1" height="1" />
 <script src="https://www.googletagmanager.com/gtag/js?id=AP-TEST" async></script>
 <script src="https://static.doubleclick.net/instream/ad_status.js" async></script>
-<img src="https://www.google-analytics.com/collect?v=1" alt="" width="1" height="1">
+<img src="https://www.google-analytics.com/collect?v=1" alt="" width="1" height="1" />
 <p id="done">fixture loaded</p>
 ```
 
@@ -1261,14 +1745,20 @@ const root = join(dirname(fileURLToPath(import.meta.url)), 'fixture');
 const port = Number(process.argv[2] || 8137);
 
 const server = createServer(async (req, res) => {
-  const rel = normalize(decodeURIComponent((req.url || '/').split('?')[0])).replace(/^(\.\.[/\\])+/, '');
+  const rel = normalize(decodeURIComponent((req.url || '/').split('?')[0])).replace(
+    /^(\.\.[/\\])+/,
+    '',
+  );
   const path = join(root, rel === '/' ? 'index.html' : rel);
   try {
     const body = await readFile(path);
-    res.writeHead(200, { 'content-type': path.endsWith('.html') ? 'text/html' : 'application/octet-stream' });
+    res.writeHead(200, {
+      'content-type': path.endsWith('.html') ? 'text/html' : 'application/octet-stream',
+    });
     res.end(body);
   } catch {
-    res.writeHead(404); res.end('not found');
+    res.writeHead(404);
+    res.end('not found');
   }
 });
 server.listen(port, '127.0.0.1', () => console.log(`fixture http://127.0.0.1:${port}/`));
@@ -1277,12 +1767,14 @@ server.listen(port, '127.0.0.1', () => console.log(`fixture http://127.0.0.1:${p
 - [ ] **Step 3: Verify the server serves the page**
 
 Run:
+
 ```bash
 node scripts/autopilot/fixture-server.mjs 8137 &
 sleep 1
 curl -s http://127.0.0.1:8137/ | grep -q "adnxs.com" && echo "OK fixture serves ad refs"
 kill %1
 ```
+
 Expected: `OK fixture serves ad refs`.
 
 - [ ] **Step 4: Commit**
@@ -1297,6 +1789,7 @@ git commit -m "feat(autopilot): ad-block fixture page + static server"
 ## Task 11: Linux launcher script
 
 **Files:**
+
 - Create: `scripts/autopilot/run-autopilot.sh`
 
 - [ ] **Step 1: Write the launcher**
@@ -1382,9 +1875,11 @@ git commit -m "feat(autopilot): Linux launcher (disposable profile + report)"
 ## Task 12: Exhaustive vitest tour (desktop + mobile)
 
 **Files:**
+
 - Create: `src/autopilot/tour.test.tsx`, `src/autopilot/tour.mobile.test.tsx`
 
 **Interfaces:**
+
 - Consumes: `SCREENS`, `CATALOG`, `reachScreen`, the shared `aegisMock`, the real `App`/`DesktopApp`/`MobileApp`.
 
 - [ ] **Step 1: Write the desktop tour**
@@ -1398,10 +1893,17 @@ import { CATALOG } from './catalog';
 import { reachScreen } from './reach';
 import { getAutopilotControl } from './control';
 
-vi.mock('../lib/ipcClient', async () => (await import('../testFixtures/aegisMock')).aegisMockModule());
+vi.mock('../lib/ipcClient', async () =>
+  (await import('../testFixtures/aegisMock')).aegisMockModule(),
+);
 
-beforeEach(() => { (import.meta as unknown as { env: Record<string, unknown> }).env.VITE_AEGIS_AUTOPILOT = '1'; });
-afterEach(() => { cleanup(); delete (window as Record<string, unknown>).__aegisAutopilot; });
+beforeEach(() => {
+  (import.meta as unknown as { env: Record<string, unknown> }).env.VITE_AEGIS_AUTOPILOT = '1';
+});
+afterEach(() => {
+  cleanup();
+  delete (window as Record<string, unknown>).__aegisAutopilot;
+});
 
 describe('desktop autopilot tour', () => {
   it('reaches every desktop screen without crashing', async () => {
@@ -1410,7 +1912,9 @@ describe('desktop autopilot tour', () => {
     const control = getAutopilotControl();
     expect(control).toBeDefined();
     for (const screen of SCREENS) {
-      await act(async () => { await reachScreen(control!, screen, { emitEvent: vi.fn() }); });
+      await act(async () => {
+        await reachScreen(control!, screen, { emitEvent: vi.fn() });
+      });
       // App still mounted (no throw / unmount) after reaching the screen.
       expect(document.querySelector('.app, .fullscreen-exit')).toBeTruthy();
     }
@@ -1439,10 +1943,18 @@ Expected: PASS. Extend `aegisMock.ts` shapes until the catalog-exercise test pas
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 
-vi.mock('../lib/ipcClient', async () => (await import('../testFixtures/aegisMock')).aegisMockModule());
+vi.mock('../lib/ipcClient', async () =>
+  (await import('../testFixtures/aegisMock')).aegisMockModule(),
+);
 
-beforeEach(() => { document.documentElement.classList.add('aegis-mobile'); });
-afterEach(() => { cleanup(); document.documentElement.classList.remove('aegis-mobile'); vi.resetModules(); });
+beforeEach(() => {
+  document.documentElement.classList.add('aegis-mobile');
+});
+afterEach(() => {
+  cleanup();
+  document.documentElement.classList.remove('aegis-mobile');
+  vi.resetModules();
+});
 
 describe('mobile autopilot tour', () => {
   it('renders MobileApp without crashing when .aegis-mobile is set', async () => {
@@ -1476,24 +1988,27 @@ git commit -m "test(autopilot): exhaustive vitest tour (desktop + mobile)"
 ## Task 13: CLAUDE.md docs + live verification
 
 **Files:**
+
 - Modify: `CLAUDE.md`, `src/CLAUDE.md`, `src-tauri/CLAUDE.md`, `scripts/CLAUDE.md`
 
 - [ ] **Step 1: Update root `CLAUDE.md`**
 
 Under `## Commands`, add an autopilot subsection:
 
-```markdown
+````markdown
 ### Autopilot test harness
 
 ```bash
 npm test                                  # includes the exhaustive vitest tour + drift guard
 bash scripts/autopilot/run-autopilot.sh   # launch the real app + autonomously test every feature (Linux, needs a display)
 ```
+````
 
 The live autopilot drives every feature through the real Rust core and screenshots
 every UI state; the report lands in `target/autopilot/<timestamp>/report.html`. It runs
 only in dev (`VITE_AEGIS_AUTOPILOT`) and is dead-code-eliminated from production builds.
-```
+
+````
 
 Under `## Conventions that matter everywhere`, add:
 
@@ -1504,7 +2019,7 @@ Under `## Conventions that matter everywhere`, add:
   feature — a new IPC channel, a Settings tab, or a full-window overlay — add its catalog/
   screen entry **in the same commit**. The drift-guard test (`src/autopilot/coverage.test.ts`)
   fails the build if a command channel has no catalog entry, so this isn't optional.
-```
+````
 
 - [ ] **Step 2: Update `src/CLAUDE.md`**
 
@@ -1521,19 +2036,23 @@ Document `scripts/autopilot/` — the launcher (disposable profile via `XDG_*`, 
 - [ ] **Step 5: Full suite + production-exclusion re-verify**
 
 Run:
+
 ```bash
 npm test
 npm run build:renderer && (grep -rl "runAutopilot\|__aegisAutopilot" dist/ || echo "PROD CLEAN")
 cargo build --release --manifest-path src-tauri/Cargo.toml 2>&1 | tail -2
 ```
+
 Expected: vitest all green; `PROD CLEAN`; release builds without the autopilot module.
 
 - [ ] **Step 6: Live on-hardware verification (the real proof)**
 
 Run (on this Linux machine, with a display):
+
 ```bash
 bash scripts/autopilot/run-autopilot.sh; echo "exit=$?"
 ```
+
 Expected: a `RESULT: N passed, …` summary; `target/autopilot/<ts>/report.html` exists with a populated screenshot gallery; the ad-block induction step is `pass` (block count rose on the fixture page). Record the actual numbers. If `core` steps fail, debug per `systematic-debugging` — do not paper over. (Per the project rule, this is the step that proves the harness; don't claim done without it.)
 
 - [ ] **Step 7: Commit**

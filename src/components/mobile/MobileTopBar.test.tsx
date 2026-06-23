@@ -7,10 +7,15 @@ const favs: Favorite[] = [{ id: 1, name: 'Home', url: 'https://home.test/', posi
 
 function setup(over = {}) {
   const props = {
-    url: 'https://example.com/', isLoading: false,
-    onNavigate: vi.fn(), onReloadOrStop: vi.fn(),
-    favorites: favs, onOpenFavourite: vi.fn(),
-    bottomBarHidden: false, onToggleBottomBar: vi.fn(), onEnterFullscreen: vi.fn(),
+    url: 'https://example.com/',
+    isLoading: false,
+    onNavigate: vi.fn(),
+    onReloadOrStop: vi.fn(),
+    favorites: favs,
+    onOpenFavourite: vi.fn(),
+    bottomBarHidden: false,
+    onToggleBottomBar: vi.fn(),
+    onEnterFullscreen: vi.fn(),
     ...over,
   };
   render(<MobileTopBar {...props} />);

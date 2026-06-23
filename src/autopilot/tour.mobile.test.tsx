@@ -5,10 +5,18 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, cleanup } from '@testing-library/react';
 
-vi.mock('../lib/ipcClient', async () => (await import('../testFixtures/aegisMock')).aegisMockModule());
+vi.mock('../lib/ipcClient', async () =>
+  (await import('../testFixtures/aegisMock')).aegisMockModule(),
+);
 
-beforeEach(() => { document.documentElement.classList.add('aegis-mobile'); });
-afterEach(() => { cleanup(); document.documentElement.classList.remove('aegis-mobile'); vi.resetModules(); });
+beforeEach(() => {
+  document.documentElement.classList.add('aegis-mobile');
+});
+afterEach(() => {
+  cleanup();
+  document.documentElement.classList.remove('aegis-mobile');
+  vi.resetModules();
+});
 
 describe('mobile autopilot tour', () => {
   it('renders MobileApp without crashing when .aegis-mobile is set', async () => {

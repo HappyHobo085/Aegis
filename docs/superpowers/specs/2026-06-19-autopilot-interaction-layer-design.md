@@ -34,11 +34,11 @@ user gesture:
 
 ```ts
 export interface InteractionSpec {
-  id: string;                         // unique, e.g. 'toolbar.bookmarkStar.add'
-  domain: string;                     // 'toolbar' | 'tabs' | 'sidebar' | 'settings' | ...
-  description: string;                // human summary of the user action
-  screen: ScreenId;                   // screen to reach first (control must be on-screen)
-  layers: InteractionLayer[];         // ['vitest','live'] — where it can run (see below)
+  id: string; // unique, e.g. 'toolbar.bookmarkStar.add'
+  domain: string; // 'toolbar' | 'tabs' | 'sidebar' | 'settings' | ...
+  description: string; // human summary of the user action
+  screen: ScreenId; // screen to reach first (control must be on-screen)
+  layers: InteractionLayer[]; // ['vitest','live'] — where it can run (see below)
   /** Perform the real gesture (click/type/keyboard) via ctx. */
   run(ctx: InteractionCtx): Promise<void>;
   /** Assert the effect; throw on failure. Returns a short success detail. */
@@ -55,16 +55,16 @@ export interface InteractionCtx {
   layer: InteractionLayer;
   // Real gestures. vitest: @testing-library/user-event. live: real DOM dispatch helpers.
   click(el: Element): Promise<void>;
-  type(el: Element, text: string): Promise<void>;   // focuses, types
-  press(key: string): Promise<void>;                 // keyboard, e.g. 'Enter', '{Control>}t{/Control}'
+  type(el: Element, text: string): Promise<void>; // focuses, types
+  press(key: string): Promise<void>; // keyboard, e.g. 'Enter', '{Control>}t{/Control}'
   // Queries scoped to the rendered chrome (role/text/label/selector — NOT brittle CSS).
   byRole(role: string, name?: string | RegExp): HTMLElement | null;
   byText(text: string | RegExp): HTMLElement | null;
   byLabel(label: string | RegExp): HTMLElement | null;
   bySelector(sel: string): HTMLElement | null;
   // Effect-assertion surface.
-  aegis: AegisApi;                  // vitest: the mock; live: the real client
-  calls: CallLog;                   // vitest only: recorded mock calls (e.g. calls.of('favorites.add'))
+  aegis: AegisApi; // vitest: the mock; live: the real client
+  calls: CallLog; // vitest only: recorded mock calls (e.g. calls.of('favorites.add'))
   // Reach a screen before running (delegates to reach.ts).
   reach(screen: ScreenId): Promise<void>;
 }
@@ -180,7 +180,7 @@ over a first.
 
 - OS/file/network/interaction-bound actions already documented as untestable (real
   downloads' file ops, real permission prompts, real malware navigation, a real sync
-  server, app restart). Their *UI affordances* (the buttons) are tested via mocked/event
+  server, app restart). Their _UI affordances_ (the buttons) are tested via mocked/event
   paths; their real effects remain manual.
 - Visual/pixel regression of screenshots (the gallery stays a human artifact).
 

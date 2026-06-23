@@ -20,8 +20,14 @@ describe('TagFilter', () => {
 
   it('marks active tags with aria-pressed=true', () => {
     render(<TagFilter {...props({ activeTags: ['dev'] })} />);
-    expect(screen.getByRole('button', { name: /filter by tag dev/i })).toHaveAttribute('aria-pressed', 'true');
-    expect(screen.getByRole('button', { name: /filter by tag news/i })).toHaveAttribute('aria-pressed', 'false');
+    expect(screen.getByRole('button', { name: /filter by tag dev/i })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(screen.getByRole('button', { name: /filter by tag news/i })).toHaveAttribute(
+      'aria-pressed',
+      'false',
+    );
   });
 
   it('clicking an inactive chip adds it to activeTags', async () => {

@@ -63,7 +63,7 @@ dotted event name.
     EasyList (ads) **+ EasyPrivacy (trackers/analytics)** **+ Peter Lowe's** (ad+tracking
     hosts) **+ a curated abuse-TLD block** (`abuse-tlds.txt`: `||cfd^` etc.), mirroring
     uBlock Origin's default set plus rotating-domain defense. EasyList alone blocks ad
-    servers but *not* analytics (google-analytics, hotjar, scorecardresearch, …), so
+    servers but _not_ analytics (google-analytics, hotjar, scorecardresearch, …), so
     EasyPrivacy closes that gap; and piracy/streaming sites serve pop-under/banner ads
     from rotating random domains on throwaway TLDs (e.g. `limbycocking.cfd`) that no
     static domain list catches — `||tld^` blocks the whole abuse TLD (engine, converter,
@@ -94,7 +94,7 @@ dotted event name.
     `adblock_convert.rs` (Brave → Safari content-blocker JSON), chunked ~25k
     rules/filter (WebKit caps ~50k), disk-cached by hash. **Filters are per-webview
     (per-tab), not global** — `apply_filters` covers every content webview + caches
-    the chunks; `nav::spawn_tab` calls `apply_to_new_tab` so tabs opened *after*
+    the chunks; `nav::spawn_tab` calls `apply_to_new_tab` so tabs opened _after_
     boot get filters too (not just the boot-active tab); `remove_all` clears all.
   - `adblock_inject.rs` (Windows + macOS) — document-start JS blocking
     fetch/XHR/sendBeacon + cosmetic hiding. On Linux it skips the heavy injection (native
@@ -135,14 +135,14 @@ dotted event name.
   **Correction (verified by the autopilot A/B trace):** the content filter blocks
   declaratively with no per-block callback, and `resource-load-started` does **NOT**
   fire for a request the filter blocks (the load is cancelled before the signal). So the
-  counter only sees requests the *capped* content filter ALLOWED, and counts the ones the
-  *full* engine flags (`should_block`) — i.e. ads that slip past the ~50k-rule filter cap
+  counter only sees requests the _capped_ content filter ALLOWED, and counts the ones the
+  _full_ engine flags (`should_block`) — i.e. ads that slip past the ~50k-rule filter cap
   but the engine still catches. **Consequence:** well-known hosts (top of EasyList) are
   always within the cap → filter-blocked pre-signal → blocked but **never counted on the
   badge** (real blocking, invisible count). This is why the autopilot proves blocking from
   the A/B trace (ad subresources fire with ad-block OFF, vanish with it ON) rather than
   from the shield count. (WebKit also negative-caches a blocked URL, a separate reason a
-  page of *static* ad URLs under-counts on reload — moot for real, per-request-unique ad
+  page of _static_ ad URLs under-counts on reload — moot for real, per-request-unique ad
   URLs.)
 - **Misc** — `picker.rs` (element picker), `update.rs` (tauri-plugin-updater state).
 
@@ -153,12 +153,12 @@ debug builds and is **completely absent from release binaries**.
 
 Four `#[tauri::command]` functions are registered:
 
-| Command | What it does |
-|---|---|
-| `autopilot_screenshot` | Calls `spectacle -b -n -a -o <dir>/shots/<name>.png` (best-effort; Linux/KDE). |
-| `autopilot_write_report` | Writes `report.json` + `report.html` to `$AEGIS_AUTOPILOT_OUT` (or a temp dir). |
-| `autopilot_done` | Writes `done.sentinel` to the output dir — the launcher's watchdog polls for this. |
-| `autopilot_emit_event` | Re-uses the production `emit_event()` (`.`→`:` rewrite) to synthesize events the live runner needs (e.g. `nav.failed`, `safety.interstitialShown`). |
+| Command                  | What it does                                                                                                                                        |
+| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `autopilot_screenshot`   | Calls `spectacle -b -n -a -o <dir>/shots/<name>.png` (best-effort; Linux/KDE).                                                                      |
+| `autopilot_write_report` | Writes `report.json` + `report.html` to `$AEGIS_AUTOPILOT_OUT` (or a temp dir).                                                                     |
+| `autopilot_done`         | Writes `done.sentinel` to the output dir — the launcher's watchdog polls for this.                                                                  |
+| `autopilot_emit_event`   | Re-uses the production `emit_event()` (`.`→`:` rewrite) to synthesize events the live runner needs (e.g. `nav.failed`, `safety.interstitialShown`). |
 
 **These commands are NOT in the `ipc()` dispatcher and NOT in `shared/types.ts`
 `IPC` const.** They are a private side channel: the renderer calls them directly by
@@ -199,6 +199,7 @@ malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt
 (JNI into the Rust `libapp_lib.so`). `AndroidManifest.xml` grants only `INTERNET`.
 
 **Mobile chrome (`MainActivity.kt`), kept in sync with the `MobileApp` shell in `src/`:**
+
 - The content area is inset by the chrome heights: `topMargin = 72dp`
   (`MOBILE_ADDRESS_H` 48 + `MOBILE_FAV_H` 24) + status inset, `bottomMargin = 56dp`
   (`MOBILE_BOTTOMBAR_H`) + nav inset. **`applyContentMargins()`** is the single place
@@ -286,21 +287,21 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     build / `cargo check --target aarch64-linux-android` catches these; desktop and the
     Windows cross-check do not.
 11. **Draw over a ViewGroup's children with `dispatchDraw`, not `onDraw`.** A
-    `ViewGroup`'s `onDraw()` paints *behind* its children, so an indicator drawn there is
+    `ViewGroup`'s `onDraw()` paints _behind_ its children, so an indicator drawn there is
     occluded by an opaque `MATCH_PARENT` child (the content WebView). `GestureContainer`
     draws its swipe arrow / refresh spinner in `dispatchDraw()` after `super.dispatchDraw()`,
     which renders on top. (Same class of bug as the earlier "chrome overlay rendered behind
     the native content view.")
 12. **AppImage HTML5 video — GStreamer plugin path.** WebKitGTK decodes `<video>`/`<audio>`
     via GStreamer, which `dlopen`s its plugins (incl. `appsink`, how WebKit pulls frames)
-    from `GST_PLUGIN_SYSTEM_PATH_1_0`. linuxdeploy bundles `libgstreamer` (a *linked* dep)
+    from `GST_PLUGIN_SYSTEM_PATH_1_0`. linuxdeploy bundles `libgstreamer` (a _linked_ dep)
     but NOT the `dlopen`-ed plugin modules, and `AppRun` points that env var at the bundled
     (empty) dir — so all media fails with "GStreamer element appsink not found": permanent
     spinner, no playback (the streamex.sh symptom). `lib.rs` appends the host's plugin
     dir(s) (`/usr/lib64/gstreamer-1.0`, …) to the path; the bundled libgstreamer is copied
     from the build host so it version-matches and loads them. Harmless for the `.deb`/dev
     (those dirs are already default). Fedora multilib note: `/usr/lib/gstreamer-1.0` is the
-    *i686* dir, so it's only used as a fallback when no arch-specific dir exists.
+    _i686_ dir, so it's only used as a fallback when no arch-specific dir exists.
 13. **`on_navigation` fires for subframes; don't drive the URL bar from it.** wry wires
     Tauri's `on_navigation` to WebKitGTK `decide-policy` (NavigationAction) with NO
     main-frame filter, so cross-site iframe/embedded-player loads call it too — and it
@@ -346,7 +347,7 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     NavigationAction, the first consumed pending, the repeats saw none → "scripted" → blocked (the
     autopilot caught this regression: app-initiated `example.com` blocked from `about:blank`). **Live-verified:**
     real streamex.sh direct case (`BLOCK https://www.google.com/ (from https://streamex.sh/)`, page stays on
-    streamex) AND a synthetic redirect *chain* (`BLOCK …/final (from …/8800)` across a 301), with the
+    streamex) AND a synthetic redirect _chain_ (`BLOCK …/final (from …/8800)` across a 301), with the
     full autopilot green (92/0/1, no false blocks). Windows uses `block_at_start` via `NavigationStarting`
     (top-frame only, fires once per hop → resolves app-initiated at the hop and stores it for redirect
     hops to inherit). Allowed navs call `use_()`; non-Response / non-blocked fall through (`false`) so
@@ -362,7 +363,7 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     `Snackbar`** (a chrome-layer bar can't paint over the native content WebView either) with
     the same "Open anyway" → new-tab action (`MainActivity.showRedirectBlocked`).
 
-14. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
+15. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
     backend). The MSVC "Desktop development with C++" workload bundles CMake; install
     NASM separately (nasm.us) and add it to PATH. CI's `windows-latest` ships both, so
     this only bites local builds. Same-machine aside: behind a network that blocks the
@@ -370,17 +371,17 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     fetch with `CRYPT_E_NO_REVOCATION_CHECK` — set `http.check-revoke = false` in
     `~/.cargo/config.toml`.
 
-15. **Windows child webviews need PHYSICAL bounds at fractional DPI.** wry's `add_child`
+16. **Windows child webviews need PHYSICAL bounds at fractional DPI.** wry's `add_child`
     / `set_bounds` called with `LogicalPosition`/`LogicalSize` mispositions the WebView2
     controller's INPUT/hit-test region at non-100% scaling (e.g. 125%): the content
-    webview *renders* below the chrome bars but *captures their clicks*, so the toolbar
+    webview _renders_ below the chrome bars but _captures their clicks_, so the toolbar
     and favourites bar go dead (the tab strip, above the misplaced region, still works —
     that's the "can't add a tab / favourites don't click" symptom). `nav::spawn_tab` and
     `view::apply_inset` pass `PhysicalPosition`/`PhysicalSize` on Windows (logical×scale)
     so the controller's hit rect matches the host window. Only bites fractional DPI — 100%
     is unaffected, which is why CI / 100%-DPI testing missed it. (macOS keeps Logical.)
 
-16. **Windows runtime tab creation must spawn the webview OFF the UI thread, and tabs
+17. **Windows runtime tab creation must spawn the webview OFF the UI thread, and tabs
     need explicit show/hide.** Two pre-existing Windows multi-tab bugs:
     (a) `window.add_child` **deadlocks the UI thread** when called synchronously from the
     `ipc` command — WebView2's async `CreateCoreWebView2Controller` can't complete while
@@ -397,47 +398,47 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
 These apply when there is more than one content webview (i.e. multiple tabs):
 
 a. **One canonical GtkFixed.** Every content webview must live in the same
-   `GtkFixed` container. New `add_child`-ed tabs land in the `GtkBox` and must
-   be re-parented into the `GtkFixed` each layout pass; leaving them in a nested
-   `GtkFixed` breaks the hide-others logic.
+`GtkFixed` container. New `add_child`-ed tabs land in the `GtkBox` and must
+be re-parented into the `GtkFixed` each layout pass; leaving them in a nested
+`GtkFixed` breaks the hide-others logic.
 
 b. **Classify by GTK widget name, not pointer.** Content webviews are identified
-   in `layout()` by a GTK widget name set via `mark_content_label`
-   (constant `CONTENT_WIDGET_NAME`). Do NOT collect pointers via `with_webview`
-   — that closure runs off the main thread and races with layout.
+in `layout()` by a GTK widget name set via `mark_content_label`
+(constant `CONTENT_WIDGET_NAME`). Do NOT collect pointers via `with_webview`
+— that closure runs off the main thread and races with layout.
 
 c. **Hide the active content by parking it OFFSCREEN, never `set_visible(false)`.**
-   A full-window chrome overlay (settings/downloads/sidebar-less) should cover the
-   page: `content_visible = fullscreen || sidebar || !overlay` (also treat
-   `about:`/home as not-covering). But on this stack `set_visible(false)` on the
-   active content is wrong twice over: (1) it *backgrounds* the page — rAF stalls,
-   which malvertising weaponizes to fire a redirect — and (2) it doesn't even
-   reliably hide it: the WebKit native window stays stacked on top, so a full
-   overlay renders BEHIND the page (confirmed via layout logging — the flags were
-   correct, content stayed on top regardless; see gotcha (d)). So `layout()` keeps
-   the active content `set_visible(true)` ALWAYS and, when it shouldn't cover the
-   screen, moves it OFFSCREEN (`fixed.move_(&child, -10000, -10000)`) — the same
-   mechanism that reliably hides background tabs. Visible+offscreen = not
-   backgrounded and not covering the chrome. Z-order: raise the content only when
-   it's shown; otherwise raise the chrome — never `raise()` the content while it's
-   parked, or it re-covers the overlay.
+A full-window chrome overlay (settings/downloads/sidebar-less) should cover the
+page: `content_visible = fullscreen || sidebar || !overlay` (also treat
+`about:`/home as not-covering). But on this stack `set_visible(false)` on the
+active content is wrong twice over: (1) it _backgrounds_ the page — rAF stalls,
+which malvertising weaponizes to fire a redirect — and (2) it doesn't even
+reliably hide it: the WebKit native window stays stacked on top, so a full
+overlay renders BEHIND the page (confirmed via layout logging — the flags were
+correct, content stayed on top regardless; see gotcha (d)). So `layout()` keeps
+the active content `set_visible(true)` ALWAYS and, when it shouldn't cover the
+screen, moves it OFFSCREEN (`fixed.move_(&child, -10000, -10000)`) — the same
+mechanism that reliably hides background tabs. Visible+offscreen = not
+backgrounded and not covering the chrome. Z-order: raise the content only when
+it's shown; otherwise raise the chrome — never `raise()` the content while it's
+parked, or it re-covers the overlay.
 
 d. **Fullscreen exit button must be the topmost GtkFixed child.** In fullscreen
-   mode the exit button must be re-added as the last (topmost z-order) child of
-   the `GtkFixed` each layout pass — `raise()` alone is not enough to lift a GTK
-   widget above native WebKit windows.
+mode the exit button must be re-added as the last (topmost z-order) child of
+the `GtkFixed` each layout pass — `raise()` alone is not enough to lift a GTK
+widget above native WebKit windows.
 
 e. **Size the webviews via `size_allocate`, NOT `set_size_request` — or the window
-   can't shrink.** In a `GtkFixed`, `set_size_request(w, h)` sets each child's
-   *minimum* size, which GTK propagates up as the **window's** minimum — so sizing
-   the chrome/content webviews to the window size pins the window's minimum to its
-   current size: it can grow but never shrink ("can't make the window smaller").
-   Fix: the webviews carry a `(0,0)` size request (no pin) and are sized via
-   `size_allocate` from `size_fixed_children`, connected `after=true` on the
-   canonical `GtkFixed`'s "size-allocate" so it runs *after* GtkFixed clobbers
-   children to their 0×0 request (it reads each child's current x,y + the live Fixed
-   allocation, and never calls `move_`/`queue_resize`, so it can't loop). The
-   effective insets are published by `layout()` into managed `LayoutInsets`. A sane
-   floor is set via Tauri `set_min_size` (now effective — only because the webviews
-   no longer pin the minimum). Live-verified: the window resizes to 600×400 and
-   clamps at the 420×320 minimum.
+can't shrink.** In a `GtkFixed`, `set_size_request(w, h)` sets each child's
+_minimum_ size, which GTK propagates up as the **window's** minimum — so sizing
+the chrome/content webviews to the window size pins the window's minimum to its
+current size: it can grow but never shrink ("can't make the window smaller").
+Fix: the webviews carry a `(0,0)` size request (no pin) and are sized via
+`size_allocate` from `size_fixed_children`, connected `after=true` on the
+canonical `GtkFixed`'s "size-allocate" so it runs _after_ GtkFixed clobbers
+children to their 0×0 request (it reads each child's current x,y + the live Fixed
+allocation, and never calls `move_`/`queue_resize`, so it can't loop). The
+effective insets are published by `layout()` into managed `LayoutInsets`. A sane
+floor is set via Tauri `set_min_size` (now effective — only because the webviews
+no longer pin the minimum). Live-verified: the window resizes to 600×400 and
+clamps at the 420×320 minimum.

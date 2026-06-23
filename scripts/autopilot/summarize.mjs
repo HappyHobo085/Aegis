@@ -35,17 +35,33 @@ export function adblockVerdictFromLog(logText, fixtureOrigin = 'http://127.0.0.1
   const off = adSubresources('off');
   const on = adSubresources('on');
   if (off === 0)
-    return { status: 'skip', off, on, detail: 'no ad traffic observed in the OFF phase (trace markers absent)' };
+    return {
+      status: 'skip',
+      off,
+      on,
+      detail: 'no ad traffic observed in the OFF phase (trace markers absent)',
+    };
   if (on === 0)
-    return { status: 'pass', off, on, detail: `${off} ad subresource(s) loaded with ad-block OFF, ${on} with ad-block ON` };
-  return { status: 'fail', off, on, detail: `ads still loaded with ad-block ON (off=${off}, on=${on})` };
+    return {
+      status: 'pass',
+      off,
+      on,
+      detail: `${off} ad subresource(s) loaded with ad-block OFF, ${on} with ad-block ON`,
+    };
+  return {
+    status: 'fail',
+    off,
+    on,
+    detail: `ads still loaded with ad-block ON (off=${off}, on=${on})`,
+  };
 }
 
 /** Build the printable lines + exit code for a run. Pure: takes the parsed report + raw log. */
 export function summarize(report, logText, fixtureOrigin, galleryPath) {
   const s = report.summary;
   const out = [`\n==> RESULT: ${s.pass} passed, ${s.fail} failed, ${s.skip} skipped`];
-  for (const x of report.results.filter((x) => x.status === 'fail')) out.push(`   FAIL ${x.title}: ${x.detail || ''}`);
+  for (const x of report.results.filter((x) => x.status === 'fail'))
+    out.push(`   FAIL ${x.title}: ${x.detail || ''}`);
   const v = adblockVerdictFromLog(logText, fixtureOrigin);
   out.push(
     v
@@ -72,7 +88,12 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } catch {
     /* no app.log — verdict falls back to SKIP */
   }
-  const { lines, exitCode } = summarize(report, logText, fixtureOrigin, resolve(outDir, 'report.html'));
+  const { lines, exitCode } = summarize(
+    report,
+    logText,
+    fixtureOrigin,
+    resolve(outDir, 'report.html'),
+  );
   console.log(lines.join('\n'));
   process.exit(exitCode);
 }

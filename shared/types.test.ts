@@ -43,7 +43,11 @@ describe('shared/types', () => {
   });
 
   it('admits the Phase-1 data-model shapes', () => {
-    const state: AdblockState = { enabled: true, allowlistedHosts: ['example.com'], sessionBlocked: 5 };
+    const state: AdblockState = {
+      enabled: true,
+      allowlistedHosts: ['example.com'],
+      sessionBlocked: 5,
+    };
     expect(state.allowlistedHosts).toContain('example.com');
 
     const count: BlockedCount = { viewId: PRIMARY_VIEW_ID, page: 2, session: 9 };
@@ -101,7 +105,13 @@ describe('shared/types — Phase 3 additions', () => {
     const entry: HistoryEntry = { id: 2, url: 'https://a.test/', title: 'A', visitedAt: 1234 };
     expect(entry.visitedAt).toBe(1234);
 
-    const saved: SavedItem = { id: 3, url: 'https://b.test/', title: 'B', tags: ['news'], savedAt: 5678 };
+    const saved: SavedItem = {
+      id: 3,
+      url: 'https://b.test/',
+      title: 'B',
+      tags: ['news'],
+      savedAt: 5678,
+    };
     expect(saved.tags).toEqual(['news']);
     expect(saved.savedAt).toBe(5678);
 

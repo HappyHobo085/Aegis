@@ -48,7 +48,10 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           // doesn't emit sync.changed), then wait for the chip to render before clicking.
           await ctx.aegis.favorites.add({ name: SEED.name, url: SEED.url });
           await nudgeSync('favorites');
-          await waitFor(() => ctx.byLabel(/^Open Autopilot Test$/), 'favorite chip "Autopilot Test"');
+          await waitFor(
+            () => ctx.byLabel(/^Open Autopilot Test$/),
+            'favorite chip "Autopilot Test"',
+          );
         }
         const chip = ctx.byLabel(/^Open Autopilot Test$/);
         if (!chip) throw new Error('Favorite chip "Autopilot Test" not found in favorites bar');
@@ -77,7 +80,9 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           await new Promise((r) => setTimeout(r, 400));
         }
         const now = (await ctx.aegis.nav.getState(vid)).url;
-        throw new Error(`live: url never carried ?ap=favopen after clicking favorite chip (now ${now})`);
+        throw new Error(
+          `live: url never carried ?ap=favopen after clicking favorite chip (now ${now})`,
+        );
       },
     } satisfies InteractionSpec;
   })(),
@@ -108,17 +113,17 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('favorites.add'))
-            throw new Error('favorites.add not called');
+          if (!ctx.calls.called('favorites.add')) throw new Error('favorites.add not called');
           return 'favManager add → favorites.add()';
         }
         // Live: list length must have increased by 1 from baseline.
         await new Promise((r) => setTimeout(r, 500));
         const list = await ctx.aegis.favorites.list();
-        if (_baseLength === undefined)
-          throw new Error('live: _baseLength was never captured');
+        if (_baseLength === undefined) throw new Error('live: _baseLength was never captured');
         if (list.length !== _baseLength + 1)
-          throw new Error(`live: expected ${_baseLength + 1} favorites after add, got ${list.length}`);
+          throw new Error(
+            `live: expected ${_baseLength + 1} favorites after add, got ${list.length}`,
+          );
         // Clean up: remove the test favorite.
         const added = list.find((f) => f.url === 'https://testsite.test/');
         if (added) await ctx.aegis.favorites.remove(added.id);
@@ -132,7 +137,12 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
     let _originalName: string | undefined;
     let _favoriteId: number | undefined;
     type MockFn = { mockResolvedValue(v: Favorite[]): void };
-    const SEED: Favorite = { id: 10, name: 'Original Name', url: 'https://rename-test.test/', position: 0 };
+    const SEED: Favorite = {
+      id: 10,
+      name: 'Original Name',
+      url: 'https://rename-test.test/',
+      position: 0,
+    };
     return {
       id: 'favManager.rename',
       domain: 'favManager',
@@ -165,7 +175,10 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           _favoriteId = fav.id;
           // Nudge useFavorites to re-fetch so the open manager renders the new row.
           await nudgeSync('favorites');
-          await waitFor(() => ctx.byLabel(new RegExp(`^Name for ${SEED.name}$`)), `manager row for "${SEED.name}"`);
+          await waitFor(
+            () => ctx.byLabel(new RegExp(`^Name for ${SEED.name}$`)),
+            `manager row for "${SEED.name}"`,
+          );
         }
         // The FavoritesManager renders a row with "Name for <name>" input.
         const nameInput = ctx.byLabel(new RegExp(`^Name for ${_originalName}$`));
@@ -177,8 +190,7 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('favorites.update'))
-            throw new Error('favorites.update not called');
+          if (!ctx.calls.called('favorites.update')) throw new Error('favorites.update not called');
           return 'favManager rename → favorites.update()';
         }
         // Live: the name in the list must have changed.
@@ -203,7 +215,12 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
     // Capture list length BEFORE deletion so assert can verify it shrank by 1.
     let _baseLength: number | undefined;
     type MockFn = { mockResolvedValue(v: Favorite[]): void };
-    const SEED: Favorite = { id: 20, name: 'To Delete', url: 'https://delete-test.test/', position: 0 };
+    const SEED: Favorite = {
+      id: 20,
+      name: 'To Delete',
+      url: 'https://delete-test.test/',
+      position: 0,
+    };
     return {
       id: 'favManager.delete',
       domain: 'favManager',
@@ -229,7 +246,10 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           // then snapshot the baseline length after the row is present.
           await ctx.aegis.favorites.add({ name: SEED.name, url: SEED.url });
           await nudgeSync('favorites');
-          await waitFor(() => ctx.byRole('button', /^Remove favorite To Delete$/), 'manager "Remove favorite To Delete" button');
+          await waitFor(
+            () => ctx.byRole('button', /^Remove favorite To Delete$/),
+            'manager "Remove favorite To Delete" button',
+          );
           _baseLength = (await ctx.aegis.favorites.list()).length;
         }
         const removeBtn = ctx.byRole('button', /^Remove favorite To Delete$/);
@@ -238,17 +258,17 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
-          if (!ctx.calls.called('favorites.remove'))
-            throw new Error('favorites.remove not called');
+          if (!ctx.calls.called('favorites.remove')) throw new Error('favorites.remove not called');
           return 'favManager delete → favorites.remove()';
         }
         // Live: list length must have decreased by exactly 1 from baseline.
         await new Promise((r) => setTimeout(r, 500));
         const list = await ctx.aegis.favorites.list();
-        if (_baseLength === undefined)
-          throw new Error('live: _baseLength was never captured');
+        if (_baseLength === undefined) throw new Error('live: _baseLength was never captured');
         if (list.length !== _baseLength - 1)
-          throw new Error(`live: expected ${_baseLength - 1} favorites after delete, got ${list.length}`);
+          throw new Error(
+            `live: expected ${_baseLength - 1} favorites after delete, got ${list.length}`,
+          );
         return `favManager delete → list shrank from ${_baseLength} to ${list.length}`;
       },
     } satisfies InteractionSpec;

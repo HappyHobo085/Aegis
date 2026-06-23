@@ -4,8 +4,12 @@ import { MobileBottomBar } from './MobileBottomBar';
 
 function setup(over = {}) {
   const props = {
-    onSaved: vi.fn(), onHistory: vi.fn(), onTabs: vi.fn(), onMenu: vi.fn(),
-    tabCount: 3, shield: <div data-testid="shield" />,
+    onSaved: vi.fn(),
+    onHistory: vi.fn(),
+    onTabs: vi.fn(),
+    onMenu: vi.fn(),
+    tabCount: 3,
+    shield: <div data-testid="shield" />,
     ...over,
   };
   render(<MobileBottomBar {...props} />);
