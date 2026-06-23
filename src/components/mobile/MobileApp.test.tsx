@@ -144,6 +144,15 @@ vi.mock('../../lib/ipcClient', () => ({
       close: vi.fn().mockResolvedValue(undefined),
       onState: vi.fn().mockReturnValue(() => {}),
     },
+    zoom: {
+      get: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),
+      set: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),
+      reset: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),
+      onChanged: vi.fn().mockReturnValue(() => {}),
+    },
+    redirect: {
+      onBlocked: vi.fn().mockReturnValue(() => {}),
+    },
     safety: {
       getState: vi.fn().mockResolvedValue(null),
       proceed: vi.fn(),

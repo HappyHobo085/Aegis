@@ -1,4 +1,15 @@
-import { ArrowLeft, ArrowRight, Home, Star, Download, Settings, Search } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  Home,
+  Star,
+  Download,
+  Settings,
+  Search,
+  ZoomIn,
+  ZoomOut,
+  RotateCcw,
+} from 'lucide-react';
 import { MobileSheet } from './MobileSheet';
 
 interface MobileMenuSheetProps {
@@ -14,6 +25,10 @@ interface MobileMenuSheetProps {
   canBookmark: boolean;
   onToggleBookmark(): void;
   onFind(): void;
+  zoomPercent: string;
+  onZoomIn(): void;
+  onZoomOut(): void;
+  onZoomReset(): void;
 }
 
 export function MobileMenuSheet({
@@ -29,6 +44,10 @@ export function MobileMenuSheet({
   canBookmark,
   onToggleBookmark,
   onFind,
+  zoomPercent,
+  onZoomIn,
+  onZoomOut,
+  onZoomReset,
 }: MobileMenuSheetProps) {
   return (
     <MobileSheet title="Menu" onClose={onClose}>
@@ -77,6 +96,21 @@ export function MobileMenuSheet({
             <Search size={20} aria-hidden="true" />
             Find in page
           </button>
+        </li>
+        <li className="mobile-menu__item mobile-menu__item--zoom">
+          <span className="mobile-menu__zoom-label">Zoom</span>
+          <div className="mobile-menu__zoom-controls">
+            <button type="button" aria-label="Zoom out" onClick={onZoomOut}>
+              <ZoomOut size={18} aria-hidden="true" />
+            </button>
+            <span className="mobile-menu__zoom-value">{zoomPercent}</span>
+            <button type="button" aria-label="Zoom in" onClick={onZoomIn}>
+              <ZoomIn size={18} aria-hidden="true" />
+            </button>
+            <button type="button" aria-label="Reset zoom" onClick={onZoomReset}>
+              <RotateCcw size={16} aria-hidden="true" />
+            </button>
+          </div>
         </li>
         <li>
           <button type="button" className="mobile-menu__item" onClick={onDownloads}>

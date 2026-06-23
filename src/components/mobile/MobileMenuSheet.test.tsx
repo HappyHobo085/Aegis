@@ -15,6 +15,11 @@ function setup(over = {}) {
     isCurrentSaved: false,
     canBookmark: true,
     onToggleBookmark: vi.fn(),
+    onFind: vi.fn(),
+    zoomPercent: '100%',
+    onZoomIn: vi.fn(),
+    onZoomOut: vi.fn(),
+    onZoomReset: vi.fn(),
     ...over,
   };
   render(<MobileMenuSheet {...props} />);

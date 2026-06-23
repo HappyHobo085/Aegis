@@ -20,6 +20,7 @@ import { useCustomFilters } from '../../hooks/useCustomFilters';
 import { useDownloads } from '../../hooks/useDownloads';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useFind } from '../../hooks/useFind';
+import { useZoom } from '../../hooks/useZoom';
 import { useMobileTabSync } from '../../hooks/useMobileTabSync';
 import { AdblockShield } from '../AdblockShield';
 import { FindBar } from '../FindBar';
@@ -70,6 +71,7 @@ export function MobileApp() {
   const tabs = useTabs();
   const nav = useNav(tabs.activeId);
   const find = useFind(tabs.activeId);
+  const zoom = useZoom(tabs.activeId);
   const adblock = useAdblock(tabs.activeId, nav.state.url);
   useMobileTabSync(tabs.tabs, tabs.activeId);
   const favorites = useFavorites(nav.state.url);
@@ -210,6 +212,10 @@ export function MobileApp() {
             find.show();
             setSheet(null);
           }}
+          zoomPercent={zoom.percent}
+          onZoomIn={zoom.zoomIn}
+          onZoomOut={zoom.zoomOut}
+          onZoomReset={zoom.reset}
         />
       )}
 

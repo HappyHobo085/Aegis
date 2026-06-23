@@ -413,6 +413,78 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
   },
 
   {
+    id: 'mobile.menu.zoomIn',
+    domain: 'mobile.menu',
+    description: 'Open menu sheet → click "Zoom in" → zoom.set called',
+    screen: 'home',
+    layers: ['vitest'],
+    mobile: true,
+    run: async (ctx) => {
+      // Open the menu sheet.
+      const menuBtn = ctx.byRole('button', /^Menu$/);
+      if (!menuBtn) throw new Error('Menu button not found in MobileBottomBar');
+      await ctx.click(menuBtn);
+      // Click the "Zoom in" button in the zoom controls row.
+      const zoomInBtn = ctx.byRole('button', /^Zoom in$/);
+      if (!zoomInBtn) throw new Error('"Zoom in" button not found in MobileMenuSheet');
+      await ctx.click(zoomInBtn);
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('zoom.set'))
+        throw new Error('zoom.set not called after clicking "Zoom in" in MobileMenuSheet');
+      return 'MobileMenuSheet "Zoom in" → zoom.set()';
+    },
+  },
+
+  {
+    id: 'mobile.menu.zoomOut',
+    domain: 'mobile.menu',
+    description: 'Open menu sheet → click "Zoom out" → zoom.set called',
+    screen: 'home',
+    layers: ['vitest'],
+    mobile: true,
+    run: async (ctx) => {
+      // Open the menu sheet.
+      const menuBtn = ctx.byRole('button', /^Menu$/);
+      if (!menuBtn) throw new Error('Menu button not found in MobileBottomBar');
+      await ctx.click(menuBtn);
+      // Click the "Zoom out" button in the zoom controls row.
+      const zoomOutBtn = ctx.byRole('button', /^Zoom out$/);
+      if (!zoomOutBtn) throw new Error('"Zoom out" button not found in MobileMenuSheet');
+      await ctx.click(zoomOutBtn);
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('zoom.set'))
+        throw new Error('zoom.set not called after clicking "Zoom out" in MobileMenuSheet');
+      return 'MobileMenuSheet "Zoom out" → zoom.set()';
+    },
+  },
+
+  {
+    id: 'mobile.menu.zoomReset',
+    domain: 'mobile.menu',
+    description: 'Open menu sheet → click "Reset zoom" → zoom.reset called',
+    screen: 'home',
+    layers: ['vitest'],
+    mobile: true,
+    run: async (ctx) => {
+      // Open the menu sheet.
+      const menuBtn = ctx.byRole('button', /^Menu$/);
+      if (!menuBtn) throw new Error('Menu button not found in MobileBottomBar');
+      await ctx.click(menuBtn);
+      // Click the "Reset zoom" button in the zoom controls row.
+      const resetBtn = ctx.byRole('button', /^Reset zoom$/);
+      if (!resetBtn) throw new Error('"Reset zoom" button not found in MobileMenuSheet');
+      await ctx.click(resetBtn);
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('zoom.reset'))
+        throw new Error('zoom.reset not called after clicking "Reset zoom" in MobileMenuSheet');
+      return 'MobileMenuSheet "Reset zoom" → zoom.reset()';
+    },
+  },
+
+  {
     id: 'mobile.topBar.hideToolbar',
     domain: 'mobile.topBar',
     description:
