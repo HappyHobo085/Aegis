@@ -71,8 +71,7 @@ describe('FindBar', () => {
       />,
     );
     const status = screen.getByRole('status');
-    expect(status.textContent).toContain('2');
-    expect(status.textContent).toContain('3');
+    expect(status.textContent).toContain('2/3');
   });
 
   it('shows 0/0 when matchCount is 0', () => {
@@ -86,7 +85,7 @@ describe('FindBar', () => {
       />,
     );
     const status = screen.getByRole('status');
-    expect(status.textContent).toContain('0');
+    expect(status.textContent).toContain('0/0');
   });
 
   it('clicking "Find next" fires onNext', async () => {
