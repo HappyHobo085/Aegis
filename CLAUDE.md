@@ -116,3 +116,16 @@ Linux-only; ad-block works on Windows, it just isn't counted on the badge — se
 adblock note in `src-tauri/CLAUDE.md`.) Android browses + ad-blocks + is secure
 (verified on emulator). macOS compiles + bundles green in CI but is not yet
 GUI-runtime-verified. iOS is unstarted (needs macOS + Xcode).
+
+**Privacy & sync subsystems (DONE).** Beyond browse/ad-block/security, the following
+are shipped across platforms: **E2E sync** (`sync.rs` pull→merge→push, `sync_auth.rs`
+Ed25519 device tokens, `sync_stores.rs` HLC-LWW merge; self-hosted `sync-server/`),
+**WebRTC IP-leak defense** (`webrtc_shim.rs` + the `webrtcPolicy` setting, with native
+Linux/Windows backstops), the **atomic store-write** path (`jsonstore::write_atomic`),
+the **shared crypto** layer (`crypto.rs` — XChaCha20-Poly1305 / HKDF / Argon2id /
+zeroize), and **Android document-start JS injection** (`MainActivity.kt`
+`addDocumentStartJavaScript`). The **OS-keychain anchor** is desktop-done / Android-
+partial (hardware-Keystore JNI path documented, not yet connected — passphrase
+fallback works). **Remaining roadmap features:** a password vault, anti-fingerprinting
+(farbling), and a content-webview proxy — see `docs/FEATURE_ROADMAP.md` and the
+improvements-program decomposition in `docs/superpowers/specs/`.

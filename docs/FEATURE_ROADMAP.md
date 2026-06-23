@@ -4,6 +4,20 @@
 >
 > The one constant: **Aegis is a shell, not an engine fork.** It cannot do what Brave does inside Blink/V8. The honest question per feature is "how close can a JS shim / native webview setting / app-level feature get, and how detectable/weaker is it." Effort scale matches the critics' _revised_ numbers.
 
+> **⚠️ Status note (2026-06-23 — read this first).** Large parts of this roadmap are **already shipped**; the section bodies below are kept as the _design basis_ and now carry an inline **STATUS** line where reality has moved past them. Verified current state (see `docs/superpowers/specs/2026-06-23-improvements-program-design.md` §1.1 for the evidence trail):
+>
+> | Roadmap item                              | State            | Where it lives in the code                                                                                                                                                     |
+> | ----------------------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+> | **E2E sync (F2b)**                        | ✅ **DONE**      | `src-tauri/src/sync.rs` (pull→merge→push, `GET/POST /v1/records`, background loop), `sync_auth.rs` (Ed25519 signed device tokens), `sync_stores.rs` (per-uuid HLC LWW merge)   |
+> | **WebRTC IP-leak defense (§3.1)**         | ✅ **DONE**      | `webrtc_shim.rs` + `webrtc_shim.{public-only,disable}.js`; `webrtcPolicy` setting (`shared/types.ts`); native Linux/Windows backstops                                          |
+> | **S1 atomic store writes**                | ✅ **DONE**      | `jsonstore::write_atomic` (temp→fsync→rename→dir-fsync + `.bak`); `settings.rs`, `customfilters.rs`, `data.rs`, `subs.rs` route through it                                     |
+> | **S2 shared crypto**                      | ✅ **DONE**      | `crypto.rs`: XChaCha20-Poly1305 + HKDF-SHA256 + Argon2id (via `sync_keystore`) + `zeroize`                                                                                     |
+> | **S4 Android document-start injection**   | ✅ **DONE**      | `MainActivity.kt` `WebViewCompat.addDocumentStartJavaScript(...)` per tab (ad-block popup guard + WebRTC shim)                                                                 |
+> | **S3 OS keychain**                        | 🟡 **PARTIAL**   | Desktop `keyring` done (`sync_keystore.rs`); **Android hardware-Keystore JNI path documented but not yet connected** (passphrase fallback works) — remaining sub-project **J** |
+> | **Password vault (§3.4 Phase A)**         | ⬜ **REMAINING** | No `vault.rs` yet — sub-project **K**                                                                                                                                          |
+> | **Anti-fingerprinting / farbling (§3.2)** | ⬜ **REMAINING** | No `farble.rs` yet — sub-project **L**                                                                                                                                         |
+> | **Proxy ("VPN" Tier-1, §3.5)**            | ⬜ **REMAINING** | No proxy module yet — sub-project **M**                                                                                                                                        |
+
 ---
 
 ## 1. TL;DR
@@ -26,11 +40,15 @@ Multiple features depend on the same handful of plumbing pieces. Build these _be
 
 ### S1 — Atomic store writes (prerequisite for sync **and** the vault)
 
+> **STATUS: ✅ DONE.** Shipped as `jsonstore::write_atomic` / `write_atomic_no_backup` (temp file → `sync_all` → atomic `rename` → parent-dir fsync, plus a `.bak` recovery copy). All store writers route through it: `settings.rs`, `customfilters.rs`, `data.rs`, `subs.rs`. The "Confirmed bug" text below is the original problem statement, retained for rationale; the line numbers it cites are pre-fix.
+
 **Confirmed bug:** `jsonstore::save` (`jsonstore.rs:34`), `settings::write` (`settings.rs:42`), `customfilters::write` (`customfilters.rs:29`), plus bare writes in `data.rs:42` and `subs.rs` all use `std::fs::write` = truncate-then-write, no fsync, no rename. A crash mid-flush truncates the store to empty.
 **Fix:** write to a temp file → fsync file **and** parent dir (Linux ext4/btrfs need both) → atomic `std::fs::rename` (atomic intra-filesystem on all four targets). Small effort, benefits all existing data. **Load-bearing for the vault** (a half-written AEAD blob = total credential loss — also keep a versioned backup-on-write copy since a corrupt AEAD blob is unrecoverable). **Load-bearing for sync** (a crash during merge corrupts a store).
 **Effort: S.**
 
 ### S2 — Shared crypto + key-derivation layer (sync **and** vault)
+
+> **STATUS: ✅ DONE.** Shipped as `src-tauri/src/crypto.rs`: XChaCha20-Poly1305 seal/open (24-byte random nonce), HKDF-SHA256 per-namespace key derivation, `zeroize` on drop, with Argon2id passphrase wrapping in `sync_keystore.rs`. The crates below (`chacha20poly1305`/`hkdf`/`argon2`/`zeroize`) are in `Cargo.toml`. The vault (sub-project K) will reuse this module unchanged.
 
 Both features need the same RustCrypto stack. Build it once as a small internal crypto module.
 
@@ -41,6 +59,8 @@ Both features need the same RustCrypto stack. Build it once as a small internal 
 
 ### S3 — OS-keychain abstraction (sync seed-at-rest, vault DEK anchoring, proxy/VPN secrets)
 
+> **STATUS: 🟡 PARTIAL.** Desktop is done — `sync_keystore.rs` anchors the sync root in the OS keychain via the `keyring` crate (service `com.aegis.browser`), degrading to a passphrase-wrapped file when no Secret Service / Credential Manager / Keychain is available. **Remaining (sub-project J):** the Android hardware-backed Keystore (StrongBox / `KeyGenParameterSpec`) JNI path is documented in `sync_keystore.rs` but **not yet connected** — Android currently uses the passphrase fallback. This stays here as the design for that follow-up.
+
 - `keyring` v4 (confirmed: feature-gated backends for Linux Secret Service / keyutils, Windows Credential Manager, macOS Keychain, Android, iOS — one crate covers the desktop trio's anchor). On Linux it transitively pulls zbus/D-Bus and **needs a running Secret Service daemon at runtime** — must **degrade gracefully to master-password-only** when absent, never crash.
 - **Android caveat (corrected):** `keyring`'s Android backend is a _software_ Keystore wrapper, **not** hardware-backed. For the vault, do the hardware-backed/StrongBox wrap in Kotlin via `KeyGenParameterSpec` through the existing JNI bridge (the `NativeAdblock`/`NativeSafety` pattern) — **not** `keyring`, and **not** the deprecated `EncryptedSharedPreferences`.
 - Honest stance: this is the **shakiest cross-platform piece**; treat full keychain integration as a follow-up tier and ship master-password-only first.
@@ -50,9 +70,11 @@ Both features need the same RustCrypto stack. Build it once as a small internal 
 
 This is the single biggest piece of shared leverage: WebRTC defense, farbling, and autofill _detection_ all ride document-start injection into the **content** webview.
 
+> **STATUS: ✅ DONE.** The desktop path always existed; the Android content-tab path is now **built** — `MainActivity.kt` calls `WebViewCompat.addDocumentStartJavaScript(wv, documentStartScript, setOf("*"))` per tab (the ad-block popup guard + the WebRTC shim ride it). The Android bullet below saying "must be BUILT — it does not exist" is **superseded** and kept only for the original analysis.
+
 - **Desktop (Linux/Windows/macOS): already exists.** `nav.rs:123` `spawn_tab` calls `.initialization_script_for_all_frames(crate::adblock_inject::script())` (verified API: `tauri 2.11.2 webview/mod.rs:927`, `for_main_frame_only:false`, flows through wry to all engines incl. cross-origin iframes). `adblock_inject::script()` returns `POPUP_GUARD` on Linux and `POPUP_GUARD + build()` on non-Linux (`adblock_inject.rs:53-60`).
 - **Refactor required:** `script()` currently returns `&'static str` via a `OnceLock`. WebRTC and farbling need a per-session salt/policy baked in as literals, so the script is no longer a compile-time constant. `script()` (or new `webrtc_inject::script(policy)` / `farble.rs::script(salt, level)`) must return an owned `String` and the `OnceLock` cache reworked. The farbling design half-acknowledged this; it is a non-trivial change to the existing static-return contract.
-- **Android: must be BUILT — it does not exist.** `createTabWebView` (`MainActivity.kt:263-283`) builds a plain `WebView`, sets UA/settings/clients, and injects **no** script. Content tabs are _not_ `RustWebView` (which has the document-start path at `RustWebView.kt:30-34`) — they are hand-rolled. So **the popup guard, the WebRTC shim, farbling, and autofill detection would all be the first document-start script Android content tabs ever run.** Use `WebViewCompat.addDocumentStartJavaScript(wv, script, setOf("*"))` gated on `WebViewFeature.isFeatureSupported(DOCUMENT_START_SCRIPT)` (the `androidx.webkit:webkit:1.14.0` dep is **already on the classpath** — `build.gradle.kts:83`). Fallback: `evaluateJavascript` in `onPageStarted` (`MainActivity.kt:116-119`), which is **racy** (a fast inline page script can win) and loses sub-frame coverage (per wry's own doc). The salt/script must cross Rust→Kotlin via a new JNI getter or the bridge.
+- **Android: ✅ NOW BUILT (was: "must be BUILT — it does not exist").** `createTabWebView` (`MainActivity.kt:263-283`) builds a plain `WebView`, sets UA/settings/clients, and — as shipped — now ALSO attaches the document-start script via `WebViewCompat.addDocumentStartJavaScript`. (Original analysis follows, retained for context: Content tabs are _not_ `RustWebView` (which has the document-start path at `RustWebView.kt:30-34`) — they are hand-rolled. So **the popup guard, the WebRTC shim, farbling, and autofill detection would all be the first document-start script Android content tabs ever run.** Use `WebViewCompat.addDocumentStartJavaScript(wv, script, setOf("*"))` gated on `WebViewFeature.isFeatureSupported(DOCUMENT_START_SCRIPT)` (the `androidx.webkit:webkit:1.14.0` dep is **already on the classpath** — `build.gradle.kts:83`). Fallback: `evaluateJavascript` in `onPageStarted` (`MainActivity.kt:116-119`), which is **racy** (a fast inline page script can win) and loses sub-frame coverage (per wry's own doc). The salt/script must cross Rust→Kotlin via a new JNI getter or the bridge.)
 - **Build the popup guard into Android here too** — it's the same plumbing and is currently missing on Android, so do it once.
   **Effort: M** (the Android path is genuinely new multi-file JNI+Kotlin work).
 
@@ -70,6 +92,8 @@ This is the single biggest piece of shared leverage: WebRTC defense, farbling, a
 ## 3. Per-feature plans
 
 ### 3.1 WebRTC IP-leak defense
+
+> **STATUS: ✅ DONE.** Shipped as `webrtc_shim.rs` (+ single-sourced `webrtc_shim.public-only.js` / `webrtc_shim.disable.js`) driven by the `webrtcPolicy` setting (`'default' | 'public-only' | 'disable'`, `shared/types.ts`). The shim wraps `RTCPeerConnection` to filter local/private ICE candidates, SDP, and `getStats()`; native backstops are wired (Linux `set_enable_webrtc(false)` for `disable`; Windows `--force-webrtc-ip-handling-policy`); Android registers it per tab via the document-start path (S4). **The Worker-bypass limit below is honored as a documented known gap, not a bug** (see the residual matrix in `src-tauri/CLAUDE.md`). The approach text below matches what shipped.
 
 **Approach per platform (corrected):**
 
@@ -119,6 +143,8 @@ This is the single biggest piece of shared leverage: WebRTC defense, farbling, a
 ---
 
 ### 3.3 End-to-end-encrypted cross-platform sync
+
+> **STATUS: ✅ DONE (this is "F2b").** Shipped as `sync.rs` (per-namespace pull→merge→push over `reqwest::blocking`, `GET/POST /v1/records`, a debounced periodic background pass), `sync_auth.rs` (the **restored auth tier** — short-lived per-device **Ed25519** signed tokens, addressing the "server has no authentication" gap flagged below), and `sync_stores.rs` (per-uuid **HLC last-writer-wins** merge with tombstones). A self-hosted reference server lives in `sync-server/`. The uuid/hlc/tombstone retrofit, per-key settings split, and targeted-refetch described below were all implemented. Local-at-rest still depends on S3 (PARTIAL on Android) as the design notes.
 
 **Approach (all platforms `full`, engine-independent):** Brave-style zero-knowledge sync. 32-byte `getrandom` seed → 24-word BIP39 phrase (root secret) → HKDF-SHA256 per-namespace keys + a non-reversible `accountId = HKDF(seed,"server-account-id")`. Each record `{id(uuid), namespace, hlc, deleted, nonce, ciphertext}` is XChaCha20-Poly1305-sealed with `AAD = namespace||id||hlc`. Pull→merge→push over the existing `reqwest::blocking`-on-a-thread pattern (`subs.rs::fetch_text:44-66`) under the already-installed aws-lc-rs provider (`lib.rs:334`). Conflict resolution = per-record LWW by HLC + tombstones; **settings split into per-key records**; `customFilters` stays whole-blob LWW (surfaced, not hidden). No CRDT.
 

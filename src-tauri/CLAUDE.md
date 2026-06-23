@@ -108,6 +108,19 @@ dotted event name.
     `ICoreWebView2` via unsafe COM for full network interception.
 - **Security** — `safety.rs` (URLhaus malware host set from `resources/`, JNI
   `isMalwareHost`), `permissions.rs` (site permission prompts).
+- **E2E sync ("F2b") + crypto** — `sync.rs` (per-namespace pull→merge→push over
+  `reqwest::blocking`, `GET/POST /v1/records`, a debounced periodic background pass),
+  `sync_auth.rs` (per-device **Ed25519** signed access tokens — the server authorizes
+  iff the signature verifies and the device pubkey is registered), `sync_stores.rs`
+  (per-uuid **HLC last-writer-wins** merge with tombstones — the `sync.changed`
+  targeted-refetch seam, never a full reload), `sync_envelope.rs` / `sync_identity.rs`
+  (record sealing + identity), and `sync_keystore.rs` (root-secret-at-rest: desktop
+  `keyring`, Android hardware-Keystore JNI path **documented but not yet connected**,
+  passphrase-wrapped file fallback). All record crypto is `crypto.rs`:
+  **XChaCha20-Poly1305** seal/open (24-byte nonce), **HKDF-SHA256** per-namespace keys,
+  **Argon2id** passphrase KDF, `zeroize`-on-drop. A self-hosted reference server is the
+  standalone `sync-server/` crate. `sync.*` data channels flow on Android for free
+  (they ride the normal `ipc` chokepoint, not the `AegisAndroid` nav bridge).
 - **WebRTC IP-leak defense** — `webrtc_shim.rs`: the `webrtcPolicy` setting
   (`default`/`public-only`(default)/`disable`) as a document-start JS shim that wraps
   `RTCPeerConnection` to filter local/private ICE candidates (the `icecandidate` event,
