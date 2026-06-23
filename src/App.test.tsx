@@ -1,5 +1,5 @@
 // src/App.test.tsx
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavState, NavFailed, NavCrashed } from '../shared/types';
@@ -411,6 +411,7 @@ describe('App', () => {
   });
 
   it('calls applyTheme with the full settings (incl. themeMode) on mount', async () => {
+    applyThemeSpy.mockClear();
     render(<App />);
     // Wait for the mount effect to fire: settings.get resolves and applyTheme is called.
     await waitFor(() => expect(applyThemeSpy).toHaveBeenCalled());

@@ -260,6 +260,7 @@ describe('MobileApp', () => {
   });
 
   it('calls applyTheme with the full settings (incl. themeMode) on mount', async () => {
+    applyThemeSpy.mockClear();
     render(<MobileApp />);
     // Wait for the mount effect to fire: settings.get resolves and applyTheme is called.
     await waitFor(() => expect(applyThemeSpy).toHaveBeenCalled());
