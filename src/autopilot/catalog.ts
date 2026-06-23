@@ -503,6 +503,19 @@ export const CATALOG: FeatureCheck[] = [
       assertArray(await a.sync.listDevices());
     },
   },
+  // find-in-page (stub — Task 9 enriches this entry: verify() round-trip + screens.ts + reach.ts + interaction specs)
+  {
+    id: 'find',
+    domain: 'find',
+    title: 'Find in page',
+    channels: [IPC.findStart, IPC.findNext, IPC.findPrev, IPC.findClose],
+    exercise: async (a) => {
+      await a.find.start(V, 'test');
+      await a.find.next(V);
+      await a.find.prev(V);
+      await a.find.close(V);
+    },
+  },
 ];
 
 // Channels whose `exercise` body intentionally does NOT call them (destructive,

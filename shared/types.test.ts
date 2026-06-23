@@ -326,6 +326,36 @@ describe('shared/types — Phase 5 additions', () => {
   });
 });
 
+describe('shared/types — find-in-page additions', () => {
+  it('exposes the find IPC channel constants', () => {
+    expect(IPC.findStart).toBe('find.start');
+    expect(IPC.findNext).toBe('find.next');
+    expect(IPC.findPrev).toBe('find.prev');
+    expect(IPC.findClose).toBe('find.close');
+    expect(IPC.evtFindState).toBe('find.state');
+  });
+
+  it('admits the FindState data-model shape', () => {
+    // compile-only: import FindState and construct a valid value
+    type FindStateShape = import('./types').FindState;
+    const s: FindStateShape = { viewId: 1, query: 'hello', matchCount: 3, activeMatchIndex: 1 };
+    expect(s.matchCount).toBe(3);
+    expect(s.activeMatchIndex).toBe(1);
+  });
+
+  it('types the find AegisApi namespace (compile-only shape check)', () => {
+    type FindApi = import('./types').AegisApi['find'];
+    const shape: Record<keyof FindApi, true> = {
+      start: true,
+      next: true,
+      prev: true,
+      close: true,
+      onState: true,
+    };
+    expect(Object.keys(shape).sort()).toEqual(['close', 'next', 'onState', 'prev', 'start']);
+  });
+});
+
 describe('shared/types — IPC channel-name invariants (Foundation)', () => {
   const entries = Object.entries(IPC) as [string, string][];
 

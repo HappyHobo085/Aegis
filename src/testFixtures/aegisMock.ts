@@ -178,6 +178,13 @@ export function aegisMockModule() {
         removeException: vi.fn(),
         onInterstitial: vi.fn(() => () => {}),
       },
+      find: {
+        start: vi.fn(async () => {}),
+        next: vi.fn(async () => {}),
+        prev: vi.fn(async () => {}),
+        close: vi.fn(async () => {}),
+        onState: vi.fn().mockReturnValue(() => {}),
+      },
       tabs: {
         list: vi.fn().mockResolvedValue({
           tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],

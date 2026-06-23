@@ -27,6 +27,7 @@ import type {
   SyncState,
   SyncDevice,
   SyncChanged,
+  FindState,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call, on } from './tauriInvoke';
@@ -57,6 +58,14 @@ interface AndroidBridge {
   /** Destroy tab `id`'s native WebView but keep the tab (idle-sweep); recreated on next
    * activateTab. */
   discardTab(id: number): void;
+  /** Begin/refine a find-in-page search on the active content WebView (Task 10 implements). */
+  find(query: string, caseSensitive: boolean): void;
+  /** Advance to the next find match. */
+  findNext(): void;
+  /** Go back to the previous find match. */
+  findPrev(): void;
+  /** End the find session and clear highlights. */
+  findClose(): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -308,6 +317,58 @@ export const aegis: AegisApi = {
     removeDevice: (deviceId) => call<SyncDevice[]>(IPC.syncRemoveDevice, { deviceId }),
     onState: (cb) => on<SyncState>(IPC.evtSyncState, cb),
     onChanged: (cb) => on<SyncChanged>(IPC.evtSyncChanged, cb),
+  },
+  find: {
+    start: (viewId, query, caseSensitive = false) => {
+      const a = androidBridge();
+      if (a) {
+        a.find(query, caseSensitive);
+        return Promise.resolve();
+      }
+      return call(IPC.findStart, { viewId, query, caseSensitive });
+    },
+    next: (viewId) => {
+      const a = androidBridge();
+      if (a) {
+        a.findNext();
+        return Promise.resolve();
+      }
+      return call(IPC.findNext, { viewId });
+    },
+    prev: (viewId) => {
+      const a = androidBridge();
+      if (a) {
+        a.findPrev();
+        return Promise.resolve();
+      }
+      return call(IPC.findPrev, { viewId });
+    },
+    close: (viewId) => {
+      const a = androidBridge();
+      if (a) {
+        a.findClose();
+        return Promise.resolve();
+      }
+      return call(IPC.findClose, { viewId });
+    },
+    onState: (cb) => {
+      // Android has no Tauri event bus on the content side; the Kotlin client pushes
+      // FindState via window.__aegisFindState (set up here), mirroring nav.onState's
+      // __aegisNavState multi-subscriber pattern exactly. Task 10 implements the Kotlin side.
+      if (androidBridge()) {
+        const w = window as unknown as {
+          __aegisFindStateCbs?: Set<(s: FindState) => void>;
+          __aegisFindState?: (s: FindState) => void;
+        };
+        const cbs = (w.__aegisFindStateCbs ??= new Set());
+        cbs.add(cb);
+        w.__aegisFindState = (s) => cbs.forEach((f) => f(s));
+        return () => {
+          cbs.delete(cb);
+        };
+      }
+      return on<FindState>(IPC.evtFindState, cb);
+    },
   },
 };
 

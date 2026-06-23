@@ -119,6 +119,13 @@ export const IPC = {
   // events (main -> chrome): engine state + a targeted post-merge change notice
   evtSyncState: 'sync.state',
   evtSyncChanged: 'sync.changed',
+  // find-in-page (chrome -> main; Task 9+ wires the Rust/Kotlin back-ends)
+  findStart: 'find.start',
+  findNext: 'find.next',
+  findPrev: 'find.prev',
+  findClose: 'find.close',
+  // event (main -> chrome): live match count / active index
+  evtFindState: 'find.state',
 } as const;
 
 export interface NavState {
@@ -340,6 +347,15 @@ export interface SyncChanged {
   changedUuids: string[];
 }
 
+/** Live match state pushed by the Rust/Kotlin back-end during a find-in-page session.
+ * `activeMatchIndex` is 1-based; 0 means unknown (WebKitGTK / macOS don't report it). */
+export interface FindState {
+  viewId: ViewId;
+  query: string;
+  matchCount: number;
+  activeMatchIndex: number;
+}
+
 /** Exposed on window.aegis by chromePreload via contextBridge. */
 export interface AegisApi {
   nav: {
@@ -493,6 +509,18 @@ export interface AegisApi {
     removeDevice(deviceId: string): Promise<SyncDevice[]>;
     onState(cb: (s: SyncState) => void): () => void;
     onChanged(cb: (c: SyncChanged) => void): () => void;
+  };
+  find: {
+    /** Begin (or refine) a search for `query` on the view. */
+    start(viewId: ViewId, query: string, caseSensitive?: boolean): Promise<void>;
+    /** Advance to the next match. */
+    next(viewId: ViewId): Promise<void>;
+    /** Go back to the previous match. */
+    prev(viewId: ViewId): Promise<void>;
+    /** End the search and clear highlights. */
+    close(viewId: ViewId): Promise<void>;
+    /** Subscribe to live match-count / active-index updates. Returns unsubscribe fn. */
+    onState(cb: (s: FindState) => void): () => void;
   };
 }
 
