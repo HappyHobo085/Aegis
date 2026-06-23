@@ -3972,7 +3972,7 @@ a:focus-visible {
 .mobile-sheet__title {
   font-size: 17px;
   margin: 0;
-  color: var(--fg);
+  color: #fff;
 }
 .mobile-sheet__body {
   flex: 1;
@@ -4154,7 +4154,7 @@ a:focus-visible {
 }
 .tab--active {
   background: #2f2f2f;
-  color: var(--fg);
+  color: #fff;
 }
 .tab--asleep {
   opacity: 0.55;
