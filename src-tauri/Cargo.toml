@@ -95,7 +95,7 @@ windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_WinR
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = "0.3"
-objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKFindConfiguration", "WKFindResult", "block2"] }
+objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKFindConfiguration", "WKFindResult", "block2", "objc2-core-foundation"] }
 
 # OS keychain for the sync seed at rest (desktop only — keyring 3.x has NO Android backend;
 # Android wraps the seed via the hardware Keystore through JNI). When no secret-service
