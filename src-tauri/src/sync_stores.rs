@@ -93,8 +93,7 @@ fn merge_records(
 pub fn merge_into(app: &AppHandle, name: &str, remote: &[Value]) -> Vec<String> {
     let node = crate::sync_identity::node_id(app);
     let local = read_all(app, name);
-    let (mut merged, mut changed) =
-        merge_records(local, remote, &node, crate::jsonstore::now_ms());
+    let (mut merged, mut changed) = merge_records(local, remote, &node, crate::jsonstore::now_ms());
     // Collapse cross-device duplicates (same normalized url/host): tombstone the losers so the
     // deletion converges across devices. Idempotent — tombstoned losers are skipped next pass.
     let losers = duplicate_losers(&merged, key_field_for(name));
@@ -328,14 +327,20 @@ mod tests {
         let remote = vec![rec("a", 5, false, "new")];
         let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert_eq!(changed, vec!["a".to_string()]);
-        assert_eq!(merged[0].get("payload").and_then(Value::as_str), Some("new"));
+        assert_eq!(
+            merged[0].get("payload").and_then(Value::as_str),
+            Some("new")
+        );
 
         // Remote older → ignored (no change).
         let local = vec![rec("a", 9, false, "keep")];
         let remote = vec![rec("a", 2, false, "stale")];
         let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert!(changed.is_empty());
-        assert_eq!(merged[0].get("payload").and_then(Value::as_str), Some("keep"));
+        assert_eq!(
+            merged[0].get("payload").and_then(Value::as_str),
+            Some("keep")
+        );
     }
 
     #[test]
@@ -365,9 +370,15 @@ mod tests {
         assert_eq!(changed, vec!["remote-uuid".to_string()]);
         assert_eq!(merged.len(), 2);
         // The two records keep distinct ids so a renderer `remove {id}` can't hit both.
-        let ids: Vec<i64> = merged.iter().filter_map(|r| r.get("id").and_then(Value::as_i64)).collect();
+        let ids: Vec<i64> = merged
+            .iter()
+            .filter_map(|r| r.get("id").and_then(Value::as_i64))
+            .collect();
         assert_eq!(ids.len(), 2);
-        assert_ne!(ids[0], ids[1], "the inserted remote id must be re-keyed: {ids:?}");
+        assert_ne!(
+            ids[0], ids[1],
+            "the inserted remote id must be re-keyed: {ids:?}"
+        );
     }
 
     #[test]
@@ -382,8 +393,15 @@ mod tests {
             "hlc": { "wall_ms": 5, "counter": 0, "node": "b" }, "deleted": false
         })];
         let (merged, _) = merge_records(local, &remote, "n", 100);
-        assert_eq!(merged[0].get("payload").and_then(Value::as_str), Some("new"));
-        assert_eq!(merged[0].get("id").and_then(Value::as_i64), Some(7), "local id preserved");
+        assert_eq!(
+            merged[0].get("payload").and_then(Value::as_str),
+            Some("new")
+        );
+        assert_eq!(
+            merged[0].get("id").and_then(Value::as_i64),
+            Some(7),
+            "local id preserved"
+        );
     }
 
     #[test]

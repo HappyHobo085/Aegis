@@ -103,10 +103,14 @@ pub fn verify(token: &AuthToken, sig_hex: &str, now_ms: i64) -> Result<(), Strin
         return Err("token issued in the future".into());
     }
     let vk_bytes = unhex(&token.device_id).ok_or("bad device_id hex")?;
-    let vk_arr: [u8; 32] = vk_bytes.try_into().map_err(|_| "device_id must be 32 bytes")?;
+    let vk_arr: [u8; 32] = vk_bytes
+        .try_into()
+        .map_err(|_| "device_id must be 32 bytes")?;
     let vk = VerifyingKey::from_bytes(&vk_arr).map_err(|_| "invalid public key")?;
     let sig_bytes = unhex(sig_hex).ok_or("bad signature hex")?;
-    let sig_arr: [u8; 64] = sig_bytes.try_into().map_err(|_| "signature must be 64 bytes")?;
+    let sig_arr: [u8; 64] = sig_bytes
+        .try_into()
+        .map_err(|_| "signature must be 64 bytes")?;
     let sig = Signature::from_bytes(&sig_arr);
     vk.verify_strict(&canonical(token), &sig)
         .map_err(|_| "signature verification failed".to_string())

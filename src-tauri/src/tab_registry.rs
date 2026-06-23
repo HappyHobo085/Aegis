@@ -191,17 +191,29 @@ impl Registry {
         }
     }
 
-    pub fn create(&mut self, url: Option<String>, background: bool, now_ms: u64) -> (ViewId, String) {
+    pub fn create(
+        &mut self,
+        url: Option<String>,
+        background: bool,
+        now_ms: u64,
+    ) -> (ViewId, String) {
         let id = self.next_id;
         self.next_id += 1;
         let url = url.unwrap_or_else(|| self.home_url.clone());
         self.tabs.push(Tab {
-            id, url: url.clone(), title: String::new(),
-            pinned: false, live: true, last_active: now_ms,
-            history: vec![url.clone()], hist_index: 0,
+            id,
+            url: url.clone(),
+            title: String::new(),
+            pinned: false,
+            live: true,
+            last_active: now_ms,
+            history: vec![url.clone()],
+            hist_index: 0,
         });
         if !background {
-            if let Some(i) = self.idx(self.active_id) { self.tabs[i].last_active = now_ms; }
+            if let Some(i) = self.idx(self.active_id) {
+                self.tabs[i].last_active = now_ms;
+            }
             self.active_id = id;
         }
         (id, url)
@@ -228,15 +240,24 @@ impl Registry {
     /// Close `id`. Pushes it onto the reopen stack and activates a neighbor.
     pub fn close(&mut self, id: ViewId, now_ms: u64) -> CloseOutcome {
         let Some(i) = self.idx(id) else {
-            return CloseOutcome { closed_live: false, spawn: None };
+            return CloseOutcome {
+                closed_live: false,
+                spawn: None,
+            };
         };
         let t = self.tabs.remove(i);
         self.closed_stack.push(ClosedTab {
-            url: t.url, title: t.title, position: i, pinned: t.pinned,
+            url: t.url,
+            title: t.title,
+            position: i,
+            pinned: t.pinned,
         });
         if self.tabs.is_empty() {
             let (nid, nurl) = self.create(None, false, now_ms);
-            return CloseOutcome { closed_live: t.live, spawn: Some((nid, nurl)) };
+            return CloseOutcome {
+                closed_live: t.live,
+                spawn: Some((nid, nurl)),
+            };
         }
         if id == self.active_id {
             let ni = i.min(self.tabs.len() - 1);
@@ -248,10 +269,16 @@ impl Registry {
             if !self.tabs[ni].live {
                 self.tabs[ni].live = true;
                 let url = self.tabs[ni].url.clone();
-                return CloseOutcome { closed_live: t.live, spawn: Some((self.active_id, url)) };
+                return CloseOutcome {
+                    closed_live: t.live,
+                    spawn: Some((self.active_id, url)),
+                };
             }
         }
-        CloseOutcome { closed_live: t.live, spawn: None }
+        CloseOutcome {
+            closed_live: t.live,
+            spawn: None,
+        }
     }
 
     pub fn set_pinned(&mut self, id: ViewId, pinned: bool) {
@@ -291,18 +318,27 @@ impl Registry {
     }
 
     pub fn can_go_back(&self, id: ViewId) -> bool {
-        self.idx(id).map(|i| self.tabs[i].hist_index > 0).unwrap_or(false)
+        self.idx(id)
+            .map(|i| self.tabs[i].hist_index > 0)
+            .unwrap_or(false)
     }
 
     pub fn can_go_forward(&self, id: ViewId) -> bool {
-        self.idx(id).map(|i| { let t = &self.tabs[i]; t.hist_index + 1 < t.history.len() }).unwrap_or(false)
+        self.idx(id)
+            .map(|i| {
+                let t = &self.tabs[i];
+                t.hist_index + 1 < t.history.len()
+            })
+            .unwrap_or(false)
     }
 
     /// Move back one entry; returns the URL to navigate to (None if already at the start).
     pub fn go_back(&mut self, id: ViewId) -> Option<String> {
         let i = self.idx(id)?;
         let t = &mut self.tabs[i];
-        if t.hist_index == 0 { return None; }
+        if t.hist_index == 0 {
+            return None;
+        }
         t.hist_index -= 1;
         t.url = t.history[t.hist_index].clone();
         Some(t.url.clone())
@@ -312,7 +348,9 @@ impl Registry {
     pub fn go_forward(&mut self, id: ViewId) -> Option<String> {
         let i = self.idx(id)?;
         let t = &mut self.tabs[i];
-        if t.hist_index + 1 >= t.history.len() { return None; }
+        if t.hist_index + 1 >= t.history.len() {
+            return None;
+        }
         t.hist_index += 1;
         t.url = t.history[t.hist_index].clone();
         Some(t.url.clone())
@@ -345,11 +383,19 @@ impl Registry {
         let id = self.next_id;
         self.next_id += 1;
         let pos = c.position.min(self.tabs.len());
-        self.tabs.insert(pos, Tab {
-            id, url: c.url.clone(), title: c.title,
-            pinned: c.pinned, live: true, last_active: now_ms,
-            history: vec![c.url.clone()], hist_index: 0,
-        });
+        self.tabs.insert(
+            pos,
+            Tab {
+                id,
+                url: c.url.clone(),
+                title: c.title,
+                pinned: c.pinned,
+                live: true,
+                last_active: now_ms,
+                history: vec![c.url.clone()],
+                hist_index: 0,
+            },
+        );
         if let Some(i) = self.idx(self.active_id) {
             self.tabs[i].last_active = now_ms;
         }
@@ -395,7 +441,11 @@ mod tests {
         assert_eq!(s.tabs.len(), 2);
         // Only the active tab is eagerly live after restore.
         assert!(s.tabs.iter().find(|t| t.id == s.active_id).unwrap().live);
-        assert!(s.tabs.iter().filter(|t| t.id != s.active_id).all(|t| !t.live));
+        assert!(s
+            .tabs
+            .iter()
+            .filter(|t| t.id != s.active_id)
+            .all(|t| !t.live));
     }
 
     #[test]
@@ -406,17 +456,17 @@ mod tests {
 
     #[test]
     fn create_foreground_changes_active() {
-        let mut r = reg();                 // tab 1 active
+        let mut r = reg(); // tab 1 active
         let (b, _) = r.create(Some("https://b.test/".into()), false, 1234);
-        assert_eq!(r.active_id(), b);       // foreground create switches active
+        assert_eq!(r.active_id(), b); // foreground create switches active
     }
 
     #[test]
     fn create_background_keeps_active() {
-        let mut r = reg();                 // tab 1 active
+        let mut r = reg(); // tab 1 active
         let before = r.active_id();
         let (b, _) = r.create(Some("https://b.test/".into()), true, 1234);
-        assert_eq!(r.active_id(), before);  // background create does NOT switch active
+        assert_eq!(r.active_id(), before); // background create does NOT switch active
         assert_ne!(b, before);
     }
 
@@ -424,15 +474,25 @@ mod tests {
     fn restore_with_unknown_active_id_falls_back_to_first_tab() {
         let session = PersistedSession {
             tabs: vec![
-                PersistedTab { id: 5, url: "https://a.test/".into(), title: String::new(), pinned: false },
-                PersistedTab { id: 6, url: "https://b.test/".into(), title: String::new(), pinned: false },
+                PersistedTab {
+                    id: 5,
+                    url: "https://a.test/".into(),
+                    title: String::new(),
+                    pinned: false,
+                },
+                PersistedTab {
+                    id: 6,
+                    url: "https://b.test/".into(),
+                    title: String::new(),
+                    pinned: false,
+                },
             ],
             active_id: 999, // not present
             next_id: 7,
         };
         let r = Registry::restore(session, "https://home.test/".into());
         let s = r.tabs_state();
-        assert_eq!(s.active_id, s.tabs[0].id);                 // fell back to first tab
+        assert_eq!(s.active_id, s.tabs[0].id); // fell back to first tab
         assert!(s.tabs.iter().find(|t| t.id == s.active_id).unwrap().live);
     }
 
@@ -453,19 +513,19 @@ mod tests {
 
     #[test]
     fn activating_discarded_tab_returns_its_url_to_spawn() {
-        let mut r = reg();                                              // tab 1 active
+        let mut r = reg(); // tab 1 active
         let (b, _) = r.create(Some("https://b.test/".into()), false, 0); // b active
-        r.activate(1, 5);                                              // back to tab 1; b is now a background tab
-        r.discard_for_test(b);                                         // discard the background tab b
-        let url = r.activate(b, 20);                                   // re-activate discarded b -> must respawn
+        r.activate(1, 5); // back to tab 1; b is now a background tab
+        r.discard_for_test(b); // discard the background tab b
+        let url = r.activate(b, 20); // re-activate discarded b -> must respawn
         assert_eq!(url.as_deref(), Some("https://b.test/"));
         assert_eq!(r.active_id(), b);
     }
 
     #[test]
     fn closing_active_activates_a_neighbor() {
-        let mut r = reg();          // tab 1
-        let (b, _) = r.create(None, false, 0);  // tab 2 (active)
+        let mut r = reg(); // tab 1
+        let (b, _) = r.create(None, false, 0); // tab 2 (active)
         let out = r.close(b, 0);
         assert!(out.closed_live);
         assert!(out.spawn.is_none()); // neighbor (tab 1) was already live
@@ -495,19 +555,19 @@ mod tests {
 
     #[test]
     fn closing_a_background_tab_keeps_active_and_needs_no_spawn() {
-        let mut r = reg();                          // tab 1 active
-        let (b, _) = r.create(None, false, 0);      // b active
-        r.activate(1, 5);                           // tab 1 active; b is now a live background tab
+        let mut r = reg(); // tab 1 active
+        let (b, _) = r.create(None, false, 0); // b active
+        r.activate(1, 5); // tab 1 active; b is now a live background tab
         let out = r.close(b, 10);
-        assert_eq!(r.active_id(), 1);               // active unchanged by closing a background tab
+        assert_eq!(r.active_id(), 1); // active unchanged by closing a background tab
         assert!(out.spawn.is_none());
-        assert!(out.closed_live);                   // b had a live webview to destroy
+        assert!(out.closed_live); // b had a live webview to destroy
         assert_eq!(r.tabs_state().tabs.len(), 1);
     }
 
     #[test]
     fn activating_the_current_tab_is_a_noop() {
-        let mut r = reg();                          // tab 1 active
+        let mut r = reg(); // tab 1 active
         assert_eq!(r.activate(1, 5), None);
         assert_eq!(r.active_id(), 1);
     }
@@ -520,10 +580,10 @@ mod tests {
 
     #[test]
     fn closing_active_respawns_a_discarded_neighbor() {
-        let mut r = reg();                          // tab 1
-        let (b, _) = r.create(None, false, 0);      // b active; tab 1 is a background tab
-        r.discard_for_test(1);                      // discard the neighbor (tab 1)
-        let out = r.close(b, 10);                   // close active b -> neighbor 1 must respawn
+        let mut r = reg(); // tab 1
+        let (b, _) = r.create(None, false, 0); // b active; tab 1 is a background tab
+        r.discard_for_test(1); // discard the neighbor (tab 1)
+        let out = r.close(b, 10); // close active b -> neighbor 1 must respawn
         assert_eq!(r.active_id(), 1);
         let (sid, _surl) = out.spawn.expect("discarded neighbor must be respawned");
         assert_eq!(sid, 1);
@@ -531,8 +591,8 @@ mod tests {
 
     #[test]
     fn pinning_moves_the_tab_to_the_front() {
-        let mut r = reg();                       // tab 1
-        let (b, _) = r.create(None, false, 0);   // tab 2
+        let mut r = reg(); // tab 1
+        let (b, _) = r.create(None, false, 0); // tab 2
         r.set_pinned(b, true);
         assert_eq!(r.tabs_state().tabs[0].id, b);
         assert!(r.tabs_state().tabs[0].pinned);
@@ -540,20 +600,20 @@ mod tests {
 
     #[test]
     fn reorder_respects_given_order_but_keeps_pinned_first() {
-        let mut r = reg();                       // 1
-        let (b, _) = r.create(None, false, 0);   // 2
-        let (c, _) = r.create(None, false, 0);   // 3
-        r.set_pinned(c, true);                   // c pinned -> front
-        r.reorder(&[b, 1, c]);                   // request b,1,c; c stays pinned-first
+        let mut r = reg(); // 1
+        let (b, _) = r.create(None, false, 0); // 2
+        let (c, _) = r.create(None, false, 0); // 3
+        r.set_pinned(c, true); // c pinned -> front
+        r.reorder(&[b, 1, c]); // request b,1,c; c stays pinned-first
         let ids: Vec<ViewId> = r.tabs_state().tabs.iter().map(|t| t.id).collect();
         assert_eq!(ids, vec![c, b, 1]);
     }
 
     #[test]
     fn sweep_discards_idle_background_tabs_only() {
-        let mut r = reg();                                  // tab 1
-        let (b, _) = r.create(None, false, 0);              // tab 2 active, 1 backgrounded@0
-        // now = 60_000 ms, timeout = 30_000 ms -> tab 1 (idle 60s) is discarded.
+        let mut r = reg(); // tab 1
+        let (b, _) = r.create(None, false, 0); // tab 2 active, 1 backgrounded@0
+                                               // now = 60_000 ms, timeout = 30_000 ms -> tab 1 (idle 60s) is discarded.
         let victims = r.sweep_idle(60_000, 30_000);
         assert_eq!(victims, vec![1]);
         assert!(!r.tabs_state().tabs.iter().find(|t| t.id == 1).unwrap().live);
@@ -562,11 +622,11 @@ mod tests {
 
     #[test]
     fn sweep_exempts_active_and_pinned() {
-        let mut r = reg();                                  // tab 1 active
-        let (_b, _) = r.create(None, false, 0);              // tab 2 active, 1 backgrounded@0
-        r.set_pinned(1, true);                              // 1 pinned -> exempt
+        let mut r = reg(); // tab 1 active
+        let (_b, _) = r.create(None, false, 0); // tab 2 active, 1 backgrounded@0
+        r.set_pinned(1, true); // 1 pinned -> exempt
         let victims = r.sweep_idle(999_999, 1);
-        assert!(victims.is_empty());                        // active(b) + pinned(1) both exempt
+        assert!(victims.is_empty()); // active(b) + pinned(1) both exempt
     }
 
     #[test]
@@ -578,24 +638,24 @@ mod tests {
 
     #[test]
     fn sweep_keeps_recently_active_tabs() {
-        let mut r = reg();                                  // tab 1
-        let (_b, _) = r.create(None, false, 50_000);        // tab 1 backgrounded@50s
-        let victims = r.sweep_idle(60_000, 30_000);         // idle only 10s < 30s
+        let mut r = reg(); // tab 1
+        let (_b, _) = r.create(None, false, 50_000); // tab 1 backgrounded@50s
+        let victims = r.sweep_idle(60_000, 30_000); // idle only 10s < 30s
         assert!(victims.is_empty());
     }
 
     #[test]
     fn nav_history_tracks_back_forward() {
-        let mut r = reg();                    // tab 1 @ home: history=[home], index 0
+        let mut r = reg(); // tab 1 @ home: history=[home], index 0
         r.record_nav(1, "https://a.test/");
         r.record_nav(1, "https://b.test/");
         assert!(r.can_go_back(1));
         assert!(!r.can_go_forward(1));
         assert_eq!(r.go_back(1), Some("https://a.test/".to_string()));
         assert_eq!(r.url_of(1), Some("https://a.test/"));
-        assert!(r.can_go_back(1));            // still can go back to home
-        assert!(r.can_go_forward(1));         // can go forward to b
-        // the navigation event caused by going back is a no-op (dedup), keeps forward
+        assert!(r.can_go_back(1)); // still can go back to home
+        assert!(r.can_go_forward(1)); // can go forward to b
+                                      // the navigation event caused by going back is a no-op (dedup), keeps forward
         r.record_nav(1, "https://a.test/");
         assert!(r.can_go_forward(1));
         assert_eq!(r.go_forward(1), Some("https://b.test/".to_string()));
@@ -607,13 +667,13 @@ mod tests {
     #[test]
     fn go_back_forward_at_ends_return_none() {
         let mut r = reg();
-        assert_eq!(r.go_back(1), None);       // at home, nothing behind
-        assert_eq!(r.go_forward(1), None);    // nothing ahead
+        assert_eq!(r.go_back(1), None); // at home, nothing behind
+        assert_eq!(r.go_forward(1), None); // nothing ahead
     }
 
     #[test]
     fn tabs_state_carries_title_and_url() {
-        let mut r = reg();              // tab 1 @ home
+        let mut r = reg(); // tab 1 @ home
         r.record_nav(1, "https://a.test/");
         r.set_title(1, "Alpha".into());
         let meta = &r.tabs_state().tabs[0];

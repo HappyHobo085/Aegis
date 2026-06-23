@@ -9,7 +9,6 @@ use std::sync::{Mutex, OnceLock};
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Url};
 
-
 /// Parsed malware hosts (bundled URLhaus hostfile), built once.
 fn malware_hosts() -> &'static HashSet<String> {
     static SET: OnceLock<HashSet<String>> = OnceLock::new();

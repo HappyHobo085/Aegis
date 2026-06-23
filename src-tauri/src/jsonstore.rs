@@ -179,7 +179,9 @@ pub fn uuid_of(item: &Value) -> Option<&str> {
 
 /// Whether a record is tombstoned.
 pub fn is_deleted(item: &Value) -> bool {
-    item.get("deleted").and_then(Value::as_bool).unwrap_or(false)
+    item.get("deleted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
 }
 
 /// Serialize a fresh HLC (ticked off the global clock) as a JSON value for storage.
@@ -332,7 +334,7 @@ mod tests {
         let p = dir.join("store.json");
         write_atomic(&p, b"[\"good\"]").unwrap(); // creates store.json
         write_atomic(&p, b"[\"newer\"]").unwrap(); // store.json.bak = ["good"]
-        // Corrupt the primary as a crash-mid-write would.
+                                                   // Corrupt the primary as a crash-mid-write would.
         fs::write(&p, b"{ this is not valid json").unwrap();
         let recovered = read_with_backup(&p).expect("should recover from .bak");
         assert_eq!(recovered, "[\"good\"]");
@@ -406,13 +408,19 @@ mod tests {
     #[test]
     fn ensure_sync_meta_assigns_all_three_when_absent_and_is_idempotent() {
         let mut item = json!({ "id": 1, "url": "https://x" });
-        assert!(ensure_sync_meta(&mut item, "node-a", 1000), "should assign on first pass");
+        assert!(
+            ensure_sync_meta(&mut item, "node-a", 1000),
+            "should assign on first pass"
+        );
         let uuid1 = uuid_of(&item).unwrap().to_string();
         assert!(!uuid1.is_empty());
         assert!(item.get("hlc").is_some());
         assert_eq!(is_deleted(&item), false);
         // Idempotent: a second pass changes nothing and keeps the SAME uuid.
-        assert!(!ensure_sync_meta(&mut item, "node-a", 2000), "second pass must be a no-op");
+        assert!(
+            !ensure_sync_meta(&mut item, "node-a", 2000),
+            "second pass must be a no-op"
+        );
         assert_eq!(uuid_of(&item).unwrap(), uuid1);
     }
 
@@ -436,7 +444,10 @@ mod tests {
             json!({ "id": 3 }), // no deleted field → treated as live
         ];
         let out = live(items);
-        let ids: Vec<i64> = out.iter().filter_map(|i| i.get("id").and_then(Value::as_i64)).collect();
+        let ids: Vec<i64> = out
+            .iter()
+            .filter_map(|i| i.get("id").and_then(Value::as_i64))
+            .collect();
         assert_eq!(ids, vec![1, 3]);
     }
 

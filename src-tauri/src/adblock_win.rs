@@ -30,7 +30,10 @@ pub fn install(pw: &tauri::webview::PlatformWebview) {
         };
         // Fire WebResourceRequested for every request (not just custom protocols).
         if core
-            .AddWebResourceRequestedFilter(&HSTRING::from("*"), COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL)
+            .AddWebResourceRequestedFilter(
+                &HSTRING::from("*"),
+                COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
+            )
             .is_err()
         {
             return;

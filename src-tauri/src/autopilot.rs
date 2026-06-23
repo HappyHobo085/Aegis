@@ -22,7 +22,16 @@ fn out_dir() -> PathBuf {
 pub fn autopilot_screenshot(name: String) -> Result<(), String> {
     let dir = out_dir().join("shots");
     fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let safe: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
+    let safe: String = name
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
     let path = dir.join(format!("{safe}.png"));
     // Best-effort: spectacle active-window, background mode, no notification.
     // (Linux/KDE-specific; fails gracefully on other platforms.)
@@ -64,7 +73,13 @@ mod tests {
     use super::*;
     #[test]
     fn out_dir_honors_env() {
-        assert_eq!(out_dir_from(Some("/tmp/aegis-ap-test".into())), PathBuf::from("/tmp/aegis-ap-test"));
-        assert_eq!(out_dir_from(None), std::env::temp_dir().join("aegis-autopilot"));
+        assert_eq!(
+            out_dir_from(Some("/tmp/aegis-ap-test".into())),
+            PathBuf::from("/tmp/aegis-ap-test")
+        );
+        assert_eq!(
+            out_dir_from(None),
+            std::env::temp_dir().join("aegis-autopilot")
+        );
     }
 }

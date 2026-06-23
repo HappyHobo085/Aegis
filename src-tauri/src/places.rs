@@ -31,7 +31,10 @@ fn live_has_url(items: &[Value], url: &str) -> bool {
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {
         // ---- favorites ----
-        "favorites.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(app, "favorites"))))),
+        "favorites.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
+            app,
+            "favorites"
+        ))))),
 
         "favorites.add" => {
             let mut items = jsonstore::load_synced(app, "favorites");
@@ -97,7 +100,9 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         // ---- saved (with tags) ----
-        "saved.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(app, "saved"))))),
+        "saved.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
+            app, "saved"
+        ))))),
 
         "saved.has" => {
             let items = jsonstore::load_synced(app, "saved");

@@ -21,7 +21,11 @@ pub struct Hlc {
 impl Hlc {
     #[allow(dead_code)] // used by F2b / tests; kept as part of the frozen contract
     pub fn zero(node: &str) -> Self {
-        Hlc { wall_ms: 0, counter: 0, node: node.to_string() }
+        Hlc {
+            wall_ms: 0,
+            counter: 0,
+            node: node.to_string(),
+        }
     }
     fn key(&self) -> (i64, u32, &str) {
         (self.wall_ms, self.counter, self.node.as_str())
@@ -94,7 +98,11 @@ fn next_observe(local: (i64, u32), now_ms: i64, remote: (i64, u32)) -> (i64, u32
 pub fn tick(node: &str, now_ms: i64) -> Hlc {
     let mut g = clock().lock().unwrap();
     *g = next_tick(*g, now_ms);
-    Hlc { wall_ms: g.0, counter: g.1, node: node.to_string() }
+    Hlc {
+        wall_ms: g.0,
+        counter: g.1,
+        node: node.to_string(),
+    }
 }
 
 /// HLC receive: on observing `remote`, return a local stamp that dominates BOTH the prior
@@ -103,7 +111,11 @@ pub fn tick(node: &str, now_ms: i64) -> Hlc {
 pub fn observe(node: &str, now_ms: i64, remote: &Hlc) -> Hlc {
     let mut g = clock().lock().unwrap();
     *g = next_observe(*g, now_ms, (remote.wall_ms, remote.counter));
-    Hlc { wall_ms: g.0, counter: g.1, node: node.to_string() }
+    Hlc {
+        wall_ms: g.0,
+        counter: g.1,
+        node: node.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -112,10 +124,26 @@ mod tests {
 
     #[test]
     fn ordering_is_wall_then_counter_then_node() {
-        let a = Hlc { wall_ms: 10, counter: 0, node: "a".into() };
-        let b = Hlc { wall_ms: 10, counter: 1, node: "a".into() };
-        let c = Hlc { wall_ms: 11, counter: 0, node: "a".into() };
-        let d = Hlc { wall_ms: 10, counter: 0, node: "b".into() };
+        let a = Hlc {
+            wall_ms: 10,
+            counter: 0,
+            node: "a".into(),
+        };
+        let b = Hlc {
+            wall_ms: 10,
+            counter: 1,
+            node: "a".into(),
+        };
+        let c = Hlc {
+            wall_ms: 11,
+            counter: 0,
+            node: "a".into(),
+        };
+        let d = Hlc {
+            wall_ms: 10,
+            counter: 0,
+            node: "b".into(),
+        };
         assert!(a < b && b < c);
         assert!(a < d); // same wall+counter → node breaks the tie
         assert!(d < b); // higher counter beats node tiebreak
@@ -150,7 +178,11 @@ mod tests {
 
     #[test]
     fn bytes_is_deterministic_and_order_consistent() {
-        let h = Hlc { wall_ms: 0x0102_0304_0506_0708, counter: 0x0900_000A, node: "xy".into() };
+        let h = Hlc {
+            wall_ms: 0x0102_0304_0506_0708,
+            counter: 0x0900_000A,
+            node: "xy".into(),
+        };
         let b = h.bytes();
         assert_eq!(&b[0..8], &[1, 2, 3, 4, 5, 6, 7, 8]); // big-endian wall_ms
         assert_eq!(&b[8..12], &[0x09, 0x00, 0x00, 0x0A]); // big-endian counter
@@ -163,7 +195,14 @@ mod tests {
     fn from_value_reads_the_hlc_field() {
         let rec = serde_json::json!({ "hlc": { "wall_ms": 3, "counter": 1, "node": "z" } });
         let h = from_value(&rec).unwrap();
-        assert_eq!(h, Hlc { wall_ms: 3, counter: 1, node: "z".into() });
+        assert_eq!(
+            h,
+            Hlc {
+                wall_ms: 3,
+                counter: 1,
+                node: "z".into()
+            }
+        );
         assert!(from_value(&serde_json::json!({})).is_none());
     }
 }

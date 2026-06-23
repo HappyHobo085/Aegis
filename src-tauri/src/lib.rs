@@ -1,8 +1,8 @@
 mod adblock;
 // The bundled filter lists (EasyList + EasyPrivacy + Peter Lowe's), single-sourced so
 // every ad-block tier blocks from the identical set across all platforms.
-mod adblock_lists;
 mod adblock_convert;
+mod adblock_lists;
 // Chromium-side network ad-blocking engine (`should_block`). Used by Android (JNI
 // export) and Windows (WebView2 interception, adblock_win) for full request blocking,
 // and by ALL desktop platforms to drop ad/tracker pop-unders in nav::on_new_window.
@@ -40,17 +40,16 @@ mod nav_url_mac;
 mod adblock_inject;
 // WebRTC IP-leak defense: the document-start shim builder + reference filter rules.
 // Gated like adblock_engine so the NativeWebrtc JNI export links on Android.
-#[cfg(any(desktop, target_os = "android", test))]
-mod webrtc_shim;
 #[cfg(target_os = "linux")]
 mod adblock_webkit;
 #[cfg(target_os = "linux")]
 mod linux_layout;
+#[cfg(any(desktop, target_os = "android", test))]
+mod webrtc_shim;
 // Sync engine (F2b) crypto: key tree + recovery phrase + record seal/open. Ungated — the
 // crypto deps build on every target (the cross-compile gate confirmed this), incl. Android.
 mod crypto;
 // Per-device Ed25519 signed-token auth for the sync server (F2b).
-mod sync_auth;
 mod customfilters;
 mod data;
 mod downloads;
@@ -63,6 +62,7 @@ mod places;
 mod safety;
 mod settings;
 mod subs;
+mod sync_auth;
 // Sync data-layer (F2a): the HLC envelope + stable device node id that timestamp every
 // syncable record. Pure/ungated — the sync engine (F2b) builds on this frozen contract.
 mod sync_envelope;
@@ -73,12 +73,12 @@ mod sync_keystore;
 // The merge seam F2b consumes: SYNCABLE stores + read_all/merge_into (HLC last-writer-wins).
 mod sync_stores;
 // The sync ENGINE (F2b): enable/disable, device pairing, the encrypted pull/merge/push loop.
+#[cfg(debug_assertions)]
+mod autopilot;
 mod sync;
 mod tab_registry;
 mod tabs;
 mod update;
-#[cfg(debug_assertions)]
-mod autopilot;
 mod view;
 
 use serde_json::Value;
@@ -185,10 +185,17 @@ pub fn install_adblock(app: tauri::AppHandle) {
         subs_text.hash(&mut hasher);
         let marker = store_dir.join(format!("v{:x}.ready", hasher.finish()));
         let cached = marker.exists();
-        let sources: Vec<&str> = bundled.iter().copied().chain([custom.as_str(), subs_text.as_str()]).collect();
+        let sources: Vec<&str> = bundled
+            .iter()
+            .copied()
+            .chain([custom.as_str(), subs_text.as_str()])
+            .collect();
         match adblock_convert::to_content_blocker_chunks(&sources, 25_000) {
             Ok(chunks) => {
-                eprintln!("[aegis-cf] filter lists -> {} chunks (cached={cached})", chunks.len());
+                eprintln!(
+                    "[aegis-cf] filter lists -> {} chunks (cached={cached})",
+                    chunks.len()
+                );
                 // Arm the marker BEFORE kicking off the (async) compiles, so it's written
                 // only after the last chunk actually persists — not up front, which would
                 // race a mid-compile exit into a stale partial cache. See adblock_webkit.
@@ -206,12 +213,18 @@ pub fn install_adblock(app: tauri::AppHandle) {
 fn install_tab_menu(app: &tauri::AppHandle) -> tauri::Result<()> {
     use tauri::menu::{MenuBuilder, MenuItemBuilder, SubmenuBuilder};
     let item = |id: &str, label: &str, accel: &str| {
-        MenuItemBuilder::with_id(id, label).accelerator(accel).build(app)
+        MenuItemBuilder::with_id(id, label)
+            .accelerator(accel)
+            .build(app)
     };
     let tabs_menu = SubmenuBuilder::new(app, "Tabs")
         .item(&item("tab_new", "New Tab", "CmdOrCtrl+T")?)
         .item(&item("tab_close", "Close Tab", "CmdOrCtrl+W")?)
-        .item(&item("tab_reopen", "Reopen Closed Tab", "CmdOrCtrl+Shift+T")?)
+        .item(&item(
+            "tab_reopen",
+            "Reopen Closed Tab",
+            "CmdOrCtrl+Shift+T",
+        )?)
         .item(&item("tab_next", "Next Tab", "Ctrl+Tab")?)
         .item(&item("tab_prev", "Previous Tab", "Ctrl+Shift+Tab")?)
         .build()?;
@@ -368,7 +381,10 @@ pub fn run() {
                         let mods = dir.join("gio/modules");
                         std::env::set_var("GIO_MODULE_DIR", &mods);
                         std::env::set_var("GIO_EXTRA_MODULES", &mods); // older glib
-                        eprintln!("[aegis] GIO_MODULE_DIR -> {} (bundled TLS backend)", mods.display());
+                        eprintln!(
+                            "[aegis] GIO_MODULE_DIR -> {} (bundled TLS backend)",
+                            mods.display()
+                        );
                         break;
                     }
                 }
@@ -413,136 +429,140 @@ pub fn run() {
         let _ = crate::emit_event(app, "tabs.shortcut", s);
     });
 
-    let builder = builder
-        .setup(|app| {
-            if cfg!(debug_assertions) {
-                app.handle().plugin(
-                    tauri_plugin_log::Builder::default()
-                        .level(log::LevelFilter::Info)
-                        .build(),
-                )?;
+    let builder = builder.setup(|app| {
+        if cfg!(debug_assertions) {
+            app.handle().plugin(
+                tauri_plugin_log::Builder::default()
+                    .level(log::LevelFilter::Info)
+                    .build(),
+            )?;
+        }
+
+        // Android: seed the WebRTC document-start shim's policy from settings (its JNI
+        // getter has no AppHandle). Kept fresh on settings change in settings.rs.
+        #[cfg(target_os = "android")]
+        crate::webrtc_shim::note_policy(&crate::settings::webrtc_policy(app.handle()));
+
+        // Seed the ad-block allowlist from disk (the managed AdblockState was created
+        // empty at builder time) + mirror it into the engine — so allowlisted hosts
+        // survive a restart on every platform.
+        crate::adblock::seed_from_disk(app.handle());
+
+        // Sync: auto-unlock from the OS keychain if a seed is stored, and start syncing.
+        crate::sync::start(app.handle());
+
+        // Initialize the tab registry: restore from tabs.json if it exists,
+        // otherwise start fresh with the configured home page.  Only the active
+        // tab gets an eager webview; the rest lazy-spawn on activation.
+        let home = crate::settings::home_url(app.handle()).to_string();
+        let reg = match tabs::load_session(app.handle()) {
+            Some(session) => crate::tab_registry::Registry::restore(session, home.clone()),
+            None => crate::tab_registry::Registry::new(home.clone()),
+        };
+        app.manage(tabs::Tabs::from_registry(reg));
+        let active = app.state::<tabs::Tabs>().reg.lock().unwrap().active_id();
+        let active_url = app
+            .state::<tabs::Tabs>()
+            .reg
+            .lock()
+            .unwrap()
+            .url_of(active)
+            .map(str::to_string);
+        if let Some(url) = active_url {
+            if let Ok(u) = tauri::Url::parse(&url) {
+                nav::spawn_tab(app.handle(), active, u)?;
             }
+        }
+        tabs::start_idle_sweep(app.handle());
 
-            // Android: seed the WebRTC document-start shim's policy from settings (its JNI
-            // getter has no AppHandle). Kept fresh on settings change in settings.rs.
-            #[cfg(target_os = "android")]
-            crate::webrtc_shim::note_policy(&crate::settings::webrtc_policy(app.handle()));
-
-            // Seed the ad-block allowlist from disk (the managed AdblockState was created
-            // empty at builder time) + mirror it into the engine — so allowlisted hosts
-            // survive a restart on every platform.
-            crate::adblock::seed_from_disk(app.handle());
-
-            // Sync: auto-unlock from the OS keychain if a seed is stored, and start syncing.
-            crate::sync::start(app.handle());
-
-            // Initialize the tab registry: restore from tabs.json if it exists,
-            // otherwise start fresh with the configured home page.  Only the active
-            // tab gets an eager webview; the rest lazy-spawn on activation.
-            let home = crate::settings::home_url(app.handle()).to_string();
-            let reg = match tabs::load_session(app.handle()) {
-                Some(session) => crate::tab_registry::Registry::restore(session, home.clone()),
-                None => crate::tab_registry::Registry::new(home.clone()),
-            };
-            app.manage(tabs::Tabs::from_registry(reg));
-            let active = app.state::<tabs::Tabs>().reg.lock().unwrap().active_id();
-            let active_url = app.state::<tabs::Tabs>().reg.lock().unwrap().url_of(active).map(str::to_string);
-            if let Some(url) = active_url {
-                if let Ok(u) = tauri::Url::parse(&url) {
-                    nav::spawn_tab(app.handle(), active, u)?;
+        // Tauri child-webview auto-resize is incomplete; recompute bounds on
+        // window resize so the content view keeps filling the area below the chrome.
+        // Linux: the content/chrome webviews are sized via size_allocate (not
+        // set_size_request, which pins the window's minimum to its current size so it can't
+        // shrink — see linux_layout's SIZING NOTE). Register the insets state the sizing
+        // handler reads before the first layout pass below.
+        #[cfg(target_os = "linux")]
+        app.manage(linux_layout::LayoutInsets::default());
+        if let Some(window) = app.get_window("main") {
+            // A sane floor so the window can shrink (the bug was it couldn't at all) without
+            // collapsing to an unusable size. Effective now that the webviews no longer pin it.
+            let _ = window.set_min_size(Some(tauri::LogicalSize::new(420.0, 320.0)));
+            let handle = app.handle().clone();
+            window.on_window_event(move |event| {
+                if let tauri::WindowEvent::Resized(_) = event {
+                    view::apply_inset(&handle);
                 }
-            }
-            tabs::start_idle_sweep(app.handle());
-
-            // Tauri child-webview auto-resize is incomplete; recompute bounds on
-            // window resize so the content view keeps filling the area below the chrome.
-            // Linux: the content/chrome webviews are sized via size_allocate (not
-            // set_size_request, which pins the window's minimum to its current size so it can't
-            // shrink — see linux_layout's SIZING NOTE). Register the insets state the sizing
-            // handler reads before the first layout pass below.
-            #[cfg(target_os = "linux")]
-            app.manage(linux_layout::LayoutInsets::default());
-            if let Some(window) = app.get_window("main") {
-                // A sane floor so the window can shrink (the bug was it couldn't at all) without
-                // collapsing to an unusable size. Effective now that the webviews no longer pin it.
-                let _ = window.set_min_size(Some(tauri::LogicalSize::new(420.0, 320.0)));
-                let handle = app.handle().clone();
-                window.on_window_event(move |event| {
-                    if let tauri::WindowEvent::Resized(_) = event {
-                        view::apply_inset(&handle);
-                    }
-                });
-            }
-            view::apply_inset(app.handle());
-
-            // Emit the restored tabs state so the chrome renders all tabs immediately
-            // (belt-and-suspenders: the chrome also calls tabs.list on mount).
-            let _ = crate::emit_event(app.handle(), "tabs.state", {
-                let s = app.state::<tabs::Tabs>().reg.lock().unwrap().tabs_state();
-                serde_json::to_value(s).unwrap_or(serde_json::Value::Null)
             });
+        }
+        view::apply_inset(app.handle());
 
-            // Win/macOS: install a "Tabs" menu with accelerators so native OS-level
-            // key capture delivers Ctrl+T/W/Tab etc. even when the content webview has
-            // focus. Linux uses a GTK key hook instead (connect_tab_keys_label).
-            #[cfg(all(desktop, not(target_os = "linux")))]
-            install_tab_menu(app.handle())?;
+        // Emit the restored tabs state so the chrome renders all tabs immediately
+        // (belt-and-suspenders: the chrome also calls tabs.list on mount).
+        let _ = crate::emit_event(app.handle(), "tabs.state", {
+            let s = app.state::<tabs::Tabs>().reg.lock().unwrap().tabs_state();
+            serde_json::to_value(s).unwrap_or(serde_json::Value::Null)
+        });
 
-            // Linux: render native widgets (the <select> popup menus, file dialogs)
-            // in the dark variant so they match Aegis's always-dark UI instead of a
-            // white system-light theme. Sets the GTK app-wide "prefer dark" hint.
-            #[cfg(target_os = "linux")]
-            {
-                use gtk::prelude::*;
-                if let Some(gset) = gtk::Settings::default() {
-                    gset.set_gtk_application_prefer_dark_theme(true);
-                    // Select a concrete dark theme by name (Adwaita-dark is built into
-                    // GTK). prefer-dark alone is a no-op on themes like Breeze whose dark
-                    // form is a separate theme, and the GTK_THEME env didn't take — set
-                    // it directly on the live Settings so native dialogs render dark.
-                    gset.set_gtk_theme_name(Some("Adwaita-dark"));
-                }
-                // Style the native floating fullscreen-exit button (linux_layout's
-                // `#aegis-fs-exit`) so it matches the dark UI: a small dark box with a
-                // light ↘↖ (arrows pointing inward — matches the React Minimize2 exit
-                // icon), pinned top-right over edge-to-edge fullscreen content.
-                let css = gtk::CssProvider::new();
-                let _ = css.load_from_data(
-                    b"#aegis-fs-exit{background-color:#1f1f1f;border:1px solid #3a3a3a;}\
+        // Win/macOS: install a "Tabs" menu with accelerators so native OS-level
+        // key capture delivers Ctrl+T/W/Tab etc. even when the content webview has
+        // focus. Linux uses a GTK key hook instead (connect_tab_keys_label).
+        #[cfg(all(desktop, not(target_os = "linux")))]
+        install_tab_menu(app.handle())?;
+
+        // Linux: render native widgets (the <select> popup menus, file dialogs)
+        // in the dark variant so they match Aegis's always-dark UI instead of a
+        // white system-light theme. Sets the GTK app-wide "prefer dark" hint.
+        #[cfg(target_os = "linux")]
+        {
+            use gtk::prelude::*;
+            if let Some(gset) = gtk::Settings::default() {
+                gset.set_gtk_application_prefer_dark_theme(true);
+                // Select a concrete dark theme by name (Adwaita-dark is built into
+                // GTK). prefer-dark alone is a no-op on themes like Breeze whose dark
+                // form is a separate theme, and the GTK_THEME env didn't take — set
+                // it directly on the live Settings so native dialogs render dark.
+                gset.set_gtk_theme_name(Some("Adwaita-dark"));
+            }
+            // Style the native floating fullscreen-exit button (linux_layout's
+            // `#aegis-fs-exit`) so it matches the dark UI: a small dark box with a
+            // light ↘↖ (arrows pointing inward — matches the React Minimize2 exit
+            // icon), pinned top-right over edge-to-edge fullscreen content.
+            let css = gtk::CssProvider::new();
+            let _ = css.load_from_data(
+                b"#aegis-fs-exit{background-color:#1f1f1f;border:1px solid #3a3a3a;}\
                       #aegis-fs-exit:hover{background-color:#333333;}\
                       #aegis-fs-exit label{color:#eaeaea;font-size:15px;font-weight:700;}",
+            );
+            if let Some(screen) = gtk::gdk::Screen::default() {
+                gtk::StyleContext::add_provider_for_screen(
+                    &screen,
+                    &css,
+                    gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
                 );
-                if let Some(screen) = gtk::gdk::Screen::default() {
-                    gtk::StyleContext::add_provider_for_screen(
-                        &screen,
-                        &css,
-                        gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-                    );
-                }
             }
+        }
 
-            // The per-tab WebKit signal hooks (permission handler, title→history +
-            // picker sentinel, Esc-exits-fullscreen) are installed at spawn time in
-            // nav::spawn_tab — including for the first tab spawned above — so they're
-            // no longer wired here.
+        // The per-tab WebKit signal hooks (permission handler, title→history +
+        // picker sentinel, Esc-exits-fullscreen) are installed at spawn time in
+        // nav::spawn_tab — including for the first tab spawned above — so they're
+        // no longer wired here.
 
-            // Ad-blocking (Linux/WebKit): install EasyList content filters.
-            #[cfg(target_os = "linux")]
-            install_adblock(app.handle().clone());
-            // Warm the pop-under matching engine off-thread so the first window.open
-            // check (nav::on_new_window) doesn't pay the EasyList parse on the UI thread.
-            // (Android already warms it on the first intercepted request.)
-            #[cfg(desktop)]
-            std::thread::spawn(|| {
-                let _ = adblock_engine::should_block(
-                    "https://aegis.invalid/",
-                    "https://aegis.invalid/",
-                    "document",
-                );
-            });
-            Ok(())
-        })
-        ;
+        // Ad-blocking (Linux/WebKit): install EasyList content filters.
+        #[cfg(target_os = "linux")]
+        install_adblock(app.handle().clone());
+        // Warm the pop-under matching engine off-thread so the first window.open
+        // check (nav::on_new_window) doesn't pay the EasyList parse on the UI thread.
+        // (Android already warms it on the first intercepted request.)
+        #[cfg(desktop)]
+        std::thread::spawn(|| {
+            let _ = adblock_engine::should_block(
+                "https://aegis.invalid/",
+                "https://aegis.invalid/",
+                "document",
+            );
+        });
+        Ok(())
+    });
     #[cfg(debug_assertions)]
     let builder = builder.invoke_handler(tauri::generate_handler![
         ipc,

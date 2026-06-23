@@ -1,0 +1,3 @@
+# Deterministic rustfmt across CI and dev. Defaults are intentional — we only pin the
+# edition so wrapping/derive-formatting matches src-tauri/Cargo.toml's `edition = "2021"`.
+edition = "2021"

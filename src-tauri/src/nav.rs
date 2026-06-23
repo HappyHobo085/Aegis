@@ -42,7 +42,10 @@ pub fn content_label(id: u32) -> String {
 
 /// Parse the tab id out of a `content:{id}` label (defaults to 1).
 fn label_id(label: &str) -> u32 {
-    label.strip_prefix("content:").and_then(|s| s.parse().ok()).unwrap_or(1)
+    label
+        .strip_prefix("content:")
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1)
 }
 
 /// Navigate a tab's content webview, FIRST registering the target as an
@@ -94,8 +97,12 @@ pub(crate) fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loadi
     if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
         eprintln!("[aegis-nav] emit_state id={id} loading={loading} url={url}");
     }
-    let (back, fwd) = app.try_state::<crate::tabs::Tabs>()
-        .map(|s| { let r = s.reg.lock().unwrap(); (r.can_go_back(id), r.can_go_forward(id)) })
+    let (back, fwd) = app
+        .try_state::<crate::tabs::Tabs>()
+        .map(|s| {
+            let r = s.reg.lock().unwrap();
+            (r.can_go_back(id), r.can_go_forward(id))
+        })
         .unwrap_or((false, false));
     let _ = crate::emit_event(
         app,
@@ -150,7 +157,10 @@ pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
             .unwrap_or_default();
         if crate::adblock_engine::should_block(u.as_str(), &source, "document") {
             if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
-                eprintln!("[aegis-nav] BLOCK ad navigation: {} (from {source})", u.as_str());
+                eprintln!(
+                    "[aegis-nav] BLOCK ad navigation: {} (from {source})",
+                    u.as_str()
+                );
             }
             // Auto-close a pop-under shell: a NON-active tab that never showed real content
             // whose navigation is an ad. The active tab + any tab that loaded a real page are
@@ -321,7 +331,9 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
         } else {
             match crate::settings::webrtc_policy(app).as_str() {
                 "disable" => Some(" --force-webrtc-ip-handling-policy=disable_non_proxied_udp"),
-                "public-only" => Some(" --force-webrtc-ip-handling-policy=default_public_interface_only"),
+                "public-only" => {
+                    Some(" --force-webrtc-ip-handling-policy=default_public_interface_only")
+                }
                 _ => None,
             }
         };
@@ -427,7 +439,10 @@ pub fn spawn_tab(_app: &AppHandle, _id: u32, _url: Url) -> tauri::Result<()> {
 
 /// Handle `nav.*` channels. Returns `None` if `channel` is not a nav channel.
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
-    let id = payload.get("viewId").and_then(Value::as_u64).map(|n| n as u32);
+    let id = payload
+        .get("viewId")
+        .and_then(Value::as_u64)
+        .map(|n| n as u32);
     let label = match id {
         Some(i) => content_label(i),
         None => active_content_label(app),
@@ -440,7 +455,9 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 Ok(u) => match content {
                     Some(w) => {
                         crate::redirect_guard::expect(app, label_id(&label), u.as_str());
-                        w.navigate(u).map(|_| Value::Null).map_err(|e| e.to_string())
+                        w.navigate(u)
+                            .map(|_| Value::Null)
+                            .map_err(|e| e.to_string())
                     }
                     None => Ok(Value::Null),
                 },
@@ -449,9 +466,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
         "nav.back" => {
             let target_id = id.unwrap_or_else(|| {
-                app.try_state::<crate::tabs::Tabs>().map(|s| s.reg.lock().unwrap().active_id()).unwrap_or(1)
+                app.try_state::<crate::tabs::Tabs>()
+                    .map(|s| s.reg.lock().unwrap().active_id())
+                    .unwrap_or(1)
             });
-            let url = app.try_state::<crate::tabs::Tabs>().and_then(|s| s.reg.lock().unwrap().go_back(target_id));
+            let url = app
+                .try_state::<crate::tabs::Tabs>()
+                .and_then(|s| s.reg.lock().unwrap().go_back(target_id));
             if let (Some(url), Some(w)) = (url, content) {
                 if let Ok(u) = Url::parse(&url) {
                     crate::redirect_guard::expect(app, label_id(&label), u.as_str());
@@ -462,9 +483,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
         "nav.forward" => {
             let target_id = id.unwrap_or_else(|| {
-                app.try_state::<crate::tabs::Tabs>().map(|s| s.reg.lock().unwrap().active_id()).unwrap_or(1)
+                app.try_state::<crate::tabs::Tabs>()
+                    .map(|s| s.reg.lock().unwrap().active_id())
+                    .unwrap_or(1)
             });
-            let url = app.try_state::<crate::tabs::Tabs>().and_then(|s| s.reg.lock().unwrap().go_forward(target_id));
+            let url = app
+                .try_state::<crate::tabs::Tabs>()
+                .and_then(|s| s.reg.lock().unwrap().go_forward(target_id));
             if let (Some(url), Some(w)) = (url, content) {
                 if let Ok(u) = Url::parse(&url) {
                     crate::redirect_guard::expect(app, label_id(&label), u.as_str());
@@ -498,8 +523,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     .map(|s| s.reg.lock().unwrap().active_id())
                     .unwrap_or(1)
             });
-            let (back, fwd) = app.try_state::<crate::tabs::Tabs>()
-                .map(|s| { let r = s.reg.lock().unwrap(); (r.can_go_back(vid), r.can_go_forward(vid)) })
+            let (back, fwd) = app
+                .try_state::<crate::tabs::Tabs>()
+                .map(|s| {
+                    let r = s.reg.lock().unwrap();
+                    (r.can_go_back(vid), r.can_go_forward(vid))
+                })
                 .unwrap_or((false, false));
             Ok(json!({
                 "viewId": vid, "url": url, "title": "",
@@ -513,7 +542,9 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{forget_tab_content, mark_tab_has_content, should_autoclose_popunder, tabs_with_content};
+    use super::{
+        forget_tab_content, mark_tab_has_content, should_autoclose_popunder, tabs_with_content,
+    };
 
     #[test]
     fn autoclose_only_nonactive_blank_tabs() {

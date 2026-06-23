@@ -110,11 +110,17 @@ pub fn unwrap_with_passphrase(blob: &str, passphrase: &str) -> Result<RootSecret
 }
 
 fn vault_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("sync-vault.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("sync-vault.json"))
 }
 
 fn salt_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("sync-device-salt.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("sync-device-salt.json"))
 }
 
 /// The per-install 16-byte salt (read-or-create) that makes this device's signing key
@@ -123,7 +129,11 @@ pub fn device_local_salt(app: &AppHandle) -> Vec<u8> {
     if let Some(p) = salt_path(app) {
         if let Some(salt) = crate::jsonstore::read_with_backup(&p)
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
-            .and_then(|v| v.get("salt").and_then(serde_json::Value::as_str).map(String::from))
+            .and_then(|v| {
+                v.get("salt")
+                    .and_then(serde_json::Value::as_str)
+                    .map(String::from)
+            })
             .and_then(|s| unhex(&s))
             .filter(|s| s.len() == 16)
         {
@@ -131,7 +141,8 @@ pub fn device_local_salt(app: &AppHandle) -> Vec<u8> {
         }
         let mut salt = [0u8; 16];
         let _ = getrandom::getrandom(&mut salt);
-        let txt = serde_json::to_string(&serde_json::json!({ "salt": hex(&salt) })).unwrap_or_default();
+        let txt =
+            serde_json::to_string(&serde_json::json!({ "salt": hex(&salt) })).unwrap_or_default();
         let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
         return salt.to_vec();
     }
@@ -148,7 +159,10 @@ pub fn device_local_salt(app: &AppHandle) -> Vec<u8> {
 // crashes — the worst case is the same as before this path existed.
 #[cfg(target_os = "android")]
 fn keystore_vault_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("sync-keystore-vault.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("sync-keystore-vault.json"))
 }
 
 #[cfg(target_os = "android")]
@@ -362,7 +376,10 @@ pub fn load_root(app: &AppHandle, passphrase: Option<&str>) -> Option<RootSecret
 pub fn has_stored_root(app: &AppHandle) -> bool {
     #[cfg(target_os = "android")]
     {
-        if keystore_vault_path(app).map(|p| p.exists()).unwrap_or(false) {
+        if keystore_vault_path(app)
+            .map(|p| p.exists())
+            .unwrap_or(false)
+        {
             return true;
         }
     }

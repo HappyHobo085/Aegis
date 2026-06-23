@@ -43,7 +43,10 @@ fn is_newer(candidate: &str, current: &str) -> bool {
     }
     let (a, b) = (parts(candidate), parts(current));
     for i in 0..a.len().max(b.len()) {
-        let (x, y) = (a.get(i).copied().unwrap_or(0), b.get(i).copied().unwrap_or(0));
+        let (x, y) = (
+            a.get(i).copied().unwrap_or(0),
+            b.get(i).copied().unwrap_or(0),
+        );
         if x != y {
             return x > y;
         }
@@ -95,21 +98,33 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
             {
                 let app = app.clone();
                 tauri::async_runtime::spawn(async move {
-                    set(&app, json!({ "status": "checking", "version": null, "percent": 0, "error": null }));
+                    set(
+                        &app,
+                        json!({ "status": "checking", "version": null, "percent": 0, "error": null }),
+                    );
                     let result = match app.updater() {
                         Ok(updater) => updater.check().await,
                         Err(e) => Err(e),
                     };
                     match result {
-                        Ok(Some(update)) => set(&app, json!({
-                            "status": "available", "version": update.version, "percent": 0, "error": null
-                        })),
-                        Ok(None) => set(&app, json!({
-                            "status": "not-available", "version": null, "percent": 0, "error": null
-                        })),
-                        Err(e) => set(&app, json!({
-                            "status": "error", "version": null, "percent": 0, "error": e.to_string()
-                        })),
+                        Ok(Some(update)) => set(
+                            &app,
+                            json!({
+                                "status": "available", "version": update.version, "percent": 0, "error": null
+                            }),
+                        ),
+                        Ok(None) => set(
+                            &app,
+                            json!({
+                                "status": "not-available", "version": null, "percent": 0, "error": null
+                            }),
+                        ),
+                        Err(e) => set(
+                            &app,
+                            json!({
+                                "status": "error", "version": null, "percent": 0, "error": e.to_string()
+                            }),
+                        ),
                     }
                 });
             }
@@ -120,7 +135,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
             tauri::async_runtime::spawn(async move {
                 let Ok(updater) = app.updater() else { return };
                 if let Ok(Some(update)) = updater.check().await {
-                    set(&app, json!({ "status": "downloading", "version": update.version, "percent": 0, "error": null }));
+                    set(
+                        &app,
+                        json!({ "status": "downloading", "version": update.version, "percent": 0, "error": null }),
+                    );
                     let progress_app = app.clone();
                     let result = update
                         .download_and_install(
@@ -133,9 +151,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
                         .await;
                     match result {
                         Ok(()) => app.restart(),
-                        Err(e) => set(&app, json!({
-                            "status": "error", "version": null, "percent": 0, "error": e.to_string()
-                        })),
+                        Err(e) => set(
+                            &app,
+                            json!({
+                                "status": "error", "version": null, "percent": 0, "error": e.to_string()
+                            }),
+                        ),
                     }
                 }
             });
@@ -151,23 +172,35 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
 #[cfg(target_os = "android")]
 fn android_check(app: AppHandle) {
     std::thread::spawn(move || {
-        set(&app, json!({ "status": "checking", "version": null, "percent": 0, "error": null }));
+        set(
+            &app,
+            json!({ "status": "checking", "version": null, "percent": 0, "error": null }),
+        );
         let current = app.package_info().version.to_string();
         let fetched = reqwest::blocking::get(MANIFEST_URL)
             .and_then(|r| r.error_for_status())
             .and_then(|r| r.text());
         match fetched {
             Ok(body) => match newer_android_version(&body, &current) {
-                Some(version) => set(&app, json!({
-                    "status": "available", "version": version, "percent": 0, "error": null
-                })),
-                None => set(&app, json!({
-                    "status": "not-available", "version": null, "percent": 0, "error": null
-                })),
+                Some(version) => set(
+                    &app,
+                    json!({
+                        "status": "available", "version": version, "percent": 0, "error": null
+                    }),
+                ),
+                None => set(
+                    &app,
+                    json!({
+                        "status": "not-available", "version": null, "percent": 0, "error": null
+                    }),
+                ),
             },
-            Err(e) => set(&app, json!({
-                "status": "error", "version": null, "percent": 0, "error": e.to_string()
-            })),
+            Err(e) => set(
+                &app,
+                json!({
+                    "status": "error", "version": null, "percent": 0, "error": e.to_string()
+                }),
+            ),
         }
     });
 }
@@ -192,7 +225,7 @@ mod tests {
         assert_eq!(newer_android_version(m, "0.1.0").as_deref(), Some("0.2.0"));
         assert_eq!(newer_android_version(m, "0.2.0"), None); // up to date
         assert_eq!(newer_android_version(m, "0.3.0"), None); // local build is newer
-        // Newer version, but no Android artifact published yet → don't offer it.
+                                                             // Newer version, but no Android artifact published yet → don't offer it.
         let no_android = r#"{"version":"0.2.0","platforms":{"linux-x86_64":{"url":"u"}}}"#;
         assert_eq!(newer_android_version(no_android, "0.1.0"), None);
         assert_eq!(newer_android_version("not json", "0.1.0"), None);

@@ -139,8 +139,13 @@ pub fn apply_inset(app: &AppHandle) {
         let w = (logical.width - left - right).max(0.0);
         let h = (logical.height - top).max(0.0);
         let _ = content.set_bounds(tauri::Rect {
-            position: tauri::PhysicalPosition::new((left * scale).round() as i32, (top * scale).round() as i32).into(),
-            size: tauri::PhysicalSize::new((w * scale).round() as u32, (h * scale).round() as u32).into(),
+            position: tauri::PhysicalPosition::new(
+                (left * scale).round() as i32,
+                (top * scale).round() as i32,
+            )
+            .into(),
+            size: tauri::PhysicalSize::new((w * scale).round() as u32, (h * scale).round() as u32)
+                .into(),
         });
     }
     #[cfg(target_os = "macos")]
@@ -163,7 +168,11 @@ pub fn apply_inset(app: &AppHandle) {
         let active_visible = content_visible(&lay);
         for (label, w) in app.webviews() {
             if label.starts_with("content:") {
-                let _ = if label == active && active_visible { w.show() } else { w.hide() };
+                let _ = if label == active && active_visible {
+                    w.show()
+                } else {
+                    w.hide()
+                };
             }
         }
     }
@@ -183,7 +192,14 @@ mod tests {
     use super::{content_visible, Layout};
 
     fn lay(overlay: bool, sidebar: bool, fullscreen: bool) -> Layout {
-        Layout { left: 0.0, top: 0.0, right: 0.0, fullscreen, overlay, sidebar }
+        Layout {
+            left: 0.0,
+            top: 0.0,
+            right: 0.0,
+            fullscreen,
+            overlay,
+            sidebar,
+        }
     }
 
     #[test]
@@ -204,8 +220,14 @@ mod tests {
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     let res: Result<Value, String> = match channel {
         "view.setContentInset" => {
-            let top = payload.pointer("/inset/top").and_then(Value::as_f64).unwrap_or(0.0);
-            let left = payload.pointer("/inset/left").and_then(Value::as_f64).unwrap_or(0.0);
+            let top = payload
+                .pointer("/inset/top")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
+            let left = payload
+                .pointer("/inset/left")
+                .and_then(Value::as_f64)
+                .unwrap_or(0.0);
             update(app, |l| {
                 l.left = left;
                 l.top = top;
@@ -215,7 +237,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "view.setContentVisible" => {
             #[cfg(desktop)]
             {
-                let visible = payload.get("visible").and_then(Value::as_bool).unwrap_or(true);
+                let visible = payload
+                    .get("visible")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true);
                 #[cfg(target_os = "linux")]
                 crate::linux_layout::set_content_visible(app, visible);
                 #[cfg(not(target_os = "linux"))]
@@ -228,17 +253,26 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         // A full-window chrome overlay (settings, downloads, safety interstitial, …)
         // is in the chrome webview, behind the content; hide the content so it shows.
         "view.setChromeOverlay" => {
-            let active = payload.get("active").and_then(Value::as_bool).unwrap_or(false);
+            let active = payload
+                .get("active")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             update(app, |l| l.overlay = active);
             Ok(Value::Null)
         }
         // The sidebar is a right panel: inset the content from the right (page stays
         // visible) instead of hiding it.
         "view.setSidebar" => {
-            let active = payload.get("active").and_then(Value::as_bool).unwrap_or(false);
+            let active = payload
+                .get("active")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             // The sidebar panel is user-resizable; inset the content by its ACTUAL width
             // (reported by the chrome) so the opaque content never overlaps the panel.
-            let width = payload.get("width").and_then(Value::as_f64).unwrap_or(SIDEBAR_WIDTH);
+            let width = payload
+                .get("width")
+                .and_then(Value::as_f64)
+                .unwrap_or(SIDEBAR_WIDTH);
             update(app, |l| {
                 l.sidebar = active;
                 l.right = if active { width } else { 0.0 };
@@ -252,9 +286,18 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         // apply mid-transition and leave Settings rendered behind the content. One update → one
         // apply removes that race.
         "view.setLayout" => {
-            let overlay = payload.get("overlay").and_then(Value::as_bool).unwrap_or(false);
-            let sidebar = payload.get("sidebar").and_then(Value::as_bool).unwrap_or(false);
-            let width = payload.get("width").and_then(Value::as_f64).unwrap_or(SIDEBAR_WIDTH);
+            let overlay = payload
+                .get("overlay")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let sidebar = payload
+                .get("sidebar")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let width = payload
+                .get("width")
+                .and_then(Value::as_f64)
+                .unwrap_or(SIDEBAR_WIDTH);
             update(app, |l| {
                 l.overlay = overlay;
                 l.sidebar = sidebar;

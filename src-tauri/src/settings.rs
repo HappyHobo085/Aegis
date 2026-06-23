@@ -7,7 +7,10 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Url};
 
 fn store_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("settings.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("settings.json"))
 }
 
 /// Defaults matching `Settings` in shared/types.ts.
@@ -81,7 +84,10 @@ pub fn sync_server_url(app: &AppHandle) -> String {
 
 /// Minutes a background tab may idle before discard (0 disables). Default 30.
 pub fn tab_idle_timeout_min(app: &AppHandle) -> u64 {
-    load(app).get("tabIdleTimeout").and_then(Value::as_u64).unwrap_or(30)
+    load(app)
+        .get("tabIdleTimeout")
+        .and_then(Value::as_u64)
+        .unwrap_or(30)
 }
 
 /// The configured home page as a URL (default about:blank). Blank or unparseable
@@ -131,7 +137,10 @@ fn merge(base: &mut Value, over: &Value) {
 // ---------------------------------------------------------------------------
 
 fn sync_path(app: &AppHandle) -> Option<PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("settings-sync.json"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("settings-sync.json"))
 }
 
 fn load_sync_records(app: &AppHandle) -> Vec<Value> {
@@ -187,15 +196,23 @@ fn ensure_sync_projection(app: &AppHandle) -> Vec<Value> {
 fn record_change(app: &AppHandle, key: &str, value: &Value) {
     let mut recs = ensure_sync_projection(app);
     let node = crate::sync_identity::node_id(app);
-    if let Some(r) = recs.iter_mut().find(|r| r.get("key").and_then(Value::as_str) == Some(key)) {
+    if let Some(r) = recs
+        .iter_mut()
+        .find(|r| r.get("key").and_then(Value::as_str) == Some(key))
+    {
         // No HLC churn if the value didn't actually change (and it isn't a revive).
-        if r.get("value") == Some(value) && !r.get("deleted").and_then(Value::as_bool).unwrap_or(false) {
+        if r.get("value") == Some(value)
+            && !r.get("deleted").and_then(Value::as_bool).unwrap_or(false)
+        {
             return;
         }
         let hlc = crate::sync_envelope::tick(&node, crate::jsonstore::now_ms());
         if let Some(o) = r.as_object_mut() {
             o.insert("value".into(), value.clone());
-            o.insert("hlc".into(), serde_json::to_value(&hlc).unwrap_or(Value::Null));
+            o.insert(
+                "hlc".into(),
+                serde_json::to_value(&hlc).unwrap_or(Value::Null),
+            );
             o.insert("deleted".into(), json!(false));
         }
     } else {
@@ -215,11 +232,21 @@ fn record_change(app: &AppHandle, key: &str, value: &Value) {
 fn merge_projection(mut local: Vec<Value>, remote: &[Value]) -> (Vec<Value>, Vec<String>) {
     let mut changed = Vec::new();
     for r in remote {
-        let Some(key) = r.get("key").and_then(Value::as_str) else { continue };
-        let Some(rhlc) = crate::sync_envelope::from_value(r) else { continue };
-        match local.iter_mut().find(|l| l.get("key").and_then(Value::as_str) == Some(key)) {
+        let Some(key) = r.get("key").and_then(Value::as_str) else {
+            continue;
+        };
+        let Some(rhlc) = crate::sync_envelope::from_value(r) else {
+            continue;
+        };
+        match local
+            .iter_mut()
+            .find(|l| l.get("key").and_then(Value::as_str) == Some(key))
+        {
             Some(l) => {
-                if crate::sync_envelope::from_value(l).map(|lh| rhlc > lh).unwrap_or(true) {
+                if crate::sync_envelope::from_value(l)
+                    .map(|lh| rhlc > lh)
+                    .unwrap_or(true)
+                {
                     *l = r.clone();
                     changed.push(key.to_string());
                 }
@@ -261,16 +288,28 @@ mod tests {
 
     #[test]
     fn merge_projection_is_per_key_lww() {
-        let local = vec![rec("httpsOnly", 5, json!(false)), rec("primaryColor", 1, json!("#000"))];
+        let local = vec![
+            rec("httpsOnly", 5, json!(false)),
+            rec("primaryColor", 1, json!("#000")),
+        ];
         let remote = vec![
-            rec("httpsOnly", 2, json!(true)),    // older → ignored (keep local false)
+            rec("httpsOnly", 2, json!(true)), // older → ignored (keep local false)
             rec("primaryColor", 9, json!("#fff")), // newer → wins
             rec("homeUrl", 1, json!("https://x")), // new key → inserted
         ];
         let (merged, mut changed) = merge_projection(local, &remote);
         changed.sort();
-        assert_eq!(changed, vec!["homeUrl".to_string(), "primaryColor".to_string()]);
-        let by_key = |k: &str| merged.iter().find(|r| r.get("key").and_then(Value::as_str) == Some(k)).cloned().unwrap();
+        assert_eq!(
+            changed,
+            vec!["homeUrl".to_string(), "primaryColor".to_string()]
+        );
+        let by_key = |k: &str| {
+            merged
+                .iter()
+                .find(|r| r.get("key").and_then(Value::as_str) == Some(k))
+                .cloned()
+                .unwrap()
+        };
         assert_eq!(by_key("httpsOnly").get("value"), Some(&json!(false))); // unchanged
         assert_eq!(by_key("primaryColor").get("value"), Some(&json!("#fff"))); // updated
         assert_eq!(by_key("homeUrl").get("value"), Some(&json!("https://x"))); // inserted
@@ -303,7 +342,9 @@ pub fn apply_synced(app: &AppHandle, records: &[Value]) {
         .unwrap_or_else(|| json!({}));
     if let Some(obj) = flat.as_object_mut() {
         for r in records {
-            let Some(key) = r.get("key").and_then(Value::as_str) else { continue };
+            let Some(key) = r.get("key").and_then(Value::as_str) else {
+                continue;
+            };
             if r.get("deleted").and_then(Value::as_bool).unwrap_or(false) {
                 obj.remove(key); // → load() falls back to the default for this key
             } else if let Some(v) = r.get("value") {

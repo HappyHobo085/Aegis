@@ -33,7 +33,8 @@ pub fn node_id(app: &AppHandle) -> String {
                     return id;
                 }
                 let id = uuid::Uuid::new_v4().to_string();
-                let txt = serde_json::to_string_pretty(&json!({ "nodeId": id })).unwrap_or_default();
+                let txt =
+                    serde_json::to_string_pretty(&json!({ "nodeId": id })).unwrap_or_default();
                 let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
                 return id;
             }

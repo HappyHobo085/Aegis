@@ -59,22 +59,32 @@ pub fn combined() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{ABUSE_TLDS, EASYLIST, EASYPRIVACY, LARGE_LISTS, combined};
+    use super::{combined, ABUSE_TLDS, EASYLIST, EASYPRIVACY, LARGE_LISTS};
 
     #[test]
     fn bundles_easylist_and_easyprivacy_and_peter_lowe() {
         // The three large upstream lists are non-trivial (guards against a truncated/
         // empty vendored file silently shrinking coverage).
         for (i, list) in LARGE_LISTS.iter().enumerate() {
-            assert!(list.len() > 10_000, "bundled list {i} looks too small: {} bytes", list.len());
+            assert!(
+                list.len() > 10_000,
+                "bundled list {i} looks too small: {} bytes",
+                list.len()
+            );
         }
         // EasyList carries an ad server it's known for; EasyPrivacy carries a tracker
         // EasyList deliberately omits — proving the privacy tier is actually bundled.
         assert!(EASYLIST.contains("doubleclick.net"));
         assert!(EASYPRIVACY.contains("google-analytics.com"));
-        assert!(!EASYLIST.contains("google-analytics.com"), "EasyList shouldn't carry analytics — that's EasyPrivacy's job");
+        assert!(
+            !EASYLIST.contains("google-analytics.com"),
+            "EasyList shouldn't carry analytics — that's EasyPrivacy's job"
+        );
         // The abuse-TLD list blocks the throwaway TLD that served the streamex ad.
-        assert!(ABUSE_TLDS.contains("||cfd^"), "abuse-TLD list must block .cfd");
+        assert!(
+            ABUSE_TLDS.contains("||cfd^"),
+            "abuse-TLD list must block .cfd"
+        );
     }
 
     #[test]

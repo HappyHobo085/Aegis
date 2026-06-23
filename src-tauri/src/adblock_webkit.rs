@@ -77,7 +77,10 @@ fn note_save_complete() {
                 let _ = std::fs::create_dir_all(dir);
             }
             let _ = std::fs::write(&marker, b"");
-            eprintln!("[aegis-cf] ready-marker written ({} compiles done)", marker.display());
+            eprintln!(
+                "[aegis-cf] ready-marker written ({} compiles done)",
+                marker.display()
+            );
         }
     }
 }
@@ -141,7 +144,8 @@ fn install_on(content: tauri::Webview, chunks: &[String], store_dir: &PathBuf, c
         };
         // One store handle (to the on-disk cache dir), shared by all chunks and
         // intentionally leaked (it must outlive the async callbacks; app lifetime).
-        let store = unsafe { webkit2gtk::ffi::webkit_user_content_filter_store_new(dir_c.as_ptr()) };
+        let store =
+            unsafe { webkit2gtk::ffi::webkit_user_content_filter_store_new(dir_c.as_ptr()) };
         if store.is_null() {
             return;
         }
@@ -208,7 +212,9 @@ unsafe fn install_filter(
     let Ok(id) = CString::new(identifier) else {
         return;
     };
-    let ctx = Box::into_raw(Box::new(FilterCtx { ucm: ucm.to_glib_full() }));
+    let ctx = Box::into_raw(Box::new(FilterCtx {
+        ucm: ucm.to_glib_full(),
+    }));
 
     if cached {
         webkit2gtk::ffi::webkit_user_content_filter_store_load(
@@ -245,7 +251,10 @@ unsafe fn add_and_finish(
         webkit2gtk::ffi::webkit_user_content_filter_unref(filter);
         eprintln!("[aegis-cf] filter {what}");
     } else {
-        eprintln!("[aegis-cf] filter {what} FAILED (err set: {})", !err.is_null());
+        eprintln!(
+            "[aegis-cf] filter {what} FAILED (err set: {})",
+            !err.is_null()
+        );
         if !err.is_null() {
             glib::ffi::g_error_free(err);
         }
@@ -261,7 +270,8 @@ unsafe extern "C" fn save_done(
 ) {
     let store = source as *mut webkit2gtk::ffi::WebKitUserContentFilterStore;
     let mut err: *mut glib::ffi::GError = std::ptr::null_mut();
-    let filter = webkit2gtk::ffi::webkit_user_content_filter_store_save_finish(store, res, &mut err);
+    let filter =
+        webkit2gtk::ffi::webkit_user_content_filter_store_save_finish(store, res, &mut err);
     add_and_finish(filter, err, user_data as *mut FilterCtx, "compiled+added");
     // A compile finished — only now is this chunk safely on disk. Write the marker
     // once the last one lands (avoids the stale-cache race; see arm_ready_marker).
@@ -275,7 +285,8 @@ unsafe extern "C" fn load_done(
 ) {
     let store = source as *mut webkit2gtk::ffi::WebKitUserContentFilterStore;
     let mut err: *mut glib::ffi::GError = std::ptr::null_mut();
-    let filter = webkit2gtk::ffi::webkit_user_content_filter_store_load_finish(store, res, &mut err);
+    let filter =
+        webkit2gtk::ffi::webkit_user_content_filter_store_load_finish(store, res, &mut err);
     add_and_finish(filter, err, user_data as *mut FilterCtx, "loaded+added");
 }
 

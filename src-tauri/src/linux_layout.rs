@@ -18,7 +18,9 @@ pub fn connect_title_label(app: &AppHandle, label: &str) {
         return;
     };
     let app = app.clone();
-    let id = label.strip_prefix("content:").and_then(|s| s.parse::<u32>().ok());
+    let id = label
+        .strip_prefix("content:")
+        .and_then(|s| s.parse::<u32>().ok());
     let _ = content.with_webview(move |pw| {
         pw.inner().connect_title_notify(move |wv| {
             let title = wv.title().map(|s| s.to_string()).unwrap_or_default();
@@ -48,7 +50,10 @@ pub fn connect_url_tracker(app: &AppHandle, label: &str) {
     let Some(content) = app.get_webview(label) else {
         return;
     };
-    let Some(id) = label.strip_prefix("content:").and_then(|s| s.parse::<u32>().ok()) else {
+    let Some(id) = label
+        .strip_prefix("content:")
+        .and_then(|s| s.parse::<u32>().ok())
+    else {
         return;
     };
     let app = app.clone();
@@ -80,25 +85,29 @@ pub fn connect_block_counter(app: &AppHandle, label: &str) {
     let Some(content) = app.get_webview(label) else {
         return;
     };
-    let Some(id) = label.strip_prefix("content:").and_then(|s| s.parse::<u32>().ok()) else {
+    let Some(id) = label
+        .strip_prefix("content:")
+        .and_then(|s| s.parse::<u32>().ok())
+    else {
         return;
     };
     let app = app.clone();
     let _ = content.with_webview(move |pw| {
-        pw.inner().connect_resource_load_started(move |wv, _res, request| {
-            use webkit2gtk::URIRequestExt;
-            let url = request.uri().map(|s| s.to_string()).unwrap_or_default();
-            let page = wv.uri().map(|s| s.to_string()).unwrap_or_default();
-            let blocked = crate::adblock_engine::should_block(&url, &page, "other");
-            // Diagnostic: when AEGIS_AUTOPILOT_TRACE is set, log every subresource the
-            // counter signal sees + its should_block verdict (goes to the autopilot app.log).
-            if std::env::var("AEGIS_AUTOPILOT_TRACE").is_ok() {
-                eprintln!("[aegis-count] block={blocked} page={page} url={url}");
-            }
-            if blocked {
-                crate::adblock::note_blocked(&app, id);
-            }
-        });
+        pw.inner()
+            .connect_resource_load_started(move |wv, _res, request| {
+                use webkit2gtk::URIRequestExt;
+                let url = request.uri().map(|s| s.to_string()).unwrap_or_default();
+                let page = wv.uri().map(|s| s.to_string()).unwrap_or_default();
+                let blocked = crate::adblock_engine::should_block(&url, &page, "other");
+                // Diagnostic: when AEGIS_AUTOPILOT_TRACE is set, log every subresource the
+                // counter signal sees + its should_block verdict (goes to the autopilot app.log).
+                if std::env::var("AEGIS_AUTOPILOT_TRACE").is_ok() {
+                    eprintln!("[aegis-count] block={blocked} page={page} url={url}");
+                }
+                if blocked {
+                    crate::adblock::note_blocked(&app, id);
+                }
+            });
     });
 }
 
@@ -122,7 +131,10 @@ pub fn install_nav_policy(app: &AppHandle, label: &str) {
     let Some(content) = app.get_webview(label) else {
         return;
     };
-    let Some(id) = label.strip_prefix("content:").and_then(|s| s.parse::<u32>().ok()) else {
+    let Some(id) = label
+        .strip_prefix("content:")
+        .and_then(|s| s.parse::<u32>().ok())
+    else {
         return;
     };
     let app = app.clone();
@@ -492,7 +504,9 @@ pub fn layout(
         .map(|s| {
             let r = s.reg.lock().unwrap();
             let id = r.active_id();
-            r.url_of(id).map(|u| u.starts_with("about:")).unwrap_or(true)
+            r.url_of(id)
+                .map(|u| u.starts_with("about:"))
+                .unwrap_or(true)
         })
         .unwrap_or(true);
     let active_visible = content_visible && !active_at_home;

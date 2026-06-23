@@ -57,7 +57,8 @@ const POPUP_GUARD: &str = r#"(function(){
 /// builds its equivalent via the NativeInject + NativeWebrtc JNI getters.
 #[cfg_attr(target_os = "android", allow(dead_code))] // Android uses the JNI getters instead
 pub fn script(app: &tauri::AppHandle, host_allowlisted: bool) -> String {
-    let webrtc = crate::webrtc_shim::shim_for(&crate::settings::webrtc_policy(app), host_allowlisted);
+    let webrtc =
+        crate::webrtc_shim::shim_for(&crate::settings::webrtc_policy(app), host_allowlisted);
     compose(&webrtc)
 }
 
@@ -82,7 +83,10 @@ fn build() -> String {
     let mut selectors: Vec<&str> = Vec::new();
     // Extract from EVERY bundled list (ads + trackers + Peter Lowe's), so the injected
     // blocker covers the same domains/cosmetics as the engine tier — see `adblock_lists`.
-    for line in crate::adblock_lists::ALL.iter().flat_map(|list| list.lines()) {
+    for line in crate::adblock_lists::ALL
+        .iter()
+        .flat_map(|list| list.lines())
+    {
         let l = line.trim();
         if let Some(rest) = l.strip_prefix("||") {
             // Plain domain anchor `||domain^` (no path, no $options) → block the domain
@@ -189,7 +193,10 @@ mod tests {
         assert!(s.contains("window.fetch="));
         assert!(s.contains("display:none!important"));
         // A known EasyList ad/tracker domain is in the blocklist Set.
-        assert!(s.contains("\"adnxs.com\""), "expected a known ad domain in the set");
+        assert!(
+            s.contains("\"adnxs.com\""),
+            "expected a known ad domain in the set"
+        );
         // Procedural selectors are filtered out (no extended pseudos leak into CSS).
         assert!(!s.contains(":matches-css"));
         assert!(!s.contains(":has-text("));

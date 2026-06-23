@@ -31,7 +31,10 @@ pub fn refresh(app: &AppHandle) {
             crate::adblock_engine::set_policy(g.enabled, &g.allowlist);
         }
         // Rebuild the engine FilterSet = bundled lists + enabled subs + custom filters.
-        let extra = vec![crate::subs::enabled_text(app), crate::customfilters::load(app)];
+        let extra = vec![
+            crate::subs::enabled_text(app),
+            crate::customfilters::load(app),
+        ];
         crate::adblock_engine::reload_lists(extra);
     }
 }

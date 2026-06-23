@@ -91,8 +91,16 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     if q.is_empty() {
                         return true;
                     }
-                    let u = it.get("url").and_then(Value::as_str).unwrap_or("").to_lowercase();
-                    let t = it.get("title").and_then(Value::as_str).unwrap_or("").to_lowercase();
+                    let u = it
+                        .get("url")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_lowercase();
+                    let t = it
+                        .get("title")
+                        .and_then(Value::as_str)
+                        .unwrap_or("")
+                        .to_lowercase();
                     u.contains(&q) || t.contains(&q)
                 })
                 .take(200)

@@ -113,7 +113,14 @@ pub fn should_block_pred(scripted: bool, from: &str, target: &str, app_initiated
 /// origin. The `app_initiated` field is left unresolved here (false) — it is resolved ONCE, at the
 /// decision point, because WebKit fires `NavigationAction` repeatedly (and for subframes) and the
 /// PendingNavs match is one-shot. Used by Linux's two-phase hook (`decide_at_response` decides).
-pub fn note_nav(app: &AppHandle, tab: u32, from: &str, target: &str, scripted: bool, is_redirect: bool) {
+pub fn note_nav(
+    app: &AppHandle,
+    tab: u32,
+    from: &str,
+    target: &str,
+    scripted: bool,
+    is_redirect: bool,
+) {
     let chain = if is_redirect {
         chain_origin(app, tab).unwrap_or(ChainStart {
             from: from.to_string(),
@@ -164,14 +171,26 @@ pub fn block_at_start(
 ) -> Option<String> {
     let chain = if is_redirect {
         chain_origin(app, tab).unwrap_or_else(|| {
-            let app_initiated =
-                app.try_state::<PendingNavs>().is_some_and(|p| p.take_if_match(tab, target));
-            ChainStart { from: from.to_string(), origin_target: target.to_string(), scripted, app_initiated }
+            let app_initiated = app
+                .try_state::<PendingNavs>()
+                .is_some_and(|p| p.take_if_match(tab, target));
+            ChainStart {
+                from: from.to_string(),
+                origin_target: target.to_string(),
+                scripted,
+                app_initiated,
+            }
         })
     } else {
-        let app_initiated =
-            app.try_state::<PendingNavs>().is_some_and(|p| p.take_if_match(tab, target));
-        let c = ChainStart { from: from.to_string(), origin_target: target.to_string(), scripted, app_initiated };
+        let app_initiated = app
+            .try_state::<PendingNavs>()
+            .is_some_and(|p| p.take_if_match(tab, target));
+        let c = ChainStart {
+            from: from.to_string(),
+            origin_target: target.to_string(),
+            scripted,
+            app_initiated,
+        };
         if let Some(s) = app.try_state::<Chains>() {
             s.0.lock().unwrap().insert(tab, c.clone());
         }
@@ -182,7 +201,14 @@ pub fn block_at_start(
 
 /// The in-flight chain origin for a redirect hop, if one was recorded for this tab.
 pub fn chain_origin(app: &AppHandle, tab: u32) -> Option<ChainStart> {
-    Some(app.try_state::<Chains>()?.0.lock().unwrap().get(&tab)?.clone())
+    Some(
+        app.try_state::<Chains>()?
+            .0
+            .lock()
+            .unwrap()
+            .get(&tab)?
+            .clone(),
+    )
 }
 
 /// Drop a tab's in-flight chain once its top-frame load resolves.
@@ -227,7 +253,9 @@ fn norm_key(url: &str) -> String {
             "{}://{}:{}{}?{}",
             u.scheme(),
             u.host_str().unwrap_or(""),
-            u.port_or_known_default().map(|p| p.to_string()).unwrap_or_default(),
+            u.port_or_known_default()
+                .map(|p| p.to_string())
+                .unwrap_or_default(),
             u.path().trim_end_matches('/'),
             u.query().unwrap_or(""),
         ),
@@ -270,8 +298,14 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_shouldBlock(
     scripted: jni::sys::jboolean,
     main_frame: jni::sys::jboolean,
 ) -> jni::sys::jboolean {
-    let current: String = env.get_string(&current).map(|s| s.into()).unwrap_or_default();
-    let target: String = env.get_string(&target).map(|s| s.into()).unwrap_or_default();
+    let current: String = env
+        .get_string(&current)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    let target: String = env
+        .get_string(&target)
+        .map(|s| s.into())
+        .unwrap_or_default();
     should_block(&current, &target, scripted != 0, main_frame != 0) as jni::sys::jboolean
 }
 
@@ -282,25 +316,55 @@ mod tests {
     // --- should_block (the cross-origin predicate, Android's entry) ---
     #[test]
     fn blocks_scripted_cross_origin_top_frame() {
-        assert!(should_block("https://streamex.to/watch", "https://google.com/", true, true));
+        assert!(should_block(
+            "https://streamex.to/watch",
+            "https://google.com/",
+            true,
+            true
+        ));
     }
     #[test]
     fn allows_same_origin() {
-        assert!(!should_block("https://a.com/x", "https://a.com/y", true, true));
+        assert!(!should_block(
+            "https://a.com/x",
+            "https://a.com/y",
+            true,
+            true
+        ));
     }
     #[test]
     fn allows_user_gesture() {
-        assert!(!should_block("https://a.com/", "https://b.com/", false, true));
+        assert!(!should_block(
+            "https://a.com/",
+            "https://b.com/",
+            false,
+            true
+        ));
     }
     #[test]
     fn allows_subframe() {
-        assert!(!should_block("https://a.com/", "https://b.com/", true, false));
+        assert!(!should_block(
+            "https://a.com/",
+            "https://b.com/",
+            true,
+            false
+        ));
     }
     #[test]
     fn ignores_non_http_target() {
         assert!(!should_block("https://a.com/", "about:blank", true, true));
-        assert!(!should_block("https://a.com/", "data:text/html,x", true, true));
-        assert!(!should_block("https://a.com/", "javascript:void(0)", true, true));
+        assert!(!should_block(
+            "https://a.com/",
+            "data:text/html,x",
+            true,
+            true
+        ));
+        assert!(!should_block(
+            "https://a.com/",
+            "javascript:void(0)",
+            true,
+            true
+        ));
     }
     #[test]
     fn fails_open_on_unparseable() {
@@ -310,41 +374,81 @@ mod tests {
     #[test]
     fn cross_origin_by_port_and_scheme() {
         assert!(should_block("https://a.com/", "http://a.com/", true, true)); // scheme differs
-        assert!(should_block("https://a.com:8443/", "https://a.com/", true, true)); // port differs
+        assert!(should_block(
+            "https://a.com:8443/",
+            "https://a.com/",
+            true,
+            true
+        )); // port differs
     }
 
     // --- should_block_pred (the chain verdict applied at the decision point; `from` is the chain
     //     origin, `target` is the displayable destination, `app_initiated` resolved from pending) ---
     #[test]
     fn pred_blocks_scripted_cross_origin_direct() {
-        assert!(should_block_pred(true, "https://streamex.to/watch", "https://google.com/", false));
+        assert!(should_block_pred(
+            true,
+            "https://streamex.to/watch",
+            "https://google.com/",
+            false
+        ));
     }
     #[test]
     fn pred_blocks_scripted_cross_origin_after_redirect() {
         // THE BUG: streamex → google.com (scripted) → 301 → www.google.com. The destination
         // hop carries is_redirect=true, but the chain ORIGIN was scripted + non-app-initiated,
         // so the displayable destination must still be blocked.
-        assert!(should_block_pred(true, "https://streamex.to/watch", "https://www.google.com/", false));
+        assert!(should_block_pred(
+            true,
+            "https://streamex.to/watch",
+            "https://www.google.com/",
+            false
+        ));
     }
     #[test]
     fn pred_allows_app_initiated_chain() {
         // Address-bar nav whose server redirects cross-origin (e.g. youtu.be → youtube.com):
         // app_initiated=true (the PendingNavs match against the chain's origin target).
-        assert!(!should_block_pred(true, "https://old.example/", "https://www.google.com/", true));
+        assert!(!should_block_pred(
+            true,
+            "https://old.example/",
+            "https://www.google.com/",
+            true
+        ));
     }
     #[test]
     fn pred_allows_user_gesture_chain() {
         // A clicked link that bounces through OAuth/shortener redirects (scripted=false).
-        assert!(!should_block_pred(false, "https://app.example/", "https://accounts.google.com/", false));
+        assert!(!should_block_pred(
+            false,
+            "https://app.example/",
+            "https://accounts.google.com/",
+            false
+        ));
     }
     #[test]
     fn pred_allows_same_origin() {
-        assert!(!should_block_pred(true, "https://a.com/x", "https://a.com/y", false));
+        assert!(!should_block_pred(
+            true,
+            "https://a.com/x",
+            "https://a.com/y",
+            false
+        ));
     }
     #[test]
     fn pred_ignores_non_http_target() {
-        assert!(!should_block_pred(true, "https://a.com/", "about:blank", false));
-        assert!(!should_block_pred(true, "https://a.com/", "data:text/html,x", false));
+        assert!(!should_block_pred(
+            true,
+            "https://a.com/",
+            "about:blank",
+            false
+        ));
+        assert!(!should_block_pred(
+            true,
+            "https://a.com/",
+            "data:text/html,x",
+            false
+        ));
     }
     #[test]
     fn pred_fails_open_on_unparseable_origin() {

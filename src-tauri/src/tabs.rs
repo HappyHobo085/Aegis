@@ -16,13 +16,18 @@ pub struct Tabs {
 
 impl Tabs {
     pub fn from_registry(reg: Registry) -> Self {
-        Tabs { reg: Mutex::new(reg), start: Instant::now() }
+        Tabs {
+            reg: Mutex::new(reg),
+            start: Instant::now(),
+        }
     }
 }
 
 /// Monotonic ms since app start (matches the registry's `now_ms` clock).
 pub fn now_ms(app: &AppHandle) -> u64 {
-    app.try_state::<Tabs>().map(|s| s.start.elapsed().as_millis() as u64).unwrap_or(0)
+    app.try_state::<Tabs>()
+        .map(|s| s.start.elapsed().as_millis() as u64)
+        .unwrap_or(0)
 }
 
 fn state_value(app: &AppHandle) -> Value {
@@ -96,11 +101,22 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
     match channel {
         "tabs.list" => Some(Ok(state_value(app))),
         "tabs.create" => {
-            let url = payload.get("url").and_then(Value::as_str).map(str::to_string);
+            let url = payload
+                .get("url")
+                .and_then(Value::as_str)
+                .map(str::to_string);
             // background = true opens the tab without switching the active tab (target=_blank
             // / window.open on mobile; matches on_new_window's open_background on desktop).
-            let background = payload.get("background").and_then(Value::as_bool).unwrap_or(false);
-            let (id, u) = app.state::<Tabs>().reg.lock().unwrap().create(url, background, now);
+            let background = payload
+                .get("background")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let (id, u) = app
+                .state::<Tabs>()
+                .reg
+                .lock()
+                .unwrap()
+                .create(url, background, now);
             spawn(app, id, &u);
             crate::view::apply_inset(app); // show the active tab (unchanged when background)
             emit_and_persist(app);
@@ -109,7 +125,9 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "tabs.activate" => {
             let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
             let to_spawn = app.state::<Tabs>().reg.lock().unwrap().activate(id, now);
-            if let Some(u) = to_spawn { spawn(app, id, &u); }
+            if let Some(u) = to_spawn {
+                spawn(app, id, &u);
+            }
             crate::view::apply_inset(app);
             emit_and_persist(app);
             Some(Ok(state_value(app)))
@@ -117,29 +135,48 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "tabs.close" => {
             let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
             let out = app.state::<Tabs>().reg.lock().unwrap().close(id, now);
-            if out.closed_live { close_webview(app, id); }
-            if let Some((nid, u)) = out.spawn { spawn(app, nid, &u); }
+            if out.closed_live {
+                close_webview(app, id);
+            }
+            if let Some((nid, u)) = out.spawn {
+                spawn(app, nid, &u);
+            }
             crate::view::apply_inset(app);
             emit_and_persist(app);
             Some(Ok(state_value(app)))
         }
         "tabs.reopenClosed" => {
             let reopened = app.state::<Tabs>().reg.lock().unwrap().reopen_closed(now);
-            if let Some((id, u)) = reopened { spawn(app, id, &u); }
+            if let Some((id, u)) = reopened {
+                spawn(app, id, &u);
+            }
             crate::view::apply_inset(app);
             emit_and_persist(app);
             Some(Ok(state_value(app)))
         }
         "tabs.setPinned" => {
             let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
-            let pinned = payload.get("pinned").and_then(Value::as_bool).unwrap_or(false);
-            app.state::<Tabs>().reg.lock().unwrap().set_pinned(id, pinned);
+            let pinned = payload
+                .get("pinned")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            app.state::<Tabs>()
+                .reg
+                .lock()
+                .unwrap()
+                .set_pinned(id, pinned);
             emit_and_persist(app);
             Some(Ok(state_value(app)))
         }
         "tabs.reorder" => {
-            let ids: Vec<u32> = payload.get("ids").and_then(Value::as_array)
-                .map(|a| a.iter().filter_map(|v| v.as_u64().map(|n| n as u32)).collect())
+            let ids: Vec<u32> = payload
+                .get("ids")
+                .and_then(Value::as_array)
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_u64().map(|n| n as u32))
+                        .collect()
+                })
                 .unwrap_or_default();
             app.state::<Tabs>().reg.lock().unwrap().reorder(&ids);
             emit_and_persist(app);
@@ -147,7 +184,11 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
         "tabs.setTitle" => {
             let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
-            let title = payload.get("title").and_then(Value::as_str).unwrap_or("").to_string();
+            let title = payload
+                .get("title")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             app.state::<Tabs>().reg.lock().unwrap().set_title(id, title);
             emit_and_persist(app);
             Some(Ok(state_value(app)))
@@ -178,7 +219,12 @@ pub fn close_tab(app: &AppHandle, id: u32) {
 /// the webview, emits state + persists, but does NOT change the active tab.
 pub fn open_background(app: &AppHandle, url: &str) {
     let now = now_ms(app);
-    let (id, u) = app.state::<Tabs>().reg.lock().unwrap().create(Some(url.to_string()), true, now);
+    let (id, u) = app
+        .state::<Tabs>()
+        .reg
+        .lock()
+        .unwrap()
+        .create(Some(url.to_string()), true, now);
     spawn(app, id, &u);
     emit_and_persist(app);
 }
@@ -189,7 +235,9 @@ fn session_path(app: &AppHandle) -> Option<std::path::PathBuf> {
 
 /// Persist the session to tabs.json.
 pub fn persist(app: &AppHandle) {
-    let Some(p) = session_path(app) else { return; };
+    let Some(p) = session_path(app) else {
+        return;
+    };
     let session = match app.try_state::<Tabs>() {
         Some(s) => s.reg.lock().unwrap().to_persisted(),
         None => return,
@@ -214,16 +262,22 @@ pub fn start_idle_sweep(app: &AppHandle) {
     std::thread::spawn(move || loop {
         std::thread::sleep(std::time::Duration::from_secs(30));
         let timeout_ms = crate::settings::tab_idle_timeout_min(&app).saturating_mul(60_000);
-        if timeout_ms == 0 { continue; }
+        if timeout_ms == 0 {
+            continue;
+        }
         let now = now_ms(&app);
         let victims = match app.try_state::<Tabs>() {
             Some(s) => s.reg.lock().unwrap().sweep_idle(now, timeout_ms),
             None => continue,
         };
-        if victims.is_empty() { continue; }
+        if victims.is_empty() {
+            continue;
+        }
         let app2 = app.clone();
         let _ = app.run_on_main_thread(move || {
-            for id in &victims { close_webview(&app2, *id); }
+            for id in &victims {
+                close_webview(&app2, *id);
+            }
             emit_and_persist(&app2); // strip re-renders the discarded tabs as "asleep"
         });
     });

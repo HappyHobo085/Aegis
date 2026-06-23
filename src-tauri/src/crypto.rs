@@ -131,7 +131,13 @@ pub fn seal(
     getrandom::getrandom(&mut nonce).map_err(|e| e.to_string())?;
     let aad = aad_for(ns, uuid, hlc_bytes);
     let ct = cipher_for(data_key)
-        .encrypt(XNonce::from_slice(&nonce), Payload { msg: plaintext, aad: &aad })
+        .encrypt(
+            XNonce::from_slice(&nonce),
+            Payload {
+                msg: plaintext,
+                aad: &aad,
+            },
+        )
         .map_err(|_| "seal failed".to_string())?;
     Ok((nonce.to_vec(), ct))
 }
@@ -151,7 +157,13 @@ pub fn open(
     }
     let aad = aad_for(ns, uuid, hlc_bytes);
     cipher_for(data_key)
-        .decrypt(XNonce::from_slice(nonce), Payload { msg: ciphertext, aad: &aad })
+        .decrypt(
+            XNonce::from_slice(nonce),
+            Payload {
+                msg: ciphertext,
+                aad: &aad,
+            },
+        )
         .map_err(|_| "open failed: authentication error".to_string())
 }
 
@@ -195,8 +207,14 @@ mod tests {
     #[test]
     fn device_seed_differs_per_install_salt() {
         let r = RootSecret([9u8; 32]);
-        assert_ne!(device_signing_seed(&r, b"salt-A"), device_signing_seed(&r, b"salt-B"));
-        assert_eq!(device_signing_seed(&r, b"salt-A"), device_signing_seed(&r, b"salt-A"));
+        assert_ne!(
+            device_signing_seed(&r, b"salt-A"),
+            device_signing_seed(&r, b"salt-B")
+        );
+        assert_eq!(
+            device_signing_seed(&r, b"salt-A"),
+            device_signing_seed(&r, b"salt-A")
+        );
     }
 
     #[test]
@@ -216,7 +234,15 @@ mod tests {
         // Wrong namespace, uuid, or hlc each fail authentication (no splicing).
         assert!(open(&key, &nonce, &ct, "saved", "uuid-1", hlc).is_err());
         assert!(open(&key, &nonce, &ct, "favorites", "uuid-2", hlc).is_err());
-        assert!(open(&key, &nonce, &ct, "favorites", "uuid-1", b"\xff\xff\xff\xff").is_err());
+        assert!(open(
+            &key,
+            &nonce,
+            &ct,
+            "favorites",
+            "uuid-1",
+            b"\xff\xff\xff\xff"
+        )
+        .is_err());
         // A wrong key fails too.
         let other = data_key(&RootSecret([4u8; 32]), "favorites");
         assert!(open(&other, &nonce, &ct, "favorites", "uuid-1", hlc).is_err());
@@ -233,7 +259,10 @@ mod tests {
         let k = account_signing_key(&r);
         assert_eq!(k.to_bytes(), account_signing_key(&r).to_bytes()); // deterministic
         assert_eq!(account_id(&r), super::hex(&k.verifying_key().to_bytes())); // id IS the pubkey
-        assert_ne!(account_signing_key(&RootSecret([12u8; 32])).to_bytes(), k.to_bytes());
+        assert_ne!(
+            account_signing_key(&RootSecret([12u8; 32])).to_bytes(),
+            k.to_bytes()
+        );
     }
 
     #[test]

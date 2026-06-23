@@ -144,7 +144,11 @@ fn add_host(app: &AppHandle, host: &str) {
 /// Tombstone a host.
 fn remove_host(app: &AppHandle, host: &str) {
     let mut items = jsonstore::load_synced(app, "allowlist");
-    jsonstore::tombstone(&mut items, |it| it.get("host").and_then(Value::as_str) == Some(host), app);
+    jsonstore::tombstone(
+        &mut items,
+        |it| it.get("host").and_then(Value::as_str) == Some(host),
+        app,
+    );
     let _ = jsonstore::save(app, "allowlist", &items);
 }
 
@@ -177,7 +181,9 @@ fn state_json(app: &AppHandle) -> Value {
             let g = s.0.lock().unwrap();
             json!({ "enabled": g.enabled, "allowlistedHosts": g.allowlist, "sessionBlocked": session_blocked(), "pageBlocked": active_page_blocked(app) })
         }
-        None => json!({ "enabled": true, "allowlistedHosts": [], "sessionBlocked": session_blocked(), "pageBlocked": active_page_blocked(app) }),
+        None => {
+            json!({ "enabled": true, "allowlistedHosts": [], "sessionBlocked": session_blocked(), "pageBlocked": active_page_blocked(app) })
+        }
     }
 }
 
@@ -202,7 +208,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "adblock.getState" => Some(Ok(state_json(app))),
 
         "adblock.setEnabled" => {
-            let enabled = payload.get("enabled").and_then(Value::as_bool).unwrap_or(true);
+            let enabled = payload
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(true);
             if let Some(s) = app.try_state::<AdblockState>() {
                 s.0.lock().unwrap().enabled = enabled;
             }
@@ -219,7 +228,11 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         "adblock.toggleAllowlist" | "adblock.removeAllowlist" => {
-            let host = payload.get("host").and_then(Value::as_str).unwrap_or("").to_string();
+            let host = payload
+                .get("host")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             if !host.is_empty() {
                 if channel == "adblock.removeAllowlist" {
                     remove_host(app, &host);

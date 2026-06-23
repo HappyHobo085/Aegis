@@ -197,10 +197,7 @@ pub fn note_policy(policy: &str) {
 
 #[cfg(target_os = "android")]
 fn android_policy() -> String {
-    let p = ANDROID_POLICY
-        .read()
-        .map(|g| g.clone())
-        .unwrap_or_default();
+    let p = ANDROID_POLICY.read().map(|g| g.clone()).unwrap_or_default();
     if p.is_empty() {
         "public-only".to_string()
     } else {
@@ -231,17 +228,40 @@ mod tests {
 
     #[test]
     fn classifies_ipv4_private_and_public() {
-        for a in ["10.0.0.1", "10.255.255.255", "192.168.1.5", "172.16.0.1", "172.31.255.1", "169.254.1.1", "127.0.0.1"] {
+        for a in [
+            "10.0.0.1",
+            "10.255.255.255",
+            "192.168.1.5",
+            "172.16.0.1",
+            "172.31.255.1",
+            "169.254.1.1",
+            "127.0.0.1",
+        ] {
             assert!(is_local_address(a), "{a} should be local/private");
         }
-        for a in ["8.8.8.8", "1.1.1.1", "172.15.0.1", "172.32.0.1", "172.8.0.1", "203.0.113.7", "0.0.0.0"] {
+        for a in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "172.15.0.1",
+            "172.32.0.1",
+            "172.8.0.1",
+            "203.0.113.7",
+            "0.0.0.0",
+        ] {
             assert!(!is_local_address(a), "{a} should be public/keepable");
         }
     }
 
     #[test]
     fn classifies_ipv6_private_and_public() {
-        for a in ["::1", "fe80::1", "fe80::abcd", "fc00::1", "fd12:3456::1", "FE80::1"] {
+        for a in [
+            "::1",
+            "fe80::1",
+            "fe80::abcd",
+            "fc00::1",
+            "fd12:3456::1",
+            "FE80::1",
+        ] {
             assert!(is_local_address(a), "{a} should be local/private");
         }
         for a in ["2001:4860:4860::8888", "2606:4700::1111"] {
@@ -252,15 +272,23 @@ mod tests {
     #[test]
     fn keep_candidate_keeps_relay_and_public_drops_private() {
         // Private host → drop.
-        assert!(!keep_candidate("candidate:1 1 udp 2122260223 192.168.1.5 51000 typ host generation 0"));
+        assert!(!keep_candidate(
+            "candidate:1 1 udp 2122260223 192.168.1.5 51000 typ host generation 0"
+        ));
         // mDNS host → drop.
-        assert!(!keep_candidate("a=candidate:1 1 udp 2122260223 abc-def.local 51000 typ host"));
+        assert!(!keep_candidate(
+            "a=candidate:1 1 udp 2122260223 abc-def.local 51000 typ host"
+        ));
         // Public srflx → keep.
         assert!(keep_candidate("candidate:2 1 udp 1686052607 203.0.113.7 51000 typ srflx raddr 192.168.1.5 rport 51000"));
         // TURN relay even with a private-looking raddr → keep (calls survive).
-        assert!(keep_candidate("candidate:3 1 udp 41885439 198.51.100.9 60000 typ relay raddr 10.0.0.2 rport 0"));
+        assert!(keep_candidate(
+            "candidate:3 1 udp 41885439 198.51.100.9 60000 typ relay raddr 10.0.0.2 rport 0"
+        ));
         // Private srflx (rare) → drop.
-        assert!(!keep_candidate("candidate:4 1 udp 1686052607 10.0.0.9 51000 typ srflx"));
+        assert!(!keep_candidate(
+            "candidate:4 1 udp 1686052607 10.0.0.9 51000 typ srflx"
+        ));
     }
 
     #[test]
@@ -269,8 +297,12 @@ mod tests {
         assert!(keep_candidate(""));
         assert!(keep_candidate("a=group:BUNDLE 0 1"));
         assert!(keep_candidate("candidate:1 1 udp"));
-        assert!(keep_candidate("candidate:1 1 udp 123 192.168.1.5 5000 generation 0")); // no typ
-        assert!(keep_candidate("garbage candidate: with no real fields here at all"));
+        assert!(keep_candidate(
+            "candidate:1 1 udp 123 192.168.1.5 5000 generation 0"
+        )); // no typ
+        assert!(keep_candidate(
+            "garbage candidate: with no real fields here at all"
+        ));
     }
 
     #[test]
@@ -282,11 +314,26 @@ a=candidate:1 1 udp 2122260223 192.168.1.5 51000 typ host\r\n\
 a=candidate:2 1 udp 1686052607 203.0.113.7 51000 typ srflx\r\n\
 a=candidate:3 1 udp 41885439 198.51.100.9 60000 typ relay\r\n";
         let out = filter_sdp(sdp);
-        assert!(!out.contains("192.168.1.5"), "private IP must be gone: {out}");
-        assert!(out.contains("c=IN IP4 0.0.0.0"), "private c= rewritten: {out}");
-        assert!(out.contains("o=- 46117 2 IN IP4 0.0.0.0"), "private o= rewritten: {out}");
-        assert!(out.contains("typ host") == false, "private host candidate dropped: {out}");
-        assert!(out.contains("203.0.113.7") && out.contains("typ srflx"), "public srflx kept: {out}");
+        assert!(
+            !out.contains("192.168.1.5"),
+            "private IP must be gone: {out}"
+        );
+        assert!(
+            out.contains("c=IN IP4 0.0.0.0"),
+            "private c= rewritten: {out}"
+        );
+        assert!(
+            out.contains("o=- 46117 2 IN IP4 0.0.0.0"),
+            "private o= rewritten: {out}"
+        );
+        assert!(
+            out.contains("typ host") == false,
+            "private host candidate dropped: {out}"
+        );
+        assert!(
+            out.contains("203.0.113.7") && out.contains("typ srflx"),
+            "public srflx kept: {out}"
+        );
         assert!(out.contains("typ relay"), "relay kept: {out}");
         // Idempotent: a second pass changes nothing.
         assert_eq!(filter_sdp(&out), out);
@@ -311,16 +358,32 @@ a=candidate:3 1 udp 41885439 198.51.100.9 60000 typ relay\r\n";
         // RTCPeerConnection/candidate/SDP wrapping (test covers the shipped string).
         let js = shim_for("public-only", false);
         for marker in [
-            "isLocalAddr", "keepCand", "filterSdp",
-            "endsWith('.local')", "fe8", "n0===10", "n0===127", "n0===192 && n1===168",
-            "n0===169 && n1===254", "n0===172 && n1>=16 && n1<=31",
-            "'relay'", "c=IN IP4 0.0.0.0", "createOffer", "localDescription",
+            "isLocalAddr",
+            "keepCand",
+            "filterSdp",
+            "endsWith('.local')",
+            "fe8",
+            "n0===10",
+            "n0===127",
+            "n0===192 && n1===168",
+            "n0===169 && n1===254",
+            "n0===172 && n1>=16 && n1<=31",
+            "'relay'",
+            "c=IN IP4 0.0.0.0",
+            "createOffer",
+            "localDescription",
             "window.RTCPeerConnection = Patched",
             // The review-driven additions: getStats leak filter, onicecandidate replace
             // semantics, and static-method preservation must be present in the shipped JS.
-            "getStats", "local-candidate", "removeEventListener", "getOwnPropertyNames",
+            "getStats",
+            "local-candidate",
+            "removeEventListener",
+            "getOwnPropertyNames",
         ] {
-            assert!(js.contains(marker), "shipped public-only JS missing marker: {marker}");
+            assert!(
+                js.contains(marker),
+                "shipped public-only JS missing marker: {marker}"
+            );
         }
     }
 }

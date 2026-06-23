@@ -86,8 +86,16 @@ const PICKER_JS: &str = r#"
 #[cfg(target_os = "linux")]
 pub fn on_picked(app: &AppHandle, payload: &str) {
     let parsed: Value = serde_json::from_str(payload).unwrap_or(Value::Null);
-    let selector = parsed.get("selector").and_then(Value::as_str).unwrap_or("").trim();
-    let host = parsed.get("host").and_then(Value::as_str).unwrap_or("").trim();
+    let selector = parsed
+        .get("selector")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    let host = parsed
+        .get("host")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
     if selector.is_empty() {
         return;
     }
@@ -124,8 +132,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
             return Some(Ok(json!({ "ok": false })));
         };
         let _ = content.with_webview(|pw| {
-            pw.inner()
-                .evaluate_javascript(PICKER_JS, None, None, None::<&gio::Cancellable>, |_| {});
+            pw.inner().evaluate_javascript(
+                PICKER_JS,
+                None,
+                None,
+                None::<&gio::Cancellable>,
+                |_| {},
+            );
         });
         Some(Ok(json!({ "ok": true })))
     }

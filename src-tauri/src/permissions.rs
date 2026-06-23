@@ -10,9 +10,9 @@
 //! run_on_main_thread (the same main thread), so the request never crosses
 //! threads.
 use serde_json::{json, Value};
+use tauri::AppHandle;
 #[cfg(target_os = "linux")]
 use tauri::Manager;
-use tauri::AppHandle;
 
 use crate::jsonstore;
 
@@ -73,13 +73,22 @@ fn origin_of(uri: &str) -> String {
 fn classify(req: &webkit2gtk::PermissionRequest) -> String {
     use glib::object::Cast;
     use webkit2gtk::UserMediaPermissionRequestExt;
-    if req.downcast_ref::<webkit2gtk::GeolocationPermissionRequest>().is_some() {
+    if req
+        .downcast_ref::<webkit2gtk::GeolocationPermissionRequest>()
+        .is_some()
+    {
         return "geolocation".into();
     }
-    if req.downcast_ref::<webkit2gtk::NotificationPermissionRequest>().is_some() {
+    if req
+        .downcast_ref::<webkit2gtk::NotificationPermissionRequest>()
+        .is_some()
+    {
         return "notifications".into();
     }
-    if req.downcast_ref::<webkit2gtk::PointerLockPermissionRequest>().is_some() {
+    if req
+        .downcast_ref::<webkit2gtk::PointerLockPermissionRequest>()
+        .is_some()
+    {
         return "pointer-lock".into();
     }
     if let Some(um) = req.downcast_ref::<webkit2gtk::UserMediaPermissionRequest>() {
@@ -141,7 +150,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "permissions.list" => Some(Ok(json!(list(app)))),
         "permissions.remove" => {
             let origin = payload.get("origin").and_then(Value::as_str).unwrap_or("");
-            let permission = payload.get("permission").and_then(Value::as_str).unwrap_or("");
+            let permission = payload
+                .get("permission")
+                .and_then(Value::as_str)
+                .unwrap_or("");
             let mut items = list(app);
             items.retain(|it| {
                 !(it.get("origin").and_then(Value::as_str) == Some(origin)
@@ -156,7 +168,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             Some(Ok(json!([])))
         }
         "permissions.resolve" => {
-            let id = payload.get("requestId").and_then(Value::as_u64).unwrap_or(0);
+            let id = payload
+                .get("requestId")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
             let allow = payload.get("decision").and_then(Value::as_str) == Some("allow");
             #[cfg(target_os = "linux")]
             {

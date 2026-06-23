@@ -82,12 +82,21 @@ pub fn merge_remote(app: &AppHandle, remote: &Value) -> bool {
     let node = crate::sync_identity::node_id(app);
     crate::sync_envelope::observe(&node, crate::jsonstore::now_ms(), &rhlc);
     let local = sync_record(app);
-    let wins = crate::sync_envelope::from_value(&local).map(|lh| rhlc > lh).unwrap_or(true);
+    let wins = crate::sync_envelope::from_value(&local)
+        .map(|lh| rhlc > lh)
+        .unwrap_or(true);
     if !wins {
         return false;
     }
-    let deleted = remote.get("deleted").and_then(Value::as_bool).unwrap_or(false);
-    let text = if deleted { "" } else { remote.get("text").and_then(Value::as_str).unwrap_or("") };
+    let deleted = remote
+        .get("deleted")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let text = if deleted {
+        ""
+    } else {
+        remote.get("text").and_then(Value::as_str).unwrap_or("")
+    };
     if let Some(p) = path(app) {
         let _ = crate::jsonstore::write_atomic(&p, text.as_bytes());
     }

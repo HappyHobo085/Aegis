@@ -5,10 +5,10 @@
 //! Compile-verified (`cargo check --target x86_64-pc-windows-gnu` + CI msvc); the
 //! runtime behavior needs a Windows desktop to confirm.
 use tauri::AppHandle;
-use webview2_com::NavigationStartingEventHandler;
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2, ICoreWebView2NavigationStartingEventArgs,
 };
+use webview2_com::NavigationStartingEventHandler;
 
 /// Install a `NavigationStarting` handler on the content webview that cancels
 /// scripted cross-origin top-frame redirects. Call inside
@@ -17,7 +17,9 @@ use webview2_com::Microsoft::Web::WebView2::Win32::{
 pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
     let controller = pw.controller();
     unsafe {
-        let Ok(core) = controller.CoreWebView2() else { return };
+        let Ok(core) = controller.CoreWebView2() else {
+            return;
+        };
         let handler = NavigationStartingEventHandler::create(Box::new(move |core, args| {
             if let (Some(core), Some(args)) = (core, args) {
                 // Fail open: never break navigation if our check errors.
@@ -56,9 +58,14 @@ unsafe fn handle(
     // chain on a fresh nav, continue it on a redirect — so a scripted cross-origin
     // redirect (e.g. google.com → www.google.com) is blocked even though the final hop
     // looks like "just a redirect", while user/app-initiated redirect chains pass.
-    if let Some(from) =
-        crate::redirect_guard::block_at_start(app, id, &current, &target, scripted, redirected.as_bool())
-    {
+    if let Some(from) = crate::redirect_guard::block_at_start(
+        app,
+        id,
+        &current,
+        &target,
+        scripted,
+        redirected.as_bool(),
+    ) {
         args.SetCancel(true)?;
         crate::redirect_guard::on_blocked(app, id, &from, &target);
     }

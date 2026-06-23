@@ -33,13 +33,19 @@ pub fn to_content_blocker_chunks(
 /// Single-chunk convenience (used by tests): returns (json, rule_count).
 pub fn to_content_blocker_json(filter_lists: &[&str]) -> Result<(String, usize), String> {
     let chunks = to_content_blocker_chunks(filter_lists, usize::MAX)?;
-    let json = chunks.into_iter().next().unwrap_or_else(|| "[]".to_string());
+    let json = chunks
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "[]".to_string());
     // count = number of array elements; cheap parse-free count via the converter
     let mut set = FilterSet::new(true);
     for list in filter_lists {
         set.add_filters(list.lines(), ParseOptions::default());
     }
-    let count = set.into_content_blocking().map(|(r, _)| r.len()).unwrap_or(0);
+    let count = set
+        .into_content_blocking()
+        .map(|(r, _)| r.len())
+        .unwrap_or(0);
     Ok((json, count))
 }
 
@@ -51,8 +57,14 @@ mod tests {
     fn converts_a_network_rule_to_a_block_action() {
         let (json, count) = to_content_blocker_json(&["||ads.example.com^"]).unwrap();
         assert!(count >= 1, "expected at least one rule, got {count}");
-        assert!(json.contains("ads.example.com") || json.contains("ads\\\\.example"), "json: {json}");
-        assert!(json.contains("\"block\""), "expected a block action: {json}");
+        assert!(
+            json.contains("ads.example.com") || json.contains("ads\\\\.example"),
+            "json: {json}"
+        );
+        assert!(
+            json.contains("\"block\""),
+            "expected a block action: {json}"
+        );
     }
 
     #[test]
@@ -68,10 +80,16 @@ mod tests {
         // (NOT the engine), so prove EasyPrivacy's tracker rules survive conversion to
         // WebKit JSON — a tracker EasyList alone would miss must appear in the output.
         let chunks = to_content_blocker_chunks(&crate::adblock_lists::ALL, 25_000).unwrap();
-        assert!(!chunks.is_empty(), "bundled lists must convert to at least one chunk");
+        assert!(
+            !chunks.is_empty(),
+            "bundled lists must convert to at least one chunk"
+        );
         let all: String = chunks.concat();
         assert!(all.contains("doubleclick"), "EasyList ad rule must convert");
-        assert!(all.contains("google-analytics"), "EasyPrivacy tracker rule must convert (Linux content-filter coverage)");
+        assert!(
+            all.contains("google-analytics"),
+            "EasyPrivacy tracker rule must convert (Linux content-filter coverage)"
+        );
     }
 
     #[test]
@@ -81,7 +99,11 @@ mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         let chunks = to_content_blocker_chunks(&[&rules], 10).unwrap();
-        assert!(chunks.len() >= 5, "expected several chunks, got {}", chunks.len());
+        assert!(
+            chunks.len() >= 5,
+            "expected several chunks, got {}",
+            chunks.len()
+        );
         // each chunk is a valid JSON array
         for c in &chunks {
             assert!(c.starts_with('[') && c.ends_with(']'));

@@ -196,10 +196,16 @@ mod tests {
         assert!(is_unwanted_popup("about:blank", "https://site.example"));
         assert!(is_unwanted_popup("", "https://site.example"));
         assert!(is_unwanted_popup("  ", "https://site.example"));
-        assert!(is_unwanted_popup("javascript:void(0)", "https://site.example"));
+        assert!(is_unwanted_popup(
+            "javascript:void(0)",
+            "https://site.example"
+        ));
         assert!(is_unwanted_popup("ABOUT:BLANK", "https://site.example"));
         // A real http(s) link is decided by the ad engine, not the shell check.
-        assert!(!is_unwanted_popup("https://example.org/article", "https://site.example"));
+        assert!(!is_unwanted_popup(
+            "https://example.org/article",
+            "https://site.example"
+        ));
     }
 
     // One test (not several) because it mutates the process-wide policy globals.
@@ -208,33 +214,57 @@ mod tests {
         // Default: on, empty allowlist. `||adnxs.com^` is an unconditional anchor in
         // the vendored EasyList; example.com is clean.
         assert!(
-            should_block("https://adnxs.com/tag.js", "https://news.example.com", "script"),
+            should_block(
+                "https://adnxs.com/tag.js",
+                "https://news.example.com",
+                "script"
+            ),
             "a known ad/tracker domain must be blocked"
         );
         // Trackers/analytics live in EasyPrivacy, NOT EasyList — these prove the
         // privacy list is actually in the engine (they would NOT block on EasyList
         // alone, which is exactly the coverage gap this bundle closes).
         assert!(
-            should_block("https://www.google-analytics.com/analytics.js", "https://news.example.com", "script"),
+            should_block(
+                "https://www.google-analytics.com/analytics.js",
+                "https://news.example.com",
+                "script"
+            ),
             "an analytics tracker (EasyPrivacy) must be blocked"
         );
         assert!(
-            should_block("https://sb.scorecardresearch.com/beacon.js", "https://news.example.com", "script"),
+            should_block(
+                "https://sb.scorecardresearch.com/beacon.js",
+                "https://news.example.com",
+                "script"
+            ),
             "a comScore tracker (EasyPrivacy) must be blocked"
         );
         // Rotating malvertising domains on throwaway TLDs (the streamex pop-under/banner
         // networks) — caught by the abuse-TLD block (`||cfd^`), since no static domain
         // list can keep up with disposable random names like these.
         assert!(
-            should_block("https://cupcake.limbycocking.cfd/banner.jpg", "https://streamex.sh/watch", "image"),
+            should_block(
+                "https://cupcake.limbycocking.cfd/banner.jpg",
+                "https://streamex.sh/watch",
+                "image"
+            ),
             "a rotating .cfd malvertising domain must be blocked by the abuse-TLD list"
         );
         assert!(
-            should_block("https://1x39.r5zkgi2ufhmkn5ty2i.cfd/x", "https://streamex.sh/watch", "script"),
+            should_block(
+                "https://1x39.r5zkgi2ufhmkn5ty2i.cfd/x",
+                "https://streamex.sh/watch",
+                "script"
+            ),
             "any .cfd host must be blocked regardless of the random subdomain"
         );
         assert!(
-            !should_block("https://cfd.example.com/app.js", "https://example.com", "script"),
+            !should_block(
+                "https://cfd.example.com/app.js",
+                "https://example.com",
+                "script"
+            ),
             "a host that merely contains 'cfd' as a non-TLD label must NOT be blocked"
         );
         assert!(
@@ -242,17 +272,29 @@ mod tests {
             "a normal first-party page must not be blocked"
         );
         assert!(
-            !should_block("https://example.com/styles.css", "https://example.com/", "stylesheet"),
+            !should_block(
+                "https://example.com/styles.css",
+                "https://example.com/",
+                "stylesheet"
+            ),
             "a normal first-party asset must not be blocked"
         );
         // A pop-under (top-level document) to an ad domain is blocked too — this is
         // exactly what nav::on_new_window checks to drop ad pop-unders into nowhere.
         assert!(
-            should_block("https://adnxs.com/popunder", "https://news.example.com", "document"),
+            should_block(
+                "https://adnxs.com/popunder",
+                "https://news.example.com",
+                "document"
+            ),
             "an ad-domain pop-under (document) must be blocked"
         );
         assert!(
-            !should_block("https://example.org/article", "https://news.example.com", "document"),
+            !should_block(
+                "https://example.org/article",
+                "https://news.example.com",
+                "document"
+            ),
             "a legit target=_blank link (clean domain) must still open"
         );
         // is_unwanted_popup combines the blank-shell check with the ad-domain check.
@@ -264,24 +306,40 @@ mod tests {
         // Toggle OFF → nothing is ad-blocked.
         set_policy(false, &[]);
         assert!(
-            !should_block("https://adnxs.com/tag.js", "https://news.example.com", "script"),
+            !should_block(
+                "https://adnxs.com/tag.js",
+                "https://news.example.com",
+                "script"
+            ),
             "with ad-block off, even ad domains are allowed"
         );
 
         // ON, page host allowlisted → ads allowed on that page, blocked elsewhere.
         set_policy(true, &["news.example.com".to_string()]);
         assert!(
-            !should_block("https://adnxs.com/tag.js", "https://news.example.com/article", "script"),
+            !should_block(
+                "https://adnxs.com/tag.js",
+                "https://news.example.com/article",
+                "script"
+            ),
             "ads on an allowlisted page must be allowed"
         );
         assert!(
-            should_block("https://adnxs.com/tag.js", "https://other.example.org/", "script"),
+            should_block(
+                "https://adnxs.com/tag.js",
+                "https://other.example.org/",
+                "script"
+            ),
             "ads on a non-allowlisted page must still block"
         );
 
         // Reset to default so nothing else sees a mutated engine.
         set_policy(true, &[]);
-        assert!(should_block("https://adnxs.com/tag.js", "https://news.example.com", "script"));
+        assert!(should_block(
+            "https://adnxs.com/tag.js",
+            "https://news.example.com",
+            "script"
+        ));
 
         // reload_lists folds extra filter text (an enabled subscription / a custom rule)
         // into the engine. `reloadtest.example` is in NO bundled list, so it only blocks
@@ -289,17 +347,29 @@ mod tests {
         // below is processed after the reload).
         reload_lists(vec!["||reloadtest.example^".to_string()]);
         assert!(
-            should_block("https://reloadtest.example/x", "https://site.example", "script"),
+            should_block(
+                "https://reloadtest.example/x",
+                "https://site.example",
+                "script"
+            ),
             "a reloaded custom filter must take effect"
         );
         assert!(
-            should_block("https://adnxs.com/tag.js", "https://news.example.com", "script"),
+            should_block(
+                "https://adnxs.com/tag.js",
+                "https://news.example.com",
+                "script"
+            ),
             "the bundled lists still apply after a reload"
         );
         // Reset the engine to the bundled-only lists so other tests don't see it blocked.
         reload_lists(vec![]);
         assert!(
-            !should_block("https://reloadtest.example/x", "https://site.example", "script"),
+            !should_block(
+                "https://reloadtest.example/x",
+                "https://site.example",
+                "script"
+            ),
             "after reloading without the custom filter, it no longer blocks"
         );
     }

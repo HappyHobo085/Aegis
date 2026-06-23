@@ -57,7 +57,9 @@ pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf) {
 pub fn on_finished(app: &AppHandle, success: bool) {
     let mut items = jsonstore::load_synced(app, "downloads");
     for it in items.iter_mut().rev() {
-        if !jsonstore::is_deleted(it) && it.get("state").and_then(Value::as_str) == Some("progressing") {
+        if !jsonstore::is_deleted(it)
+            && it.get("state").and_then(Value::as_str) == Some("progressing")
+        {
             if let Some(o) = it.as_object_mut() {
                 o.insert(
                     "state".into(),
@@ -75,12 +77,19 @@ pub fn on_finished(app: &AppHandle, success: bool) {
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     let id = || payload.get("id").and_then(Value::as_i64);
     match channel {
-        "downloads.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(app, "downloads"))))),
+        "downloads.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
+            app,
+            "downloads"
+        ))))),
 
         "downloads.remove" | "downloads.cancel" => {
             let mut items = jsonstore::load_synced(app, "downloads");
             let want = id();
-            jsonstore::tombstone(&mut items, |it| it.get("id").and_then(Value::as_i64) == want, app);
+            jsonstore::tombstone(
+                &mut items,
+                |it| it.get("id").and_then(Value::as_i64) == want,
+                app,
+            );
             let _ = jsonstore::save(app, "downloads", &items);
             Some(Ok(json!(jsonstore::live(items))))
         }

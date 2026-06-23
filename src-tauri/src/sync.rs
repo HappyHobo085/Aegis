@@ -96,7 +96,10 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 // A durable "user disabled sync" marker so disable() sticks across restarts (the seed may
 // remain in the keychain when not forgotten, but boot must NOT auto-re-enable).
 fn disabled_flag_path(app: &AppHandle) -> Option<std::path::PathBuf> {
-    app.path().app_data_dir().ok().map(|d| d.join("sync-disabled.flag"))
+    app.path()
+        .app_data_dir()
+        .ok()
+        .map(|d| d.join("sync-disabled.flag"))
 }
 fn set_disabled_flag(app: &AppHandle, disabled: bool) {
     if let Some(p) = disabled_flag_path(app) {
@@ -135,7 +138,10 @@ fn emit_state(app: &AppHandle) {
 /// Seal a local record into a wire record `{uuid, hlc, deleted, nonce, ct}` — cleartext
 /// uuid/hlc/deleted (so the server can key/order without decrypting) + the sealed record.
 fn seal_wire(data_key: &[u8; 32], ns: &str, rec: &Value) -> Result<Value, String> {
-    let uuid = rec.get("uuid").and_then(Value::as_str).ok_or("record missing uuid")?;
+    let uuid = rec
+        .get("uuid")
+        .and_then(Value::as_str)
+        .ok_or("record missing uuid")?;
     let hlc = crate::sync_envelope::from_value(rec).ok_or("record missing hlc")?;
     let deleted = crate::jsonstore::is_deleted(rec);
     let plaintext = serde_json::to_vec(rec).map_err(|e| e.to_string())?;
@@ -152,17 +158,33 @@ fn seal_wire(data_key: &[u8; 32], ns: &str, rec: &Value) -> Result<Value, String
 /// Open a wire record back into the local record, authenticating it against the cleartext
 /// uuid/hlc (the AAD binding). Returns the decrypted local record.
 fn open_wire(data_key: &[u8; 32], ns: &str, w: &Value) -> Result<Value, String> {
-    let uuid = w.get("uuid").and_then(Value::as_str).ok_or("wire missing uuid")?;
+    let uuid = w
+        .get("uuid")
+        .and_then(Value::as_str)
+        .ok_or("wire missing uuid")?;
     let hlc = crate::sync_envelope::from_value(w).ok_or("wire missing hlc")?;
-    let nonce = w.get("nonce").and_then(Value::as_str).and_then(unhex).ok_or("wire bad nonce")?;
-    let ct = w.get("ct").and_then(Value::as_str).and_then(unhex).ok_or("wire bad ct")?;
+    let nonce = w
+        .get("nonce")
+        .and_then(Value::as_str)
+        .and_then(unhex)
+        .ok_or("wire bad nonce")?;
+    let ct = w
+        .get("ct")
+        .and_then(Value::as_str)
+        .and_then(unhex)
+        .ok_or("wire bad ct")?;
     let pt = crypto::open(data_key, &nonce, &ct, ns, uuid, &hlc.bytes())?;
     serde_json::from_slice(&pt).map_err(|e| e.to_string())
 }
 
 // --- HTTP (reqwest blocking on a dedicated thread, per the subs.rs pattern) ---
 
-fn http(method: &'static str, url: String, auth: String, body: Option<Value>) -> Result<Value, String> {
+fn http(
+    method: &'static str,
+    url: String,
+    auth: String,
+    body: Option<Value>,
+) -> Result<Value, String> {
     std::thread::spawn(move || -> Result<Value, String> {
         let client = reqwest::blocking::Client::builder()
             .timeout(Duration::from_secs(30))
@@ -193,10 +215,19 @@ fn http(method: &'static str, url: String, auth: String, body: Option<Value>) ->
 }
 
 fn auth_header(account_id: &str, device_seed: &[u8; 32]) -> Result<String, String> {
-    let (token, sig) =
-        sync_auth::mint(device_seed, account_id, crate::jsonstore::now_ms(), sync_auth::DEFAULT_TTL_MS)?;
+    let (token, sig) = sync_auth::mint(
+        device_seed,
+        account_id,
+        crate::jsonstore::now_ms(),
+        sync_auth::DEFAULT_TTL_MS,
+    )?;
     let token_json = serde_json::to_vec(&token).map_err(|e| e.to_string())?;
-    Ok(format!("AegisSig {}.{}.{}", account_id, hex(&token_json), sig))
+    Ok(format!(
+        "AegisSig {}.{}.{}",
+        account_id,
+        hex(&token_json),
+        sig
+    ))
 }
 
 /// One sync pass: per namespace pull→merge→push. Runs on the caller's (background) thread.
@@ -281,7 +312,11 @@ fn sync_once(app: &AppHandle) -> Result<(), String> {
 
 fn emit_changed(app: &AppHandle, ns: &str, changed: &[String]) {
     if !changed.is_empty() {
-        crate::emit_event(app, "sync.changed", json!({ "namespace": ns, "changedUuids": changed }));
+        crate::emit_event(
+            app,
+            "sync.changed",
+            json!({ "namespace": ns, "changedUuids": changed }),
+        );
     }
 }
 
@@ -300,7 +335,12 @@ fn sync_ns(
     merge: impl Fn(&[Value]) -> Vec<String>,
 ) -> Result<Vec<String>, String> {
     let auth = auth_header(account_id, device_seed)?;
-    let pulled = http("GET", format!("{base}/v1/records?ns={ns}"), auth.clone(), None)?;
+    let pulled = http(
+        "GET",
+        format!("{base}/v1/records?ns={ns}"),
+        auth.clone(),
+        None,
+    )?;
     let mut decrypted = Vec::new();
     if let Some(arr) = pulled.get("records").and_then(Value::as_array) {
         for w in arr {
@@ -319,7 +359,12 @@ fn sync_ns(
             Err(e) => eprintln!("[aegis-sync] skip unsealable {ns} record: {e}"),
         }
     }
-    http("POST", format!("{base}/v1/records"), auth, Some(json!({ "ns": ns, "records": wire })))?;
+    http(
+        "POST",
+        format!("{base}/v1/records"),
+        auth,
+        Some(json!({ "ns": ns, "records": wire })),
+    )?;
     Ok(changed)
 }
 
@@ -400,10 +445,11 @@ pub fn nudge(app: &AppHandle) {
     std::thread::spawn(move || {
         // Panic-safe: a panic in sync_once must reset status to Error, not leave it stuck
         // on "syncing" forever (SyncState's lock isn't held across sync_once, so no poison).
-        let result = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sync_once(&app))) {
-            Ok(r) => r,
-            Err(_) => Err("sync task panicked".to_string()),
-        };
+        let result =
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sync_once(&app))) {
+                Ok(r) => r,
+                Err(_) => Err("sync task panicked".to_string()),
+            };
         let st = app.state::<SyncState>();
         let mut g = st.0.lock().unwrap();
         match result {
@@ -518,7 +564,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         "sync.disable" => {
-            let forget = payload.get("forget").and_then(Value::as_bool).unwrap_or(false);
+            let forget = payload
+                .get("forget")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             set_disabled_flag(app, true); // durable: don't auto-re-enable on next boot
             {
                 let st = app.state::<SyncState>();
@@ -551,7 +600,11 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 
         "sync.getRecoveryPhrase" => {
             // Highest-sensitivity channel: gated on an explicit confirm; never logged.
-            if !payload.get("confirm").and_then(Value::as_bool).unwrap_or(false) {
+            if !payload
+                .get("confirm")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
                 return Some(Err("confirmation required".into()));
             }
             let st = app.state::<SyncState>();
@@ -593,7 +646,8 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                         .unwrap_or_default()
                         .into_iter()
                         .map(|mut d| {
-                            let is_this = d.get("deviceId").and_then(Value::as_str) == Some(this.as_str());
+                            let is_this =
+                                d.get("deviceId").and_then(Value::as_str) == Some(this.as_str());
                             if let Some(o) = d.as_object_mut() {
                                 o.insert("isThisDevice".into(), json!(is_this));
                             }
@@ -607,7 +661,11 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         "sync.removeDevice" => {
-            let device_id = payload.get("deviceId").and_then(Value::as_str).unwrap_or("").to_string();
+            let device_id = payload
+                .get("deviceId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let (account_id, device_seed) = {
                 let st = app.state::<SyncState>();
                 let g = st.0.lock().unwrap();
@@ -644,14 +702,23 @@ mod tests {
     fn healthz_url_builds_or_rejects() {
         assert_eq!(healthz_url(""), None);
         assert_eq!(healthz_url("   "), None);
-        assert_eq!(healthz_url("http://h:8787"), Some("http://h:8787/healthz".to_string()));
-        assert_eq!(healthz_url("http://h:8787/"), Some("http://h:8787/healthz".to_string()));
+        assert_eq!(
+            healthz_url("http://h:8787"),
+            Some("http://h:8787/healthz".to_string())
+        );
+        assert_eq!(
+            healthz_url("http://h:8787/"),
+            Some("http://h:8787/healthz".to_string())
+        );
         assert_eq!(
             healthz_url("  https://sync.example.com/  "),
             Some("https://sync.example.com/healthz".to_string())
         );
         // A double trailing slash (copy-paste artifact) collapses to one — no `//healthz`.
-        assert_eq!(healthz_url("http://h:8787//"), Some("http://h:8787/healthz".to_string()));
+        assert_eq!(
+            healthz_url("http://h:8787//"),
+            Some("http://h:8787/healthz".to_string())
+        );
     }
 
     #[test]

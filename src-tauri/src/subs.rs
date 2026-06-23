@@ -153,7 +153,8 @@ pub fn update_all(app: &AppHandle) -> Value {
             std::thread::spawn(move || {
                 let res = fetch_text(url).map(|text| {
                     // Regenerable cache → no .bak (see fetch_in_background).
-                    let _ = jsonstore::write_atomic_no_backup(&cache_path(&app, &id), text.as_bytes());
+                    let _ =
+                        jsonstore::write_atomic_no_backup(&cache_path(&app, &id), text.as_bytes());
                     hash_text(&text)
                 });
                 (id, res)
@@ -196,7 +197,9 @@ pub fn update_all(app: &AppHandle) -> Value {
 /// Handle `subs.*`. Returns `None` if not a subs channel.
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {
-        "subs.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(app, "subs"))))),
+        "subs.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
+            app, "subs"
+        ))))),
 
         "subs.add" => {
             let url = payload
@@ -242,8 +245,15 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         "subs.setEnabled" => {
-            let list_id = payload.get("listId").and_then(Value::as_str).unwrap_or("").to_string();
-            let enabled = payload.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+            let list_id = payload
+                .get("listId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let enabled = payload
+                .get("enabled")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let mut items = jsonstore::load_synced(app, "subs");
             let mut need_fetch = false;
             for it in items.iter_mut() {
@@ -266,7 +276,11 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         "subs.remove" => {
-            let list_id = payload.get("listId").and_then(Value::as_str).unwrap_or("").to_string();
+            let list_id = payload
+                .get("listId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
             let mut items = jsonstore::load_synced(app, "subs");
             jsonstore::tombstone(
                 &mut items,

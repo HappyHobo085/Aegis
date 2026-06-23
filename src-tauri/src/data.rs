@@ -40,7 +40,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 // not-yet-migrated rows first).
                 bundle.insert((*s).into(), json!(jsonstore::load_synced(app, s)));
             }
-            bundle.insert("customFilters".into(), json!(crate::customfilters::load(app)));
+            bundle.insert(
+                "customFilters".into(),
+                json!(crate::customfilters::load(app)),
+            );
 
             let path = export_file(app, payload);
             let txt = serde_json::to_string_pretty(&Value::Object(bundle)).unwrap_or_default();
