@@ -106,6 +106,45 @@ dotted event name.
     popups (e.g. OAuth) are blocked too; real `<a target=_blank>` links still open.
   - `adblock_win.rs` (Windows) — hooks WebView2 `WebResourceRequested` on
     `ICoreWebView2` via unsafe COM for full network interception.
+- **Find-in-page** (`find.rs` + `find_{linux,win,mac}.rs`):
+  - `find.rs` — dispatcher (PLACE 2 of the IPC three-place rule): matches the four
+    `find.*` channels, resolves the target tab id (defaults to active), and routes to the
+    per-platform module. Exports `emit_state(app, view_id, query, match_count, active)`
+    — the single place that calls `crate::emit_event(app, "find.state", …)` so the
+    `find.state` event always goes through the `.`→`:` rewrite. Also exports
+    `is_find_channel(channel) -> bool` for unit tests.
+  - `find_linux.rs` — **WebKitFindController** (webkit2gtk): `install(app, label)` wires
+    `connect_found_text` + `connect_failed_to_find_text` signals once per tab at spawn
+    (called from `nav::spawn_tab`). Real match count via `found-text`; full highlight;
+    **no active-index getter** (reports `1` when at least one match exists, else `0`).
+    `FindController` is not `Send`, so all calls are made _inside_ the `with_webview`
+    closure — moving the controller out does not borrow-check. Options bits: always
+    `WRAP_AROUND`; `CASE_INSENSITIVE` added when `!case_sensitive`.
+  - `find_win.rs` — **`ICoreWebView2Find`** (webview2-com `ICoreWebView2_28::Find`):
+    `install` wires `MatchCountChanged` + `ActiveMatchIndexChanged` event handlers.
+    Real match count **and** active index; full highlight via
+    `SetShouldHighlightAllMatches(true)`; native Find dialog suppressed via
+    `SetSuppressDefaultFindDialog(true)`. **Runtime-floor:** `ICoreWebView2_28::Find`
+    requires a 2024+ WebView2 Runtime — if `cast::<ICoreWebView2_28>()` fails on an
+    older runtime, all find calls are **silent no-ops** (browsing unaffected). The
+    minimum runtime build is not confirmable from Linux; device testing records it.
+    Compile-verified via `cargo check --target x86_64-pc-windows-gnu`.
+  - `find_mac.rs` — **`WKWebView::findString:withConfiguration:completionHandler:`**
+    (objc2-web-kit, features `WKFindConfiguration` + `WKFindResult`). **Degraded:**
+    `WKFindResult` exposes only `matchFound` (bool) — no match count, no highlight-all,
+    no active index. The FindBar shows "1 match" when something is found and "0 matches"
+    otherwise; real count + highlight-all would require a JS-shim tier (recorded
+    follow-up). `next`/`prev` re-issue `findString:` with `backwards` toggled; the last
+    query is stored per tab in `LAST_QUERY` (`OnceLock<Mutex<HashMap<u32, String>>>`).
+    macOS objc2 code cannot be compiled from Linux — **CI-only verify** (macos-latest).
+  - **Android** — `find` is handled entirely in Kotlin (`MainActivity.kt`). The
+    `AegisAndroid` JS bridge exposes `find(query, caseSensitive)`, `findNext()`,
+    `findPrev()`, and `findClose()`. `findAllAsync(query)` is called on the active tab's
+    WebView; a `setFindListener` wired at tab creation calls `pushFindState(id, count,
+ordinal+1)` → `window.__aegisFindState(…)` in the chrome (mirroring `pushNavState` /
+    `__aegisNavState`). **Limit:** Android `findAllAsync` is **case-insensitive only** —
+    the `caseSensitive` flag is accepted but ignored by the platform API. No Rust
+    involvement for Android find.
 - **Security** — `safety.rs` (URLhaus malware host set from `resources/`, JNI
   `isMalwareHost`), `permissions.rs` (site permission prompts).
 - **E2E sync ("F2b") + crypto** — `sync.rs` (per-namespace pull→merge→push over
@@ -406,6 +445,24 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     z-order doesn't follow the active tab, so `view::apply_inset` shows the active tab's
     webview and hides every other tab's each layout pass (Linux does this in
     `linux_layout::layout`). Without it, switching tabs left the previous page on top.
+
+18. **Find-in-page per-platform capability matrix (honest):**
+    - **Linux** (WebKitFindController): real match count via `found-text` signal, full
+      highlight-all, **no active-index getter** (reports `1` when count > 0 else `0`).
+      Live-verify pending user display session; cross-check clean.
+    - **Windows** (`ICoreWebView2Find`): real count + real active index + highlight-all.
+      **Requires a 2024+ WebView2 Runtime** — `cast::<ICoreWebView2_28>()` fails silently
+      on older runtimes (browsing unaffected, find is a no-op). Compile-verified via gnu
+      cross-check + CI; GUI runtime-verify pending user's Windows 11 device.
+    - **macOS** (`WKWebView::findString:withConfiguration:completionHandler:`):
+      **degraded** — `WKFindResult` exposes only `matchFound` (bool); no real count, no
+      highlight-all, no active index. FindBar shows "1 match" / "0 matches". JS-shim tier
+      for real count + highlight is a recorded follow-up. CI-compile-only; GUI requires a
+      macOS desktop session.
+    - **Android** (Kotlin `WebView.findAllAsync`): real count + active index (ordinal + 1)
+      - highlight-all. **Case-insensitive only** — the `caseSensitive` flag is accepted but
+        the Android WebView find API has no case-sensitive mode. Kotlin compile-verified; GUI
+        runtime-verify pending device session.
 
 ### Multi-webview Linux layout (hard-won facts)
 

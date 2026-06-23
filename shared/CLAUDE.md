@@ -29,6 +29,12 @@ from, to }`) — the native redirect guard cancelled a scripted cross-origin top
     Snackbar) with "Open anyway" → opens `to` in a new tab (`tabs.create` desktop /
     `__aegisOpenTab` Android). Emitted per-platform from the native nav-policy hook; see
     `src-tauri/CLAUDE.md` gotcha 14.
+  - `find.*` channels + `find.state` event: - `find.start` (payload `{ query, caseSensitive?, viewId? }`) — begin/update a
+    find-in-page session on the active (or specified) tab. - `find.next` / `find.prev` (payload `{ viewId? }`) — advance to the next/previous
+    match within the current session. - `find.close` (payload `{ viewId? }`) — end the session and clear all highlights. - `find.state` event (`evtFindState`, payload `FindState { viewId, query, matchCount,
+activeMatchIndex }`) — pushed by the Rust/Kotlin back-end whenever match counts
+    change. On Android this is emitted via `window.__aegisFindState(...)`, matching the
+    `pushNavState` / `__aegisNavState` bridge pattern.
   - `AegisApi` — the typed shape of `window.aegis` (what `src/lib/ipcClient.ts`
     implements). Adding a feature means adding it here first.
 - **`types.test.ts`, `types.update.test.ts`** — assert the contract's invariants
