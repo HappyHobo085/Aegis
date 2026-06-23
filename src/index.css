@@ -1,30 +1,50 @@
 /* src/index.css */
 :root {
-  /* Mark the UI as dark so form controls, scrollbars, and native <select> popups
-     render dark to match — not a white system-light default. */
+  /* Theme-independent tokens (shape/elevation). Color tokens live in the
+     [data-theme="…"] blocks below and are selected by the data-theme attribute
+     that src/lib/theme.ts writes on <html>. */
+  --radius-1: 4px;
+  --radius-2: 6px;
+  --radius-3: 8px;
+  --radius-4: 12px;
+  --radius-pill: 999px;
+  --chrome-top-height: 56px;
+  /* Accent fallback (overridden inline by applyTheme from the primaryColor setting). */
+  --accent-color: #3b82f6;
+  --text-on-accent: #ffffff;
+}
+
+/* ── Dark palette (default; pixel-identical to the pre-refactor look) ── */
+:root,
+[data-theme='dark'] {
   color-scheme: dark;
-  /* re-based to UW palette (names kept so theme wiring is untouched) */
-  --accent-color: #3b82f6; /* was #4f8cff (CSS fallback); blue-500 brand */
   --bg: #121212; /* app base / scrollbar track */
   --bg-elevated: #1f1f1f; /* header, sidebar, modals, toasts */
   --bg-input: #2a2a2a; /* inputs, cards/list rows, chips, hover */
   --fg: #e0e0e0; /* primary text */
   --fg-muted: #888; /* muted text, icons, placeholders */
   --border: #333; /* default borders */
-  --danger: #ff5d5d; /* keep Aegis danger token name */
-  --chrome-top-height: 56px; /* unchanged */
-
-  /* new tokens */
   --border-2: #444; /* secondary border: search field, dividers, scrollbar hover */
-  --success: #22c55e; /* toast success only */
-  --text-on-accent: #ffffff; /* text on accent-filled buttons */
-  --radius-1: 4px;
-  --radius-2: 6px;
-  --radius-3: 8px;
-  --radius-4: 12px;
-  --radius-pill: 999px;
+  --danger: #ff5d5d;
+  --success: #22c55e;
   --shadow-modal: 0 10px 25px rgba(0, 0, 0, 0.5);
   --shadow-float: 0 6px 24px rgba(0, 0, 0, 0.4);
+}
+
+/* ── Light palette ── */
+[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f5f5f7; /* app base / scrollbar track */
+  --bg-elevated: #ffffff; /* header, sidebar, modals, toasts */
+  --bg-input: #ececef; /* inputs, cards/list rows, chips, hover */
+  --fg: #1c1c1e; /* primary text */
+  --fg-muted: #6b6b70; /* muted text, icons, placeholders */
+  --border: #d6d6db; /* default borders */
+  --border-2: #c2c2c8; /* secondary border: search field, dividers, scrollbar hover */
+  --danger: #d92d2d;
+  --success: #1a9e4b;
+  --shadow-modal: 0 10px 25px rgba(0, 0, 0, 0.18);
+  --shadow-float: 0 6px 24px rgba(0, 0, 0, 0.14);
 }
 
 * {
@@ -256,7 +276,7 @@ textarea::placeholder {
 .toolbar__fullscreen:hover:not(:disabled),
 .bookmark-button:hover:not(:disabled),
 .toolbar__downloads:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
   color: var(--fg);
   border-color: transparent;
 }
@@ -284,7 +304,7 @@ textarea::placeholder {
 }
 .fullscreen-exit:hover {
   background: var(--bg-input);
-  color: #fff;
+  color: var(--fg);
 }
 /* In fullscreen the chrome is a tiny top-right box; the app-wide transparent body can
    fail to paint that small webview on compositing-disabled GPUs, leaving the exit button
@@ -319,7 +339,7 @@ body.aegis-fullscreen {
   border-radius: var(--radius-pill);
   border: 1px solid var(--border-2);
   background: var(--bg-input);
-  color: #fff;
+  color: var(--fg);
   min-width: 0;
   width: 100%;
 }
@@ -374,7 +394,7 @@ body.aegis-fullscreen {
 }
 
 .adblock-shield__button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
   color: var(--fg);
   border-color: transparent;
 }
@@ -492,7 +512,7 @@ body.aegis-fullscreen {
 }
 
 .zoom-indicator__label:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
   color: var(--fg);
 }
 
@@ -528,7 +548,7 @@ body.aegis-fullscreen {
 }
 
 .zoom-indicator__popover button:hover {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
   color: var(--fg);
 }
 
@@ -588,7 +608,7 @@ body.aegis-fullscreen {
 /* Manage button — subtle pill, slightly bolder weight */
 .favorites-bar__manage {
   padding: 4px 10px;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--bg-input);
   border-radius: var(--radius-4);
   border: 1px solid transparent;
   color: var(--fg-muted);
@@ -703,7 +723,7 @@ body.aegis-fullscreen {
 }
 
 .tag-input__chip button:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--bg-input);
   border-color: transparent;
   color: var(--fg);
 }
@@ -898,7 +918,7 @@ body.aegis-fullscreen {
 }
 
 .sidebar__close:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
   border-color: transparent;
   color: var(--fg);
 }
@@ -1747,7 +1767,7 @@ body.aegis-fullscreen {
 }
 
 .settings-modal__close:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
   border-color: transparent;
   color: var(--fg);
 }
@@ -1881,7 +1901,7 @@ body.aegis-fullscreen {
 }
 
 .downloads-modal__close:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
   border-color: transparent;
   color: var(--fg);
 }
@@ -3319,7 +3339,7 @@ body.aegis-fullscreen {
 }
 .redirect-bar__dismiss:hover {
   color: var(--fg);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
 }
 
 /* ── Find-in-page bar ───────────────────────────────────────────────────── */
@@ -3371,7 +3391,7 @@ body.aegis-fullscreen {
 }
 .find-bar__nav:hover:not(:disabled) {
   color: var(--fg);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
 }
 .find-bar__nav:disabled {
   opacity: 0.35;
@@ -3390,7 +3410,7 @@ body.aegis-fullscreen {
 }
 .find-bar__close:hover {
   color: var(--fg);
-  background: rgba(255, 255, 255, 0.08);
+  background: var(--bg-input);
 }
 
 /* Individual toast item */
@@ -3952,7 +3972,7 @@ a:focus-visible {
 .mobile-sheet__title {
   font-size: 17px;
   margin: 0;
-  color: #fff;
+  color: var(--fg);
 }
 .mobile-sheet__body {
   flex: 1;
@@ -4134,7 +4154,7 @@ a:focus-visible {
 }
 .tab--active {
   background: #2f2f2f;
-  color: #fff;
+  color: var(--fg);
 }
 .tab--asleep {
   opacity: 0.55;
