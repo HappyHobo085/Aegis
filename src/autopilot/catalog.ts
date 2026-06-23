@@ -504,7 +504,6 @@ export const CATALOG: FeatureCheck[] = [
     },
   },
   // zoom (page zoom — session-only per tab)
-  // Task 11 enriches: verify() + screens/reach + interaction specs
   {
     id: 'zoom',
     domain: 'zoom',
@@ -514,6 +513,22 @@ export const CATALOG: FeatureCheck[] = [
       assertObject(await a.zoom.get(V));
       assertObject(await a.zoom.set(V, 1.25));
       assertObject(await a.zoom.reset(V));
+    },
+    verify: async (a) => {
+      const before = (await a.zoom.get(V)).factor;
+      const set = await a.zoom.set(V, 1.5);
+      if (Math.abs(set.factor - 1.5) > 1e-6)
+        throw new Error(`zoom.set: expected 1.5, got ${set.factor}`);
+      const got = await a.zoom.get(V);
+      if (Math.abs(got.factor - 1.5) > 1e-6)
+        throw new Error(`zoom.get after set: expected 1.5, got ${got.factor}`);
+      const clamped = await a.zoom.set(V, 99); // clamp check
+      if (clamped.factor !== 3.0)
+        throw new Error(`zoom.set clamp: expected 3.0, got ${clamped.factor}`);
+      const reset = await a.zoom.reset(V);
+      if (reset.factor !== 1.0) throw new Error(`zoom.reset: expected 1.0, got ${reset.factor}`);
+      await a.zoom.set(V, before); // restore
+      return 'zoom set→get→clamp→reset→restore ok';
     },
   },
   // find-in-page

@@ -375,4 +375,95 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       return 'allowlist checkbox → adblock.toggleAllowlist()';
     },
   },
+
+  // ─── Task 11: page zoom (ZoomIndicator popover) ─────────────────────────
+
+  {
+    id: 'toolbar.zoom.label',
+    domain: 'toolbar',
+    description: 'Click the zoom % label button → opens the zoom popover',
+    screen: 'home',
+    // live excluded: the live CallLog is inert; the popover open/close is
+    // ZoomIndicator-local React state (no real IPC call to assert).
+    layers: ['vitest'],
+    run: async (ctx) => {
+      const btn = ctx.byRole('button', /^Page zoom$/);
+      if (!btn) throw new Error('zoom label button not found');
+      await ctx.click(btn);
+    },
+    assert: async (ctx) => {
+      if (!ctx.bySelector('.zoom-indicator__popover'))
+        throw new Error('zoom popover did not open after clicking zoom label');
+      return 'zoom label → popover open';
+    },
+  },
+
+  {
+    id: 'toolbar.zoom.in',
+    domain: 'toolbar',
+    description: 'Open zoom popover, click Zoom in → zoom.set called with a larger factor',
+    screen: 'home',
+    // live excluded: the live CallLog is inert; can't confirm zoom.set via ctx.calls live.
+    layers: ['vitest'],
+    run: async (ctx) => {
+      // Open the popover first (it is ZoomIndicator-internal state; no control-surface hook).
+      const labelBtn = ctx.byRole('button', /^Page zoom$/);
+      if (!labelBtn) throw new Error('zoom label button not found');
+      await ctx.click(labelBtn);
+      const inBtn = ctx.byRole('button', /^Zoom in$/);
+      if (!inBtn) throw new Error('"Zoom in" button not found');
+      await ctx.click(inBtn);
+    },
+    assert: async (ctx) => {
+      // zoom.set is called by useZoom.apply() (optimistic + IPC); factor is > 1.0 after
+      // one step from the default 1.0.  args = [viewId, factor].
+      if (!ctx.calls.called('zoom.set', (a) => (a[1] as number) > 1.0))
+        throw new Error('zoom.set not called with factor > 1.0');
+      return 'Zoom in → zoom.set(>1.0)';
+    },
+  },
+
+  {
+    id: 'toolbar.zoom.out',
+    domain: 'toolbar',
+    description: 'Open zoom popover, click Zoom out → zoom.set called with a smaller factor',
+    screen: 'home',
+    // live excluded: same reason as toolbar.zoom.in.
+    layers: ['vitest'],
+    run: async (ctx) => {
+      const labelBtn = ctx.byRole('button', /^Page zoom$/);
+      if (!labelBtn) throw new Error('zoom label button not found');
+      await ctx.click(labelBtn);
+      const outBtn = ctx.byRole('button', /^Zoom out$/);
+      if (!outBtn) throw new Error('"Zoom out" button not found');
+      await ctx.click(outBtn);
+    },
+    assert: async (ctx) => {
+      // Stepping down from 1.0 produces a factor < 1.0.
+      if (!ctx.calls.called('zoom.set', (a) => (a[1] as number) < 1.0))
+        throw new Error('zoom.set not called with factor < 1.0');
+      return 'Zoom out → zoom.set(<1.0)';
+    },
+  },
+
+  {
+    id: 'toolbar.zoom.reset',
+    domain: 'toolbar',
+    description: 'Open zoom popover, click Reset zoom → zoom.reset called',
+    screen: 'home',
+    // live excluded: the live CallLog is inert; can't confirm zoom.reset via ctx.calls live.
+    layers: ['vitest'],
+    run: async (ctx) => {
+      const labelBtn = ctx.byRole('button', /^Page zoom$/);
+      if (!labelBtn) throw new Error('zoom label button not found');
+      await ctx.click(labelBtn);
+      const resetBtn = ctx.byRole('button', /^Reset zoom$/);
+      if (!resetBtn) throw new Error('"Reset zoom" button not found');
+      await ctx.click(resetBtn);
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('zoom.reset')) throw new Error('zoom.reset not called');
+      return 'Reset zoom → zoom.reset()';
+    },
+  },
 ];
