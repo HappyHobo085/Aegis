@@ -4,10 +4,18 @@ GitHub Actions workflows and Dependabot config for Aegis.
 
 ## Workflows (`workflows/`)
 
-- **`ci.yml`** (CI) — the always-on gate. Runs on every PR, on push to `main`, and
-  weekly (Mon 06:17 UTC). Ubuntu only: `npm ci` → `npm test` (vitest node + jsdom
-  projects) → `node scripts/check-npm-audit.mjs` (high/critical audit gate). Fast;
-  no native build.
+- **`ci.yml`** (CI) — the always-on gate. Runs on every PR, weekly (Mon 06:17 UTC),
+  and on demand. Ubuntu only; two parallel jobs:
+  - **`web`**: `npm ci` → `npm run typecheck` (scoped `tsc --noEmit` via
+    `tsconfig.build.json`, which excludes test files + `src/testFixtures` to skip the
+    known test-only type noise) → `npm run lint` (ESLint flat config, errors fail /
+    warnings are the migration backlog) → `npm run format:check` (Prettier) →
+    `npm test` (vitest node + jsdom) → `node scripts/check-npm-audit.mjs`.
+  - **`rust`**: installs the webkit2gtk build deps, then
+    `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` (the 119
+    `src-tauri` unit tests, Linux-cfg paths) for `src-tauri/Cargo.toml`, plus an
+    advisory (non-blocking) `cargo audit` over the crypto/keyring/TLS deps.
+    The standalone `sync-server/` crate is NOT gated here (separate non-workspace crate).
 - **`tauri-build-check.yml`** (Tauri Build Check) — proves the app compiles, links,
   and bundles on real OSes and produces downloadable artifacts for on-device
   testing. Triggers on push to `main` and on demand. Matrix:

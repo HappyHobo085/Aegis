@@ -1,0 +1,6 @@
+# cargo-audit config. The gate runs advisory-only (continue-on-error) today; to promote
+# it to blocking, drop `continue-on-error` in ci.yml and list any consciously-accepted
+# advisory id here WITH justification in the commit — the Rust analog of
+# scripts/.audit-allowlist.json. Empty = nothing accepted yet.
+[advisories]
+ignore = []

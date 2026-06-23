@@ -10,3 +10,5 @@ package-lock.json
 *.AppImage
 # Rust-embedded JS assets (include_str!'d + string-matched by cargo tests) — must not be reformatted
 src-tauri/src
+# SDD scratch (git-ignored working files) — keep out of the local format:check
+.superpowers
