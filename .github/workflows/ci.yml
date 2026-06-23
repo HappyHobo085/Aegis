@@ -20,7 +20,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  verify:
+  # Fast Node gate: type-check (scoped), lint, format, unit tests, supply-chain audit.
+  web:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -30,8 +31,60 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
+      - name: Type-check (production source, scoped)
+        run: npm run typecheck
+      - name: ESLint
+        if: ${{ !cancelled() }}
+        run: npm run lint
+      - name: Prettier (format check)
+        if: ${{ !cancelled() }}
+        run: npm run format:check
       - name: Unit tests (node + jsdom)
+        if: ${{ !cancelled() }}
         run: npm test
       - name: Dependency audit gate (high/critical)
         if: ${{ !cancelled() }}
         run: node scripts/check-npm-audit.mjs
+
+  # Rust gate for the src-tauri crate: format, lint, the 119 unit tests, supply-chain audit.
+  rust:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      # src-tauri links webkit2gtk on Linux; cargo test/clippy compile the crate, so the
+      # native build deps must be present (mirrors tauri-build-check.yml's Linux deps).
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            patchelf
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ci-rust-${{ hashFiles('src-tauri/Cargo.lock') }}
+      - name: cargo fmt --check
+        run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
+      - name: cargo clippy (-D warnings)
+        if: ${{ !cancelled() }}
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+      - name: cargo test
+        if: ${{ !cancelled() }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+      - name: cargo audit (advisory — crypto/keyring/TLS surface)
+        if: ${{ !cancelled() }}
+        continue-on-error: true
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit --file src-tauri/Cargo.lock
