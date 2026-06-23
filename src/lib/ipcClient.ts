@@ -28,9 +28,11 @@ import type {
   SyncDevice,
   SyncChanged,
   FindState,
+  ZoomState,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call, on } from './tauriInvoke';
+import { clampZoom } from './zoom';
 
 /** The Kotlin content-webview bridge, injected on Android only (window.AegisAndroid).
  * On mobile there's no separate content webview on the Rust side, so nav goes here. */
@@ -66,6 +68,8 @@ interface AndroidBridge {
   findPrev(): void;
   /** End the find session and clear highlights. */
   findClose(): void;
+  /** Set page zoom for tab `id` (percentage int, 100 == 1.0). No-op off Android. */
+  setZoom(id: number, percent: number): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -77,6 +81,9 @@ function androidBridge(): AndroidBridge | undefined {
 if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)) {
   document.documentElement.classList.add('aegis-mobile');
 }
+
+// Module-local cache for Android zoom factors (no return channel from the native bridge).
+const androidZoom = new Map<number, number>();
 
 export const aegis: AegisApi = {
   nav: {
@@ -368,6 +375,47 @@ export const aegis: AegisApi = {
         };
       }
       return on<FindState>(IPC.evtFindState, cb);
+    },
+  },
+  zoom: {
+    get: (viewId) => {
+      const a = androidBridge();
+      if (a) return Promise.resolve({ viewId, factor: androidZoom.get(viewId) ?? 1.0 });
+      return call<ZoomState>(IPC.zoomGet, { viewId });
+    },
+    set: (viewId, factor) => {
+      const a = androidBridge();
+      if (a) {
+        const f = clampZoom(factor);
+        androidZoom.set(viewId, f);
+        a.setZoom(viewId, Math.round(f * 100));
+        // No native event bus on Android content side; push to onChanged subscribers,
+        // mirroring nav.onState's __aegisNavState multi-subscriber pattern.
+        (window as unknown as { __aegisZoomChanged?: (s: ZoomState) => void }).__aegisZoomChanged?.(
+          {
+            viewId,
+            factor: f,
+          },
+        );
+        return Promise.resolve({ viewId, factor: f });
+      }
+      return call<ZoomState>(IPC.zoomSet, { viewId, factor });
+    },
+    reset: (viewId) => aegis.zoom.set(viewId, 1.0),
+    onChanged: (cb) => {
+      if (androidBridge()) {
+        const w = window as unknown as {
+          __aegisZoomChangedCbs?: Set<(s: ZoomState) => void>;
+          __aegisZoomChanged?: (s: ZoomState) => void;
+        };
+        const cbs = (w.__aegisZoomChangedCbs ??= new Set());
+        cbs.add(cb);
+        w.__aegisZoomChanged = (s) => cbs.forEach((f) => f(s));
+        return () => {
+          cbs.delete(cb);
+        };
+      }
+      return on<ZoomState>(IPC.evtZoomChanged, cb);
     },
   },
 };

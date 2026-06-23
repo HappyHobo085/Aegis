@@ -126,6 +126,12 @@ export const IPC = {
   findClose: 'find.close',
   // event (main -> chrome): live match count / active index
   evtFindState: 'find.state',
+  // page zoom (chrome <-> main)
+  zoomGet: 'zoom.get',
+  zoomSet: 'zoom.set',
+  zoomReset: 'zoom.reset',
+  // event (main -> chrome): a tab's zoom factor changed
+  evtZoomChanged: 'zoom.changed',
 } as const;
 
 export interface NavState {
@@ -229,6 +235,14 @@ export type ImportMode = 'merge' | 'replace';
 export interface ContentInset {
   top: number;
   left: number;
+}
+
+/** A content tab's current page-zoom factor (1.0 == 100%). Session-only in v1
+ * (in-memory, per live tab, not persisted, not per-origin). v2 (per-origin) can layer a
+ * disk store + a main-frame-origin re-apply hook WITHOUT changing this IPC surface. */
+export interface ZoomState {
+  viewId: ViewId;
+  factor: number; // clamped to [0.5, 3.0]
 }
 
 // ---- adblock data model ----
@@ -521,6 +535,14 @@ export interface AegisApi {
     close(viewId: ViewId): Promise<void>;
     /** Subscribe to live match-count / active-index updates. Returns unsubscribe fn. */
     onState(cb: (s: FindState) => void): () => void;
+  };
+  zoom: {
+    get(viewId: ViewId): Promise<ZoomState>;
+    /** Set an absolute factor (clamped server-side). Returns the applied state. */
+    set(viewId: ViewId, factor: number): Promise<ZoomState>;
+    /** Reset to 1.0. Returns the applied state. */
+    reset(viewId: ViewId): Promise<ZoomState>;
+    onChanged(cb: (s: ZoomState) => void): () => void;
   };
 }
 

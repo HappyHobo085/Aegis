@@ -503,6 +503,19 @@ export const CATALOG: FeatureCheck[] = [
       assertArray(await a.sync.listDevices());
     },
   },
+  // zoom (page zoom — session-only per tab)
+  // Task 11 enriches: verify() + screens/reach + interaction specs
+  {
+    id: 'zoom',
+    domain: 'zoom',
+    title: 'Page zoom',
+    channels: [IPC.zoomGet, IPC.zoomSet, IPC.zoomReset],
+    exercise: async (a) => {
+      assertObject(await a.zoom.get(V));
+      assertObject(await a.zoom.set(V, 1.25));
+      assertObject(await a.zoom.reset(V));
+    },
+  },
   // find-in-page
   {
     id: 'find',

@@ -185,6 +185,12 @@ export function aegisMockModule() {
         close: vi.fn(async () => {}),
         onState: vi.fn().mockReturnValue(() => {}),
       },
+      zoom: {
+        get: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),
+        set: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),
+        reset: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),
+        onChanged: vi.fn().mockReturnValue(() => {}),
+      },
       tabs: {
         list: vi.fn().mockResolvedValue({
           tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
