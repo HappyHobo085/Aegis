@@ -34,9 +34,20 @@ pub fn options_bits(case_sensitive: bool) -> u32 {
     opts.bits()
 }
 
-/// Install (once per tab, at spawn) the `found-text` / `failed-to-find-text`
-/// signal handlers on this tab's WebKitFindController.  Called from
-/// `nav::spawn_tab`'s Linux block, next to `connect_block_counter`.
+/// Install the `found-text` / `failed-to-find-text` signal handlers on this
+/// tab's WebKitFindController.
+///
+/// # MUST be called exactly once per content webview
+///
+/// This function connects two GLib signals and discards the returned
+/// `SignalHandlerId`s — there is no deduplication guard.  A second call on
+/// the same webview would stack duplicate handlers: every subsequent
+/// `found-text` signal would fire `find.state` N times (once per handler),
+/// producing incorrect match counts in the FindBar.
+///
+/// The contract is satisfied today: the only caller is `nav::spawn_tab`
+/// (Linux block, next to `connect_block_counter`), which runs exactly once
+/// per tab at webview creation time.  Do not add a second call site.
 pub fn install(app: &AppHandle, label: &str) {
     let Some(content) = app.get_webview(label) else {
         return;
@@ -112,16 +123,17 @@ pub fn prev(app: &AppHandle, id: u32) {
 }
 
 pub fn close(app: &AppHandle, id: u32) {
-    let Some(w) = app.get_webview(&crate::nav::content_label(id)) else {
-        return;
-    };
-    let app = app.clone();
-    let _ = w.with_webview(move |pw| {
-        if let Some(fc) = pw.inner().find_controller() {
-            fc.search_finish();
-        }
-        crate::find::emit_state(&app, id, "", 0, 0);
-    });
+    // Stop the WebKit find session when the webview is still alive.
+    if let Some(w) = app.get_webview(&crate::nav::content_label(id)) {
+        let _ = w.with_webview(move |pw| {
+            if let Some(fc) = pw.inner().find_controller() {
+                fc.search_finish();
+            }
+        });
+    }
+    // Always reset the FindBar — even if the webview was idle-discarded and
+    // the with_webview block above was skipped.
+    crate::find::emit_state(app, id, "", 0, 0);
 }
 
 #[cfg(test)]
