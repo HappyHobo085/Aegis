@@ -59,7 +59,7 @@ pub fn on_tab_title(app: &AppHandle, id: u32, title: &str) {
     emit_and_persist(app);
 }
 
-fn spawn(app: &AppHandle, id: u32, url: &str) {
+fn spawn(app: &AppHandle, id: u32, url: &str, private: bool) {
     let Ok(u) = Url::parse(url) else { return };
     // Windows: WebView2 DEADLOCKS the UI thread if a webview is created synchronously on
     // the event-loop thread — i.e. directly from the sync `ipc` command (see the Tauri
@@ -70,7 +70,7 @@ fn spawn(app: &AppHandle, id: u32, url: &str) {
     {
         let app = app.clone();
         std::thread::spawn(move || {
-            if let Err(e) = crate::nav::spawn_tab(&app, id, u) {
+            if let Err(e) = crate::nav::spawn_tab(&app, id, u, private) {
                 eprintln!("[aegis] spawn_tab({id}) failed: {e}");
                 return;
             }
@@ -80,8 +80,15 @@ fn spawn(app: &AppHandle, id: u32, url: &str) {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = crate::nav::spawn_tab(app, id, u);
+        let _ = crate::nav::spawn_tab(app, id, u, private);
     }
+}
+
+/// Whether tab `id` is a private (incognito) tab. Defaults to false for an unknown id.
+pub fn is_private(app: &AppHandle, id: u32) -> bool {
+    app.try_state::<Tabs>()
+        .and_then(|s| s.reg.lock().unwrap().is_private(id))
+        .unwrap_or(false)
 }
 
 /// Desktop: tear down the tab's child webview. Mobile is single-webview (tabs are a
@@ -111,13 +118,17 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .get("background")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            let private = payload
+                .get("private")
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
             let (id, u) = app
                 .state::<Tabs>()
                 .reg
                 .lock()
                 .unwrap()
-                .create(url, background, now);
-            spawn(app, id, &u);
+                .create_private(url, background, now, private);
+            spawn(app, id, &u, private);
             crate::view::apply_inset(app); // show the active tab (unchanged when background)
             emit_and_persist(app);
             Some(Ok(state_value(app)))
@@ -126,7 +137,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
             let to_spawn = app.state::<Tabs>().reg.lock().unwrap().activate(id, now);
             if let Some(u) = to_spawn {
-                spawn(app, id, &u);
+                // Read privateness from the registry: only non-private discarded tabs
+                // are ever respawned (private tabs are exempt from the idle sweep).
+                let private = is_private(app, id);
+                spawn(app, id, &u, private);
             }
             crate::view::apply_inset(app);
             emit_and_persist(app);
@@ -139,7 +153,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 close_webview(app, id);
             }
             if let Some((nid, u)) = out.spawn {
-                spawn(app, nid, &u);
+                // Neighbor respawn: read privateness from the registry (private tabs are
+                // exempt from the idle sweep, so any discarded neighbor is always non-private).
+                let private = is_private(app, nid);
+                spawn(app, nid, &u, private);
             }
             crate::view::apply_inset(app);
             emit_and_persist(app);
@@ -148,7 +165,8 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "tabs.reopenClosed" => {
             let reopened = app.state::<Tabs>().reg.lock().unwrap().reopen_closed(now);
             if let Some((id, u)) = reopened {
-                spawn(app, id, &u);
+                // Reopened tabs are always non-private (reopen_closed creates non-private tabs).
+                spawn(app, id, &u, false);
             }
             crate::view::apply_inset(app);
             emit_and_persist(app);
@@ -208,7 +226,10 @@ pub fn close_tab(app: &AppHandle, id: u32) {
         close_webview(app, id);
     }
     if let Some((nid, u)) = out.spawn {
-        spawn(app, nid, &u);
+        // Neighbor respawn: private tabs are exempt from the idle sweep, so any
+        // discarded neighbor is always non-private; read from registry for safety.
+        let private = is_private(app, nid);
+        spawn(app, nid, &u, private);
     }
     crate::nav::forget_tab_content(id);
     crate::view::apply_inset(app);
@@ -217,15 +238,16 @@ pub fn close_tab(app: &AppHandle, id: u32) {
 
 /// Open a URL in a new BACKGROUND tab (from on_new_window / Ctrl-click). Spawns
 /// the webview, emits state + persists, but does NOT change the active tab.
-pub fn open_background(app: &AppHandle, url: &str) {
+/// A popup from a private tab inherits privateness (`private = true`).
+pub fn open_background(app: &AppHandle, url: &str, private: bool) {
     let now = now_ms(app);
-    let (id, u) = app
-        .state::<Tabs>()
-        .reg
-        .lock()
-        .unwrap()
-        .create(Some(url.to_string()), true, now);
-    spawn(app, id, &u);
+    let (id, u) = app.state::<Tabs>().reg.lock().unwrap().create_private(
+        Some(url.to_string()),
+        true,
+        now,
+        private,
+    );
+    spawn(app, id, &u, private);
     emit_and_persist(app);
 }
 

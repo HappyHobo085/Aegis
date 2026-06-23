@@ -238,7 +238,6 @@ impl Registry {
         (id, url)
     }
 
-    #[allow(dead_code)] // used by later tasks (ephemeral webview, history/sync/downloads skip)
     pub fn is_private(&self, id: ViewId) -> Option<bool> {
         self.idx(id).map(|i| self.tabs[i].private)
     }
@@ -383,8 +382,12 @@ impl Registry {
         Some(t.url.clone())
     }
 
-    /// Discard live, non-active, non-pinned tabs idle for >= timeout_ms.
+    /// Discard live, non-active, non-pinned, non-private tabs idle for >= timeout_ms.
     /// `timeout_ms == 0` disables. Returns ids whose webviews the caller must close().
+    /// Private tabs are never discarded: their ephemeral session data is gone once the
+    /// webview closes, and re-creating a new ephemeral partition on reload would leak
+    /// that a private tab exists and expose a blank fresh context instead of the
+    /// expected page — contrary to user expectations.
     pub fn sweep_idle(&mut self, now_ms: u64, timeout_ms: u64) -> Vec<ViewId> {
         if timeout_ms == 0 {
             return Vec::new();
@@ -395,6 +398,7 @@ impl Registry {
             if t.live
                 && t.id != active
                 && !t.pinned
+                && !t.private
                 && now_ms.saturating_sub(t.last_active) >= timeout_ms
             {
                 t.live = false;
@@ -662,6 +666,20 @@ mod tests {
         let mut r = reg();
         let _ = r.create(None, false, 0);
         assert!(r.sweep_idle(u64::MAX, 0).is_empty());
+    }
+
+    #[test]
+    fn sweep_exempts_private_tabs() {
+        let mut r = reg(); // tab 1 (normal, active)
+        let (p, _) = r.create_private(None, true, 0, true); // tab 2 private, backgrounded@0
+        let (_n, _) = r.create_private(None, false, 0, false); // tab 3 normal, now active
+                                                               // long-idle sweep: the normal background tab 1 is a victim; the private tab p is NOT.
+        let victims = r.sweep_idle(999_999, 1);
+        assert!(victims.contains(&1));
+        assert!(
+            !victims.contains(&p),
+            "a private tab must never be discarded"
+        );
     }
 
     #[test]

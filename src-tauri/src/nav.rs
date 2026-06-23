@@ -203,10 +203,14 @@ pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
 /// window. The label is `content:<id>`. Initial bounds put it below the chrome;
 /// `view::apply_inset` keeps it sized on inset/resize.
 ///
+/// `private` marks the tab as incognito — the webview should use an ephemeral
+/// data partition (wired in a later task); passed through now so all callers
+/// carry the flag.
+///
 /// Desktop only: uses the `unstable` multi-webview API (`Window::add_child`).
 /// Mobile (single-webview) is a no-op so the chrome still loads.
 #[cfg(desktop)]
-pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
+pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, _private: bool) -> tauri::Result<()> {
     let window = app
         .get_window("main")
         .expect("main window must exist (declared in tauri.conf.json)");
@@ -310,7 +314,7 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
                 }
                 let app_main = app_nw.clone();
                 let _ = app_nw.run_on_main_thread(move || {
-                    crate::tabs::open_background(&app_main, &u);
+                    crate::tabs::open_background(&app_main, &u, false /* wired in Task 4 */);
                 });
                 tauri::webview::NewWindowResponse::Deny
             }
@@ -445,7 +449,7 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
 
 /// Mobile placeholder: no separate content webview yet (single-webview platform).
 #[cfg(mobile)]
-pub fn spawn_tab(_app: &AppHandle, _id: u32, _url: Url) -> tauri::Result<()> {
+pub fn spawn_tab(_app: &AppHandle, _id: u32, _url: Url, _private: bool) -> tauri::Result<()> {
     Ok(())
 }
 

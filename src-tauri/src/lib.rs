@@ -491,7 +491,7 @@ pub fn run() {
             .map(str::to_string);
         if let Some(url) = active_url {
             if let Ok(u) = tauri::Url::parse(&url) {
-                nav::spawn_tab(app.handle(), active, u)?;
+                nav::spawn_tab(app.handle(), active, u, false)?;
             }
         }
         tabs::start_idle_sweep(app.handle());
