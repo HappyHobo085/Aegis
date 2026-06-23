@@ -17,6 +17,7 @@ import type {
   PermissionPrompt,
   RedirectBlocked,
   FindState,
+  BlockedCount,
 } from '../../shared/types';
 import type { CallLog, InteractionCtx } from './interactions';
 import type { ScreenId } from './screens';
@@ -140,6 +141,15 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
   type FindStateMockFn = { mock?: { calls: ((s: FindState) => void)[][] } };
   const findStateCallback: ((s: FindState) => void) | undefined = aegis.find
     ? (aegis.find.onState as unknown as FindStateMockFn).mock?.calls?.[0]?.[0]
+    : undefined;
+
+  // Capture the adblock.onBlockedCount callback (registered by useAdblock) so the badge
+  // interaction spec can push a BlockedCount and verify the AdblockShield badge re-renders.
+  // Same pattern as emitNavState / emitFindState — captured BEFORE calls.reset() clears
+  // the mock's call log.
+  type BlockedCountMockFn = { mock?: { calls: ((c: BlockedCount) => void)[][] } };
+  const blockedCountCallback: ((c: BlockedCount) => void) | undefined = aegis.adblock
+    ? (aegis.adblock.onBlockedCount as unknown as BlockedCountMockFn).mock?.calls?.[0]?.[0]
     : undefined;
 
   return {
@@ -286,6 +296,14 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       // matchCount > 0.  Uses flushSync so the DOM updates synchronously before
       // the next gesture fires (same pattern as emitNavState / emitTabsState).
       if (findStateCallback) flushSync(() => findStateCallback(s));
+      return Promise.resolve();
+    },
+    emitBlockedCount: (c: BlockedCount) => {
+      // Push a BlockedCount update into useAdblock so the AdblockShield badge
+      // re-renders with the given page count — mirroring what the real core emits
+      // via adblock.blockedCount.  Uses flushSync so the DOM updates synchronously
+      // before the next gesture fires (same pattern as emitNavState / emitFindState).
+      if (blockedCountCallback) flushSync(() => blockedCountCallback(c));
       return Promise.resolve();
     },
   };

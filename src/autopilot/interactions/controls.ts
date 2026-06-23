@@ -11,6 +11,7 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'toolbar.picker',
   'shieldPopover.toggleAdblock',
   'shieldPopover.allowlistSite',
+  'shieldPopover.badgeReflectsBlockedCount',
   // Task 4: tabs + keyboard shortcuts
   'tabs.newButton',
   'tabs.activate',

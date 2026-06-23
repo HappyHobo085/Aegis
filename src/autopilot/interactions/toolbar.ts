@@ -377,6 +377,42 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     },
   },
 
+  {
+    id: 'shieldPopover.badgeReflectsBlockedCount',
+    domain: 'shieldPopover',
+    description:
+      'An adblock.blockedCount event for the active view raises the shield badge + popover count',
+    screen: 'home',
+    // vitest-only: the badge count rises only when the native ad-block tier fires
+    // adblock.blockedCount events, which the live CallLog can't observe and the live
+    // autopilot doesn't assert (the Linux counter under-counts content-filter-blocked
+    // requests; blocking is proven via the A/B trace, not the badge count — see gotcha 6
+    // in src-tauri/CLAUDE.md).  The event→badge path is fully testable via the mock.
+    layers: ['vitest'],
+    mobile: true, // the badge + onBlockedCount path is shared with the mobile shield
+    run: async (ctx) => {
+      // Flush the pending aegis.adblock.getState().then() microtask (which resolves
+      // to pageBlocked=undefined → 0) BEFORE emitBlockedCount sets page=3.  Without
+      // this drain the getState() then() runs inside act() AFTER flushSync and resets
+      // the badge back to 0 — the same React 18 Strict Mode + async-mock ordering
+      // gotcha documented in src/CLAUDE.md.  A single Promise.resolve() tick is enough
+      // to drain the already-resolved mock promise.
+      await Promise.resolve();
+      // Emit a BlockedCount for the active view through the mocked onBlockedCount callback,
+      // then open the shield popover to read the page-count figure.
+      ctx.emitBlockedCount?.({ viewId: BASE_NAV.viewId, page: 3, session: 7 });
+      const shield = ctx.byRole('button', /^Ad blocking$/);
+      if (shield) await ctx.click(shield);
+    },
+    assert: async (ctx) => {
+      // The badge span (.adblock-shield__badge) should show the page total.
+      const badge = ctx.bySelector('.adblock-shield__badge');
+      if (badge?.textContent !== '3')
+        throw new Error(`badge=${badge?.textContent ?? 'not found'}, want 3`);
+      return 'shield badge shows the blocked-count page total';
+    },
+  },
+
   // ─── Task 11: page zoom — keyboard path (App.tsx window keydown) ────────
 
   {

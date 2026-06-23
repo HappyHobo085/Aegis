@@ -361,8 +361,18 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
    without panicking and the network ad-block tier blocks (DoubleClick `gpt.js`
    served an empty 204; a non-ad control script still loaded). `nav_url_win.rs`'s
    `SourceChanged` handler installs cleanly too, though its same-document URL
-   tracking wasn't exercised yet. The shield block-counter is still NOT wired on
-   Windows (`note_blocked` is Linux-only) — blocking works, the badge just shows 0.
+   tracking wasn't exercised yet. The shield block-counter is **now wired on
+   Windows** (`adblock_win.rs`'s `WebResourceRequested` block path calls
+   `note_blocked`) **and Android** (Kotlin `shouldInterceptRequest` counts each
+   ad-block tier block → `__aegisBlockedCount` → `adblock.blockedCount`). Honest
+   per-platform caveat: Linux counts only requests that pass the content-filter cap
+   and are then flagged by `should_block` (content-filter-blocked requests are
+   cancelled before `resource-load-started` fires, so they are never counted — real
+   blocking, invisible count); Windows counts every `WebResourceRequested` block in
+   the network tier (the injected JS tier does not call `note_blocked`); Android
+   counts every `shouldInterceptRequest` ad-block branch hit. Each platform's badge
+   means "requests this tier blocked on this page / this session", not "all ads truly
+   blocked". Blocking itself is proven by the A/B trace, not the count.
 7. **TLS** — a crypto provider must be installed once (done in `lib.rs`) or every
    reqwest/updater HTTPS call panics.
 8. **Android needs JDK 21.** Gradle 8.14.3 / AGP 8.11.0 can't run under JDK 25 (the

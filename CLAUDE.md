@@ -111,9 +111,13 @@ blocking (trace): PASS`. A push that adds a capability without its autopilot cov
 Linux desktop is verified on real hardware. Windows desktop is verified on real
 hardware (Windows 11): browses and ad-blocks — both the WebView2 network tier
 (`adblock_win`) and the injected tier — with no crash, and the CI-built portable
-exe behaves identically to a local build. (The shield block-_counter_ is still
-Linux-only; ad-block works on Windows, it just isn't counted on the badge — see the
-adblock note in `src-tauri/CLAUDE.md`.) Android browses + ad-blocks + is secure
+exe behaves identically to a local build. (The shield block-_counter_ is now wired on all three
+platforms: Linux via `connect_block_counter`/`resource-load-started`, Windows via the
+`WebResourceRequested` network tier in `adblock_win.rs`, and Android via
+`shouldInterceptRequest` in `MainActivity.kt`. Each platform's count reflects what
+its own ad-block tier sees — content-filter-blocked requests on Linux are cancelled
+before the signal fires and are never counted; see gotcha 6 in `src-tauri/CLAUDE.md`
+for the honest per-platform framing.) Android browses + ad-blocks + is secure
 (verified on emulator). macOS compiles + bundles green in CI but is not yet
 GUI-runtime-verified. iOS is unstarted (needs macOS + Xcode).
 

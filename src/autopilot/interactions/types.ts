@@ -15,6 +15,7 @@ import type {
   PermissionPrompt,
   RedirectBlocked,
   FindState,
+  BlockedCount,
 } from '../../../shared/types';
 import type { ScreenId } from '../screens';
 
@@ -136,6 +137,13 @@ export interface InteractionCtx {
    * mock's call log.  No-op on live (live state comes from the real core).
    */
   emitFindState?(state: FindState): Promise<void>;
+  /**
+   * Vitest-only: push a BlockedCount update into useAdblock so the AdblockShield badge
+   * re-renders with the given page count.  The callback is captured at ctx-creation time,
+   * BEFORE calls.reset() clears the mock's call log.  No-op on live (live state comes
+   * from real blocks; the badge is proven via the A/B trace, not a count assert).
+   */
+  emitBlockedCount?(count: BlockedCount): Promise<void>;
 }
 
 export interface InteractionSpec {
