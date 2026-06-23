@@ -19,6 +19,12 @@ export const SIDEBAR_W = 280;
  * toast can't paint over the opaque content webview). Desktop for now.
  */
 export const REDIRECT_BAR_H = 40;
+/**
+ * FIND_BAR_H — the find-in-page infobar height. While a find session is active this bar
+ * shows below the favbar (or redirect bar) and is ADDED to the content inset so it sits
+ * in the chrome's always-visible strip. Desktop only; same stripe as REDIRECT_BAR_H.
+ */
+export const FIND_BAR_H = 40;
 
 /**
  * Mobile (Android) chrome heights in logical px. These MUST stay in sync with the

@@ -3188,6 +3188,77 @@ body.aegis-fullscreen {
   background: rgba(255, 255, 255, 0.08);
 }
 
+/* ── Find-in-page bar ───────────────────────────────────────────────────── */
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+  height: 40px;
+  padding: 0 12px;
+  box-sizing: border-box;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
+  color: var(--fg);
+  font-size: 13px;
+}
+.find-bar__input {
+  flex: 1 1 auto;
+  min-width: 0;
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 8px;
+  font: inherit;
+  outline: none;
+}
+.find-bar__input:focus {
+  border-color: var(--accent-color);
+}
+.find-bar__count {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  min-width: 40px;
+  text-align: center;
+}
+.find-bar__nav {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+.find-bar__nav:hover:not(:disabled) {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.08);
+}
+.find-bar__nav:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.find-bar__close {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  background: transparent;
+  border: none;
+  color: var(--fg-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+}
+.find-bar__close:hover {
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.08);
+}
+
 /* Individual toast item */
 .toast {
   pointer-events: auto;
