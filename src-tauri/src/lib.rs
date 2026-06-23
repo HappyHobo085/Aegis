@@ -80,6 +80,14 @@ mod tab_registry;
 mod tabs;
 mod update;
 mod view;
+// Find-in-page dispatcher + per-platform native implementations.
+mod find;
+#[cfg(target_os = "linux")]
+mod find_linux;
+#[cfg(target_os = "macos")]
+mod find_mac;
+#[cfg(target_os = "windows")]
+mod find_win;
 
 use serde_json::Value;
 use tauri::{Emitter, Manager};
@@ -100,6 +108,9 @@ pub fn emit_event<S: serde::Serialize + Clone>(app: &tauri::AppHandle, name: &st
 #[tauri::command]
 fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, String> {
     if let Some(result) = nav::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = find::dispatch(&app, &channel, &payload) {
         return result;
     }
     if let Some(result) = tabs::dispatch(&app, &channel, &payload) {
