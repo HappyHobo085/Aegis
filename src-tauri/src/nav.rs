@@ -411,11 +411,12 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url) -> tauri::Result<()> {
     // navigations — the WebView2 analog of Linux's notify::uri.
     #[cfg(target_os = "windows")]
     if let Some(content) = app.get_webview(&label) {
+        let app_ab = app.clone();
         let app_url = app.clone();
         let app_rg = app.clone();
         let app_find = app.clone();
         let _ = content.with_webview(move |pw| {
-            crate::adblock_win::install(&pw);
+            crate::adblock_win::install(&pw, app_ab, id);
             crate::nav_url_win::install(&pw, app_url, id);
             crate::nav_policy_win::install(&pw, app_rg, id);
             crate::find_win::install(&pw, app_find, id);

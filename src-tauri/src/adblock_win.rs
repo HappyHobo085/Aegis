@@ -18,9 +18,10 @@ use webview2_com::WebResourceRequestedEventHandler;
 use windows::core::{Result, HSTRING, PWSTR};
 
 /// Install the ad-block request interceptor on the content webview. Call inside
-/// `content_webview.with_webview(|pw| adblock_win::install(&pw))`. Fails silently if
-/// the WebView2 isn't ready — ad-block just won't be active, browsing is unaffected.
-pub fn install(pw: &tauri::webview::PlatformWebview) {
+/// `content_webview.with_webview(|pw| adblock_win::install(&pw, app, id))`. `app`+`id`
+/// let the block branch bump the shield badge (`adblock::note_blocked`). Fails silently
+/// if the WebView2 isn't ready — ad-block just won't be active, browsing is unaffected.
+pub fn install(pw: &tauri::webview::PlatformWebview, app: tauri::AppHandle, id: u32) {
     let controller = pw.controller();
     let environment = pw.environment();
     unsafe {
@@ -41,8 +42,11 @@ pub fn install(pw: &tauri::webview::PlatformWebview) {
         let env = environment.clone();
         let handler = WebResourceRequestedEventHandler::create(Box::new(move |_core, args| {
             if let Some(args) = args {
-                // Fail open: never break a page if our check errors.
-                let _ = handle(&env, &args);
+                // Fail open: never break a page if our check errors. Count only in the
+                // branch that actually blocks (not allowed requests, not pop-under path).
+                if handle(&env, &args).unwrap_or(false) {
+                    crate::adblock::note_blocked(&app, id);
+                }
             }
             Ok(())
         }));
@@ -51,20 +55,22 @@ pub fn install(pw: &tauri::webview::PlatformWebview) {
     }
 }
 
-/// Block a single request if the adblock engine matches it.
+/// Block a single request if the adblock engine matches it. Returns `Ok(true)` when the
+/// request was blocked (so the caller can count it on the shield badge), `Ok(false)`
+/// when it was allowed.
 unsafe fn handle(
     env: &ICoreWebView2Environment,
     args: &ICoreWebView2WebResourceRequestedEventArgs,
-) -> Result<()> {
+) -> Result<bool> {
     let request = args.Request()?;
     let mut uri = PWSTR::null();
     request.Uri(&mut uri)?;
     if uri.is_null() {
-        return Ok(());
+        return Ok(false);
     }
     let url = uri.to_string().unwrap_or_default();
     if !url.starts_with("http") {
-        return Ok(());
+        return Ok(false);
     }
     // EasyList domain anchors (`||host^`) match on the request host regardless of the
     // source page or resource type, so an empty source / "other" type blocks the bulk
@@ -78,6 +84,7 @@ unsafe fn handle(
             &HSTRING::from(""),
         )?;
         args.SetResponse(&response)?;
+        return Ok(true);
     }
-    Ok(())
+    Ok(false)
 }
