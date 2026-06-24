@@ -434,4 +434,29 @@ mod tests {
         let b = wrap_with_passphrase(&root, "pw").unwrap();
         assert_ne!(a, b);
     }
+
+    #[test]
+    fn vault_backing_maps_to_the_ui_strings() {
+        // These exact strings back SyncState.vaultBacking in shared/types.ts
+        // ('keychain' | 'passphrase' | 'none'); a rename here desyncs the chrome.
+        assert_eq!(VaultBacking::Keychain.as_str(), "keychain");
+        assert_eq!(VaultBacking::Passphrase.as_str(), "passphrase");
+        assert_eq!(VaultBacking::None.as_str(), "none");
+    }
+
+    #[test]
+    fn passphrase_fallback_rejects_a_tampered_blob() {
+        // The fallback used whenever the keychain/keystore is unavailable must fail
+        // authentication on a corrupted ciphertext rather than returning garbage bytes.
+        let root = RootSecret([7u8; 32]);
+        let blob = wrap_with_passphrase(&root, "pw").unwrap();
+        let mut v: serde_json::Value = serde_json::from_str(&blob).unwrap();
+        // Flip a hex nibble in the ciphertext (still valid hex, wrong bytes).
+        let ct = v["ct"].as_str().unwrap().to_string();
+        let mut chars: Vec<char> = ct.chars().collect();
+        chars[0] = if chars[0] == '0' { '1' } else { '0' };
+        v["ct"] = serde_json::Value::String(chars.into_iter().collect());
+        let tampered = serde_json::to_string(&v).unwrap();
+        assert!(unwrap_with_passphrase(&tampered, "pw").is_err());
+    }
 }
