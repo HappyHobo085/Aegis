@@ -52,7 +52,7 @@ sha2 = "0.10"
 ed25519-dalek = { version = "2", features = ["zeroize"] }
 bip39 = "2"
 argon2 = "0.5"
-getrandom = "0.2"
+getrandom = "0.4"
 zeroize = { version = "1", features = ["derive"] }
 
 # Linux-only: reach the underlying webkit2gtk widget to work around tauri#10420
