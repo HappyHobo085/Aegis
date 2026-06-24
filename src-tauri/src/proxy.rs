@@ -171,13 +171,27 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
 ///   The `apply` → `emit_event("proxy.state")` path still runs so the chrome's UI reflects
 ///   the new config immediately; only the actual egress proxy of live open tabs is unaffected.
 ///   (Task 9 docs should surface: "On Windows, reload the tab to apply a proxy change.")
-/// macOS: Task 5 (not yet implemented).
+/// macOS: NOT implemented — direct connection (no proxy applied).
+///   The proper fix is a hand-rolled Network.framework / objc2 binding that sets
+///   `WKWebsiteDataStore.proxyConfigurations` (macOS 14+). That binding requires
+///   unconfirmed `nw_proxy_config_*` / `NWEndpoint` FFI signatures that cannot be
+///   verified without a macOS toolchain (objc2 cannot be compiled from Linux —
+///   see `aegis-macos-crosscompile` in project memory). Deferred to a Mac-developer
+///   follow-up (sub-project I). macOS builds and runs, just with no proxy support.
+///   See docs/superpowers/plans/2026-06-23-proxy.md Task 6 for the deferred binding spec.
 pub fn apply_to_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let cfg = current(app);
     #[cfg(target_os = "linux")]
     crate::linux_layout::apply_proxy_label(app, &crate::nav::content_label(id), &cfg);
-    // Windows: spawn-time only (see doc-comment above). macOS: Task 5.
-    #[cfg(not(target_os = "linux"))]
+    // macOS: documented no-op — direct connection. Network.framework binding deferred
+    // to a Mac-developer follow-up; see doc-comment above.
+    #[cfg(target_os = "macos")]
+    let _ = (id, cfg);
+    // Windows: spawn-time only (see doc-comment above).
+    // Android: proxy is applied via the AegisAndroid bridge + ProxyController at boot
+    // and on every proxy.setConfig / proxy.clear call via apply() → note_config().
+    // Neither platform has a live per-tab setter here.
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
     let _ = (id, cfg);
 }
 
