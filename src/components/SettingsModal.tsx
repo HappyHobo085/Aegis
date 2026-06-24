@@ -1,5 +1,5 @@
 // src/components/SettingsModal.tsx
-import { useId, useState } from 'react';
+import { useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
@@ -39,22 +39,21 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   data: 'Data',
 };
 
-export const TAB_ORDER: SettingsTab[] = [
-  'appearance',
-  'search',
-  'home',
-  'tabs',
-  'filterLists',
-  'myFilters',
-  'allowlist',
-  'downloads',
-  'sitePermissions',
-  'security',
-  'proxy',
-  'vault',
-  'sync',
-  'data',
+/** Settings tabs grouped into labelled sections so related controls sit together
+ *  instead of in one flat 14-item strip. The flattened group order IS the tab order. */
+export interface SettingsGroup {
+  title: string;
+  tabs: SettingsTab[];
+}
+
+export const TAB_GROUPS: SettingsGroup[] = [
+  { title: 'Browser', tabs: ['appearance', 'home', 'search', 'tabs', 'downloads'] },
+  { title: 'Ad blocking', tabs: ['filterLists', 'myFilters', 'allowlist'] },
+  { title: 'Privacy & security', tabs: ['security', 'sitePermissions', 'proxy', 'vault'] },
+  { title: 'Data & sync', tabs: ['sync', 'data'] },
 ];
+
+export const TAB_ORDER: SettingsTab[] = TAB_GROUPS.flatMap((g) => g.tabs);
 
 export interface SettingsModalProps {
   onClose(): void;
@@ -96,6 +95,42 @@ export function SettingsModal({
   const dialogRef = useDialog<HTMLDivElement>(onClose);
   const tabsRef = useHorizontalWheel<HTMLDivElement>();
   const [tab, setTab] = useState<SettingsTab>('appearance');
+
+  // Roving arrow-key navigation across the (grouped) tab rail. Up/Left and Down/Right
+  // move + activate the previous/next tab; Home/End jump to the ends.
+  const tabRefs = useRef<Partial<Record<SettingsTab, HTMLButtonElement | null>>>({});
+  const moveTab = (delta: number): void => {
+    const i = TAB_ORDER.indexOf(tab);
+    const next = TAB_ORDER[(i + delta + TAB_ORDER.length) % TAB_ORDER.length];
+    setTab(next);
+    tabRefs.current[next]?.focus();
+  };
+  const onTabKeyDown = (e: React.KeyboardEvent): void => {
+    switch (e.key) {
+      case 'ArrowDown':
+      case 'ArrowRight':
+        e.preventDefault();
+        moveTab(1);
+        break;
+      case 'ArrowUp':
+      case 'ArrowLeft':
+        e.preventDefault();
+        moveTab(-1);
+        break;
+      case 'Home':
+        e.preventDefault();
+        setTab(TAB_ORDER[0]);
+        tabRefs.current[TAB_ORDER[0]]?.focus();
+        break;
+      case 'End': {
+        e.preventDefault();
+        const last = TAB_ORDER[TAB_ORDER.length - 1];
+        setTab(last);
+        tabRefs.current[last]?.focus();
+        break;
+      }
+    }
+  };
 
   // Stable id pairs (tab control id + panel id) per section, for aria wiring.
   const appearanceTabId = useId();
@@ -176,21 +211,34 @@ export function SettingsModal({
             ref={tabsRef}
             className="settings-modal__tabs"
             role="tablist"
+            aria-orientation="vertical"
             aria-label="Settings sections"
+            onKeyDown={onTabKeyDown}
           >
-            {TAB_ORDER.map((t) => (
-              <button
-                key={t}
-                type="button"
-                role="tab"
-                id={tabIds[t]}
-                aria-controls={panelId}
-                aria-selected={tab === t}
-                className="settings-modal__tab"
-                onClick={() => setTab(t)}
-              >
-                {TAB_LABELS[t]}
-              </button>
+            {TAB_GROUPS.map((group) => (
+              <div key={group.title} className="settings-modal__tab-group" role="presentation">
+                <div className="settings-modal__tab-group-label" aria-hidden="true">
+                  {group.title}
+                </div>
+                {group.tabs.map((t) => (
+                  <button
+                    key={t}
+                    ref={(el) => {
+                      tabRefs.current[t] = el;
+                    }}
+                    type="button"
+                    role="tab"
+                    id={tabIds[t]}
+                    aria-controls={panelId}
+                    aria-selected={tab === t}
+                    tabIndex={tab === t ? 0 : -1}
+                    className="settings-modal__tab"
+                    onClick={() => setTab(t)}
+                  >
+                    {TAB_LABELS[t]}
+                  </button>
+                ))}
+              </div>
             ))}
           </div>
           <div

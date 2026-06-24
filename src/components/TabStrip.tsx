@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import { Plus, X, Globe, EyeOff } from 'lucide-react';
 import type { TabMeta, ViewId } from '../../shared/types';
 
@@ -37,9 +38,52 @@ export function TabStrip({
   onReorder,
   onSetPinned,
 }: TabStripProps) {
+  const stripRef = useRef<HTMLDivElement | null>(null);
+
+  // Roving-tabindex keyboard nav: arrows move focus between tabs, Enter/Space
+  // activates, Delete/Backspace closes. (The strip was pointer-only before.)
+  const focusTabAt = (index: number): void => {
+    const els = stripRef.current?.querySelectorAll<HTMLElement>('[role="tab"]');
+    if (!els || els.length === 0) return;
+    const clamped = (index + els.length) % els.length;
+    els[clamped]?.focus();
+  };
+  const onTabKeyDown = (e: React.KeyboardEvent, t: TabMeta, index: number): void => {
+    switch (e.key) {
+      case 'Enter':
+      case ' ':
+        e.preventDefault();
+        onActivate(t.id);
+        break;
+      case 'ArrowRight':
+        e.preventDefault();
+        focusTabAt(index + 1);
+        break;
+      case 'ArrowLeft':
+        e.preventDefault();
+        focusTabAt(index - 1);
+        break;
+      case 'Home':
+        e.preventDefault();
+        focusTabAt(0);
+        break;
+      case 'End':
+        e.preventDefault();
+        focusTabAt(tabs.length - 1);
+        break;
+      case 'Delete':
+      case 'Backspace':
+        if (!t.pinned) {
+          e.preventDefault();
+          onClose(t.id);
+        }
+        break;
+    }
+  };
+
   return (
-    <div className="tabstrip" role="tablist" aria-label="Open tabs">
-      {tabs.map((t) => {
+    <div className="tabstrip" role="tablist" aria-label="Open tabs" ref={stripRef}>
+      {tabs.map((t, index) => {
         const title = labelFor(t);
         const isActive = t.id === activeId;
         return (
@@ -60,6 +104,7 @@ export function TabStrip({
               .join(' ')}
             draggable
             onClick={() => onActivate(t.id)}
+            onKeyDown={(e) => onTabKeyDown(e, t, index)}
             onDragStart={(e) => e.dataTransfer.setData('text/tab-id', String(t.id))}
             onDragOver={(e) => e.preventDefault()}
             onDrop={(e) => {

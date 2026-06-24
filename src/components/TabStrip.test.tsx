@@ -78,4 +78,32 @@ describe('TabStrip', () => {
     setup();
     expect(screen.getByRole('tab', { name: /Alpha/ })).not.toHaveClass('tab--private');
   });
+
+  it('activates with Enter/Space and closes with Delete (keyboard)', () => {
+    const p = setup();
+    const beta = screen.getByRole('tab', { name: /Beta/ });
+    fireEvent.keyDown(beta, { key: 'Enter' });
+    expect(p.onActivate).toHaveBeenCalledWith(2);
+    fireEvent.keyDown(beta, { key: ' ' });
+    expect(p.onActivate).toHaveBeenCalledTimes(2);
+    fireEvent.keyDown(beta, { key: 'Delete' });
+    expect(p.onClose).toHaveBeenCalledWith(2);
+  });
+
+  it('moves focus between tabs with Arrow keys (roving tabindex)', () => {
+    setup();
+    const alpha = screen.getByRole('tab', { name: /Alpha/ });
+    alpha.focus();
+    fireEvent.keyDown(alpha, { key: 'ArrowRight' });
+    expect(screen.getByRole('tab', { name: /Beta/ })).toHaveFocus();
+  });
+
+  it('does not close a pinned tab via Delete', () => {
+    const pinned: TabMeta[] = [
+      { id: 1, pinned: true, live: true, title: 'Pin', url: 'https://pin.test/', private: false },
+    ];
+    const p = setup({ tabs: pinned, activeId: 1 });
+    fireEvent.keyDown(screen.getByRole('tab', { name: /Pin/ }), { key: 'Delete' });
+    expect(p.onClose).not.toHaveBeenCalled();
+  });
 });

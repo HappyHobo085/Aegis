@@ -25,6 +25,7 @@ import { useCustomFilters } from './hooks/useCustomFilters';
 import { useDownloads } from './hooks/useDownloads';
 import { usePermissions } from './hooks/usePermissions';
 import { useContentInset } from './hooks/useContentInset';
+import { useNarrowViewport } from './hooks/useNarrowViewport';
 import { useUpdate } from './hooks/useUpdate';
 import { useSafety } from './hooks/useSafety';
 import { useTabs } from './hooks/useTabs';
@@ -46,7 +47,7 @@ import { SkipLink } from './components/SkipLink';
 import { Toaster } from './components/Toaster';
 import { ConfirmDialog } from './components/ConfirmDialog';
 import { PermissionPromptDialog } from './components/PermissionPromptDialog';
-import { WelcomeHint } from './components/WelcomeHint';
+import { Onboarding } from './components/Onboarding';
 import { SettingsModal } from './components/SettingsModal';
 import { AppearanceTab } from './components/AppearanceTab';
 import { SearchTab } from './components/SearchTab';
@@ -91,6 +92,7 @@ function hostOf(url: string): string | null {
 function DesktopApp() {
   const tabs = useTabs();
   const nav = useNav(tabs.activeId);
+  const isNarrow = useNarrowViewport();
   const adblock = useAdblock(tabs.activeId, nav.state.url);
   // The ad-block shield popover is a chrome dropdown; track it so the content webview
   // is lowered while it's open (Tauri's content view is opaque and on top).
@@ -467,6 +469,7 @@ function DesktopApp() {
         forward={nav.forward}
         reloadOrStop={nav.reloadOrStop}
         home={nav.home}
+        isNarrow={isNarrow}
         adblock={{
           state: adblock.state,
           page: adblock.page,
@@ -474,6 +477,7 @@ function DesktopApp() {
           setEnabled: adblock.setEnabled,
           toggleAllowlist: adblock.toggleAllowlist,
           onOpenChange: setShieldOpen,
+          onReload: nav.reloadOrStop,
         }}
         bookmark={
           <BookmarkButton
@@ -692,7 +696,12 @@ function DesktopApp() {
           onResolve={(_requestId, decision) => void permissions.resolve(decision)}
         />
       )}
-      <WelcomeHint />
+      <Onboarding
+        searchEngines={settings.settings.searchEngines}
+        defaultSearchTemplate={settings.settings.defaultSearchTemplate}
+        onChooseSearch={(template) => void settings.update({ defaultSearchTemplate: template })}
+        onOpenSettings={() => setSettingsOpen(true)}
+      />
       <Toaster />
       <ConfirmDialog />
     </div>

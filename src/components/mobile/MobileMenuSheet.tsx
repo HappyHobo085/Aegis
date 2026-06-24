@@ -2,7 +2,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Home,
-  Star,
+  Bookmark,
   Download,
   Settings,
   Search,
@@ -87,7 +87,11 @@ export function MobileMenuSheet({
             disabled={!canBookmark}
             onClick={onToggleBookmark}
           >
-            <Star size={20} aria-hidden="true" />
+            <Bookmark
+              size={20}
+              aria-hidden="true"
+              fill={isCurrentSaved ? 'currentColor' : 'none'}
+            />
             {isCurrentSaved ? 'Remove bookmark' : 'Bookmark this page'}
           </button>
         </li>

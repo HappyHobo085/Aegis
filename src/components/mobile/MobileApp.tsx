@@ -48,6 +48,7 @@ import { DataTab } from '../DataTab';
 import { PermissionPromptDialog } from '../PermissionPromptDialog';
 import { Toaster } from '../Toaster';
 import { ConfirmDialog } from '../ConfirmDialog';
+import { Onboarding } from '../Onboarding';
 import { MobileTopBar } from './MobileTopBar';
 import { MobileBottomBar } from './MobileBottomBar';
 import { MobileMenuSheet } from './MobileMenuSheet';
@@ -365,6 +366,12 @@ export function MobileApp() {
           onResolve={(_requestId, decision) => void permissions.resolve(decision)}
         />
       )}
+      <Onboarding
+        searchEngines={settings.settings.searchEngines}
+        defaultSearchTemplate={settings.settings.defaultSearchTemplate}
+        onChooseSearch={(template) => void settings.update({ defaultSearchTemplate: template })}
+        onOpenSettings={() => setSheet('settings')}
+      />
       <Toaster />
       <ConfirmDialog />
     </div>

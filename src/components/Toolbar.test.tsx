@@ -133,4 +133,34 @@ describe('Toolbar', () => {
     );
     expect(screen.getByRole('button', { name: /toggle sidebar/i })).toBeInTheDocument();
   });
+
+  it('shows secondary slots inline when not narrow', () => {
+    render(
+      <Toolbar
+        state={state}
+        {...handlers()}
+        gear={<button type="button">Open settings</button>}
+      />,
+    );
+    // No overflow trigger; the gear is directly visible.
+    expect(screen.queryByRole('button', { name: /more tools/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument();
+  });
+
+  it('folds secondary slots into a "More tools" overflow menu when narrow', async () => {
+    render(
+      <Toolbar
+        state={state}
+        {...handlers()}
+        isNarrow
+        gear={<button type="button">Open settings</button>}
+      />,
+    );
+    const more = screen.getByRole('button', { name: /more tools/i });
+    expect(more).toBeInTheDocument();
+    // The secondary slot is hidden until the overflow menu is opened.
+    expect(screen.queryByRole('button', { name: /open settings/i })).not.toBeInTheDocument();
+    await userEvent.click(more);
+    expect(screen.getByRole('button', { name: /open settings/i })).toBeInTheDocument();
+  });
 });

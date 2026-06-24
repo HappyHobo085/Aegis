@@ -53,14 +53,14 @@ function Popover({
         Page zoom controls
       </span>
       <button type="button" aria-label="Zoom out" onClick={zoomOut}>
-        <ZoomOut size={16} />
+        <ZoomOut size={16} aria-hidden="true" />
       </button>
       <span className="zoom-indicator__value">{formatZoom(factor)}</span>
       <button type="button" aria-label="Zoom in" onClick={zoomIn}>
-        <ZoomIn size={16} />
+        <ZoomIn size={16} aria-hidden="true" />
       </button>
       <button type="button" aria-label="Reset zoom" onClick={reset}>
-        <RotateCcw size={16} />
+        <RotateCcw size={16} aria-hidden="true" />
       </button>
     </div>
   );
