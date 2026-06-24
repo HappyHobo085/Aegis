@@ -6,10 +6,13 @@ import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebStorage
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
@@ -46,6 +49,14 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // the desktop v1 design. Kept on discard so a reactivated tab restores its zoom;
   // dropped on close (session ends).
   private val tabZoom = HashMap<Int, Int>()
+  // IDs of private (incognito-mode) tabs. Best-effort ephemeral tier: Android WebView has
+  // no per-WebView data partition (unlike desktop wry's incognito context), so isolation is
+  // process-global — CookieManager and WebStorage are shared across ALL tabs. What we CAN
+  // do per-WebView: disable disk cache (LOAD_NO_CACHE) and refuse 3rd-party cookies. On the
+  // LAST private tab closing (no private tabs remain), we flush cookies + WebStorage — which
+  // also clears any normal-tab session data at that moment. This is the documented weaker
+  // behavior; per-tab isolation requires Android's unreleased per-profile WebView API.
+  private val privateTabs = HashSet<Int>()
   private var activeTabId = -1
   // Per-tab current page URL (the ad-block first-party context), read on the network
   // thread in shouldInterceptRequest; concurrent for safe cross-thread reads.
@@ -328,7 +339,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     try { NativeInject.documentStartScript() } catch (_: Throwable) { "" }
   }
 
-  private fun createTabWebView(id: Int, url: String): WebView {
+  private fun createTabWebView(id: Int, url: String, isPrivate: Boolean = false): WebView {
     val wv = WebView(this)
     wv.settings.javaScriptEnabled = true
     wv.settings.domStorageEnabled = true
@@ -337,6 +348,19 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // Replay any session zoom stored for this tab (e.g. after a discard→reactivate) so
     // the user's zoom survives the WebView being recreated. No-op when unset (first open).
     tabZoom[id]?.let { wv.settings.textZoom = it }
+    if (isPrivate) {
+      // Best-effort private-mode ephemerality.
+      // LIMIT: Android WebView has no per-WebView data partition; CookieManager and
+      // WebStorage are process-global. We can't truly isolate a private tab's cookies
+      // from a coexisting normal tab's. What we do here is the best available:
+      //   • LOAD_NO_CACHE: skip disk read/write for this tab's HTTP cache (memory-only).
+      //   • setAcceptThirdPartyCookies(false): refuse 3rd-party cookies for this WebView.
+      //   • domStorageEnabled left TRUE (there is no per-WebView DOM-storage partition;
+      //     turning it off site-wide is too blunt and breaks most pages).
+      // On the last private tab closing, a process-global flush runs (see teardownTab).
+      wv.settings.cacheMode = WebSettings.LOAD_NO_CACHE
+      CookieManager.getInstance().setAcceptThirdPartyCookies(wv, false)
+    }
     // Multi-window support for target=_blank / window.open (Task 9).
     wv.settings.setSupportMultipleWindows(true)
     wv.settings.javaScriptCanOpenWindowsAutomatically = true
@@ -562,14 +586,65 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
   }
 
+  /**
+   * Shared teardown for closeTab and discardTab.
+   *
+   * Removes the WebView from the gesture container, clears its cache/history if it was
+   * a private tab, then destroys it. If this was the LAST private tab, flushes the
+   * process-global cookie jar and web storage.
+   *
+   * HONEST LIMIT: CookieManager and WebStorage are process-global on Android — there is
+   * no per-WebView data partition before the (unreleased) per-profile WebView API. While a
+   * private tab and a normal tab coexist the cookie jar is shared; the flush on last-private-
+   * close also clears any normal-tab session cookies at that moment. This is the documented
+   * weaker Android behavior — the only alternative is withholding third-party cookies
+   * (already done at tab creation) and the LOAD_NO_CACHE disk-cache bypass.
+   *
+   * [keepZoom] — pass true for discardTab (zoom survives a reload) and false for closeTab
+   * (tab is gone permanently so the stored zoom is useless).
+   */
+  private fun teardownTab(id: Int, keepZoom: Boolean) {
+    tabWebViews.remove(id)?.let { wv ->
+      wv.visibility = View.GONE
+      gestureContainer?.removeView(wv)
+      if (privateTabs.contains(id)) {
+        // Clear this tab's contribution to the HTTP cache and its navigation history.
+        wv.clearCache(true)
+        wv.clearHistory()
+      }
+      wv.destroy()
+    }
+    pageUrls.remove(id)
+    pageBlocked.remove(id)
+    if (!keepZoom) tabZoom.remove(id)
+    if (activeTabId == id) { activeTabId = -1; contentWebView = null }
+    // Flush shared stores ONLY when the last private tab goes away, minimising impact on
+    // normal tabs (but note the impact is still non-zero: any normal-tab session cookies
+    // present at this moment are also cleared — see HONEST LIMIT above).
+    if (privateTabs.remove(id) && privateTabs.isEmpty()) {
+      CookieManager.getInstance().removeAllCookies(null)
+      CookieManager.getInstance().flush()
+      WebStorage.getInstance().deleteAllData()
+      Log.i("AegisPrivate", "Last private tab closed — flushed cookies + web storage")
+    }
+  }
+
   /** Exposed to the chrome webview's JS as `window.AegisAndroid`. Methods run on the
    *  JS-bridge thread, so all WebView calls hop to the UI thread. */
   inner class Bridge {
-    /** Activate a tab: create its WebView lazily on first call, show it, hide all others.
-     *  The chrome calls this on mount for the first tab and on every tab switch. */
+    /**
+     * Activate a tab: create its WebView lazily on first call, show it, hide all others.
+     * The chrome calls this on mount for the first tab and on every tab switch.
+     *
+     * [isPrivate] — when true this tab runs in best-effort private mode: disk cache is
+     * bypassed (LOAD_NO_CACHE) and third-party cookies are refused for its WebView. On the
+     * last private tab closing, cookies + web storage are flushed process-globally.
+     * Task 8/9 will wire the chrome to pass isPrivate = true for incognito tabs.
+     */
     @JavascriptInterface
-    fun activateTab(id: Int, url: String) = runOnUiThread {
-      val wv = tabWebViews[id] ?: createTabWebView(id, url).also { tabWebViews[id] = it }
+    fun activateTab(id: Int, url: String, isPrivate: Boolean = false) = runOnUiThread {
+      if (isPrivate) privateTabs.add(id)
+      val wv = tabWebViews[id] ?: createTabWebView(id, url, isPrivate).also { tabWebViews[id] = it }
       activeTabId = id
       contentWebView = wv
       for ((tid, w) in tabWebViews) if (tid != id) w.visibility = View.GONE
@@ -585,15 +660,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     /** Permanently close a tab: destroy its WebView and remove it from the map. */
     @JavascriptInterface
     fun closeTab(id: Int) = runOnUiThread {
-      tabWebViews.remove(id)?.let {
-        it.visibility = View.GONE
-        gestureContainer?.removeView(it)
-        it.destroy()
-      }
-      pageUrls.remove(id)
-      pageBlocked.remove(id)
-      tabZoom.remove(id) // drop zoom on close; kept on discard so reload restores it
-      if (activeTabId == id) { activeTabId = -1; contentWebView = null }
+      teardownTab(id, keepZoom = false)
     }
 
     /** Discard an idle tab (memory reclaim): destroy its WebView; re-activating will
@@ -603,14 +670,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
      *  until it blocks again (accepted limitation; identical to a fresh load). */
     @JavascriptInterface
     fun discardTab(id: Int) = runOnUiThread {
-      tabWebViews.remove(id)?.let {
-        it.visibility = View.GONE
-        gestureContainer?.removeView(it)
-        it.destroy()
-      }
-      pageUrls.remove(id)
-      pageBlocked.remove(id)
-      if (activeTabId == id) { activeTabId = -1; contentWebView = null }
+      teardownTab(id, keepZoom = true)
     }
 
     @JavascriptInterface
