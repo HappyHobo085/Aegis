@@ -140,10 +140,15 @@ private tab** button in `TabStrip` + `Ctrl+Shift+N` (desktop) + mobile tab switc
 Autopilot: catalog `verify` asserts a private navigation leaves no history row (live
 gated); interaction specs cover the button + keyboard shortcut. Runtime verify: Linux
 live GUI and Win/macOS GUI **PENDING** user sessions; Android device verify **PENDING**.
-The **OS-keychain anchor** is desktop-done / Android-wired + device-verified (commit
-`03f0012`; `AegisKeystore.kt` does a real `KeyGenParameterSpec` AES-GCM wrap;
-passphrase-wrapped file is the fallback when no keychain is available; only remaining
-work is preferring StrongBox — sub-project J). **Anti-fingerprinting / farbling**
+The **OS-keychain anchor** is desktop-done / Android hardware-anchored — **sub-project
+J DONE.** Android now PREFERS StrongBox (hardware Secure Element where the device has
+`FEATURE_STRONGBOX_KEYSTORE`, graceful TEE fallback otherwise); the seed-at-rest
+contract (Keychain → Passphrase → None) holds on all tiers. Honest framing:
+StrongBox vs. TEE is device-dependent (emulators + most phones = TEE; SE-capable
+devices = StrongBox) — this is a documented hardware-tier fact, not a parity gap.
+Desktop uses `keyring` (Secret Service / Credential Manager / Keychain).
+Passphrase-wrapped file is the fallback when no keychain is available. On-device
+wrap/unwrap hardware verify is **PENDING** user (phone session). **Anti-fingerprinting / farbling**
 (`farble.rs`; sub-project L): opt-in (default `off`), three levels (`off` / `standard` /
 `strict`). `standard` perturbs canvas (`getImageData`/`toDataURL`/`toBlob`), audio
 (`getFloatFrequencyData`/`getChannelData`), and navigator/UA-CH
