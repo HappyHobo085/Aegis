@@ -19,6 +19,7 @@ import { useSaved } from './hooks/useSaved';
 import { useSettings } from './hooks/useSettings';
 import { useSync } from './hooks/useSync';
 import { useVault } from './hooks/useVault';
+import { useProxy } from './hooks/useProxy';
 import { useSubscriptions } from './hooks/useSubscriptions';
 import { useCustomFilters } from './hooks/useCustomFilters';
 import { useDownloads } from './hooks/useDownloads';
@@ -58,6 +59,7 @@ import { SitePermissionsTab } from './components/SitePermissionsTab';
 import { SecurityTab } from './components/SecurityTab';
 import { SyncSettingsTab } from './components/SyncSettingsTab';
 import { VaultSettingsTab } from './components/VaultSettingsTab';
+import { ProxySettingsTab } from './components/ProxySettingsTab';
 import { DataTab } from './components/DataTab';
 import { TabsTab } from './components/TabsTab';
 import { TabStrip } from './components/TabStrip';
@@ -129,6 +131,7 @@ function DesktopApp() {
   const update = useUpdate();
   const safety = useSafety();
   const fingerprint = useFingerprint();
+  const proxy = useProxy();
   const find = useFind(tabs.activeId);
 
   // Dev-only: expose an imperative control surface so the autopilot can reach every
@@ -664,6 +667,9 @@ function DesktopApp() {
               toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
               removeFingerprintAllowlist={fingerprint.removeAllowlist}
             />
+          }
+          proxy={
+            <ProxySettingsTab state={proxy.state} setConfig={proxy.setConfig} test={proxy.test} />
           }
           vault={<VaultSettingsTab vault={vault} />}
           sync={

@@ -17,6 +17,7 @@ import { useSaved } from '../../hooks/useSaved';
 import { useSettings } from '../../hooks/useSettings';
 import { useSync } from '../../hooks/useSync';
 import { useVault } from '../../hooks/useVault';
+import { useProxy } from '../../hooks/useProxy';
 import { useSubscriptions } from '../../hooks/useSubscriptions';
 import { useCustomFilters } from '../../hooks/useCustomFilters';
 import { useDownloads } from '../../hooks/useDownloads';
@@ -42,6 +43,7 @@ import { SitePermissionsTab } from '../SitePermissionsTab';
 import { SecurityTab } from '../SecurityTab';
 import { SyncSettingsTab } from '../SyncSettingsTab';
 import { VaultSettingsTab } from '../VaultSettingsTab';
+import { ProxySettingsTab } from '../ProxySettingsTab';
 import { DataTab } from '../DataTab';
 import { PermissionPromptDialog } from '../PermissionPromptDialog';
 import { Toaster } from '../Toaster';
@@ -84,6 +86,7 @@ export function MobileApp() {
   const settings = useSettings();
   const sync = useSync();
   const vault = useVault();
+  const proxy = useProxy();
   const subscriptions = useSubscriptions();
   const customFilters = useCustomFilters();
   const downloads = useDownloads();
@@ -336,6 +339,9 @@ export function MobileApp() {
               toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
               removeFingerprintAllowlist={fingerprint.removeAllowlist}
             />
+          }
+          proxy={
+            <ProxySettingsTab state={proxy.state} setConfig={proxy.setConfig} test={proxy.test} />
           }
           vault={<VaultSettingsTab vault={vault} />}
           sync={

@@ -188,6 +188,37 @@ vi.mock('../../lib/ipcClient', () => ({
       removeAllowlist: vi.fn().mockResolvedValue({ level: 'off', allowlistedHosts: [] }),
       clearAllowlist: vi.fn().mockResolvedValue({ level: 'off', allowlistedHosts: [] }),
     },
+    proxy: {
+      getState: vi.fn().mockResolvedValue({
+        mode: 'off',
+        scheme: 'http',
+        host: '',
+        port: 8080,
+        bypassHosts: [],
+        active: false,
+        uri: null,
+      }),
+      setConfig: vi.fn().mockResolvedValue({
+        mode: 'off',
+        scheme: 'http',
+        host: '',
+        port: 8080,
+        bypassHosts: [],
+        active: false,
+        uri: null,
+      }),
+      clear: vi.fn().mockResolvedValue({
+        mode: 'off',
+        scheme: 'http',
+        host: '',
+        port: 8080,
+        bypassHosts: [],
+        active: false,
+        uri: null,
+      }),
+      testConnection: vi.fn().mockResolvedValue({ ok: true, latencyMs: 1 }),
+      onState: vi.fn().mockReturnValue(() => {}),
+    },
     tabs: {
       list: vi.fn().mockResolvedValue({
         tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false }],
