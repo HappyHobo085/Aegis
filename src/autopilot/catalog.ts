@@ -608,11 +608,15 @@ export const CATALOG: FeatureCheck[] = [
       return `find start→state(matchCount=${(got as { matchCount: number }).matchCount})→close ok`;
     },
   },
-  // vault (Phase A — password manager, chrome-only, no autofill)
+  // vault (Phase A — password manager, chrome-only, no autofill).  The live verify
+  // creates/unlocks a throwaway vault on the disposable profile, round-trips a
+  // credential, then locks.  Safe to mutate (disposable profile starts empty).
+  // vaultCreate/Unlock/Lock/Add/Update/Remove are listed in UNTESTED_CHANNELS
+  // (exercise calls only the read-only getState; the mutating calls are live-verify-only).
   {
-    id: 'vault',
+    id: 'vault.crud',
     domain: 'vault',
-    title: 'Password vault',
+    title: 'Vault create/unlock/add/list/search/update/remove/lock',
     channels: [
       IPC.vaultGetState,
       IPC.vaultCreate,
@@ -626,14 +630,46 @@ export const CATALOG: FeatureCheck[] = [
     ],
     exercise: async (a) => {
       assertObject(await a.vault.getState());
-      await a.vault.create('test-master-pw');
-      await a.vault.unlock('test-master-pw');
-      assertArray(await a.vault.list());
-      assertArray(await a.vault.add({ site: 'https://ap.test/', username: 'ap', password: 'pw' }));
-      assertArray(await a.vault.search('ap'));
-      assertArray(await a.vault.update('mock-uuid', { password: 'new-pw' }));
-      assertArray(await a.vault.remove('mock-uuid'));
+    },
+    verify: async (a) => {
+      const pw = 'ap-vault-pass-9271';
+      let st = await a.vault.getState();
+      // Create only if absent (the disposable profile starts empty); else unlock.
+      if (!st.exists) st = await a.vault.create(pw);
+      else if (!st.unlocked) st = await a.vault.unlock(pw);
+      if (!st.unlocked) throw new Error('vault: not unlocked after create/unlock');
+      const probeSite = 'https://ap-vault.test/';
+      const added = await a.vault.add({
+        site: probeSite,
+        username: 'ap-user',
+        password: 'ap-secret',
+        notes: 'n',
+      });
+      const rec = added.find((r) => r.site === probeSite);
+      if (!rec) throw new Error('add: probe credential not in list');
+      if (rec.password !== 'ap-secret') throw new Error('add: password not round-tripped');
+      // search finds it by site substring
+      const found = await a.vault.search('ap-vault');
+      if (!found.some((r) => r.uuid === rec.uuid)) throw new Error('search: probe not found');
+      // update the username, assert it changed
+      const updated = await a.vault.update(rec.uuid, { username: 'ap-user-2' });
+      if (updated.find((r) => r.uuid === rec.uuid)?.username !== 'ap-user-2')
+        throw new Error('update: username not changed');
+      // remove it
+      const afterRemove = await a.vault.remove(rec.uuid);
+      if (afterRemove.some((r) => r.uuid === rec.uuid)) throw new Error('remove: probe survived');
+      // lock zeroizes — list must now error (locked) and getState.unlocked=false
       await a.vault.lock();
+      const locked = await a.vault.getState();
+      if (locked.unlocked) throw new Error('lock: still unlocked');
+      let listErrored = false;
+      try {
+        await a.vault.list();
+      } catch {
+        listErrored = true;
+      }
+      if (!listErrored) throw new Error('lock: list did not error while locked');
+      return 'vault create→unlock→add→search→update→remove→lock(+locked-list-rejected) ok';
     },
   },
 ];
@@ -678,4 +714,14 @@ export const UNTESTED_CHANNELS = new Set<string>([
   IPC.syncTestConnection,
   IPC.syncGetRecoveryPhrase,
   IPC.syncRemoveDevice,
+  // vault — mutating ops are live-verify-only (the exercise calls only read-only getState):
+  IPC.vaultCreate,
+  IPC.vaultUnlock,
+  IPC.vaultLock,
+  IPC.vaultAdd,
+  IPC.vaultUpdate,
+  IPC.vaultRemove,
+  // vault — list/search are read-shaped but locked-gated; safe to list here:
+  IPC.vaultList,
+  IPC.vaultSearch,
 ]);

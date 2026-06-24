@@ -1,4 +1,10 @@
-import type { DownloadEntry, HistoryEntry, SavedItem, SitePermission } from '../../shared/types';
+import type {
+  DownloadEntry,
+  HistoryEntry,
+  SavedItem,
+  SitePermission,
+  VaultRecord,
+} from '../../shared/types';
 
 // The dev-only imperative surface DesktopApp registers so the autopilot can reach
 // each overlay/state without selector brittleness. Calls the SAME setState handlers
@@ -33,6 +39,12 @@ export interface AutopilotControl {
   setSitePermissions(permissions: SitePermission[]): void;
   /** Directly set the allowlisted hosts in the adblock state (bypasses async refresh; autopilot vitest seeding only). */
   setAllowlistedHosts(hosts: string[]): void;
+  /**
+   * Directly seed the VaultSettingsTab's displayed records list (bypasses the async
+   * vault.list() → setRecords chain; autopilot vitest seeding only).
+   * Writes through vault._setRecordsRef.current, which VaultSettingsTab registers on mount.
+   */
+  setVaultRecords(records: VaultRecord[]): void;
 }
 
 const KEY = '__aegisAutopilot';

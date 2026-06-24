@@ -18,6 +18,7 @@ import type {
   RedirectBlocked,
   FindState,
   BlockedCount,
+  VaultState,
 } from '../../shared/types';
 import type { CallLog, InteractionCtx } from './interactions';
 import type { ScreenId } from './screens';
@@ -150,6 +151,15 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
   type BlockedCountMockFn = { mock?: { calls: ((c: BlockedCount) => void)[][] } };
   const blockedCountCallback: ((c: BlockedCount) => void) | undefined = aegis.adblock
     ? (aegis.adblock.onBlockedCount as unknown as BlockedCountMockFn).mock?.calls?.[0]?.[0]
+    : undefined;
+
+  // Capture the vault.onState callback (registered by useVault) so vault interaction specs
+  // can push a VaultState and drive the VaultSettingsTab into the desired state
+  // (create / locked / unlocked) without relying on re-mounting the Settings panel.
+  // Same pattern as emitNavState — captured BEFORE calls.reset() clears the mock's calls.
+  type VaultStateMockFn = { mock?: { calls: ((s: VaultState) => void)[][] } };
+  const vaultStateCallback: ((s: VaultState) => void) | undefined = aegis.vault
+    ? (aegis.vault.onState as unknown as VaultStateMockFn).mock?.calls?.[0]?.[0]
     : undefined;
 
   return {
@@ -304,6 +314,22 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       // via adblock.blockedCount.  Uses flushSync so the DOM updates synchronously
       // before the next gesture fires (same pattern as emitNavState / emitFindState).
       if (blockedCountCallback) flushSync(() => blockedCountCallback(c));
+      return Promise.resolve();
+    },
+    emitVaultState: (s: VaultState) => {
+      // Push a VaultState update into useVault so VaultSettingsTab re-renders in the
+      // desired state (create / locked / unlocked).  Uses flushSync so the DOM updates
+      // synchronously before the next gesture fires — same pattern as emitNavState.
+      if (vaultStateCallback) flushSync(() => vaultStateCallback(s));
+      return Promise.resolve();
+    },
+    emitVaultRecords: (records: import('../../shared/types').VaultRecord[]) => {
+      // Directly seed the VaultSettingsTab's displayed records list via the autopilot
+      // control seam (vault._setRecordsRef → setRecords).  Uses flushSync so the DOM
+      // updates synchronously before the next gesture fires — bypasses the async
+      // vault.list() → setRecords chain that would need act() to commit in jsdom.
+      const control = getAutopilotControl();
+      if (control) flushSync(() => control.setVaultRecords(records));
       return Promise.resolve();
     },
   };

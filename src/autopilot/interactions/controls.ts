@@ -122,4 +122,12 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'mobile.tabSwitcher.switch',
   'mobile.tabSwitcher.close',
   'mobile.topBar.hideToolbar',
+  // Task 7 (vault): Passwords settings tab controls
+  'vault.create.submit',
+  'vault.unlock.submit',
+  'vault.add.submit',
+  'vault.search.input',
+  'vault.row.showPassword',
+  'vault.row.copyPassword',
+  'vault.lock',
 ]);

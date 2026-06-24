@@ -46,6 +46,17 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
   const [records, setRecords] = useState<VaultRecord[]>([]);
   const [revealedUuids, setRevealedUuids] = useState<Set<string>>(new Set());
 
+  // Dev/autopilot seam: register the setRecords setter in the vault hook's ref so
+  // the autopilot control can seed records directly via flushSync (no async list() call).
+  // No-op in production (the ref is never read by non-autopilot code).
+  const _setRecordsRef = vault._setRecordsRef;
+  useEffect(() => {
+    _setRecordsRef.current = setRecords;
+    return () => {
+      _setRecordsRef.current = null;
+    };
+  }, [_setRecordsRef]);
+
   // ---- add-entry form state ----
   const [addSite, setAddSite] = useState('');
   const [addUsername, setAddUsername] = useState('');

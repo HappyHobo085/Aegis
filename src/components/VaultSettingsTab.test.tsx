@@ -36,6 +36,8 @@ function fakeVault(over: Partial<UseVault> = {}): UseVault {
     update: vi.fn(async () => []),
     remove: vi.fn(async () => []),
     search: vi.fn(async () => []),
+    // Dev/autopilot seam — a no-op ref so the useEffect in VaultSettingsTab doesn't crash.
+    _setRecordsRef: { current: null },
     ...over,
   } as unknown as UseVault;
 }

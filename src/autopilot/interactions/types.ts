@@ -16,6 +16,7 @@ import type {
   RedirectBlocked,
   FindState,
   BlockedCount,
+  VaultState,
 } from '../../../shared/types';
 import type { ScreenId } from '../screens';
 
@@ -144,6 +145,20 @@ export interface InteractionCtx {
    * from real blocks; the badge is proven via the A/B trace, not a count assert).
    */
   emitBlockedCount?(count: BlockedCount): Promise<void>;
+  /**
+   * Vitest-only: push a VaultState update into useVault so VaultSettingsTab re-renders
+   * in the desired state (create / locked / unlocked).  The callback is captured from
+   * vault.onState at ctx-creation time.  No-op on live (live state comes from the real
+   * core after calling vault.create / vault.unlock).
+   */
+  emitVaultState?(state: VaultState): Promise<void>;
+  /**
+   * Vitest-only: directly seed the VaultSettingsTab's displayed records list via the
+   * autopilot control seam (vault._setRecordsRef → setRecords), bypassing the async
+   * vault.list() path.  Uses flushSync so the DOM updates synchronously before the
+   * next gesture fires.  No-op on live (live records come from vault.list() calls).
+   */
+  emitVaultRecords?(records: import('../../../shared/types').VaultRecord[]): Promise<void>;
 }
 
 export interface InteractionSpec {
