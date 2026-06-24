@@ -310,6 +310,44 @@ export const VAULT_INTERACTIONS: InteractionSpec[] = [
     },
   },
 
+  // ── Delete row ────────────────────────────────────────────────────────────
+
+  {
+    id: 'vault.row.delete',
+    domain: 'vault',
+    description: 'Click "Delete entry for {site}" on a row → vault.remove called',
+    screen: 'settings:vault',
+    layers: ['vitest'] as InteractionLayer[],
+    run: async (ctx: InteractionCtx) => {
+      // Seed the unlocked vault state, then seed a record via the control-surface seam.
+      await seedUnlockedState(ctx, 1);
+      await ctx.emitVaultRecords?.([PROBE_RECORD]);
+      await waitFor(
+        () => {
+          const rows = document.querySelectorAll('.vault-tab__row');
+          if (rows.length === 0)
+            throw new Error('vault: no .vault-tab__row elements after seeding');
+        },
+        { timeout: 2000, interval: 50 },
+      );
+      // aria-label is "Delete entry for {site}" (VaultSettingsTab.tsx line 360).
+      const deleteBtn = ctx.byRole('button', /^Delete entry for /);
+      if (!deleteBtn) throw new Error('"Delete entry for …" button not found');
+      await ctx.click(deleteBtn);
+      await new Promise((r) => setTimeout(r, 100));
+    },
+    assert: async (ctx: InteractionCtx) => {
+      if (
+        !ctx.calls.called('vault.remove', (args) => {
+          const uuid = args[0] as string;
+          return uuid === PROBE_RECORD.uuid;
+        })
+      )
+        throw new Error('vault.remove not called with probe UUID after clicking Delete');
+      return `Delete row → vault.remove("${PROBE_RECORD.uuid}")`;
+    },
+  },
+
   // ── Lock vault ────────────────────────────────────────────────────────────
 
   {

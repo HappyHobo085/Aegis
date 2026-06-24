@@ -129,5 +129,6 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'vault.search.input',
   'vault.row.showPassword',
   'vault.row.copyPassword',
+  'vault.row.delete',
   'vault.lock',
 ]);

@@ -669,7 +669,20 @@ export const CATALOG: FeatureCheck[] = [
         listErrored = true;
       }
       if (!listErrored) throw new Error('lock: list did not error while locked');
-      return 'vault create→unlock→add→search→update→remove→lock(+locked-list-rejected) ok';
+      // Wrong-password rejection: attempt to unlock with a deliberately wrong master password
+      // and assert the call rejects.  The vault must remain locked after this step (verified
+      // by the getState() call below).  Live-only (runs on the disposable profile).
+      let wrongPwRejected = false;
+      try {
+        await a.vault.unlock('WRONG-PASSWORD-x9z!');
+      } catch {
+        wrongPwRejected = true;
+      }
+      if (!wrongPwRejected) throw new Error('vault: wrong password was NOT rejected by unlock');
+      const stillLocked = await a.vault.getState();
+      if (stillLocked.unlocked)
+        throw new Error('vault: wrong-password attempt left vault unlocked');
+      return 'vault create→unlock→add→search→update→remove→lock(+locked-list-rejected+wrong-pw-rejected) ok';
     },
   },
 ];
@@ -714,14 +727,16 @@ export const UNTESTED_CHANNELS = new Set<string>([
   IPC.syncTestConnection,
   IPC.syncGetRecoveryPhrase,
   IPC.syncRemoveDevice,
-  // vault — mutating ops are live-verify-only (the exercise calls only read-only getState):
+  // vault — these channels are not called by the vault.crud exercise() body (which calls
+  // only the read-only getState); they ARE covered by the interaction tour
+  // (vault.row.delete → vaultRemove; vault.create.submit → vaultCreate; etc.) and/or the
+  // live verify() round-trip.  Listed here only because exercise() skips them:
   IPC.vaultCreate,
   IPC.vaultUnlock,
   IPC.vaultLock,
   IPC.vaultAdd,
   IPC.vaultUpdate,
   IPC.vaultRemove,
-  // vault — list/search are read-shaped but locked-gated; safe to list here:
   IPC.vaultList,
   IPC.vaultSearch,
 ]);
