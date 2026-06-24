@@ -81,7 +81,7 @@ jni = "0.21"
 # wry only intercepts custom-protocol requests. webview2-com pinned to match tauri's
 # PlatformWebview types; windows for PWSTR/HSTRING/EventRegistrationToken.
 [target.'cfg(target_os = "windows")'.dependencies]
-webview2-com = "=0.38.2"
+webview2-com = "=0.39.1"
 windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_WinRT"] }
 
 # macOS: observe the WKWebView's `URL` via KVO (nav_url_mac.rs) so the address bar
