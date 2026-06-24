@@ -1,19 +1,27 @@
 // src/components/SecurityTab.tsx
 import { useEffect, useState } from 'react';
-import type { Settings } from '../../shared/types';
+import type { FingerprintState, Settings } from '../../shared/types';
 
 export function SecurityTab({
   settings,
   update,
   listExceptions,
   removeException,
+  fingerprintState,
+  toggleFingerprintAllowlist,
+  removeFingerprintAllowlist,
 }: {
   settings: Settings;
   update: (partial: Partial<Settings>) => void;
   listExceptions: () => Promise<string[]>;
   removeException: (host: string) => void;
+  fingerprintState: FingerprintState;
+  toggleFingerprintAllowlist: (host: string) => void;
+  removeFingerprintAllowlist: (host: string) => void;
 }) {
   const [exceptions, setExceptions] = useState<string[]>([]);
+  const [addHost, setAddHost] = useState('');
+
   useEffect(() => {
     let active = true;
     void listExceptions().then((xs) => {
@@ -59,6 +67,7 @@ export function SecurityTab({
           ))}
         </ul>
       )}
+
       <h3>WebRTC IP protection</h3>
       <label className="security-tab__field">
         <span>WebRTC policy</span>
@@ -85,6 +94,72 @@ export function SecurityTab({
         On &mdash; known malware and phishing sites are blocked with a warning. This protection is
         always active and can&apos;t be turned off.
       </p>
+
+      <h3>Anti-fingerprinting</h3>
+      <label className="security-tab__field">
+        <span>Anti-fingerprinting level</span>
+        <select
+          value={settings.antiFingerprint}
+          onChange={(e) =>
+            update({ antiFingerprint: e.target.value as Settings['antiFingerprint'] })
+          }
+          aria-label="Anti-fingerprinting level"
+        >
+          <option value="off">Off (default)</option>
+          <option value="standard">Standard — noise canvas, audio &amp; WebGL reads</option>
+          <option value="strict">Strict — noise all surfaces + reduce timer precision</option>
+        </select>
+      </label>
+      <p>
+        <strong>Opt-in.</strong> Standard and Strict add per-session CSPRNG noise (farbling) to
+        canvas, audio, and WebGL read surfaces so each site sees a stable-but-unique fingerprint
+        within a session rather than the real value. Noise resets each session. Limit: a same-world
+        JavaScript shim is detectable by anti-bot vendors and may break sites that rely on canvas
+        for rendering. Farbling is applied per frame origin — iframes from a different origin are
+        treated independently.
+      </p>
+
+      <h3>Sites with fingerprint protection off</h3>
+      {fingerprintState.allowlistedHosts.length === 0 ? (
+        <p>No sites are exempted from fingerprint protection.</p>
+      ) : (
+        <ul>
+          {fingerprintState.allowlistedHosts.map((host) => (
+            <li key={host}>
+              <span>{host}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${host} from fingerprint allowlist`}
+                onClick={() => removeFingerprintAllowlist(host)}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="security-tab__add-host">
+        <input
+          type="text"
+          value={addHost}
+          onChange={(e) => setAddHost(e.target.value)}
+          placeholder="example.com"
+          aria-label="Host to add to fingerprint allowlist"
+        />
+        <button
+          type="button"
+          aria-label="Add host to fingerprint allowlist"
+          disabled={addHost.trim() === ''}
+          onClick={() => {
+            const h = addHost.trim();
+            if (!h) return;
+            toggleFingerprintAllowlist(h);
+            setAddHost('');
+          }}
+        >
+          Add
+        </button>
+      </div>
     </div>
   );
 }

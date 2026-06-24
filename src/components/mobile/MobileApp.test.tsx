@@ -182,6 +182,12 @@ vi.mock('../../lib/ipcClient', () => ({
       removeException: vi.fn(),
       onInterstitial: vi.fn(() => () => {}),
     },
+    fingerprint: {
+      getState: vi.fn().mockResolvedValue({ level: 'off', allowlistedHosts: [] }),
+      toggleAllowlist: vi.fn().mockResolvedValue({ level: 'off', allowlistedHosts: [] }),
+      removeAllowlist: vi.fn().mockResolvedValue({ level: 'off', allowlistedHosts: [] }),
+      clearAllowlist: vi.fn().mockResolvedValue({ level: 'off', allowlistedHosts: [] }),
+    },
     tabs: {
       list: vi.fn().mockResolvedValue({
         tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false }],

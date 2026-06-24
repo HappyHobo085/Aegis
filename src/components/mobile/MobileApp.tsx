@@ -10,6 +10,7 @@ import { applyTheme } from '../../lib/theme';
 import { useTabs } from '../../hooks/useTabs';
 import { useNav } from '../../hooks/useNav';
 import { useAdblock } from '../../hooks/useAdblock';
+import { useFingerprint } from '../../hooks/useFingerprint';
 import { useFavorites } from '../../hooks/useFavorites';
 import { useHistory } from '../../hooks/useHistory';
 import { useSaved } from '../../hooks/useSaved';
@@ -75,6 +76,7 @@ export function MobileApp() {
   const find = useFind(tabs.activeId);
   const zoom = useZoom(tabs.activeId);
   const adblock = useAdblock(tabs.activeId, nav.state.url);
+  const fingerprint = useFingerprint();
   useMobileTabSync(tabs.tabs, tabs.activeId);
   const favorites = useFavorites(nav.state.url);
   const history = useHistory();
@@ -330,6 +332,9 @@ export function MobileApp() {
               update={settings.update}
               listExceptions={() => aegis.safety.listExceptions()}
               removeException={(h) => void aegis.safety.removeException(h)}
+              fingerprintState={fingerprint.state}
+              toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
+              removeFingerprintAllowlist={fingerprint.removeAllowlist}
             />
           }
           vault={<VaultSettingsTab vault={vault} />}

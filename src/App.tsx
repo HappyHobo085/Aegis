@@ -12,6 +12,7 @@ import { useNav } from './hooks/useNav';
 import { useFind } from './hooks/useFind';
 import { useZoom } from './hooks/useZoom';
 import { useAdblock } from './hooks/useAdblock';
+import { useFingerprint } from './hooks/useFingerprint';
 import { useFavorites } from './hooks/useFavorites';
 import { useHistory } from './hooks/useHistory';
 import { useSaved } from './hooks/useSaved';
@@ -127,6 +128,7 @@ function DesktopApp() {
   const dismissedRedirectsRef = useRef<Set<string>>(new Set());
   const update = useUpdate();
   const safety = useSafety();
+  const fingerprint = useFingerprint();
   const find = useFind(tabs.activeId);
 
   // Dev-only: expose an imperative control surface so the autopilot can reach every
@@ -657,6 +659,9 @@ function DesktopApp() {
               update={settings.update}
               listExceptions={() => aegis.safety.listExceptions()}
               removeException={(h) => void aegis.safety.removeException(h)}
+              fingerprintState={fingerprint.state}
+              toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
+              removeFingerprintAllowlist={fingerprint.removeAllowlist}
             />
           }
           vault={<VaultSettingsTab vault={vault} />}
