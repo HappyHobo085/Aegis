@@ -164,6 +164,36 @@ to newly created/reloaded tabs only. Honest limits: a same-world JS shim is dete
 per-frame-origin seeding (not Brave's per-top-eTLD+1); Android has no fp-allowlist (v1).
 `vitest farbleShim.test.ts` is authoritative for shim runtime behavior and passes (814
 tests). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
-are **PENDING** user. **Remaining roadmap features:** a content-webview proxy — see
-`docs/FEATURE_ROADMAP.md` and the improvements-program decomposition in
-`docs/superpowers/specs/`.
+are **PENDING** user. **Content-webview Proxy** (`proxy.rs`; sub-project M): routes
+browsed pages through a user-configured HTTP or SOCKS5 proxy. **This is a Proxy, not a
+VPN** — it covers the content webview only (not the OS, not other apps, not the chrome's
+own updater/filter-list fetches). Residual leaks remain: WebRTC is mitigated by the
+WebRTC IP-leak fix (shipped), but DNS/QUIC/UDP egress is outside the proxy path. Use
+for light geo/region testing or pairing an external proxy — not anonymity. Shipped
+`proxy.*` IPC (`proxy.getState` / `proxy.setConfig` / `proxy.clear` /
+`proxy.testConnection`), `ProxySettingsTab` + `useProxy` hook, and autopilot coverage
+(`proxy.state` catalog entry with `verify` round-trip + interaction specs). Per-platform
+parity matrix:
+
+- **Linux** — live proxy via WebKitGTK `WebsiteDataManagerExt::set_network_proxy_settings`
+  (`NetworkProxyMode::Custom` / `Default`). Per-webview fan-out + spawn-inherit. Egress
+  verify **PENDING** user (route traffic through a real proxy log).
+- **Android** — process-global proxy via `androidx.webkit ProxyController.setProxyOverride`
+  / `clearProxyOverride` (feature-checked; `NativeProxy.kt` JNI → `proxy.rs`
+  `note_config`). Covers both the chrome and content WebViews (process-global — a parity
+  difference vs. desktop content-only). The chrome (`tauri.localhost` / `127.0.0.1` /
+  `localhost`) is excluded via bypass rules so the UI is not proxied. Device egress verify
+  **PENDING** user.
+- **Windows** — compile-verified. Proxy applied at spawn time via `--proxy-server` /
+  `--proxy-bypass-list` in `additional_browser_args`. **Spawn-time only**: toggling the
+  proxy applies to new/reloaded tabs; already-open tabs are unaffected (reload to apply).
+  The `apply` call is a deliberate no-op on Windows (WebView2 browser args are immutable
+  after creation). Owner runtime egress verify **PENDING** Windows session.
+- **macOS** — NOT implemented. Direct connection. `WKWebsiteDataStore.proxyConfigurations`
+  (macOS 14+) requires raw `msg_send!` / hand-rolled `nw_proxy_config_*` Network.framework
+  bindings that cannot be compiled or verified from Linux (objc2 needs a macOS toolchain).
+  Deferred to a Mac-developer follow-up (sub-project I). macOS builds and runs; proxy is
+  simply absent.
+
+**Remaining roadmap features:** password-vault autofill (Phase B), anti-fingerprinting
+runtime verifies, and content-webview proxy macOS tier — see `docs/FEATURE_ROADMAP.md`.

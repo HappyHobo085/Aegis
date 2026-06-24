@@ -59,7 +59,7 @@ width)` so the page insets from the right and stays visible. Width is remembered
   (toolbar + favbar height), via `hooks/useContentInset.ts` — no DOM measurement.
 - **One hook per domain** in `hooks/` (nav, adblock, history, saved, favorites,
   settings, subscriptions, customFilters, downloads, permissions, update, safety,
-  **tabs**, **find**, **fingerprint**). Components stay presentational; state + IPC wiring
+  **tabs**, **find**, **fingerprint**, **proxy**). Components stay presentational; state + IPC wiring
   lives in the hook.
 - **`hooks/useTabs`** — owns `TabsState` (the ordered tab list), the active tab
   id, and per-tab nav-state + page titles. All chrome features (nav bar, adblock
@@ -120,6 +120,27 @@ fingerprint.toggleAllowlist, fingerprint.clearAllowlist]`; `verify` round-trip t
     toggles a host on/off and asserts the state); interaction specs in
     `src/autopilot/interactions/settings.ts` cover the level select and the allowlist
     toggle/clear controls.
+- **`hooks/useProxy`** — owns proxy UI state (`ProxyState`: `{ mode, scheme, host, port,
+bypassHosts, active, uri }`). Seeds from `aegis.proxy.getState()` on mount; subscribes
+  to `aegis.proxy.onState`. Exposes `setConfig(cfg)` (calls `proxy.setConfig` + re-reads
+  state), `clear()` (calls `proxy.clear`), and `testConnection(cfg)` (TCP-reachability
+  probe, returns `{ ok, latencyMs?, error? }`). Re-reads state after every mutation so the
+  UI reflects the Rust source of truth. Consumed exclusively by `ProxySettingsTab`.
+- **`components/ProxySettingsTab`** — the "Proxy" tab inside the Settings modal (sub-project
+  M). Renders a mode select (`off` / `proxy`), and — only when `mode === 'proxy'` — the
+  scheme select (HTTP / SOCKS5), host/port inputs, a bypass-hosts list manager, and three
+  action buttons: **Apply** (`proxy.setConfig`), **Turn off** (`proxy.clear`), and **Test
+  connection** (`proxy.testConnection` → shows latency or error). **Honest UI copy:**
+  - The tab header and all labels say "Proxy" — never "VPN".
+  - A note informs the user that the proxy covers browsed pages only (not the OS or other
+    apps) and that DNS/QUIC may still leak outside the proxy path.
+  - On Windows: a note warns that proxy changes apply only to new or reloaded tabs
+    (spawn-time limitation — see `src-tauri/CLAUDE.md` gotcha 22).
+    Autopilot coverage: `proxy.state` catalog entry (`channels: [proxy.getState,
+proxy.setConfig, proxy.clear, proxy.testConnection]`) with a `verify` round-trip (sets a
+    probe config, asserts host/port/bypassHosts persist, restores). Interaction specs in
+    `src/autopilot/interactions/settings.ts` cover the mode select, host/port inputs, bypass
+    add/remove, Apply/Turn-off/Test buttons.
 - **`components/FindBar`** — Ctrl+F infobar (purely presentational): text input,
   match-count display, prev/next nav buttons, and a close button. Auto-focuses on mount.
   Rendered inside `DesktopApp` (and `MobileApp`) keyed on the active view id; shown only

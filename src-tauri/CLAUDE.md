@@ -342,6 +342,39 @@ records[{uuid, updatedAt, nonce, ct}]}`. The only cleartext fields are the
     add/update/remove CRUD round-trips, at-rest ciphertext has no plaintext fields,
     update/remove persistence + reload, dispatch wrong-password, search. (~15 tests in
     `vault::tests`.)
+- **Content-webview Proxy** — `proxy.rs`: routes browsed pages through a user-configured
+  HTTP or SOCKS5 proxy. **This is a Proxy, not a VPN** — content-webview-scoped only; leaky
+  (DNS/QUIC/UDP outside the proxy path; WebRTC mitigated by the shipped WebRTC fix); does
+  not cover the chrome's own updater/filter-list fetches. Per-platform apply mechanisms:
+  - **Linux** — live setter: `WebsiteDataManagerExt::set_network_proxy_settings` with
+    `NetworkProxyMode::Custom` + `NetworkProxySettings::new(uri, bypass)` per content
+    webview. Called on every `proxy.setConfig` / `proxy.clear` via per-tab fan-out from
+    `apply_to_tab`, and at spawn via `nav::spawn_tab` so new tabs inherit the proxy.
+  - **Windows** — spawn-time args only: `--proxy-server=<uri>` and
+    `--proxy-bypass-list=<hosts>` injected into `additional_browser_args` in
+    `nav::spawn_tab`. WebView2 browser args are immutable after creation, so the
+    `apply_to_tab` live setter is a deliberate no-op on Windows. Toggling the proxy
+    applies only to new or reloaded tabs.
+  - **Android** — process-global: `NativeProxy.kt` JNI down-call reads the serialized
+    `ProxyConfig` from `proxy::proxy_config_json` (a global `OnceLock<Mutex<String>>`
+    updated by `note_config` on every `proxy.setConfig` / `proxy.clear`). Kotlin calls
+    `ProxyController.getInstance().setProxyOverride` / `clearProxyOverride`
+    (feature-gated on `WebViewFeature.PROXY_OVERRIDE`). The proxy is process-global —
+    it affects both the chrome and content WebViews; the chrome (`tauri.localhost`,
+    `127.0.0.1`, `localhost`) is excluded via bypass rules. **Rust cannot JNI-up-call
+    into Kotlin on Android** (see gotcha in Android JNI notes); the apply direction is
+    always Kotlin DOWN to `proxy::note_config` for reading, not Rust UP.
+  - **macOS** — NOT implemented. `apply_to_tab` is a `cfg(target_os="macos")` no-op.
+    `WKWebsiteDataStore.proxyConfigurations` (macOS 14+) requires hand-rolled
+    `nw_proxy_config_*` / Network.framework FFI bindings not present in `objc2-web-kit
+0.3.2` and uncompilable from Linux. Deferred to sub-project I.
+  - IPC: `proxy.getState` / `proxy.setConfig` / `proxy.clear` / `proxy.testConnection`
+    (TCP-reachability probe, not egress verification). `ProxyState` (`Mutex<ProxyConfig>`)
+    managed at boot; seeded from `settings::proxy_config`; persisted into settings key
+    `"proxy"` via `settings.set`. `proxy.state` event emitted on every config change.
+  - Unit-tested in `proxy::tests`: `from_value` parse/validate, `default_uri` schemes,
+    `is_active` guard, `test_connection` socket probe, serde `bypassHosts` round-trip
+    (the canonical key lesson — see gotcha 21 below).
 - **Misc** — `picker.rs` (element picker), `update.rs` (tauri-plugin-updater state).
 
 ## Dev-only autopilot commands (`src-tauri/src/autopilot.rs`)
@@ -803,6 +836,30 @@ d. **Fullscreen exit button must be the topmost GtkFixed child.** In fullscreen
 mode the exit button must be re-added as the last (topmost z-order) child of
 the `GtkFixed` each layout pass — `raise()` alone is not enough to lift a GTK
 widget above native WebKit windows.
+
+21. **Proxy `bypassHosts` canonical-key lesson.** The `ProxyConfig` struct uses
+    `#[serde(rename = "bypassHosts")]` so that `serde_json::to_value` writes
+    `"bypassHosts"` (matching `settings.json`, `state_json`, and the TS
+    `ProxyConfig` interface) and `from_value` reads the same key back. Without
+    the rename, serde writes `"bypass_hosts"` but `from_value` expects
+    `"bypassHosts"` — a four-way key mismatch (struct field / serde output /
+    settings store / TypeScript) that silently drops all bypass hosts on every
+    restart. The fix: one canonical `"bypassHosts"` string used everywhere;
+    enforced by the `serde_roundtrip_preserves_bypass_hosts` unit test.
+
+22. **Proxy: four very different apply mechanisms per platform.** Adding a
+    new proxy feature must account for each tier independently:
+    - **Linux**: live per-webview `set_network_proxy_settings` — changes take
+      effect immediately on all existing tabs.
+    - **Windows**: spawn-time `--proxy-server` arg — changes only apply to
+      tabs created or reloaded AFTER `proxy.setConfig`; already-open tabs keep
+      their old proxy until reload. UI copy should say "reload the tab to apply."
+    - **Android**: process-global `ProxyController` via a Kotlin down-call —
+      covers ALL WebViews in the process; the chrome is excluded via bypass rules.
+      Rust cannot up-call into Kotlin; the bridge is read-only from Kotlin's side
+      (Kotlin pulls the config from `proxy_config_json`, Rust never pushes).
+    - **macOS**: no-op — proxy is not implemented; macOS builds and browses
+      without it. Any macOS proxy work requires a Mac + CI verify only.
 
 e. **Size the webviews via `size_allocate`, NOT `set_size_request` — or the window
 can't shrink.** In a `GtkFixed`, `set_size_request(w, h)` sets each child's
