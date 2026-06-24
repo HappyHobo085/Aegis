@@ -22,3 +22,36 @@ updates:
     directory: '/'
     schedule:
       interval: 'weekly'
+
+  # Rust crates. Two manifests: the Tauri core (src-tauri) and the standalone
+  # self-hosted sync server. The CI `rust` job runs `cargo audit` (advisory) but
+  # nothing was keeping Cargo.lock current — these entries do. Minor/patch are
+  # grouped per crate to cut noise; major bumps (and the crypto/keyring/TLS
+  # surface flagged in docs/FEATURE_ROADMAP.md §S2) arrive individually.
+  - package-ecosystem: 'cargo'
+    directory: '/src-tauri'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 10
+    groups:
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+        patterns:
+          - '*'
+
+  - package-ecosystem: 'cargo'
+    directory: '/sync-server'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 10
+    groups:
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+        patterns:
+          - '*'

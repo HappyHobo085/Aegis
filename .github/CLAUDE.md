@@ -37,9 +37,12 @@ GitHub Actions workflows and Dependabot config for Aegis.
 
 ## `dependabot.yml`
 
-Weekly npm + github-actions updates. All minor/patch npm bumps are grouped into a
-single PR to reduce noise; major bumps arrive individually. (Cargo/Rust deps aren't
-covered yet — `src-tauri/Cargo.lock` is pinned manually.)
+Weekly npm + github-actions + **cargo** updates. Minor/patch bumps are grouped into a
+single PR per ecosystem to reduce noise; major bumps arrive individually. Cargo is
+tracked for **both** Rust manifests — `/src-tauri` (the Tauri core) and `/sync-server`
+(the standalone self-hosted sync server) — so `Cargo.lock` no longer drifts unmanaged.
+The CI `rust` job's `cargo audit` is advisory (non-blocking); the Dependabot cargo
+PRs are the currency mechanism for the crypto/keyring/TLS surface.
 
 ## Notes
 
