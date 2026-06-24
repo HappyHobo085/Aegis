@@ -104,7 +104,11 @@ use tauri::{Emitter, Manager};
 /// `IPC.evt*` names use dots (Electron's IPC allows them); translate `.`→`:` so
 /// the JS listener (which applies the same translation in tauriInvoke.ts) receives
 /// it. Without this, every `listen()` is rejected and no rust→renderer event fires.
-pub fn emit_event<S: serde::Serialize + Clone>(app: &tauri::AppHandle, name: &str, payload: S) {
+pub fn emit_event<R: tauri::Runtime, S: serde::Serialize + Clone>(
+    app: &tauri::AppHandle<R>,
+    name: &str,
+    payload: S,
+) {
     let _ = app.emit(&name.replace('.', ":"), payload);
 }
 
