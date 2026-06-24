@@ -189,11 +189,15 @@ parity matrix:
   difference vs. desktop content-only). The chrome (`tauri.localhost` / `127.0.0.1` /
   `localhost`) is excluded via bypass rules so the UI is not proxied. Device egress verify
   **PENDING** user.
-- **Windows** — compile-verified. Proxy applied at spawn time via `--proxy-server` /
-  `--proxy-bypass-list` in `additional_browser_args`. **Spawn-time only**: toggling the
-  proxy applies to new/reloaded tabs; already-open tabs are unaffected (reload to apply).
-  The `apply` call is a deliberate no-op on Windows (WebView2 browser args are immutable
-  after creation). Owner runtime egress verify **PENDING** Windows session.
+- **Windows** — **runtime egress VERIFIED on real Windows 11 (2026-06-24)**: a content
+  tab routed real `CONNECT` traffic through a local logging proxy. Proxy applied at spawn
+  time via `--proxy-server` / `--proxy-bypass-list` in `additional_browser_args`.
+  **Spawn-time only**: toggling the proxy applies to new/reloaded tabs; already-open tabs
+  are unaffected (reload to apply). The `apply` call is a deliberate no-op on Windows
+  (WebView2 browser args are immutable after creation). NOTE: because content webviews
+  carry these args, each distinct args set lives in its OWN WebView2 user-data-folder
+  (`EBWebView-content-<hash>`) — required to avoid a blank-page failure; see
+  `src-tauri/CLAUDE.md` gotcha 23.
 - **macOS** — NOT implemented. Direct connection. `WKWebsiteDataStore.proxyConfigurations`
   (macOS 14+) requires raw `msg_send!` / hand-rolled `nw_proxy_config_*` Network.framework
   bindings that cannot be compiled or verified from Linux (objc2 needs a macOS toolchain).

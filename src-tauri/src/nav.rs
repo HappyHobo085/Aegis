@@ -370,6 +370,19 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
     // emit state but cannot retarget live WebView2 instances on Windows). Task 9 docs should
     // note this: "On Windows, change the proxy setting and reload the tab to apply it."
     // (Runs before add_child, which consumes `builder`.)
+    //
+    // CRITICAL (regression fix): WebView2 refuses to create a webview whose
+    // AdditionalBrowserArguments differ from ANOTHER webview that shares the same
+    // user-data-folder — `CreateCoreWebView2EnvironmentWithOptions` fails and the content
+    // webview comes up with NO engine (a blank page, no panic). The chrome window uses
+    // wry's DEFAULT args; a content webview that appends the WebRTC/proxy flag therefore
+    // clashes with it on the shared default folder, so EVERY page was blank by default
+    // (webrtcPolicy defaults to "public-only", so the override is on out of the box). Fix:
+    // house each content webview in its OWN user-data-folder, KEYED on its exact arg string,
+    // so (a) it never clashes with the chrome and (b) only content tabs with identical args
+    // share a folder — they share cookies/logins; a different WebRTC policy, proxy, or
+    // per-site allowlist status gets its own profile. Applies to private tabs too: incognito
+    // keeps their session ephemeral, but they must still avoid the chrome's folder.
     #[cfg(target_os = "windows")]
     {
         let webrtc_arg = if host_allowlisted {
@@ -395,7 +408,7 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
         let proxy_uri = proxy_cfg.default_uri(); // None when mode=off or config is invalid
 
         let overridden = webrtc_arg.is_some() || proxy_uri.is_some();
-        if overridden {
+        let browser_args = if overridden {
             let mut args = String::from(
                 "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required",
             );
@@ -411,7 +424,30 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
                     ));
                 }
             }
-            builder = builder.additional_browser_args(&args);
+            Some(args)
+        } else {
+            None
+        };
+
+        // Per-args content profile (see the CRITICAL note above). The key is a stable hash
+        // of the exact args (DefaultHasher uses fixed SipHash keys → deterministic across
+        // runs), or "default" when no override is set. Content tabs are siblings of the
+        // chrome's "EBWebView" folder under the app's local-data dir.
+        if let Ok(base) = app.path().app_local_data_dir() {
+            let key = match &browser_args {
+                Some(a) => {
+                    use std::hash::{Hash, Hasher};
+                    let mut h = std::collections::hash_map::DefaultHasher::new();
+                    a.hash(&mut h);
+                    format!("{:016x}", h.finish())
+                }
+                None => "default".to_string(),
+            };
+            builder = builder.data_directory(base.join(format!("EBWebView-content-{key}")));
+        }
+
+        if let Some(args) = &browser_args {
+            builder = builder.additional_browser_args(args);
         }
     }
 
