@@ -78,6 +78,8 @@ mod autopilot;
 mod sync;
 mod tab_registry;
 mod tabs;
+#[cfg(test)]
+mod test_support;
 mod update;
 mod view;
 // Find-in-page dispatcher + per-platform native implementations.

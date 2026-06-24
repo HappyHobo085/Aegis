@@ -102,3 +102,9 @@ objc2-web-kit = { version = "0.3", features = ["WKWebView", "WKFindConfiguration
 # daemon is present (headless/CI) the vault falls back to a passphrase-wrapped file.
 [target.'cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))'.dependencies]
 keyring = { version = "3", features = ["linux-native-sync-persistent", "windows-native", "apple-native"] }
+
+[dev-dependencies]
+# Enables tauri::test::mock_app / mock_builder / mock_context (the crate's `test`
+# feature) so AppHandle-backed dispatchers can be unit-tested. Dev-only: release
+# builds never pull the test runtime. Version must match the normal `tauri` dep.
+tauri = { version = "2.11.2", features = ["test"] }
