@@ -11,10 +11,22 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-export function useDialog<T extends HTMLElement>(onClose: () => void): RefObject<T | null> {
+interface DialogOpts {
+  /** Focus this element on open instead of the first focusable. Use it to land focus
+      on the SAFE choice (Cancel/Block/Go-back) so a stray Enter can't fire a
+      destructive/affirmative default. */
+  initialFocus?: RefObject<HTMLElement | null>;
+}
+
+export function useDialog<T extends HTMLElement>(
+  onClose: () => void,
+  opts: DialogOpts = {},
+): RefObject<T | null> {
   const ref = useRef<T | null>(null);
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
+  const initialFocusRef = useRef(opts.initialFocus);
+  initialFocusRef.current = opts.initialFocus;
 
   // Capture the previously-focused element during the render phase, before React
   // commits DOM mutations. At render time the old focused element is still in the
@@ -31,8 +43,11 @@ export function useDialog<T extends HTMLElement>(onClose: () => void): RefObject
     const getFocusable = (): HTMLElement[] =>
       Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
 
+    const preferred = initialFocusRef.current?.current ?? null;
     const focusable = getFocusable();
-    if (focusable.length > 0) {
+    if (preferred && node.contains(preferred)) {
+      preferred.focus();
+    } else if (focusable.length > 0) {
       focusable[0].focus();
     } else {
       node.focus();

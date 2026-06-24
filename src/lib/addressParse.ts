@@ -29,7 +29,7 @@ export function addressParse(
     if (isAllowedNavigationUrl(trimmed)) {
       return { kind: 'navigate', url: trimmed };
     }
-    return { kind: 'rejected', reason: `Scheme not allowed: ${trimmed}` };
+    return { kind: 'rejected', reason: 'Aegis can only open web (http and https) addresses.' };
   }
 
   if (looksLikeHost(trimmed)) {
@@ -37,7 +37,7 @@ export function addressParse(
     if (isAllowedNavigationUrl(candidate)) {
       return { kind: 'navigate', url: candidate };
     }
-    return { kind: 'rejected', reason: `Invalid address: ${trimmed}` };
+    return { kind: 'rejected', reason: 'That doesn’t look like a valid address.' };
   }
 
   return {

@@ -4,6 +4,7 @@ import type { NavState, ViewId } from '../../shared/types';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { addressParse } from '../lib/addressParse';
+import { toast } from '../lib/toast';
 
 const emptyState = (viewId: ViewId): NavState => ({
   viewId,
@@ -57,10 +58,10 @@ export function useNav(viewId: ViewId): {
         void aegis.nav.navigate(viewId, result.url);
       } else {
         // result.kind === 'rejected': do not navigate (main also rejects the scheme
-        // defensively in nav.navigate). User-facing toast feedback is intentionally
-        // deferred (toast lands in Task 25); surface to the console so it is not
-        // silently dropped.
+        // defensively in nav.navigate). Surface the reason to the user so the address
+        // bar isn't a silent dead-end, and log it for diagnostics.
         console.warn('Address rejected:', result.reason);
+        toast.error(result.reason || "That address can't be opened.");
       }
     },
     [viewId, searchTemplate],

@@ -11,6 +11,8 @@ export interface ToastItem {
   kind: ToastKind;
   message: string;
   action?: ToastAction;
+  /** Auto-dismiss delay; retained so a hover-pause can reschedule the same duration. */
+  durationMs: number;
 }
 
 type Listener = (toasts: ToastItem[]) => void;
@@ -39,16 +41,53 @@ interface PushOpts {
   durationMs?: number;
 }
 
+function scheduleDismiss(id: number, durationMs: number): void {
+  const handle = setTimeout(() => {
+    dismissTimers.delete(id);
+    toasts = toasts.filter((t) => t.id !== id);
+    emit();
+  }, durationMs);
+  dismissTimers.set(id, handle);
+}
+
 function push(kind: ToastKind, message: string, opts: PushOpts = {}): void {
-  const item: ToastItem = { id: nextId++, kind, message, action: opts.action };
+  const item: ToastItem = {
+    id: nextId++,
+    kind,
+    message,
+    action: opts.action,
+    durationMs: opts.durationMs ?? 4000,
+  };
   toasts = [...toasts, item];
   emit();
-  const handle = setTimeout(() => {
-    dismissTimers.delete(item.id);
-    toasts = toasts.filter((t) => t.id !== item.id);
-    emit();
-  }, opts.durationMs ?? 4000);
-  dismissTimers.set(item.id, handle);
+  scheduleDismiss(item.id, item.durationMs);
+}
+
+/** Remove a toast immediately (the per-toast close button). */
+export function dismissToast(id: number): void {
+  const handle = dismissTimers.get(id);
+  if (handle) {
+    clearTimeout(handle);
+    dismissTimers.delete(id);
+  }
+  toasts = toasts.filter((t) => t.id !== id);
+  emit();
+}
+
+/** Pause auto-dismiss while the pointer is over a toast. */
+export function pauseToast(id: number): void {
+  const handle = dismissTimers.get(id);
+  if (handle) {
+    clearTimeout(handle);
+    dismissTimers.delete(id);
+  }
+}
+
+/** Resume auto-dismiss when the pointer leaves (reschedules the full duration). */
+export function resumeToast(id: number): void {
+  if (dismissTimers.has(id)) return;
+  const item = toasts.find((t) => t.id === id);
+  if (item) scheduleDismiss(id, item.durationMs);
 }
 
 export const toast = {
@@ -74,18 +113,24 @@ export function __resetToasts(): void {
   emit();
 }
 
-let confirmHandler: ((message: string) => Promise<boolean>) | null = null;
+let confirmHandler: ((message: string, destructive?: boolean) => Promise<boolean>) | null = null;
 
 /** Registered by the Toaster/confirm host so confirm() can drive a dialog. */
 export function registerConfirmHandler(
-  handler: ((message: string) => Promise<boolean>) | null,
+  handler: ((message: string, destructive?: boolean) => Promise<boolean>) | null,
 ): void {
   confirmHandler = handler;
 }
 
-export function confirm(message: string): Promise<boolean> {
+/** Ask the user to confirm. Pass `{ destructive: true }` for irreversible actions
+ *  (delete/clear/forget) so the affirmative button is styled as dangerous. */
+export function confirm(message: string, opts: { destructive?: boolean } = {}): Promise<boolean> {
   if (confirmHandler) {
-    return confirmHandler(message);
+    // Only forward the 2nd arg when set, so plain confirm(message) keeps its
+    // single-argument call shape.
+    return opts.destructive !== undefined
+      ? confirmHandler(message, opts.destructive)
+      : confirmHandler(message);
   }
   return Promise.resolve(typeof window !== 'undefined' ? window.confirm(message) : false);
 }
