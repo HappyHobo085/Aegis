@@ -56,7 +56,7 @@ jobs:
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # Tauri's Linux build links webkit2gtk; install the apt equivalents of the Fedora
       # deps used in dev (mirrors tauri-release.yml). The gstreamer1.0-* codec packages
@@ -130,7 +130,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-node@v6
         with:
