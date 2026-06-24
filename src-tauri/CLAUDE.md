@@ -547,15 +547,15 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
         **Parity matrix (honest):**
         - **Linux**: ephemeral WebKit partition — compile-verified; **live GUI verify PENDING**
           user display session.
-        - **Windows**: WebView2 in-private controller — compile-verified (`cargo check
-
-    --target x86_64-pc-windows-gnu`+ CI MSVC); **GUI runtime-verify PENDING** device.
-    - **macOS**:`nonPersistentDataStore`— **CI-compile-only** (objc2 needs macOS
-      toolchain); GUI runtime is sub-project I.
-    - **Android**: best-effort`LOAD_NO_CACHE` + 3rd-party-cookie refusal + close-time
-      flush — Kotlin compile-verified; **device verify PENDING**; first-party-cookie
-      persistence after close is a documented, accepted limit (not fixable without a wry
-      or Android API change).
+        - **Windows**: WebView2 in-private controller — compile-verified
+          (`cargo check --target x86_64-pc-windows-gnu` + CI MSVC); **GUI runtime-verify
+          PENDING** device.
+        - **macOS**: `nonPersistentDataStore` — **CI-compile-only** (objc2 needs macOS
+          toolchain); GUI runtime is sub-project I.
+        - **Android**: best-effort `LOAD_NO_CACHE` + 3rd-party-cookie refusal + per-tab
+          cache/history clear on close — Kotlin compile-verified; **device verify PENDING**;
+          first-party-cookie persistence after close is a documented, accepted limit (not
+          fixable without a wry or Android per-profile API).
 
 ### Multi-webview Linux layout (hard-won facts)
 
