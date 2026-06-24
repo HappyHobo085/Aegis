@@ -23,6 +23,14 @@ fn dir(app: &AppHandle) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
 }
 
+/// Returns `true` when a download should be written to the downloads store.
+/// Private tabs skip the record so the download leaves no persistent trace —
+/// but the file itself is always saved (the user explicitly asked for it),
+/// matching Chrome/Firefox incognito behaviour.
+pub fn should_record_download(is_private: bool) -> bool {
+    !is_private
+}
+
 /// On DownloadEvent::Requested: pick the save path and (unless private) record a
 /// progressing entry. Private tabs still save the file the user asked for but leave
 /// no trace in the downloads store.
@@ -37,7 +45,7 @@ pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf, priva
     let save = dir(app).join(&filename);
     *destination = save.clone();
 
-    if private {
+    if !should_record_download(private) {
         // The file is saved normally; we just skip writing a downloads.json row so the
         // download leaves no persistent trace.
         return;
@@ -160,4 +168,14 @@ fn open(target: &str) {
     }
     #[cfg(not(desktop))]
     let _ = target;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::should_record_download;
+    #[test]
+    fn private_downloads_are_not_recorded() {
+        assert!(should_record_download(false)); // normal tab → record
+        assert!(!should_record_download(true)); // private tab → no record (file still saved)
+    }
 }
