@@ -1217,4 +1217,259 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       return 'Data import mode → "replace" radio is now checked';
     },
   },
+
+  // ── Proxy tab ─────────────────────────────────────────────────────────────
+  //
+  // The ProxySettingsTab renders a mode select (off/proxy) plus — only when
+  // mode=proxy — host/port/bypassHosts inputs and Apply/Turn off/Test connection
+  // buttons.  vitest-layer specs seed the proxy state to mode=proxy via
+  // emitProxyState (the same seam as emitFingerprintState) so the fields are
+  // visible before each gesture.  live-layer specs read/mutate via ctx.aegis.proxy.
+
+  (() => {
+    // Capture original mode live so we can restore it.
+    let _originalMode: 'off' | 'proxy' | undefined;
+    return {
+      id: 'settings.proxy.mode',
+      domain: 'settings.proxy',
+      description:
+        'Change the Proxy mode select to "proxy" → proxy.setConfig called with mode:"proxy"',
+      screen: 'settings:proxy',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') {
+          _originalMode = (await ctx.aegis.proxy.getState()).mode;
+        }
+        const select = ctx.byLabel(/^Proxy mode$/);
+        if (!select) throw new Error('"Proxy mode" select not found on Proxy tab');
+        // Select elements do not support userEvent.clear() — use native change dispatch.
+        fireInputChange(select, 'proxy');
+        // Allow the async handleModeChange to resolve.
+        await new Promise((r) => setTimeout(r, 100));
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (
+            !ctx.calls.called('proxy.setConfig', (a) => {
+              const cfg = a[0] as { mode?: string };
+              return cfg?.mode === 'proxy';
+            })
+          )
+            throw new Error('proxy.setConfig not called with mode:"proxy" after mode change');
+          return 'Proxy mode → proxy.setConfig({mode:"proxy"})';
+        }
+        // Live: getState must reflect mode=proxy; restore if needed.
+        await new Promise((r) => setTimeout(r, 400));
+        const s = await ctx.aegis.proxy.getState();
+        if (s.mode !== 'proxy')
+          throw new Error(`live: proxy mode is "${s.mode}", expected "proxy" after change`);
+        if (_originalMode !== undefined && _originalMode !== 'proxy') {
+          // Restore by clearing (mode→off).
+          await ctx.aegis.proxy.clear();
+        }
+        return `Proxy mode → mode="proxy" (restored to "${_originalMode ?? 'off'}")`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    const PROBE_HOST = '127.0.0.1';
+    return {
+      id: 'settings.proxy.host',
+      domain: 'settings.proxy',
+      description: 'Switch to proxy mode, type host → local draft updates (no IPC until Apply)',
+      screen: 'settings:proxy',
+      // Typing into the host input changes local component state; proxy.setConfig is
+      // called only when Apply is clicked (or mode changes).  We assert the input value
+      // changed, not an IPC call.  vitest-only (live: host update is local state only).
+      layers: ['vitest'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        // Switch mode to proxy via the select (fires handleModeChange → local state update
+        // → proxy.setConfig as a side-effect), which reveals the host/port fields.
+        const modeSelect = ctx.byLabel(/^Proxy mode$/);
+        if (!modeSelect) throw new Error('"Proxy mode" select not found on Proxy tab');
+        fireInputChange(modeSelect, 'proxy');
+        // Wait for the mode select async handler and React re-render.
+        await new Promise((r) => setTimeout(r, 100));
+        const hostInput = ctx.byLabel(/^Proxy host$/);
+        if (!hostInput) throw new Error('"Proxy host" input not found on Proxy tab');
+        await ctx.type(hostInput, PROBE_HOST);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        const hostInput = ctx.byLabel(/^Proxy host$/) as HTMLInputElement | null;
+        if (!hostInput) throw new Error('"Proxy host" input not found during assert');
+        if (!hostInput.value.includes(PROBE_HOST))
+          throw new Error(
+            `"Proxy host" input value is "${hostInput.value}", expected to contain "${PROBE_HOST}"`,
+          );
+        return `Proxy host input → value contains "${PROBE_HOST}"`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    const PROBE_PORT = 9090;
+    return {
+      id: 'settings.proxy.port',
+      domain: 'settings.proxy',
+      description:
+        'Switch to proxy mode, change the port input → local draft updates (no IPC until Apply)',
+      screen: 'settings:proxy',
+      // Same as settings.proxy.host: the port input updates local React state only;
+      // proxy.setConfig fires on Apply.  vitest-only.
+      layers: ['vitest'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        // Switch mode to proxy to reveal the port input.
+        const modeSelect = ctx.byLabel(/^Proxy mode$/);
+        if (!modeSelect) throw new Error('"Proxy mode" select not found on Proxy tab');
+        fireInputChange(modeSelect, 'proxy');
+        await new Promise((r) => setTimeout(r, 100));
+        const portInput = ctx.byLabel(/^Proxy port$/);
+        if (!portInput) throw new Error('"Proxy port" input not found on Proxy tab');
+        fireInputChange(portInput, String(PROBE_PORT));
+      },
+      assert: async (ctx: InteractionCtx) => {
+        const portInput = ctx.byLabel(/^Proxy port$/) as HTMLInputElement | null;
+        if (!portInput) throw new Error('"Proxy port" input not found during assert');
+        if (!portInput.value.includes(String(PROBE_PORT)))
+          throw new Error(
+            `"Proxy port" input value is "${portInput.value}", expected "${PROBE_PORT}"`,
+          );
+        return `Proxy port input → value is "${portInput.value}"`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    let _originalState: import('../../../shared/types').ProxyState | undefined;
+    return {
+      id: 'settings.proxy.apply',
+      domain: 'settings.proxy',
+      description:
+        'Switch to proxy mode, fill host/port, click "Apply proxy settings" → proxy.setConfig called',
+      screen: 'settings:proxy',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') {
+          _originalState = await ctx.aegis.proxy.getState();
+        }
+        // Switch mode to proxy (reveals the Apply button and the host/port fields).
+        const modeSelect = ctx.byLabel(/^Proxy mode$/);
+        if (!modeSelect) throw new Error('"Proxy mode" select not found on Proxy tab');
+        fireInputChange(modeSelect, 'proxy');
+        await new Promise((r) => setTimeout(r, 150));
+        const hostInput = ctx.byLabel(/^Proxy host$/);
+        if (!hostInput) throw new Error('"Proxy host" input not found before clicking Apply');
+        await ctx.type(hostInput, '127.0.0.1');
+        const portInput = ctx.byLabel(/^Proxy port$/);
+        if (!portInput) throw new Error('"Proxy port" input not found before clicking Apply');
+        fireInputChange(portInput, '8080');
+        // Reset calls after mode-change side-effects so assert only sees the Apply click.
+        ctx.calls.reset();
+        const applyBtn = ctx.byLabel(/^Apply proxy settings$/);
+        if (!applyBtn) throw new Error('"Apply proxy settings" button not found on Proxy tab');
+        await ctx.click(applyBtn);
+        await new Promise((r) => setTimeout(r, 100));
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('proxy.setConfig'))
+            throw new Error('proxy.setConfig not called after clicking Apply proxy settings');
+          return 'Apply proxy settings → proxy.setConfig()';
+        }
+        // Live: getState reflects the applied config; restore.
+        await new Promise((r) => setTimeout(r, 400));
+        const s = await ctx.aegis.proxy.getState();
+        if (s.mode !== 'proxy')
+          throw new Error(`live: proxy mode is "${s.mode}", expected "proxy" after Apply`);
+        // Restore original state.
+        if (_originalState) await ctx.aegis.proxy.setConfig(_originalState);
+        else await ctx.aegis.proxy.clear();
+        return `Apply proxy settings → mode="proxy" persisted (restored)`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    let _originalState: import('../../../shared/types').ProxyState | undefined;
+    return {
+      id: 'settings.proxy.turnOff',
+      domain: 'settings.proxy',
+      description:
+        'Switch to proxy mode, click "Turn off proxy" → proxy.setConfig called with mode:"off"',
+      screen: 'settings:proxy',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') {
+          _originalState = await ctx.aegis.proxy.getState();
+        }
+        // Switch mode to proxy (reveals Turn off button).
+        const modeSelect = ctx.byLabel(/^Proxy mode$/);
+        if (!modeSelect) throw new Error('"Proxy mode" select not found on Proxy tab');
+        fireInputChange(modeSelect, 'proxy');
+        await new Promise((r) => setTimeout(r, 150));
+        // Reset calls so assert only sees the Turn off click.
+        ctx.calls.reset();
+        const offBtn = ctx.byLabel(/^Turn off proxy$/);
+        if (!offBtn) throw new Error('"Turn off proxy" button not found on Proxy tab');
+        await ctx.click(offBtn);
+        await new Promise((r) => setTimeout(r, 100));
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (
+            !ctx.calls.called('proxy.setConfig', (a) => {
+              const cfg = a[0] as { mode?: string };
+              return cfg?.mode === 'off';
+            })
+          )
+            throw new Error('proxy.setConfig not called with mode:"off" after Turn off proxy');
+          return 'Turn off proxy → proxy.setConfig({mode:"off"})';
+        }
+        // Live: mode should now be off; restore if needed.
+        await new Promise((r) => setTimeout(r, 400));
+        const s = await ctx.aegis.proxy.getState();
+        if (s.mode !== 'off')
+          throw new Error(`live: proxy mode is "${s.mode}", expected "off" after Turn off`);
+        // Restore original state.
+        if (_originalState) await ctx.aegis.proxy.setConfig(_originalState);
+        return `Turn off proxy → mode="off" (restored to "${_originalState?.mode ?? 'off'}")`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    return {
+      id: 'settings.proxy.testConnection',
+      domain: 'settings.proxy',
+      description:
+        'Switch to proxy mode, fill host, click "Test proxy connection" → proxy.testConnection called',
+      screen: 'settings:proxy',
+      // live excluded: testConnection opens a real socket to the configured host:port;
+      // no reliable proxy is available in the autopilot environment.  The vitest mock
+      // covers the IPC wiring; the catalog verify() covers the live round-trip.
+      layers: ['vitest'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        // Switch mode to proxy to reveal the Test connection button and fill host.
+        const modeSelect = ctx.byLabel(/^Proxy mode$/);
+        if (!modeSelect) throw new Error('"Proxy mode" select not found on Proxy tab');
+        fireInputChange(modeSelect, 'proxy');
+        await new Promise((r) => setTimeout(r, 150));
+        const hostInput = ctx.byLabel(/^Proxy host$/);
+        if (!hostInput) throw new Error('"Proxy host" input not found before Test connection');
+        await ctx.type(hostInput, '127.0.0.1');
+        // Reset calls so assert only sees the Test connection click.
+        ctx.calls.reset();
+        const testBtn = ctx.byLabel(/^Test proxy connection$/);
+        if (!testBtn) throw new Error('"Test proxy connection" button not found on Proxy tab');
+        await ctx.click(testBtn);
+        await new Promise((r) => setTimeout(r, 100));
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (!ctx.calls.called('proxy.testConnection'))
+          throw new Error('proxy.testConnection not called after clicking Test proxy connection');
+        return 'Test proxy connection → proxy.testConnection(cfg)';
+      },
+    } satisfies InteractionSpec;
+  })(),
 ];

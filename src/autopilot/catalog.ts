@@ -748,7 +748,7 @@ export const CATALOG: FeatureCheck[] = [
       return `fingerprint toggle→getState→remove→getState ok; antiFingerprint standard→restored('${origLevel}') ok`;
     },
   },
-  // proxy — IPC seam (Task 2; no native apply yet — that's Tasks 3-6)
+  // proxy — IPC seam + native apply (Tasks 2-6); coverage added by Task 8.
   {
     id: 'proxy.state',
     domain: 'proxy',
@@ -781,6 +781,54 @@ export const CATALOG: FeatureCheck[] = [
           bypassHosts: [],
         }),
       );
+    },
+    verify: async (a) => {
+      // Capture original state so we can restore it after the round-trip.
+      const orig = await a.proxy.getState();
+
+      // 1. Set a probe config (port 9 = discard; never actually reachable — safe).
+      const probe = {
+        mode: 'proxy' as const,
+        scheme: 'http' as const,
+        host: '127.0.0.1',
+        port: 9,
+        bypassHosts: ['localhost'],
+      };
+      const after = await a.proxy.setConfig(probe);
+      if (after.host !== '127.0.0.1')
+        throw new Error(`proxy.setConfig did not persist host (got "${after.host}")`);
+      if (after.port !== 9)
+        throw new Error(`proxy.setConfig did not persist port (got ${after.port})`);
+      if (!after.bypassHosts.includes('localhost'))
+        throw new Error('proxy.setConfig did not persist bypassHosts');
+
+      // 2. getState must reflect the same config.
+      const got = await a.proxy.getState();
+      if (got.host !== '127.0.0.1')
+        throw new Error(`proxy.getState after setConfig: host mismatch (got "${got.host}")`);
+
+      // 3. testConnection against port 9 (discard) — unreachable, so ok:false is the
+      //    expected result.  We just assert the call returns an object with an ok field.
+      const testResult = await a.proxy.testConnection(probe);
+      if (typeof testResult.ok !== 'boolean')
+        throw new Error(
+          `proxy.testConnection: result.ok is not a boolean (got ${JSON.stringify(testResult)})`,
+        );
+
+      // 4. clear() restores an off/empty state.
+      const cleared = await a.proxy.clear();
+      if (cleared.mode !== 'off')
+        throw new Error(`proxy.clear: mode is "${cleared.mode}", expected "off"`);
+
+      // 5. Restore the original config (setConfig with original values so user's proxy
+      //    settings are not lost).
+      const restored = await a.proxy.setConfig(orig);
+      if (restored.mode !== orig.mode)
+        throw new Error(
+          `proxy restore: mode mismatch (got "${restored.mode}", expected "${orig.mode}")`,
+        );
+
+      return `proxy getState→setConfig(probe)→assert→testConnection(port:9 ok:${testResult.ok})→clear→restore ok`;
     },
   },
 ];

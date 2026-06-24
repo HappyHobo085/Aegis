@@ -166,6 +166,13 @@ export interface InteractionCtx {
    * Uses flushSync for synchronous DOM update.  No-op on live.
    */
   emitFingerprintState?(s: import('../../../shared/types').FingerprintState): Promise<void>;
+  /**
+   * Vitest-only: directly seed the ProxyState via the autopilot control seam
+   * (setProxyState → useProxy._setState), so ProxySettingsTab renders the proxy
+   * fields (mode=proxy) before the next gesture fires.
+   * Uses flushSync for synchronous DOM update.  No-op on live.
+   */
+  emitProxyState?(s: import('../../../shared/types').ProxyState): Promise<void>;
 }
 
 export interface InteractionSpec {

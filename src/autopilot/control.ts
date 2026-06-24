@@ -50,6 +50,11 @@ export interface AutopilotControl {
    * autopilot vitest seeding only). Writes through useFingerprint._setState.
    */
   setFingerprintState(s: import('../../shared/types').FingerprintState): void;
+  /**
+   * Directly seed the proxy state (bypasses the async proxy.getState() path;
+   * autopilot vitest seeding only). Writes through useProxy._setState.
+   */
+  setProxyState(s: import('../../shared/types').ProxyState): void;
 }
 
 const KEY = '__aegisAutopilot';

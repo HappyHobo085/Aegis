@@ -135,4 +135,11 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'settings.security.farbleLevel',
   'settings.security.fpAllowlistAdd',
   'settings.security.fpAllowlistRemove',
+  // Task 8 (proxy): ProxySettingsTab controls
+  'settings.proxy.mode',
+  'settings.proxy.host',
+  'settings.proxy.port',
+  'settings.proxy.apply',
+  'settings.proxy.turnOff',
+  'settings.proxy.testConnection',
 ]);
