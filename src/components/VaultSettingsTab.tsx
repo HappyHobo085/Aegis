@@ -1,0 +1,417 @@
+// src/components/VaultSettingsTab.tsx
+//
+// The "Passwords" settings tab — Phase A password vault (manual credential manager,
+// no autofill). Mirrors SyncSettingsTab.tsx's three-state structure + run/busy/error
+// helper pattern.
+//
+// Security:
+// - Master-password inputs are always type="password".
+// - New-entry password input is always type="password".
+// - Decrypted record passwords are masked by default; revealed only on demand per row.
+// - Nothing is written to localStorage / sessionStorage / IndexedDB / the URL.
+// - No credential values are logged.
+import { useEffect, useState } from 'react';
+import type { VaultRecord, VaultRecordInput } from '../../shared/types';
+import type { UseVault } from '../hooks/useVault';
+
+export function VaultSettingsTab({ vault }: { vault: UseVault }) {
+  const { state } = vault;
+
+  // ---- shared async helper ----
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    setError('');
+    try {
+      await fn();
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // ---- create-vault form state ----
+  const [createPw, setCreatePw] = useState('');
+  const [confirmPw, setConfirmPw] = useState('');
+  const [createMismatch, setCreateMismatch] = useState(false);
+
+  // ---- unlock form state ----
+  const [unlockPw, setUnlockPw] = useState('');
+  const [wrongPassword, setWrongPassword] = useState(false);
+
+  // ---- records list state ----
+  const [records, setRecords] = useState<VaultRecord[]>([]);
+  const [revealedUuids, setRevealedUuids] = useState<Set<string>>(new Set());
+
+  // ---- add-entry form state ----
+  const [addSite, setAddSite] = useState('');
+  const [addUsername, setAddUsername] = useState('');
+  const [addPassword, setAddPassword] = useState('');
+  const [addNotes, setAddNotes] = useState('');
+
+  // ---- search state ----
+  const [searchQuery, setSearchQuery] = useState('');
+
+  // Load records on mount (or when state transitions to unlocked).
+  useEffect(() => {
+    if (!state.unlocked) {
+      setRecords([]);
+      setRevealedUuids(new Set());
+      setSearchQuery('');
+      return;
+    }
+    void vault.list().then(setRecords);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.unlocked]);
+
+  const refreshList = async () => {
+    const q = searchQuery.trim();
+    const updated = q ? await vault.search(q) : await vault.list();
+    setRecords(updated);
+  };
+
+  // ---------------------------------------------------------------------------
+  // STATE 1 — no vault yet
+  // ---------------------------------------------------------------------------
+  if (!state.exists) {
+    const handleCreate = () => {
+      if (createPw !== confirmPw) {
+        setCreateMismatch(true);
+        return;
+      }
+      setCreateMismatch(false);
+      void run(async () => {
+        await vault.create(createPw);
+        setCreatePw('');
+        setConfirmPw('');
+      });
+    };
+
+    return (
+      <div className="vault-tab">
+        <h3 id="vault-create-heading">Create vault</h3>
+        <p>
+          Your passwords are stored encrypted on this device. Aegis does not autofill &mdash; copy
+          the value when you need it.
+        </p>
+        <p>
+          Choose a master password to protect your vault. You will need it every time you open the
+          Passwords tab.
+        </p>
+        <label className="vault-tab__field">
+          <span>Master password</span>
+          <input
+            type="password"
+            aria-label="Master password"
+            value={createPw}
+            autoComplete="new-password"
+            onChange={(e) => {
+              setCreatePw(e.target.value);
+              setCreateMismatch(false);
+            }}
+          />
+        </label>
+        <label className="vault-tab__field">
+          <span>Confirm password</span>
+          <input
+            type="password"
+            aria-label="Confirm password"
+            value={confirmPw}
+            autoComplete="new-password"
+            onChange={(e) => {
+              setConfirmPw(e.target.value);
+              setCreateMismatch(false);
+            }}
+          />
+        </label>
+        {createMismatch && (
+          <p className="vault-tab__error" role="alert">
+            Passwords do not match.
+          </p>
+        )}
+        {error && (
+          <p className="vault-tab__error" role="alert">
+            {error}
+          </p>
+        )}
+        <button
+          type="button"
+          aria-label="Create vault"
+          disabled={busy || createPw.length === 0}
+          onClick={handleCreate}
+        >
+          Create vault
+        </button>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // STATE 2 — vault exists but is locked
+  // ---------------------------------------------------------------------------
+  if (!state.unlocked) {
+    const handleUnlock = () => {
+      setWrongPassword(false);
+      void run(async () => {
+        try {
+          await vault.unlock(unlockPw);
+          setUnlockPw('');
+          // list() is called by the unlocked useEffect once state.unlocked flips
+          // but also call it immediately in case the parent drives state externally
+          const loaded = await vault.list();
+          setRecords(loaded);
+        } catch (e) {
+          setWrongPassword(true);
+          // re-throw so run() captures it in its error state too
+          throw e;
+        }
+      });
+    };
+
+    return (
+      <div className="vault-tab">
+        <h3>Unlock vault</h3>
+        <p>
+          {state.count} saved password{state.count !== 1 ? 's' : ''}.
+        </p>
+        <p className="vault-tab__notice">
+          Stored encrypted on this device. Aegis does not autofill &mdash; copy the value when you
+          need it.
+        </p>
+        <label className="vault-tab__field">
+          <span>Master password</span>
+          <input
+            type="password"
+            aria-label="Master password"
+            value={unlockPw}
+            autoComplete="current-password"
+            onChange={(e) => {
+              setUnlockPw(e.target.value);
+              setWrongPassword(false);
+            }}
+          />
+        </label>
+        {wrongPassword && (
+          <p className="vault-tab__error" role="alert">
+            Wrong password. Please try again.
+          </p>
+        )}
+        {error && !wrongPassword && (
+          <p className="vault-tab__error" role="alert">
+            {error}
+          </p>
+        )}
+        <button
+          type="button"
+          aria-label="Unlock"
+          disabled={busy || unlockPw.length === 0}
+          onClick={handleUnlock}
+        >
+          Unlock
+        </button>
+      </div>
+    );
+  }
+
+  // ---------------------------------------------------------------------------
+  // STATE 3 — unlocked
+  // ---------------------------------------------------------------------------
+  const toggleReveal = (uuid: string) => {
+    setRevealedUuids((prev) => {
+      const next = new Set(prev);
+      if (next.has(uuid)) {
+        next.delete(uuid);
+      } else {
+        next.add(uuid);
+      }
+      return next;
+    });
+  };
+
+  const handleSearch = async (q: string) => {
+    setSearchQuery(q);
+    if (q.trim() === '') {
+      const all = await vault.list();
+      setRecords(all);
+    } else {
+      const results = await vault.search(q);
+      setRecords(results);
+    }
+  };
+
+  const handleAdd = () => {
+    void run(async () => {
+      const input: VaultRecordInput = {
+        site: addSite.trim(),
+        username: addUsername.trim(),
+        password: addPassword,
+        notes: addNotes.trim(),
+      };
+      await vault.add(input);
+      setAddSite('');
+      setAddUsername('');
+      setAddPassword('');
+      setAddNotes('');
+      await refreshList();
+    });
+  };
+
+  const handleDelete = (uuid: string) => {
+    void run(async () => {
+      await vault.remove(uuid);
+      await refreshList();
+    });
+  };
+
+  const handleCopy = (text: string) => {
+    void navigator.clipboard.writeText(text);
+  };
+
+  return (
+    <div className="vault-tab">
+      <div className="vault-tab__header">
+        <h3>Passwords</h3>
+        <button
+          type="button"
+          aria-label="Lock vault"
+          disabled={busy}
+          onClick={() => void run(() => vault.lock())}
+        >
+          Lock
+        </button>
+      </div>
+
+      <p className="vault-tab__notice">
+        Stored encrypted on this device. Aegis does not autofill &mdash; copy the value when you
+        need it.
+      </p>
+
+      {error && (
+        <p className="vault-tab__error" role="alert">
+          {error}
+        </p>
+      )}
+
+      {/* Search */}
+      <label className="vault-tab__field">
+        <span>Search</span>
+        <input
+          type="search"
+          role="searchbox"
+          aria-label="Search passwords"
+          value={searchQuery}
+          placeholder="Filter by site or username…"
+          onChange={(e) => void handleSearch(e.target.value)}
+        />
+      </label>
+
+      {/* Records list */}
+      {records.length === 0 ? (
+        <p className="vault-tab__empty">No saved passwords.</p>
+      ) : (
+        <ul className="vault-tab__list" aria-label="Saved passwords">
+          {records.map((r) => {
+            const revealed = revealedUuids.has(r.uuid);
+            return (
+              <li key={r.uuid} className="vault-tab__row">
+                <span className="vault-tab__site" title={r.site}>
+                  {r.site}
+                </span>
+                <span className="vault-tab__username">{r.username}</span>
+                <span className="vault-tab__password">{revealed ? r.password : '••••••••'}</span>
+                <div className="vault-tab__row-actions">
+                  <button
+                    type="button"
+                    aria-label={`${revealed ? 'Hide' : 'Show'} password for ${r.site}`}
+                    onClick={() => toggleReveal(r.uuid)}
+                  >
+                    {revealed ? 'Hide' : 'Show'}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Copy password for ${r.site}`}
+                    onClick={() => handleCopy(r.password)}
+                  >
+                    Copy password
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Copy username for ${r.site}`}
+                    onClick={() => handleCopy(r.username)}
+                  >
+                    Copy username
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Delete entry for ${r.site}`}
+                    onClick={() => handleDelete(r.uuid)}
+                    disabled={busy}
+                  >
+                    Delete
+                  </button>
+                </div>
+                {r.notes && <p className="vault-tab__notes">{r.notes}</p>}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+
+      {/* Add entry form */}
+      <details className="vault-tab__add">
+        <summary>Add entry</summary>
+        <div className="vault-tab__add-form">
+          <label className="vault-tab__field">
+            <span>Site</span>
+            <input
+              type="url"
+              aria-label="Site"
+              value={addSite}
+              placeholder="https://example.com"
+              onChange={(e) => setAddSite(e.target.value)}
+            />
+          </label>
+          <label className="vault-tab__field">
+            <span>Username</span>
+            <input
+              type="text"
+              aria-label="Username"
+              value={addUsername}
+              autoComplete="off"
+              onChange={(e) => setAddUsername(e.target.value)}
+            />
+          </label>
+          <label className="vault-tab__field">
+            <span>Password</span>
+            <input
+              type="password"
+              aria-label="Password"
+              value={addPassword}
+              autoComplete="new-password"
+              onChange={(e) => setAddPassword(e.target.value)}
+            />
+          </label>
+          <label className="vault-tab__field">
+            <span>Notes</span>
+            <textarea
+              aria-label="Notes"
+              value={addNotes}
+              onChange={(e) => setAddNotes(e.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            aria-label="Add entry"
+            disabled={busy || addSite.trim().length === 0 || addPassword.length === 0}
+            onClick={handleAdd}
+          >
+            Add entry
+          </button>
+        </div>
+      </details>
+    </div>
+  );
+}

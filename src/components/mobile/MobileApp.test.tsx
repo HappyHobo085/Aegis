@@ -156,6 +156,18 @@ vi.mock('../../lib/ipcClient', () => ({
       close: vi.fn().mockResolvedValue(undefined),
       onState: vi.fn().mockReturnValue(() => {}),
     },
+    vault: {
+      getState: vi.fn().mockResolvedValue({ exists: false, unlocked: false, count: 0 }),
+      create: vi.fn().mockResolvedValue({ exists: true, unlocked: true, count: 0 }),
+      unlock: vi.fn().mockResolvedValue({ exists: true, unlocked: true, count: 0 }),
+      lock: vi.fn().mockResolvedValue({ exists: true, unlocked: false, count: 0 }),
+      list: vi.fn().mockResolvedValue([]),
+      add: vi.fn().mockResolvedValue([]),
+      update: vi.fn().mockResolvedValue([]),
+      remove: vi.fn().mockResolvedValue([]),
+      search: vi.fn().mockResolvedValue([]),
+      onState: vi.fn().mockReturnValue(() => {}),
+    },
     zoom: {
       get: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),
       set: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),

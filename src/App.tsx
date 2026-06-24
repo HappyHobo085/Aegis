@@ -17,6 +17,7 @@ import { useHistory } from './hooks/useHistory';
 import { useSaved } from './hooks/useSaved';
 import { useSettings } from './hooks/useSettings';
 import { useSync } from './hooks/useSync';
+import { useVault } from './hooks/useVault';
 import { useSubscriptions } from './hooks/useSubscriptions';
 import { useCustomFilters } from './hooks/useCustomFilters';
 import { useDownloads } from './hooks/useDownloads';
@@ -55,6 +56,7 @@ import { DownloadsTab } from './components/DownloadsTab';
 import { SitePermissionsTab } from './components/SitePermissionsTab';
 import { SecurityTab } from './components/SecurityTab';
 import { SyncSettingsTab } from './components/SyncSettingsTab';
+import { VaultSettingsTab } from './components/VaultSettingsTab';
 import { DataTab } from './components/DataTab';
 import { TabsTab } from './components/TabsTab';
 import { TabStrip } from './components/TabStrip';
@@ -99,6 +101,7 @@ function DesktopApp() {
   const saved = useSaved(nav.state.url);
   const settings = useSettings();
   const sync = useSync();
+  const vault = useVault();
   const subscriptions = useSubscriptions();
   const customFilters = useCustomFilters();
   const downloads = useDownloads();
@@ -655,6 +658,7 @@ function DesktopApp() {
               removeException={(h) => void aegis.safety.removeException(h)}
             />
           }
+          vault={<VaultSettingsTab vault={vault} />}
           sync={
             <SyncSettingsTab
               sync={sync}

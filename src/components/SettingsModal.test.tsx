@@ -15,6 +15,7 @@ const panels = () => ({
   downloads: <div data-testid="panel-downloads">DOWNLOADS</div>,
   sitePermissions: <div data-testid="panel-sitePermissions">SITE PERMISSIONS</div>,
   security: <div data-testid="panel-security">SECURITY</div>,
+  vault: <div data-testid="panel-vault">VAULT</div>,
   sync: <div data-testid="panel-sync">SYNC</div>,
   data: <div data-testid="panel-data">DATA</div>,
 });
@@ -33,7 +34,7 @@ describe('SettingsModal', () => {
     expect(dialog).toHaveAccessibleName(/settings/i);
   });
 
-  it('renders a tablist with all eleven tabs', () => {
+  it('renders a tablist with all thirteen tabs', () => {
     render(<SettingsModal {...props()} />);
     const tablist = screen.getByRole('tablist', { name: /settings sections/i });
     expect(tablist).toBeInTheDocument();
@@ -48,6 +49,8 @@ describe('SettingsModal', () => {
       /^downloads$/i,
       /site permissions/i,
       /^security$/i,
+      /^passwords$/i,
+      /^sync$/i,
       /^data$/i,
     ]) {
       expect(screen.getByRole('tab', { name })).toBeInTheDocument();

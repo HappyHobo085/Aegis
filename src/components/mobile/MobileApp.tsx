@@ -15,6 +15,7 @@ import { useHistory } from '../../hooks/useHistory';
 import { useSaved } from '../../hooks/useSaved';
 import { useSettings } from '../../hooks/useSettings';
 import { useSync } from '../../hooks/useSync';
+import { useVault } from '../../hooks/useVault';
 import { useSubscriptions } from '../../hooks/useSubscriptions';
 import { useCustomFilters } from '../../hooks/useCustomFilters';
 import { useDownloads } from '../../hooks/useDownloads';
@@ -39,6 +40,7 @@ import { DownloadsTab } from '../DownloadsTab';
 import { SitePermissionsTab } from '../SitePermissionsTab';
 import { SecurityTab } from '../SecurityTab';
 import { SyncSettingsTab } from '../SyncSettingsTab';
+import { VaultSettingsTab } from '../VaultSettingsTab';
 import { DataTab } from '../DataTab';
 import { PermissionPromptDialog } from '../PermissionPromptDialog';
 import { Toaster } from '../Toaster';
@@ -79,6 +81,7 @@ export function MobileApp() {
   const saved = useSaved(nav.state.url);
   const settings = useSettings();
   const sync = useSync();
+  const vault = useVault();
   const subscriptions = useSubscriptions();
   const customFilters = useCustomFilters();
   const downloads = useDownloads();
@@ -329,6 +332,7 @@ export function MobileApp() {
               removeException={(h) => void aegis.safety.removeException(h)}
             />
           }
+          vault={<VaultSettingsTab vault={vault} />}
           sync={
             <SyncSettingsTab
               sync={sync}
