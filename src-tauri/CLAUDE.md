@@ -350,37 +350,37 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
 
 ## Gotchas
 
-1. **tauri#10420** — Linux multi-webview won't position; fixed by GtkFixed
-   reparenting in `linux_layout.rs`.
-2. **DMABUF white-screen** — `lib.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
-3. **NVIDIA + Wayland** — force XWayland (`GDK_BACKEND=x11`) in `lib.rs`.
-4. **`Engine` is `!Send`** — keep it on its one thread; only `String`/`bool` cross.
-5. **Event names** — always go through `emit_event()` (`.`→`:`).
-6. **WebView2 COM** in `adblock_win.rs` is unsafe; CI compiles/links but doesn't
-   launch the GUI. **Runtime-verified on real Windows 11 (2026-06):** it installs
-   without panicking and the network ad-block tier blocks (DoubleClick `gpt.js`
-   served an empty 204; a non-ad control script still loaded). `nav_url_win.rs`'s
-   `SourceChanged` handler installs cleanly too, though its same-document URL
-   tracking wasn't exercised yet. The shield block-counter is **now wired on
-   Windows** (`adblock_win.rs`'s `WebResourceRequested` block path calls
-   `note_blocked`) **and Android** (Kotlin `shouldInterceptRequest` counts each
-   ad-block tier block → `__aegisBlockedCount` → `adblock.blockedCount`). Honest
-   per-platform caveat: Linux counts only requests that pass the content-filter cap
-   and are then flagged by `should_block` (content-filter-blocked requests are
-   cancelled before `resource-load-started` fires, so they are never counted — real
-   blocking, invisible count); Windows counts every `WebResourceRequested` block in
-   the network tier (the injected JS tier does not call `note_blocked`); Android
-   counts every `shouldInterceptRequest` ad-block branch hit. Each platform's badge
-   means "requests this tier blocked on this page / this session", not "all ads truly
-   blocked". Blocking itself is proven by the A/B trace, not the count.
-7. **TLS** — a crypto provider must be installed once (done in `lib.rs`) or every
-   reqwest/updater HTTPS call panics.
-8. **Android needs JDK 21.** Gradle 8.14.3 / AGP 8.11.0 can't run under JDK 25 (the
-   `:buildSrc` configuration fails with a bare `> 25.0.3`). Build with the Android
-   Studio JBR: `JAVA_HOME=~/development/android-studio/jbr npm run android:build`.
-9. **16 KB page alignment (Android 15+).** `build.rs` passes
-   `-Wl,-z,max-page-size=16384` for android targets so `libapp_lib.so`'s LOAD segments
-   are 16 KB-aligned; without it the lib fails to load ("LOAD segment not aligned").
+1.  **tauri#10420** — Linux multi-webview won't position; fixed by GtkFixed
+    reparenting in `linux_layout.rs`.
+2.  **DMABUF white-screen** — `lib.rs` sets `WEBKIT_DISABLE_DMABUF_RENDERER=1`.
+3.  **NVIDIA + Wayland** — force XWayland (`GDK_BACKEND=x11`) in `lib.rs`.
+4.  **`Engine` is `!Send`** — keep it on its one thread; only `String`/`bool` cross.
+5.  **Event names** — always go through `emit_event()` (`.`→`:`).
+6.  **WebView2 COM** in `adblock_win.rs` is unsafe; CI compiles/links but doesn't
+    launch the GUI. **Runtime-verified on real Windows 11 (2026-06):** it installs
+    without panicking and the network ad-block tier blocks (DoubleClick `gpt.js`
+    served an empty 204; a non-ad control script still loaded). `nav_url_win.rs`'s
+    `SourceChanged` handler installs cleanly too, though its same-document URL
+    tracking wasn't exercised yet. The shield block-counter is **now wired on
+    Windows** (`adblock_win.rs`'s `WebResourceRequested` block path calls
+    `note_blocked`) **and Android** (Kotlin `shouldInterceptRequest` counts each
+    ad-block tier block → `__aegisBlockedCount` → `adblock.blockedCount`). Honest
+    per-platform caveat: Linux counts only requests that pass the content-filter cap
+    and are then flagged by `should_block` (content-filter-blocked requests are
+    cancelled before `resource-load-started` fires, so they are never counted — real
+    blocking, invisible count); Windows counts every `WebResourceRequested` block in
+    the network tier (the injected JS tier does not call `note_blocked`); Android
+    counts every `shouldInterceptRequest` ad-block branch hit. Each platform's badge
+    means "requests this tier blocked on this page / this session", not "all ads truly
+    blocked". Blocking itself is proven by the A/B trace, not the count.
+7.  **TLS** — a crypto provider must be installed once (done in `lib.rs`) or every
+    reqwest/updater HTTPS call panics.
+8.  **Android needs JDK 21.** Gradle 8.14.3 / AGP 8.11.0 can't run under JDK 25 (the
+    `:buildSrc` configuration fails with a bare `> 25.0.3`). Build with the Android
+    Studio JBR: `JAVA_HOME=~/development/android-studio/jbr npm run android:build`.
+9.  **16 KB page alignment (Android 15+).** `build.rs` passes
+    `-Wl,-z,max-page-size=16384` for android targets so `libapp_lib.so`'s LOAD segments
+    are 16 KB-aligned; without it the lib fails to load ("LOAD segment not aligned").
 10. **Desktop-only Tauri APIs must be `#[cfg(desktop)]`-gated** — the Rust lib has to
     compile for android too. `Webview::close()`, `Builder::on_menu_event`, etc. are
     desktop-only (see `tabs.rs::close_webview`, the `lib.rs` builder). Only an android
@@ -510,6 +510,52 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
       - highlight-all. **Case-insensitive only** — the `caseSensitive` flag is accepted but
         the Android WebView find API has no case-sensitive mode. Kotlin compile-verified; GUI
         runtime-verify pending device session.
+
+19. **Private tabs use `WebviewBuilder::incognito(true)` on desktop — Android is a
+    best-effort weaker tier with a documented, accepted limit.**
+
+        **Desktop (Linux / Windows / macOS):** `nav::spawn_tab(…, private: bool)` calls
+        `.incognito(private)` on the `WebviewBuilder`, which maps to the engine-native
+        ephemeral partition:
+        - Linux → `WebContext::new_ephemeral()` (in-memory `WebsiteDataManager`; no
+          cookies/localStorage/IndexedDB/cache written to disk)
+        - Windows → `SetIsInPrivateModeEnabled(true)` on the WebView2 controller (requires
+          WebView2 Runtime ≥ 101.0.1210.39; no-op on older runtimes)
+        - macOS → `WKWebsiteDataStore.nonPersistentDataStore`
+
+        All on-disk persistence write-paths are guarded: `history::record` / `update_title`
+        early-return on `is_private`; `downloads::on_requested` skips the downloads-list
+        entry (the downloaded FILE still lands on disk — matches Chrome/Firefox incognito);
+        `tab_registry::to_persisted` filters out private tabs (so they are never written to
+        `tabs.json`). Private tabs are also **exempt from the idle sweep** — closing and
+        respawning an ephemeral webview would destroy the session data, so only the user
+        closing the tab ends it. A closed private tab is **NOT reopenable** (`reopen_closed`
+        creates non-private tabs). A tab opened from a private tab **inherits privateness**
+        (`on_new_window` reads `is_private(opener_id)` and passes it to `open_background`).
+
+        **Android:** wry marks `incognito` as Unsupported on Android (`wry/src/lib.rs:748`).
+        The native path in `MainActivity.kt` is a best-effort tier: `privateTabs` (`HashSet`)
+        tracks private tab ids; at creation, `wv.settings.cacheMode = LOAD_NO_CACHE` (memory-
+        only HTTP cache) and 3rd-party cookies are refused for that WebView. On close,
+        `wv.clearCache(true)` + `wv.clearHistory()` are called. **Honest limit:** Android's
+        `CookieManager` / `WebStorage` are process-global — there is no per-WebView cookie
+        partition in the released Android WebView API. First-party cookies set by a private tab
+        LINGER in the shared cookie jar after the tab is closed. The app deliberately does NOT
+        flush the global cookie jar on close (that would log the user out of normal-tab sites).
+        This limit is documented in `MainActivity.kt` and is the accepted Android weakest tier.
+
+        **Parity matrix (honest):**
+        - **Linux**: ephemeral WebKit partition — compile-verified; **live GUI verify PENDING**
+          user display session.
+        - **Windows**: WebView2 in-private controller — compile-verified (`cargo check
+
+    --target x86_64-pc-windows-gnu`+ CI MSVC); **GUI runtime-verify PENDING** device.
+    - **macOS**:`nonPersistentDataStore`— **CI-compile-only** (objc2 needs macOS
+      toolchain); GUI runtime is sub-project I.
+    - **Android**: best-effort`LOAD_NO_CACHE` + 3rd-party-cookie refusal + close-time
+      flush — Kotlin compile-verified; **device verify PENDING**; first-party-cookie
+      persistence after close is a documented, accepted limit (not fixable without a wry
+      or Android API change).
 
 ### Multi-webview Linux layout (hard-won facts)
 

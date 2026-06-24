@@ -127,10 +127,23 @@ Ed25519 device tokens, `sync_stores.rs` HLC-LWW merge; self-hosted `sync-server/
 **WebRTC IP-leak defense** (`webrtc_shim.rs` + the `webrtcPolicy` setting, with native
 Linux/Windows backstops), the **atomic store-write** path (`jsonstore::write_atomic`),
 the **shared crypto** layer (`crypto.rs` — XChaCha20-Poly1305 / HKDF / Argon2id /
-zeroize), and **Android document-start JS injection** (`MainActivity.kt`
-`addDocumentStartJavaScript`). The **OS-keychain anchor** is desktop-done / Android-
-wired + device-verified (commit `03f0012`; `AegisKeystore.kt` does a real
-`KeyGenParameterSpec` AES-GCM wrap; passphrase-wrapped file is the fallback when
-no keychain is available; only remaining work is preferring StrongBox — sub-project J). **Remaining roadmap features:** a password vault, anti-fingerprinting
-(farbling), and a content-webview proxy — see `docs/FEATURE_ROADMAP.md` and the
-improvements-program decomposition in `docs/superpowers/specs/`.
+zeroize), **Android document-start JS injection** (`MainActivity.kt`
+`addDocumentStartJavaScript`), and **private/ephemeral mode** (per-tab `private`
+flag; desktop content webview uses `WebviewBuilder::incognito(true)` — Linux
+`WebContext::new_ephemeral`, Windows `SetIsInPrivateModeEnabled`, macOS
+`nonPersistentDataStore`; history/downloads-list/session-persistence all skip private
+tabs; closed private tabs are not reopenable; a tab opened from a private tab inherits
+privateness; Android is a best-effort weaker tier — `LOAD_NO_CACHE` + 3rd-party-cookies
+refused + cache/history cleared on close, but first-party cookies linger in Android's
+process-global jar after close, which is documented and accepted). Affordance: **New
+private tab** button in `TabStrip` + `Ctrl+Shift+N` (desktop) + mobile tab switcher.
+Autopilot: catalog `verify` asserts a private navigation leaves no history row (live
+gated); interaction specs cover the button + keyboard shortcut. Runtime verify: Linux
+live GUI and Win/macOS GUI **PENDING** user sessions; Android device verify **PENDING**.
+The **OS-keychain anchor** is desktop-done / Android-wired + device-verified (commit
+`03f0012`; `AegisKeystore.kt` does a real `KeyGenParameterSpec` AES-GCM wrap;
+passphrase-wrapped file is the fallback when no keychain is available; only remaining
+work is preferring StrongBox — sub-project J). **Remaining roadmap features:** a
+password vault, anti-fingerprinting (farbling), and a content-webview proxy — see
+`docs/FEATURE_ROADMAP.md` and the improvements-program decomposition in
+`docs/superpowers/specs/`.

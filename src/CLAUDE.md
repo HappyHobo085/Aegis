@@ -87,7 +87,15 @@ reset, onOpenChange }` from `useZoom`. `onOpenChange` lets `App.tsx` raise the c
   no separate `ZoomIndicator` in the mobile shell.
 - **`components/TabStrip`** — the top row of the chrome, rendered above the
   toolbar on desktop only (hidden on mobile via `.aegis-mobile`). Shows the tab
-  list and drives `tabs.create`/`tabs.activate`/`tabs.close` etc.
+  list and drives `tabs.create`/`tabs.activate`/`tabs.close` etc. Private tabs
+  receive the `tab--private` CSS class (visual treatment) and the strip has a
+  dedicated **"New private tab"** button (`tabstrip__new--private`) that calls
+  `tabs.create(undefined, false, true)` — the third arg is `isPrivate`. The same
+  call is wired to `Ctrl+Shift+N` in `App.tsx`. Mobile: the `MobileTabSwitcher`
+  also exposes a new-private-tab entry. Interaction specs in
+  `src/autopilot/interactions/tabs.ts` cover both the button click and the
+  keyboard shortcut; the catalog `verify` in `catalog.ts` asserts a private
+  navigation leaves no history row (live-gated, runs against the real Rust core).
 - **`lib/layout.ts`** gained `TABSTRIP_H` (the pixel height reserved for the
   tab strip), used by `useContentInset` to keep the content webview positioned
   below it.
