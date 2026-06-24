@@ -8,11 +8,11 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 static NODE_ID: OnceLock<String> = OnceLock::new();
 
-fn path(app: &AppHandle) -> Option<PathBuf> {
+fn path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
@@ -21,7 +21,7 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
 
 /// This device's stable node id (read-or-create). The HLC `node` and (later) the sync
 /// device identity key off this.
-pub fn node_id(app: &AppHandle) -> String {
+pub fn node_id<R: Runtime>(app: &AppHandle<R>) -> String {
     NODE_ID
         .get_or_init(|| {
             if let Some(p) = path(app) {

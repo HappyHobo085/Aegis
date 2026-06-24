@@ -8,9 +8,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
-fn path(app: &AppHandle, name: &str) -> Option<PathBuf> {
+fn path<R: Runtime>(app: &AppHandle<R>, name: &str) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
@@ -129,7 +129,7 @@ pub fn read_text_with_backup(path: &Path) -> Option<String> {
 
 /// Load a collection (empty if missing/corrupt). A corrupt primary recovers from the
 /// `.bak` written on the last good save instead of silently zeroing the store.
-pub fn load(app: &AppHandle, name: &str) -> Vec<Value> {
+pub fn load<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
     path(app, name)
         .and_then(|p| read_with_backup(&p))
         .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
@@ -137,7 +137,7 @@ pub fn load(app: &AppHandle, name: &str) -> Vec<Value> {
 }
 
 /// Persist a collection durably (atomic temp→rename, keeps a `.bak`).
-pub fn save(app: &AppHandle, name: &str, items: &[Value]) -> Result<(), String> {
+pub fn save<R: Runtime>(app: &AppHandle<R>, name: &str, items: &[Value]) -> Result<(), String> {
     let Some(p) = path(app, name) else {
         return Err("no app data dir".into());
     };
@@ -220,7 +220,7 @@ pub fn live(items: Vec<Value>) -> Vec<Value> {
 }
 
 /// Stamp a brand-new record: fresh uuid + ticked hlc + `deleted=false`.
-pub fn stamp_new(item: &mut Value, app: &AppHandle) {
+pub fn stamp_new<R: Runtime>(item: &mut Value, app: &AppHandle<R>) {
     let node = crate::sync_identity::node_id(app);
     if let Some(obj) = item.as_object_mut() {
         obj.insert("uuid".into(), json!(uuid::Uuid::new_v4().to_string()));
@@ -230,7 +230,7 @@ pub fn stamp_new(item: &mut Value, app: &AppHandle) {
 }
 
 /// Bump a live record's hlc after a local edit (so peers see the newer version).
-pub fn touch(item: &mut Value, app: &AppHandle) {
+pub fn touch<R: Runtime>(item: &mut Value, app: &AppHandle<R>) {
     let node = crate::sync_identity::node_id(app);
     if let Some(obj) = item.as_object_mut() {
         obj.insert("hlc".into(), fresh_hlc(&node));
@@ -239,7 +239,11 @@ pub fn touch(item: &mut Value, app: &AppHandle) {
 
 /// Tombstone (set `deleted=true` + bump hlc) every record matching `pred`. The records
 /// stay in the array so the delete propagates to peers. Returns whether any matched.
-pub fn tombstone(items: &mut [Value], pred: impl Fn(&Value) -> bool, app: &AppHandle) -> bool {
+pub fn tombstone<R: Runtime>(
+    items: &mut [Value],
+    pred: impl Fn(&Value) -> bool,
+    app: &AppHandle<R>,
+) -> bool {
     let node = crate::sync_identity::node_id(app);
     let mut any = false;
     for it in items.iter_mut() {
@@ -258,7 +262,7 @@ pub fn tombstone(items: &mut [Value], pred: impl Fn(&Value) -> bool, app: &AppHa
 /// Load a collection AND lazily migrate every record to carry sync metadata, persisting
 /// back only if something was assigned. Returns the FULL array (incl. tombstones) — use
 /// `live()` for renderer-facing reads.
-pub fn load_synced(app: &AppHandle, name: &str) -> Vec<Value> {
+pub fn load_synced<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
     let node = crate::sync_identity::node_id(app);
     let mut items = load(app, name);
     let mut changed = false;
