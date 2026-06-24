@@ -82,28 +82,38 @@ pub fn seed_hex() -> String {
 }
 
 /// The document-start JS shim for `level`. Returns `""` (no interference) when
-/// `off`/allowlisted, else the STANDARD_JS with the `__AEGIS_FARBLE_SEED__` placeholder
-/// replaced by the real hex seed — so the seed is baked into the IIFE parameter call and
-/// is NEVER a top-level `var` or `window.*` global.
+/// `off`/allowlisted, else the appropriate shim JS with the `__AEGIS_FARBLE_SEED__`
+/// placeholder replaced by the real hex seed — so the seed is baked into the IIFE
+/// parameter call and is NEVER a top-level `var` or `window.*` global.
+///
+/// - `"standard"` → canvas/audio/navigator farbling (STANDARD_JS)
+/// - `"strict"` → standard surfaces + WebGL getParameter/readPixels/
+///   getSupportedExtensions/getShaderPrecisionFormat (STRICT_JS)
+/// - `"off"` / anything else / allowlisted → `""` (no interference)
 #[allow(dead_code)] // will be consumed by adblock_inject::script in the injection task
 pub fn shim_for(level: &str, host_allowlisted: bool) -> String {
     if host_allowlisted {
         return String::new();
     }
-    match level {
-        "standard" | "strict" => {
-            // Substitute the placeholder with the real seed inside the IIFE argument.
-            // The emitted script has NO top-level var and NO window.* seed assignment.
-            STANDARD_JS.replace("'__AEGIS_FARBLE_SEED__'", &format!("'{}'", seed_hex()))
-        }
-        _ => String::new(), // "off" or any unrecognised level → no interference
-    }
+    let js = match level {
+        "standard" => STANDARD_JS,
+        "strict" => STRICT_JS,
+        _ => return String::new(), // "off" or any unrecognised level → no interference
+    };
+    // Substitute the placeholder with the real seed inside the IIFE argument.
+    // The emitted script has NO top-level var and NO window.* seed assignment.
+    js.replace("'__AEGIS_FARBLE_SEED__'", &format!("'{}'", seed_hex()))
 }
 
 // The shipped standard shim JS, single-sourced so the vitest runtime test
 // (src/lib/farbleShim.test.ts) executes the EXACT bytes shipped here.
 #[allow(dead_code)] // referenced by shim_for() above; used at injection time in a later task
 const STANDARD_JS: &str = include_str!("farble.standard.js");
+
+// The shipped strict shim JS — extends standard with WebGL fingerprint perturbation.
+// Single-sourced so the vitest runtime test executes the exact shipped bytes.
+#[allow(dead_code)] // referenced by shim_for() above; used at injection time in a later task
+const STRICT_JS: &str = include_str!("farble.strict.js");
 
 #[cfg(test)]
 mod tests {
@@ -254,7 +264,7 @@ mod tests {
             );
         }
 
-        // strict also works (same artifact for now).
+        // strict → the STRICT_JS artifact (includes WebGL block).
         let js_strict = shim_for("strict", false);
         assert!(
             !js_strict.contains("'__AEGIS_FARBLE_SEED__'"),
@@ -263,6 +273,26 @@ mod tests {
         assert!(
             !js_strict.contains("var __aegisFarbleSeed"),
             "strict shim must not have a top-level var __aegisFarbleSeed"
+        );
+        // Strict must include WebGL-specific markers.
+        for marker in [
+            "getParameter",
+            "readPixels",
+            "getSupportedExtensions",
+            "getShaderPrecisionFormat",
+            "WebGLRenderingContext",
+            "UNMASKED_VENDOR_WEBGL",
+            "UNMASKED_RENDERER_WEBGL",
+        ] {
+            assert!(
+                js_strict.contains(marker),
+                "strict shim missing WebGL marker: {marker}"
+            );
+        }
+        // Standard must NOT patch WebGL (the gradient between levels is real).
+        assert!(
+            !js.contains("WebGLRenderingContext"),
+            "standard shim must NOT contain WebGL patches (level gradient)"
         );
     }
 }
