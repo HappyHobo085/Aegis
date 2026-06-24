@@ -17,6 +17,7 @@ const emptySettings: Settings = {
   webrtcPolicy: 'public-only',
   themeMode: 'system',
   syncServerUrl: '',
+  antiFingerprint: 'off',
 };
 
 export function useSettings(): {

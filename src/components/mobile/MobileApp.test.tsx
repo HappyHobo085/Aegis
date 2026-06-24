@@ -25,6 +25,7 @@ const baseSettings: Settings = {
   tabIdleTimeout: 30,
   webrtcPolicy: 'public-only',
   themeMode: 'system',
+  antiFingerprint: 'off',
 };
 
 // Spy on applyTheme so mount tests can assert it was called with the full settings.

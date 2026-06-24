@@ -367,6 +367,11 @@ export interface Settings {
    * `'dark'` / `'light'` force a palette. Renderer-only — the resolved palette is a
    * `data-theme` attribute on <html> (see src/lib/theme.ts). */
   themeMode: 'system' | 'dark' | 'light';
+  /** Anti-fingerprinting (farbling) level. Default `'off'` (opt-in) — standard and
+   * strict add per-session CSPRNG noise to canvas/audio/WebGL read surfaces so a
+   * site sees a stable-but-unique fingerprint within a session rather than the real
+   * value. Honest limit: a same-world JS shim is detectable; see src-tauri/CLAUDE.md. */
+  antiFingerprint: 'off' | 'standard' | 'strict';
   /** The E2E-encrypted sync server endpoint. Empty = sync not configured (data stays
    * local). Self-hosted: paste your reference-server URL. The server only ever sees
    * opaque ciphertext. */

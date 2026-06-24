@@ -30,7 +30,8 @@ fn defaults() -> Value {
         "tabIdleTimeout": 30,
         "webrtcPolicy": "public-only",
         "themeMode": "system",
-        "syncServerUrl": ""
+        "syncServerUrl": "",
+        "antiFingerprint": "off"
     })
 }
 
@@ -71,6 +72,17 @@ pub fn webrtc_policy<R: Runtime>(app: &AppHandle<R>) -> String {
         .get("webrtcPolicy")
         .and_then(Value::as_str)
         .unwrap_or("public-only")
+        .to_string()
+}
+
+/// The anti-fingerprint level: `"off"` (default, opt-in) | `"standard"` | `"strict"`.
+/// Raw read — callers (e.g. `farble::level`) validate/clamp the value.
+#[allow(dead_code)] // consumed by farble::level(); injection wired in later task
+pub fn anti_fingerprint<R: Runtime>(app: &AppHandle<R>) -> String {
+    load(app)
+        .get("antiFingerprint")
+        .and_then(Value::as_str)
+        .unwrap_or("off")
         .to_string()
 }
 
@@ -321,6 +333,10 @@ pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, records: &[Value]) {
     // a peer-synced change is honored on new tabs without a restart. Cheap; re-push always.
     #[cfg(target_os = "android")]
     crate::webrtc_shim::note_policy(&webrtc_policy(app));
+    // Android: same pattern for antiFingerprint — the farble level global is read by the
+    // NativeFarble JNI getter (no AppHandle available there); re-push on every synced change.
+    #[cfg(target_os = "android")]
+    crate::farble::note_level(&crate::farble::level(app));
 }
 
 /// Handle `settings.*` channels. Returns `None` if not a settings channel.
@@ -360,6 +376,15 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     .get("webrtcPolicy")
                     .and_then(Value::as_str)
                     .unwrap_or("public-only"),
+            );
+            // Android: keep the farble level global in sync — the NativeFarble JNI getter reads
+            // it (no AppHandle). New tabs pick up the change; desktop reads settings directly.
+            #[cfg(target_os = "android")]
+            crate::farble::note_level(
+                current
+                    .get("antiFingerprint")
+                    .and_then(Value::as_str)
+                    .unwrap_or("off"),
             );
             Some(Ok(current))
         }

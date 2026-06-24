@@ -19,6 +19,7 @@
 
 use hkdf::Hkdf;
 use sha2::Sha256;
+use tauri::{AppHandle, Runtime};
 
 /// Per-SESSION 256-bit salt: OS CSPRNG, generated once at boot, NEVER persisted (resets each
 /// session, like Brave's farbling seed). The page never sees it — only the one-way `public_seed`.
@@ -103,6 +104,48 @@ pub fn shim_for(level: &str, host_allowlisted: bool) -> String {
     // Substitute the placeholder with the real seed inside the IIFE argument.
     // The emitted script has NO top-level var and NO window.* seed assignment.
     js.replace("'__AEGIS_FARBLE_SEED__'", &format!("'{}'", seed_hex()))
+}
+
+/// The current anti-fingerprint level: `"off"` (default) | `"standard"` | `"strict"`.
+/// Reads `antiFingerprint` from the persisted settings, defaulting to `"off"` (opt-in).
+/// Unknown stored values are clamped to `"off"` so a corrupt/future setting is safe.
+/// Mirrors `settings::webrtc_policy`.
+#[allow(dead_code)] // consumed by adblock_inject::script in the injection task (Task 6+)
+pub fn level<R: Runtime>(app: &AppHandle<R>) -> String {
+    let raw = crate::settings::anti_fingerprint(app);
+    match raw.as_str() {
+        "standard" | "strict" => raw,
+        _ => "off".to_string(),
+    }
+}
+
+/// Android-only: the farble level the document-start shim getter reads. Seeded at boot and
+/// updated on settings change from the Rust side (the JNI getter has no `AppHandle` to
+/// read settings itself). Off Android this is unused — desktop bakes the level per-tab
+/// from settings directly in `adblock_inject::script`. Mirrors `webrtc_shim::ANDROID_POLICY`.
+#[cfg(target_os = "android")]
+static ANDROID_LEVEL: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+/// Record the current farble level for the Android shim getter. Android-only: the JNI
+/// getter has no `AppHandle`, so the level is pushed here (seeded at boot, updated on
+/// settings change). Desktop reads settings directly. Mirrors `webrtc_shim::note_policy`.
+#[cfg(target_os = "android")]
+pub fn note_level(level: &str) {
+    if let Ok(mut g) = ANDROID_LEVEL.write() {
+        *g = level.to_string();
+    }
+}
+
+/// Return the current farble level for Android (default `"off"`). Mirrors `webrtc_shim::android_policy`.
+#[cfg(target_os = "android")]
+#[allow(dead_code)] // consumed by the NativeFarble JNI getter in the injection task (Task 7)
+pub fn android_level() -> String {
+    let p = ANDROID_LEVEL.read().map(|g| g.clone()).unwrap_or_default();
+    if p.is_empty() {
+        "off".to_string()
+    } else {
+        p
+    }
 }
 
 // The shipped standard shim JS, single-sourced so the vitest runtime test
@@ -214,7 +257,33 @@ mod tests {
         assert_eq!(s.len(), 32);
     }
 
-    // ── T7: shim_for emits the right artifact per level ───────────────────────────────────
+    // ── T7: level() reader returns "off" by default and the stored value when set ──────────
+    #[test]
+    fn level_returns_default_and_stored_value() {
+        use crate::test_support::with_tmp_app;
+        use serde_json::json;
+        // Default: no stored setting → "off".
+        with_tmp_app(|app| {
+            assert_eq!(super::level(app), "off");
+        });
+        // After writing "standard": returns "standard".
+        with_tmp_app(|app| {
+            crate::settings::write(app, &json!({"antiFingerprint": "standard"}));
+            assert_eq!(super::level(app), "standard");
+        });
+        // After writing "strict": returns "strict".
+        with_tmp_app(|app| {
+            crate::settings::write(app, &json!({"antiFingerprint": "strict"}));
+            assert_eq!(super::level(app), "strict");
+        });
+        // Unknown stored value is clamped to "off".
+        with_tmp_app(|app| {
+            crate::settings::write(app, &json!({"antiFingerprint": "bogus"}));
+            assert_eq!(super::level(app), "off");
+        });
+    }
+
+    // ── T8: shim_for emits the right artifact per level ───────────────────────────────────
     #[test]
     fn shim_for_emits_the_right_artifact_per_level() {
         // off / unknown / allowlisted → no interference.
@@ -294,5 +363,27 @@ mod tests {
             !js.contains("WebGLRenderingContext"),
             "standard shim must NOT contain WebGL patches (level gradient)"
         );
+    }
+
+    // ── T9: note_level / android_level round-trip (Android-only, cfg'd out elsewhere) ──────
+    #[cfg(target_os = "android")]
+    #[test]
+    fn note_level_and_android_level_round_trip() {
+        // Default (empty global) → "off".
+        // (This may be non-empty if another test ran first in the same process; clear it.)
+        super::note_level("");
+        assert_eq!(super::android_level(), "off");
+
+        // After note_level("standard") → "standard".
+        super::note_level("standard");
+        assert_eq!(super::android_level(), "standard");
+
+        // After note_level("strict") → "strict".
+        super::note_level("strict");
+        assert_eq!(super::android_level(), "strict");
+
+        // After note_level("off") → "off".
+        super::note_level("off");
+        assert_eq!(super::android_level(), "off");
     }
 }

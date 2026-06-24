@@ -42,6 +42,7 @@ const baseSettings: Settings = {
   webrtcPolicy: 'public-only',
   themeMode: 'system',
   syncServerUrl: '',
+  antiFingerprint: 'off',
 };
 
 beforeEach(() => {

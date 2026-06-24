@@ -26,6 +26,7 @@ const baseSettings: Settings = {
   tabIdleTimeout: 30,
   webrtcPolicy: 'public-only',
   themeMode: 'system',
+  antiFingerprint: 'off',
 };
 
 export function aegisMockModule() {
