@@ -306,6 +306,35 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
   },
 
   {
+    id: 'mobile.tabSwitcher.newPrivateTab',
+    domain: 'mobile.tabSwitcher',
+    description:
+      'Open tab switcher → click "New private tab" → tabs.create called with isPrivate=true',
+    screen: 'home',
+    layers: ['vitest'],
+    mobile: true,
+    run: async (ctx) => {
+      // Flush pending microtasks (same pattern as mobile.tabSwitcher.newTab).
+      await ctx.emitNavState?.({ ...BASE_NAV });
+      // Open the tab switcher via the Tabs bottom-bar button.
+      const tabsBtn = ctx.byRole('button', /^Tabs \(\d+ open\)$/);
+      if (!tabsBtn) throw new Error('Tabs button not found in MobileBottomBar');
+      await ctx.click(tabsBtn);
+      // Click the "New private tab" button in the switcher.
+      const privateBtn = ctx.byRole('button', /^New private tab$/);
+      if (!privateBtn) throw new Error('"New private tab" button not found in MobileTabSwitcher');
+      await ctx.click(privateBtn);
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('tabs.create', (a) => a[2] === true))
+        throw new Error(
+          'tabs.create not called with isPrivate=true after clicking New private tab in MobileTabSwitcher',
+        );
+      return 'MobileTabSwitcher New private tab → tabs.create(…, …, true)';
+    },
+  },
+
+  {
     id: 'mobile.tabSwitcher.switch',
     domain: 'mobile.tabSwitcher',
     description: 'Open tab switcher with 2 tabs → click second tab → tabs.activate called',

@@ -1,4 +1,5 @@
 // src/autopilot/interactions/tabs.ts
+import { act } from '@testing-library/react';
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
 import type { TabsState } from '../../../shared/types';
 import { waitFor, fixtureUrl } from './helpers';
@@ -263,6 +264,60 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
       if (!ctx.calls.called('tabs.reopenClosed'))
         throw new Error('tabs.reopenClosed not called after Ctrl+Shift+T shortcut');
       return 'Ctrl+Shift+T (onShortcut "reopen") → tabs.reopenClosed()';
+    },
+  },
+
+  // ─── Task 11: private tab affordances ─────────────────────────────────────
+
+  {
+    id: 'tabs.newPrivateButton',
+    domain: 'tabs',
+    description:
+      'Click the "New private tab" button in the TabStrip → tabs.create called with isPrivate=true',
+    screen: 'home',
+    layers: ['vitest'],
+    run: async (ctx) => {
+      const btn = ctx.byRole('button', /^New private tab$/);
+      if (!btn)
+        throw new Error('"New private tab" button not found (aria-label="New private tab")');
+      await ctx.click(btn);
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('tabs.create', (a) => a[2] === true))
+        throw new Error(
+          'tabs.create not called with isPrivate=true (third arg) after New private tab click',
+        );
+      return 'New private tab button → tabs.create(…, …, true)';
+    },
+  },
+
+  {
+    id: 'keyboard.newPrivateTab',
+    domain: 'keyboard',
+    description: 'Ctrl+Shift+N window keydown → tabs.create called with isPrivate=true',
+    screen: 'home',
+    // App.tsx registers a window keydown handler for Ctrl+Shift+N (not a menu accelerator
+    // on Linux — that path goes through the native Ctrl+T route in onShortcut). The handler
+    // IS DOM-based and fires in jsdom when dispatched on window.  This is the Windows/DOM
+    // path that a real jsdom environment can exercise end-to-end.
+    layers: ['vitest'],
+    run: async (_ctx) => {
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'n',
+            ctrlKey: true,
+            shiftKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+    },
+    assert: async (ctx) => {
+      if (!ctx.calls.called('tabs.create', (a) => a[2] === true))
+        throw new Error('tabs.create not called with isPrivate=true after Ctrl+Shift+N keydown');
+      return 'Ctrl+Shift+N (window keydown) → tabs.create(…, …, true)';
     },
   },
 ];

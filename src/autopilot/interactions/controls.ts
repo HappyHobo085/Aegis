@@ -20,6 +20,9 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'keyboard.newTab',
   'keyboard.closeTab',
   'keyboard.reopenTab',
+  // Task 11: private tab affordances
+  'tabs.newPrivateButton',
+  'keyboard.newPrivateTab',
   // Task 5: favorites bar/manager + sidebar history
   'favbar.openFavorite',
   'favManager.add',
@@ -115,6 +118,7 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'mobile.menu.zoomOut',
   'mobile.menu.zoomReset',
   'mobile.tabSwitcher.newTab',
+  'mobile.tabSwitcher.newPrivateTab',
   'mobile.tabSwitcher.switch',
   'mobile.tabSwitcher.close',
   'mobile.topBar.hideToolbar',
