@@ -34,5 +34,7 @@ export const FIND_BAR_H = 40;
  *   bottomMargin = MOBILE_BOTTOMBAR_H                (the auto-hiding action bar)
  */
 export const MOBILE_ADDRESS_H = 48;
-export const MOBILE_FAV_H = 24;
+// 36px so the favourites chips clear the ~36px touch-target floor (was 24px, chips
+// were only 22px tall — too small to tap reliably). Kept in sync with MainActivity.kt.
+export const MOBILE_FAV_H = 36;
 export const MOBILE_BOTTOMBAR_H = 56;

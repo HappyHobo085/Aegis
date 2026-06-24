@@ -438,11 +438,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       val parent = (webView.parent as? ViewGroup) ?: findViewById(android.R.id.content)
       // Chrome heights are cached below; actual WebViews are created lazily by
       // activateTab (the chrome calls it on mount for the first tab).
-      // Slim top chrome = address bar (48dp) + favourites strip (24dp) = 72dp; the
+      // Slim top chrome = address bar (48dp) + favourites strip (36dp) = 84dp; the
       // bottom action bar is 56dp. These MUST stay in sync with src/lib/layout.ts
       // (MOBILE_ADDRESS_H + MOBILE_FAV_H for the top, MOBILE_BOTTOMBAR_H for the bottom).
+      // The favourites strip is 36dp (was 24dp) so its chips clear the touch-target floor.
       val density = resources.displayMetrics.density
-      val top = (72 * density).toInt()
+      val top = (84 * density).toInt()
       val bottomBar = (56 * density).toInt()
       topChromePx = top
       bottomBarPx = bottomBar
