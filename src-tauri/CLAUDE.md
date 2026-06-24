@@ -57,6 +57,12 @@ dotted event name.
   `active_content_label()`/`active_webview()` (refactored from the old single
   `CONTENT_LABEL` constant).
 - **`view.rs`** — content webview geometry: insets, sidebar, fullscreen, overlay.
+  **Desktop fullscreen now drives the OS window.** `view.setFullscreen` calls
+  `Window::set_fullscreen(on)` (`#[cfg(desktop)]`) in addition to the content-webview
+  relayout, so the window takes over the monitor (titlebar hidden). On Linux,
+  `linux_layout::exit_fullscreen` (Esc / floating exit button) also calls
+  `set_fullscreen(false)` directly. Backend call — no capability change. Android fullscreen
+  is the immersive `setFullscreen` bridge (hides the system bars) instead.
 - **`data.rs`** — `data.export` / `data.import` (bundles all stores + settings).
   **Unit-tested via `test_support::with_tmp_app`:** export produces a v2 bundle
   with every store present; cross-app import round-trip (export → fresh app →
