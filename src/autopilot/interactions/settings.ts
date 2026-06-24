@@ -1222,9 +1222,10 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
   //
   // The ProxySettingsTab renders a mode select (off/proxy) plus — only when
   // mode=proxy — host/port/bypassHosts inputs and Apply/Turn off/Test connection
-  // buttons.  vitest-layer specs seed the proxy state to mode=proxy via
-  // emitProxyState (the same seam as emitFingerprintState) so the fields are
-  // visible before each gesture.  live-layer specs read/mutate via ctx.aegis.proxy.
+  // buttons.  vitest-layer specs seed the proxy state to mode=proxy by firing a
+  // change event on the mode select (fireInputChange(modeEl, 'proxy')), which
+  // triggers the component's own onChange → setState path synchronously.
+  // live-layer specs read/mutate via ctx.aegis.proxy.
 
   (() => {
     // Capture original mode live so we can restore it.

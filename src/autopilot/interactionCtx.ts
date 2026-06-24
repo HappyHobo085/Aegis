@@ -341,15 +341,6 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       if (control) flushSync(() => control.setFingerprintState(s));
       return Promise.resolve();
     },
-    emitProxyState: (s: import('../../shared/types').ProxyState) => {
-      // Directly seed the proxy state via the autopilot control seam
-      // (setProxyState → useProxy._setState).  Uses flushSync so the DOM
-      // updates synchronously before the next gesture fires — same pattern as
-      // emitFingerprintState / emitSitePermissions.
-      const control = getAutopilotControl();
-      if (control) flushSync(() => control.setProxyState(s));
-      return Promise.resolve();
-    },
   };
 }
 

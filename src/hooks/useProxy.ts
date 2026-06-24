@@ -18,8 +18,6 @@ export interface UseProxy {
   setConfig(cfg: ProxyConfig): Promise<ProxyState>;
   clear(): Promise<ProxyState>;
   test(cfg: ProxyConfig): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
-  /** Dev-only: directly seed the proxy state (bypasses the async getState() path). */
-  _setState(s: ProxyState): void;
 }
 
 export function useProxy(): UseProxy {
@@ -51,5 +49,5 @@ export function useProxy(): UseProxy {
 
   const test = useCallback((cfg: ProxyConfig) => aegis.proxy.testConnection(cfg), []);
 
-  return { state, setConfig, clear, test, _setState: setState };
+  return { state, setConfig, clear, test };
 }
