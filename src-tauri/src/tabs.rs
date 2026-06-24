@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use serde_json::Value;
-use tauri::{AppHandle, Manager, Url};
+use tauri::{AppHandle, Manager, Runtime, Url};
 
 use crate::tab_registry::{Registry, TabsState};
 
@@ -24,25 +24,25 @@ impl Tabs {
 }
 
 /// Monotonic ms since app start (matches the registry's `now_ms` clock).
-pub fn now_ms(app: &AppHandle) -> u64 {
+pub fn now_ms<R: Runtime>(app: &AppHandle<R>) -> u64 {
     app.try_state::<Tabs>()
         .map(|s| s.start.elapsed().as_millis() as u64)
         .unwrap_or(0)
 }
 
-fn state_value(app: &AppHandle) -> Value {
+fn state_value<R: Runtime>(app: &AppHandle<R>) -> Value {
     let s: TabsState = app.state::<Tabs>().reg.lock().unwrap().tabs_state();
     serde_json::to_value(s).unwrap_or(Value::Null)
 }
 
 /// Emit `tabs.state` + persist the session.
-fn emit_and_persist(app: &AppHandle) {
+fn emit_and_persist<R: Runtime>(app: &AppHandle<R>) {
     crate::emit_event(app, "tabs.state", state_value(app));
     persist(app);
 }
 
 /// Record a tab's current URL (called from nav.rs on_page_load) for restore.
-pub fn on_tab_url(app: &AppHandle, id: u32, url: &str) {
+pub fn on_tab_url<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
         s.reg.lock().unwrap().record_nav(id, url);
     }
@@ -52,7 +52,7 @@ pub fn on_tab_url(app: &AppHandle, id: u32, url: &str) {
 /// Record a tab's page title (from the WebKit title-changed signal). Updates the
 /// strip + persists it so restored "asleep" tabs show their title.
 #[allow(dead_code)] // only called from the Linux WebKit title-changed signal (linux_layout)
-pub fn on_tab_title(app: &AppHandle, id: u32, title: &str) {
+pub fn on_tab_title<R: Runtime>(app: &AppHandle<R>, id: u32, title: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
         s.reg.lock().unwrap().set_title(id, title.to_string());
     }
@@ -85,7 +85,7 @@ fn spawn(app: &AppHandle, id: u32, url: &str, private: bool) {
 }
 
 /// Whether tab `id` is a private (incognito) tab. Defaults to false for an unknown id.
-pub fn is_private(app: &AppHandle, id: u32) -> bool {
+pub fn is_private<R: Runtime>(app: &AppHandle<R>, id: u32) -> bool {
     app.try_state::<Tabs>()
         .and_then(|s| s.reg.lock().unwrap().is_private(id))
         .unwrap_or(false)
@@ -251,12 +251,12 @@ pub fn open_background(app: &AppHandle, url: &str, private: bool) {
     emit_and_persist(app);
 }
 
-fn session_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+fn session_path<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
     app.path().app_data_dir().ok().map(|d| d.join("tabs.json"))
 }
 
 /// Persist the session to tabs.json.
-pub fn persist(app: &AppHandle) {
+pub fn persist<R: Runtime>(app: &AppHandle<R>) {
     let Some(p) = session_path(app) else {
         return;
     };
@@ -272,7 +272,9 @@ pub fn persist(app: &AppHandle) {
 }
 
 /// Load a saved session, if any. Recovers from tabs.json.bak if the primary is corrupt.
-pub fn load_session(app: &AppHandle) -> Option<crate::tab_registry::PersistedSession> {
+pub fn load_session<R: Runtime>(
+    app: &AppHandle<R>,
+) -> Option<crate::tab_registry::PersistedSession> {
     let p = session_path(app)?;
     let txt = crate::jsonstore::read_with_backup(&p)?;
     serde_json::from_str(&txt).ok()
@@ -303,4 +305,296 @@ pub fn start_idle_sweep(app: &AppHandle) {
             emit_and_persist(&app2); // strip re-renders the discarded tabs as "asleep"
         });
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::with_tmp_app;
+
+    // ── session persistence ───────────────────────────────────────────────────
+
+    /// persist() serialises the managed registry to tabs.json; load_session() reads
+    /// it back.  Roundtrip must preserve tab count, active id, and next_id.
+    #[test]
+    fn session_round_trips_through_the_app_data_dir() {
+        with_tmp_app(|app| {
+            // Seed the managed registry with an extra tab so the persisted session
+            // has 2 tabs (the boot tab + the new one).
+            {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.create(Some("https://a.test/".into()), false, 0);
+            }
+
+            // Write the session via the production persist() helper.
+            persist(app);
+
+            // The session file must exist under the temp data dir.
+            let data_dir = app.path().app_data_dir().expect("data dir resolves");
+            let session_file = data_dir.join("tabs.json");
+            assert!(
+                session_file.exists(),
+                "tabs.json must exist after persist()"
+            );
+
+            // Read it back.
+            let loaded = load_session(app).expect("load_session must succeed after persist()");
+
+            // Capture the expected values from the registry.
+            let expected = {
+                let tabs = app.state::<Tabs>();
+                let reg = tabs.reg.lock().unwrap();
+                reg.to_persisted()
+            };
+
+            assert_eq!(
+                loaded.tabs.len(),
+                expected.tabs.len(),
+                "tab count must match"
+            );
+            assert_eq!(
+                loaded.active_id, expected.active_id,
+                "active_id must round-trip"
+            );
+            assert_eq!(loaded.next_id, expected.next_id, "next_id must round-trip");
+
+            // The extra tab's URL must survive the roundtrip.
+            let found = loaded.tabs.iter().any(|t| t.url == "https://a.test/");
+            assert!(found, "persisted tab URL must be present after load");
+        });
+    }
+
+    /// load_session() with no tabs.json returns None — callers fall back to a fresh
+    /// single-tab registry.
+    #[test]
+    fn missing_session_file_returns_none() {
+        with_tmp_app(|app| {
+            // No tabs.json written — load_session must return None, not panic.
+            let loaded = load_session(app);
+            assert!(
+                loaded.is_none(),
+                "load_session with no file must return None"
+            );
+        });
+    }
+
+    /// A persist() / load_session() roundtrip preserves tab titles and pinned state.
+    #[test]
+    fn session_preserves_title_and_pinned() {
+        with_tmp_app(|app| {
+            {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                // Create a pinned tab with a title.
+                let (id, _) = reg.create(Some("https://pinned.test/".into()), false, 0);
+                reg.set_pinned(id, true);
+                reg.set_title(id, "Pinned Page".into());
+            }
+
+            persist(app);
+            let loaded = load_session(app).expect("load_session must succeed");
+
+            let pinned_tab = loaded
+                .tabs
+                .iter()
+                .find(|t| t.url == "https://pinned.test/")
+                .expect("pinned tab must be in the session");
+
+            assert!(pinned_tab.pinned, "pinned flag must survive the roundtrip");
+            assert_eq!(
+                pinned_tab.title, "Pinned Page",
+                "title must survive the roundtrip"
+            );
+        });
+    }
+
+    // ── tabs_state from the managed registry ──────────────────────────────────
+
+    /// The managed registry's tabs_state() returns a well-formed TabsState:
+    /// at least one tab and a non-zero activeId.  This covers the same surface as
+    /// `tabs.list` without calling the non-generic dispatch() function.
+    #[test]
+    fn managed_registry_tabs_state_is_well_formed() {
+        with_tmp_app(|app| {
+            let state = app.state::<Tabs>();
+            let reg = state.reg.lock().unwrap();
+            let ts = reg.tabs_state();
+
+            assert!(
+                !ts.tabs.is_empty(),
+                "tabs_state must have at least the boot tab"
+            );
+            assert!(ts.active_id > 0, "active_id must be non-zero");
+
+            // activeId must correspond to a tab in the list.
+            let found = ts.tabs.iter().any(|t| t.id == ts.active_id);
+            assert!(found, "active_id must correspond to a tab in the tabs list");
+        });
+    }
+
+    // ── is_private ───────────────────────────────────────────────────────────
+
+    /// is_private returns false for the boot tab (always non-private) and false for
+    /// an unknown id.
+    #[test]
+    fn is_private_false_for_normal_tab_and_unknown_id() {
+        with_tmp_app(|app| {
+            // Boot tab id is 1.
+            assert!(!is_private(app, 1), "boot tab must not be private");
+            // Unknown id: must return false, not panic.
+            assert!(!is_private(app, 9999), "unknown id must return false");
+        });
+    }
+
+    // ── pure-state registry mutations ─────────────────────────────────────────
+
+    /// set_title updates the title in the managed registry; persist + load_session
+    /// preserve it (end-to-end Tauri-layer test without webview spawn).
+    #[test]
+    fn set_title_persists_through_session_roundtrip() {
+        with_tmp_app(|app| {
+            // Mutate via the registry directly (same code dispatch("tabs.setTitle") calls).
+            {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.set_title(1, "Hello".into());
+            }
+
+            persist(app);
+            let loaded = load_session(app).expect("load_session must succeed");
+
+            let boot_tab = loaded
+                .tabs
+                .iter()
+                .find(|t| t.id == 1)
+                .expect("boot tab must be in session");
+            assert_eq!(
+                boot_tab.title, "Hello",
+                "title must survive persist/load roundtrip"
+            );
+        });
+    }
+
+    /// set_pinned updates the pinned flag in the managed registry; persist + load_session
+    /// preserve it.
+    #[test]
+    fn set_pinned_persists_through_session_roundtrip() {
+        with_tmp_app(|app| {
+            {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.set_pinned(1, true);
+            }
+
+            persist(app);
+            let loaded = load_session(app).expect("load_session must succeed");
+
+            let boot_tab = loaded
+                .tabs
+                .iter()
+                .find(|t| t.id == 1)
+                .expect("boot tab must be in session");
+            assert!(
+                boot_tab.pinned,
+                "pinned flag must survive persist/load roundtrip"
+            );
+        });
+    }
+
+    /// reorder changes the tab order in the managed registry; tabs_state() reflects it.
+    #[test]
+    fn reorder_changes_tab_order_in_managed_registry() {
+        with_tmp_app(|app| {
+            // Create a second tab so we have ids [1, 2].
+            let id2 = {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                let (id, _) = reg.create(Some("https://b.test/".into()), false, 0);
+                id
+            };
+
+            // Reorder to [id2, 1].
+            {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.reorder(&[id2, 1]);
+            }
+
+            let state = app.state::<Tabs>();
+            let reg = state.reg.lock().unwrap();
+            let ts = reg.tabs_state();
+
+            assert!(ts.tabs.len() >= 2, "must have at least 2 tabs after create");
+            // After reorder, id2 should appear before tab 1.
+            let pos_id2 = ts
+                .tabs
+                .iter()
+                .position(|t| t.id == id2)
+                .expect("id2 must be present");
+            let pos_1 = ts
+                .tabs
+                .iter()
+                .position(|t| t.id == 1)
+                .expect("tab 1 must be present");
+            assert!(
+                pos_id2 < pos_1,
+                "id2 must appear before tab 1 after reorder"
+            );
+        });
+    }
+
+    // ── persist + session path ────────────────────────────────────────────────
+
+    /// persist() is idempotent: calling it twice with the same state produces the
+    /// same file content.
+    #[test]
+    fn persist_is_idempotent() {
+        with_tmp_app(|app| {
+            persist(app);
+            let first = load_session(app).expect("first persist must be loadable");
+            persist(app);
+            let second = load_session(app).expect("second persist must be loadable");
+
+            assert_eq!(first.tabs.len(), second.tabs.len());
+            assert_eq!(first.active_id, second.active_id);
+            assert_eq!(first.next_id, second.next_id);
+        });
+    }
+
+    /// Private tabs are excluded from the persisted session.
+    #[test]
+    fn private_tabs_are_excluded_from_persisted_session() {
+        with_tmp_app(|app| {
+            {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                // create_private(url, background, now_ms, private=true)
+                reg.create_private(Some("https://private.test/".into()), false, 0, true);
+            }
+
+            // is_private returns true for the new tab; we check by inspecting the registry.
+            let private_id = {
+                let tabs = app.state::<Tabs>();
+                let reg = tabs.reg.lock().unwrap();
+                let ts = reg.tabs_state();
+                // The private tab is the most recently created (active, id > 1).
+                ts.active_id
+            };
+            assert!(
+                is_private(app, private_id),
+                "newly created private tab must be private"
+            );
+
+            persist(app);
+            let loaded = load_session(app).expect("load_session must succeed");
+
+            // The private tab's URL must NOT appear in the persisted session.
+            let found = loaded.tabs.iter().any(|t| t.url == "https://private.test/");
+            assert!(
+                !found,
+                "private tab must be excluded from the persisted session"
+            );
+        });
+    }
 }
