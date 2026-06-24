@@ -77,6 +77,18 @@ interface AndroidBridge {
   findClose(): void;
   /** Set page zoom for tab `id` (percentage int, 100 == 1.0). No-op off Android. */
   setZoom(id: number, percent: number): void;
+  /**
+   * Apply an HTTP or SOCKS5 proxy process-globally (all WebViews in this process,
+   * including the chrome).  Called by `proxy.setConfig` when `config.mode === 'proxy'`.
+   * The chrome's own localhost/tauri.localhost origin is bypassed on the native side.
+   * PARITY DIFFERENCE vs desktop (content-only) — documented in the proxy task report.
+   */
+  setProxy?(scheme: string, host: string, port: number, bypass: string): void;
+  /**
+   * Clear the process-global proxy override (return to direct connections).
+   * Called by `proxy.setConfig` when `config.mode !== 'proxy'` and by `proxy.clear`.
+   */
+  clearProxy?(): void;
 }
 function androidBridge(): AndroidBridge | undefined {
   return (window as unknown as { AegisAndroid?: AndroidBridge }).AegisAndroid;
@@ -451,8 +463,32 @@ export const aegis: AegisApi = {
   },
   proxy: {
     getState: () => call<ProxyState>(IPC.proxyGetState),
-    setConfig: (config: ProxyConfig) => call<ProxyState>(IPC.proxySetConfig, { config }),
-    clear: () => call<ProxyState>(IPC.proxyClear),
+    setConfig: (config: ProxyConfig) => {
+      // On Android: drive the process-global ProxyController via the bridge in addition
+      // to the normal IPC call (which persists + emits proxy.state).
+      // ProxyController.setProxyOverride is PROCESS-GLOBAL (chrome webview too) —
+      // documented parity difference vs desktop (content-only).  The native bridge
+      // bypasses the chrome's own localhost/tauri.localhost origin so the React UI
+      // is not proxied.
+      const a = androidBridge();
+      if (a) {
+        if (config.mode === 'proxy') {
+          a.setProxy?.(
+            config.scheme,
+            config.host,
+            config.port,
+            (config.bypassHosts ?? []).join(','),
+          );
+        } else {
+          a.clearProxy?.();
+        }
+      }
+      return call<ProxyState>(IPC.proxySetConfig, { config });
+    },
+    clear: () => {
+      androidBridge()?.clearProxy?.();
+      return call<ProxyState>(IPC.proxyClear);
+    },
     testConnection: (config: ProxyConfig) =>
       call<{ ok: boolean; latencyMs?: number; error?: string }>(IPC.proxyTestConnection, {
         config,

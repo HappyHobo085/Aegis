@@ -19,6 +19,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.ProxyConfig
+import androidx.webkit.ProxyController
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.google.android.material.snackbar.Snackbar
@@ -473,6 +475,14 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       ViewCompat.requestApplyInsets(parent)
       // Let the React chrome (in the chrome webview) drive this content webview.
       webView.addJavascriptInterface(Bridge(), "AegisAndroid")
+      // Boot-apply the persisted proxy config (if any) so a saved ON proxy is live
+      // from the very first navigation — before the React chrome can call setProxy.
+      // ProxyController.setProxyOverride is PROCESS-GLOBAL: it routes ALL WebViews in
+      // this process (content AND chrome) through the proxy.  The chrome's own origin
+      // is bypassed via bypassSimpleHostnames() + addDirect() in Bridge.setProxy, so
+      // the React UI itself is NOT proxied.  If the feature is unsupported (old WebView)
+      // this is a graceful no-op.
+      applyBootProxy()
       // Warm the adblock engine (parses EasyList ~once) off the UI thread so the
       // first page's first request isn't stalled building it.
       Thread {
@@ -481,6 +491,57 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         } catch (_: Throwable) {
         }
       }.start()
+    }
+  }
+
+  /**
+   * Apply the persisted proxy config at boot (called once from onWebViewCreate.post).
+   * Reads the Rust `proxy::ANDROID_PROXY_CONFIG` global via `NativeProxy.proxyConfig()`
+   * and calls `ProxyController.setProxyOverride` / `clearProxyOverride` as appropriate.
+   *
+   * PARITY DIFFERENCE (documented): `ProxyController.setProxyOverride` is PROCESS-GLOBAL
+   * on Android — it routes ALL WebViews in the process (content AND chrome) through the
+   * proxy.  On desktop the proxy applies to the content WebView only.  The chrome's own
+   * localhost / tauri.localhost origin is bypassed via `bypassSimpleHostnames()` +
+   * `addDirect()` so the React UI is not proxied.  This difference is noted for Task 9 docs.
+   *
+   * Feature-check: if PROXY_OVERRIDE is unsupported (old System WebView) this is a
+   * safe no-op — browsing is unaffected without proxy support.
+   */
+  private fun applyBootProxy() {
+    if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return
+    try {
+      val json = NativeProxy.proxyConfig()
+      if (json.isEmpty()) return // no config seeded yet — direct (default)
+      val obj = org.json.JSONObject(json)
+      val mode = obj.optString("mode", "off")
+      if (mode != "proxy") {
+        // OFF or unrecognised — clear any previously applied override (idempotent).
+        ProxyController.getInstance().clearProxyOverride({ it.run() }, { })
+        return
+      }
+      val scheme = obj.optString("scheme", "http")
+      val host = obj.optString("host", "")
+      val port = obj.optInt("port", 0)
+      if (host.isEmpty() || port < 1 || port > 65535) return // invalid config — direct
+      val rule = "$scheme://$host:$port"
+      val builder = ProxyConfig.Builder().addProxyRule(rule)
+      // Bypass the chrome's own origin (localhost / tauri.localhost) + simple hostnames
+      // so the React UI is not proxied.  Fall through to direct for non-matching rules.
+      builder.bypassSimpleHostnames()
+      builder.addDirect()
+      val bypassArr = obj.optJSONArray("bypassHosts")
+      if (bypassArr != null) {
+        for (i in 0 until bypassArr.length()) {
+          val h = bypassArr.optString(i, "").trim()
+          if (h.isNotEmpty()) builder.addBypassRule(h)
+        }
+      }
+      ProxyController.getInstance().setProxyOverride(builder.build(), { it.run() }, {
+        Log.i("AegisProxy", "boot proxy applied: $rule")
+      })
+    } catch (t: Throwable) {
+      Log.w("AegisProxy", "boot proxy apply failed", t)
     }
   }
 
@@ -805,6 +866,63 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       currentFindQuery = ""
       contentWebView?.clearMatches()
       pushFindState(activeTabId, 0, 0)
+    }
+
+    // --- Proxy bridge (Task 5) ---
+    //
+    // PARITY DIFFERENCE vs desktop: `ProxyController.setProxyOverride` is PROCESS-GLOBAL
+    // on Android — it routes ALL WebViews in the process (content AND chrome) through the
+    // proxy.  On desktop the proxy is content-webview-scoped only.  We mitigate by calling
+    // `bypassSimpleHostnames()` + `addDirect()` so the React UI's localhost/tauri.localhost
+    // origin falls through to direct.  User-supplied bypass-hosts are also applied.
+    // If `PROXY_OVERRIDE` is unsupported (old System WebView) these are graceful no-ops.
+
+    /**
+     * Apply an HTTP or SOCKS5 proxy process-globally (all WebViews in this process).
+     * Called by the React chrome when the user enables a proxy in Settings, and by the
+     * ipcClient's `proxy.setConfig` Android route.
+     *
+     * @param scheme "http" or "socks5"
+     * @param host   proxy host (non-empty, validated Rust-side)
+     * @param port   proxy port (1–65535, validated Rust-side)
+     * @param bypass comma-separated bypass-host list (may be empty)
+     */
+    @JavascriptInterface
+    fun setProxy(scheme: String, host: String, port: Int, bypass: String) = runOnUiThread {
+      if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return@runOnUiThread
+      val rule = "$scheme://$host:$port"
+      val builder = ProxyConfig.Builder().addProxyRule(rule)
+      // Bypass the chrome's own origin (localhost / tauri.localhost) + simple hostnames
+      // so the React UI is not routed through the proxy.
+      builder.bypassSimpleHostnames()
+      builder.addDirect()
+      bypass.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach {
+        builder.addBypassRule(it)
+      }
+      try {
+        ProxyController.getInstance().setProxyOverride(builder.build(), { it.run() }, {
+          Log.i("AegisProxy", "proxy set: $rule")
+        })
+      } catch (t: Throwable) {
+        Log.w("AegisProxy", "setProxyOverride failed", t)
+      }
+    }
+
+    /**
+     * Clear the process-global proxy override, returning to direct connections.
+     * Called by the React chrome when the user disables the proxy in Settings, and
+     * by the ipcClient's `proxy.setConfig` (mode=off) / `proxy.clear` Android routes.
+     */
+    @JavascriptInterface
+    fun clearProxy() = runOnUiThread {
+      if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return@runOnUiThread
+      try {
+        ProxyController.getInstance().clearProxyOverride({ it.run() }, {
+          Log.i("AegisProxy", "proxy cleared")
+        })
+      } catch (t: Throwable) {
+        Log.w("AegisProxy", "clearProxyOverride failed", t)
+      }
     }
   }
 

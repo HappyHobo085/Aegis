@@ -183,6 +183,11 @@ pub fn apply_to_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
 
 /// Re-apply the active proxy config to every existing live content webview, then
 /// emit `proxy.state` so the chrome reflects the new config immediately.
+///
+/// On Android: also pushes the config to `ANDROID_PROXY_CONFIG` so the Kotlin
+/// boot-apply (and any subsequent `NativeProxy.proxyConfig()` call) reads the
+/// current config without an `AppHandle`. The chrome's `AegisAndroid.setProxy` /
+/// `clearProxy` bridge methods apply it to `ProxyController` process-globally.
 pub fn apply<R: Runtime>(app: &AppHandle<R>) {
     if let Some(s) = app.try_state::<crate::tabs::Tabs>() {
         let ids: Vec<u32> = s.reg.lock().unwrap().all_ids();
@@ -190,7 +195,57 @@ pub fn apply<R: Runtime>(app: &AppHandle<R>) {
             apply_to_tab(app, id);
         }
     }
+    #[cfg(target_os = "android")]
+    note_config(&current(app));
     crate::emit_event(app, "proxy.state", state_json(app));
+}
+
+/// Android-only: the serialized proxy config the `NativeProxy.proxyConfig()` JNI getter
+/// reads. Seeded at boot (by `apply` → here) and updated on every `proxy.setConfig` /
+/// `proxy.clear` (again via `apply`). The JNI getter has no `AppHandle`, so the config
+/// is pushed into this global by the Rust side.
+///
+/// The value is a compact JSON object matching the `ProxyConfig` serde shape:
+/// `{"mode":"proxy","scheme":"http","host":"...","port":8080,"bypassHosts":[...]}`.
+/// The Kotlin side parses it, then calls `ProxyController.setProxyOverride` /
+/// `clearProxyOverride` through the `AegisAndroid` bridge.
+#[cfg(target_os = "android")]
+static ANDROID_PROXY_CONFIG: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
+
+/// Push the current proxy config to the Android-side global so the Kotlin boot-apply
+/// can read it via the `NativeProxy.proxyConfig()` JNI getter. Android-only.
+#[cfg(target_os = "android")]
+pub fn note_config(cfg: &ProxyConfig) {
+    let json = serde_json::to_string(cfg).unwrap_or_default();
+    if let Ok(mut g) = ANDROID_PROXY_CONFIG.write() {
+        *g = json;
+    }
+}
+
+/// JNI bridge for Android's `NativeProxy.proxyConfig()`. Returns the serialized
+/// `ProxyConfig` JSON for the current proxy settings, so the Kotlin boot-apply can
+/// call `ProxyController.setProxyOverride` without an `AppHandle`. Returns a null
+/// jstring on failure (Kotlin treats that as "use direct / no proxy").
+///
+/// Panic-safe via `catch_unwind` — a JNI frame that unwinds across a non-unwinding
+/// boundary causes SIGABRT (see the Android JNI crash gotcha in the project memory).
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeProxy_proxyConfig<'a>(
+    env: jni::JNIEnv<'a>,
+    _this: jni::objects::JObject<'a>,
+) -> jni::sys::jstring {
+    let result = std::panic::catch_unwind(|| {
+        ANDROID_PROXY_CONFIG
+            .read()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    });
+    let json = result.unwrap_or_default();
+    match env.new_string(json) {
+        Ok(s) => s.into_raw(),
+        Err(_) => std::ptr::null_mut(),
+    }
 }
 
 /// Route `proxy.*` IPC channels. Returns `None` for unowned channels.
