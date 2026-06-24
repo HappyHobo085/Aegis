@@ -130,6 +130,17 @@ dotted event name.
     a new window to a rotating ad domain no list can track. Same-origin / `about:blank` opens
     pass through (native `on_new_window` vets those). Trade-off: legit cross-origin scripted
     popups (e.g. OAuth) are blocked too; real `<a target=_blank>` links still open.
+    **Anti-fingerprinting (farbling) — Task 6:** `script(app, host_allowlisted, host)` now
+    also appends `farble::shim_for(level, fp_allowlisted)` after the popup guard (and after
+    the non-Linux ad-block body) via `compose(webrtc, farble)`. The farble shim uses the
+    SEPARATE `fp-allowlist` (`farble::host_allowlisted`), not the ad-block allowlist. `off`
+    level or an fp-allowlisted host → `""` → no injection (fail-safe no-op). **Per-spawn
+    limitation (same as WebRTC shim):** the shim is evaluated once at content-webview creation;
+    toggling the farbling level or fp-allowlist applies to newly spawned/reloaded tabs only.
+    An in-tab SPA navigation to a different host is not re-evaluated until respawn. **Honest
+    detectability note:** like the WebRTC shim, a JS shim is detectable by a motivated site;
+    on WebKit the UA already lies about the engine. This is the accepted trade-off for the
+    farbling tier — it adds noise that stops passive fingerprinting without breaking pages.
   - `adblock_win.rs` (Windows) — hooks WebView2 `WebResourceRequested` on
     `ICoreWebView2` via unsafe COM for full network interception.
 - **Find-in-page** (`find.rs` + `find_{linux,win,mac}.rs`):

@@ -230,10 +230,16 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
     // "trusted site") is exempt from the WebRTC shim + native backstops. Computed from the
     // spawn URL's host before `url` is moved into the builder. Residual: keyed on the spawn
     // host; an in-tab SPA navigation to a different host isn't re-evaluated until respawn.
-    let host_allowlisted = url
-        .host_str()
-        .map(|h| crate::adblock::host_allowlisted(app, h))
-        .unwrap_or(false);
+    //
+    // `host` is also threaded into `adblock_inject::script` for the SEPARATE farble
+    // fp-allowlist check (farble::host_allowlisted). The two allowlists are independent:
+    // ad-block allowlist = "trust this site's ads"; fp-allowlist = "don't farble this site".
+    let host = url.host_str().unwrap_or("").to_string();
+    let host_allowlisted = if host.is_empty() {
+        false
+    } else {
+        crate::adblock::host_allowlisted(app, &host)
+    };
 
     let app_nav = app.clone();
     let app_load = app.clone();
@@ -249,11 +255,17 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
         // live only in memory and vanish when the webview closes. Verified API:
         // `WebviewBuilder::incognito(bool)` at tauri-2.11.2/src/webview/mod.rs:997.
         .incognito(private)
-        // Inject the WebRTC IP-leak shim + ad/tracker blocker at document start into the
-        // page and all iframes. The shim hides the local IP per the user's webrtcPolicy;
-        // the ad-block part supplements WebKit content filters on Linux and IS the ad-block
-        // layer on Windows/macOS (where wry exposes no request interception).
-        .initialization_script_for_all_frames(crate::adblock_inject::script(app, host_allowlisted))
+        // Inject the WebRTC IP-leak shim + ad/tracker blocker + farbling shim at document
+        // start into the page and all iframes. The WebRTC shim hides the local IP per the
+        // user's webrtcPolicy; the ad-block part supplements WebKit content filters on Linux
+        // and IS the ad-block layer on Windows/macOS; the farble shim perturbs canvas/audio/
+        // WebGL fingerprinting surfaces per the antiFingerprint setting. All three are
+        // evaluated at spawn time: toggling settings applies to new/reloaded tabs only.
+        .initialization_script_for_all_frames(crate::adblock_inject::script(
+            app,
+            host_allowlisted,
+            &host,
+        ))
         // The policy logic lives in `decide_navigation` so every platform shares it. On Linux
         // this Tauri hook is disconnected at spawn (wry claims `decide-policy` and would block
         // our own gesture/frame-aware handler) and `linux_layout::install_nav_policy` runs the

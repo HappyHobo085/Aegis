@@ -7,6 +7,22 @@
 //! domains and (b) hides ad elements with injected CSS. Both lists are extracted from
 //! the same bundled EasyList the Rust engine uses.
 //!
+//! ## Anti-fingerprinting (farbling) — Task 6
+//!
+//! `script()` now also composes the farbling shim (from `farble::shim_for`) into the
+//! document-start injection. The shim is appended after the pop-under guard (and after the
+//! non-Linux ad-block body) by `compose(webrtc, farble)`. It uses a SEPARATE allowlist
+//! (`fp-allowlist` / `farble::host_allowlisted`) from the ad-block allowlist, and consults
+//! the `antiFingerprint` setting (`farble::level`). `off` or an allowlisted host → `""` →
+//! no injection (fail-safe no-op).
+//!
+//! **Per-spawn limitation:** the farble shim (like the WebRTC shim) is evaluated ONCE at
+//! content-webview creation (document-start script registered per webview). Toggling the
+//! farbling level or allowlist applies to newly spawned/reloaded tabs, not already-open ones.
+//! The allowlist host is evaluated from the spawn URL at creation time — an in-tab SPA
+//! navigation to a different host is not re-evaluated until the tab is reloaded/respawned.
+//! This is the same model as the WebRTC shim and other spawn-time injections.
+//!
 //! Limitation vs. true network interception: requests the HTML parser makes directly
 //! (`<img>`/`<script>`/`<iframe>` src) still hit the network — but the cosmetic layer
 //! hides what they render, and the JS-API layer stops scripts/trackers/beacons.
@@ -49,31 +65,62 @@ const POPUP_GUARD: &str = r#"(function(){
 })();"#;
 
 /// The document-start script injected into the desktop content webview: the WebRTC
-/// IP-leak shim (per the user's `webrtcPolicy` + the per-site allowlist escape hatch),
-/// then the pop-under guard (EVERY platform), then — on Windows/macOS — the heavier
+/// IP-leak shim (per the user's `webrtcPolicy` + the ad-block per-site allowlist escape
+/// hatch), then the pop-under guard (EVERY platform), then — on Windows/macOS — the heavier
 /// fetch/XHR/cosmetic ad-block layer (Linux does full network blocking via WebKit content
-/// filters, so it skips the ~1 MB injection). `host_allowlisted` = the tab host is on the
-/// ad-block allowlist, which doubles as the WebRTC escape hatch (shim returns ""). Android
-/// builds its equivalent via the NativeInject + NativeWebrtc JNI getters.
+/// filters, so it skips the ~1 MB injection), and finally the anti-fingerprinting (farbling)
+/// shim (per the user's `antiFingerprint` setting + the SEPARATE `fp-allowlist` escape hatch).
+///
+/// `host_allowlisted` = the tab host is on the AD-BLOCK allowlist (doubles as the WebRTC
+/// escape hatch). `host` = the raw host string of the spawn URL, used to look up the
+/// FARBLE allowlist separately (`fp-allowlist`; a different allowlist from the ad-block one).
+///
+/// For `off` farbling level or an fp-allowlisted host, `farble::shim_for` returns `""` →
+/// no farble injection (fail-safe no-op). A farble error never blocks webview creation.
+///
+/// **Per-spawn limitation:** the farble shim is evaluated ONCE at content-webview creation.
+/// Toggling the level or fp-allowlist applies to newly spawned/reloaded tabs only.
+///
+/// Android builds its equivalent via the NativeInject + NativeWebrtc JNI getters.
 #[cfg_attr(target_os = "android", allow(dead_code))] // Android uses the JNI getters instead
-pub fn script(app: &tauri::AppHandle, host_allowlisted: bool) -> String {
+pub fn script(app: &tauri::AppHandle, host_allowlisted: bool, host: &str) -> String {
     let webrtc =
         crate::webrtc_shim::shim_for(&crate::settings::webrtc_policy(app), host_allowlisted);
-    compose(&webrtc)
+    // Farble shim: uses the SEPARATE fp-allowlist (not the ad-block allowlist). Fail-open:
+    // a farble computation error (e.g. missing state) yields "" → no-op injection.
+    let farble = {
+        let level = crate::farble::level(app);
+        let fp_allowlisted = crate::farble::host_allowlisted(app, host);
+        crate::farble::shim_for(&level, fp_allowlisted)
+    };
+    compose(&webrtc, &farble)
 }
 
 /// Compose the document-start script from the (already-built) WebRTC shim prefix + the
-/// pop-under guard + (non-Linux) the cached ad-block body. Split out so the composition is
-/// unit-testable without an AppHandle.
+/// pop-under guard + (non-Linux) the cached ad-block body + the farble shim suffix.
+/// Split out so the composition is unit-testable without an AppHandle.
+///
+/// `farble` is `""` for the `off`/allowlisted case → no farble appended (correct no-op).
 #[cfg_attr(target_os = "android", allow(dead_code))]
-fn compose(webrtc: &str) -> String {
+fn compose(webrtc: &str, farble: &str) -> String {
     #[cfg(target_os = "linux")]
     {
-        format!("{webrtc}\n{POPUP_GUARD}")
+        if farble.is_empty() {
+            format!("{webrtc}\n{POPUP_GUARD}")
+        } else {
+            format!("{webrtc}\n{POPUP_GUARD}\n{farble}")
+        }
     }
     #[cfg(not(target_os = "linux"))]
     {
-        format!("{webrtc}\n{POPUP_GUARD}\n{}", BUILT.get_or_init(build))
+        if farble.is_empty() {
+            format!("{webrtc}\n{POPUP_GUARD}\n{}", BUILT.get_or_init(build))
+        } else {
+            format!(
+                "{webrtc}\n{POPUP_GUARD}\n{}\n{farble}",
+                BUILT.get_or_init(build)
+            )
+        }
     }
 }
 
@@ -213,9 +260,33 @@ mod tests {
         assert!(g.contains("realOpen.apply"));
         // The composed script carries the guard on EVERY platform — incl. the Linux test
         // host, where the heavy ad-block injection is otherwise skipped. compose() with an
-        // empty WebRTC prefix is the no-policy/allowlisted case.
-        assert!(super::compose("").contains("__aegisBlocked"));
+        // empty WebRTC prefix and empty farble is the no-policy/allowlisted case.
+        assert!(super::compose("", "").contains("__aegisBlocked"));
         // The WebRTC shim is prepended ahead of the guard when present.
-        assert!(super::compose("/*shim*/").starts_with("/*shim*/"));
+        assert!(super::compose("/*shim*/", "").starts_with("/*shim*/"));
+    }
+
+    #[test]
+    fn compose_appends_farble_after_popup_guard() {
+        // A non-empty farble argument must appear AFTER the popup guard.
+        let s = super::compose("", "/*farble*/");
+        let guard_pos = s
+            .find("__aegisBlocked")
+            .expect("popup guard must be present");
+        let farble_pos = s.find("/*farble*/").expect("farble must be present");
+        assert!(
+            farble_pos > guard_pos,
+            "farble must appear after the popup guard: guard@{guard_pos} farble@{farble_pos}"
+        );
+        assert!(s.ends_with("/*farble*/"), "farble must be at the end");
+    }
+
+    #[test]
+    fn compose_empty_farble_unchanged() {
+        // compose("", "") must produce the same result as the old compose("") did — no farble appended.
+        let with_empty = super::compose("", "");
+        assert!(!with_empty.contains("/*farble*/"));
+        // Sanity: popup guard still present.
+        assert!(with_empty.contains("__aegisBlocked"));
     }
 }
