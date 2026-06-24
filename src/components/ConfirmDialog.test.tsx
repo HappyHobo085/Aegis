@@ -1,10 +1,11 @@
 // src/components/ConfirmDialog.test.tsx
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { StrictMode } from 'react';
 import { render, screen, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ConfirmDialog } from './ConfirmDialog';
 import { confirm, registerConfirmHandler, __resetToasts } from '../lib/toast';
+import * as toastLib from '../lib/toast';
 
 beforeEach(() => {
   __resetToasts();
@@ -70,18 +71,48 @@ describe('ConfirmDialog', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
+  it('lands initial focus on the SAFE choice (Cancel), not the affirmative default', async () => {
+    render(<ConfirmDialog />);
+    act(() => void confirm('Focus me safely?'));
+    await screen.findByRole('dialog');
+    // Cancel (the safe choice) should have focus on open so a stray Enter can't fire OK.
+    expect(screen.getByRole('button', { name: /^cancel$/i })).toHaveFocus();
+  });
+
   it('focus is trapped inside the dialog', async () => {
     render(<ConfirmDialog />);
     act(() => void confirm('Trapped?'));
     await screen.findByRole('dialog');
-    // First focusable should have focus on open
     const okBtn = screen.getByRole('button', { name: /^ok$/i });
-    expect(okBtn).toHaveFocus();
-    // Tab from Cancel (last) wraps back to OK (first)
     const cancelBtn = screen.getByRole('button', { name: /^cancel$/i });
-    cancelBtn.focus();
+    // Cancel (last focusable) has focus on open; Tab wraps back to OK (first).
+    expect(cancelBtn).toHaveFocus();
     await userEvent.tab();
     expect(okBtn).toHaveFocus();
+  });
+
+  it('clicking the scrim/backdrop cancels (resolves false) and closes the dialog', async () => {
+    const { container } = render(<ConfirmDialog />);
+    let result: boolean | undefined;
+    act(() => {
+      void confirm('Backdrop?').then((v) => {
+        result = v;
+      });
+    });
+    await screen.findByRole('dialog');
+    const scrim = container.querySelector('.confirm-dialog__scrim') as HTMLElement;
+    await userEvent.click(scrim);
+    expect(result).toBe(false);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('clicking inside the dialog card does NOT close it (no bubble to scrim)', async () => {
+    render(<ConfirmDialog />);
+    act(() => void confirm('Inside click?'));
+    const dialog = await screen.findByRole('dialog');
+    // Click the message text inside the card — should stay open.
+    await userEvent.click(screen.getByText('Inside click?'));
+    expect(dialog).toBeInTheDocument();
   });
 
   it('promise resolves exactly once even if Escape fires then Cancel is clicked', async () => {
@@ -139,6 +170,31 @@ describe('ConfirmDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: /^cancel$/i }));
     expect(result).toBe(false);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('non-destructive (default): the OK button has no danger class', async () => {
+    render(<ConfirmDialog />);
+    act(() => void confirm('Plain confirm'));
+    await screen.findByRole('dialog');
+    const okBtn = screen.getByRole('button', { name: /^ok$/i });
+    expect(okBtn).not.toHaveClass('confirm-dialog__confirm--danger');
+  });
+
+  it('destructive: the OK button gets the danger class when the handler is flagged', async () => {
+    // The public confirm(message) wrapper forwards only the message, but ConfirmDialog
+    // registers a handler that also accepts a `destructive` flag. Capture that handler
+    // and drive it directly with destructive=true to exercise the danger-styling path.
+    let captured: ((m: string, d?: boolean) => Promise<boolean>) | null = null;
+    const spy = vi.spyOn(toastLib, 'registerConfirmHandler').mockImplementation((h) => {
+      captured = h as unknown as (m: string, d?: boolean) => Promise<boolean>;
+    });
+    render(<ConfirmDialog />);
+    expect(captured).toBeTypeOf('function');
+    act(() => void captured!('Delete forever?', true));
+    await screen.findByRole('dialog');
+    const okBtn = screen.getByRole('button', { name: /^ok$/i });
+    expect(okBtn).toHaveClass('confirm-dialog__confirm--danger');
+    spy.mockRestore();
   });
 
   it('dialog has accessible role, aria-modal, and aria-describedby on the message', async () => {

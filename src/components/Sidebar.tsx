@@ -69,6 +69,21 @@ export function Sidebar({ open, onClose, history, saved, onWidthChange }: Sideba
     onWidthChange?.(width);
   }, [width, onWidthChange]);
 
+  // Escape closes the panel while it's open. The sidebar is an INSET panel (the page
+  // stays visible beside it), not a modal, so we don't trap focus — we just listen for
+  // Escape on the document and call onClose. The listener is only attached while open.
+  useEffect(() => {
+    if (!open) return;
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [open, onClose]);
+
   const onResizePointerDown = (e: ReactPointerEvent<HTMLDivElement>): void => {
     e.preventDefault();
     (e.target as HTMLElement).setPointerCapture(e.pointerId);

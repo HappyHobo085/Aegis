@@ -8,6 +8,8 @@ interface PendingConfirm {
   message: string;
   resolve: (value: boolean) => void;
   resolved: boolean;
+  /** When true, the affirmative (OK) action is styled as destructive. */
+  destructive?: boolean;
 }
 
 function Dialog({
@@ -18,25 +20,37 @@ function Dialog({
   onResolve: (value: boolean) => void;
 }) {
   const msgId = useId();
-  const dialogRef = useDialog<HTMLDivElement>(() => onResolve(false));
+  // Land initial focus on the SAFE choice (Cancel) so a stray Enter can't fire the
+  // affirmative default.
+  const cancelRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useDialog<HTMLDivElement>(() => onResolve(false), {
+    initialFocus: cancelRef,
+  });
 
   return (
-    <div className="confirm-dialog__scrim">
+    // Backdrop/scrim click cancels (treated as a dismiss).
+    <div className="confirm-dialog__scrim" onClick={() => onResolve(false)}>
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-describedby={msgId}
         className="confirm-dialog"
+        // Don't let clicks inside the card bubble up to the scrim (which would cancel).
+        onClick={(e) => e.stopPropagation()}
       >
         <p id={msgId} className="confirm-dialog__message">
           {pending.message}
         </p>
         <div className="confirm-dialog__actions">
-          <button type="button" onClick={() => onResolve(true)}>
+          <button
+            type="button"
+            className={pending.destructive ? 'confirm-dialog__confirm--danger' : undefined}
+            onClick={() => onResolve(true)}
+          >
             OK
           </button>
-          <button type="button" onClick={() => onResolve(false)}>
+          <button type="button" ref={cancelRef} onClick={() => onResolve(false)}>
             Cancel
           </button>
         </div>
@@ -65,9 +79,18 @@ export function ConfirmDialog() {
   }, []);
 
   useEffect(() => {
-    registerConfirmHandler((message: string): Promise<boolean> => {
+    // The registered handler accepts the message and an optional `destructive` flag.
+    // `confirm(message)` in lib/toast supplies only the message today (default
+    // non-destructive); the second parameter lets a future destructive-confirm caller
+    // flag the affirmative action without changing this component.
+    registerConfirmHandler((message: string, destructive?: boolean): Promise<boolean> => {
       return new Promise<boolean>((resolve) => {
-        const pendingItem: PendingConfirm = { message, resolve, resolved: false };
+        const pendingItem: PendingConfirm = {
+          message,
+          resolve,
+          resolved: false,
+          destructive: destructive ?? false,
+        };
         pendingRef.current = pendingItem;
         setPending(pendingItem);
       });

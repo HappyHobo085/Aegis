@@ -65,4 +65,20 @@ describe('DownloadsModal', () => {
     await userEvent.keyboard('{Escape}');
     expect(p.onClose).toHaveBeenCalledTimes(1);
   });
+
+  it('clicking the scrim/backdrop calls onClose', async () => {
+    const p = props();
+    const { container } = render(<DownloadsModal {...p} />);
+    const scrim = container.querySelector('.downloads-modal__scrim') as HTMLElement;
+    await userEvent.click(scrim);
+    expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('clicking inside the dialog card does NOT close it (no bubble to scrim)', async () => {
+    const p = props();
+    render(<DownloadsModal {...p} />);
+    // Click the heading inside the card — should not bubble to the scrim.
+    await userEvent.click(screen.getByRole('heading', { name: /downloads/i }));
+    expect(p.onClose).not.toHaveBeenCalled();
+  });
 });

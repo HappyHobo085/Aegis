@@ -49,6 +49,20 @@ describe('Sidebar', () => {
     expect(p.onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('pressing Escape while open calls onClose', async () => {
+    const p = props();
+    render(<Sidebar {...p} />);
+    await userEvent.keyboard('{Escape}');
+    expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('pressing Escape while closed does nothing (no listener attached)', async () => {
+    const p = props({ open: false });
+    render(<Sidebar {...p} />);
+    await userEvent.keyboard('{Escape}');
+    expect(p.onClose).not.toHaveBeenCalled();
+  });
+
   it('does NOT render an internal toggle button', () => {
     render(<Sidebar {...props()} />);
     expect(screen.queryByRole('button', { name: /toggle sidebar/i })).not.toBeInTheDocument();

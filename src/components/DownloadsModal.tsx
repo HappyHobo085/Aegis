@@ -16,13 +16,16 @@ export function DownloadsModal({ onClose, ...panel }: DownloadsModalProps) {
   const dialogRef = useDialog<HTMLDivElement>(onClose);
 
   return (
-    <div className="downloads-modal__scrim">
+    // Backdrop/scrim click closes the modal.
+    <div className="downloads-modal__scrim" onClick={onClose}>
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby={titleId}
         className="downloads-modal"
+        // Clicks inside the card must not bubble to the scrim (which would close).
+        onClick={(e) => e.stopPropagation()}
       >
         <div className="downloads-modal__header">
           <h2 id={titleId} className="downloads-modal__title">

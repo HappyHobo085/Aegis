@@ -53,4 +53,25 @@ describe('PermissionPromptDialog', () => {
     await userEvent.keyboard('{Escape}');
     expect(p.onResolve).toHaveBeenCalledWith(7, 'deny');
   });
+
+  it('lands initial focus on the SAFE choice (Block), not Allow', () => {
+    render(<PermissionPromptDialog {...props()} />);
+    expect(screen.getByRole('button', { name: /^block$/i })).toHaveFocus();
+  });
+
+  it('clicking the scrim/backdrop denies (closing == blocking)', async () => {
+    const p = props({ prompt: prompt({ requestId: 8 }) });
+    const { container } = render(<PermissionPromptDialog {...p} />);
+    const scrim = container.querySelector('.permission-prompt__scrim') as HTMLElement;
+    await userEvent.click(scrim);
+    expect(p.onResolve).toHaveBeenCalledWith(8, 'deny');
+  });
+
+  it('clicking inside the dialog card does NOT deny (no bubble to scrim)', async () => {
+    const p = props({ prompt: prompt({ requestId: 9 }) });
+    render(<PermissionPromptDialog {...p} />);
+    // Click the message text inside the card — must not trigger a scrim-deny.
+    await userEvent.click(screen.getByText(/wants to use/i));
+    expect(p.onResolve).not.toHaveBeenCalled();
+  });
 });

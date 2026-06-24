@@ -1,6 +1,9 @@
 // src/components/SafetyInterstitial.tsx
+import { useRef } from 'react';
 import type { SafetyInterstitialPayload } from '../../shared/types';
 import { useChromeSurface } from '../hooks/useChromeSurfaces';
+import { useDialog } from '../hooks/useDialog';
+import { confirm } from '../lib/toast';
 
 function safeHost(url: string): string {
   try {
@@ -9,6 +12,8 @@ function safeHost(url: string): string {
     return url;
   }
 }
+
+const noop = (): void => {};
 
 export function SafetyInterstitial({
   interstitial,
@@ -20,11 +25,29 @@ export function SafetyInterstitial({
   onBack?: () => void;
 }) {
   useChromeSurface('safetyInterstitial', interstitial !== null);
+  // Land focus on the SAFE action (Go back). Esc closes to the safe action too;
+  // when onBack is undefined there is no safe action, so Esc/close is a no-op.
+  const backRef = useRef<HTMLButtonElement | null>(null);
+  const dialogRef = useDialog<HTMLDivElement>(onBack ?? noop, { initialFocus: backRef });
+
   if (interstitial === null) return null;
   const host = safeHost(interstitial.url);
   const malware = interstitial.reason === 'malware';
+
+  const handleContinue = async (): Promise<void> => {
+    if (malware) {
+      // Require an explicit confirm before proceeding to a flagged-dangerous site.
+      const ok = await confirm('This site is flagged as dangerous. Continue anyway?', {
+        destructive: true,
+      });
+      if (!ok) return;
+    }
+    onProceed(interstitial.url);
+  };
+
   return (
     <div
+      ref={dialogRef}
       className={`interstitial${malware ? ' interstitial--malware' : ''}`}
       role="alertdialog"
       aria-modal="true"
@@ -55,6 +78,7 @@ export function SafetyInterstitial({
           {onBack && (
             <button
               type="button"
+              ref={backRef}
               className="interstitial__back"
               aria-label="Go back"
               onClick={onBack}
@@ -65,7 +89,7 @@ export function SafetyInterstitial({
           <button
             type="button"
             className="interstitial__continue"
-            onClick={() => onProceed(interstitial.url)}
+            onClick={() => void handleContinue()}
           >
             {malware ? 'Continue anyway (not recommended)' : 'Continue to HTTP for this site'}
           </button>
