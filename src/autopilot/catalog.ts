@@ -115,19 +115,49 @@ export const CATALOG: FeatureCheck[] = [
         throw new Error('close: new tab still in list');
 
       // PRIVATE TAB: browsing in it must leave NO history row.
-      const probe = `https://ap-private-${Date.now()}.test/`;
-      const privCreated = await a.tabs.create(probe, false, true);
+      //
+      // The probe must be a URL the live fixture server actually serves so that a
+      // NON-private navigation WOULD record a history row.  Using a .test/ or
+      // .invalid/ domain (NXDOMAIN) means the navigation fails before any page
+      // loads, so the Rust history store never writes regardless of the private
+      // flag — a passing assertion that proves nothing about private mode.
+      //
+      // VITE_AEGIS_AUTOPILOT_FIXTURE is the live fixture server base (e.g.
+      // http://127.0.0.1:8137/), always set by run-autopilot.sh.  The query
+      // marker makes the URL unique so history.search returns at most one hit.
+      const ts = Date.now();
+      const fixtureBase =
+        (import.meta.env.VITE_AEGIS_AUTOPILOT_FIXTURE as string) || 'http://127.0.0.1:8137/';
+      const normalProbe = `${fixtureBase}?aegis-normal-probe=${ts}`;
+      const privateProbe = `${fixtureBase}?aegis-private-probe=${ts}`;
+
+      // Sanity: a NORMAL navigation to the fixture MUST record a history row,
+      // proving this URL path actually goes through the history store.
+      const normalTab = await a.tabs.create(normalProbe, false, false);
+      const normalTabId = normalTab.tabs.find((t) => !beforeIds.has(t.id) && !t.private)?.id;
+      if (normalTabId === undefined) throw new Error('private-sanity: no normal tab created');
+      await a.nav.navigate(normalTabId, normalProbe);
+      await new Promise((r) => setTimeout(r, 1500));
+      const normalHits = (await a.history.search(normalProbe)).length;
+      await a.tabs.close(normalTabId);
+      if (normalHits === 0)
+        throw new Error(
+          `private-sanity: normal nav to ${normalProbe} left 0 history rows — probe path is not being recorded; fix the probe URL before trusting the private-tab assertion`,
+        );
+
+      // Now the actual private-tab check.
+      const privCreated = await a.tabs.create(privateProbe, false, true);
       const pid = privCreated.tabs.find((t) => t.private)?.id;
       if (pid === undefined) throw new Error('private: created tab not marked private in state');
       // Navigate the private tab and give the (skipped) history write a chance to (not) happen.
-      await a.nav.navigate(pid, probe);
+      await a.nav.navigate(pid, privateProbe);
       await new Promise((r) => setTimeout(r, 1500));
-      const hits = (await a.history.search(probe)).length;
+      const hits = (await a.history.search(privateProbe)).length;
       await a.tabs.close(pid);
       if (hits !== 0)
-        throw new Error(`private: navigation left ${hits} history row(s) for ${probe}`);
+        throw new Error(`private: navigation left ${hits} history row(s) for ${privateProbe}`);
 
-      return `tabs create(bg)→assert→close ok (newId=${newTab.id}); private-leaves-no-history ok (privId=${pid})`;
+      return `tabs create(bg)→assert→close ok (newId=${newTab.id}); private-leaves-no-history ok (privId=${pid}, sanity=${normalHits} normal rows recorded)`;
     },
   },
   // view — overlay/visibility calls are pure layout side-effects on the native webview stack;
