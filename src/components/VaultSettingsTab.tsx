@@ -13,6 +13,7 @@
 import { useEffect, useState } from 'react';
 import type { VaultRecord, VaultRecordInput } from '../../shared/types';
 import type { UseVault } from '../hooks/useVault';
+import { confirm, toast } from '../lib/toast';
 
 export function VaultSettingsTab({ vault }: { vault: UseVault }) {
   const { state } = vault;
@@ -271,14 +272,26 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
   };
 
   const handleDelete = (uuid: string) => {
-    void run(async () => {
-      await vault.remove(uuid);
-      await refreshList();
-    });
+    void (async () => {
+      if (!(await confirm('Delete this saved password? This can’t be undone.', { destructive: true })))
+        return;
+      void run(async () => {
+        await vault.remove(uuid);
+        await refreshList();
+      });
+    })();
   };
 
   const handleCopy = (text: string) => {
-    void navigator.clipboard.writeText(text);
+    void (async () => {
+      try {
+        await navigator.clipboard.writeText(text);
+        toast.success('Copied');
+      } catch (e) {
+        console.error('Clipboard copy failed:', e);
+        toast.error('Couldn’t copy');
+      }
+    })();
   };
 
   return (

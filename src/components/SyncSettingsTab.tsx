@@ -1,7 +1,38 @@
 // src/components/SyncSettingsTab.tsx
 import { useEffect, useState } from 'react';
-import type { SyncDevice } from '../../shared/types';
+import type { SyncDevice, SyncState } from '../../shared/types';
 import type { UseSync } from '../hooks/useSync';
+import { confirm, toast } from '../lib/toast';
+
+/** Friendly label for the raw sync-engine status enum. */
+function statusLabel(status: SyncState['status']): string {
+  switch (status) {
+    case 'idle':
+      return 'Up to date';
+    case 'syncing':
+      return 'Syncing…';
+    case 'error':
+      return 'Sync error';
+    case 'disabled':
+      return 'Off';
+    default:
+      return status;
+  }
+}
+
+/** Friendly label for where the encryption keys are stored. */
+function vaultBackingLabel(backing: SyncState['vaultBacking']): string {
+  switch (backing) {
+    case 'keychain':
+      return 'Device keychain';
+    case 'passphrase':
+      return 'Passphrase-protected';
+    case 'none':
+      return 'Not protected';
+    default:
+      return backing;
+  }
+}
 
 export function SyncSettingsTab({
   sync,
@@ -52,9 +83,20 @@ export function SyncSettingsTab({
     try {
       await fn();
     } catch (e) {
-      setError(String(e));
+      console.error('Sync action failed:', e);
+      setError("Couldn't reach the sync server — check the URL and your connection.");
     } finally {
       setBusy(false);
+    }
+  };
+
+  const copyPhrase = async (text: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      toast.success('Recovery phrase copied');
+    } catch (e) {
+      console.error('Failed to copy recovery phrase:', e);
+      toast.error("Couldn't copy the recovery phrase");
     }
   };
 
@@ -108,6 +150,13 @@ export function SyncSettingsTab({
               synced data &mdash; no one (including us) can reset them.
             </p>
             <code className="sync-tab__phrase-words">{phrase}</code>
+            <button
+              type="button"
+              onClick={() => void copyPhrase(phrase)}
+              aria-label="Copy recovery phrase"
+            >
+              Copy
+            </button>
             <button type="button" onClick={() => setPhrase(null)}>
               I&apos;ve saved it
             </button>
@@ -152,10 +201,10 @@ export function SyncSettingsTab({
     <div className="sync-tab">
       <h3>Sync</h3>
       <p>
-        Status: {state.status}
+        Status: {statusLabel(state.status)}
         {state.lastError ? ` — ${state.lastError}` : ''}
       </p>
-      <p>Key storage: {state.vaultBacking}</p>
+      <p>Key storage: {vaultBackingLabel(state.vaultBacking)}</p>
       <button type="button" disabled={busy} onClick={() => void run(() => sync.syncNow())}>
         Sync now
       </button>
@@ -164,6 +213,13 @@ export function SyncSettingsTab({
       {phrase ? (
         <div className="sync-tab__phrase" role="alert">
           <code className="sync-tab__phrase-words">{phrase}</code>
+          <button
+            type="button"
+            onClick={() => void copyPhrase(phrase)}
+            aria-label="Copy recovery phrase"
+          >
+            Copy
+          </button>
           <button type="button" onClick={() => setPhrase(null)}>
             Hide
           </button>
@@ -195,7 +251,16 @@ export function SyncSettingsTab({
                 type="button"
                 disabled={busy}
                 onClick={() =>
-                  void run(async () => setDevices(await sync.removeDevice(d.deviceId)))
+                  void (async () => {
+                    if (
+                      await confirm(
+                        `Remove “${d.label}” from your synced devices? It will need your recovery phrase to sync again.`,
+                        { destructive: true },
+                      )
+                    ) {
+                      void run(async () => setDevices(await sync.removeDevice(d.deviceId)));
+                    }
+                  })()
                 }
               >
                 Remove
@@ -210,7 +275,22 @@ export function SyncSettingsTab({
         <input type="checkbox" checked={forget} onChange={(e) => setForget(e.target.checked)} />
         <span>Also forget the encryption keys on this device</span>
       </label>
-      <button type="button" disabled={busy} onClick={() => void run(() => sync.disable(forget))}>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() =>
+          void (async () => {
+            if (
+              await confirm(
+                'Disable sync and forget the encryption keys on this device? You will need your recovery phrase to re-enable.',
+                { destructive: true },
+              )
+            ) {
+              void run(() => sync.disable(forget));
+            }
+          })()
+        }
+      >
         Disable sync
       </button>
       {error && (

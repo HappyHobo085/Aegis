@@ -57,18 +57,24 @@ describe('SecurityTab', () => {
   it('shows malicious-site protection as on (always)', () => {
     renderSecurityTab();
     expect(screen.getByText(/malicious-site protection/i)).toBeInTheDocument();
-    // "On —" appears in the malicious-site protection paragraph
-    expect(screen.getByText(/on\s*—/i)).toBeInTheDocument();
+    // The malicious-site paragraph states the protection is always-on.
+    expect(
+      screen.getByText(/known malware and phishing sites are blocked/i),
+    ).toBeInTheDocument();
   });
 
-  it('lists exceptions and removes one', async () => {
+  it('lists exceptions and removes one (via a descriptive aria-label)', async () => {
     const removeException = vi.fn();
     renderSecurityTab({
       listExceptions: async () => ['neverssl.com'],
       removeException,
     });
     expect(await screen.findByText('neverssl.com')).toBeInTheDocument();
-    await userEvent.click(screen.getByRole('button', { name: /remove/i }));
+    // The HTTP-exception Remove button now carries a descriptive aria-label
+    // (parity with its fingerprint-allowlist sibling).
+    await userEvent.click(
+      screen.getByRole('button', { name: /remove http exception for neverssl\.com/i }),
+    );
     expect(removeException).toHaveBeenCalledWith('neverssl.com');
   });
 
@@ -126,5 +132,30 @@ describe('SecurityTab', () => {
     renderSecurityTab();
     expect(screen.getByText(/opt-in/i)).toBeInTheDocument();
     expect(screen.getByText(/anti-bot vendors/i)).toBeInTheDocument();
+  });
+
+  it('the Standard option does NOT claim it noises WebGL (WebGL is strict-only)', () => {
+    renderSecurityTab();
+    const standardOption = screen
+      .getByRole('combobox', { name: /anti-fingerprinting level/i })
+      .querySelector('option[value="standard"]');
+    expect(standardOption).toBeTruthy();
+    expect(standardOption?.textContent ?? '').not.toMatch(/webgl/i);
+    // The Strict option is where WebGL belongs.
+    const strictOption = screen
+      .getByRole('combobox', { name: /anti-fingerprinting level/i })
+      .querySelector('option[value="strict"]');
+    expect(strictOption?.textContent ?? '').toMatch(/webgl/i);
+  });
+
+  it('the explanatory copy attributes WebGL to Strict, not Standard, and drops dev jargon', () => {
+    renderSecurityTab();
+    // Plain-language reword: no raw "CSPRNG" / "farbling" / "per frame origin" jargon.
+    expect(screen.queryByText(/CSPRNG/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/farbling/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/per frame origin/i)).not.toBeInTheDocument();
+    // Plain-language explanation present.
+    expect(screen.getByText(/randomized noise/i)).toBeInTheDocument();
+    expect(screen.getByText(/regenerated each session/i)).toBeInTheDocument();
   });
 });

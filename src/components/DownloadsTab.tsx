@@ -1,6 +1,7 @@
 // src/components/DownloadsTab.tsx
 import { useState } from 'react';
 import type { Settings } from '../../shared/types';
+import { toast } from '../lib/toast';
 
 export interface DownloadsTabProps {
   settings: Settings;
@@ -11,16 +12,28 @@ export function DownloadsTab({ settings, update }: DownloadsTabProps) {
   const [dir, setDir] = useState(settings.downloadDir);
 
   const handleSave = (): void => {
-    void update({ downloadDir: dir.trim() });
+    void (async () => {
+      await update({ downloadDir: dir.trim() });
+      toast.success('Saved');
+    })();
   };
 
   const handleUseDefault = (): void => {
     setDir('');
-    void update({ downloadDir: '' });
+    void (async () => {
+      await update({ downloadDir: '' });
+      toast.success('Saved');
+    })();
   };
 
   return (
-    <div className="downloads-tab">
+    <form
+      className="downloads-tab"
+      onSubmit={(e) => {
+        e.preventDefault();
+        handleSave();
+      }}
+    >
       <label htmlFor="downloads-tab-dir">Download folder</label>
       <input
         id="downloads-tab-dir"
@@ -30,9 +43,7 @@ export function DownloadsTab({ settings, update }: DownloadsTabProps) {
         onChange={(e) => setDir(e.target.value)}
       />
       <div className="downloads-tab__actions">
-        <button type="button" onClick={handleSave}>
-          Save download folder
-        </button>
+        <button type="submit">Save download folder</button>
         <button type="button" onClick={handleUseDefault}>
           Use default
         </button>
@@ -40,6 +51,6 @@ export function DownloadsTab({ settings, update }: DownloadsTabProps) {
       {settings.downloadDir.length === 0 && (
         <p className="downloads-tab__hint">Empty — downloads go to your system Downloads folder.</p>
       )}
-    </div>
+    </form>
   );
 }

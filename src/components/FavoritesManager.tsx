@@ -2,6 +2,7 @@
 import { useId, useState } from 'react';
 import { Trash2, X } from 'lucide-react';
 import type { Favorite } from '../../shared/types';
+import { normalizeSavedUrl } from '../lib/addressParse';
 import { useDialog } from '../hooks/useDialog';
 import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
@@ -24,6 +25,21 @@ function FavoriteRow({
 }) {
   const [name, setName] = useState(favorite.name);
   const [url, setUrl] = useState(favorite.url);
+  const [error, setError] = useState<string | null>(null);
+
+  const handleSave = (): void => {
+    if (name.trim().length === 0) {
+      setError('Enter a name.');
+      return;
+    }
+    const normalized = normalizeSavedUrl(url);
+    if (!normalized.ok) {
+      setError(normalized.reason);
+      return;
+    }
+    setError(null);
+    void update(favorite.id, { name: name.trim(), url: normalized.url });
+  };
 
   return (
     <li className="favorites-manager__row">
@@ -33,20 +49,22 @@ function FavoriteRow({
         aria-label={`Name for ${favorite.name}`}
         placeholder="Hacker News"
         value={name}
-        onChange={(e) => setName(e.target.value)}
+        onChange={(e) => {
+          setName(e.target.value);
+          if (error) setError(null);
+        }}
       />
       <input
         type="text"
         aria-label={`URL for ${favorite.name}`}
         placeholder="https://news.ycombinator.com"
         value={url}
-        onChange={(e) => setUrl(e.target.value)}
+        onChange={(e) => {
+          setUrl(e.target.value);
+          if (error) setError(null);
+        }}
       />
-      <button
-        type="button"
-        aria-label={`Save favorite ${favorite.name}`}
-        onClick={() => void update(favorite.id, { name, url })}
-      >
+      <button type="button" aria-label={`Save favorite ${favorite.name}`} onClick={handleSave}>
         Save
       </button>
       <button
@@ -56,6 +74,11 @@ function FavoriteRow({
       >
         <Trash2 size={14} aria-hidden="true" />
       </button>
+      {error && (
+        <div className="favorites-manager__row-error" role="alert">
+          {error}
+        </div>
+      )}
     </li>
   );
 }
@@ -73,12 +96,22 @@ export function FavoritesManager({
 
   const [newName, setNewName] = useState('');
   const [newUrl, setNewUrl] = useState('');
+  const [addError, setAddError] = useState<string | null>(null);
 
   const handleAdd = (): void => {
-    if (newName.trim().length === 0 || newUrl.trim().length === 0) return;
-    void add({ name: newName.trim(), url: newUrl.trim() });
+    if (newName.trim().length === 0) {
+      setAddError('Enter a name.');
+      return;
+    }
+    const normalized = normalizeSavedUrl(newUrl);
+    if (!normalized.ok) {
+      setAddError(normalized.reason);
+      return;
+    }
+    void add({ name: newName.trim(), url: normalized.url });
     setNewName('');
     setNewUrl('');
+    setAddError(null);
   };
 
   return (
@@ -111,18 +144,29 @@ export function FavoritesManager({
             aria-label="New favorite name"
             placeholder="Hacker News"
             value={newName}
-            onChange={(e) => setNewName(e.target.value)}
+            onChange={(e) => {
+              setNewName(e.target.value);
+              if (addError) setAddError(null);
+            }}
           />
           <input
             type="text"
             aria-label="New favorite URL"
             placeholder="https://news.ycombinator.com"
             value={newUrl}
-            onChange={(e) => setNewUrl(e.target.value)}
+            onChange={(e) => {
+              setNewUrl(e.target.value);
+              if (addError) setAddError(null);
+            }}
           />
           <button type="button" onClick={handleAdd}>
             Add favorite
           </button>
+          {addError && (
+            <div className="favorites-manager__add-error" role="alert">
+              {addError}
+            </div>
+          )}
         </div>
       </div>
     </div>

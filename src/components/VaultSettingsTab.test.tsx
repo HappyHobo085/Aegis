@@ -6,6 +6,12 @@ import { VaultSettingsTab } from './VaultSettingsTab';
 import type { UseVault } from '../hooks/useVault';
 import type { VaultState, VaultRecord } from '../../shared/types';
 
+vi.mock('../lib/toast', () => ({
+  confirm: vi.fn(),
+  toast: { success: vi.fn(), error: vi.fn() },
+}));
+import { confirm, toast } from '../lib/toast';
+
 // ---- fake vault record ----
 function makeRecord(over: Partial<VaultRecord> = {}): VaultRecord {
   return {
@@ -42,8 +48,10 @@ function fakeVault(over: Partial<UseVault> = {}): UseVault {
   } as unknown as UseVault;
 }
 
-// ---- mock clipboard ----
+// ---- mock clipboard + confirm ----
 beforeEach(() => {
+  vi.clearAllMocks();
+  (confirm as ReturnType<typeof vi.fn>).mockResolvedValue(true);
   Object.assign(navigator, {
     clipboard: { writeText: vi.fn(async () => {}) },
   });
@@ -227,7 +235,7 @@ describe('VaultSettingsTab — unlocked', () => {
     expect(screen.queryByText('••••••••')).not.toBeInTheDocument();
   });
 
-  it('copy password writes to clipboard', async () => {
+  it('copy password writes to clipboard and toasts success', async () => {
     const record = makeRecord({ password: 'hunter2' });
     const list = vi.fn(async () => [record]);
     renderUnlocked({ list });
@@ -235,9 +243,10 @@ describe('VaultSettingsTab — unlocked', () => {
     const copyBtn = screen.getByRole('button', { name: /copy password for/i });
     await userEvent.click(copyBtn);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('hunter2');
+    await vi.waitFor(() => expect(toast.success).toHaveBeenCalledWith('Copied'));
   });
 
-  it('copy username writes to clipboard', async () => {
+  it('copy username writes to clipboard and toasts success', async () => {
     const record = makeRecord({ username: 'alice' });
     const list = vi.fn(async () => [record]);
     renderUnlocked({ list });
@@ -245,9 +254,26 @@ describe('VaultSettingsTab — unlocked', () => {
     const copyBtn = screen.getByRole('button', { name: /copy username for/i });
     await userEvent.click(copyBtn);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('alice');
+    await vi.waitFor(() => expect(toast.success).toHaveBeenCalledWith('Copied'));
   });
 
-  it('delete calls remove() and refreshes list()', async () => {
+  it('copy toasts an error when the clipboard write fails', async () => {
+    const record = makeRecord({ password: 'hunter2' });
+    const list = vi.fn(async () => [record]);
+    Object.assign(navigator, {
+      clipboard: {
+        writeText: vi.fn(async () => {
+          throw new Error('denied');
+        }),
+      },
+    });
+    renderUnlocked({ list });
+    await vi.waitFor(() => expect(screen.queryByText('alice')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /copy password for/i }));
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledWith('Couldn’t copy'));
+  });
+
+  it('delete confirms, then calls remove() and refreshes list()', async () => {
     const record = makeRecord();
     const remove = vi.fn(async () => []);
     const list = vi.fn(async () => [record]);
@@ -257,8 +283,21 @@ describe('VaultSettingsTab — unlocked', () => {
     list.mockClear();
     const deleteBtn = screen.getByRole('button', { name: /delete entry for/i });
     await userEvent.click(deleteBtn);
-    expect(remove).toHaveBeenCalledWith('uuid-1');
+    expect(confirm).toHaveBeenCalled();
+    await vi.waitFor(() => expect(remove).toHaveBeenCalledWith('uuid-1'));
     expect(list).toHaveBeenCalled();
+  });
+
+  it('delete does NOTHING when the confirm is declined', async () => {
+    (confirm as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    const record = makeRecord();
+    const remove = vi.fn(async () => []);
+    const list = vi.fn(async () => [record]);
+    renderUnlocked({ remove, list });
+    await vi.waitFor(() => expect(screen.queryByText('alice')).toBeInTheDocument());
+    await userEvent.click(screen.getByRole('button', { name: /delete entry for/i }));
+    expect(confirm).toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
   });
 
   it('search calls search(q) and updates the displayed records', async () => {

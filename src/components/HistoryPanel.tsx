@@ -31,7 +31,7 @@ export function HistoryPanel({
   };
 
   const handleClear = async (): Promise<void> => {
-    const ok = await confirm('Clear all history? This cannot be undone.');
+    const ok = await confirm('Clear all history? This cannot be undone.', { destructive: true });
     if (ok) void clear();
   };
 

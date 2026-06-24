@@ -27,6 +27,46 @@ describe('AdblockShield', () => {
     expect(btn).toHaveTextContent('12');
   });
 
+  it('folds the page count into the button accessible name when > 0', () => {
+    render(<AdblockShield {...props({ page: 12 })} />);
+    expect(
+      screen.getByRole('button', { name: /ad blocking, 12 blocked on this page/i }),
+    ).toBeInTheDocument();
+  });
+
+  it('marks the visual badge aria-hidden so it is not double-announced', () => {
+    const { container } = render(<AdblockShield {...props({ page: 12 })} />);
+    const badge = container.querySelector('.adblock-shield__badge');
+    expect(badge).not.toBeNull();
+    expect(badge).toHaveTextContent('12');
+    expect(badge).toHaveAttribute('aria-hidden', 'true');
+  });
+
+  it('hides the page-count badge entirely when the count is 0', () => {
+    const { container } = render(<AdblockShield {...props({ page: 0 })} />);
+    expect(container.querySelector('.adblock-shield__badge')).toBeNull();
+    // The accessible name is the bare label — no count suffix.
+    const btn = screen.getByRole('button', { name: 'Ad blocking' });
+    expect(btn).not.toHaveTextContent('0');
+  });
+
+  it('does not render a Reload-to-apply button when onReload is omitted', async () => {
+    render(<AdblockShield {...props()} />);
+    await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    expect(screen.queryByRole('button', { name: /reload to apply/i })).not.toBeInTheDocument();
+  });
+
+  it('renders a Reload-to-apply button that calls onReload when provided', async () => {
+    const onReload = vi.fn();
+    render(<AdblockShield {...props({ onReload })} />);
+    await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    const reloadBtn = within(screen.getByRole('dialog')).getByRole('button', {
+      name: /reload to apply/i,
+    });
+    await userEvent.click(reloadBtn);
+    expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
   it('the popover is closed until the shield button is clicked', () => {
     render(<AdblockShield {...props()} />);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();

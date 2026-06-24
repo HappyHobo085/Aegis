@@ -44,6 +44,35 @@ describe('TagInput', () => {
     expect(p.onChange).toHaveBeenCalledWith(['news', 'design']);
   });
 
+  it('commits a typed-but-not-Entered tag when the input loses focus', async () => {
+    const p = props();
+    render(<TagInput {...p} />);
+    const input = screen.getByRole('textbox', { name: /add tag/i });
+    await userEvent.type(input, 'dev');
+    expect(p.onChange).not.toHaveBeenCalled();
+    // Blur (e.g. user clicks Save) — the pending tag must not be lost.
+    input.blur();
+    expect(p.onChange).toHaveBeenCalledWith(['news', 'dev']);
+  });
+
+  it('does not commit empty/whitespace on blur', async () => {
+    const p = props();
+    render(<TagInput {...p} />);
+    const input = screen.getByRole('textbox', { name: /add tag/i });
+    await userEvent.type(input, '   ');
+    input.blur();
+    expect(p.onChange).not.toHaveBeenCalled();
+  });
+
+  it('does not commit a duplicate tag on blur', async () => {
+    const p = props();
+    render(<TagInput {...p} />);
+    const input = screen.getByRole('textbox', { name: /add tag/i });
+    await userEvent.type(input, 'news');
+    input.blur();
+    expect(p.onChange).not.toHaveBeenCalled();
+  });
+
   it('removing a chip calls onChange without that tag', async () => {
     const p = props({ tags: ['news', 'dev'] });
     render(<TagInput {...p} />);

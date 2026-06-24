@@ -106,6 +106,47 @@ describe('ProxySettingsTab', () => {
     expect(vpnLabels).toHaveLength(0);
   });
 
+  it('does not show the unsaved-changes hint when the draft matches applied state', () => {
+    render(<ProxySettingsTab state={onState} setConfig={vi.fn()} test={vi.fn()} />);
+    expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
+  });
+
+  it('shows the unsaved-changes hint after editing the host', async () => {
+    render(<ProxySettingsTab state={onState} setConfig={vi.fn()} test={vi.fn()} />);
+    const hostField = screen.getByRole('textbox', { name: /proxy host/i });
+    await userEvent.clear(hostField);
+    await userEvent.type(hostField, '10.0.0.1');
+    expect(screen.getByText(/unsaved changes — apply to use/i)).toBeInTheDocument();
+  });
+
+  it('shows the unsaved-changes hint after changing the port', async () => {
+    render(<ProxySettingsTab state={onState} setConfig={vi.fn()} test={vi.fn()} />);
+    const portField = screen.getByRole('spinbutton', { name: /proxy port/i });
+    await userEvent.clear(portField);
+    await userEvent.type(portField, '3128');
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+  });
+
+  it('clears the unsaved-changes hint once the parent applies the new state', async () => {
+    const setConfig = vi.fn().mockResolvedValue(onState);
+    const { rerender } = render(
+      <ProxySettingsTab state={onState} setConfig={setConfig} test={vi.fn()} />,
+    );
+    const hostField = screen.getByRole('textbox', { name: /proxy host/i });
+    await userEvent.clear(hostField);
+    await userEvent.type(hostField, '10.0.0.1');
+    expect(screen.getByText(/unsaved changes/i)).toBeInTheDocument();
+    // Parent re-renders with the applied state matching the new host → hint gone.
+    rerender(
+      <ProxySettingsTab
+        state={{ ...onState, host: '10.0.0.1', uri: 'http://10.0.0.1:8080' }}
+        setConfig={setConfig}
+        test={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
+  });
+
   it('sets scheme via select', async () => {
     const setConfig = vi.fn().mockResolvedValue(onState);
     render(<ProxySettingsTab state={onState} setConfig={setConfig} test={vi.fn()} />);

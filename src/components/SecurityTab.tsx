@@ -56,6 +56,7 @@ export function SecurityTab({
               <span>{host}</span>
               <button
                 type="button"
+                aria-label={`Remove HTTP exception for ${host}`}
                 onClick={() => {
                   removeException(host);
                   setExceptions((xs) => xs.filter((h) => h !== host));
@@ -106,17 +107,18 @@ export function SecurityTab({
           aria-label="Anti-fingerprinting level"
         >
           <option value="off">Off (default)</option>
-          <option value="standard">Standard — noise canvas, audio &amp; WebGL reads</option>
-          <option value="strict">Strict — noise all surfaces + reduce timer precision</option>
+          <option value="standard">Standard — noise canvas, audio &amp; device details</option>
+          <option value="strict">Strict — Standard plus WebGL, and reduced timer precision</option>
         </select>
       </label>
       <p>
-        <strong>Opt-in.</strong> Standard and Strict add per-session CSPRNG noise (farbling) to
-        canvas, audio, and WebGL read surfaces so each site sees a stable-but-unique fingerprint
-        within a session rather than the real value. Noise resets each session. Limit: a same-world
-        JavaScript shim is detectable by anti-bot vendors and may break sites that rely on canvas
-        for rendering. Farbling is applied per frame origin — iframes from a different origin are
-        treated independently.
+        <strong>Opt-in.</strong> This adds randomized noise to the fingerprinting signals websites
+        read, regenerated each session — so each site sees a stable-but-unique fingerprint within a
+        session rather than your real value. <strong>Standard</strong> covers canvas, audio, and
+        device details (such as your reported CPU cores and memory). <strong>Strict</strong> adds
+        WebGL surfaces and reduces timer precision. Limit: this kind of protection is detectable by
+        anti-bot vendors and may break sites that rely on canvas for rendering. Each website&apos;s
+        embedded frames are noised independently.
       </p>
 
       <h3>Sites with fingerprint protection off</h3>

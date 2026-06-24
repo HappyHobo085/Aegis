@@ -61,6 +61,10 @@ export function TagInput({ tags, suggestions, onChange }: TagInputProps) {
               commit();
             }
           }}
+          // Commit a typed-but-not-Entered tag when focus leaves, so it isn't
+          // lost if the user clicks Save instead of pressing Enter. `commit`
+          // (via addTag) already no-ops on empty/whitespace/duplicate input.
+          onBlur={() => commit()}
         />
       </div>
       {available.length > 0 && (

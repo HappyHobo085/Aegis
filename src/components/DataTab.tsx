@@ -32,6 +32,7 @@ export function DataTab({ onExport, onImport }: DataTabProps) {
     if (mode === 'replace') {
       const ok = await confirm(
         'Replace all favorites, history, saved items and settings with the imported data? This cannot be undone.',
+        { destructive: true },
       );
       if (!ok) return;
     }

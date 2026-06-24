@@ -15,6 +15,10 @@ export interface AdblockShieldProps {
    *  the opaque, always-on-top content webview on Tauri (else the popover renders
    *  behind the page). No-op on Electron's transparent-chrome architecture. */
   onOpenChange?(open: boolean): void;
+  /** When provided, the popover shows a "Reload to apply" button next to the
+   *  "Applies on reload" copy. The coordinator (App) wires this to reload the
+   *  active tab so an ad-block change takes effect immediately. Omit to hide it. */
+  onReload?(): void;
 }
 
 function Popover({
@@ -23,6 +27,7 @@ function Popover({
   host,
   setEnabled,
   toggleAllowlist,
+  onReload,
   onClose,
 }: AdblockShieldProps & { onClose: () => void }) {
   const labelId = useId();
@@ -65,7 +70,18 @@ function Popover({
       </label>
       <p className="adblock-shield__count">Blocked here: {page}</p>
       <p className="adblock-shield__count">Blocked this session: {state.sessionBlocked}</p>
-      <p className="adblock-shield__hint">Applies on reload.</p>
+      <div className="adblock-shield__reload-row">
+        <p className="adblock-shield__hint">Applies on reload.</p>
+        {onReload && (
+          <button
+            type="button"
+            className="adblock-shield__reload"
+            onClick={() => onReload()}
+          >
+            Reload to apply
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -82,13 +98,14 @@ export function AdblockShield(props: AdblockShieldProps) {
   const allowlisted = props.host !== null && props.state.allowlistedHosts.includes(props.host);
   const blockingActive = props.state.enabled && !allowlisted;
   const ShieldIcon = blockingActive ? Shield : ShieldOff;
+  const page = props.page;
 
   return (
     <div className="adblock-shield">
       <button
         type="button"
         className="adblock-shield__button"
-        aria-label="Ad blocking"
+        aria-label={page > 0 ? `Ad blocking, ${page} blocked on this page` : 'Ad blocking'}
         title="Ad blocking"
         aria-haspopup="dialog"
         aria-expanded={open}
@@ -97,7 +114,11 @@ export function AdblockShield(props: AdblockShieldProps) {
         <span aria-hidden="true" className="adblock-shield__icon">
           <ShieldIcon size={18} aria-hidden="true" />
         </span>
-        <span className="adblock-shield__badge">{props.page}</span>
+        {page > 0 && (
+          <span aria-hidden="true" className="adblock-shield__badge">
+            {page}
+          </span>
+        )}
       </button>
       {open && <Popover {...props} onClose={() => changeOpen(false)} />}
     </div>

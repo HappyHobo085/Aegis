@@ -1,8 +1,18 @@
 // src/components/MyFiltersTab.test.tsx
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+
+vi.mock('../lib/toast', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+import { toast } from '../lib/toast';
+
 import { MyFiltersTab } from './MyFiltersTab';
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
 
 describe('MyFiltersTab', () => {
   it('shows the current custom-filter text in the textarea', () => {
@@ -43,5 +53,12 @@ describe('MyFiltersTab', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: /save filters/i }));
     expect(save).toHaveBeenCalledWith('||ads.example^');
+  });
+
+  it('toasts "Saved" after a successful save', async () => {
+    const save = vi.fn(async () => {});
+    render(<MyFiltersTab text="||x^" save={save} />);
+    await userEvent.click(screen.getByRole('button', { name: /save filters/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Saved'));
   });
 });

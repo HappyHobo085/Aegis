@@ -43,13 +43,23 @@ export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabPro
   }
 
   async function handleApply() {
-    if (mode === 'off') {
-      await setConfig(currentCfg());
-    } else {
-      await setConfig(currentCfg());
-    }
+    await setConfig(currentCfg());
     setTestStatus('');
   }
+
+  // The draft (local edit state) differs from what is currently applied (the
+  // hook's `state`). Compares the user-editable fields; the bypass list is
+  // normalised both sides so cosmetic spacing/commas don't read as dirty.
+  const draftBypass = bypassRaw
+    .split(/[\n,]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const dirty =
+    mode === 'proxy' &&
+    (scheme !== state.scheme ||
+      host.trim() !== state.host ||
+      port !== state.port ||
+      draftBypass.join('\n') !== state.bypassHosts.join('\n'));
 
   async function handleTest() {
     setBusy(true);
@@ -153,6 +163,12 @@ export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabPro
               Test connection
             </button>
           </div>
+
+          {dirty && (
+            <p className="proxy-tab__dirty" role="status">
+              Unsaved changes — Apply to use.
+            </p>
+          )}
 
           {testStatus && (
             <p className="proxy-tab__status" role="status">

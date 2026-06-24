@@ -55,6 +55,58 @@ describe('FavoritesManager', () => {
     expect(p.add).toHaveBeenCalledWith({ name: 'Gamma', url: 'https://gamma.example/' });
   });
 
+  it('shows an inline error and does not add when the name is blank', async () => {
+    const p = props();
+    render(<FavoritesManager {...p} />);
+    // Fill only the URL — leave the name empty.
+    await userEvent.type(
+      screen.getByRole('textbox', { name: /new favorite url/i }),
+      'https://gamma.example/',
+    );
+    await userEvent.click(screen.getByRole('button', { name: /^add favorite$/i }));
+    expect(p.add).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/enter a name/i);
+  });
+
+  it('shows an inline error and does not add when the URL is invalid', async () => {
+    const p = props();
+    render(<FavoritesManager {...p} />);
+    await userEvent.type(screen.getByRole('textbox', { name: /new favorite name/i }), 'Gamma');
+    await userEvent.type(screen.getByRole('textbox', { name: /new favorite url/i }), 'not a url');
+    await userEvent.click(screen.getByRole('button', { name: /^add favorite$/i }));
+    expect(p.add).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+
+  it('clears the add error once the user edits a field', async () => {
+    const p = props();
+    render(<FavoritesManager {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /^add favorite$/i }));
+    expect(screen.getByRole('alert')).toBeInTheDocument();
+    await userEvent.type(screen.getByRole('textbox', { name: /new favorite name/i }), 'G');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('normalizes a schemeless URL when adding a favorite', async () => {
+    const p = props();
+    render(<FavoritesManager {...p} />);
+    await userEvent.type(screen.getByRole('textbox', { name: /new favorite name/i }), 'Gamma');
+    await userEvent.type(screen.getByRole('textbox', { name: /new favorite url/i }), 'gamma.example');
+    await userEvent.click(screen.getByRole('button', { name: /^add favorite$/i }));
+    // normalizeSavedUrl prepends https:// to a schemeless host (no re-serialization).
+    expect(p.add).toHaveBeenCalledWith({ name: 'Gamma', url: 'https://gamma.example' });
+  });
+
+  it('blocks an edit-save with a blank name and shows an inline error', async () => {
+    const p = props();
+    render(<FavoritesManager {...p} />);
+    const nameField = screen.getByRole('textbox', { name: /name for alpha/i });
+    await userEvent.clear(nameField);
+    await userEvent.click(screen.getByRole('button', { name: /save favorite alpha/i }));
+    expect(p.update).not.toHaveBeenCalled();
+    expect(screen.getByRole('alert')).toHaveTextContent(/enter a name/i);
+  });
+
   it('removes a favorite via its row Remove button', async () => {
     const p = props();
     render(<FavoritesManager {...p} />);

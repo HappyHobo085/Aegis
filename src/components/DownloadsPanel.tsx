@@ -19,6 +19,23 @@ function percentOf(received: number, total: number): number {
   return Math.max(0, Math.min(100, pct));
 }
 
+const STATE_LABELS: Record<DownloadEntry['state'], string> = {
+  progressing: 'Downloading',
+  completed: 'Completed',
+  interrupted: 'Failed',
+  cancelled: 'Cancelled',
+};
+
+/** Friendly label for a raw download state. */
+function stateLabel(state: DownloadEntry['state']): string {
+  return STATE_LABELS[state] ?? state;
+}
+
+/** True for states that should get the error styling treatment. */
+function isErrorState(state: DownloadEntry['state']): boolean {
+  return state === 'interrupted' || state === 'cancelled';
+}
+
 export function DownloadsPanel({
   downloads,
   remove,
@@ -30,6 +47,11 @@ export function DownloadsPanel({
   const handleClear = async (): Promise<void> => {
     const ok = await confirm('Clear the downloads list? This does not delete the files.');
     if (ok) void clear();
+  };
+
+  const handleCancel = async (id: number, filename: string): Promise<void> => {
+    const ok = await confirm(`Cancel the download of “${filename}”?`);
+    if (ok) void cancel(id);
   };
 
   return (
@@ -58,7 +80,13 @@ export function DownloadsPanel({
               <li key={d.id} className="downloads-panel__row">
                 <span className="downloads-panel__filename">{d.filename}</span>
                 <span className="downloads-panel__url">{d.url}</span>
-                <span className="downloads-panel__state">{d.state}</span>
+                <span
+                  className={`downloads-panel__state${
+                    isErrorState(d.state) ? ' downloads-panel__state--error' : ''
+                  }`}
+                >
+                  {stateLabel(d.state)}
+                </span>
                 {d.state === 'progressing' && (
                   <div
                     role="progressbar"
@@ -97,7 +125,7 @@ export function DownloadsPanel({
                       type="button"
                       className="downloads-panel__cancel"
                       aria-label={`Cancel ${d.filename}`}
-                      onClick={() => void cancel(d.id)}
+                      onClick={() => void handleCancel(d.id, d.filename)}
                     >
                       <X size={14} aria-hidden="true" />
                       Cancel

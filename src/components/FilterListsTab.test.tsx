@@ -60,6 +60,61 @@ describe('FilterListsTab', () => {
     expect(p.add).toHaveBeenCalledWith('https://lists.example/custom.txt');
   });
 
+  it('normalizes a schemeless host to https before adding', async () => {
+    const p = props();
+    render(<FilterListsTab {...p} />);
+    const form = screen.getByRole('group', { name: /add filter list/i });
+    await userEvent.type(
+      within(form).getByRole('textbox', { name: /list url/i }),
+      'lists.example/custom.txt',
+    );
+    await userEvent.click(within(form).getByRole('button', { name: /^add list$/i }));
+    expect(p.add).toHaveBeenCalledWith('https://lists.example/custom.txt');
+  });
+
+  it('shows an inline error and does NOT add on an empty URL', async () => {
+    const p = props();
+    render(<FilterListsTab {...p} />);
+    const form = screen.getByRole('group', { name: /add filter list/i });
+    await userEvent.click(within(form).getByRole('button', { name: /^add list$/i }));
+    expect(within(form).getByRole('alert')).toBeInTheDocument();
+    expect(p.add).not.toHaveBeenCalled();
+  });
+
+  it('shows an inline error and does NOT add on a non-http(s) URL', async () => {
+    const p = props();
+    render(<FilterListsTab {...p} />);
+    const form = screen.getByRole('group', { name: /add filter list/i });
+    await userEvent.type(
+      within(form).getByRole('textbox', { name: /list url/i }),
+      'ftp://lists.example/custom.txt',
+    );
+    await userEvent.click(within(form).getByRole('button', { name: /^add list$/i }));
+    expect(within(form).getByRole('alert')).toBeInTheDocument();
+    expect(p.add).not.toHaveBeenCalled();
+  });
+
+  it('clears the inline error once the user edits the URL field', async () => {
+    const p = props();
+    render(<FilterListsTab {...p} />);
+    const form = screen.getByRole('group', { name: /add filter list/i });
+    await userEvent.click(within(form).getByRole('button', { name: /^add list$/i }));
+    expect(within(form).getByRole('alert')).toBeInTheDocument();
+    await userEvent.type(within(form).getByRole('textbox', { name: /list url/i }), 'h');
+    expect(within(form).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('submits a valid URL on Enter in the field', async () => {
+    const p = props();
+    render(<FilterListsTab {...p} />);
+    const form = screen.getByRole('group', { name: /add filter list/i });
+    await userEvent.type(
+      within(form).getByRole('textbox', { name: /list url/i }),
+      'https://lists.example/typed.txt{Enter}',
+    );
+    expect(p.add).toHaveBeenCalledWith('https://lists.example/typed.txt');
+  });
+
   it('removes a list via its row Remove button', async () => {
     const p = props();
     render(<FilterListsTab {...p} />);

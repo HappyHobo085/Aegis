@@ -1,9 +1,15 @@
 // src/components/DownloadsTab.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { fireEvent } from '@testing-library/react';
 import type { Settings } from '../../shared/types';
+
+vi.mock('../lib/toast', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+import { toast } from '../lib/toast';
+
 import { DownloadsTab } from './DownloadsTab';
 
 const baseSettings: Settings = {
@@ -42,11 +48,35 @@ describe('DownloadsTab', () => {
     expect(p.update).toHaveBeenCalledWith({ downloadDir: '/tmp/dl' });
   });
 
+  it('toasts "Saved" after a successful Save', async () => {
+    const p = props();
+    render(<DownloadsTab {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /save download folder/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Saved'));
+  });
+
+  it('submits on Enter in the folder field', async () => {
+    const p = props();
+    render(<DownloadsTab {...p} />);
+    const input = screen.getByLabelText(/download folder/i);
+    await userEvent.clear(input);
+    await userEvent.type(input, '/tmp/typed{Enter}');
+    expect(p.update).toHaveBeenCalledWith({ downloadDir: '/tmp/typed' });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Saved'));
+  });
+
   it('Use default clears the downloadDir to the empty string (OS Downloads)', async () => {
     const p = props();
     render(<DownloadsTab {...p} />);
     await userEvent.click(screen.getByRole('button', { name: /use default/i }));
     expect(p.update).toHaveBeenCalledWith({ downloadDir: '' });
+  });
+
+  it('toasts "Saved" after Use default', async () => {
+    const p = props();
+    render(<DownloadsTab {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /use default/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Saved'));
   });
 
   it('shows the OS-default hint when downloadDir is empty', () => {

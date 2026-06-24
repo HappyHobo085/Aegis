@@ -1,5 +1,6 @@
 // src/components/MyFiltersTab.tsx
 import { useState } from 'react';
+import { toast } from '../lib/toast';
 
 export interface MyFiltersTabProps {
   text: string;
@@ -17,8 +18,21 @@ export function countRules(text: string): number {
 export function MyFiltersTab({ text, save }: MyFiltersTabProps) {
   const [draft, setDraft] = useState(text);
 
+  const handleSave = (): void => {
+    void (async () => {
+      await save(draft);
+      toast.success('Saved');
+    })();
+  };
+
   return (
-    <div className="my-filters-tab">
+    <form
+      className="my-filters-tab"
+      onSubmit={(e) => {
+        e.preventDefault();
+        handleSave();
+      }}
+    >
       <label htmlFor="my-filters-tab-text">Custom filters</label>
       <textarea
         id="my-filters-tab-text"
@@ -33,10 +47,10 @@ export function MyFiltersTab({ text, save }: MyFiltersTabProps) {
       />
       <div className="my-filters-tab__footer">
         <span className="my-filters-tab__count">{countRules(draft)} rules</span>
-        <button type="button" aria-label="Save filters" onClick={() => void save(draft)}>
+        <button type="submit" aria-label="Save filters">
           Save
         </button>
       </div>
-    </div>
+    </form>
   );
 }

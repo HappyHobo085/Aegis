@@ -65,13 +65,59 @@ describe('DownloadsPanel', () => {
     expect(p.showInFolder).toHaveBeenCalledWith(7);
   });
 
-  it('shows a Cancel action for a progressing download and calls cancel', async () => {
+  it('shows a Cancel action for a progressing download, confirms, then calls cancel', async () => {
     const p = props({
       downloads: [entry({ id: 3, state: 'progressing', receivedBytes: 500, totalBytes: 1000 })],
     });
     render(<DownloadsPanel {...p} />);
     await userEvent.click(screen.getByRole('button', { name: /cancel file\.zip/i }));
+    expect(confirm).toHaveBeenCalled();
     expect(p.cancel).toHaveBeenCalledWith(3);
+  });
+
+  it('does NOT cancel a download when the confirm is declined', async () => {
+    (confirm as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    const p = props({
+      downloads: [entry({ id: 3, state: 'progressing', receivedBytes: 500, totalBytes: 1000 })],
+    });
+    render(<DownloadsPanel {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /cancel file\.zip/i }));
+    expect(confirm).toHaveBeenCalled();
+    expect(p.cancel).not.toHaveBeenCalled();
+  });
+
+  it('maps each raw state to a friendly label', () => {
+    const cases: Array<[DownloadEntry['state'], string]> = [
+      ['progressing', 'Downloading'],
+      ['completed', 'Completed'],
+      ['interrupted', 'Failed'],
+      ['cancelled', 'Cancelled'],
+    ];
+    for (const [state, label] of cases) {
+      const { unmount } = render(<DownloadsPanel {...props({ downloads: [entry({ state })] })} />);
+      expect(screen.getByText(label)).toBeInTheDocument();
+      // Never the raw enum value.
+      expect(screen.queryByText(state)).not.toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it('gives failed/cancelled states the error className', () => {
+    const { container, unmount } = render(
+      <DownloadsPanel {...props({ downloads: [entry({ state: 'interrupted' })] })} />,
+    );
+    expect(container.querySelector('.downloads-panel__state--error')).toBeTruthy();
+    unmount();
+
+    const cancelled = render(
+      <DownloadsPanel {...props({ downloads: [entry({ state: 'cancelled' })] })} />,
+    );
+    expect(cancelled.container.querySelector('.downloads-panel__state--error')).toBeTruthy();
+    cancelled.unmount();
+
+    // A completed download is NOT an error.
+    const ok = render(<DownloadsPanel {...props({ downloads: [entry({ state: 'completed' })] })} />);
+    expect(ok.container.querySelector('.downloads-panel__state--error')).toBeNull();
   });
 
   it('does NOT offer Cancel for a completed download', () => {

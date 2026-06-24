@@ -1,8 +1,14 @@
 // src/components/HomeTab.test.tsx
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Settings } from '../../shared/types';
+
+vi.mock('../lib/toast', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+import { toast } from '../lib/toast';
+
 import { HomeTab } from './HomeTab';
 
 const settings = (over: Partial<Settings> = {}): Settings => ({
@@ -13,6 +19,10 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   hideChromeByDefault: false,
   downloadDir: '',
   ...over,
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
 });
 
 describe('HomeTab', () => {
@@ -34,5 +44,22 @@ describe('HomeTab', () => {
     await userEvent.type(field, 'https://start.example/');
     await userEvent.click(screen.getByRole('button', { name: /save home url/i }));
     expect(update).toHaveBeenCalledWith({ homeUrl: 'https://start.example/' });
+  });
+
+  it('toasts "Saved" after a successful save', async () => {
+    const update = vi.fn(async () => {});
+    render(<HomeTab settings={settings()} update={update} />);
+    await userEvent.click(screen.getByRole('button', { name: /save home url/i }));
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Saved'));
+  });
+
+  it('submits on Enter in the URL field', async () => {
+    const update = vi.fn(async () => {});
+    render(<HomeTab settings={settings()} update={update} />);
+    const field = screen.getByRole('textbox', { name: /home url/i });
+    await userEvent.clear(field);
+    await userEvent.type(field, 'https://typed.example/{Enter}');
+    expect(update).toHaveBeenCalledWith({ homeUrl: 'https://typed.example/' });
+    await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Saved'));
   });
 });

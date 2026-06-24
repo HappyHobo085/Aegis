@@ -1,4 +1,6 @@
 // src/components/AllowlistTab.tsx
+import { confirm } from '../lib/toast';
+
 export interface AllowlistTabProps {
   hosts: string[];
   removeAllowlist(host: string): void;
@@ -6,10 +8,18 @@ export interface AllowlistTabProps {
 }
 
 export function AllowlistTab({ hosts, removeAllowlist, clearAllowlist }: AllowlistTabProps) {
+  const handleClear = (): void => {
+    void (async () => {
+      if (await confirm('Remove all allowlisted sites?', { destructive: true })) {
+        clearAllowlist();
+      }
+    })();
+  };
+
   return (
     <div className="allowlist-tab">
       <div className="allowlist-tab__actions">
-        <button type="button" disabled={hosts.length === 0} onClick={() => clearAllowlist()}>
+        <button type="button" disabled={hosts.length === 0} onClick={handleClear}>
           Clear all
         </button>
       </div>
