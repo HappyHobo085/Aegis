@@ -492,7 +492,7 @@ pub fn dispatch<R: Runtime>(
             if password.is_empty() {
                 return Some(Err("master password required".into()));
             }
-            let mut salt = [0u8; 16];
+            let mut salt = [0u8; 32];
             if getrandom::getrandom(&mut salt).is_err() {
                 return Some(Err("rng failed".into()));
             }
@@ -1364,6 +1364,89 @@ mod tests {
                 .unwrap()
                 .unwrap_err();
             assert!(srch_err.contains("locked"));
+        });
+    }
+
+    /// Full lock→file→unlock round-trip through the IPC dispatcher.
+    ///
+    /// Proves that `vault.unlock` reads the persisted file from disk and derives +
+    /// decrypts fresh — NOT from in-memory state (which `vault.lock` clears).
+    #[test]
+    fn dispatch_lock_file_unlock_round_trip() {
+        crate::test_support::with_tmp_app(|app| {
+            // Step 1: create the vault via dispatch.
+            let s = super::dispatch(app, "vault.create", &json!({"masterPassword": "master-pw"}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(s["exists"], json!(true));
+            assert_eq!(s["unlocked"], json!(true));
+
+            // Step 2: add a distinctive credential via dispatch.
+            let added = super::dispatch(
+                app,
+                "vault.add",
+                &json!({
+                    "input": {
+                        "site": "https://roundtrip.test",
+                        "username": "roundtrip-user",
+                        "password": "r0unDtr1P-s3cr3t!",
+                        "notes": "dispatch round-trip note"
+                    }
+                }),
+            )
+            .unwrap()
+            .unwrap();
+            let records = added.as_array().unwrap();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0]["site"], json!("https://roundtrip.test"));
+
+            // Step 3: lock the vault via dispatch; confirm in-memory state is cleared.
+            let locked = super::dispatch(app, "vault.lock", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(locked["unlocked"], json!(false));
+            assert_eq!(locked["count"], json!(0));
+
+            // Confirm vault.list returns a locked error (in-memory key is gone).
+            let list_err = super::dispatch(app, "vault.list", &json!({}))
+                .unwrap()
+                .unwrap_err();
+            assert!(
+                list_err.contains("locked"),
+                "expected locked error after lock, got: {list_err}"
+            );
+
+            // Step 4: unlock via dispatch — this MUST re-read the persisted file from
+            // disk and re-derive + re-decrypt (the in-memory key is None after lock).
+            let unlocked =
+                super::dispatch(app, "vault.unlock", &json!({"masterPassword": "master-pw"}))
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(
+                unlocked["unlocked"],
+                json!(true),
+                "unlock from file must succeed"
+            );
+
+            // Step 5: list and confirm the distinctive credential survived
+            // the lock → file → unlock round-trip.
+            let list = super::dispatch(app, "vault.list", &json!({}))
+                .unwrap()
+                .unwrap();
+            let creds = list.as_array().unwrap();
+            assert_eq!(
+                creds.len(),
+                1,
+                "exactly one credential must survive the round-trip"
+            );
+            assert_eq!(creds[0]["site"], json!("https://roundtrip.test"));
+            assert_eq!(creds[0]["username"], json!("roundtrip-user"));
+            assert_eq!(
+                creds[0]["password"],
+                json!("r0unDtr1P-s3cr3t!"),
+                "plaintext password must survive lock→file→unlock"
+            );
+            assert_eq!(creds[0]["notes"], json!("dispatch round-trip note"));
         });
     }
 }
