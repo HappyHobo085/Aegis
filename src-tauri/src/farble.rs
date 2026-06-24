@@ -172,15 +172,24 @@ pub extern "system" fn Java_com_aegis_browser_NativeFarble_farbleScript<'a>(
     env: jni::JNIEnv<'a>,
     _this: jni::objects::JObject<'a>,
 ) -> jni::sys::jstring {
-    // Clamp the stored level: only "standard" and "strict" are valid; anything else → off.
-    let raw = android_level();
-    let clamped = match raw.as_str() {
-        "standard" | "strict" => raw.as_str(),
-        _ => "off",
-    };
-    let s = shim_for(clamped, false);
-    match env.new_string(s) {
-        Ok(js) => js.into_raw(),
+    // Defensive catch_unwind: any panic (including the HKDF expand expect in
+    // public_seed(), however unreachable at 16-byte output) must not unwind
+    // across the FFI boundary into Java — that is UB. `env` is kept OUTSIDE the
+    // closure because JNIEnv is !UnwindSafe; only UnwindSafe types (String) cross.
+    let result = std::panic::catch_unwind(|| {
+        // Clamp the stored level: only "standard" and "strict" are valid; anything else → off.
+        let raw = android_level();
+        let clamped = match raw.as_str() {
+            "standard" | "strict" => raw.as_str(),
+            _ => "off",
+        };
+        shim_for(clamped, false)
+    });
+    match result {
+        Ok(s) => match env.new_string(s) {
+            Ok(js) => js.into_raw(),
+            Err(_) => std::ptr::null_mut(),
+        },
         Err(_) => std::ptr::null_mut(),
     }
 }
