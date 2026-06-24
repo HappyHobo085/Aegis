@@ -78,7 +78,7 @@ dotted event name.
     `seed_defaults` (called from `lib.rs` setup): idempotent + tombstone-aware
     (`ensure_default_rows` skips a `listId` that already exists, even tombstoned — so a
     removed default is never resurrected), seeded rows carry `builtin: true` + `enabled:
-    true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies already
+true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies already
     provide the rules, and an immediate fetch would re-apply the WebKit content filters
     mid-launch (heavy + disrupts an in-flight find / the active page — the live autopilot
     caught exactly this). Defaults refresh on the user's "Update all" or an off→on toggle.

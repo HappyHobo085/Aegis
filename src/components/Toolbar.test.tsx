@@ -136,11 +136,7 @@ describe('Toolbar', () => {
 
   it('shows secondary slots inline when not narrow', () => {
     render(
-      <Toolbar
-        state={state}
-        {...handlers()}
-        gear={<button type="button">Open settings</button>}
-      />,
+      <Toolbar state={state} {...handlers()} gear={<button type="button">Open settings</button>} />,
     );
     // No overflow trigger; the gear is directly visible.
     expect(screen.queryByRole('button', { name: /more tools/i })).not.toBeInTheDocument();

@@ -73,11 +73,7 @@ function Popover({
       <div className="adblock-shield__reload-row">
         <p className="adblock-shield__hint">Applies on reload.</p>
         {onReload && (
-          <button
-            type="button"
-            className="adblock-shield__reload"
-            onClick={() => onReload()}
-          >
+          <button type="button" className="adblock-shield__reload" onClick={() => onReload()}>
             Reload to apply
           </button>
         )}

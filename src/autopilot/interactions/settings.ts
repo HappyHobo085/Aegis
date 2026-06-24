@@ -764,8 +764,7 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         const revokeBtn = ctx.byLabel(
           new RegExp(`Revoke .* for ${PROBE.origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'),
         );
-        if (!revokeBtn)
-          throw new Error(`"Revoke … for ${PROBE.origin}" button not found`);
+        if (!revokeBtn) throw new Error(`"Revoke … for ${PROBE.origin}" button not found`);
         await ctx.click(revokeBtn);
       },
       assert: async (ctx) => {

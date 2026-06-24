@@ -19,14 +19,26 @@ export interface OnboardingProps {
 }
 
 const FEATURES = [
-  { Icon: Shield, title: 'Ads blocked by default', body: 'Ads and trackers are filtered out of the box — no setup.' },
-  { Icon: EyeOff, title: 'Private tabs', body: 'Open a private tab (Ctrl+Shift+N) that leaves no history behind.' },
+  {
+    Icon: Shield,
+    title: 'Ads blocked by default',
+    body: 'Ads and trackers are filtered out of the box — no setup.',
+  },
+  {
+    Icon: EyeOff,
+    title: 'Private tabs',
+    body: 'Open a private tab (Ctrl+Shift+N) that leaves no history behind.',
+  },
   {
     Icon: Fingerprint,
     title: 'Fingerprint protection',
     body: 'Turn on anti-fingerprinting in Settings → Security to resist tracking.',
   },
-  { Icon: Network, title: 'Built-in proxy', body: 'Route browsed pages through a proxy in Settings → Proxy.' },
+  {
+    Icon: Network,
+    title: 'Built-in proxy',
+    body: 'Route browsed pages through a proxy in Settings → Proxy.',
+  },
 ];
 
 /** First-run welcome: surfaces the signature features and lets the user pick a default

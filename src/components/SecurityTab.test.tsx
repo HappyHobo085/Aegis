@@ -58,9 +58,7 @@ describe('SecurityTab', () => {
     renderSecurityTab();
     expect(screen.getByText(/malicious-site protection/i)).toBeInTheDocument();
     // The malicious-site paragraph states the protection is always-on.
-    expect(
-      screen.getByText(/known malware and phishing sites are blocked/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/known malware and phishing sites are blocked/i)).toBeInTheDocument();
   });
 
   it('lists exceptions and removes one (via a descriptive aria-label)', async () => {

@@ -74,7 +74,12 @@ function ToolbarOverflow({ children }: { children: ReactNode }) {
         <MoreHorizontal size={18} aria-hidden="true" />
       </button>
       {open && (
-        <div ref={popoverRef} role="menu" aria-label="More tools" className="toolbar-overflow__menu">
+        <div
+          ref={popoverRef}
+          role="menu"
+          aria-label="More tools"
+          className="toolbar-overflow__menu"
+        >
           {children}
         </div>
       )}

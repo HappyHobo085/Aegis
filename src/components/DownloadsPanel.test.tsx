@@ -116,7 +116,9 @@ describe('DownloadsPanel', () => {
     cancelled.unmount();
 
     // A completed download is NOT an error.
-    const ok = render(<DownloadsPanel {...props({ downloads: [entry({ state: 'completed' })] })} />);
+    const ok = render(
+      <DownloadsPanel {...props({ downloads: [entry({ state: 'completed' })] })} />,
+    );
     expect(ok.container.querySelector('.downloads-panel__state--error')).toBeNull();
   });
 

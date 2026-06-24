@@ -273,7 +273,9 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
 
   const handleDelete = (uuid: string) => {
     void (async () => {
-      if (!(await confirm('Delete this saved password? This can’t be undone.', { destructive: true })))
+      if (
+        !(await confirm('Delete this saved password? This can’t be undone.', { destructive: true }))
+      )
         return;
       void run(async () => {
         await vault.remove(uuid);

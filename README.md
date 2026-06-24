@@ -43,11 +43,11 @@ npm run tauri:build
 
 **Output:**
 
-| Artifact | Path |
-| -------- | ---- |
-| AppImage | `src-tauri/target/release/bundle/appimage/Aegis_0.1.0_amd64.AppImage` |
-| Debian package | `src-tauri/target/release/bundle/deb/Aegis_0.1.0_amd64.deb` |
-| Raw binary | `src-tauri/target/release/app` |
+| Artifact       | Path                                                                  |
+| -------------- | --------------------------------------------------------------------- |
+| AppImage       | `src-tauri/target/release/bundle/appimage/Aegis_0.1.0_amd64.AppImage` |
+| Debian package | `src-tauri/target/release/bundle/deb/Aegis_0.1.0_amd64.deb`           |
+| Raw binary     | `src-tauri/target/release/app`                                        |
 
 > **AppImage distribution caveat:** build the AppImage on a **recent** distro
 > (the CI uses `ubuntu-24.04`). An AppImage built on `ubuntu-22.04` bundles a webkit2gtk
@@ -60,7 +60,7 @@ npm run tauri:build
 
 Build **on Windows** with:
 
-- **Visual Studio** with the *Desktop development with C++* workload (bundles CMake).
+- **Visual Studio** with the _Desktop development with C++_ workload (bundles CMake).
 - **NASM** ([nasm.us](https://www.nasm.us/)) on `PATH` — required by `aws-lc-sys` (rustls' crypto backend).
 - The **WebView2 Runtime** (preinstalled on Windows 10/11).
 
@@ -71,10 +71,10 @@ npm run tauri:build        # or: npm run build
 
 **Output:**
 
-| Artifact | Path |
-| -------- | ---- |
+| Artifact       | Path                                                             |
+| -------------- | ---------------------------------------------------------------- |
 | NSIS installer | `src-tauri\target\release\bundle\nsis\Aegis_0.1.0_x64-setup.exe` |
-| Raw binary | `src-tauri\target\release\app.exe` |
+| Raw binary     | `src-tauri\target\release\app.exe`                               |
 
 > If `cargo` fails every crates.io fetch with `CRYPT_E_NO_REVOCATION_CHECK` (a network
 > that blocks OCSP/CRL), set `http.check-revoke = false` in `~/.cargo/config.toml`.
@@ -95,9 +95,9 @@ npm run tauri -- build --target x86_64-apple-darwin  # Intel
 
 **Output** (arch in the filename matches the build target):
 
-| Artifact | Path |
-| -------- | ---- |
-| App bundle | `src-tauri/target/release/bundle/macos/Aegis.app` |
+| Artifact   | Path                                                                          |
+| ---------- | ----------------------------------------------------------------------------- |
+| App bundle | `src-tauri/target/release/bundle/macos/Aegis.app`                             |
 | Disk image | `src-tauri/target/release/bundle/dmg/Aegis_0.1.0_aarch64.dmg` (or `_x64.dmg`) |
 
 > macOS-native code can only be compiled on a Mac; it cannot be cross-built from Linux.
@@ -108,7 +108,7 @@ npm run tauri -- build --target x86_64-apple-darwin  # Intel
 
 **Requirements:**
 
-- **JDK 21** — *not* a newer JDK. Gradle/AGP here fail under JDK 25. Use Android Studio's
+- **JDK 21** — _not_ a newer JDK. Gradle/AGP here fail under JDK 25. Use Android Studio's
   bundled JBR.
 - **Android SDK** (`ANDROID_HOME`) + **NDK 27**.
 - One-time project init only if `src-tauri/gen/android/` is missing: `npm run tauri android init`.
@@ -123,10 +123,10 @@ npm run android:build -- --target aarch64  # arm64-only (smaller; for a phone)
 
 **Output:**
 
-| Artifact | Path |
-| -------- | ---- |
-| Universal release APK | `src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
-| (debug, from `android:dev`) | `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk` |
+| Artifact                    | Path                                                                                      |
+| --------------------------- | ----------------------------------------------------------------------------------------- |
+| Universal release APK       | `src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
+| (debug, from `android:dev`) | `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`     |
 
 **Signing:** by default the release APK is signed with the **debug key** (installs fine,
 but is not a Play-Store upload key and is not an update channel). For a real release key,
@@ -165,7 +165,7 @@ git push origin v0.1.0
 
 ### `tauri-build-check.yml` — on-demand test artifacts
 
-Run manually (Actions → *Tauri Build Check* → *Run workflow*) to get downloadable,
+Run manually (Actions → _Tauri Build Check_ → _Run workflow_) to get downloadable,
 unsigned artifacts (retained 14 days) for on-device testing:
 
 - **Windows** → `Aegis_x64_portable.exe` (raw portable exe, no installer)
@@ -177,14 +177,14 @@ unsigned artifacts (retained 14 days) for on-device testing:
 
 ## Output locations at a glance
 
-| Platform | Command | Artifact path (from repo root) |
-| -------- | ------- | ------------------------------ |
-| Linux | `npm run tauri:build` | `src-tauri/target/release/bundle/appimage/Aegis_0.1.0_amd64.AppImage` |
-| Linux | `npm run tauri:build` | `src-tauri/target/release/bundle/deb/Aegis_0.1.0_amd64.deb` |
-| Windows | `npm run tauri:build` (on Windows) | `src-tauri/target/release/bundle/nsis/Aegis_0.1.0_x64-setup.exe` |
-| macOS | `npm run tauri:build` (on macOS) | `src-tauri/target/release/bundle/{macos/Aegis.app, dmg/Aegis_0.1.0_<arch>.dmg}` |
-| Android | `npm run android:build` | `src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
-| All desktop (CI) | push `v*` tag | GitHub Release assets (draft) |
+| Platform         | Command                            | Artifact path (from repo root)                                                            |
+| ---------------- | ---------------------------------- | ----------------------------------------------------------------------------------------- |
+| Linux            | `npm run tauri:build`              | `src-tauri/target/release/bundle/appimage/Aegis_0.1.0_amd64.AppImage`                     |
+| Linux            | `npm run tauri:build`              | `src-tauri/target/release/bundle/deb/Aegis_0.1.0_amd64.deb`                               |
+| Windows          | `npm run tauri:build` (on Windows) | `src-tauri/target/release/bundle/nsis/Aegis_0.1.0_x64-setup.exe`                          |
+| macOS            | `npm run tauri:build` (on macOS)   | `src-tauri/target/release/bundle/{macos/Aegis.app, dmg/Aegis_0.1.0_<arch>.dmg}`           |
+| Android          | `npm run android:build`            | `src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
+| All desktop (CI) | push `v*` tag                      | GitHub Release assets (draft)                                                             |
 
 ---
 

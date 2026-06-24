@@ -1,7 +1,13 @@
 // src/components/Toaster.tsx
 import { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
-import { subscribeToasts, dismissToast, pauseToast, resumeToast, type ToastItem } from '../lib/toast';
+import {
+  subscribeToasts,
+  dismissToast,
+  pauseToast,
+  resumeToast,
+  type ToastItem,
+} from '../lib/toast';
 
 export function Toaster() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
