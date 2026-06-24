@@ -404,6 +404,20 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         }
       }
     }
+    // Anti-fingerprinting (farbling) shim, document-start, per the user's antiFingerprint
+    // level. Read fresh per tab so a level change applies to new tabs; "" when no farbling
+    // applies (level "off" or clamped bogus value). fp-allowlist is desktop-only in v1 —
+    // the Rust getter always passes host_allowlisted=false on Android (see NativeFarble.kt).
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+      val farble = try { NativeFarble.farbleScript() } catch (_: Throwable) { "" }
+      if (farble.isNotEmpty()) {
+        try {
+          WebViewCompat.addDocumentStartJavaScript(wv, farble, setOf("*"))
+        } catch (t: Throwable) {
+          Log.w("AegisFarble", "farble shim inject failed", t)
+        }
+      }
+    }
     val lp = FrameLayout.LayoutParams(
       FrameLayout.LayoutParams.MATCH_PARENT,
       FrameLayout.LayoutParams.MATCH_PARENT,

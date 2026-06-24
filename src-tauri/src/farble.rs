@@ -141,13 +141,47 @@ pub fn note_level(level: &str) {
 
 /// Return the current farble level for Android (default `"off"`). Mirrors `webrtc_shim::android_policy`.
 #[cfg(target_os = "android")]
-#[allow(dead_code)] // consumed by the NativeFarble JNI getter in the injection task (Task 7)
+#[allow(dead_code)] // consumed by the NativeFarble JNI getter below
 pub fn android_level() -> String {
     let p = ANDROID_LEVEL.read().map(|g| g.clone()).unwrap_or_default();
     if p.is_empty() {
         "off".to_string()
     } else {
         p
+    }
+}
+
+/// JNI bridge for Android's `NativeFarble.farbleScript()`. Returns the farble shim JS for
+/// the current level. The raw `android_level()` value is clamped here (standard/strict →
+/// pass through; anything else → "off") before calling `shim_for`, so a bogus stored value
+/// always produces a fail-open empty string rather than unexpected output.
+///
+/// **Per-site allowlist:** the fp-allowlist is desktop-only in v1 — the JNI getter has no
+/// `AppHandle` (no Tauri runtime on the JNI thread), so `host_allowlisted` is always
+/// `false`. Farbling therefore applies to all hosts on Android regardless of the
+/// fp-allowlist. Parity gap: toggling a host on the fp-allowlist exempts it on desktop but
+/// NOT on Android. This is a documented v1 limitation; closing it requires routing the
+/// allowlist to a global (like `ANDROID_LEVEL`) or calling `NativeFarble.farbleScript(host)`
+/// from the Kotlin side — tracked as a future improvement.
+///
+/// Registered as a per-tab document-start script in `MainActivity.createTabWebView`.
+/// Returns null jstring on failure (Kotlin skips registration).
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeFarble_farbleScript<'a>(
+    env: jni::JNIEnv<'a>,
+    _this: jni::objects::JObject<'a>,
+) -> jni::sys::jstring {
+    // Clamp the stored level: only "standard" and "strict" are valid; anything else → off.
+    let raw = android_level();
+    let clamped = match raw.as_str() {
+        "standard" | "strict" => raw.as_str(),
+        _ => "off",
+    };
+    let s = shim_for(clamped, false);
+    match env.new_string(s) {
+        Ok(js) => js.into_raw(),
+        Err(_) => std::ptr::null_mut(),
     }
 }
 
