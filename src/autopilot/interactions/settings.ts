@@ -986,11 +986,26 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
           // emitAllowlist / emitSitePermissions pattern.  Uses flushSync for synchronous DOM update.
           await ctx.emitFingerprintState?.({ level: 'off', allowlistedHosts: [PROBE_HOST] });
         } else {
-          // Live: add the probe host first, then re-reach settings:security so the row renders.
-          const st = await ctx.aegis.fingerprint.getState();
-          if (!st.allowlistedHosts.includes(PROBE_HOST))
-            await ctx.aegis.fingerprint.toggleAllowlist(PROBE_HOST);
-          await ctx.reach('settings:security');
+          // Live: seed the probe host through the real Add UI (type + click Add) so the
+          // useFingerprint hook's toggleAllowlist callback fires → setState(response) →
+          // allowlistedHosts updates → the "Remove …" row renders.
+          // Calling ctx.aegis.fingerprint.toggleAllowlist() directly bypasses the hook and
+          // never triggers a re-render, so the Remove button would never appear.
+          // First clean up any leftover state from a prior run.
+          const initialState = await ctx.aegis.fingerprint.getState();
+          if (initialState.allowlistedHosts.includes(PROBE_HOST))
+            await ctx.aegis.fingerprint.removeAllowlist(PROBE_HOST);
+          // Type into the "Host to add" input and click Add — goes through the hook.
+          const input = ctx.byLabel(/^Host to add to fingerprint allowlist$/i);
+          if (!input)
+            throw new Error(
+              '"Host to add to fingerprint allowlist" input not found on Security tab',
+            );
+          await ctx.type(input, PROBE_HOST);
+          const addBtn = ctx.byLabel(/^Add host to fingerprint allowlist$/i);
+          if (!addBtn) throw new Error('"Add host to fingerprint allowlist" button not found');
+          await ctx.click(addBtn);
+          // Wait for the Remove row to appear (hook setState propagates asynchronously).
           await waitFor(
             () => ctx.byLabel(new RegExp(`Remove ${PROBE_HOST} from fingerprint allowlist`)),
             `"Remove ${PROBE_HOST} from fingerprint allowlist" button`,
@@ -1013,7 +1028,7 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
             );
           return `fpAllowlistRemove → fingerprint.removeAllowlist("${PROBE_HOST}")`;
         }
-        // Live: host must be gone.
+        // Live: host must be gone from the Rust-side state.
         await new Promise((r) => setTimeout(r, 400));
         const state = await ctx.aegis.fingerprint.getState();
         if (state.allowlistedHosts.includes(PROBE_HOST))
