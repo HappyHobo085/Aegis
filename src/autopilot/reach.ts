@@ -33,6 +33,7 @@ const SETTINGS_TAB_LABEL: Record<string, string> = {
   downloads: 'Downloads',
   sitePermissions: 'Site permissions',
   security: 'Security',
+  vault: 'Passwords',
   sync: 'Sync',
   data: 'Data',
 };
