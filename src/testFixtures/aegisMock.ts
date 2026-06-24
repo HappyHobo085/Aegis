@@ -3,7 +3,13 @@
 // can reuse it without duplicating the object.
 import { vi } from 'vitest';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
-import type { NavState, NavFailed, NavCrashed, Settings } from '../../shared/types';
+import type {
+  NavState,
+  NavFailed,
+  NavCrashed,
+  Settings,
+  FingerprintState,
+} from '../../shared/types';
 
 const baseState: NavState = {
   viewId: PRIMARY_VIEW_ID,
@@ -195,6 +201,20 @@ export function aegisMockModule() {
         set: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),
         reset: vi.fn().mockResolvedValue({ viewId: PRIMARY_VIEW_ID, factor: 1.0 }),
         onChanged: vi.fn().mockReturnValue(() => {}),
+      },
+      fingerprint: {
+        getState: vi
+          .fn()
+          .mockResolvedValue({ level: 'off', allowlistedHosts: [] } satisfies FingerprintState),
+        toggleAllowlist: vi
+          .fn()
+          .mockResolvedValue({ level: 'off', allowlistedHosts: [] } satisfies FingerprintState),
+        removeAllowlist: vi
+          .fn()
+          .mockResolvedValue({ level: 'off', allowlistedHosts: [] } satisfies FingerprintState),
+        clearAllowlist: vi
+          .fn()
+          .mockResolvedValue({ level: 'off', allowlistedHosts: [] } satisfies FingerprintState),
       },
       vault: {
         getState: vi.fn().mockResolvedValue({ exists: false, unlocked: false, count: 0 }),

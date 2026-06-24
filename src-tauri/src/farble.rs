@@ -18,8 +18,11 @@
 //! called per origin — it hands one 16-byte token to the page and the shim fans out.
 
 use hkdf::Hkdf;
+use serde_json::{json, Value};
 use sha2::Sha256;
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
+
+use crate::jsonstore;
 
 /// Per-SESSION 256-bit salt: OS CSPRNG, generated once at boot, NEVER persisted (resets each
 /// session, like Brave's farbling seed). The page never sees it — only the one-way `public_seed`.
@@ -145,6 +148,170 @@ pub fn android_level() -> String {
         "off".to_string()
     } else {
         p
+    }
+}
+
+// ── Per-site farble allowlist (fp-allowlist syncable store) ───────────────────────────────
+
+/// The in-memory farble allowlist cache.
+#[derive(Default)]
+pub struct FarbleInner {
+    pub allowlist: Vec<String>,
+}
+
+/// Managed state for the farble per-site allowlist (the fast in-memory cache).
+pub struct FarbleState(pub std::sync::Mutex<FarbleInner>);
+
+impl Default for FarbleState {
+    fn default() -> Self {
+        FarbleState(std::sync::Mutex::new(FarbleInner::default()))
+    }
+}
+
+/// Whether `host` is on the farble allowlist — exact match or subdomain match.
+/// Allowlisting `example.com` also covers `www.example.com`.
+#[allow(dead_code)] // consumed by the shim injector in a later task (Task 6+)
+#[cfg_attr(target_os = "android", allow(dead_code))]
+pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    match app.try_state::<FarbleState>() {
+        Some(s) => {
+            let g = s.0.lock().unwrap();
+            g.allowlist
+                .iter()
+                .any(|h| host == h || host.ends_with(&format!(".{h}")))
+        }
+        None => false,
+    }
+}
+
+/// The live farble-allowlisted hosts from the persisted store.
+fn load_fp_allowlist_hosts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
+    jsonstore::live(jsonstore::load_synced(app, "fp-allowlist"))
+        .iter()
+        .filter_map(|it| it.get("host").and_then(Value::as_str).map(String::from))
+        .collect()
+}
+
+/// Add a host to the fp-allowlist (revive a tombstone in place, or stamp a new record).
+fn add_fp_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
+    let mut items = jsonstore::load_synced(app, "fp-allowlist");
+    match items
+        .iter_mut()
+        .find(|it| it.get("host").and_then(Value::as_str) == Some(host))
+    {
+        Some(it) => {
+            if jsonstore::is_deleted(it) {
+                if let Some(o) = it.as_object_mut() {
+                    o.insert("deleted".into(), json!(false));
+                }
+                jsonstore::touch(it, app);
+            }
+        }
+        None => {
+            let mut item = json!({ "host": host });
+            jsonstore::stamp_new(&mut item, app);
+            items.push(item);
+        }
+    }
+    let _ = jsonstore::save(app, "fp-allowlist", &items);
+}
+
+/// Tombstone a host in the fp-allowlist.
+fn remove_fp_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
+    let mut items = jsonstore::load_synced(app, "fp-allowlist");
+    jsonstore::tombstone(
+        &mut items,
+        |it| it.get("host").and_then(Value::as_str) == Some(host),
+        app,
+    );
+    let _ = jsonstore::save(app, "fp-allowlist", &items);
+}
+
+/// Tombstone every live fp-allowlist host (clear all).
+fn clear_fp_hosts<R: Runtime>(app: &AppHandle<R>) {
+    let mut items = jsonstore::load_synced(app, "fp-allowlist");
+    jsonstore::tombstone(&mut items, |it| !jsonstore::is_deleted(it), app);
+    let _ = jsonstore::save(app, "fp-allowlist", &items);
+}
+
+/// Refresh the in-memory FarbleState.allowlist cache from the persisted store.
+fn reseed_fp_inner<R: Runtime>(app: &AppHandle<R>) {
+    let hosts = load_fp_allowlist_hosts(app);
+    if let Some(s) = app.try_state::<FarbleState>() {
+        s.0.lock().unwrap().allowlist = hosts;
+    }
+}
+
+/// Seed the (already `.manage()`'d) FarbleState from disk at boot. Mirrors
+/// `adblock::seed_from_disk` for the farble allowlist store (`fp-allowlist`).
+pub fn seed_from_disk<R: Runtime>(app: &AppHandle<R>) {
+    reseed_fp_inner(app);
+}
+
+/// Build the JSON state object for `fingerprint.getState` (and after mutations).
+fn fp_state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
+    let lvl = level(app);
+    match app.try_state::<FarbleState>() {
+        Some(s) => {
+            let g = s.0.lock().unwrap();
+            json!({ "level": lvl, "allowlistedHosts": g.allowlist })
+        }
+        None => json!({ "level": lvl, "allowlistedHosts": [] }),
+    }
+}
+
+/// Handle `fingerprint.*` channels. Returns `None` if not a fingerprint channel.
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
+    match channel {
+        "fingerprint.getState" => Some(Ok(fp_state_json(app))),
+
+        "fingerprint.toggleAllowlist" => {
+            let host = payload
+                .get("host")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if !host.is_empty() {
+                if load_fp_allowlist_hosts(app).iter().any(|h| h == &host) {
+                    remove_fp_host(app, &host); // toggle off
+                } else {
+                    add_fp_host(app, &host); // toggle on
+                }
+            }
+            reseed_fp_inner(app);
+            crate::sync::nudge(app);
+            Some(Ok(fp_state_json(app)))
+        }
+
+        "fingerprint.removeAllowlist" => {
+            let host = payload
+                .get("host")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if !host.is_empty() {
+                remove_fp_host(app, &host);
+            }
+            reseed_fp_inner(app);
+            crate::sync::nudge(app);
+            Some(Ok(fp_state_json(app)))
+        }
+
+        "fingerprint.clearAllowlist" => {
+            clear_fp_hosts(app);
+            reseed_fp_inner(app);
+            crate::sync::nudge(app);
+            Some(Ok(fp_state_json(app)))
+        }
+
+        _ => None,
     }
 }
 
@@ -385,5 +552,168 @@ mod tests {
         // After note_level("off") → "off".
         super::note_level("off");
         assert_eq!(super::android_level(), "off");
+    }
+
+    // ── Fingerprint allowlist tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn fp_default_state_is_empty_allowlist() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            let s = super::dispatch(app, "fingerprint.getState", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(s
+                .get("allowlistedHosts")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn fp_toggle_adds_then_removes_and_persists() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            // Toggle on — host should appear in state and in the persisted store.
+            let on = super::dispatch(
+                app,
+                "fingerprint.toggleAllowlist",
+                &json!({ "host": "fp.example.com" }),
+            )
+            .unwrap()
+            .unwrap();
+            let hosts: Vec<&str> = on
+                .get("allowlistedHosts")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert!(
+                hosts.contains(&"fp.example.com"),
+                "host appears after toggle-on"
+            );
+            assert_eq!(
+                super::load_fp_allowlist_hosts(app),
+                vec!["fp.example.com".to_string()],
+                "persisted store reflects the added host"
+            );
+            // Toggle off — host should be gone.
+            let off = super::dispatch(
+                app,
+                "fingerprint.toggleAllowlist",
+                &json!({ "host": "fp.example.com" }),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                off.get("allowlistedHosts")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .is_empty(),
+                "allowlistedHosts is empty after toggle-off"
+            );
+            assert!(
+                super::load_fp_allowlist_hosts(app).is_empty(),
+                "persisted store is empty after toggle-off"
+            );
+        });
+    }
+
+    #[test]
+    fn fp_host_allowlisted_covers_subdomains() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            super::dispatch(
+                app,
+                "fingerprint.toggleAllowlist",
+                &json!({ "host": "example.com" }),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                super::host_allowlisted(app, "example.com"),
+                "exact host is allowlisted"
+            );
+            assert!(
+                super::host_allowlisted(app, "www.example.com"),
+                "subdomain is covered by the allowlist entry"
+            );
+            assert!(
+                !super::host_allowlisted(app, "notexample.com"),
+                "unrelated host is not allowlisted"
+            );
+            assert!(
+                !super::host_allowlisted(app, ""),
+                "empty string never matches"
+            );
+        });
+    }
+
+    #[test]
+    fn fp_remove_allowlist_removes_host() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            // Add via toggle, then remove via removeAllowlist.
+            super::dispatch(
+                app,
+                "fingerprint.toggleAllowlist",
+                &json!({ "host": "rm.example.com" }),
+            )
+            .unwrap()
+            .unwrap();
+            let after_remove = super::dispatch(
+                app,
+                "fingerprint.removeAllowlist",
+                &json!({ "host": "rm.example.com" }),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                after_remove
+                    .get("allowlistedHosts")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .is_empty(),
+                "host is gone after removeAllowlist"
+            );
+        });
+    }
+
+    #[test]
+    fn fp_clear_allowlist_tombstones_everything() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            super::dispatch(
+                app,
+                "fingerprint.toggleAllowlist",
+                &json!({ "host": "a.fp.test" }),
+            )
+            .unwrap()
+            .unwrap();
+            super::dispatch(
+                app,
+                "fingerprint.toggleAllowlist",
+                &json!({ "host": "b.fp.test" }),
+            )
+            .unwrap()
+            .unwrap();
+            let cleared = super::dispatch(app, "fingerprint.clearAllowlist", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(
+                cleared
+                    .get("allowlistedHosts")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .is_empty(),
+                "getState returns empty allowlistedHosts after clearAllowlist"
+            );
+            assert!(
+                super::load_fp_allowlist_hosts(app).is_empty(),
+                "persisted store is empty after clearAllowlist"
+            );
+        });
     }
 }

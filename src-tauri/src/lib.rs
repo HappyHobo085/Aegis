@@ -181,6 +181,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = vault::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = farble::dispatch(&app, &channel, &payload) {
+        return result;
+    }
 
     let v = match channel.as_str() {
         "lists.updateNow" => subs::update_all(&app),
@@ -447,7 +450,8 @@ pub fn run() {
         .manage(redirect_guard::NavActions::default())
         .manage(redirect_guard::Chains::default())
         .manage(zoom::ZoomStore::default())
-        .manage(vault::VaultState::default());
+        .manage(vault::VaultState::default())
+        .manage(farble::FarbleState::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;
@@ -487,6 +491,10 @@ pub fn run() {
         // empty at builder time) + mirror it into the engine — so allowlisted hosts
         // survive a restart on every platform.
         crate::adblock::seed_from_disk(app.handle());
+
+        // Seed the fingerprint per-site allowlist from disk (the managed FarbleState was
+        // created empty at builder time) — so allowlisted hosts survive a restart.
+        crate::farble::seed_from_disk(app.handle());
 
         // Sync: auto-unlock from the OS keychain if a seed is stored, and start syncing.
         crate::sync::start(app.handle());

@@ -685,6 +685,24 @@ export const CATALOG: FeatureCheck[] = [
       return 'vault create→unlock→add→search→update→remove→lock(+locked-list-rejected+wrong-pw-rejected) ok';
     },
   },
+  // fingerprint allowlist
+  {
+    id: 'fingerprint.allowlist',
+    domain: 'fingerprint',
+    title: 'Fingerprint per-site allowlist',
+    channels: [
+      IPC.fingerprintGetState,
+      IPC.fingerprintToggleAllowlist,
+      IPC.fingerprintRemoveAllowlist,
+      IPC.fingerprintClearAllowlist,
+    ],
+    exercise: async (a) => {
+      assertObject(await a.fingerprint.getState());
+      assertObject(await a.fingerprint.toggleAllowlist('ap-fp.test'));
+      assertObject(await a.fingerprint.removeAllowlist('ap-fp.test'));
+      assertObject(await a.fingerprint.clearAllowlist());
+    },
+  },
 ];
 
 // Channels whose `exercise` body intentionally does NOT call them (destructive,

@@ -32,6 +32,7 @@ import type {
   VaultState,
   VaultRecord,
   VaultRecordInput,
+  FingerprintState,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call, on } from './tauriInvoke';
@@ -439,6 +440,12 @@ export const aegis: AegisApi = {
       }
       return on<ZoomState>(IPC.evtZoomChanged, cb);
     },
+  },
+  fingerprint: {
+    getState: () => call<FingerprintState>(IPC.fingerprintGetState),
+    toggleAllowlist: (host) => call<FingerprintState>(IPC.fingerprintToggleAllowlist, { host }),
+    removeAllowlist: (host) => call<FingerprintState>(IPC.fingerprintRemoveAllowlist, { host }),
+    clearAllowlist: () => call<FingerprintState>(IPC.fingerprintClearAllowlist),
   },
   vault: {
     getState: () => call<VaultState>(IPC.vaultGetState),

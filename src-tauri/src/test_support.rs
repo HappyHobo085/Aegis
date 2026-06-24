@@ -85,6 +85,7 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
         .manage(crate::redirect_guard::Chains::default())
         .manage(crate::zoom::ZoomStore::default())
         .manage(crate::vault::VaultState::default())
+        .manage(crate::farble::FarbleState::default())
         // --- setup()-time managed state ---
         // tabs::Tabs: lib.rs adds this in setup() after loading/restoring the session.
         // In tests we construct a minimal single-tab registry (home = "about:blank") so
@@ -141,6 +142,7 @@ mod tests {
             assert!(app.try_state::<crate::redirect_guard::Chains>().is_some());
             assert!(app.try_state::<crate::zoom::ZoomStore>().is_some());
             assert!(app.try_state::<crate::tabs::Tabs>().is_some());
+            assert!(app.try_state::<crate::farble::FarbleState>().is_some());
             #[cfg(target_os = "linux")]
             assert!(app
                 .try_state::<crate::linux_layout::LayoutInsets>()

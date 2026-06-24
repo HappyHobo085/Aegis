@@ -143,6 +143,11 @@ export const IPC = {
   vaultRemove: 'vault.remove',
   vaultSearch: 'vault.search',
   evtVaultState: 'vault.state',
+  // fingerprint per-site allowlist (chrome -> main)
+  fingerprintGetState: 'fingerprint.getState',
+  fingerprintToggleAllowlist: 'fingerprint.toggleAllowlist',
+  fingerprintRemoveAllowlist: 'fingerprint.removeAllowlist',
+  fingerprintClearAllowlist: 'fingerprint.clearAllowlist',
 } as const;
 
 export interface NavState {
@@ -256,6 +261,11 @@ export interface ContentInset {
 export interface ZoomState {
   viewId: ViewId;
   factor: number; // clamped to [0.5, 3.0]
+}
+
+export interface FingerprintState {
+  level: string; // 'off' | 'standard' | 'strict'
+  allowlistedHosts: string[];
 }
 
 export interface VaultState {
@@ -597,6 +607,12 @@ export interface AegisApi {
     remove(uuid: string): Promise<VaultRecord[]>;
     search(q: string): Promise<VaultRecord[]>;
     onState(cb: (s: VaultState) => void): () => void;
+  };
+  fingerprint: {
+    getState(): Promise<FingerprintState>;
+    toggleAllowlist(host: string): Promise<FingerprintState>;
+    removeAllowlist(host: string): Promise<FingerprintState>;
+    clearAllowlist(): Promise<FingerprintState>;
   };
 }
 
