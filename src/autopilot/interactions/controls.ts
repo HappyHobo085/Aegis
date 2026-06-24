@@ -131,4 +131,8 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'vault.row.copyPassword',
   'vault.row.delete',
   'vault.lock',
+  // Task 9 (farbling): SecurityTab anti-fingerprint controls
+  'settings.security.farbleLevel',
+  'settings.security.fpAllowlistAdd',
+  'settings.security.fpAllowlistRemove',
 ]);

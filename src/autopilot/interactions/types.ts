@@ -159,6 +159,13 @@ export interface InteractionCtx {
    * next gesture fires.  No-op on live (live records come from vault.list() calls).
    */
   emitVaultRecords?(records: import('../../../shared/types').VaultRecord[]): Promise<void>;
+  /**
+   * Vitest-only: directly seed the FingerprintState (allowlistedHosts + level) via the
+   * autopilot control seam (setFingerprintState → useFingerprint._setState), so
+   * SecurityTab renders the seeded allowlist rows before the next gesture fires.
+   * Uses flushSync for synchronous DOM update.  No-op on live.
+   */
+  emitFingerprintState?(s: import('../../../shared/types').FingerprintState): Promise<void>;
 }
 
 export interface InteractionSpec {

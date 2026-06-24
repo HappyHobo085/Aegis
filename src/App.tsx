@@ -167,6 +167,7 @@ function DesktopApp() {
       setSitePermissions: (perms) => permissions._setPermissions(perms),
       setAllowlistedHosts: (hosts) => adblock._setAllowlistedHosts(hosts),
       setVaultRecords: (records) => vault._setRecordsRef.current?.(records),
+      setFingerprintState: (s) => fingerprint._setState(s),
     });
   }, []);
 

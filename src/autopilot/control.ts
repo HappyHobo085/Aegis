@@ -45,6 +45,11 @@ export interface AutopilotControl {
    * Writes through vault._setRecordsRef.current, which VaultSettingsTab registers on mount.
    */
   setVaultRecords(records: VaultRecord[]): void;
+  /**
+   * Directly seed the fingerprint state (bypasses the async fingerprint.getState() path;
+   * autopilot vitest seeding only). Writes through useFingerprint._setState.
+   */
+  setFingerprintState(s: import('../../shared/types').FingerprintState): void;
 }
 
 const KEY = '__aegisAutopilot';

@@ -887,6 +887,142 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     } satisfies InteractionSpec;
   })(),
 
+  // ── Security tab — anti-fingerprinting controls ───────────────────────────
+
+  (() => {
+    let _originalLevel: string | undefined;
+    return {
+      id: 'settings.security.farbleLevel',
+      domain: 'settings.security',
+      description:
+        'Change the Anti-fingerprinting level select to "standard" → settings.set({antiFingerprint}) called',
+      screen: 'settings:security',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') {
+          _originalLevel = (await ctx.aegis.settings.get()).antiFingerprint;
+        }
+        const select = ctx.byLabel(/^Anti-fingerprinting level$/i);
+        if (!select)
+          throw new Error('"Anti-fingerprinting level" select not found on Security tab');
+        fireInputChange(select, 'standard');
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return p?.antiFingerprint !== undefined;
+            })
+          )
+            throw new Error('settings.set not called with antiFingerprint after change');
+          return 'Anti-fingerprinting level change → settings.set({antiFingerprint})';
+        }
+        await new Promise((r) => setTimeout(r, 400));
+        const s = await ctx.aegis.settings.get();
+        if (s.antiFingerprint !== 'standard')
+          throw new Error(`live: antiFingerprint is "${s.antiFingerprint}", expected "standard"`);
+        if (_originalLevel !== undefined)
+          await ctx.aegis.settings.set({
+            antiFingerprint: _originalLevel as AegisSettings['antiFingerprint'],
+          });
+        return `Anti-fingerprinting level → "standard" (restored to "${_originalLevel}")`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    const PROBE_HOST = 'ap9-fp-add.example';
+    return {
+      id: 'settings.security.fpAllowlistAdd',
+      domain: 'settings.security',
+      description:
+        'Type a host in "Host to add to fingerprint allowlist" and click Add → fingerprint.toggleAllowlist called',
+      screen: 'settings:security',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        const input = ctx.byLabel(/^Host to add to fingerprint allowlist$/i);
+        if (!input)
+          throw new Error('"Host to add to fingerprint allowlist" input not found on Security tab');
+        await ctx.type(input, PROBE_HOST);
+        const addBtn = ctx.byLabel(/^Add host to fingerprint allowlist$/i);
+        if (!addBtn) throw new Error('"Add host to fingerprint allowlist" button not found');
+        await ctx.click(addBtn);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('fingerprint.toggleAllowlist', (a) => a[0] === PROBE_HOST))
+            throw new Error(
+              `fingerprint.toggleAllowlist not called with "${PROBE_HOST}" after clicking Add`,
+            );
+          return `fpAllowlistAdd → fingerprint.toggleAllowlist("${PROBE_HOST}")`;
+        }
+        // Live: host should now be in the allowlist; clean up.
+        await new Promise((r) => setTimeout(r, 400));
+        const state = await ctx.aegis.fingerprint.getState();
+        if (!state.allowlistedHosts.includes(PROBE_HOST))
+          throw new Error(
+            `live: "${PROBE_HOST}" not found in allowlistedHosts after toggleAllowlist`,
+          );
+        await ctx.aegis.fingerprint.removeAllowlist(PROBE_HOST);
+        return `fpAllowlistAdd → "${PROBE_HOST}" allowlisted and cleaned up (live)`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
+  (() => {
+    const PROBE_HOST = 'ap9-fp-remove.example';
+    return {
+      id: 'settings.security.fpAllowlistRemove',
+      domain: 'settings.security',
+      description:
+        'Click "Remove {host} from fingerprint allowlist" → fingerprint.removeAllowlist called',
+      screen: 'settings:security',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          // Seed: push a FingerprintState with the probe host via the control-surface seam
+          // (setFingerprintState → useFingerprint._setState → React re-render), identical to
+          // emitAllowlist / emitSitePermissions pattern.  Uses flushSync for synchronous DOM update.
+          await ctx.emitFingerprintState?.({ level: 'off', allowlistedHosts: [PROBE_HOST] });
+        } else {
+          // Live: add the probe host first, then re-reach settings:security so the row renders.
+          const st = await ctx.aegis.fingerprint.getState();
+          if (!st.allowlistedHosts.includes(PROBE_HOST))
+            await ctx.aegis.fingerprint.toggleAllowlist(PROBE_HOST);
+          await ctx.reach('settings:security');
+          await waitFor(
+            () => ctx.byLabel(new RegExp(`Remove ${PROBE_HOST} from fingerprint allowlist`)),
+            `"Remove ${PROBE_HOST} from fingerprint allowlist" button`,
+          );
+        }
+        const removeBtn = ctx.byLabel(
+          new RegExp(`Remove ${PROBE_HOST} from fingerprint allowlist`),
+        );
+        if (!removeBtn)
+          throw new Error(
+            `"Remove ${PROBE_HOST} from fingerprint allowlist" button not found — allowlist may be empty`,
+          );
+        await ctx.click(removeBtn);
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          if (!ctx.calls.called('fingerprint.removeAllowlist', (a) => a[0] === PROBE_HOST))
+            throw new Error(
+              `fingerprint.removeAllowlist not called with "${PROBE_HOST}" after clicking Remove`,
+            );
+          return `fpAllowlistRemove → fingerprint.removeAllowlist("${PROBE_HOST}")`;
+        }
+        // Live: host must be gone.
+        await new Promise((r) => setTimeout(r, 400));
+        const state = await ctx.aegis.fingerprint.getState();
+        if (state.allowlistedHosts.includes(PROBE_HOST))
+          throw new Error(`live: "${PROBE_HOST}" still in allowlistedHosts after removeAllowlist`);
+        return `fpAllowlistRemove → "${PROBE_HOST}" gone from allowlist (live)`;
+      },
+    } satisfies InteractionSpec;
+  })(),
+
   // ── Sync tab ─────────────────────────────────────────────────────────────
 
   {

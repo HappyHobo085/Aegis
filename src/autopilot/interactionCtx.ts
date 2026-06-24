@@ -332,6 +332,15 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       if (control) flushSync(() => control.setVaultRecords(records));
       return Promise.resolve();
     },
+    emitFingerprintState: (s: import('../../shared/types').FingerprintState) => {
+      // Directly seed the fingerprint state via the autopilot control seam
+      // (setFingerprintState → useFingerprint._setState).  Uses flushSync so the DOM
+      // updates synchronously before the next gesture fires — same pattern as
+      // emitAllowlist / emitSitePermissions.
+      const control = getAutopilotControl();
+      if (control) flushSync(() => control.setFingerprintState(s));
+      return Promise.resolve();
+    },
   };
 }
 

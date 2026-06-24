@@ -702,6 +702,51 @@ export const CATALOG: FeatureCheck[] = [
       assertObject(await a.fingerprint.removeAllowlist('ap-fp.test'));
       assertObject(await a.fingerprint.clearAllowlist());
     },
+    verify: async (a) => {
+      const probe = 'ap-fp-verify.test';
+
+      // 1. Baseline: probe host must not be present.
+      const before = await a.fingerprint.getState();
+      if (before.allowlistedHosts.includes(probe)) await a.fingerprint.removeAllowlist(probe); // clean up stale probe from a prior run
+
+      // 2. toggleAllowlist adds the host.
+      const toggled = await a.fingerprint.toggleAllowlist(probe);
+      if (!toggled.allowlistedHosts.includes(probe))
+        throw new Error(`toggleAllowlist: "${probe}" not present in returned state`);
+
+      // 3. getState reflects it.
+      const afterToggle = await a.fingerprint.getState();
+      if (!afterToggle.allowlistedHosts.includes(probe))
+        throw new Error(`getState after toggle: "${probe}" not in allowlistedHosts`);
+
+      // 4. removeAllowlist removes it.
+      const removed = await a.fingerprint.removeAllowlist(probe);
+      if (removed.allowlistedHosts.includes(probe))
+        throw new Error(`removeAllowlist: "${probe}" still in returned state`);
+
+      // 5. getState confirms it is gone.
+      const afterRemove = await a.fingerprint.getState();
+      if (afterRemove.allowlistedHosts.includes(probe))
+        throw new Error(`getState after remove: "${probe}" still in allowlistedHosts`);
+
+      // 6. Round-trip the antiFingerprint setting: set to 'standard', assert, restore.
+      const origSettings = await a.settings.get();
+      const origLevel = origSettings.antiFingerprint;
+      await a.settings.set({ antiFingerprint: 'standard' });
+      const afterSet = await a.settings.get();
+      if (afterSet.antiFingerprint !== 'standard')
+        throw new Error(
+          `settings.set antiFingerprint: expected 'standard', got '${afterSet.antiFingerprint}'`,
+        );
+      await a.settings.set({ antiFingerprint: origLevel });
+      const restored = await a.settings.get();
+      if (restored.antiFingerprint !== origLevel)
+        throw new Error(
+          `settings restore antiFingerprint: expected '${origLevel}', got '${restored.antiFingerprint}'`,
+        );
+
+      return `fingerprint toggle→getState→remove→getState ok; antiFingerprint standard→restored('${origLevel}') ok`;
+    },
   },
 ];
 
