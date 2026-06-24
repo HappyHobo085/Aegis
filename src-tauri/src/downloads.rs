@@ -5,12 +5,12 @@
 use std::path::{Path, PathBuf};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::jsonstore;
 
 /// Resolve the directory downloads are saved to.
-fn dir(app: &AppHandle) -> PathBuf {
+fn dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
     let configured = crate::settings::download_dir(app);
     if !configured.is_empty() {
         let p = PathBuf::from(&configured);
@@ -34,7 +34,12 @@ pub fn should_record_download(is_private: bool) -> bool {
 /// On DownloadEvent::Requested: pick the save path and (unless private) record a
 /// progressing entry. Private tabs still save the file the user asked for but leave
 /// no trace in the downloads store.
-pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf, private: bool) {
+pub fn on_requested<R: Runtime>(
+    app: &AppHandle<R>,
+    url: &str,
+    destination: &mut PathBuf,
+    private: bool,
+) {
     let filename = url
         .rsplit('/')
         .next()
@@ -70,7 +75,7 @@ pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf, priva
 }
 
 /// On DownloadEvent::Finished: mark the newest progressing entry completed/interrupted.
-pub fn on_finished(app: &AppHandle, success: bool) {
+pub fn on_finished<R: Runtime>(app: &AppHandle<R>, success: bool) {
     let mut items = jsonstore::load_synced(app, "downloads");
     for it in items.iter_mut().rev() {
         if !jsonstore::is_deleted(it)
@@ -90,7 +95,11 @@ pub fn on_finished(app: &AppHandle, success: bool) {
     crate::emit_event(app, "downloads.changed", Value::Null);
 }
 
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     let id = || payload.get("id").and_then(Value::as_i64);
     match channel {
         "downloads.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
@@ -145,7 +154,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
     }
 }
 
-fn path_of(app: &AppHandle, id: Option<i64>) -> Option<String> {
+fn path_of<R: Runtime>(app: &AppHandle<R>, id: Option<i64>) -> Option<String> {
     jsonstore::load(app, "downloads")
         .iter()
         .find(|it| it.get("id").and_then(Value::as_i64) == id)
@@ -172,10 +181,102 @@ fn open(target: &str) {
 
 #[cfg(test)]
 mod tests {
-    use super::should_record_download;
+    use super::*;
+    use crate::test_support::with_tmp_app;
+
+    fn live_rows(app: &tauri::AppHandle<tauri::test::MockRuntime>) -> Vec<Value> {
+        jsonstore::live(jsonstore::load_synced(app, "downloads"))
+    }
+
     #[test]
     fn private_downloads_are_not_recorded() {
         assert!(should_record_download(false)); // normal tab → record
         assert!(!should_record_download(true)); // private tab → no record (file still saved)
+    }
+
+    #[test]
+    fn on_requested_derives_filename_and_records_progressing() {
+        with_tmp_app(|app| {
+            let mut dest = PathBuf::new();
+            on_requested(
+                app,
+                "https://files.test/path/report.pdf?token=abc",
+                &mut dest,
+                false,
+            );
+            assert_eq!(dest.file_name().unwrap().to_string_lossy(), "report.pdf");
+            let rows = live_rows(app);
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                rows[0].get("filename").and_then(Value::as_str),
+                Some("report.pdf")
+            );
+            assert_eq!(
+                rows[0].get("state").and_then(Value::as_str),
+                Some("progressing")
+            );
+        });
+    }
+
+    #[test]
+    fn on_finished_marks_newest_progressing_completed() {
+        with_tmp_app(|app| {
+            let mut d = PathBuf::new();
+            on_requested(app, "https://files.test/a.bin", &mut d, false);
+            on_finished(app, true);
+            let rows = live_rows(app);
+            assert_eq!(
+                rows[0].get("state").and_then(Value::as_str),
+                Some("completed")
+            );
+        });
+    }
+
+    #[test]
+    fn on_finished_false_marks_interrupted() {
+        with_tmp_app(|app| {
+            let mut d = PathBuf::new();
+            on_requested(app, "https://files.test/a.bin", &mut d, false);
+            on_finished(app, false);
+            assert_eq!(
+                live_rows(app)[0].get("state").and_then(Value::as_str),
+                Some("interrupted")
+            );
+        });
+    }
+
+    #[test]
+    fn remove_tombstones_one_row() {
+        with_tmp_app(|app| {
+            let mut d = PathBuf::new();
+            on_requested(app, "https://files.test/a.bin", &mut d, false);
+            on_finished(app, true);
+            let id = live_rows(app)[0].get("id").and_then(Value::as_i64).unwrap();
+            let after = dispatch(app, "downloads.remove", &json!({ "id": id }))
+                .unwrap()
+                .unwrap();
+            assert!(after.as_array().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn clear_keeps_progressing_and_tombstones_finished() {
+        with_tmp_app(|app| {
+            // one finished, one still progressing.
+            let mut d = PathBuf::new();
+            on_requested(app, "https://files.test/done.bin", &mut d, false);
+            on_finished(app, true);
+            let mut d2 = PathBuf::new();
+            on_requested(app, "https://files.test/inflight.bin", &mut d2, false);
+            let after = dispatch(app, "downloads.clear", &json!({}))
+                .unwrap()
+                .unwrap();
+            let rows = after.as_array().unwrap();
+            assert_eq!(rows.len(), 1, "only the progressing row survives clear");
+            assert_eq!(
+                rows[0].get("state").and_then(Value::as_str),
+                Some("progressing")
+            );
+        });
     }
 }

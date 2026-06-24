@@ -48,7 +48,7 @@ pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) {
 }
 
 /// Configured download directory ("" = use the OS Downloads dir).
-pub fn download_dir(app: &AppHandle) -> String {
+pub fn download_dir<R: Runtime>(app: &AppHandle<R>) -> String {
     load(app)
         .get("downloadDir")
         .and_then(Value::as_str)
