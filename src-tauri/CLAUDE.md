@@ -861,6 +861,33 @@ widget above native WebKit windows.
     - **macOS**: no-op — proxy is not implemented; macOS builds and browses
       without it. Any macOS proxy work requires a Mac + CI verify only.
 
+23. **Windows: content webviews need their OWN user-data-folder, keyed on their
+    browser args (the `additional_browser_args` blank-page regression).** WebView2
+    refuses to create a webview whose `AdditionalBrowserArguments` differ from
+    another webview already using the **same user-data-folder** —
+    `CreateCoreWebView2EnvironmentWithOptions` fails and the content webview comes up
+    with **no engine** (blank page, no panic, `spawn_tab` returns `Ok`). The chrome
+    window is created with wry's DEFAULT args; a content webview that appends the
+    WebRTC (`--force-webrtc-ip-handling-policy`) or proxy (`--proxy-server`) flag
+    therefore clashes with the chrome on the shared default folder. Because
+    `webrtcPolicy` defaults to `public-only`, EVERY content tab got the override and
+    **every page was blank by default** on Windows — a total browsing break introduced
+    by `196d4a3` (WebRTC backstop), unnoticed because the last hand-verified Windows
+    build (`Aegis_x64_portable.exe`, 2026-06-17 18:00) predated that commit (20:13) and
+    the autopilot can't exercise WebView2 env creation. **Fix (`nav::spawn_tab`):** house
+    each content webview in its own folder `EBWebView-content-<hash(args)>` (sibling of
+    the chrome's `EBWebView`), keyed on the exact arg string (`"default"` when no
+    override). So (a) content never clashes with the chrome and (b) only tabs with
+    IDENTICAL args share a folder — they share cookies/logins; a different WebRTC policy,
+    proxy, or per-site allowlist status gets its own profile. Applies to private tabs too
+    (incognito keeps them ephemeral but they must still avoid the chrome's folder).
+    Runtime-verified on real Windows 11 (2026-06-24): default `public-only` renders +
+    ad-blocks, private tab renders, and proxy egress confirmed (real `CONNECT` traffic
+    logged through a local proxy). Side effect: toggling WebRTC/proxy/allowlist starts a
+    fresh cookie jar for new tabs in the new profile — acceptable (a different
+    network/privacy context). **Lesson:** never give one webview different browser args
+    than its same-profile siblings; isolate the profile if the args must differ.
+
 e. **Size the webviews via `size_allocate`, NOT `set_size_request` — or the window
 can't shrink.** In a `GtkFixed`, `set_size_request(w, h)` sets each child's
 _minimum_ size, which GTK propagates up as the **window's** minimum — so sizing
