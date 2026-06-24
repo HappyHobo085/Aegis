@@ -49,6 +49,9 @@ mod webrtc_shim;
 // Sync engine (F2b) crypto: key tree + recovery phrase + record seal/open. Ungated — the
 // crypto deps build on every target (the cross-compile gate confirmed this), incl. Android.
 mod crypto;
+// Anti-fingerprinting (farbling): one-way session salt + per-session public SEED derivation.
+// Ungated — the HKDF/getrandom deps build on every target.
+mod farble;
 // Per-device Ed25519 signed-token auth for the sync server (F2b).
 mod customfilters;
 mod data;
@@ -475,6 +478,10 @@ pub fn run() {
         // getter has no AppHandle). Kept fresh on settings change in settings.rs.
         #[cfg(target_os = "android")]
         crate::webrtc_shim::note_policy(&crate::settings::webrtc_policy(app.handle()));
+
+        // Anti-fingerprinting: generate the per-session salt from the OS CSPRNG. Idempotent.
+        // The salt is NEVER persisted — it resets on every launch (Brave-style farbling seed).
+        crate::farble::init_session_salt();
 
         // Seed the ad-block allowlist from disk (the managed AdblockState was created
         // empty at builder time) + mirror it into the engine — so allowlisted hosts
