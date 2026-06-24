@@ -162,9 +162,27 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     })
 }
 
-/// No-op stub for Tasks 3-6 to fill in with per-platform `#[cfg]` bodies.
-/// Always emits `proxy.state` so the chrome can react immediately.
+/// Apply the active proxy config to a single content webview (identified by tab id).
+/// Linux: routes through WebKitGTK `WebsiteDataManager::set_network_proxy_settings`.
+/// Other platforms: stubs (Tasks 4-5 fill them in).
+pub fn apply_to_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
+    let cfg = current(app);
+    #[cfg(target_os = "linux")]
+    crate::linux_layout::apply_proxy_label(app, &crate::nav::content_label(id), &cfg);
+    // Suppress unused-variable warning on non-Linux targets until Tasks 4-5 add their bodies.
+    #[cfg(not(target_os = "linux"))]
+    let _ = (id, cfg);
+}
+
+/// Re-apply the active proxy config to every existing live content webview, then
+/// emit `proxy.state` so the chrome reflects the new config immediately.
 pub fn apply<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(s) = app.try_state::<crate::tabs::Tabs>() {
+        let ids: Vec<u32> = s.reg.lock().unwrap().all_ids();
+        for id in ids {
+            apply_to_tab(app, id);
+        }
+    }
     crate::emit_event(app, "proxy.state", state_json(app));
 }
 

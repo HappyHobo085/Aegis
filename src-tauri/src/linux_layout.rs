@@ -378,6 +378,47 @@ pub fn set_zoom_level_label(app: &AppHandle, label: &str, factor: f64) {
     });
 }
 
+/// Apply a proxy config to one content webview's WebKit network session via
+/// `WebsiteDataManager::set_network_proxy_settings`. When the config is active,
+/// a CUSTOM proxy (with the config's default URI and bypass-host list) is set;
+/// when it is off/invalid, the mode is reset to DEFAULT (direct connection).
+/// Live-switchable — may be called any time after the webview exists.
+///
+/// FAIL-SAFE: any error (webview not found, `with_webview` failure, missing
+/// WebsiteDataManager) is swallowed with an eprintln so a proxy-apply failure
+/// never crashes the app.
+pub fn apply_proxy_label<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    label: &str,
+    cfg: &crate::proxy::ProxyConfig,
+) {
+    let Some(w) = app.get_webview(label) else {
+        return;
+    };
+    let uri = cfg.default_uri();
+    let ignore: Vec<String> = cfg.bypass_hosts.clone();
+    let label_owned = label.to_owned();
+    let _ = w.with_webview(move |pw| {
+        use webkit2gtk::{
+            NetworkProxyMode, NetworkProxySettings, WebViewExt, WebsiteDataManagerExt,
+        };
+        let Some(mgr) = WebViewExt::website_data_manager(&pw.inner()) else {
+            eprintln!("[aegis-proxy] apply_proxy_label: no WebsiteDataManager for {label_owned}");
+            return;
+        };
+        match uri {
+            Some(u) => {
+                let ignore_refs: Vec<&str> = ignore.iter().map(String::as_str).collect();
+                let mut settings = NetworkProxySettings::new(Some(&u), &ignore_refs);
+                mgr.set_network_proxy_settings(NetworkProxyMode::Custom, Some(&mut settings));
+            }
+            None => {
+                mgr.set_network_proxy_settings(NetworkProxyMode::Default, None);
+            }
+        }
+    });
+}
+
 /// Stamp a content webview's GTK widget with CONTENT_WIDGET_NAME so layout() can
 /// classify it. Called once per tab from nav::spawn_tab.
 pub fn mark_content_label(app: &AppHandle, label: &str) {

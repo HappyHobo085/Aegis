@@ -153,6 +153,11 @@ impl Registry {
         self.active_id
     }
 
+    /// Return the ids of all live (non-discarded) tabs in order.
+    pub fn all_ids(&self) -> Vec<ViewId> {
+        self.tabs.iter().filter(|t| t.live).map(|t| t.id).collect()
+    }
+
     pub fn url_of(&self, id: ViewId) -> Option<&str> {
         self.idx(id).map(|i| self.tabs[i].url.as_str())
     }

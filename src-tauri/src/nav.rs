@@ -481,6 +481,11 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
     // so the user's zoom survives the webview being rebuilt. No-op at 1.0.
     crate::zoom::apply_to_tab(app, id);
 
+    // Apply the active proxy config to this new tab so it inherits the proxy from birth.
+    // Linux: routes through WebKitGTK WebsiteDataManager (live, per-webview).
+    // Other platforms: Tasks 4-5 fill in their bodies; no-op for now.
+    crate::proxy::apply_to_tab(app, id);
+
     Ok(())
 }
 
