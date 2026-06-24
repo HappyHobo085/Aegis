@@ -89,14 +89,14 @@ pub fn enabled_text<R: Runtime>(app: &AppHandle<R>) -> String {
 
 /// Rebuild + reapply ad-block after a subscription change, on every platform (Linux
 /// WebKit filters + the engine FilterSet reload via adblock_refresh).
-fn reinstall_adblock(app: &AppHandle) {
+fn reinstall_adblock<R: Runtime>(app: &AppHandle<R>) {
     crate::adblock_refresh::refresh(app);
 }
 
 /// Fetch a subscription in the background, cache it, stamp `lastUpdated`/`hash` on
 /// its row, re-install the engine, and notify the renderer. On failure the row
 /// keeps `lastUpdated: null` (shows as "never updated") and contributes no rules.
-fn fetch_in_background(app: AppHandle, list_id: String, url: String) {
+fn fetch_in_background<R: Runtime>(app: AppHandle<R>, list_id: String, url: String) {
     std::thread::spawn(move || match fetch_text(url) {
         Ok(text) => {
             // No .bak: the cache is regenerable from the network, so a recovery copy
@@ -131,7 +131,7 @@ fn url_of(items: &[Value], list_id: &str) -> Option<String> {
 /// engine once, and return a `ListUpdateResult` (per-source ok/error + timestamp).
 /// Fetches run concurrently so wall-time is the slowest single list. Backs
 /// `lists.updateNow`.
-pub fn update_all(app: &AppHandle) -> Value {
+pub fn update_all<R: Runtime>(app: &AppHandle<R>) -> Value {
     let now = jsonstore::now_ms();
     let enabled: Vec<(String, String)> = jsonstore::load(app, "subs")
         .iter()
@@ -195,7 +195,11 @@ pub fn update_all(app: &AppHandle) -> Value {
 }
 
 /// Handle `subs.*`. Returns `None` if not a subs channel.
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     match channel {
         "subs.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
             app, "subs"
@@ -294,5 +298,130 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::with_tmp_app;
+
+    #[test]
+    fn list_id_from_url_strips_txt_and_takes_last_segment() {
+        assert_eq!(
+            list_id_from_url("https://x.test/lists/easyprivacy.txt"),
+            "easyprivacy"
+        );
+        assert_eq!(list_id_from_url("https://x.test/regional/de"), "de");
+        assert_eq!(list_id_from_url("https://x.test/trailing/"), "trailing");
+        assert_eq!(list_id_from_url("noslash"), "noslash");
+    }
+
+    #[test]
+    fn hash_text_is_stable_and_distinguishes() {
+        assert_eq!(hash_text("a"), hash_text("a"));
+        assert_ne!(hash_text("a"), hash_text("b"));
+    }
+
+    #[test]
+    fn url_of_finds_the_row_by_list_id() {
+        let items = vec![
+            json!({ "listId": "ep", "url": "https://x/ep.txt" }),
+            json!({ "listId": "de", "url": "https://x/de.txt" }),
+        ];
+        assert_eq!(url_of(&items, "de").as_deref(), Some("https://x/de.txt"));
+        assert_eq!(url_of(&items, "missing"), None);
+    }
+
+    #[test]
+    fn add_rejects_non_http_scheme() {
+        with_tmp_app(|app| {
+            let r = dispatch(app, "subs.add", &json!({ "url": "ftp://x/list.txt" }));
+            assert!(
+                matches!(r, Some(Err(_))),
+                "non-http(s) url must be rejected"
+            );
+        });
+    }
+
+    #[test]
+    fn add_inserts_optimistic_row_then_list_and_remove() {
+        with_tmp_app(|app| {
+            let after = dispatch(
+                app,
+                "subs.add",
+                &json!({ "url": "https://x.test/easyprivacy.txt" }),
+            )
+            .unwrap()
+            .unwrap();
+            let rows = after.as_array().unwrap();
+            assert_eq!(rows.len(), 1);
+            assert_eq!(
+                rows[0].get("listId").and_then(Value::as_str),
+                Some("easyprivacy")
+            );
+            assert_eq!(rows[0].get("enabled").and_then(Value::as_bool), Some(true));
+            assert!(
+                rows[0]
+                    .get("lastUpdated")
+                    .map(Value::is_null)
+                    .unwrap_or(false),
+                "fetch is async → null until done"
+            );
+            // list reflects it.
+            let listed = dispatch(app, "subs.list", &json!({})).unwrap().unwrap();
+            assert_eq!(listed.as_array().unwrap().len(), 1);
+            // remove tombstones it (live list empties).
+            let removed = dispatch(app, "subs.remove", &json!({ "listId": "easyprivacy" }))
+                .unwrap()
+                .unwrap();
+            assert!(removed.as_array().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn set_enabled_flips_persisted_flag() {
+        with_tmp_app(|app| {
+            let _ = dispatch(
+                app,
+                "subs.add",
+                &json!({ "url": "https://x.test/easyprivacy.txt" }),
+            )
+            .unwrap();
+            let after = dispatch(
+                app,
+                "subs.setEnabled",
+                &json!({ "listId": "easyprivacy", "enabled": false }),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                after.as_array().unwrap()[0]
+                    .get("enabled")
+                    .and_then(Value::as_bool),
+                Some(false)
+            );
+        });
+    }
+
+    #[test]
+    fn enabled_text_concatenates_cached_enabled_lists_only() {
+        with_tmp_app(|app| {
+            // Seed two rows: one enabled with a cache file, one disabled.
+            let rows = vec![
+                json!({ "listId": "ep", "url": "https://x/ep.txt", "enabled": true }),
+                json!({ "listId": "off", "url": "https://x/off.txt", "enabled": false }),
+            ];
+            jsonstore::save(app, "subs", &rows).unwrap();
+            // Write the cache file enabled_text reads (cache_path is private — mirror it via the cache dir).
+            let cache = subs_dir(app).join("ep.txt");
+            std::fs::write(&cache, "||cached-ad.example^\n").unwrap();
+            let text = enabled_text(app);
+            assert!(
+                text.contains("||cached-ad.example^"),
+                "enabled cached list contributes its text"
+            );
+            assert!(!text.contains("off"), "a disabled list contributes nothing");
+        });
     }
 }
