@@ -10,9 +10,9 @@
 //! run_on_main_thread (the same main thread), so the request never crosses
 //! threads.
 use serde_json::{json, Value};
-use tauri::AppHandle;
 #[cfg(target_os = "linux")]
 use tauri::Manager;
+use tauri::{AppHandle, Runtime};
 
 use crate::jsonstore;
 
@@ -25,7 +25,7 @@ thread_local! {
 #[cfg(target_os = "linux")]
 static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
-fn list(app: &AppHandle) -> Vec<Value> {
+fn list<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
     jsonstore::load(app, "permissions")
 }
 
@@ -42,7 +42,7 @@ fn remembered(app: &AppHandle, origin: &str, permission: &str) -> Option<bool> {
 
 /// Upsert a remembered (origin, permission) decision.
 #[allow(dead_code)] // only reached via the Linux permission handler (linux_layout)
-fn persist(app: &AppHandle, origin: &str, permission: &str, allow: bool) {
+fn persist<R: Runtime>(app: &AppHandle<R>, origin: &str, permission: &str, allow: bool) {
     let mut items = list(app);
     items.retain(|it| {
         !(it.get("origin").and_then(Value::as_str) == Some(origin)
@@ -145,7 +145,11 @@ pub fn install_handler_label(app: &AppHandle, label: &str) {
 
 /// Handle `permissions.*`. list/remove/clear are cross-platform (JSON store);
 /// resolve acts on the held request (Linux) and remembers the choice.
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     match channel {
         "permissions.list" => Some(Ok(json!(list(app)))),
         "permissions.remove" => {
@@ -197,5 +201,85 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             Some(Ok(Value::Null))
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::with_tmp_app;
+    use serde_json::json;
+    use tauri::test::MockRuntime;
+
+    fn seed(app: &AppHandle<MockRuntime>) {
+        let rows = vec![
+            json!({ "origin": "https://a.test", "permission": "geolocation", "decision": "allow" }),
+            json!({ "origin": "https://a.test", "permission": "camera", "decision": "deny" }),
+            json!({ "origin": "https://b.test", "permission": "notifications", "decision": "allow" }),
+        ];
+        crate::jsonstore::save(app, "permissions", &rows).unwrap();
+    }
+
+    #[test]
+    fn list_returns_all_seeded_decisions() {
+        with_tmp_app(|app| {
+            seed(app);
+            let v = dispatch(app, "permissions.list", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(v.as_array().unwrap().len(), 3);
+        });
+    }
+
+    #[test]
+    fn remove_deletes_only_the_matching_origin_permission_pair() {
+        with_tmp_app(|app| {
+            seed(app);
+            let after = dispatch(
+                app,
+                "permissions.remove",
+                &json!({ "origin": "https://a.test", "permission": "camera" }),
+            )
+            .unwrap()
+            .unwrap();
+            let rows = after.as_array().unwrap();
+            assert_eq!(rows.len(), 2);
+            // The (a.test, camera) pair is gone; (a.test, geolocation) stays.
+            assert!(rows
+                .iter()
+                .all(
+                    |it| !(it.get("origin").and_then(Value::as_str) == Some("https://a.test")
+                        && it.get("permission").and_then(Value::as_str) == Some("camera"))
+                ));
+            assert!(rows
+                .iter()
+                .any(|it| it.get("permission").and_then(Value::as_str) == Some("geolocation")));
+        });
+    }
+
+    #[test]
+    fn clear_empties_the_store() {
+        with_tmp_app(|app| {
+            seed(app);
+            let after = dispatch(app, "permissions.clear", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(after.as_array().unwrap().is_empty());
+            assert!(crate::jsonstore::load(app, "permissions").is_empty());
+        });
+    }
+
+    #[test]
+    fn origin_of_strips_path_keeping_scheme_host_port() {
+        // origin_of is #[cfg(target_os = "linux")] — assert it only on Linux hosts.
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(
+                origin_of("https://example.com:8443/some/path?x=1"),
+                "https://example.com:8443"
+            );
+            assert_eq!(origin_of("https://example.com/"), "https://example.com");
+            assert_eq!(origin_of("not-a-url"), "not-a-url");
+        }
     }
 }
