@@ -96,6 +96,8 @@ mod zoom;
 mod zoom_mac;
 #[cfg(target_os = "windows")]
 mod zoom_win;
+// Local encrypted-at-rest password vault (Phase A — manage only, NO autofill, NO page bridge).
+mod vault;
 
 use serde_json::Value;
 use tauri::{Emitter, Manager};
@@ -438,7 +440,8 @@ pub fn run() {
         .manage(redirect_guard::PendingNavs::default())
         .manage(redirect_guard::NavActions::default())
         .manage(redirect_guard::Chains::default())
-        .manage(zoom::ZoomStore::default());
+        .manage(zoom::ZoomStore::default())
+        .manage(vault::VaultState::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;
