@@ -132,6 +132,17 @@ export const IPC = {
   zoomReset: 'zoom.reset',
   // event (main -> chrome): a tab's zoom factor changed
   evtZoomChanged: 'zoom.changed',
+  // password vault (Phase A — manage only, NO autofill)
+  vaultGetState: 'vault.getState',
+  vaultCreate: 'vault.create',
+  vaultUnlock: 'vault.unlock',
+  vaultLock: 'vault.lock',
+  vaultList: 'vault.list',
+  vaultAdd: 'vault.add',
+  vaultUpdate: 'vault.update',
+  vaultRemove: 'vault.remove',
+  vaultSearch: 'vault.search',
+  evtVaultState: 'vault.state',
 } as const;
 
 export interface NavState {
@@ -245,6 +256,26 @@ export interface ContentInset {
 export interface ZoomState {
   viewId: ViewId;
   factor: number; // clamped to [0.5, 3.0]
+}
+
+export interface VaultState {
+  exists: boolean;
+  unlocked: boolean;
+  count: number;
+}
+export interface VaultRecord {
+  uuid: string;
+  updatedAt: number;
+  site: string;
+  username: string;
+  password: string;
+  notes: string;
+}
+export interface VaultRecordInput {
+  site: string;
+  username: string;
+  password: string;
+  notes?: string;
 }
 
 // ---- adblock data model ----
@@ -549,6 +580,18 @@ export interface AegisApi {
     /** Reset to 1.0. Returns the applied state. */
     reset(viewId: ViewId): Promise<ZoomState>;
     onChanged(cb: (s: ZoomState) => void): () => void;
+  };
+  vault: {
+    getState(): Promise<VaultState>;
+    create(masterPassword: string): Promise<VaultState>;
+    unlock(masterPassword: string): Promise<VaultState>;
+    lock(): Promise<VaultState>;
+    list(): Promise<VaultRecord[]>;
+    add(input: VaultRecordInput): Promise<VaultRecord[]>;
+    update(uuid: string, partial: Partial<VaultRecordInput>): Promise<VaultRecord[]>;
+    remove(uuid: string): Promise<VaultRecord[]>;
+    search(q: string): Promise<VaultRecord[]>;
+    onState(cb: (s: VaultState) => void): () => void;
   };
 }
 

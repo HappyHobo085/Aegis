@@ -4,9 +4,6 @@
 //! (crypto::seal/open) under the dedicated "vault" namespace, gated by a master-password
 //! Argon2id KDF (mirroring sync_keystore::derive_kek). The vault is NOT synced and NEVER
 //! reachable from the content webview — there is no page->core bridge (locked decision).
-//
-// Task 3 (IPC dispatcher) is not yet wired — suppress dead_code lints on the pure seam.
-#![allow(dead_code)]
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Mutex;
@@ -185,6 +182,7 @@ impl From<String> for VaultError {
 /// Initialize a brand-new vault: derive the key from `password`, seal the verifier,
 /// return the on-disk JSON (no records yet) and the derived key so the caller can
 /// transition to "unlocked" without a second KDF call.
+#[allow(dead_code)]
 pub fn init_vault(password: &str) -> Result<(Value, Zeroizing<[u8; 32]>), VaultError> {
     // Generate a fresh random 32-byte Argon2id salt.
     let mut salt = vec![0u8; 32];
@@ -198,6 +196,7 @@ pub fn init_vault(password: &str) -> Result<(Value, Zeroizing<[u8; 32]>), VaultE
 /// Unlock an existing vault from its on-disk JSON.
 /// Derives the key, verifies it against the verifier, then decrypts all records.
 /// Returns `VaultError::WrongPassword` if the AEAD authentication fails.
+#[allow(dead_code)]
 pub fn unlock_vault(
     file: &Value,
     password: &str,
@@ -232,6 +231,7 @@ pub fn unlock_vault(
 
 /// Re-seal all records (and the verifier) under `vk`, returning an updated on-disk JSON.
 /// Called when adding/updating/removing a record while the vault is unlocked.
+#[allow(dead_code)]
 pub fn seal_vault(salt: &[u8], vk: &[u8; 32], records: &[Cred]) -> Result<Value, VaultError> {
     let verifier = seal_verifier(vk)?;
     let mut wire: Vec<Value> = Vec::with_capacity(records.len());
@@ -243,6 +243,7 @@ pub fn seal_vault(salt: &[u8], vk: &[u8; 32], records: &[Cred]) -> Result<Value,
 
 // ─── VaultState methods (pure, AppHandle-free) ──────────────────────────────
 
+#[allow(dead_code)]
 impl VaultState {
     /// Load an existing vault file into memory and derive the key.
     /// Returns `WrongPassword` if the password is wrong; `NotCreated` if `file` is None.
@@ -429,6 +430,279 @@ pub fn persist<R: Runtime>(app: &AppHandle<R>, g: &Inner) -> Result<(), String> 
     let p = vault_path(app).ok_or("no app data dir")?;
     let txt = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
     crate::jsonstore::write_atomic(&p, txt.as_bytes()).map_err(|e| e.to_string())
+}
+
+// ─── IPC dispatcher ──────────────────────────────────────────────────────────
+
+fn now_ms() -> i64 {
+    crate::jsonstore::now_ms()
+}
+
+fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
+    let g = app.state::<VaultState>();
+    let g = g.0.lock().unwrap();
+    json!({
+        "exists": g.created || vault_exists(app),
+        "unlocked": g.key.is_some(),
+        "count": g.records.len()
+    })
+}
+
+fn emit_state<R: Runtime>(app: &AppHandle<R>) {
+    crate::emit_event(app, "vault.state", state_json(app));
+}
+
+fn live_records(g: &Inner) -> Result<Value, String> {
+    g.key
+        .as_ref()
+        .ok_or_else(|| "vault is locked".to_string())?;
+    let arr: Vec<Value> = g
+        .records
+        .iter()
+        .map(|c| {
+            json!({
+                "uuid": c.uuid, "updatedAt": c.updated_at, "site": c.site,
+                "username": c.username, "password": c.password, "notes": c.notes,
+            })
+        })
+        .collect();
+    Ok(json!(arr))
+}
+
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
+    let pw = || {
+        payload
+            .get("masterPassword")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string()
+    };
+    match channel {
+        "vault.getState" => Some(Ok(state_json(app))),
+
+        "vault.create" => {
+            if vault_exists(app) {
+                return Some(Err("a vault already exists".into()));
+            }
+            let password = pw();
+            if password.is_empty() {
+                return Some(Err("master password required".into()));
+            }
+            let mut salt = [0u8; 16];
+            if getrandom::getrandom(&mut salt).is_err() {
+                return Some(Err("rng failed".into()));
+            }
+            let vk = match derive_vault_key(&password, &salt) {
+                Ok(k) => k,
+                Err(e) => return Some(Err(e)),
+            };
+            {
+                let st = app.state::<VaultState>();
+                let mut g = st.0.lock().unwrap();
+                g.salt = salt.to_vec();
+                g.key = Some(vk);
+                g.records = Vec::new();
+                g.created = true;
+                if let Err(e) = persist(app, &g) {
+                    return Some(Err(e));
+                }
+            }
+            emit_state(app);
+            Some(Ok(state_json(app)))
+        }
+
+        "vault.unlock" => {
+            let Some(file) = read_file(app) else {
+                return Some(Err("no vault to unlock".into()));
+            };
+            let salt = match file.get("salt").and_then(Value::as_str).and_then(unhex) {
+                Some(s) => s,
+                None => return Some(Err("vault file: bad salt".into())),
+            };
+            let vk = match derive_vault_key(&pw(), &salt) {
+                Ok(k) => k,
+                Err(e) => return Some(Err(e)),
+            };
+            if let Some(v) = file.get("verifier") {
+                if let Err(e) = check_verifier(&vk, v) {
+                    return Some(Err(e));
+                }
+            } else {
+                return Some(Err("vault file: no verifier".into()));
+            }
+            let mut records = Vec::new();
+            if let Some(arr) = file.get("records").and_then(Value::as_array) {
+                for w in arr {
+                    match open_record(&vk, w) {
+                        Ok(c) => records.push(c),
+                        Err(e) => eprintln!("[aegis-vault] skip undecryptable record: {e}"),
+                    }
+                }
+            }
+            {
+                let st = app.state::<VaultState>();
+                let mut g = st.0.lock().unwrap();
+                g.salt = salt;
+                g.key = Some(vk);
+                g.records = records;
+                g.created = true;
+            }
+            emit_state(app);
+            Some(Ok(state_json(app)))
+        }
+
+        "vault.lock" => {
+            {
+                let st = app.state::<VaultState>();
+                let mut g = st.0.lock().unwrap();
+                g.key = None;
+                g.records.clear();
+            }
+            emit_state(app);
+            Some(Ok(state_json(app)))
+        }
+
+        "vault.list" => {
+            let st = app.state::<VaultState>();
+            let g = st.0.lock().unwrap();
+            Some(live_records(&g))
+        }
+
+        "vault.add" => {
+            let input = payload.get("input").cloned().unwrap_or_else(|| json!({}));
+            let site = input
+                .get("site")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let username = input
+                .get("username")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let password = input
+                .get("password")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let notes = input
+                .get("notes")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let st = app.state::<VaultState>();
+            let mut g = st.0.lock().unwrap();
+            if g.key.is_none() {
+                return Some(Err("vault is locked".into()));
+            }
+            add_record(
+                &mut g.records,
+                &site,
+                &username,
+                &password,
+                &notes,
+                now_ms(),
+            );
+            if let Err(e) = persist(app, &g) {
+                return Some(Err(e));
+            }
+            let out = live_records(&g);
+            drop(g);
+            emit_state(app);
+            Some(out)
+        }
+
+        "vault.update" => {
+            let uuid = payload
+                .get("uuid")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let p = payload.get("partial").cloned().unwrap_or_else(|| json!({}));
+            // Must bind to owned Strings so the &str references live long enough.
+            let opt_site_s = p.get("site").and_then(Value::as_str).map(str::to_string);
+            let opt_username_s = p
+                .get("username")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let opt_password_s = p
+                .get("password")
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let opt_notes_s = p.get("notes").and_then(Value::as_str).map(str::to_string);
+            let st = app.state::<VaultState>();
+            let mut g = st.0.lock().unwrap();
+            if g.key.is_none() {
+                return Some(Err("vault is locked".into()));
+            }
+            update_record(
+                &mut g.records,
+                &uuid,
+                opt_site_s.as_deref(),
+                opt_username_s.as_deref(),
+                opt_password_s.as_deref(),
+                opt_notes_s.as_deref(),
+                now_ms(),
+            );
+            if let Err(e) = persist(app, &g) {
+                return Some(Err(e));
+            }
+            let out = live_records(&g);
+            drop(g);
+            emit_state(app);
+            Some(out)
+        }
+
+        "vault.remove" => {
+            let uuid = payload
+                .get("uuid")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let st = app.state::<VaultState>();
+            let mut g = st.0.lock().unwrap();
+            if g.key.is_none() {
+                return Some(Err("vault is locked".into()));
+            }
+            g.records.retain(|c| c.uuid != uuid);
+            if let Err(e) = persist(app, &g) {
+                return Some(Err(e));
+            }
+            let out = live_records(&g);
+            drop(g);
+            emit_state(app);
+            Some(out)
+        }
+
+        "vault.search" => {
+            let q = payload
+                .get("q")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let st = app.state::<VaultState>();
+            let g = st.0.lock().unwrap();
+            if g.key.is_none() {
+                return Some(Err("vault is locked".into()));
+            }
+            let arr: Vec<Value> = search(&g.records, &q)
+                .into_iter()
+                .map(|c| {
+                    json!({
+                        "uuid": c.uuid, "updatedAt": c.updated_at, "site": c.site,
+                        "username": c.username, "password": c.password, "notes": c.notes,
+                    })
+                })
+                .collect();
+            Some(Ok(json!(arr)))
+        }
+
+        _ => None,
+    }
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -928,5 +1202,168 @@ mod tests {
             creds_after.is_empty(),
             "expected no creds after remove, got: {creds_after:?}"
         );
+    }
+
+    // ── Task-3 dispatch tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_roundtrip_create_unlock_add_list_search_update_remove_lock() {
+        crate::test_support::with_tmp_app(|app| {
+            // getState: not yet created
+            let s = super::dispatch(app, "vault.getState", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(s["exists"], json!(false));
+            assert_eq!(s["unlocked"], json!(false));
+
+            // create
+            let s = super::dispatch(app, "vault.create", &json!({"masterPassword": "hunter2"}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(s["exists"], json!(true));
+            assert_eq!(s["unlocked"], json!(true));
+            assert_eq!(s["count"], json!(0));
+
+            // add two records
+            let r1 = super::dispatch(
+                app,
+                "vault.add",
+                &json!({
+                    "input": { "site": "https://example.com", "username": "alice", "password": "s3cr3t", "notes": "note1" }
+                }),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(r1.as_array().unwrap().len(), 1);
+            let uuid1 = r1[0]["uuid"].as_str().unwrap().to_string();
+
+            let r2 = super::dispatch(
+                app,
+                "vault.add",
+                &json!({
+                    "input": { "site": "https://other.net", "username": "bob", "password": "p@ss", "notes": "" }
+                }),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(r2.as_array().unwrap().len(), 2);
+
+            // list
+            let list = super::dispatch(app, "vault.list", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(list.as_array().unwrap().len(), 2);
+
+            // search — matches "alice"
+            let hits = super::dispatch(app, "vault.search", &json!({"q": "alice"}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(hits.as_array().unwrap().len(), 1);
+            assert_eq!(hits[0]["username"], json!("alice"));
+
+            // list returns plaintext passwords (Phase A: chrome needs them for display/copy)
+            assert_eq!(list[0]["password"], json!("s3cr3t"));
+
+            // update uuid1: change password
+            let updated = super::dispatch(
+                app,
+                "vault.update",
+                &json!({ "uuid": uuid1, "partial": { "password": "new-pw" } }),
+            )
+            .unwrap()
+            .unwrap();
+            let rec = updated
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["uuid"] == json!(uuid1))
+                .unwrap();
+            assert_eq!(rec["password"], json!("new-pw"));
+            assert_eq!(rec["site"], json!("https://example.com"));
+
+            // remove uuid1
+            let after_remove = super::dispatch(app, "vault.remove", &json!({"uuid": uuid1}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(after_remove.as_array().unwrap().len(), 1);
+            assert!(after_remove
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["uuid"] != json!(uuid1)));
+
+            // lock
+            let locked = super::dispatch(app, "vault.lock", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(locked["unlocked"], json!(false));
+            assert_eq!(locked["count"], json!(0));
+
+            // ops while locked → error
+            let err = super::dispatch(app, "vault.list", &json!({}))
+                .unwrap()
+                .unwrap_err();
+            assert!(err.contains("locked"), "expected locked error, got: {err}");
+        });
+    }
+
+    #[test]
+    fn dispatch_wrong_password_fails_unlock() {
+        crate::test_support::with_tmp_app(|app| {
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "correct"}))
+                .unwrap()
+                .unwrap();
+            super::dispatch(app, "vault.lock", &json!({}))
+                .unwrap()
+                .unwrap();
+            let err = super::dispatch(app, "vault.unlock", &json!({"masterPassword": "wrong"}))
+                .unwrap()
+                .unwrap_err();
+            assert!(
+                err.contains("wrong master password"),
+                "expected wrong password error, got: {err}"
+            );
+        });
+    }
+
+    #[test]
+    fn dispatch_ops_while_locked_return_error() {
+        crate::test_support::with_tmp_app(|app| {
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "pw"}))
+                .unwrap()
+                .unwrap();
+            super::dispatch(app, "vault.lock", &json!({}))
+                .unwrap()
+                .unwrap();
+
+            let list_err = super::dispatch(app, "vault.list", &json!({}))
+                .unwrap()
+                .unwrap_err();
+            assert!(list_err.contains("locked"));
+
+            let add_err = super::dispatch(
+                app,
+                "vault.add",
+                &json!({"input": {"site":"x.com","username":"u","password":"p","notes":""}}),
+            )
+            .unwrap()
+            .unwrap_err();
+            assert!(add_err.contains("locked"));
+
+            let upd_err = super::dispatch(app, "vault.update", &json!({"uuid":"x","partial":{}}))
+                .unwrap()
+                .unwrap_err();
+            assert!(upd_err.contains("locked"));
+
+            let rem_err = super::dispatch(app, "vault.remove", &json!({"uuid":"x"}))
+                .unwrap()
+                .unwrap_err();
+            assert!(rem_err.contains("locked"));
+
+            let srch_err = super::dispatch(app, "vault.search", &json!({"q":"x"}))
+                .unwrap()
+                .unwrap_err();
+            assert!(srch_err.contains("locked"));
+        });
     }
 }

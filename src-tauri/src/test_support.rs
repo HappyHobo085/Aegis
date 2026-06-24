@@ -84,6 +84,7 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
         .manage(crate::redirect_guard::NavActions::default())
         .manage(crate::redirect_guard::Chains::default())
         .manage(crate::zoom::ZoomStore::default())
+        .manage(crate::vault::VaultState::default())
         // --- setup()-time managed state ---
         // tabs::Tabs: lib.rs adds this in setup() after loading/restoring the session.
         // In tests we construct a minimal single-tab registry (home = "about:blank") so

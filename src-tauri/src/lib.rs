@@ -175,6 +175,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = safety::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = vault::dispatch(&app, &channel, &payload) {
+        return result;
+    }
 
     let v = match channel.as_str() {
         "lists.updateNow" => subs::update_all(&app),

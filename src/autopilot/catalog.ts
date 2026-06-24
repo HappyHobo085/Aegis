@@ -608,6 +608,34 @@ export const CATALOG: FeatureCheck[] = [
       return `find start→state(matchCount=${(got as { matchCount: number }).matchCount})→close ok`;
     },
   },
+  // vault (Phase A — password manager, chrome-only, no autofill)
+  {
+    id: 'vault',
+    domain: 'vault',
+    title: 'Password vault',
+    channels: [
+      IPC.vaultGetState,
+      IPC.vaultCreate,
+      IPC.vaultUnlock,
+      IPC.vaultLock,
+      IPC.vaultList,
+      IPC.vaultAdd,
+      IPC.vaultUpdate,
+      IPC.vaultRemove,
+      IPC.vaultSearch,
+    ],
+    exercise: async (a) => {
+      assertObject(await a.vault.getState());
+      await a.vault.create('test-master-pw');
+      await a.vault.unlock('test-master-pw');
+      assertArray(await a.vault.list());
+      assertArray(await a.vault.add({ site: 'https://ap.test/', username: 'ap', password: 'pw' }));
+      assertArray(await a.vault.search('ap'));
+      assertArray(await a.vault.update('mock-uuid', { password: 'new-pw' }));
+      assertArray(await a.vault.remove('mock-uuid'));
+      await a.vault.lock();
+    },
+  },
 ];
 
 // Channels whose `exercise` body intentionally does NOT call them (destructive,

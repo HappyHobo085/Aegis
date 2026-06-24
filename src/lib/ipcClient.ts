@@ -29,6 +29,9 @@ import type {
   SyncChanged,
   FindState,
   ZoomState,
+  VaultState,
+  VaultRecord,
+  VaultRecordInput,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call, on } from './tauriInvoke';
@@ -436,6 +439,19 @@ export const aegis: AegisApi = {
       }
       return on<ZoomState>(IPC.evtZoomChanged, cb);
     },
+  },
+  vault: {
+    getState: () => call<VaultState>(IPC.vaultGetState),
+    create: (masterPassword: string) => call<VaultState>(IPC.vaultCreate, { masterPassword }),
+    unlock: (masterPassword: string) => call<VaultState>(IPC.vaultUnlock, { masterPassword }),
+    lock: () => call<VaultState>(IPC.vaultLock),
+    list: () => call<VaultRecord[]>(IPC.vaultList),
+    add: (input: VaultRecordInput) => call<VaultRecord[]>(IPC.vaultAdd, { input }),
+    update: (uuid: string, partial: Partial<VaultRecordInput>) =>
+      call<VaultRecord[]>(IPC.vaultUpdate, { uuid, partial }),
+    remove: (uuid: string) => call<VaultRecord[]>(IPC.vaultRemove, { uuid }),
+    search: (q: string) => call<VaultRecord[]>(IPC.vaultSearch, { q }),
+    onState: (cb: (s: VaultState) => void) => on<VaultState>(IPC.evtVaultState, cb),
   },
 };
 
