@@ -357,15 +357,18 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
             }
         });
 
-    // Windows: WebRTC native backstop via Chromium's IP-handling policy. CRITICAL:
+    // Windows: WebRTC native backstop + proxy via Chromium browser args. CRITICAL:
     // additional_browser_args REPLACES wry's ENTIRE default arg string, so we must
     // re-include BOTH defaults wry sets — the --disable-features list AND
     // --autoplay-policy=no-user-gesture-required (wry appends it because autoplay defaults
-    // to true; dropping it would break HTML5 video/audio autoplay). disable → block all
-    // non-proxied UDP (worker-tight); public-only → only the public interface (hides the
-    // LAN IP). Only override the args when we actually add a WebRTC flag, so the
-    // no-protection / allowlisted path keeps wry's untouched defaults. Read at webview
-    // creation only → a mid-session change applies to new tabs; the shim covers open tabs.
+    // to true; dropping it would break HTML5 video/audio autoplay). We build ONE combined
+    // arg string that may include a WebRTC flag AND/OR proxy switches; the arg is only set
+    // when at least one override is needed, so the no-override path keeps wry's untouched
+    // defaults. Read at webview creation only → a mid-session toggle applies to new/reloaded
+    // tabs only (SPAWN-TIME LIMITATION: browser args are immutable after WebView2 creation;
+    // existing open tabs keep their spawn-time proxy; see apply_to_tab / proxy::apply which
+    // emit state but cannot retarget live WebView2 instances on Windows). Task 9 docs should
+    // note this: "On Windows, change the proxy setting and reload the tab to apply it."
     // (Runs before add_child, which consumes `builder`.)
     #[cfg(target_os = "windows")]
     {
@@ -380,11 +383,34 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
                 _ => None,
             }
         };
-        if let Some(arg) = webrtc_arg {
+
+        // Proxy: read the active config from managed state (seeded at boot from settings.json).
+        // When active, append --proxy-server=<uri> and optionally --proxy-bypass-list=<hosts>.
+        // The URI form is "<scheme>://<host>:<port>" — Chromium accepts the full URI for both
+        // http (e.g. "http://proxy.corp:3128") and socks5 (e.g. "socks5://127.0.0.1:1080"),
+        // which is the same form that proxy::ProxyConfig::default_uri() returns and that the
+        // Linux WebKitGTK tier uses. The bypass list uses WebView2's ";"-separated format
+        // (--proxy-bypass-list=localhost;127.0.0.1;*.internal), matching Chromium's convention.
+        let proxy_cfg = crate::proxy::current(app);
+        let proxy_uri = proxy_cfg.default_uri(); // None when mode=off or config is invalid
+
+        let overridden = webrtc_arg.is_some() || proxy_uri.is_some();
+        if overridden {
             let mut args = String::from(
                 "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required",
             );
-            args.push_str(arg);
+            if let Some(arg) = webrtc_arg {
+                args.push_str(arg);
+            }
+            if let Some(uri) = proxy_uri {
+                args.push_str(&format!(" --proxy-server={uri}"));
+                if !proxy_cfg.bypass_hosts.is_empty() {
+                    args.push_str(&format!(
+                        " --proxy-bypass-list={}",
+                        proxy_cfg.bypass_hosts.join(";")
+                    ));
+                }
+            }
             builder = builder.additional_browser_args(&args);
         }
     }

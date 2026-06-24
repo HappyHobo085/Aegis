@@ -163,13 +163,20 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
 }
 
 /// Apply the active proxy config to a single content webview (identified by tab id).
-/// Linux: routes through WebKitGTK `WebsiteDataManager::set_network_proxy_settings`.
-/// Other platforms: stubs (Tasks 4-5 fill them in).
+/// Linux: routes through WebKitGTK `WebsiteDataManager::set_network_proxy_settings` (live).
+/// Windows: SPAWN-TIME only — the proxy is baked into `--proxy-server` via
+///   `additional_browser_args` in `nav::spawn_tab` at webview creation. WebView2 browser
+///   args are IMMUTABLE after creation, so this live setter is a deliberate no-op: changing
+///   the proxy on Windows takes effect only when the tab is reloaded / a new tab is opened.
+///   The `apply` → `emit_event("proxy.state")` path still runs so the chrome's UI reflects
+///   the new config immediately; only the actual egress proxy of live open tabs is unaffected.
+///   (Task 9 docs should surface: "On Windows, reload the tab to apply a proxy change.")
+/// macOS: Task 5 (not yet implemented).
 pub fn apply_to_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let cfg = current(app);
     #[cfg(target_os = "linux")]
     crate::linux_layout::apply_proxy_label(app, &crate::nav::content_label(id), &cfg);
-    // Suppress unused-variable warning on non-Linux targets until Tasks 4-5 add their bodies.
+    // Windows: spawn-time only (see doc-comment above). macOS: Task 5.
     #[cfg(not(target_os = "linux"))]
     let _ = (id, cfg);
 }
