@@ -17,13 +17,20 @@ use tauri::{AppHandle, Manager, Runtime};
 /// - `scheme` : `"http"` | `"socks5"` (anything else → `is_active()` == false)
 /// - `host`   : trimmed; empty string when absent
 /// - `port`   : 0 when absent or out of range (1–65535)
-/// - `bypass_hosts`: trimmed, non-empty items split from a comma-separated string
+/// - `bypass_hosts`: trimmed, non-empty strings from a JSON array of strings
+///
+/// The canonical on-disk and IPC key for `bypass_hosts` is `"bypassHosts"` (matching
+/// `settings.json`, `state_json`, and the TS `ProxyConfig` interface). The `serde`
+/// rename ensures `serde_json::to_value` writes `"bypassHosts"` and `from_value`
+/// reads it back — preventing the silent data-loss bug where persisted bypass hosts
+/// were lost on restart because serde wrote `"bypass_hosts"` but `from_value` read `"bypass"`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ProxyConfig {
     pub mode: String,
     pub scheme: String,
     pub host: String,
     pub port: u16,
+    #[serde(rename = "bypassHosts")]
     pub bypass_hosts: Vec<String>,
 }
 
@@ -64,10 +71,19 @@ impl ProxyConfig {
             0
         };
 
+        // Canonical key is "bypassHosts" (array of strings) — matches settings.json default,
+        // state_json, and the TS ProxyConfig interface. The old "bypass" comma-string key is
+        // removed; all persisted data uses the array form via the serde rename above.
         let bypass_hosts = v
-            .get("bypass")
-            .and_then(|b| b.as_str())
-            .map(parse_bypass)
+            .get("bypassHosts")
+            .and_then(|b| b.as_array())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|e| e.as_str())
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            })
             .unwrap_or_default();
 
         ProxyConfig {
@@ -99,14 +115,6 @@ impl ProxyConfig {
         }
         Some(format!("{}://{}:{}", self.scheme, self.host, self.port))
     }
-}
-
-/// Split a comma-separated bypass list into trimmed, non-empty host entries.
-fn parse_bypass(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .collect()
 }
 
 // ---------------------------------------------------------------------------
@@ -332,9 +340,10 @@ mod tests {
 
     #[test]
     fn bypass_parsing_splits_and_trims() {
+        // Canonical form: "bypassHosts" as a JSON array of strings.
         let v = serde_json::json!({
             "mode": "proxy", "scheme": "http", "host": "h", "port": 8080,
-            "bypass": "localhost, 127.0.0.1 , ::1,, internal.corp"
+            "bypassHosts": ["localhost", " 127.0.0.1 ", "::1", "", "internal.corp"]
         });
         let c = ProxyConfig::from_value(&v);
         assert_eq!(
@@ -348,6 +357,39 @@ mod tests {
         let v = serde_json::json!({ "mode": "proxy", "scheme": "http", "host": "h", "port": 8080 });
         let c = ProxyConfig::from_value(&v);
         assert!(c.bypass_hosts.is_empty());
+    }
+
+    /// Regression guard for the bypass-hosts data-loss bug:
+    /// `serde_json::to_value` (used by `proxy.setConfig` to persist) must write
+    /// `"bypassHosts"` (not `"bypass_hosts"`), and `from_value` must read it back —
+    /// so bypass hosts survive a restart.  This test FAILS before the fix and PASSES
+    /// after (the `#[serde(rename = "bypassHosts")]` + array `from_value` path).
+    #[test]
+    fn bypass_hosts_survive_serde_roundtrip() {
+        let original = ProxyConfig {
+            mode: "proxy".into(),
+            scheme: "http".into(),
+            host: "proxy.corp".into(),
+            port: 3128,
+            bypass_hosts: vec!["localhost".into(), "192.168.0.0/24".into(), "*.corp".into()],
+        };
+        // Simulate what proxy.setConfig does: serialize to Value (written to settings.json).
+        let serialized = serde_json::to_value(&original).expect("serialize");
+        // Confirm the key is "bypassHosts", not "bypass_hosts" or "bypass".
+        assert!(
+            serialized.get("bypassHosts").is_some(),
+            "serde must write 'bypassHosts' key, got: {serialized}"
+        );
+        assert!(
+            serialized.get("bypass_hosts").is_none(),
+            "serde must NOT write 'bypass_hosts'"
+        );
+        // Simulate what proxy_config + from_value does at boot: deserialize back.
+        let reloaded = ProxyConfig::from_value(&serialized);
+        assert_eq!(
+            reloaded.bypass_hosts, original.bypass_hosts,
+            "bypass hosts must survive the serde round-trip"
+        );
     }
 
     #[test]

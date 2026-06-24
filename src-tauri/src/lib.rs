@@ -510,6 +510,9 @@ pub fn run() {
             if let Some(st) = app.handle().try_state::<crate::proxy::ProxyState>() {
                 *st.0.lock().unwrap() = cfg;
             }
+            // Apply the persisted proxy immediately so a saved ON config is live from the
+            // first navigation (no-op now; Tasks 3-6 fill apply() with per-platform setters).
+            crate::proxy::apply(app.handle());
         }
 
         // Sync: auto-unlock from the OS keychain if a seed is stored, and start syncing.
