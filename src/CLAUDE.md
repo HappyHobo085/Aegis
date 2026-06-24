@@ -237,11 +237,15 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
 - **Bottom-bar toggle** and **fullscreen** (hide all chrome — desktop parity) call
   `setBottomBarHidden` / `setFullscreen` on the bridge; the native side shrinks the
   content webview's margins so the page reclaims the space.
-- **Safe-area insets:** `env(safe-area-inset-*)` on Android WebView is only the display
-  cutout, not the system bars, so `MainActivity` pushes the real status/nav insets as
-  `--aegis-inset-top/bottom` CSS vars; the mobile bars use `var(--aegis-inset-*, env(...))`.
-  `.mobile-bottombar` is `box-sizing: content-box` so the nav-inset padding extends it
-  upward (the global reset is `border-box`).
+- **Safe-area insets (all four edges):** `env(safe-area-inset-*)` on Android WebView is
+  only the display cutout, not the system bars, so `MainActivity` pushes the real
+  `systemBars() ∪ displayCutout()` insets to the chrome as `--aegis-inset-top/bottom/left/right`
+  CSS vars. Every full-window mobile surface pads itself with `var(--aegis-inset-*, env(...))`:
+  `.mobile-topbar`, `.mobile-bottombar` (`box-sizing: content-box`), `.mobile-sheet`
+  (History/Saved/Menu/Tabs), the reused `.settings-modal__content` / `.downloads-modal`
+  (`.aegis-mobile`-scoped — this is what keeps Settings/Downloads off the status/nav bars),
+  `.onboarding`, and `.toaster`. The drift guard `src/autopilot/safeArea.test.ts` fails the
+  build if one of these selectors drops an inset var.
 
 ## Tests
 
