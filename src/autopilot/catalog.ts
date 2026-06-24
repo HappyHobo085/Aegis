@@ -113,7 +113,21 @@ export const CATALOG: FeatureCheck[] = [
       const afterClose = await a.tabs.close(newTab.id);
       if (afterClose.tabs.some((t) => t.id === newTab.id))
         throw new Error('close: new tab still in list');
-      return `tabs create(bg)→assert→close ok (newId=${newTab.id})`;
+
+      // PRIVATE TAB: browsing in it must leave NO history row.
+      const probe = `https://ap-private-${Date.now()}.test/`;
+      const privCreated = await a.tabs.create(probe, false, true);
+      const pid = privCreated.tabs.find((t) => t.private)?.id;
+      if (pid === undefined) throw new Error('private: created tab not marked private in state');
+      // Navigate the private tab and give the (skipped) history write a chance to (not) happen.
+      await a.nav.navigate(pid, probe);
+      await new Promise((r) => setTimeout(r, 1500));
+      const hits = (await a.history.search(probe)).length;
+      await a.tabs.close(pid);
+      if (hits !== 0)
+        throw new Error(`private: navigation left ${hits} history row(s) for ${probe}`);
+
+      return `tabs create(bg)→assert→close ok (newId=${newTab.id}); private-leaves-no-history ok (privId=${pid})`;
     },
   },
   // view — overlay/visibility calls are pure layout side-effects on the native webview stack;
