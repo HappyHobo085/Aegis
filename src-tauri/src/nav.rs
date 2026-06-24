@@ -203,14 +203,19 @@ pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
 /// window. The label is `content:<id>`. Initial bounds put it below the chrome;
 /// `view::apply_inset` keeps it sized on inset/resize.
 ///
-/// `private` marks the tab as incognito — the webview should use an ephemeral
-/// data partition (wired in a later task); passed through now so all callers
-/// carry the flag.
+/// `private` marks the tab as incognito — the webview uses an ephemeral data
+/// partition (`.incognito(true)`) so cookies, localStorage, IndexedDB, and cache
+/// live only in memory and vanish when the webview closes. Platform mapping
+/// (Tauri 2.11.2 / wry 0.55.1):
+///   Linux   WebKitGTK  → WebContext::new_ephemeral() (in-memory WebsiteDataManager)
+///   macOS   WKWebView  → WKWebsiteDataStore::nonPersistentDataStore
+///   Windows WebView2   → SetIsInPrivateModeEnabled(true) (WebView2 ≥101.0.1210.39)
+///   Android: UNSUPPORTED by wry — handled natively in MainActivity (best-effort flush).
 ///
 /// Desktop only: uses the `unstable` multi-webview API (`Window::add_child`).
 /// Mobile (single-webview) is a no-op so the chrome still loads.
 #[cfg(desktop)]
-pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, _private: bool) -> tauri::Result<()> {
+pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Result<()> {
     let window = app
         .get_window("main")
         .expect("main window must exist (declared in tauri.conf.json)");
@@ -235,10 +240,15 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, _private: bool) -> tauri::R
     let app_dl = app.clone();
     let nav_id = id;
     let load_id = id;
+    let dl_id = id;
     // `mut` is only needed on Windows (additional_browser_args below); harmless elsewhere.
     #[allow(unused_mut)]
     let mut builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(url))
         .user_agent(CONTENT_UA)
+        // PRIVATE TAB: ephemeral data partition — cookies/localStorage/IndexedDB/cache
+        // live only in memory and vanish when the webview closes. Verified API:
+        // `WebviewBuilder::incognito(bool)` at tauri-2.11.2/src/webview/mod.rs:997.
+        .incognito(private)
         // Inject the WebRTC IP-leak shim + ad/tracker blocker at document start into the
         // page and all iframes. The shim hides the local IP per the user's webrtcPolicy;
         // the ad-block part supplements WebKit content filters on Linux and IS the ad-block
@@ -279,13 +289,26 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, _private: bool) -> tauri::R
                 !u.starts_with("about:"),
             );
             if matches!(event, tauri::webview::PageLoadEvent::Finished) {
-                crate::history::record(&app_load, u, "", false /* wired in Task 4 */);
+                // PRIVATE: look up the tab's privateness — is_private returns false for
+                // unknown ids, so a normal tab always records. Private tabs skip history.
+                crate::history::record(
+                    &app_load,
+                    u,
+                    "",
+                    crate::tabs::is_private(&app_load, load_id),
+                );
             }
         })
         .on_download(move |_webview, event| {
             match event {
                 tauri::webview::DownloadEvent::Requested { url, destination } => {
-                    crate::downloads::on_requested(&app_dl, url.as_str(), destination);
+                    // PRIVATE: still save the file the user asked for, but record NO row.
+                    crate::downloads::on_requested(
+                        &app_dl,
+                        url.as_str(),
+                        destination,
+                        crate::tabs::is_private(&app_dl, dl_id),
+                    );
                 }
                 tauri::webview::DownloadEvent::Finished { success, .. } => {
                     crate::downloads::on_finished(&app_dl, success);
@@ -312,9 +335,11 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, _private: bool) -> tauri::R
                 if crate::adblock_engine::is_unwanted_popup(&u, &opener) {
                     return tauri::webview::NewWindowResponse::Deny;
                 }
+                // PRIVATE: a tab opened FROM a private tab inherits privateness.
+                let inherit_private = crate::tabs::is_private(&app_nw, opener_id);
                 let app_main = app_nw.clone();
                 let _ = app_nw.run_on_main_thread(move || {
-                    crate::tabs::open_background(&app_main, &u, false /* wired in Task 4 */);
+                    crate::tabs::open_background(&app_main, &u, inherit_private);
                 });
                 tauri::webview::NewWindowResponse::Deny
             }

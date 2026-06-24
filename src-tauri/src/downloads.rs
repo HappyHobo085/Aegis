@@ -23,8 +23,10 @@ fn dir(app: &AppHandle) -> PathBuf {
         .unwrap_or_else(|_| PathBuf::from("/tmp"))
 }
 
-/// On DownloadEvent::Requested: pick the save path and record a progressing entry.
-pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf) {
+/// On DownloadEvent::Requested: pick the save path and (unless private) record a
+/// progressing entry. Private tabs still save the file the user asked for but leave
+/// no trace in the downloads store.
+pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf, private: bool) {
     let filename = url
         .rsplit('/')
         .next()
@@ -34,6 +36,12 @@ pub fn on_requested(app: &AppHandle, url: &str, destination: &mut PathBuf) {
         .to_string();
     let save = dir(app).join(&filename);
     *destination = save.clone();
+
+    if private {
+        // The file is saved normally; we just skip writing a downloads.json row so the
+        // download leaves no persistent trace.
+        return;
+    }
 
     let mut items = jsonstore::load_synced(app, "downloads");
     let id = jsonstore::next_id(&items);
