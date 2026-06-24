@@ -101,6 +101,8 @@ mod zoom_mac;
 mod zoom_win;
 // Local encrypted-at-rest password vault (Phase A — manage only, NO autofill, NO page bridge).
 mod vault;
+// Content-webview-scoped proxy: pure parse/validate/URI core (Tasks 1-6).
+mod proxy;
 
 use serde_json::Value;
 use tauri::{Emitter, Manager};
