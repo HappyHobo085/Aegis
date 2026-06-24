@@ -5,7 +5,7 @@
 //! `load_synced` (incl. tombstones), persist the full array, and return only `live`
 //! records to the renderer; deletes become tombstones; edits bump the hlc via `touch`.
 use serde_json::{json, Value};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 use crate::jsonstore;
 
@@ -28,7 +28,19 @@ fn live_has_url(items: &[Value], url: &str) -> bool {
         .any(|it| !jsonstore::is_deleted(it) && it.get("url").and_then(Value::as_str) == Some(url))
 }
 
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+/// Generic dispatch core — all match logic delegated through a `do_persist` closure so
+/// the caller can decide whether to call `sync::nudge` (production) or skip it (tests).
+/// The closure receives `(store_name, full_items_array)` and returns the live-only JSON.
+fn dispatch_inner<R, F>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+    do_persist: &F,
+) -> Option<Result<Value, String>>
+where
+    R: Runtime,
+    F: Fn(&str, Vec<Value>) -> Result<Value, String>,
+{
     match channel {
         // ---- favorites ----
         "favorites.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
@@ -50,7 +62,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             });
             jsonstore::stamp_new(&mut item, app);
             items.push(item);
-            Some(persist(app, "favorites", items))
+            Some(do_persist("favorites", items))
         }
 
         "favorites.update" => {
@@ -62,14 +74,14 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     jsonstore::touch(it, app);
                 }
             }
-            Some(persist(app, "favorites", items))
+            Some(do_persist("favorites", items))
         }
 
         "favorites.remove" => {
             let mut items = jsonstore::load_synced(app, "favorites");
             let id = payload.get("id").and_then(Value::as_i64);
             jsonstore::tombstone(&mut items, |it| id_of(it) == id, app);
-            Some(persist(app, "favorites", items))
+            Some(do_persist("favorites", items))
         }
 
         "favorites.reorder" => {
@@ -96,7 +108,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 pos += 1;
                 jsonstore::touch(it, app);
             }
-            Some(persist(app, "favorites", items))
+            Some(do_persist("favorites", items))
         }
 
         // ---- saved (with tags) ----
@@ -127,14 +139,14 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 jsonstore::stamp_new(&mut item, app);
                 items.push(item);
             }
-            Some(persist(app, "saved", items))
+            Some(do_persist("saved", items))
         }
 
         "saved.remove" => {
             let mut items = jsonstore::load_synced(app, "saved");
             let id = payload.get("id").and_then(Value::as_i64);
             jsonstore::tombstone(&mut items, |it| id_of(it) == id, app);
-            Some(persist(app, "saved", items))
+            Some(do_persist("saved", items))
         }
 
         "saved.update" => {
@@ -146,7 +158,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     jsonstore::touch(it, app);
                 }
             }
-            Some(persist(app, "saved", items))
+            Some(do_persist("saved", items))
         }
 
         "saved.renameTag" => {
@@ -167,7 +179,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     jsonstore::touch(it, app);
                 }
             }
-            Some(persist(app, "saved", items))
+            Some(do_persist("saved", items))
         }
 
         "saved.deleteTag" => {
@@ -186,7 +198,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     jsonstore::touch(it, app);
                 }
             }
-            Some(persist(app, "saved", items))
+            Some(do_persist("saved", items))
         }
 
         "saved.tagUnion" => {
@@ -206,10 +218,273 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
     }
 }
 
+/// Production dispatch: takes a concrete `AppHandle<Wry>` so `sync::nudge` can be called.
+#[cfg(not(test))]
+pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+    dispatch_inner(app, channel, payload, &|name, items| {
+        persist(app, name, items)
+    })
+}
+
+/// Test dispatch: generic over `Runtime` so tests can pass `AppHandle<MockRuntime>`.
+/// `sync::nudge` is NOT called — `SyncState::enabled` is always `false` in tests so it
+/// would be a no-op, and `nudge` is not generic (it requires `AppHandle<Wry>`).
+#[cfg(test)]
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
+    dispatch_inner(app, channel, payload, &|name, items| {
+        jsonstore::save(app, name, &items)?;
+        Ok(json!(jsonstore::live(items)))
+    })
+}
+
 /// Save the FULL array (tombstones kept on disk) and return only the LIVE records.
+/// Nudges a sync pass (no-op when sync is disabled). Only used in production builds.
+#[cfg(not(test))]
 fn persist(app: &AppHandle, name: &str, items: Vec<Value>) -> Result<Value, String> {
     jsonstore::save(app, name, &items)?;
     // favorites + saved are SYNCABLE → nudge a sync (no-op when sync is disabled).
     crate::sync::nudge(app);
     Ok(json!(jsonstore::live(items)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::with_tmp_app;
+
+    fn arr(v: Result<Value, String>) -> Vec<Value> {
+        v.unwrap().as_array().cloned().unwrap()
+    }
+
+    #[test]
+    fn favorites_add_list_returns_live_records_with_positions() {
+        with_tmp_app(|app| {
+            let r = dispatch(
+                app,
+                "favorites.add",
+                &json!({ "input": { "name": "A", "url": "https://a.test/" } }),
+            )
+            .unwrap();
+            let live = arr(r);
+            assert_eq!(live.len(), 1);
+            assert_eq!(live[0].get("name").and_then(Value::as_str), Some("A"));
+            assert_eq!(live[0].get("position").and_then(Value::as_i64), Some(0));
+            // list reflects the same single live record.
+            let listed = dispatch(app, "favorites.list", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(listed.as_array().unwrap().len(), 1);
+        });
+    }
+
+    #[test]
+    fn favorites_remove_tombstones_so_list_hides_it_but_disk_keeps_it() {
+        with_tmp_app(|app| {
+            let live = arr(dispatch(
+                app,
+                "favorites.add",
+                &json!({ "input": { "name": "A", "url": "https://a.test/" } }),
+            )
+            .unwrap());
+            let id = live[0].get("id").and_then(Value::as_i64).unwrap();
+            let after = arr(dispatch(app, "favorites.remove", &json!({ "id": id })).unwrap());
+            assert!(
+                after.is_empty(),
+                "removed favorite is gone from the live list"
+            );
+            // The tombstone is still on disk (full array via load_synced).
+            let full = jsonstore::load_synced(app, "favorites");
+            assert_eq!(full.len(), 1);
+            assert!(jsonstore::is_deleted(&full[0]));
+        });
+    }
+
+    #[test]
+    fn favorites_update_merges_partial_fields() {
+        with_tmp_app(|app| {
+            let live = arr(dispatch(
+                app,
+                "favorites.add",
+                &json!({ "input": { "name": "A", "url": "https://a.test/" } }),
+            )
+            .unwrap());
+            let id = live[0].get("id").and_then(Value::as_i64).unwrap();
+            let after = arr(dispatch(
+                app,
+                "favorites.update",
+                &json!({ "id": id, "partial": { "name": "Renamed" } }),
+            )
+            .unwrap());
+            assert_eq!(
+                after[0].get("name").and_then(Value::as_str),
+                Some("Renamed")
+            );
+            assert_eq!(
+                after[0].get("url").and_then(Value::as_str),
+                Some("https://a.test/")
+            );
+        });
+    }
+
+    #[test]
+    fn favorites_reorder_reassigns_positions() {
+        with_tmp_app(|app| {
+            dispatch(
+                app,
+                "favorites.add",
+                &json!({ "input": { "name": "A", "url": "https://a.test/" } }),
+            )
+            .unwrap()
+            .unwrap();
+            dispatch(
+                app,
+                "favorites.add",
+                &json!({ "input": { "name": "B", "url": "https://b.test/" } }),
+            )
+            .unwrap()
+            .unwrap();
+            let live = jsonstore::live(jsonstore::load_synced(app, "favorites"));
+            let id_a = live
+                .iter()
+                .find(|i| i.get("name").and_then(Value::as_str) == Some("A"))
+                .unwrap()
+                .get("id")
+                .and_then(Value::as_i64)
+                .unwrap();
+            let id_b = live
+                .iter()
+                .find(|i| i.get("name").and_then(Value::as_str) == Some("B"))
+                .unwrap()
+                .get("id")
+                .and_then(Value::as_i64)
+                .unwrap();
+            let after =
+                arr(dispatch(app, "favorites.reorder", &json!({ "ids": [id_b, id_a] })).unwrap());
+            let pos = |name: &str| {
+                after
+                    .iter()
+                    .find(|i| i.get("name").and_then(Value::as_str) == Some(name))
+                    .unwrap()
+                    .get("position")
+                    .and_then(Value::as_i64)
+                    .unwrap()
+            };
+            assert_eq!(pos("B"), 0);
+            assert_eq!(pos("A"), 1);
+        });
+    }
+
+    #[test]
+    fn saved_add_dedups_live_but_allows_readd_after_remove() {
+        with_tmp_app(|app| {
+            dispatch(
+                app,
+                "saved.add",
+                &json!({ "input": { "url": "https://x.test/", "title": "X", "tags": ["t"] } }),
+            )
+            .unwrap()
+            .unwrap();
+            // Adding the same live URL again is a no-op (still one live row).
+            let again = arr(dispatch(
+                app,
+                "saved.add",
+                &json!({ "input": { "url": "https://x.test/", "title": "X2", "tags": [] } }),
+            )
+            .unwrap());
+            assert_eq!(again.len(), 1);
+            assert!(
+                dispatch(app, "saved.has", &json!({ "url": "https://x.test/" }))
+                    .unwrap()
+                    .unwrap()
+                    .as_bool()
+                    .unwrap()
+            );
+            let id = again[0].get("id").and_then(Value::as_i64).unwrap();
+            dispatch(app, "saved.remove", &json!({ "id": id }))
+                .unwrap()
+                .unwrap();
+            assert!(
+                !dispatch(app, "saved.has", &json!({ "url": "https://x.test/" }))
+                    .unwrap()
+                    .unwrap()
+                    .as_bool()
+                    .unwrap()
+            );
+            // Re-add of a removed URL is allowed.
+            let re = arr(dispatch(
+                app,
+                "saved.add",
+                &json!({ "input": { "url": "https://x.test/", "title": "X3", "tags": [] } }),
+            )
+            .unwrap());
+            assert_eq!(re.len(), 1);
+        });
+    }
+
+    #[test]
+    fn saved_tag_rename_delete_and_union() {
+        with_tmp_app(|app| {
+            dispatch(
+                app,
+                "saved.add",
+                &json!({ "input": { "url": "https://a.test/", "title": "A", "tags": ["news", "rust"] } }),
+            )
+            .unwrap()
+            .unwrap();
+            dispatch(
+                app,
+                "saved.add",
+                &json!({ "input": { "url": "https://b.test/", "title": "B", "tags": ["rust"] } }),
+            )
+            .unwrap()
+            .unwrap();
+            // union is sorted + deduped over live rows.
+            let union = dispatch(app, "saved.tagUnion", &json!({}))
+                .unwrap()
+                .unwrap();
+            let tags: Vec<&str> = union
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert_eq!(tags, vec!["news", "rust"]);
+            // rename rust → crab everywhere.
+            dispatch(
+                app,
+                "saved.renameTag",
+                &json!({ "oldT": "rust", "newT": "crab" }),
+            )
+            .unwrap()
+            .unwrap();
+            let union2 = dispatch(app, "saved.tagUnion", &json!({}))
+                .unwrap()
+                .unwrap();
+            let tags2: Vec<&str> = union2
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert_eq!(tags2, vec!["crab", "news"]);
+            // delete news → only crab remains.
+            dispatch(app, "saved.deleteTag", &json!({ "tag": "news" }))
+                .unwrap()
+                .unwrap();
+            let union3 = dispatch(app, "saved.tagUnion", &json!({}))
+                .unwrap()
+                .unwrap();
+            let tags3: Vec<&str> = union3
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert_eq!(tags3, vec!["crab"]);
+        });
+    }
 }
