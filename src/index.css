@@ -9,8 +9,19 @@
   --radius-4: 12px;
   --radius-pill: 999px;
   --chrome-top-height: 56px;
-  /* Accent fallback (overridden inline by applyTheme from the primaryColor setting). */
-  --accent-color: #3b82f6;
+  /* Type scale (intentional ramp — collapse ad-hoc px sizes onto these). */
+  --font-size-1: 11px; /* fine print, counts, timestamps */
+  --font-size-2: 12px; /* secondary labels, hints */
+  --font-size-3: 13px; /* dense body */
+  --font-size-4: 14px; /* base body */
+  --font-size-5: 16px; /* emphasised body / mobile inputs */
+  --font-size-6: 19px; /* section / modal titles */
+  --font-size-7: 22px; /* page-level headings (interstitials) */
+  /* Accent fallback (overridden inline by applyTheme from the primaryColor setting).
+     #2563eb gives white-on-accent ≈ 4.6:1 (WCAG AA for normal text); the previous
+     #3b82f6 was 3.68:1 and failed. The on-accent text color is also chosen per-accent
+     by luminance in lib/theme.ts so user-picked accents stay legible. */
+  --accent-color: #2563eb;
   --text-on-accent: #ffffff;
 }
 
@@ -21,8 +32,9 @@
   --bg: #121212; /* app base / scrollbar track */
   --bg-elevated: #1f1f1f; /* header, sidebar, modals, toasts */
   --bg-input: #2a2a2a; /* inputs, cards/list rows, chips, hover */
+  --bg-hover: rgba(255, 255, 255, 0.08); /* subtle row/icon hover wash */
   --fg: #e0e0e0; /* primary text */
-  --fg-muted: #888; /* muted text, icons, placeholders */
+  --fg-muted: #9b9b9b; /* muted text, icons, placeholders — ≈4.6:1 on --bg-input (AA) */
   --border: #333; /* default borders */
   --border-2: #444; /* secondary border: search field, dividers, scrollbar hover */
   --danger: #ff5d5d;
@@ -37,8 +49,9 @@
   --bg: #f5f5f7; /* app base / scrollbar track */
   --bg-elevated: #ffffff; /* header, sidebar, modals, toasts */
   --bg-input: #ececef; /* inputs, cards/list rows, chips, hover */
+  --bg-hover: rgba(0, 0, 0, 0.05); /* subtle row/icon hover wash */
   --fg: #1c1c1e; /* primary text */
-  --fg-muted: #6b6b70; /* muted text, icons, placeholders */
+  --fg-muted: #5f5f66; /* muted text, icons, placeholders — ≈5:1 on --bg-input (AA) */
   --border: #d6d6db; /* default borders */
   --border-2: #c2c2c8; /* secondary border: search field, dividers, scrollbar hover */
   --danger: #d92d2d;
@@ -78,7 +91,7 @@ button {
   color: var(--fg);
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-2);
   cursor: pointer;
 }
 
@@ -103,7 +116,7 @@ input {
   color: var(--fg);
   background: var(--bg-input);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-2);
 }
 
 ::placeholder {
@@ -114,6 +127,55 @@ input {
 textarea::placeholder {
   color: var(--fg-muted);
   opacity: 1;
+}
+
+/* Native <select> picks up the same surface as inputs (was OS-default chrome,
+   which clashed with the dark skin around it in the Security/Proxy tabs). */
+select {
+  font-family: inherit;
+  color: var(--fg);
+  background-color: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  padding: 6px 28px 6px 8px;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--fg-muted) 50%),
+    linear-gradient(135deg, var(--fg-muted) 50%, transparent 50%);
+  background-position:
+    right 13px center,
+    right 8px center;
+  background-size:
+    5px 5px,
+    5px 5px;
+  background-repeat: no-repeat;
+}
+
+/* Screen-reader-only: visually hidden but exposed to assistive tech. Used as
+   aria-labelledby targets (e.g. ZoomIndicator) that must not render visibly. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Respect the OS "reduce motion" preference: kill entrance animations and
+   collapse transitions to a near-instant tick (keeps state changes, drops travel). */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 /* ─── App shell ─────────────────────────────────────────────────── */
@@ -223,6 +285,7 @@ textarea::placeholder {
 .toolbar__sidebar-toggle,
 .toolbar__fullscreen,
 .bookmark-button,
+.toolbar__overflow-trigger,
 .toolbar__downloads {
   display: inline-flex;
   align-items: center;
@@ -235,6 +298,36 @@ textarea::placeholder {
   border: none;
   color: var(--fg-muted);
   flex-shrink: 0;
+}
+
+.toolbar__overflow-trigger:hover:not(:disabled) {
+  background: var(--bg-input);
+  color: var(--fg);
+}
+
+/* Overflow "More" menu — holds the secondary toolbar actions on narrow windows. */
+.toolbar-overflow {
+  position: relative;
+  flex-shrink: 0;
+}
+.toolbar-overflow__menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 10010;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  max-width: 220px;
+  padding: 8px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  box-shadow: var(--shadow-float);
+}
+/* On a narrow window the address bar must not be squeezed to nothing; keep a floor. */
+.aegis-narrow .address-bar input {
+  min-width: 96px;
 }
 
 /* lucide SVGs default to inline display, which leaves a baseline gap inside the
@@ -1773,60 +1866,80 @@ body.aegis-fullscreen {
 }
 
 /* Body: tab bar above, panel below */
+/* Grouped left rail + panel. */
 .settings-modal__body {
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   flex: 1;
   overflow: hidden;
 }
 
-/* Tab bar (horizontal scroll if too many tabs) */
+/* Vertical, grouped tab rail. */
 .settings-modal__tabs {
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 2px;
-  padding: 0 16px;
-  border-bottom: 1px solid var(--border);
-  overflow-x: auto;
-  scrollbar-width: none;
+  width: 184px;
   flex-shrink: 0;
+  padding: 12px 8px;
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+  scrollbar-width: none;
 }
 
 .settings-modal__tabs::-webkit-scrollbar {
   display: none;
 }
 
-/* Individual tab button — underline style (same as sidebar tabs) */
+.settings-modal__tab-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.settings-modal__tab-group + .settings-modal__tab-group {
+  margin-top: 12px;
+}
+.settings-modal__tab-group-label {
+  padding: 4px 12px;
+  font-size: var(--font-size-1);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+/* Individual tab — full-width row with a left active indicator. */
 .settings-modal__tab {
+  display: block;
+  width: 100%;
+  text-align: left;
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
+  border-left: 2px solid transparent;
+  border-radius: var(--radius-2);
   color: var(--fg-muted);
   font-weight: 600;
-  font-size: 13px;
-  padding: 10px 12px;
+  font-size: var(--font-size-3);
+  padding: 8px 12px;
   cursor: pointer;
   line-height: 1.4;
   white-space: nowrap;
-  flex-shrink: 0;
 }
 
 .settings-modal__tab:hover:not(:disabled) {
-  background: transparent;
-  border-color: transparent;
-  border-bottom-color: var(--border-2);
+  background: var(--bg-input);
   color: var(--fg);
 }
 
 .settings-modal__tab[aria-selected='true'] {
   color: var(--fg);
-  border-bottom-color: var(--accent-color);
+  background: var(--bg-input);
+  border-left-color: var(--accent-color);
 }
 
 .settings-modal__tab[aria-selected='true']:hover:not(:disabled) {
-  border-bottom-color: var(--accent-color);
   color: var(--fg);
+  background: var(--bg-input);
 }
 
 /* Tab panel — scrollable content area */
@@ -1834,6 +1947,48 @@ body.aegis-fullscreen {
   flex: 1;
   overflow-y: auto;
   padding: 20px;
+}
+
+/* On phones / very narrow windows the rail would eat the width — lay it back out as
+   a horizontal scrolling strip across the top. */
+.aegis-mobile .settings-modal__body,
+.aegis-narrow .settings-modal__body {
+  flex-direction: column;
+}
+.aegis-mobile .settings-modal__tabs,
+.aegis-narrow .settings-modal__tabs {
+  flex-direction: row;
+  width: auto;
+  gap: 8px;
+  border-right: none;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+.aegis-mobile .settings-modal__tab-group,
+.aegis-narrow .settings-modal__tab-group {
+  flex-direction: row;
+  align-items: center;
+  gap: 2px;
+}
+.aegis-mobile .settings-modal__tab-group + .settings-modal__tab-group,
+.aegis-narrow .settings-modal__tab-group + .settings-modal__tab-group {
+  margin-top: 0;
+}
+.aegis-mobile .settings-modal__tab-group-label,
+.aegis-narrow .settings-modal__tab-group-label {
+  padding: 0 6px;
+  border-left: 1px solid var(--border);
+}
+.aegis-mobile .settings-modal__tab,
+.aegis-narrow .settings-modal__tab {
+  width: auto;
+  border-left: none;
+  border-bottom: 2px solid transparent;
+}
+.aegis-mobile .settings-modal__tab[aria-selected='true'],
+.aegis-narrow .settings-modal__tab[aria-selected='true'] {
+  border-left-color: transparent;
+  border-bottom-color: var(--accent-color);
 }
 
 /* ─── Downloads modal (toolbar download icon → full-window page) ──── */
@@ -2085,8 +2240,8 @@ body.aegis-fullscreen {
   border: 1px solid var(--border);
   border-radius: var(--radius-2);
   background: var(--bg-input);
-  color: var(--text-primary);
-  font-size: 14px;
+  color: var(--fg);
+  font-size: var(--font-size-4);
 }
 
 .tabs-tab__field input[type='number']:focus {
@@ -2096,8 +2251,8 @@ body.aegis-fullscreen {
 
 .tabs-tab__hint {
   margin: 0;
-  font-size: 13px;
-  color: var(--text-muted);
+  font-size: var(--font-size-3);
+  color: var(--fg-muted);
   line-height: 1.5;
 }
 
@@ -3176,6 +3331,157 @@ body.aegis-fullscreen {
   color: var(--fg);
 }
 
+/* Destructive confirm (delete password, disable sync, clear list, …) — the OK
+   button turns danger-coloured so it doesn't look like a benign accent action. */
+.confirm-dialog__actions button:first-child.confirm-dialog__confirm--danger {
+  background: var(--danger);
+  color: #fff;
+}
+
+/* ─── UX-audit additions ─────────────────────────────────────────── */
+
+/* Inline add/validation errors (mirror .saved-panel__add-error). */
+.search-tab__add-error,
+.filter-lists-tab__add-error,
+.favorites-manager__add-error,
+.favorites-manager__row-error {
+  color: var(--danger);
+  font-size: var(--font-size-2);
+  margin-top: 4px;
+}
+
+/* Proxy "unsaved changes" hint. */
+.proxy-tab__dirty {
+  color: var(--fg-muted);
+  font-size: var(--font-size-2);
+  font-style: italic;
+  margin-top: 6px;
+}
+
+/* Failed/cancelled download state label. */
+.downloads-panel__state--error {
+  color: var(--danger);
+}
+
+/* Ad-block shield "Reload to apply" affordance in the popover. */
+.adblock-shield__reload-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+}
+.adblock-shield__reload {
+  flex: 0 0 auto;
+  padding: 4px 10px;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: none;
+  border-radius: var(--radius-2);
+  font-size: var(--font-size-2);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+/* ─── First-run onboarding ───────────────────────────────────────── */
+.onboarding {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.6);
+  animation: scrim-fade-in 0.15s ease;
+}
+.onboarding__card {
+  width: 100%;
+  max-width: 460px;
+  max-height: 88vh;
+  overflow-y: auto;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
+  box-shadow: var(--shadow-modal);
+  padding: 28px;
+}
+.onboarding__title {
+  margin: 0 0 6px;
+  font-size: var(--font-size-7);
+  font-weight: 700;
+}
+.onboarding__lead {
+  margin: 0 0 20px;
+  color: var(--fg-muted);
+}
+.onboarding__features {
+  list-style: none;
+  margin: 0 0 20px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.onboarding__feature {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+.onboarding__feature-icon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent-color);
+}
+.onboarding__feature-title {
+  font-weight: 600;
+}
+.onboarding__feature-body {
+  color: var(--fg-muted);
+  font-size: var(--font-size-3);
+}
+.onboarding__search {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  padding: 12px 14px;
+  margin: 0 0 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.onboarding__search-legend {
+  font-weight: 600;
+  font-size: var(--font-size-3);
+  padding: 0 4px;
+}
+.onboarding__search-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.onboarding__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+.onboarding__primary {
+  padding: 9px 18px;
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius-2);
+  font-weight: 600;
+  cursor: pointer;
+}
+.onboarding__secondary {
+  padding: 9px 16px;
+  background: transparent;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
+  cursor: pointer;
+}
+
 /* ─── Error overlay ──────────────────────────────────────────────── */
 
 /* Outer .error-overlay acts as the full-screen scrim */
@@ -3416,12 +3722,15 @@ body.aegis-fullscreen {
 /* Individual toast item */
 .toast {
   pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
   background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-3);
   box-shadow: var(--shadow-float);
   padding: 10px 14px;
-  font-size: 14px;
+  font-size: var(--font-size-4);
   color: var(--fg);
   max-width: 320px;
   animation: toast-in 0.2s ease;
@@ -3460,7 +3769,7 @@ body.aegis-fullscreen {
   margin-left: 4px;
   background: transparent;
   border: 1px solid currentColor;
-  border-radius: 4px;
+  border-radius: var(--radius-1);
   padding: 2px 8px;
   color: inherit;
   cursor: pointer;
@@ -3468,50 +3777,24 @@ body.aegis-fullscreen {
   white-space: nowrap;
 }
 
-/* ─── Welcome hint ───────────────────────────────────────────────── */
-
-/* Fixed bottom-left floating card with accent left border */
-.welcome-hint {
-  position: fixed;
-  bottom: 16px;
-  left: 16px;
-  z-index: 10020;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-left: 3px solid var(--accent-color);
-  border-radius: var(--radius-3);
-  box-shadow: var(--shadow-float);
-  padding: 12px 16px;
-  max-width: 320px;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  animation: toast-in 0.2s ease;
-}
-
-.welcome-hint p {
-  margin: 0;
-  font-size: 13px;
+.toast__close {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--fg-muted);
-  line-height: 1.5;
+  border-radius: var(--radius-1);
+  cursor: pointer;
 }
 
-/* "Got it" dismiss button */
-.welcome-hint button {
-  align-self: flex-start;
-  padding: 5px 12px;
-  background: var(--accent-color);
-  color: var(--text-on-accent);
-  border: none;
-  border-radius: var(--radius-2);
-  font-weight: 600;
-  font-size: 13px;
-}
-
-.welcome-hint button:hover:not(:disabled) {
-  background: var(--accent-color);
-  filter: brightness(1.12);
-  border-color: transparent;
+.toast__close:hover {
+  background: var(--bg-hover);
+  color: var(--fg);
 }
 
 /* ─── Loading indicator ──────────────────────────────────────────── */
@@ -3669,11 +3952,6 @@ a:focus-visible {
   color: var(--fg-muted);
 }
 
-/* Welcome hint body copy: comfortable line-height */
-.welcome-hint p {
-  line-height: 1.5;
-}
-
 /* Error overlay body already 1.6 — nudge the heading tracking */
 .error-overlay__heading {
   letter-spacing: -0.015em;
@@ -3736,8 +4014,7 @@ a:focus-visible {
 .favorites-manager__row button[aria-label*='Save'],
 .permission-prompt__actions button:first-child,
 .confirm-dialog__actions button:first-child,
-.error-overlay__actions button:first-child,
-.welcome-hint button {
+.error-overlay__actions button:first-child {
   background: linear-gradient(
     180deg,
     color-mix(in srgb, var(--accent-color) 92%, white 8%),
@@ -3762,8 +4039,7 @@ a:focus-visible {
 .favorites-manager__row button[aria-label*='Save']:hover:not(:disabled),
 .permission-prompt__actions button:first-child:hover:not(:disabled),
 .confirm-dialog__actions button:first-child:hover:not(:disabled),
-.error-overlay__actions button:first-child:hover:not(:disabled),
-.welcome-hint button:hover:not(:disabled) {
+.error-overlay__actions button:first-child:hover:not(:disabled) {
   box-shadow: 0 2px 10px color-mix(in srgb, var(--accent-color) 35%, transparent);
 }
 
@@ -3775,10 +4051,11 @@ a:focus-visible {
   border-bottom: 2px solid var(--accent-color);
 }
 
-/* Settings modal active tab */
+/* Settings modal active tab — left accent on the vertical rail (the mobile/narrow
+   overrides flip this to a bottom underline when the rail is horizontal). */
 .settings-modal__tab[aria-selected='true'] {
   color: var(--fg);
-  border-bottom: 2px solid var(--accent-color);
+  border-left: 2px solid var(--accent-color);
 }
 
 /* ─── HTTPS-failed interstitial overlay ─────────────────────────── */
@@ -3793,62 +4070,75 @@ a:focus-visible {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: #0b0f17;
+  background: var(--bg);
 }
 .interstitial__panel {
   max-width: 560px;
-  background: #111827;
-  border: 1px solid #1f2937;
-  border-radius: 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-4);
   padding: 28px 32px;
-  color: #e5e7eb;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  color: var(--fg);
+  box-shadow: var(--shadow-modal);
 }
 .interstitial__title {
   margin: 0 0 12px;
-  font-size: 20px;
+  font-size: var(--font-size-7);
   font-weight: 600;
-  color: #f9fafb;
+  color: var(--fg);
 }
 .interstitial__body {
   margin: 0 0 24px;
   line-height: 1.55;
-  font-size: 14px;
-  color: #cbd5e1;
+  font-size: var(--font-size-4);
+  color: var(--fg-muted);
 }
 .interstitial__actions {
   display: flex;
   justify-content: flex-end;
+  align-items: center;
   gap: 12px;
 }
+/* "Go back" is the recommended action → primary accent treatment. */
+.interstitial__back {
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border: 1px solid transparent;
+  border-radius: var(--radius-2);
+  padding: 9px 18px;
+  font-size: var(--font-size-4);
+  font-weight: 600;
+  cursor: pointer;
+}
+/* "Continue anyway" is the dangerous action → visually subordinate (quiet outline). */
 .interstitial__continue {
   background: transparent;
-  color: #93a4bd;
-  border: 1px solid #334155;
-  border-radius: 8px;
+  color: var(--fg-muted);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-2);
   padding: 9px 16px;
-  font-size: 13px;
+  font-size: var(--font-size-3);
   cursor: pointer;
 }
 .interstitial__continue:hover {
-  color: #e5e7eb;
-  border-color: #475569;
+  color: var(--fg);
+  border-color: var(--border-2);
 }
 .interstitial--malware {
-  background: #1a0b0b;
+  background: color-mix(in srgb, var(--danger) 8%, var(--bg));
 }
 .interstitial--malware .interstitial__panel {
-  border-color: #7f1d1d;
+  border-color: var(--danger);
 }
 .interstitial--malware .interstitial__title {
-  color: #fca5a5;
+  color: var(--danger);
 }
 
 /* ===== Mobile (Android) chrome — the MobileApp shell ===== */
 .aegis-mobile .address-bar input {
-  font-size: 16px;
-  height: 38px;
-} /* no focus-zoom, touch height */
+  font-size: var(--font-size-5);
+  height: 44px;
+} /* 16px avoids focus-zoom; 44px is the min touch height */
 
 /* --aegis-inset-top/bottom are pushed from MainActivity.kt (the real status/nav bar
    insets). On Android WebView env(safe-area-inset-*) is only the display cutout, so it
@@ -3859,8 +4149,8 @@ a:focus-visible {
   left: 0;
   right: 0;
   z-index: 10;
-  background: #1b1b1b;
-  border-bottom: 1px solid #2a2a2a;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
   padding: var(--aegis-inset-top, env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) 0
     calc(8px + env(safe-area-inset-left));
 }
@@ -3875,34 +4165,37 @@ a:focus-visible {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 44px;
+  height: 44px;
   border: 0;
   background: transparent;
-  color: #cfcfcf;
-  border-radius: 8px;
+  color: var(--fg-muted);
+  border-radius: var(--radius-3);
 }
 .mobile-favourites {
   display: flex;
   gap: 6px;
-  height: 24px;
+  height: 36px;
   overflow-x: auto;
   align-items: center;
   scrollbar-width: none;
+  /* Fade the right edge to hint the strip scrolls horizontally. */
+  mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent);
 }
 .mobile-favourites::-webkit-scrollbar {
   display: none;
 }
 .mobile-favourites__chip {
   flex: 0 0 auto;
-  height: 22px;
-  padding: 0 8px;
-  font-size: 12px;
-  line-height: 22px;
+  height: 32px;
+  padding: 0 12px;
+  font-size: var(--font-size-3);
+  line-height: 32px;
   border: 0;
-  border-radius: 11px;
-  background: #2a2a2a;
-  color: #cfcfcf;
+  border-radius: var(--radius-pill);
+  background: var(--bg-input);
+  color: var(--fg);
   white-space: nowrap;
 }
 
@@ -3917,8 +4210,8 @@ a:focus-visible {
   display: flex;
   align-items: center;
   justify-content: space-around;
-  background: #1b1b1b;
-  border-top: 1px solid #2a2a2a;
+  background: var(--bg-elevated);
+  border-top: 1px solid var(--border);
   padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
 }
 .mobile-bottombar__btn {
@@ -3929,11 +4222,11 @@ a:focus-visible {
   height: 48px;
   border: 0;
   background: transparent;
-  color: #e6e6e6;
-  border-radius: 10px;
+  color: var(--fg);
+  border-radius: var(--radius-3);
 }
 .mobile-bottombar__btn:disabled {
-  color: #555;
+  color: var(--fg-muted);
 }
 .mobile-bottombar__shield {
   display: inline-flex;
@@ -3946,7 +4239,7 @@ a:focus-visible {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  background: #161616;
+  background: var(--bg);
   padding-top: var(--aegis-inset-top, env(safe-area-inset-top));
   padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
 }
@@ -3956,23 +4249,23 @@ a:focus-visible {
   gap: 8px;
   height: 52px;
   padding: 0 8px;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid var(--border);
 }
 .mobile-sheet__back {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
   border: 0;
   background: transparent;
-  color: #e6e6e6;
-  border-radius: 10px;
+  color: var(--fg);
+  border-radius: var(--radius-3);
 }
 .mobile-sheet__title {
-  font-size: 17px;
+  font-size: var(--font-size-6);
   margin: 0;
-  color: #fff;
+  color: var(--fg);
 }
 .mobile-sheet__body {
   flex: 1;
@@ -3993,12 +4286,12 @@ a:focus-visible {
   padding: 0 12px;
   border: 0;
   background: transparent;
-  color: #e6e6e6;
-  font-size: 16px;
+  color: var(--fg);
+  font-size: var(--font-size-5);
   text-align: left;
 }
 .mobile-menu__item:disabled {
-  color: #666;
+  color: var(--fg-muted);
 }
 .mobile-menu__item--zoom {
   display: flex;
@@ -4016,12 +4309,12 @@ a:focus-visible {
 }
 .mobile-menu__zoom-label {
   flex: 1;
-  font-size: 16px;
-  color: #e6e6e6;
+  font-size: var(--font-size-5);
+  color: var(--fg);
 }
 .mobile-menu__zoom-value {
-  font-size: 16px;
-  color: #e6e6e6;
+  font-size: var(--font-size-5);
+  color: var(--fg);
   min-width: 48px;
   text-align: center;
 }
@@ -4081,10 +4374,10 @@ a:focus-visible {
   height: 48px;
   padding: 0 16px;
   border: 0;
-  border-bottom: 1px solid #2a2a2a;
+  border-bottom: 1px solid var(--border);
   background: transparent;
-  color: #cfcfcf;
-  font-size: 15px;
+  color: var(--fg-muted);
+  font-size: var(--font-size-4);
 }
 .mobile-tabs {
   list-style: none;
@@ -4094,10 +4387,10 @@ a:focus-visible {
 .mobile-tabs__row {
   display: flex;
   align-items: center;
-  border-bottom: 1px solid #222;
+  border-bottom: 1px solid var(--border);
 }
 .mobile-tabs__row--active {
-  background: #20232a;
+  background: var(--bg-input);
 }
 .mobile-tabs__open {
   flex: 1;
@@ -4109,8 +4402,8 @@ a:focus-visible {
   padding: 0 12px;
   border: 0;
   background: transparent;
-  color: #e6e6e6;
-  font-size: 15px;
+  color: var(--fg);
+  font-size: var(--font-size-4);
   text-align: left;
 }
 .mobile-tabs__title {
@@ -4126,7 +4419,7 @@ a:focus-visible {
   height: 52px;
   border: 0;
   background: transparent;
-  color: #9aa0a6;
+  color: var(--fg-muted);
 }
 .mobile-tabs__new--private {
   color: var(--aegis-private-accent, #b794f6);
@@ -4148,8 +4441,8 @@ a:focus-visible {
   height: 36px;
   gap: 2px;
   padding: 0 6px;
-  background: #1b1b1b;
-  border-bottom: 1px solid #2a2a2a;
+  background: var(--bg-elevated);
+  border-bottom: 1px solid var(--border);
   overflow-x: auto;
 }
 .tab {
@@ -4158,15 +4451,15 @@ a:focus-visible {
   gap: 6px;
   max-width: 200px;
   padding: 0 8px;
-  background: #232323;
-  border-radius: 6px 6px 0 0;
+  background: var(--bg-input);
+  border-radius: var(--radius-2) var(--radius-2) 0 0;
   cursor: pointer;
-  color: #cfcfcf;
+  color: var(--fg-muted);
   white-space: nowrap;
 }
 .tab--active {
-  background: #2f2f2f;
-  color: #fff;
+  background: color-mix(in srgb, var(--fg) 10%, var(--bg-input));
+  color: var(--fg);
 }
 .tab--asleep {
   opacity: 0.55;
@@ -4178,7 +4471,7 @@ a:focus-visible {
 .tab__title {
   overflow: hidden;
   text-overflow: ellipsis;
-  font-size: 12px;
+  font-size: var(--font-size-2);
 }
 .tab__close {
   display: inline-flex;
@@ -4187,17 +4480,17 @@ a:focus-visible {
   color: inherit;
   cursor: pointer;
   padding: 2px;
-  border-radius: 4px;
+  border-radius: var(--radius-1);
 }
 .tab__close:hover {
-  background: #444;
+  background: var(--bg-hover);
 }
 .tabstrip__new {
   display: inline-flex;
   align-items: center;
   border: 0;
   background: transparent;
-  color: #cfcfcf;
+  color: var(--fg-muted);
   cursor: pointer;
   padding: 0 8px;
 }
@@ -4212,4 +4505,10 @@ a:focus-visible {
 }
 .tab--private .tab__icon {
   color: var(--aegis-private-accent, #b794f6);
+}
+/* The tab is a role="tab" div (keyboard-focusable via roving tabindex), so it needs
+   its own focus ring — the global :focus-visible rule only covers button/input/a. */
+.tab:focus-visible {
+  outline: 2px solid var(--accent-color);
+  outline-offset: -2px;
 }

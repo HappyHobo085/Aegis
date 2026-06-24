@@ -7,7 +7,7 @@ import { onSyncChange } from '../lib/syncBus';
 
 const emptySettings: Settings = {
   homeUrl: '',
-  primaryColor: '#3b82f6',
+  primaryColor: '#2563eb',
   defaultSearchTemplate: '',
   searchEngines: [],
   hideChromeByDefault: false,

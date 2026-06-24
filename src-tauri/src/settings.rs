@@ -17,7 +17,7 @@ fn store_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
 fn defaults() -> Value {
     json!({
         "homeUrl": "about:blank",
-        "primaryColor": "#3b82f6",
+        "primaryColor": "#2563eb",
         "defaultSearchTemplate": "https://duckduckgo.com/?q=%s",
         "searchEngines": [
             { "id": "ddg", "name": "DuckDuckGo", "template": "https://duckduckgo.com/?q=%s" },

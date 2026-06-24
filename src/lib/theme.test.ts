@@ -1,6 +1,13 @@
 // src/lib/theme.test.ts
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { applyTheme, resolveTheme, prefersDarkScheme, watchSystemTheme } from './theme';
+import {
+  applyTheme,
+  resolveTheme,
+  prefersDarkScheme,
+  watchSystemTheme,
+  onAccentTextColor,
+  luminanceOf,
+} from './theme';
 
 /** Install a matchMedia mock that reports `dark` and returns the listener controls. */
 function mockMatchMedia(prefersDark: boolean) {
@@ -63,6 +70,14 @@ describe('applyTheme', () => {
     expect(document.documentElement.style.getPropertyValue('--accent-color')).toBe('#ff5500');
   });
 
+  it('sets --text-on-accent for contrast: white on a dark accent, black on a light accent', () => {
+    mockMatchMedia(true);
+    applyTheme({ primaryColor: '#2563eb', themeMode: 'dark' });
+    expect(document.documentElement.style.getPropertyValue('--text-on-accent')).toBe('#ffffff');
+    applyTheme({ primaryColor: '#ffe066', themeMode: 'dark' });
+    expect(document.documentElement.style.getPropertyValue('--text-on-accent')).toBe('#000000');
+  });
+
   it('sets data-theme="dark" and color-scheme dark for themeMode dark', () => {
     mockMatchMedia(false); // OS prefers light, but explicit dark must win
     applyTheme({ primaryColor: '#111', themeMode: 'dark' });
@@ -110,5 +125,25 @@ describe('watchSystemTheme', () => {
     vi.stubGlobal('matchMedia', undefined);
     const off = watchSystemTheme(vi.fn());
     expect(() => off()).not.toThrow();
+  });
+});
+
+describe('onAccentTextColor / luminanceOf', () => {
+  it('returns white text on dark accents, black on light ones', () => {
+    expect(onAccentTextColor('#000000')).toBe('#ffffff');
+    expect(onAccentTextColor('#2563eb')).toBe('#ffffff'); // the default blue
+    expect(onAccentTextColor('#ffffff')).toBe('#000000');
+    expect(onAccentTextColor('#ffe066')).toBe('#000000'); // a light yellow
+  });
+
+  it('accepts shorthand hex and ignores a missing leading #', () => {
+    expect(onAccentTextColor('#fff')).toBe('#000000');
+    expect(onAccentTextColor('000')).toBe('#ffffff');
+  });
+
+  it('luminanceOf is 0 for black, ~1 for white, 0 for an unparseable value', () => {
+    expect(luminanceOf('#000000')).toBeCloseTo(0, 5);
+    expect(luminanceOf('#ffffff')).toBeCloseTo(1, 5);
+    expect(luminanceOf('not-a-color')).toBe(0);
   });
 });
