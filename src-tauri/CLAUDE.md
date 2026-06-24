@@ -98,8 +98,12 @@ dotted event name.
     monotonic session total + per-tab page count and emit `adblock.blockedCount`;
     `getState` returns the active tab's `pageBlocked` so the chrome recovers the
     count on mount/tab-switch (live events emitted before the chrome subscribed —
-    e.g. the restored boot page — are otherwise lost). Counting is wired on **Linux**
-    only so far (`linux_layout::connect_block_counter`); Win/Android is a follow-up.
+    e.g. the restored boot page — are otherwise lost). Counting is wired on **all three
+    tiers**: Linux (`linux_layout::connect_block_counter` / `resource-load-started`),
+    Windows (the `adblock_win.rs` `WebResourceRequested` network tier → `note_blocked`),
+    and Android (Kotlin `shouldInterceptRequest` ad-block branch → `__aegisBlockedCount`).
+    Each tier's count reflects only what its own ad-block layer sees — Linux under-counts
+    content-filter-blocked ads (cancelled before the signal fires); see gotcha 6.
     **Unit-tested via `test_support::with_tmp_app`:** default state, `set_enabled`,
     `toggle_allowlist` + subdomain coverage + persist, `clear_allowlist`,
     `note_blocked` session/page counters, per-tab page count + reset (8 tests).
