@@ -66,7 +66,7 @@ fn zero_page(id: u32) -> u32 {
 /// WebView2 `WebResourceRequested` handler (`adblock_win`). (Android keeps an equivalent
 /// counter in Kotlin — it has no `AppHandle` and no Tauri event bus on the content side —
 /// and pushes `window.__aegisBlockedCount` directly; see `MainActivity.kt`.)
-pub fn note_blocked(app: &AppHandle, id: u32) {
+pub fn note_blocked<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let (session, page) = bump_blocked(id);
     crate::emit_event(
         app,
@@ -77,7 +77,7 @@ pub fn note_blocked(app: &AppHandle, id: u32) {
 
 /// Reset a tab's per-page blocked count on a new top-frame navigation, and refresh the
 /// badge (page → 0, session unchanged). Called from the desktop nav path (`nav.rs`).
-pub fn reset_page(app: &AppHandle, id: u32) {
+pub fn reset_page<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let session = zero_page(id);
     crate::emit_event(
         app,
@@ -107,7 +107,7 @@ impl Default for AdblockState {
 /// Reused as the WebRTC per-site escape hatch: an allowlisted site is "trusted", so its
 /// WebRTC isn't filtered by the shim / native backstops.
 #[cfg_attr(target_os = "android", allow(dead_code))] // desktop-only escape hatch in v1
-pub fn host_allowlisted(app: &AppHandle, host: &str) -> bool {
+pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
     if host.is_empty() {
         return false;
     }
@@ -136,7 +136,7 @@ pub fn load_allowlist_hosts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
 }
 
 /// Add a host (revive a tombstone in place, or stamp a new record).
-fn add_host(app: &AppHandle, host: &str) {
+fn add_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
     let mut items = jsonstore::load_synced(app, "allowlist");
     match items
         .iter_mut()
@@ -160,7 +160,7 @@ fn add_host(app: &AppHandle, host: &str) {
 }
 
 /// Tombstone a host.
-fn remove_host(app: &AppHandle, host: &str) {
+fn remove_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
     let mut items = jsonstore::load_synced(app, "allowlist");
     jsonstore::tombstone(
         &mut items,
@@ -171,7 +171,7 @@ fn remove_host(app: &AppHandle, host: &str) {
 }
 
 /// Tombstone every live host (clear).
-fn clear_hosts(app: &AppHandle) {
+fn clear_hosts<R: Runtime>(app: &AppHandle<R>) {
     let mut items = jsonstore::load_synced(app, "allowlist");
     jsonstore::tombstone(&mut items, |it| !jsonstore::is_deleted(it), app);
     let _ = jsonstore::save(app, "allowlist", &items);
@@ -221,7 +221,11 @@ fn sync_engine<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// Handle `adblock.*` channels. Returns `None` if not an adblock channel.
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     match channel {
         "adblock.getState" => Some(Ok(state_json(app))),
 
@@ -281,6 +285,180 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::with_tmp_app;
+    use serde_json::Value;
+
+    // ── AppHandle-backed state-machine tests (use the mock harness) ──────────────
+
+    #[test]
+    fn default_state_is_enabled_with_empty_allowlist() {
+        with_tmp_app(|app| {
+            let s = dispatch(app, "adblock.getState", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(s.get("enabled").and_then(Value::as_bool), Some(true));
+            assert!(s
+                .get("allowlistedHosts")
+                .and_then(Value::as_array)
+                .unwrap()
+                .is_empty());
+        });
+    }
+
+    #[test]
+    fn set_enabled_flips_the_flag() {
+        with_tmp_app(|app| {
+            let off = dispatch(app, "adblock.setEnabled", &json!({ "enabled": false }))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                off.get("enabled").and_then(Value::as_bool),
+                Some(false),
+                "flag is false after setEnabled(false)"
+            );
+            let on = dispatch(app, "adblock.setEnabled", &json!({ "enabled": true }))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                on.get("enabled").and_then(Value::as_bool),
+                Some(true),
+                "flag is true after setEnabled(true)"
+            );
+        });
+    }
+
+    #[test]
+    fn toggle_allowlist_adds_then_removes_and_persists() {
+        with_tmp_app(|app| {
+            // toggle on
+            let on = dispatch(
+                app,
+                "adblock.toggleAllowlist",
+                &json!({ "host": "ads.example.com" }),
+            )
+            .unwrap()
+            .unwrap();
+            let hosts: Vec<&str> = on
+                .get("allowlistedHosts")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert!(
+                hosts.contains(&"ads.example.com"),
+                "host appears in allowlistedHosts after toggle-on"
+            );
+            assert_eq!(
+                load_allowlist_hosts(app),
+                vec!["ads.example.com".to_string()],
+                "persisted store reflects the added host"
+            );
+            // toggle off
+            let off = dispatch(
+                app,
+                "adblock.toggleAllowlist",
+                &json!({ "host": "ads.example.com" }),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                off.get("allowlistedHosts")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .is_empty(),
+                "allowlistedHosts is empty after toggle-off"
+            );
+            assert!(
+                load_allowlist_hosts(app).is_empty(),
+                "persisted store is empty after toggle-off"
+            );
+        });
+    }
+
+    #[test]
+    fn host_allowlisted_covers_subdomains() {
+        with_tmp_app(|app| {
+            dispatch(
+                app,
+                "adblock.toggleAllowlist",
+                &json!({ "host": "example.com" }),
+            )
+            .unwrap()
+            .unwrap();
+            assert!(
+                host_allowlisted(app, "example.com"),
+                "exact host is allowlisted"
+            );
+            assert!(
+                host_allowlisted(app, "www.example.com"),
+                "subdomain is covered by the allowlist entry"
+            );
+            assert!(
+                !host_allowlisted(app, "notexample.com"),
+                "unrelated host is not allowlisted"
+            );
+            assert!(!host_allowlisted(app, ""), "empty string never matches");
+        });
+    }
+
+    #[test]
+    fn clear_allowlist_tombstones_everything() {
+        with_tmp_app(|app| {
+            dispatch(app, "adblock.toggleAllowlist", &json!({ "host": "a.test" }))
+                .unwrap()
+                .unwrap();
+            dispatch(app, "adblock.toggleAllowlist", &json!({ "host": "b.test" }))
+                .unwrap()
+                .unwrap();
+            let cleared = dispatch(app, "adblock.clearAllowlist", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(
+                cleared
+                    .get("allowlistedHosts")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .is_empty(),
+                "getState returns empty allowlistedHosts after clearAllowlist"
+            );
+            assert!(
+                load_allowlist_hosts(app).is_empty(),
+                "persisted store is empty after clearAllowlist"
+            );
+        });
+    }
+
+    #[test]
+    fn note_blocked_increments_session_and_page_counters() {
+        with_tmp_app(|app| {
+            let tab_id = 9201u32; // disjoint from Plan G's tab ids
+            zero_page(tab_id);
+            let before = session_blocked();
+            note_blocked(app, tab_id);
+            note_blocked(app, tab_id);
+            assert_eq!(
+                session_blocked(),
+                before + 2,
+                "session total increments by 2 after two note_blocked calls"
+            );
+            // reset_page zeroes per-page count; session total is unchanged.
+            let session_after = session_blocked();
+            reset_page(app, tab_id);
+            assert_eq!(
+                session_blocked(),
+                session_after,
+                "session total is unchanged after reset_page"
+            );
+            assert_eq!(
+                page_map().lock().unwrap().get(&tab_id).copied(),
+                Some(0),
+                "per-page count is zero after reset_page"
+            );
+        });
+    }
+
+    // ── Pure counter tests (no AppHandle needed — Plan G) ────────────────────────
 
     // SESSION_BLOCKED is process-global; these tests reset it and use disjoint tab ids
     // so they don't interfere. They run single-threaded relative to each other only by
