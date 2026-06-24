@@ -167,6 +167,8 @@ export interface TabMeta {
   title: string;
   /** Latest URL — label fallback (hostname) when there's no title. */
   url: string;
+  /** A private (incognito) tab: ephemeral data partition, excluded from history/sync/downloads. */
+  private: boolean;
 }
 /** The whole tab list + which tab is active. Order === strip order. */
 export interface TabsState {
@@ -389,7 +391,7 @@ export interface AegisApi {
   };
   tabs: {
     list(): Promise<TabsState>;
-    create(url?: string, background?: boolean): Promise<TabsState>;
+    create(url?: string, background?: boolean, isPrivate?: boolean): Promise<TabsState>;
     close(id: ViewId): Promise<TabsState>;
     activate(id: ViewId): Promise<TabsState>;
     reorder(ids: ViewId[]): Promise<TabsState>;

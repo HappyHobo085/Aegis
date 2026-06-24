@@ -151,7 +151,8 @@ export const aegis: AegisApi = {
   },
   tabs: {
     list: () => call<TabsState>(IPC.tabsList),
-    create: (url, background) => call<TabsState>(IPC.tabsCreate, { url, background }),
+    create: (url, background, isPrivate) =>
+      call<TabsState>(IPC.tabsCreate, { url, background, private: isPrivate }),
     close: (id) => call<TabsState>(IPC.tabsClose, { id }),
     activate: (id) => call<TabsState>(IPC.tabsActivate, { id }),
     reorder: (ids) => call<TabsState>(IPC.tabsReorder, { ids }),

@@ -4,8 +4,8 @@ import { TabStrip } from './TabStrip';
 import type { TabMeta } from '../../shared/types';
 
 const tabs: TabMeta[] = [
-  { id: 1, pinned: false, live: true, title: 'Alpha', url: 'https://alpha.test/' },
-  { id: 2, pinned: false, live: false, title: 'Beta', url: 'https://beta.test/' },
+  { id: 1, pinned: false, live: true, title: 'Alpha', url: 'https://alpha.test/', private: false },
+  { id: 2, pinned: false, live: false, title: 'Beta', url: 'https://beta.test/', private: false },
 ];
 
 function setup(over: Partial<React.ComponentProps<typeof TabStrip>> = {}) {

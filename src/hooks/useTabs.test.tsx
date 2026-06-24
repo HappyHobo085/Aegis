@@ -9,18 +9,22 @@ vi.mock('../lib/ipcClient', () => {
     aegis: {
       tabs: {
         list: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         create: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank' },
-            { id: 2, pinned: false, live: true, title: '', url: 'about:blank' },
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            { id: 2, pinned: false, live: true, title: '', url: 'about:blank', private: false },
           ],
           activeId: 2,
         }),
         close: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         activate: vi.fn().mockResolvedValue({ tabs: [], activeId: 2 }),
@@ -61,7 +65,9 @@ describe('useTabs', () => {
     await waitFor(() => expect(result.current.tabs.length).toBe(1));
     act(() => {
       (aegis.tabs as unknown as { __emit: (s: unknown) => void }).__emit({
-        tabs: [{ id: 1, pinned: false, live: false, title: '', url: 'about:blank' }],
+        tabs: [
+          { id: 1, pinned: false, live: false, title: '', url: 'about:blank', private: false },
+        ],
         activeId: 1,
       });
     });

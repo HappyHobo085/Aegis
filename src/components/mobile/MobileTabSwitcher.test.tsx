@@ -4,8 +4,15 @@ import { MobileTabSwitcher } from './MobileTabSwitcher';
 import type { TabMeta } from '../../../shared/types';
 
 const tabs: TabMeta[] = [
-  { id: 1, pinned: false, live: true, title: 'Example', url: 'https://example.com/' },
-  { id: 2, pinned: false, live: false, title: '', url: 'https://news.test/' },
+  {
+    id: 1,
+    pinned: false,
+    live: true,
+    title: 'Example',
+    url: 'https://example.com/',
+    private: false,
+  },
+  { id: 2, pinned: false, live: false, title: '', url: 'https://news.test/', private: false },
 ];
 
 function setup(over = {}) {

@@ -322,8 +322,22 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
       await ctx.emitNavState?.({ ...BASE_NAV });
       const TWO_TABS: TabsState = {
         tabs: [
-          { id: 1, pinned: false, live: true, title: 'Tab 1', url: 'https://example.com/' },
-          { id: 2, pinned: false, live: true, title: 'Tab 2', url: 'https://example.org/' },
+          {
+            id: 1,
+            pinned: false,
+            live: true,
+            title: 'Tab 1',
+            url: 'https://example.com/',
+            private: false,
+          },
+          {
+            id: 2,
+            pinned: false,
+            live: true,
+            title: 'Tab 2',
+            url: 'https://example.org/',
+            private: false,
+          },
         ],
         activeId: 1,
       };
@@ -362,8 +376,22 @@ export const MOBILE_INTERACTIONS: InteractionSpec[] = [
       await ctx.emitNavState?.({ ...BASE_NAV });
       const TWO_TABS: TabsState = {
         tabs: [
-          { id: 1, pinned: false, live: true, title: 'Tab 1', url: 'https://example.com/' },
-          { id: 2, pinned: false, live: true, title: 'Tab 2', url: 'https://example.org/' },
+          {
+            id: 1,
+            pinned: false,
+            live: true,
+            title: 'Tab 1',
+            url: 'https://example.com/',
+            private: false,
+          },
+          {
+            id: 2,
+            pinned: false,
+            live: true,
+            title: 'Tab 2',
+            url: 'https://example.org/',
+            private: false,
+          },
         ],
         activeId: 1,
       };

@@ -197,35 +197,51 @@ export function aegisMockModule() {
       },
       tabs: {
         list: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         create: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         close: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         activate: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         reorder: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         setPinned: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         reopenClosed: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         setTitle: vi.fn().mockResolvedValue({
-          tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank' }],
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
           activeId: 1,
         }),
         onState: vi.fn(() => () => {}),

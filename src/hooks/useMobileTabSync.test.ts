@@ -17,6 +17,7 @@ const t = (id: number, over: Partial<TabMeta> = {}): TabMeta => ({
   live: true,
   title: '',
   url: `https://t${id}.test/`,
+  private: false,
   ...over,
 });
 
