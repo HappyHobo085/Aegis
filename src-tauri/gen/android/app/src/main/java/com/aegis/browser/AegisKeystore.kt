@@ -2,12 +2,15 @@ package com.aegis.browser
 
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import android.util.Base64
+import android.util.Log
 import java.security.KeyStore
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 
 /**
@@ -24,9 +27,33 @@ object AegisKeystore {
   private const val IV_LEN = 12
   private const val TAG_BITS = 128
 
+  private fun logKeySecurityLevel(key: SecretKey) {
+    try {
+      val factory = SecretKeyFactory.getInstance(key.algorithm, "AndroidKeyStore")
+      val info = factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo
+      val level = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        when (info.securityLevel) {
+          KeyProperties.SECURITY_LEVEL_STRONGBOX -> "STRONGBOX"
+          KeyProperties.SECURITY_LEVEL_TRUSTED_ENVIRONMENT -> "TEE"
+          KeyProperties.SECURITY_LEVEL_SOFTWARE -> "SOFTWARE"
+          else -> "UNKNOWN(${info.securityLevel})"
+        }
+      } else {
+        @Suppress("DEPRECATION")
+        if (info.isInsideSecureHardware) "SECURE_HW(pre-S)" else "SOFTWARE(pre-S)"
+      }
+      Log.i("AegisKeystore", "sync-seed key security level = $level")
+    } catch (t: Throwable) {
+      Log.w("AegisKeystore", "could not query key security level", t)
+    }
+  }
+
   private fun secretKey(): SecretKey {
     val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-    (ks.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+    (ks.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let {
+      logKeySecurityLevel(it.secretKey)
+      return it.secretKey
+    }
     // No key yet — generate a non-exportable AES-256-GCM key bound to secure hardware.
     // Prefer a StrongBox Secure Element where the device has one; gracefully fall back to
     // the TEE/software-backed key (today's behavior) when StrongBox is unavailable, so this
@@ -46,13 +73,17 @@ object AegisKeystore {
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
       try {
         kg.init(spec(true))
-        return kg.generateKey()
+        val key = kg.generateKey()
+        logKeySecurityLevel(key)
+        return key
       } catch (_: android.security.keystore.StrongBoxUnavailableException) {
         // No Secure Element — re-init the SAME generator without StrongBox.
       }
     }
     kg.init(spec(false))
-    return kg.generateKey()
+    val key = kg.generateKey()
+    logKeySecurityLevel(key)
+    return key
   }
 
   @JvmStatic
