@@ -77,7 +77,6 @@ pub fn webrtc_policy<R: Runtime>(app: &AppHandle<R>) -> String {
 
 /// The anti-fingerprint level: `"off"` (default, opt-in) | `"standard"` | `"strict"`.
 /// Raw read — callers (e.g. `farble::level`) validate/clamp the value.
-#[allow(dead_code)] // consumed by farble::level(); injection wired in later task
 pub fn anti_fingerprint<R: Runtime>(app: &AppHandle<R>) -> String {
     load(app)
         .get("antiFingerprint")

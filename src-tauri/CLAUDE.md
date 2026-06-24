@@ -240,6 +240,42 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   **Argon2id** passphrase KDF, `zeroize`-on-drop. A self-hosted reference server is the
   standalone `sync-server/` crate. `sync.*` data channels flow on Android for free
   (they ride the normal `ipc` chokepoint, not the `AegisAndroid` nav bridge).
+- **Anti-fingerprinting / farbling** — `farble.rs`: opt-in document-start JS shim
+  that perturbs fingerprinting surfaces with per-frame-origin, per-session deterministic
+  noise. Key design points:
+  - **Three levels** (controlled by `antiFingerprint` setting, default `"off"`): `standard`
+    patches canvas (`getImageData`/`toDataURL`/`toBlob`), audio (`getFloatFrequencyData`/
+    `getChannelData`), navigator/UA-CH (`hardwareConcurrency`/`deviceMemory`/
+    `userAgentData.brands`); `strict` adds WebGL (`getParameter` UNMASKED\_\*/`readPixels`/
+    `getSupportedExtensions`/`getShaderPrecisionFormat`). The gradient between levels is
+    real and tested by `farbleShim.test.ts`.
+  - **Salt + seed** — `SESSION_SALT` is a `OnceLock<[u8;32]>` CSPRNG-filled once at boot
+    (`init_session_salt`), NEVER persisted, NEVER written to any store. The page receives
+    only `public_seed = HKDF-SHA256(salt, "aegis-farble-seed-v1")` (16 bytes, one-way).
+    Per-origin sub-seeds are derived INSIDE the shim from `SHA-256(seed || origin)` — so
+    the Rust core hands one token to the page and the shim fans out without another IPC
+    call. `data.export` does NOT carry the salt (it can't — `OnceLock` is never in any store).
+  - **Shim injection** — `shim_for(level, host_allowlisted)` returns the JS string with
+    the `__AEGIS_FARBLE_SEED__` placeholder substituted by `seed_hex()`, which is then
+    appended to the document-start script by `adblock_inject::script` (desktop) or returned
+    by the `NativeFarble` JNI getter (Android). `off` or an fp-allowlisted host → `""` →
+    no injection (fail-open).
+  - **Per-site fp-allowlist** — a separate `fp-allowlist` syncable store (not the ad-block
+    allowlist). Managed by `FarbleState` + `host_allowlisted`; dispatched via `fingerprint.*`
+    IPC channels (`getState`/`toggleAllowlist`/`removeAllowlist`/`clearAllowlist`);
+    `seed_from_disk` pre-warms it at boot. Desktop only in v1 — the Android JNI getter has
+    no `AppHandle`, so `host_allowlisted` is always `false` on Android (parity gap, documented).
+  - **Per-spawn limitation** — like the WebRTC shim, the farble shim is evaluated once at
+    content-webview creation. Toggling level or fp-allowlist applies only to newly
+    spawned/reloaded tabs; in-tab SPA navigations to a different host are not re-evaluated.
+  - **Honest limits** — a same-world JS shim is detectable (Proxy/toString probing, pristine
+    iframe comparison); hence default-off + per-site escape hatch. On WebKit (Linux/macOS) the
+    Chrome-148 UA already lies about the engine — engine-quirk detection defeats any shim.
+    Seeding is per-frame-origin (weaker than Brave's per-top-eTLD+1 — a cross-origin iframe
+    can't read `window.top.origin`). `strict`/WebGL is highest-risk and opt-in-within-opt-in.
+    This is NOT engine-level farbling and the docs never claim parity with Brave's in-Blink tier.
+  - **Runtime verify** — vitest `farbleShim.test.ts` (authoritative for shim behavior; passes).
+    Live farble-a-real-page, Android device, Win/macOS GUI **PENDING** user.
 - **WebRTC IP-leak defense** — `webrtc_shim.rs`: the `webrtcPolicy` setting
   (`default`/`public-only`(default)/`disable`) as a document-start JS shim that wraps
   `RTCPeerConnection` to filter local/private ICE candidates (the `icecandidate` event,
@@ -702,6 +738,36 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
           cache/history clear on close — Kotlin compile-verified; **device verify PENDING**;
           first-party-cookie persistence after close is a documented, accepted limit (not
           fixable without a wry or Android per-profile API).
+
+20. **Anti-fingerprinting (farbling) hard-won lessons.** Four lessons from sub-project L:
+
+    a. **Bake the seed INSIDE the IIFE closure, NEVER as a top-level `var` or `window.*`
+    assignment.** A top-level `var __aegisFarbleSeed = '...'` leaks to `window` — any
+    cross-origin script in a subsequent navigation in the same frame can read
+    `window.__aegisFarbleSeed` and reconstruct the per-origin noise, turning the seed into
+    a cross-site super-cookie. The correct form is `(function(seed){ /* shim */ })('<hex>');`
+    — the seed is a closure parameter, invisible outside the IIFE. `farble.rs`'s `shim_for`
+    enforces this by substituting the placeholder inside the IIFE call argument.
+
+    b. **Runtime shim tests MUST run in TRUE global scope via indirect eval — NOT
+    `new Function`.** `new Function('code')()` creates a new function scope, so a
+    `var` declared at the top of `code` does NOT go onto the global `window` object —
+    the leak test always passes (false negative). `(0, eval)('var x = 1'); x` runs in
+    the true global scope and WILL assign to `window`, catching the super-cookie pattern.
+    `farbleShim.test.ts` uses indirect eval for exactly this reason.
+
+    c. **Per-spawn applies to level AND allowlist.** The farble shim is baked into the
+    document-start JS at content-webview creation. Toggling `antiFingerprint` or the
+    fp-allowlist takes effect only on NEWLY spawned/reloaded tabs — existing open tabs
+    keep the shim (or absence of one) they were born with. This is the same model as the
+    WebRTC shim; document it in any UI that toggles these settings.
+
+    d. **Android has no fp-allowlist in v1 (documented parity gap).** The Android JNI
+    getter (`NativeFarble.farbleScript`) has no `AppHandle` and therefore no access to the
+    `FarbleState` managed-state; it hardcodes `host_allowlisted = false`. Closing the gap
+    requires routing the allowlist to a global (mirroring `ANDROID_LEVEL`) or passing the
+    host into `farbleScript(host)` from Kotlin. Tracked as a future improvement; not a
+    blocker.
 
 ### Multi-webview Linux layout (hard-won facts)
 

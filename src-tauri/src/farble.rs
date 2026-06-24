@@ -45,7 +45,6 @@ pub fn init_session_salt() {
 
 /// Return the current session salt, initializing it if needed (lazy fallback for tests that
 /// call `public_seed` directly without calling `init_session_salt` first).
-#[allow(dead_code)] // used by public_seed(); will be called from later tasks + tests
 fn salt() -> [u8; 32] {
     *SESSION_SALT.get_or_init(|| {
         let mut b = [0u8; 32];
@@ -65,7 +64,6 @@ fn salt() -> [u8; 32] {
 ///
 /// **Stability:** same salt (same session) → same seed. Restarting the app produces a fresh
 /// salt → a fresh seed → all farbled values shift, so cross-session correlation is impossible.
-#[allow(dead_code)] // called by seed_hex(); will be consumed by the shim injector in later tasks
 pub fn public_seed() -> [u8; 16] {
     let mut out = [0u8; 16];
     Hkdf::<Sha256>::new(None, &salt())
@@ -75,7 +73,6 @@ pub fn public_seed() -> [u8; 16] {
 }
 
 /// Hex-encode `public_seed()` — the form baked into the document-start script tag.
-#[allow(dead_code)] // will be consumed by the shim injector (adblock_inject.rs) in later tasks
 pub fn seed_hex() -> String {
     let s = public_seed();
     let mut h = String::with_capacity(32);
@@ -94,7 +91,6 @@ pub fn seed_hex() -> String {
 /// - `"strict"` → standard surfaces + WebGL getParameter/readPixels/
 ///   getSupportedExtensions/getShaderPrecisionFormat (STRICT_JS)
 /// - `"off"` / anything else / allowlisted → `""` (no interference)
-#[allow(dead_code)] // will be consumed by adblock_inject::script in the injection task
 pub fn shim_for(level: &str, host_allowlisted: bool) -> String {
     if host_allowlisted {
         return String::new();
@@ -113,7 +109,6 @@ pub fn shim_for(level: &str, host_allowlisted: bool) -> String {
 /// Reads `antiFingerprint` from the persisted settings, defaulting to `"off"` (opt-in).
 /// Unknown stored values are clamped to `"off"` so a corrupt/future setting is safe.
 /// Mirrors `settings::webrtc_policy`.
-#[allow(dead_code)] // consumed by adblock_inject::script in the injection task (Task 6+)
 pub fn level<R: Runtime>(app: &AppHandle<R>) -> String {
     let raw = crate::settings::anti_fingerprint(app);
     match raw.as_str() {
@@ -141,7 +136,6 @@ pub fn note_level(level: &str) {
 
 /// Return the current farble level for Android (default `"off"`). Mirrors `webrtc_shim::android_policy`.
 #[cfg(target_os = "android")]
-#[allow(dead_code)] // consumed by the NativeFarble JNI getter below
 pub fn android_level() -> String {
     let p = ANDROID_LEVEL.read().map(|g| g.clone()).unwrap_or_default();
     if p.is_empty() {
@@ -213,7 +207,8 @@ impl Default for FarbleState {
 
 /// Whether `host` is on the farble allowlist — exact match or subdomain match.
 /// Allowlisting `example.com` also covers `www.example.com`.
-#[allow(dead_code)] // consumed by the shim injector in a later task (Task 6+)
+/// `#[cfg_attr]` suppresses the dead-code lint on Android, where the JNI path
+/// hardcodes `host_allowlisted = false` and never calls this fn.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
     if host.is_empty() {
@@ -360,12 +355,10 @@ pub fn dispatch<R: Runtime>(
 
 // The shipped standard shim JS, single-sourced so the vitest runtime test
 // (src/lib/farbleShim.test.ts) executes the EXACT bytes shipped here.
-#[allow(dead_code)] // referenced by shim_for() above; used at injection time in a later task
 const STANDARD_JS: &str = include_str!("farble.standard.js");
 
 // The shipped strict shim JS — extends standard with WebGL fingerprint perturbation.
 // Single-sourced so the vitest runtime test executes the exact shipped bytes.
-#[allow(dead_code)] // referenced by shim_for() above; used at injection time in a later task
 const STRICT_JS: &str = include_str!("farble.strict.js");
 
 #[cfg(test)]

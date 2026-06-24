@@ -59,8 +59,8 @@ width)` so the page insets from the right and stays visible. Width is remembered
   (toolbar + favbar height), via `hooks/useContentInset.ts` — no DOM measurement.
 - **One hook per domain** in `hooks/` (nav, adblock, history, saved, favorites,
   settings, subscriptions, customFilters, downloads, permissions, update, safety,
-  **tabs**, **find**). Components stay presentational; state + IPC wiring lives in the
-  hook.
+  **tabs**, **find**, **fingerprint**). Components stay presentational; state + IPC wiring
+  lives in the hook.
 - **`hooks/useTabs`** — owns `TabsState` (the ordered tab list), the active tab
   id, and per-tab nav-state + page titles. All chrome features (nav bar, adblock
   shield, overlays, inset sidebar) key on the active tab id.
@@ -71,6 +71,14 @@ width)` so the page insets from the right and stays visible. Width is remembered
   in the React tree between operations. The hook only persists `VaultState` (the safe
   `{exists, unlocked, count}` summary) and the `_setRecordsRef` escape hatch used by
   `VaultSettingsTab` to sync its local records display with the optimistic-update flow.
+- **`hooks/useFingerprint`** — owns anti-fingerprinting state (`FingerprintState`:
+  `{ level, allowlistedHosts }`). Seeds from `aegis.fingerprint.getState()` on mount;
+  exposes `setLevel(level)` (calls `settings.set` to persist and re-calls `getState`),
+  `toggleHost(host)` (calls `fingerprint.toggleAllowlist`), and `clearAllowlist()`.
+  Consumed exclusively by `SecuritySettingsTab` (the "Security" tab in Settings).
+  The hook never holds raw credentials or sensitive data — only the string level and
+  the host allowlist. Re-reads state after every mutation so the UI reflects the Rust
+  source of truth.
 - **`hooks/useFind`** — owns find-in-page UI state for the active view. Subscribes to
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.
@@ -98,6 +106,20 @@ width)` so the page insets from the right and stays visible. Width is remembered
     Registers as a compositor surface via `useChromeSurface` (it opens inside Settings, which
     is already a registered overlay, so the content webview is already lowered — no
     additional compositor registration needed for the tab itself).
+- **`components/SecuritySettingsTab`** — the "Security" tab inside the Settings modal.
+  Includes the anti-fingerprinting section (rendered via `useFingerprint`):
+  - A level selector (`off` / `standard` / `strict`) with explanatory copy. The UI copy
+    never claims engine-level or Brave-parity farbling — it says "add noise" and notes the
+    opt-in / detectable nature. `standard` is described as perturbing canvas/audio/navigator;
+    `strict` adds WebGL.
+  - A per-site allowlist manager (desktop only, rendered when `level !== 'off'`): add the
+    current browsing host, remove individual hosts, clear all. Allowlisted hosts receive no
+    farble shim — the fp-allowlist is separate from the ad-block allowlist.
+  - Autopilot coverage: catalog entry `fingerprint.crud` (`channels: [fingerprint.getState,
+fingerprint.toggleAllowlist, fingerprint.clearAllowlist]`; `verify` round-trip that
+    toggles a host on/off and asserts the state); interaction specs in
+    `src/autopilot/interactions/settings.ts` cover the level select and the allowlist
+    toggle/clear controls.
 - **`components/FindBar`** — Ctrl+F infobar (purely presentational): text input,
   match-count display, prev/next nav buttons, and a close button. Auto-focuses on mount.
   Rendered inside `DesktopApp` (and `MobileApp`) keyed on the active view id; shown only

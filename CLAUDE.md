@@ -128,7 +128,7 @@ Ed25519 device tokens, `sync_stores.rs` HLC-LWW merge; self-hosted `sync-server/
 Linux/Windows backstops), the **atomic store-write** path (`jsonstore::write_atomic`),
 the **shared crypto** layer (`crypto.rs` — XChaCha20-Poly1305 / HKDF / Argon2id /
 zeroize), **Android document-start JS injection** (`MainActivity.kt`
-`addDocumentStartJavaScript`), and **private/ephemeral mode** (per-tab `private`
+`addDocumentStartJavaScript`), **private/ephemeral mode** (per-tab `private`
 flag; desktop content webview uses `WebviewBuilder::incognito(true)` — Linux
 `WebContext::new_ephemeral`, Windows `SetIsInPrivateModeEnabled`, macOS
 `nonPersistentDataStore`; history/downloads-list/session-persistence all skip private
@@ -143,7 +143,27 @@ live GUI and Win/macOS GUI **PENDING** user sessions; Android device verify **PE
 The **OS-keychain anchor** is desktop-done / Android-wired + device-verified (commit
 `03f0012`; `AegisKeystore.kt` does a real `KeyGenParameterSpec` AES-GCM wrap;
 passphrase-wrapped file is the fallback when no keychain is available; only remaining
-work is preferring StrongBox — sub-project J). **Remaining roadmap features:** a
-password vault, anti-fingerprinting (farbling), and a content-webview proxy — see
+work is preferring StrongBox — sub-project J). **Anti-fingerprinting / farbling**
+(`farble.rs`; sub-project L): opt-in (default `off`), three levels (`off` / `standard` /
+`strict`). `standard` perturbs canvas (`getImageData`/`toDataURL`/`toBlob`), audio
+(`getFloatFrequencyData`/`getChannelData`), and navigator/UA-CH
+(`hardwareConcurrency`/`deviceMemory`/`userAgentData.brands` kept consistent with the
+Chrome-148 UA). `strict` adds WebGL (`getParameter` UNMASKED\_\*/`readPixels`/
+`getSupportedExtensions`/`getShaderPrecisionFormat`). Shipped on all four platforms:
+desktop via `adblock_inject::script` document-start (same injection path as the WebRTC
+shim), Android via `NativeFarble` JNI getter + `MainActivity.createTabWebView`
+registration. Per-site fp-allowlist (`fp-allowlist` syncable store, `fingerprint.*` IPC
+channels, `useFingerprint` hook + SecurityTab UI) — desktop only in v1 (Android farbles
+all hosts; parity gap documented). Session salt = CSPRNG `OnceLock<[u8;32]>`, NEVER
+persisted; page sees only `public_seed = HKDF-SHA256(salt)` (one-way — not a
+super-cookie). Seed is baked INSIDE the IIFE closure, not a top-level `var`/`window.*`
+(a top-level var leaks to `window` = cross-site super-cookie; shim runtime tests run
+in true global scope via indirect eval to catch this). Per-spawn: level/allowlist apply
+to newly created/reloaded tabs only. Honest limits: a same-world JS shim is detectable
+(default-off for this reason); on WebKit the Chrome-148 UA already lies about the engine;
+per-frame-origin seeding (not Brave's per-top-eTLD+1); Android has no fp-allowlist (v1).
+`vitest farbleShim.test.ts` is authoritative for shim runtime behavior and passes (814
+tests). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
+are **PENDING** user. **Remaining roadmap features:** a content-webview proxy — see
 `docs/FEATURE_ROADMAP.md` and the improvements-program decomposition in
 `docs/superpowers/specs/`.
