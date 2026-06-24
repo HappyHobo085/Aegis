@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::sync::Mutex;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
-const NS: &str = "vault";
+const NS: &str = "pwvault";
 const VERIFIER_UUID: &str = "verifier";
 const VERIFIER_PLAINTEXT: &[u8] = b"aegis-vault-verifier-v1";
 const VERIFIER_HLC: &[u8] = b"aegis-vault-verifier-v1"; // fixed AAD version tag for the verifier
@@ -301,8 +301,9 @@ impl VaultState {
     /// Add or replace a credential (matched by uuid). Returns the updated on-disk JSON.
     pub fn upsert(&self, cred: Cred) -> Result<Value, VaultError> {
         let mut inner = self.0.lock().unwrap();
-        // Copy the key bytes to avoid holding a borrow across the mutable records operations.
-        let vk: [u8; 32] = *inner.key.as_deref().ok_or(VaultError::Locked)?;
+        // Copy the key bytes into a Zeroizing wrapper so the copy is zeroized on return,
+        // leaving no key residue on the stack after the function exits.
+        let vk = Zeroizing::new(*inner.key.as_deref().ok_or(VaultError::Locked)?);
         // Replace if uuid exists, otherwise append.
         if let Some(pos) = inner.records.iter().position(|r| r.uuid == cred.uuid) {
             inner.records[pos] = cred;
@@ -316,8 +317,9 @@ impl VaultState {
     /// Remove a credential by uuid. Returns the updated on-disk JSON.
     pub fn remove(&self, uuid: &str) -> Result<Value, VaultError> {
         let mut inner = self.0.lock().unwrap();
-        // Copy the key bytes to avoid holding a borrow across the mutable records retain.
-        let vk: [u8; 32] = *inner.key.as_deref().ok_or(VaultError::Locked)?;
+        // Copy the key bytes into a Zeroizing wrapper so the copy is zeroized on return,
+        // leaving no key residue on the stack after the function exits.
+        let vk = Zeroizing::new(*inner.key.as_deref().ok_or(VaultError::Locked)?);
         inner.records.retain(|r| r.uuid != uuid);
         let file = seal_vault(&inner.salt, &vk, &inner.records)?;
         Ok(file)
@@ -489,5 +491,47 @@ mod tests {
 
         let result = crate::crypto::open(&vk, &nonce, &ct, NS, uuid, &hlc_bytes(updated_at));
         assert!(result.is_err(), "tampered ciphertext must fail open");
+    }
+
+    /// upsert + remove mutation paths: exercises the Zeroizing-fixed key copy end-to-end.
+    /// - create + unlock VaultState → upsert a Cred → seal/persist to JSON string
+    /// - parse + unlock a fresh VaultState → assert the cred round-trips via list()
+    /// - remove the cred → re-persist → parse + unlock a third VaultState → assert it's gone
+    #[test]
+    fn upsert_and_remove_mutation_round_trip() {
+        let password = "mutation-test-password";
+        let cred = make_cred("uuid-mut-1", "mutsite.com", "mutuser", "mutpass!");
+
+        // --- Create a new vault and upsert the cred ---
+        let vs1 = VaultState::default();
+        let _initial_file = vs1.create(password).expect("create failed");
+        let on_disk1 = vs1.upsert(cred.clone()).expect("upsert failed");
+
+        // Simulate persisting + reloading: serialize then parse.
+        let json1 = serde_json::to_string(&on_disk1).expect("serialize failed");
+        let parsed1: Value = serde_json::from_str(&json1).expect("parse failed");
+
+        // --- Unlock a fresh VaultState and confirm the cred is present ---
+        let vs2 = VaultState::default();
+        vs2.unlock(Some(&parsed1), password)
+            .expect("unlock (after upsert) failed");
+        let creds = vs2.list().expect("list failed");
+        assert_eq!(creds.len(), 1, "expected exactly one cred after upsert");
+        assert_eq!(creds[0], cred, "cred did not round-trip correctly");
+
+        // --- Remove the cred from vs2 and re-persist ---
+        let on_disk2 = vs2.remove(&cred.uuid).expect("remove failed");
+        let json2 = serde_json::to_string(&on_disk2).expect("serialize after remove failed");
+        let parsed2: Value = serde_json::from_str(&json2).expect("parse after remove failed");
+
+        // --- Unlock a third VaultState and confirm the cred is gone ---
+        let vs3 = VaultState::default();
+        vs3.unlock(Some(&parsed2), password)
+            .expect("unlock (after remove) failed");
+        let creds_after = vs3.list().expect("list after remove failed");
+        assert!(
+            creds_after.is_empty(),
+            "expected no creds after remove, got: {creds_after:?}"
+        );
     }
 }
