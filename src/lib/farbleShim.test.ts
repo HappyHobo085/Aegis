@@ -554,33 +554,80 @@ describe('farble shim (strict) — shipped JS, runtime', () => {
   });
 
   it('strict getParameter differs across origins (per-origin sub-seed)', () => {
-    // Run for origin A, capture vendor.
-    runStrict(SEED_A, 'https://origin-a.test');
+    // REAL FALSIFIER: run the strict shim for 7 fixed origins with the SAME seed
+    // and collect VENDOR results into a Set.  With a 4-entry vendor list seeded by
+    // SHA-256, the probability all 7 collapse to the same entry is ~4·(1/4)^7 ≈ 0.003 %
+    // — negligible — so set.size > 1 is a deterministic, non-flaky invariant.
+    // A no-op-seeding regression (every origin → identical fingerprint) produces
+    // set.size === 1, which FAILS this test.
+    const ORIGINS = [
+      'https://site1.test',
+      'https://site2.test',
+      'https://site3.test',
+      'https://site4.test',
+      'https://site5.test',
+      'https://site6.test',
+      'https://site7.test',
+    ];
+
+    const VENDOR = 0x1f00;
+    const RENDERER = 0x1f01;
+
     const w = window as unknown as Record<string, unknown>;
-    const WGL = w['WebGLRenderingContext'] as {
-      prototype: { getParameter: (pname: number) => unknown };
-    };
     const fakeCtx: FakeWebGLCtx = {
       _vendor: 'Real GPU Vendor',
       _renderer: 'Real GPU Renderer',
       _extensions: [],
       _pixels: null,
     };
-    const vendorA = WGL.prototype.getParameter.call(fakeCtx, 0x1f00);
 
-    // Restore and re-run for origin B.
+    const vendorResults = new Set<string>();
+    const rendererResults = new Set<string>();
+
+    for (const origin of ORIGINS) {
+      // Restore the prototype before each run so previous patches don't bleed.
+      if (_savedWebGLGetParameter !== undefined) {
+        const WGL2 = w['WebGLRenderingContext'] as { prototype: WebGLProto };
+        WGL2.prototype['getParameter'] = _savedWebGLGetParameter as () => unknown;
+      }
+
+      runStrict(SEED_A, origin);
+
+      const WGL = w['WebGLRenderingContext'] as {
+        prototype: { getParameter: (pname: number) => unknown };
+      };
+
+      const vendor = WGL.prototype.getParameter.call(fakeCtx, VENDOR) as string;
+      const renderer = WGL.prototype.getParameter.call(fakeCtx, RENDERER) as string;
+
+      // Every result must be a non-empty string (sanity guard kept from prior test).
+      expect(typeof vendor).toBe('string');
+      expect(vendor.length).toBeGreaterThan(0);
+      expect(typeof renderer).toBe('string');
+      expect(renderer.length).toBeGreaterThan(0);
+
+      vendorResults.add(vendor);
+      rendererResults.add(renderer);
+    }
+
+    // CORE ASSERTION: not all origins produce the same vendor/renderer — per-origin
+    // seeding is actually operating.  set.size === 1 means the seed is a no-op (all
+    // origins return the same fingerprint = a cross-site identifier).
+    expect(vendorResults.size).toBeGreaterThan(1);
+    expect(rendererResults.size).toBeGreaterThan(1);
+
+    // Also verify determinism: re-running the SAME origin produces the SAME vendor.
+    // Restore prototype first, then re-run origin 0.
+    const WGLFinal = w['WebGLRenderingContext'] as { prototype: WebGLProto };
     if (_savedWebGLGetParameter !== undefined)
-      WGL.prototype['getParameter'] = _savedWebGLGetParameter as () => unknown;
-    runStrict(SEED_A, 'https://origin-b.test');
-    const vendorB = WGL.prototype.getParameter.call(fakeCtx, 0x1f00);
-
-    // Different origins may produce the same or different vendor (both are from the
-    // same small list), but the test confirms the shim runs without error.
-    // We also check that the result is always a non-empty string.
-    expect(typeof vendorA).toBe('string');
-    expect(typeof vendorB).toBe('string');
-    expect((vendorA as string).length).toBeGreaterThan(0);
-    expect((vendorB as string).length).toBeGreaterThan(0);
+      WGLFinal.prototype['getParameter'] = _savedWebGLGetParameter as () => unknown;
+    runStrict(SEED_A, ORIGINS[0]);
+    const WGL = w['WebGLRenderingContext'] as {
+      prototype: { getParameter: (pname: number) => unknown };
+    };
+    const vendorRepeat = WGL.prototype.getParameter.call(fakeCtx, VENDOR) as string;
+    // Re-running the first origin must yield the same vendor as the first pass.
+    expect(vendorResults.has(vendorRepeat)).toBe(true);
   });
 
   it('strict readPixels perturbs LSBs deterministically', () => {
