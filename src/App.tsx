@@ -244,6 +244,21 @@ function DesktopApp() {
     });
   }, [tabs.tabs, tabs.activeId]);
 
+  // Ctrl+Shift+N — open a new private tab (incognito).
+  // Collision check: the Ctrl+digit handler below guards !e.shiftKey; the Windows handler
+  // checks Ctrl+Shift+Tab (key === 'Tab') and Ctrl+Shift+T — 'n' is not handled there.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || !e.shiftKey) return;
+      if (e.key.toLowerCase() === 'n') {
+        e.preventDefault();
+        void tabs.create(undefined, false, true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [tabs.create]);
+
   // Ctrl+1-9 when the chrome/address bar is focused (and as the Win/macOS path,
   // where content-webview digit keys aren't captured by a menu accelerator).
   useEffect(() => {
@@ -430,6 +445,7 @@ function DesktopApp() {
           onActivate={(id) => void tabs.activate(id)}
           onClose={(id) => void tabs.close(id)}
           onCreate={() => void tabs.create()}
+          onCreatePrivate={() => void tabs.create(undefined, false, true)}
           onReorder={(ids) => void tabs.reorder(ids)}
           onSetPinned={(id, pinned) => void tabs.setPinned(id, pinned)}
         />

@@ -1,4 +1,4 @@
-import { Globe, Plus, X } from 'lucide-react';
+import { Globe, Plus, X, EyeOff } from 'lucide-react';
 import type { TabMeta, ViewId } from '../../../shared/types';
 import { MobileSheet } from './MobileSheet';
 
@@ -8,6 +8,7 @@ interface MobileTabSwitcherProps {
   onSwitch(id: ViewId): void;
   onCloseTab(id: ViewId): void;
   onNewTab(): void;
+  onNewPrivateTab(): void;
   onClose(): void;
 }
 
@@ -28,13 +29,23 @@ export function MobileTabSwitcher({
   onSwitch,
   onCloseTab,
   onNewTab,
+  onNewPrivateTab,
   onClose,
 }: MobileTabSwitcherProps) {
   return (
     <MobileSheet title="Tabs" onClose={onClose}>
-      <button type="button" className="mobile-tabs__new" onClick={onNewTab}>
+      <button type="button" className="mobile-tabs__new" aria-label="New tab" onClick={onNewTab}>
         <Plus size={18} aria-hidden="true" />
         New tab
+      </button>
+      <button
+        type="button"
+        className="mobile-tabs__new mobile-tabs__new--private"
+        aria-label="New private tab"
+        onClick={onNewPrivateTab}
+      >
+        <EyeOff size={18} aria-hidden="true" />
+        New private tab
       </button>
       <ul className="mobile-tabs">
         {tabs.map((t) => {
@@ -42,9 +53,13 @@ export function MobileTabSwitcher({
           return (
             <li
               key={t.id}
-              className={
-                t.id === activeId ? 'mobile-tabs__row mobile-tabs__row--active' : 'mobile-tabs__row'
-              }
+              className={[
+                'mobile-tabs__row',
+                t.id === activeId ? 'mobile-tabs__row--active' : '',
+                t.private ? 'mobile-tabs__row--private' : '',
+              ]
+                .filter(Boolean)
+                .join(' ')}
             >
               <button
                 type="button"
@@ -52,7 +67,11 @@ export function MobileTabSwitcher({
                 aria-label={`Switch to ${name}`}
                 onClick={() => onSwitch(t.id)}
               >
-                <Globe size={18} aria-hidden="true" />
+                {t.private ? (
+                  <EyeOff size={18} aria-hidden="true" className="mobile-tabs__icon--private" />
+                ) : (
+                  <Globe size={18} aria-hidden="true" />
+                )}
                 <span className="mobile-tabs__title">{name}</span>
               </button>
               <button

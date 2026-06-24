@@ -232,6 +232,10 @@ export function MobileApp() {
             void tabs.create('about:blank');
             setSheet(null);
           }}
+          onNewPrivateTab={() => {
+            void tabs.create(undefined, false, true);
+            setSheet(null);
+          }}
           onClose={() => setSheet(null)}
         />
       )}

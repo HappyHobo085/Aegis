@@ -1,4 +1,4 @@
-import { Plus, X, Globe } from 'lucide-react';
+import { Plus, X, Globe, EyeOff } from 'lucide-react';
 import type { TabMeta, ViewId } from '../../shared/types';
 
 interface TabStripProps {
@@ -7,6 +7,7 @@ interface TabStripProps {
   onActivate(id: ViewId): void;
   onClose(id: ViewId): void;
   onCreate(): void;
+  onCreatePrivate(): void;
   onReorder(ids: ViewId[]): void;
   onSetPinned(id: ViewId, pinned: boolean): void;
 }
@@ -32,6 +33,7 @@ export function TabStrip({
   onActivate,
   onClose,
   onCreate,
+  onCreatePrivate,
   onReorder,
   onSetPinned,
 }: TabStripProps) {
@@ -52,6 +54,7 @@ export function TabStrip({
               isActive ? 'tab--active' : '',
               t.live ? '' : 'tab--asleep',
               t.pinned ? 'tab--pinned' : '',
+              t.private ? 'tab--private' : '',
             ]
               .filter(Boolean)
               .join(' ')}
@@ -76,7 +79,11 @@ export function TabStrip({
               onSetPinned(t.id, !t.pinned);
             }}
           >
-            <Globe size={13} aria-hidden="true" className="tab__icon" />
+            {t.private ? (
+              <EyeOff size={13} aria-hidden="true" className="tab__icon" />
+            ) : (
+              <Globe size={13} aria-hidden="true" className="tab__icon" />
+            )}
             {!t.pinned && <span className="tab__title">{title}</span>}
             {!t.pinned && (
               <button
@@ -103,6 +110,15 @@ export function TabStrip({
         onClick={onCreate}
       >
         <Plus size={16} aria-hidden="true" />
+      </button>
+      <button
+        type="button"
+        className="tabstrip__new tabstrip__new--private"
+        aria-label="New private tab"
+        title="New private tab (Ctrl+Shift+N)"
+        onClick={onCreatePrivate}
+      >
+        <EyeOff size={15} aria-hidden="true" />
       </button>
     </div>
   );

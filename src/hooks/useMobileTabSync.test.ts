@@ -32,7 +32,7 @@ describe('useMobileTabSync', () => {
     renderHook(({ tabs, activeId }) => useMobileTabSync(tabs, activeId), {
       initialProps: { tabs: [t(1)], activeId: 1 },
     });
-    expect(activateTab).toHaveBeenCalledWith(1, 'https://t1.test/');
+    expect(activateTab).toHaveBeenCalledWith(1, 'https://t1.test/', false);
   });
   it('activates the active tab once useTabs resolves, even if activeId never changed', () => {
     // Regression: useTabs seeds an EMPTY {tabs:[], activeId:1} state before its async
@@ -44,7 +44,7 @@ describe('useMobileTabSync', () => {
     });
     expect(activateTab).not.toHaveBeenCalled();
     rerender({ tabs: [t(1)], activeId: 1 });
-    expect(activateTab).toHaveBeenCalledWith(1, 'https://t1.test/');
+    expect(activateTab).toHaveBeenCalledWith(1, 'https://t1.test/', false);
   });
   it('activates the new active tab when activeId changes', () => {
     const { rerender } = renderHook(({ tabs, activeId }) => useMobileTabSync(tabs, activeId), {
@@ -52,7 +52,7 @@ describe('useMobileTabSync', () => {
     });
     activateTab.mockClear();
     rerender({ tabs: [t(1), t(2)], activeId: 2 });
-    expect(activateTab).toHaveBeenCalledWith(2, 'https://t2.test/');
+    expect(activateTab).toHaveBeenCalledWith(2, 'https://t2.test/', false);
   });
   it('closes a tab that disappeared from the list', () => {
     const { rerender } = renderHook(({ tabs, activeId }) => useMobileTabSync(tabs, activeId), {

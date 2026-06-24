@@ -24,7 +24,7 @@ export function useMobileTabSync(tabs: TabMeta[], activeId: ViewId): void {
     // resurrected via tabs.activate() (which changes activeId), so this also covers
     // re-showing a discarded tab.
     if (active && activatedId.current !== activeId) {
-      activateTab(activeId, active.url);
+      activateTab(activeId, active.url, active.private);
       activatedId.current = activeId;
     }
 

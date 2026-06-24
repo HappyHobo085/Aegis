@@ -53,8 +53,9 @@ interface AndroidBridge {
    * area with no top/bottom chrome. Back exits. */
   setFullscreen(on: boolean): void;
   /** Show tab `id` (lazily creating its native WebView at `url` if absent) and hide the
-   * rest — switching, or reopening a discarded tab. */
-  activateTab(id: number, url: string): void;
+   * rest — switching, or reopening a discarded tab. `isPrivate` sets an ephemeral
+   * data partition on the native WebView (Task 7). */
+  activateTab(id: number, url: string, isPrivate?: boolean): void;
   /** Destroy + forget tab `id`'s native WebView. */
   closeTab(id: number): void;
   /** Destroy tab `id`'s native WebView but keep the tab (idle-sweep); recreated on next
@@ -454,9 +455,11 @@ export function setFullscreen(on: boolean): void {
   androidBridge()?.setFullscreen(on);
 }
 
-/** Mobile-only: show/lazily-create the active tab's native WebView. No-op off Android. */
-export function activateTab(id: number, url: string): void {
-  androidBridge()?.activateTab(id, url);
+/** Mobile-only: show/lazily-create the active tab's native WebView. No-op off Android.
+ * Pass `isPrivate=true` for private (incognito) tabs so the native side uses an ephemeral
+ * data partition (Task 7). */
+export function activateTab(id: number, url: string, isPrivate?: boolean): void {
+  androidBridge()?.activateTab(id, url, isPrivate);
 }
 /** Mobile-only: destroy + forget a tab's native WebView. No-op off Android. */
 export function closeTab(id: number): void {

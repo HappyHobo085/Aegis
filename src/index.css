@@ -4128,6 +4128,18 @@ a:focus-visible {
   background: transparent;
   color: #9aa0a6;
 }
+.mobile-tabs__new--private {
+  color: var(--aegis-private-accent, #b794f6);
+}
+.mobile-tabs__row--private {
+  background: var(--aegis-private-bg, #2a2440);
+}
+.mobile-tabs__row--private.mobile-tabs__row--active {
+  background: #352e55;
+}
+.mobile-tabs__icon--private {
+  color: var(--aegis-private-accent, #b794f6);
+}
 
 /* ===== Tab strip ===== */
 .tabstrip {
@@ -4188,4 +4200,16 @@ a:focus-visible {
   color: #cfcfcf;
   cursor: pointer;
   padding: 0 8px;
+}
+.tabstrip__new--private {
+  color: var(--aegis-private-accent, #b794f6);
+}
+.tab--private {
+  background: var(--aegis-private-bg, #2a2440);
+}
+.tab--private.tab--active {
+  background: #352e55;
+}
+.tab--private .tab__icon {
+  color: var(--aegis-private-accent, #b794f6);
 }

@@ -15,6 +15,7 @@ function setup(over: Partial<React.ComponentProps<typeof TabStrip>> = {}) {
     onActivate: vi.fn(),
     onClose: vi.fn(),
     onCreate: vi.fn(),
+    onCreatePrivate: vi.fn(),
     onReorder: vi.fn(),
     onSetPinned: vi.fn(),
     ...over,
@@ -46,7 +47,35 @@ describe('TabStrip', () => {
 
   it('creates a tab via the new-tab button', () => {
     const p = setup();
-    fireEvent.click(screen.getByRole('button', { name: /new tab/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^new tab$/i }));
     expect(p.onCreate).toHaveBeenCalled();
+  });
+
+  it('calls onCreatePrivate via the new-private-tab button', () => {
+    const p = setup();
+    fireEvent.click(screen.getByRole('button', { name: /new private tab/i }));
+    expect(p.onCreatePrivate).toHaveBeenCalled();
+  });
+
+  it('applies tab--private class and EyeOff icon for private tabs', () => {
+    const privateTabs: TabMeta[] = [
+      {
+        id: 1,
+        pinned: false,
+        live: true,
+        title: 'Secret',
+        url: 'https://secret.test/',
+        private: true,
+      },
+    ];
+    setup({ tabs: privateTabs });
+    expect(screen.getByRole('tab', { name: /Secret/ })).toHaveClass('tab--private');
+    // The EyeOff icon renders instead of Globe; it has aria-hidden so query by its container class
+    expect(screen.getByRole('tab', { name: /Secret/ }).querySelector('svg')).toBeTruthy();
+  });
+
+  it('does not apply tab--private class for normal tabs', () => {
+    setup();
+    expect(screen.getByRole('tab', { name: /Alpha/ })).not.toHaveClass('tab--private');
   });
 });

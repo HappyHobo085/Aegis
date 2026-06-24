@@ -22,6 +22,7 @@ function setup(over = {}) {
     onSwitch: vi.fn(),
     onCloseTab: vi.fn(),
     onNewTab: vi.fn(),
+    onNewPrivateTab: vi.fn(),
     onClose: vi.fn(),
     ...over,
   };
@@ -47,7 +48,32 @@ describe('MobileTabSwitcher', () => {
   });
   it('opens a new tab', () => {
     const p = setup();
-    fireEvent.click(screen.getByRole('button', { name: /new tab/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^new tab$/i }));
     expect(p.onNewTab).toHaveBeenCalled();
+  });
+
+  it('calls onNewPrivateTab via the new-private-tab button', () => {
+    const p = setup();
+    fireEvent.click(screen.getByRole('button', { name: /new private tab/i }));
+    expect(p.onNewPrivateTab).toHaveBeenCalled();
+  });
+
+  it('applies private class and EyeOff icon for private tabs', () => {
+    const privateTabs: TabMeta[] = [
+      {
+        id: 1,
+        pinned: false,
+        live: true,
+        title: 'Incognito',
+        url: 'https://incognito.test/',
+        private: true,
+      },
+      { id: 2, pinned: false, live: false, title: '', url: 'https://news.test/', private: false },
+    ];
+    setup({ tabs: privateTabs });
+    // The private row has the --private class
+    const rows = document.querySelectorAll('.mobile-tabs__row');
+    expect(rows[0]).toHaveClass('mobile-tabs__row--private');
+    expect(rows[1]).not.toHaveClass('mobile-tabs__row--private');
   });
 });
