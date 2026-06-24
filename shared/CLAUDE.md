@@ -36,6 +36,29 @@ from, to }`) — the native redirect guard cancelled a scripted cross-origin top
       match within the current session.
     - `find.close` (payload `{ viewId? }`) — end the session and clear all highlights.
     - `find.state` event (`evtFindState`, payload `FindState { viewId, query, matchCount, activeMatchIndex }`) — pushed by the Rust/Kotlin back-end whenever match counts change. On Android this is emitted via `window.__aegisFindState(...)`, matching the `pushNavState` / `__aegisNavState` bridge pattern.
+  - **`vault.*` channels** (Phase A — manage only, NO autofill, NO page→core bridge):
+    - `vault.getState` → `VaultState` — whether a vault exists, is unlocked, and how many
+      records it holds. Safe to call at any time.
+    - `vault.create(masterPassword)` → `VaultState` — initialize a new vault with the given
+      master password; errors if one already exists.
+    - `vault.unlock(masterPassword)` → `VaultState` — load + decrypt the vault; returns
+      `VaultState` with `unlocked: true` on success or an error string on wrong password.
+    - `vault.lock()` → `VaultState` — wipe the in-memory DEK and records (zeroize on drop).
+    - `vault.list()` → `VaultRecord[]` — returns all decrypted records; errors if locked.
+    - `vault.add(VaultRecordInput)` → `VaultRecord[]` — upsert + persist; returns the full
+      updated list.
+    - `vault.update(uuid, partial)` → `VaultRecord[]` — partial-update a record by uuid.
+    - `vault.remove(uuid)` → `VaultRecord[]` — remove a record and persist.
+    - `vault.search(q)` → `VaultRecord[]` — case-insensitive filter across site/username/notes.
+    - `vault.state` event (`evtVaultState`, payload `VaultState`) — pushed after every
+      create/unlock/lock/add/update/remove so the chrome stays in sync. Carries **no
+      credential data** (`{exists, unlocked, count}` only).
+  - **Vault data models:** - `VaultState { exists: boolean; unlocked: boolean; count: number }` — safe summary; no
+    credentials. This is the ONLY vault data emitted as a Tauri event. - `VaultRecord { uuid: string; updatedAt: number; site: string; username: string;
+password: string; notes: string }` — decrypted record; returned only by direct IPC
+    commands (`list`/`add`/`update`/`remove`/`search`) to the chrome, never to the content
+    webview. - `VaultRecordInput { site: string; username: string; password: string; notes?: string }` —
+    input shape for `add`/`update`.
   - `AegisApi` — the typed shape of `window.aegis` (what `src/lib/ipcClient.ts`
     implements). Adding a feature means adding it here first.
 - **`types.test.ts`, `types.update.test.ts`** — assert the contract's invariants

@@ -265,6 +265,36 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   from the shield count. (WebKit also negative-caches a blocked URL, a separate reason a
   page of _static_ ad URLs under-counts on reload — moot for real, per-request-unique ad
   URLs.)
+- **Password vault** — `vault.rs`: Phase A encrypted-at-rest credential manager (NO
+  autofill, NO page→core bridge — locked decision). Pure Rust core with **zero
+  platform-gated code** (`#[cfg(target_os=…)]` appears only in the `#[cfg(test)]`
+  block) → identical on Linux / Windows / macOS / Android. Key design points:
+  - **Crypto:** master password → Argon2id (OWASP params, per-vault 32-byte random
+    salt) → 32-byte DEK (`Zeroizing<[u8;32]>`). Records sealed individually with
+    XChaCha20-Poly1305 via `crypto::seal`/`crypto::open`. AAD binds `ns|uuid|updatedAt`
+    so record splicing fails authentication. Same crypto as `sync.rs` — no new cipher.
+  - **File layout on disk:** `vault.json` holds `{v, kdf, salt, verifier{nonce,ct},
+records[{uuid, updatedAt, nonce, ct}]}`. The only cleartext fields are the
+    non-secret KDF salt and per-record routing (uuid, updatedAt). Written via
+    `jsonstore::write_atomic` (temp→fsync→rename); `.bak` is kept on every write.
+  - **In-memory state** (`VaultState` → `Mutex<Inner>`): locked (`key=None`, `records`
+    empty) by default and at every boot — never auto-unlocked from a keychain in Phase A.
+    On `vault.lock`, `Zeroizing` wipes the DEK on drop; `Cred` is `Zeroize+ZeroizeOnDrop`.
+    Every read/mutate channel returns `Err("vault is locked")` when `key` is `None`.
+  - **No page bridge:** the `vault.state` event carries only `{exists, unlocked, count}`
+    — no credential data. Plaintext credentials live only in `Inner.records` (in-process,
+    while unlocked) and transiently in the serde_json `Zeroizing` buffer during seal/open.
+    The content webview has no vault path: no `vault` reference in `adblock_inject.rs`,
+    `nav.rs`, `webrtc_shim.rs`, or `MainActivity.kt` (grep-verified).
+  - **IPC dispatch** in `lib.rs` via the standard `vault::dispatch(&app, &channel,
+&payload)` arm. Channels: `vault.getState`, `vault.create`, `vault.unlock`,
+    `vault.lock`, `vault.list`, `vault.add`, `vault.update`, `vault.remove`,
+    `vault.search`. Event: `vault.state` (via `emit_event` → `.`→`:` rewrite).
+  - **Unit-tested via `test_support::with_tmp_app`**: init/unlock round-trip, wrong
+    password rejection, lock zeroizes key + clears records, list-while-locked rejected,
+    add/update/remove CRUD round-trips, at-rest ciphertext has no plaintext fields,
+    update/remove persistence + reload, dispatch wrong-password, search. (~15 tests in
+    `vault::tests`.)
 - **Misc** — `picker.rs` (element picker), `update.rs` (tauri-plugin-updater state).
 
 ## Dev-only autopilot commands (`src-tauri/src/autopilot.rs`)
@@ -361,6 +391,7 @@ registers all 11 managed states that the real `lib.rs` builder + `setup()` insta
 | `redirect_guard::NavActions`                                 | builder            |
 | `redirect_guard::Chains`                                     | builder            |
 | `zoom::ZoomStore`                                            | builder            |
+| `vault::VaultState` (locked by default — no auto-unlock)     | builder            |
 | `tabs::Tabs` (single-tab Registry, home `"about:blank"`)     | `setup()`          |
 | `linux_layout::LayoutInsets` (`#[cfg(target_os = "linux")]`) | `setup()`          |
 

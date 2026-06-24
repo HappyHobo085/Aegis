@@ -64,6 +64,13 @@ width)` so the page insets from the right and stays visible. Width is remembered
 - **`hooks/useTabs`** — owns `TabsState` (the ordered tab list), the active tab
   id, and per-tab nav-state + page titles. All chrome features (nav bar, adblock
   shield, overlays, inset sidebar) key on the active tab id.
+- **`hooks/useVault`** — owns vault UI state (`VaultState`) and exposes the typed vault
+  API to `VaultSettingsTab`. **Security note:** decrypted records are NEVER held in React
+  state — `list`, `add`, `update`, `remove`, and `search` each call the IPC directly and
+  return the list without storing it in the hook, so plaintext credentials are not resident
+  in the React tree between operations. The hook only persists `VaultState` (the safe
+  `{exists, unlocked, count}` summary) and the `_setRecordsRef` escape hatch used by
+  `VaultSettingsTab` to sync its local records display with the optimistic-update flow.
 - **`hooks/useFind`** — owns find-in-page UI state for the active view. Subscribes to
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.
@@ -74,6 +81,23 @@ width)` so the page insets from the right and stays visible. Width is remembered
   Chrome-style discrete ladder (via `lib/zoom.ts`'s `stepZoom`), apply optimistically,
   then confirm via `aegis.zoom.set`. `reset` restores 100% via `aegis.zoom.reset`.
   Returns `{ factor, percent, zoomIn, zoomOut, reset, setFactor }`.
+- **`components/VaultSettingsTab`** — the "Passwords" tab inside the Settings modal (Phase
+  A — manage only, no autofill). Renders three views depending on `VaultState`: a create
+  form (new vault), an unlock form (existing vault), and the credential list (unlocked).
+  UI security properties enforced in the component:
+  - All master-password inputs are `type="password"` with `autoComplete="new-password"` /
+    `"current-password"`.
+  - The new-entry password field is `type="password"`.
+  - Record passwords are **masked by default** (`type="password"`) and revealed only on
+    explicit per-row "Reveal" click; each row tracks its own reveal state in
+    `revealedUuids` (a `Set<string>` in local state, cleared on lock).
+  - "Copy" copies the plaintext to the clipboard without ever showing it.
+  - "Delete" removes the record from the vault (confirm on the row).
+  - Records are NOT stored in `useVault` state — `VaultSettingsTab` calls
+    `vault.list()` on unlock and holds the list locally; the hook never persists plaintext.
+    Registers as a compositor surface via `useChromeSurface` (it opens inside Settings, which
+    is already a registered overlay, so the content webview is already lowered — no
+    additional compositor registration needed for the tab itself).
 - **`components/FindBar`** — Ctrl+F infobar (purely presentational): text input,
   match-count display, prev/next nav buttons, and a close button. Auto-focuses on mount.
   Rendered inside `DesktopApp` (and `MobileApp`) keyed on the active view id; shown only
@@ -183,6 +207,15 @@ Vite dead-code-eliminates it on `build:renderer`.
   bodies intentionally skip calling them live (destructive, OS-bound, or
   fire-and-forget). This set is enforcement documentation, not an escape hatch: the
   drift guard asserts every member also appears in some catalog entry's `channels`.
+  **Vault coverage (`vault.crud`):** all nine `vault.*` channels are listed in the
+  `vault.crud` entry's `channels[]`. The `verify(api)` round-trip creates a throwaway
+  vault on the disposable profile, unlocks it, asserts the locked-list is rejected,
+  adds a record, updates it, searches it, removes it, and locks — with state assertions
+  at every step. `vaultCreate`/`vaultUnlock`/`vaultLock`/`vaultAdd`/`vaultUpdate`/
+  `vaultRemove` are also listed in `UNTESTED_CHANNELS` (the `exercise` body only calls
+  `getState`; the round-trips happen in `verify` which runs live only). The
+  `settings:vault` screen is registered in `screens.ts` via the standard
+  `settings:<tab>` pattern and is reached by the autopilot's settings-tab walk.
 - **`screens.ts`** — `SCREENS: ScreenSpec[]`. Every reachable UI state: `home`,
   `sidebar:history`, `sidebar:saved`, `downloads`, `favoritesManager`,
   `settings:<tab>` (one entry per `SettingsTab` from `TAB_ORDER`), `shieldPopover`,
