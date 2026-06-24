@@ -1,5 +1,6 @@
 package com.aegis.browser
 
+import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.util.Base64
@@ -26,8 +27,11 @@ object AegisKeystore {
   private fun secretKey(): SecretKey {
     val ks = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
     (ks.getEntry(ALIAS, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
-    val kg = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
-    kg.init(
+    // No key yet — generate a non-exportable AES-256-GCM key bound to secure hardware.
+    // Prefer a StrongBox Secure Element where the device has one; gracefully fall back to
+    // the TEE/software-backed key (today's behavior) when StrongBox is unavailable, so this
+    // never regresses on the common no-Secure-Element device (emulators, most phones).
+    fun spec(strongBox: Boolean) =
       KeyGenParameterSpec.Builder(
         ALIAS,
         KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
@@ -35,8 +39,19 @@ object AegisKeystore {
         .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
         .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
         .setKeySize(256)
-        .build(),
-    )
+        .apply { if (strongBox) setIsStrongBoxBacked(true) }
+        .build()
+
+    val kg = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      try {
+        kg.init(spec(true))
+        return kg.generateKey()
+      } catch (_: android.security.keystore.StrongBoxUnavailableException) {
+        // No Secure Element — re-init the SAME generator without StrongBox.
+      }
+    }
+    kg.init(spec(false))
     return kg.generateKey()
   }
 
