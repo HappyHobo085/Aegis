@@ -186,6 +186,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = farble::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = proxy::dispatch(&app, &channel, &payload) {
+        return result;
+    }
 
     let v = match channel.as_str() {
         "lists.updateNow" => subs::update_all(&app),
@@ -453,7 +456,8 @@ pub fn run() {
         .manage(redirect_guard::Chains::default())
         .manage(zoom::ZoomStore::default())
         .manage(vault::VaultState::default())
-        .manage(farble::FarbleState::default());
+        .manage(farble::FarbleState::default())
+        .manage(proxy::ProxyState::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;
@@ -497,6 +501,16 @@ pub fn run() {
         // Seed the fingerprint per-site allowlist from disk (the managed FarbleState was
         // created empty at builder time) — so allowlisted hosts survive a restart.
         crate::farble::seed_from_disk(app.handle());
+
+        // Seed ProxyState from persisted settings so a saved proxy config is live on the
+        // first tab spawn (Tasks 3-6 apply it to the content webview).
+        {
+            let cfg =
+                crate::proxy::ProxyConfig::from_value(&crate::settings::proxy_config(app.handle()));
+            if let Some(st) = app.handle().try_state::<crate::proxy::ProxyState>() {
+                *st.0.lock().unwrap() = cfg;
+            }
+        }
 
         // Sync: auto-unlock from the OS keychain if a seed is stored, and start syncing.
         crate::sync::start(app.handle());

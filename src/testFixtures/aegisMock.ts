@@ -9,6 +9,7 @@ import type {
   NavCrashed,
   Settings,
   FingerprintState,
+  ProxyState,
 } from '../../shared/types';
 
 const baseState: NavState = {
@@ -216,6 +217,24 @@ export function aegisMockModule() {
           .fn()
           .mockResolvedValue({ level: 'off', allowlistedHosts: [] } satisfies FingerprintState),
       },
+      proxy: (() => {
+        const baseProxyState: ProxyState = {
+          mode: 'off',
+          scheme: 'http',
+          host: '',
+          port: 8080,
+          bypassHosts: [],
+          active: false,
+          uri: null,
+        };
+        return {
+          getState: vi.fn().mockResolvedValue(baseProxyState),
+          setConfig: vi.fn().mockResolvedValue(baseProxyState),
+          clear: vi.fn().mockResolvedValue(baseProxyState),
+          testConnection: vi.fn().mockResolvedValue({ ok: true, latencyMs: 1 }),
+          onState: vi.fn().mockReturnValue(() => {}),
+        };
+      })(),
       vault: {
         getState: vi.fn().mockResolvedValue({ exists: false, unlocked: false, count: 0 }),
         create: vi.fn().mockResolvedValue({ exists: true, unlocked: true, count: 0 }),

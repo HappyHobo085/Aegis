@@ -748,6 +748,41 @@ export const CATALOG: FeatureCheck[] = [
       return `fingerprint toggle→getState→remove→getState ok; antiFingerprint standard→restored('${origLevel}') ok`;
     },
   },
+  // proxy — IPC seam (Task 2; no native apply yet — that's Tasks 3-6)
+  {
+    id: 'proxy.state',
+    domain: 'proxy',
+    title: 'Proxy getState/setConfig/clear/testConnection',
+    channels: [
+      IPC.proxyGetState,
+      IPC.proxySetConfig,
+      IPC.proxyClear,
+      IPC.proxyTestConnection,
+      IPC.evtProxyState,
+    ],
+    exercise: async (a) => {
+      assertObject(await a.proxy.getState());
+      assertObject(
+        await a.proxy.setConfig({
+          mode: 'off',
+          scheme: 'http',
+          host: '',
+          port: 8080,
+          bypassHosts: [],
+        }),
+      );
+      assertObject(await a.proxy.clear());
+      assertObject(
+        await a.proxy.testConnection({
+          mode: 'proxy',
+          scheme: 'http',
+          host: '127.0.0.1',
+          port: 8080,
+          bypassHosts: [],
+        }),
+      );
+    },
+  },
 ];
 
 // Channels whose `exercise` body intentionally does NOT call them (destructive,

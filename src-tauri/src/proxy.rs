@@ -5,6 +5,11 @@
 // Tasks 2-6 consume this module; suppress dead-code warnings until they are wired in.
 #![allow(dead_code)]
 
+use serde_json::Value;
+use std::net::ToSocketAddrs;
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager, Runtime};
+
 /// Parsed, validated proxy configuration.
 ///
 /// Field invariants (enforced by `from_value`, not the struct itself):
@@ -13,7 +18,7 @@
 /// - `host`   : trimmed; empty string when absent
 /// - `port`   : 0 when absent or out of range (1–65535)
 /// - `bypass_hosts`: trimmed, non-empty items split from a comma-separated string
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ProxyConfig {
     pub mode: String,
     pub scheme: String,
@@ -102,6 +107,128 @@ fn parse_bypass(raw: &str) -> Vec<String> {
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// Tauri layer — Tasks 2-6 (managed state, IPC dispatch, apply stub, probe).
+// ---------------------------------------------------------------------------
+
+/// Managed proxy state. Seeded from `settings::proxy_config` at boot;
+/// updated on `proxy.setConfig` / `proxy.clear`.
+pub struct ProxyState(pub Mutex<ProxyConfig>);
+
+impl Default for ProxyState {
+    fn default() -> Self {
+        ProxyState(Mutex::new(ProxyConfig {
+            mode: "off".into(),
+            scheme: "http".into(),
+            host: String::new(),
+            port: 8080,
+            bypass_hosts: vec![],
+        }))
+    }
+}
+
+/// Read the current `ProxyConfig` from managed state, falling back to the
+/// settings store if the state is not managed (e.g. minimal test harness).
+pub fn current<R: Runtime>(app: &AppHandle<R>) -> ProxyConfig {
+    if let Some(st) = app.try_state::<ProxyState>() {
+        return st.0.lock().unwrap().clone();
+    }
+    ProxyConfig::from_value(&crate::settings::proxy_config(app))
+}
+
+/// Build the JSON payload returned by `proxy.getState` and emitted as `proxy.state`.
+fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
+    let cfg = current(app);
+    let active = cfg.is_active();
+    let uri = cfg.default_uri();
+    serde_json::json!({
+        "mode": cfg.mode,
+        "scheme": cfg.scheme,
+        "host": cfg.host,
+        "port": cfg.port,
+        "bypassHosts": cfg.bypass_hosts,
+        "active": active,
+        "uri": uri,
+    })
+}
+
+/// No-op stub for Tasks 3-6 to fill in with per-platform `#[cfg]` bodies.
+/// Always emits `proxy.state` so the chrome can react immediately.
+pub fn apply<R: Runtime>(app: &AppHandle<R>) {
+    crate::emit_event(app, "proxy.state", state_json(app));
+}
+
+/// Route `proxy.*` IPC channels. Returns `None` for unowned channels.
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
+    match channel {
+        "proxy.getState" => Some(Ok(state_json(app))),
+
+        "proxy.setConfig" | "proxy.clear" => {
+            let cfg = if channel == "proxy.clear" {
+                ProxyConfig {
+                    mode: "off".into(),
+                    ..current(app)
+                }
+            } else {
+                ProxyConfig::from_value(payload.get("config").unwrap_or(&Value::Null))
+            };
+            // Persist into settings.json's `proxy` key (exported/imported with data.export).
+            let mut s = crate::settings::all(app);
+            if let Some(o) = s.as_object_mut() {
+                o.insert(
+                    "proxy".into(),
+                    serde_json::to_value(&cfg).unwrap_or(Value::Null),
+                );
+            }
+            crate::settings::write(app, &s);
+            if let Some(st) = app.try_state::<ProxyState>() {
+                *st.0.lock().unwrap() = cfg;
+            }
+            apply(app);
+            Some(Ok(state_json(app)))
+        }
+
+        "proxy.testConnection" => {
+            let cfg = ProxyConfig::from_value(payload.get("config").unwrap_or(&Value::Null));
+            Some(Ok(test_connection(&cfg)))
+        }
+
+        _ => None,
+    }
+}
+
+/// TCP-connect probe: attempts to reach `cfg.host:cfg.port` within 3 s.
+/// Returns `{ ok, latencyMs?, error? }`.
+///
+/// Proves host:port is TCP-reachable, NOT that traffic egresses through the proxy.
+/// The live egress trace (Task 9) is the definitive proof.
+pub fn test_connection(cfg: &ProxyConfig) -> Value {
+    if cfg.host.is_empty() {
+        return serde_json::json!({ "ok": false, "error": "host is empty" });
+    }
+    let addr_str = format!("{}:{}", cfg.host, cfg.port);
+    let t0 = std::time::Instant::now();
+    match addr_str.to_socket_addrs().ok().and_then(|mut a| a.next()) {
+        None => serde_json::json!({
+            "ok": false,
+            "error": format!("could not resolve '{addr_str}'"),
+        }),
+        Some(addr) => {
+            match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_secs(3)) {
+                Ok(_) => {
+                    let ms = t0.elapsed().as_millis() as u64;
+                    serde_json::json!({ "ok": true, "latencyMs": ms })
+                }
+                Err(e) => serde_json::json!({ "ok": false, "error": e.to_string() }),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -251,5 +378,53 @@ mod tests {
             bypass_hosts: vec![],
         };
         assert_eq!(c.default_uri().as_deref(), Some("socks5://10.0.0.9:1080"));
+    }
+
+    #[test]
+    fn test_connection_reachable() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cfg = ProxyConfig {
+            mode: "proxy".into(),
+            scheme: "http".into(),
+            host: "127.0.0.1".into(),
+            port,
+            bypass_hosts: vec![],
+        };
+        let result = test_connection(&cfg);
+        assert_eq!(result.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert!(result.get("latencyMs").is_some());
+    }
+
+    #[test]
+    fn test_connection_unreachable() {
+        // Bind briefly to get a free port, then drop so it's closed.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let cfg = ProxyConfig {
+            mode: "proxy".into(),
+            scheme: "http".into(),
+            host: "127.0.0.1".into(),
+            port,
+            bypass_hosts: vec![],
+        };
+        let result = test_connection(&cfg);
+        assert_eq!(result.get("ok").and_then(|v| v.as_bool()), Some(false));
+        assert!(result.get("error").is_some());
+    }
+
+    #[test]
+    fn test_connection_empty_host() {
+        let cfg = ProxyConfig {
+            mode: "proxy".into(),
+            scheme: "http".into(),
+            host: "".into(),
+            port: 8080,
+            bypass_hosts: vec![],
+        };
+        let result = test_connection(&cfg);
+        assert_eq!(result.get("ok").and_then(|v| v.as_bool()), Some(false));
     }
 }

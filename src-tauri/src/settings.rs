@@ -31,7 +31,8 @@ fn defaults() -> Value {
         "webrtcPolicy": "public-only",
         "themeMode": "system",
         "syncServerUrl": "",
-        "antiFingerprint": "off"
+        "antiFingerprint": "off",
+        "proxy": { "mode": "off", "scheme": "http", "host": "", "port": 8080, "bypassHosts": [] }
     })
 }
 
@@ -83,6 +84,14 @@ pub fn anti_fingerprint<R: Runtime>(app: &AppHandle<R>) -> String {
         .and_then(Value::as_str)
         .unwrap_or("off")
         .to_string()
+}
+
+/// The proxy configuration object. Returns the stored value or a safe `mode:"off"` default.
+pub fn proxy_config<R: Runtime>(app: &AppHandle<R>) -> Value {
+    load(app)
+        .get("proxy")
+        .cloned()
+        .unwrap_or_else(|| serde_json::json!({ "mode": "off" }))
 }
 
 /// The sync server endpoint ("" = sync not configured; data stays local until set).

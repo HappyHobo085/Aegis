@@ -148,6 +148,12 @@ export const IPC = {
   fingerprintToggleAllowlist: 'fingerprint.toggleAllowlist',
   fingerprintRemoveAllowlist: 'fingerprint.removeAllowlist',
   fingerprintClearAllowlist: 'fingerprint.clearAllowlist',
+  // proxy (content-webview proxy: mode/scheme/host/port/bypass)
+  proxyGetState: 'proxy.getState',
+  proxySetConfig: 'proxy.setConfig',
+  proxyClear: 'proxy.clear',
+  proxyTestConnection: 'proxy.testConnection',
+  evtProxyState: 'proxy.state',
 } as const;
 
 export interface NavState {
@@ -266,6 +272,21 @@ export interface ZoomState {
 export interface FingerprintState {
   level: string; // 'off' | 'standard' | 'strict'
   allowlistedHosts: string[];
+}
+
+/** Proxy configuration sent to `proxy.setConfig`. */
+export interface ProxyConfig {
+  mode: 'off' | 'proxy';
+  scheme: 'http' | 'socks5';
+  host: string;
+  port: number;
+  bypassHosts: string[];
+}
+
+/** Full proxy state returned by `proxy.getState` and emitted as `proxy.state`. */
+export interface ProxyState extends ProxyConfig {
+  active: boolean;
+  uri: string | null;
 }
 
 export interface VaultState {
@@ -613,6 +634,15 @@ export interface AegisApi {
     toggleAllowlist(host: string): Promise<FingerprintState>;
     removeAllowlist(host: string): Promise<FingerprintState>;
     clearAllowlist(): Promise<FingerprintState>;
+  };
+  proxy: {
+    getState(): Promise<ProxyState>;
+    setConfig(config: ProxyConfig): Promise<ProxyState>;
+    clear(): Promise<ProxyState>;
+    testConnection(
+      config: ProxyConfig,
+    ): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
+    onState(cb: (s: ProxyState) => void): () => void;
   };
 }
 

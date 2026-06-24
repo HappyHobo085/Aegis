@@ -33,6 +33,8 @@ import type {
   VaultRecord,
   VaultRecordInput,
   FingerprintState,
+  ProxyConfig,
+  ProxyState,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call, on } from './tauriInvoke';
@@ -446,6 +448,16 @@ export const aegis: AegisApi = {
     toggleAllowlist: (host) => call<FingerprintState>(IPC.fingerprintToggleAllowlist, { host }),
     removeAllowlist: (host) => call<FingerprintState>(IPC.fingerprintRemoveAllowlist, { host }),
     clearAllowlist: () => call<FingerprintState>(IPC.fingerprintClearAllowlist),
+  },
+  proxy: {
+    getState: () => call<ProxyState>(IPC.proxyGetState),
+    setConfig: (config: ProxyConfig) => call<ProxyState>(IPC.proxySetConfig, { config }),
+    clear: () => call<ProxyState>(IPC.proxyClear),
+    testConnection: (config: ProxyConfig) =>
+      call<{ ok: boolean; latencyMs?: number; error?: string }>(IPC.proxyTestConnection, {
+        config,
+      }),
+    onState: (cb: (s: ProxyState) => void) => on<ProxyState>(IPC.evtProxyState, cb),
   },
   vault: {
     getState: () => call<VaultState>(IPC.vaultGetState),
