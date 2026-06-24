@@ -528,6 +528,10 @@ malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt
   `setBottomBarHidden` (the top-bar chevron — content reclaims the bar's gap), and
   `setFullscreen` (desktop-parity hide-all-chrome — content fills the safe area, Back
   exits). The chrome installs `window.__aegisMobileBack` for native Back to call.
+  `setFullscreen` (desktop-parity hide-all-chrome) now ALSO goes immersive —
+  `WindowInsetsControllerCompat.hide(systemBars())` on enter / `show(...)` on exit, with
+  `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` — so the page truly owns the whole screen (status
+  + nav bars hidden), matching the HTML5-video `onShowCustomView` path. Back exits.
 - **Safe-area insets (all four edges):** the insets listener reads
   `systemBars() ∪ displayCutout()` and pushes the real status/nav/side insets to the chrome
   as `--aegis-inset-top/bottom/left/right` CSS vars (px ÷ density); `onCreate` sets

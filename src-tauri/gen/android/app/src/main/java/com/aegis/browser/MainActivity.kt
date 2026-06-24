@@ -837,6 +837,11 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     @JavascriptInterface
     fun setFullscreen(on: Boolean) = runOnUiThread {
       fullscreen = on
+      WindowInsetsControllerCompat(window, window.decorView).apply {
+        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (on) hide(WindowInsetsCompat.Type.systemBars())
+        else show(WindowInsetsCompat.Type.systemBars())
+      }
       applyContentMargins()
     }
 
