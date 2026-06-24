@@ -529,6 +529,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       // Bypass the chrome's own origin (localhost / tauri.localhost) + simple hostnames
       // so the React UI is not proxied.  Fall through to direct for non-matching rules.
       builder.bypassSimpleHostnames()
+      // Explicitly bypass the chrome's own origin so the React UI is never proxied.
+      // bypassSimpleHostnames() only covers dotless hostnames; tauri.localhost is dotted
+      // and would otherwise be routed through the proxy, breaking the chrome UI.
+      builder.addBypassRule("tauri.localhost")
+      builder.addBypassRule("127.0.0.1")
+      builder.addBypassRule("localhost")
       builder.addDirect()
       val bypassArr = obj.optJSONArray("bypassHosts")
       if (bypassArr != null) {
@@ -895,6 +901,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       // Bypass the chrome's own origin (localhost / tauri.localhost) + simple hostnames
       // so the React UI is not routed through the proxy.
       builder.bypassSimpleHostnames()
+      // Explicitly bypass the chrome's own origin so the React UI is never proxied.
+      // bypassSimpleHostnames() only covers dotless hostnames; tauri.localhost is dotted
+      // and would otherwise be routed through the proxy, breaking the chrome UI.
+      builder.addBypassRule("tauri.localhost")
+      builder.addBypassRule("127.0.0.1")
+      builder.addBypassRule("localhost")
       builder.addDirect()
       bypass.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach {
         builder.addBypassRule(it)
