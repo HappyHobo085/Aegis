@@ -81,6 +81,26 @@ pub fn seed_hex() -> String {
     h
 }
 
+/// The document-start JS shim for `level`. Returns `""` (no interference) when
+/// `off`/allowlisted, else the seed-prefixed standard artifact.
+#[allow(dead_code)] // will be consumed by adblock_inject::script in the injection task
+pub fn shim_for(level: &str, host_allowlisted: bool) -> String {
+    if host_allowlisted {
+        return String::new();
+    }
+    match level {
+        "standard" | "strict" => {
+            format!("var __aegisFarbleSeed=\"{}\";\n{}", seed_hex(), STANDARD_JS)
+        }
+        _ => String::new(), // "off" or any unrecognised level → no interference
+    }
+}
+
+// The shipped standard shim JS, single-sourced so the vitest runtime test
+// (src/lib/farbleShim.test.ts) executes the EXACT bytes shipped here.
+#[allow(dead_code)] // referenced by shim_for() above; used at injection time in a later task
+const STANDARD_JS: &str = include_str!("farble.standard.js");
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +198,48 @@ mod tests {
         let s: [u8; 32] = salt();
         // Just touching the value; the assertion is that we got here without any persist call.
         assert_eq!(s.len(), 32);
+    }
+
+    // ── T7: shim_for emits the right artifact per level ───────────────────────────────────
+    #[test]
+    fn shim_for_emits_the_right_artifact_per_level() {
+        // off / unknown / allowlisted → no interference.
+        assert_eq!(shim_for("off", false), "");
+        assert_eq!(shim_for("nonsense", false), "");
+        assert_eq!(shim_for("standard", true), ""); // allowlisted host
+        assert_eq!(shim_for("strict", true), "");
+
+        // standard → the emitted JS embeds a seed line + the shipped canvas/audio/navigator
+        // farble markers (tests the shipped string, not just the Rust code path).
+        let js = shim_for("standard", false);
+        // The seed line must come first.
+        assert!(
+            js.starts_with("var __aegisFarbleSeed="),
+            "seed literal missing from standard shim: {js:.80}..."
+        );
+        for marker in [
+            "getImageData",
+            "[native code]",
+            "getChannelData",
+            "hardwareConcurrency",
+            "userAgentData",
+            "sha256",
+            "xoshiro128",
+            "__aegisFarbleSeed",
+        ] {
+            assert!(
+                js.contains(marker),
+                "standard shim missing marker: {marker}"
+            );
+        }
+        // SEED must NOT appear as a window global (closured, not assigned to window.*).
+        assert!(
+            !js.contains("window.__aegisFarbleSeed"),
+            "SEED must not be assigned to window.*"
+        );
+
+        // strict also works (same artifact for now).
+        let js_strict = shim_for("strict", false);
+        assert!(js_strict.starts_with("var __aegisFarbleSeed="));
     }
 }
