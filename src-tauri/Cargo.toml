@@ -74,7 +74,7 @@ gio = "0.18"
 # Reach the JVM from Rust so sync_keystore can up-call the Kotlin AegisKeystore to wrap/unwrap
 # the sync seed with the hardware AndroidKeyStore. The JavaVM is captured in JNI_OnLoad — Tauri
 # doesn't use ndk-glue, so ndk_context is never initialized (see sync_keystore.rs).
-jni = "0.21"
+jni = "0.22"
 
 # Windows: add our own WebView2 WebResourceRequested handler (full network ad-block)
 # directly on the content webview's ICoreWebView2 reached via Tauri's with_webview —
