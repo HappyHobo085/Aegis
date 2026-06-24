@@ -28,7 +28,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
     "@tauri-apps/plugin-dialog": "^2.7.1",
-    "lucide-react": "^0.477.0"
+    "lucide-react": "^1.21.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
