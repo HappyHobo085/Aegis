@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, Url};
+use tauri::{AppHandle, Manager, Runtime, Url};
 
 /// Parsed malware hosts (bundled URLhaus hostfile), built once.
 fn malware_hosts() -> &'static HashSet<String> {
@@ -37,7 +37,7 @@ pub struct SafetyState {
 }
 
 /// True if navigating to `url` should be blocked as malware (and it isn't excepted).
-pub fn is_blocked(app: &AppHandle, url: &Url) -> bool {
+pub fn is_blocked<R: Runtime>(app: &AppHandle<R>, url: &Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
@@ -76,7 +76,7 @@ pub extern "system" fn Java_com_aegis_browser_NativeSafety_isMalwareHost(
 
 /// Record + surface the interstitial, and show a visible warning in the content
 /// area (deferred to avoid nav-callback re-entrancy).
-pub fn raise(app: &AppHandle, url: &str) {
+pub fn raise<R: Runtime>(app: &AppHandle<R>, url: &str) {
     let payload = json!({ "url": url, "reason": "malware" });
     if let Some(s) = app.try_state::<SafetyState>() {
         *s.interstitial.lock().unwrap() = payload.clone();
@@ -95,7 +95,11 @@ pub fn raise(app: &AppHandle, url: &str) {
     });
 }
 
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     match channel {
         "safety.getState" => {
             let v = app
@@ -142,5 +146,104 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
 
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_support::with_tmp_app;
+
+    // Filled from resources/malware-hosts.txt (first data line, second field).
+    const MALWARE_HOST: &str = "0022a601.pphost.net";
+
+    #[test]
+    fn malware_hosts_parsed_from_bundle_is_nonempty_and_contains_the_probe() {
+        assert!(
+            !malware_hosts().is_empty(),
+            "bundled malware host set must parse"
+        );
+        assert!(
+            malware_hosts().contains(MALWARE_HOST),
+            "the chosen probe host must be in the bundled list (re-run Step 0 if this fails)"
+        );
+    }
+
+    #[test]
+    fn is_blocked_true_for_malware_host_false_for_clean() {
+        with_tmp_app(|app| {
+            let bad = Url::parse(&format!("https://{MALWARE_HOST}/x")).unwrap();
+            let good = Url::parse("https://example.com/").unwrap();
+            assert!(is_blocked(app, &bad));
+            assert!(!is_blocked(app, &good));
+        });
+    }
+
+    #[test]
+    fn session_exception_unblocks_the_host() {
+        with_tmp_app(|app| {
+            let bad = Url::parse(&format!("https://{MALWARE_HOST}/x")).unwrap();
+            assert!(is_blocked(app, &bad));
+            // Add a session exception directly (the same set `proceed` writes).
+            app.state::<SafetyState>()
+                .exceptions
+                .lock()
+                .unwrap()
+                .insert(MALWARE_HOST.to_string());
+            assert!(
+                !is_blocked(app, &bad),
+                "an excepted host is no longer blocked"
+            );
+        });
+    }
+
+    #[test]
+    fn proceed_records_exception_and_clears_interstitial() {
+        with_tmp_app(|app| {
+            // Seed an interstitial as raise() would.
+            *app.state::<SafetyState>().interstitial.lock().unwrap() =
+                json!({ "url": format!("https://{MALWARE_HOST}/"), "reason": "malware" });
+            let url = format!("https://{MALWARE_HOST}/");
+            dispatch(app, "safety.proceed", &json!({ "url": url }))
+                .unwrap()
+                .unwrap();
+            // interstitial cleared.
+            let state = dispatch(app, "safety.getState", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(state, Value::Null);
+            // exception recorded → listExceptions contains the host.
+            let list = dispatch(app, "safety.listExceptions", &json!({}))
+                .unwrap()
+                .unwrap();
+            let hosts: Vec<&str> = list
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(Value::as_str)
+                .collect();
+            assert!(hosts.contains(&MALWARE_HOST));
+        });
+    }
+
+    #[test]
+    fn remove_exception_drops_it() {
+        with_tmp_app(|app| {
+            app.state::<SafetyState>()
+                .exceptions
+                .lock()
+                .unwrap()
+                .insert(MALWARE_HOST.to_string());
+            let _ = dispatch(
+                app,
+                "safety.removeException",
+                &json!({ "host": MALWARE_HOST }),
+            )
+            .unwrap();
+            let list = dispatch(app, "safety.listExceptions", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(list.as_array().unwrap().is_empty());
+        });
     }
 }
