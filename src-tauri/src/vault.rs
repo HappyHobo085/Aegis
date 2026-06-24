@@ -10,6 +10,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Mutex;
+use tauri::{AppHandle, Manager, Runtime};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 const NS: &str = "pwvault";
@@ -326,6 +327,110 @@ impl VaultState {
     }
 }
 
+// ─── Pure CRUD helpers (no AppHandle) ────────────────────────────────────────
+
+/// Push a new `Cred` with a fresh uuid and `updated_at = now` onto `recs`, returning
+/// a clone of the inserted record. Pure — no I/O, no AppHandle.
+pub fn add_record(
+    recs: &mut Vec<Cred>,
+    site: &str,
+    username: &str,
+    password: &str,
+    notes: &str,
+    now: i64,
+) -> Cred {
+    let c = Cred {
+        uuid: uuid::Uuid::new_v4().to_string(),
+        updated_at: now,
+        site: site.to_string(),
+        username: username.to_string(),
+        password: password.to_string(),
+        notes: notes.to_string(),
+    };
+    recs.push(c.clone());
+    c
+}
+
+/// Apply a partial update to the record with `uuid`, bumping `updated_at` to `now`.
+/// Returns `true` iff the record was found. Pure — no I/O, no AppHandle.
+pub fn update_record(
+    recs: &mut [Cred],
+    uuid: &str,
+    site: Option<&str>,
+    username: Option<&str>,
+    password: Option<&str>,
+    notes: Option<&str>,
+    now: i64,
+) -> bool {
+    if let Some(c) = recs.iter_mut().find(|c| c.uuid == uuid) {
+        if let Some(v) = site {
+            c.site = v.to_string();
+        }
+        if let Some(v) = username {
+            c.username = v.to_string();
+        }
+        if let Some(v) = password {
+            c.password = v.to_string();
+        }
+        if let Some(v) = notes {
+            c.notes = v.to_string();
+        }
+        c.updated_at = now;
+        true
+    } else {
+        false
+    }
+}
+
+/// Case-insensitive substring search over `site` and `username`.
+/// An empty (or whitespace-only) query returns all records.
+/// Pure — no I/O, no AppHandle.
+pub fn search<'a>(recs: &'a [Cred], q: &str) -> Vec<&'a Cred> {
+    let needle = q.trim().to_lowercase();
+    recs.iter()
+        .filter(|c| {
+            needle.is_empty()
+                || c.site.to_lowercase().contains(&needle)
+                || c.username.to_lowercase().contains(&needle)
+        })
+        .collect()
+}
+
+// ─── File I/O layer (generic over Runtime so tests use MockRuntime) ───────────
+
+/// Absolute path to the vault's at-rest file inside the app data dir.
+pub fn vault_path<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
+    app.path().app_data_dir().ok().map(|d| d.join("vault.json"))
+}
+
+/// Returns `true` iff a vault file currently exists on disk.
+pub fn vault_exists<R: Runtime>(app: &AppHandle<R>) -> bool {
+    vault_path(app).map(|p| p.exists()).unwrap_or(false)
+}
+
+/// Read + parse the at-rest vault file (with `.bak` recovery).
+/// Returns `None` if absent, unreadable, or not valid JSON.
+pub fn read_file<R: Runtime>(app: &AppHandle<R>) -> Option<Value> {
+    vault_path(app)
+        .and_then(|p| crate::jsonstore::read_with_backup(&p))
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+}
+
+/// Re-seal the current in-memory vault state to disk atomically (temp→rename, keeps `.bak`).
+/// Called after every mutation while the vault is unlocked. Returns `Err` if locked.
+pub fn persist<R: Runtime>(app: &AppHandle<R>, g: &Inner) -> Result<(), String> {
+    let vk = g.key.as_ref().ok_or("vault is locked")?;
+    let verifier = seal_verifier(vk)?;
+    let mut records = Vec::with_capacity(g.records.len());
+    for c in &g.records {
+        records.push(seal_record(vk, c)?);
+    }
+    let file = file_json(&g.salt, verifier, &records);
+    let p = vault_path(app).ok_or("no app data dir")?;
+    let txt = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+    crate::jsonstore::write_atomic(&p, txt.as_bytes()).map_err(|e| e.to_string())
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -491,6 +596,296 @@ mod tests {
 
         let result = crate::crypto::open(&vk, &nonce, &ct, NS, uuid, &hlc_bytes(updated_at));
         assert!(result.is_err(), "tampered ciphertext must fail open");
+    }
+
+    // ── Task-2 pure-helper tests ──────────────────────────────────────────────
+
+    fn now_ms() -> i64 {
+        crate::jsonstore::now_ms()
+    }
+
+    /// add_record pushes a Cred with a fresh uuid and `updated_at == now`.
+    #[test]
+    fn add_assigns_uuid_and_updated_at() {
+        let mut recs: Vec<Cred> = Vec::new();
+        let t = now_ms();
+        let c = add_record(&mut recs, "https://example.com", "alice", "secret", "n", t);
+        assert_eq!(recs.len(), 1);
+        assert!(!c.uuid.is_empty(), "uuid must be non-empty");
+        assert_eq!(c.updated_at, t);
+        assert_eq!(recs[0].uuid, c.uuid);
+    }
+
+    /// update_record merges the partial and bumps updated_at.
+    #[test]
+    fn update_replaces_fields_and_bumps_updated_at() {
+        let mut recs: Vec<Cred> = Vec::new();
+        let t1 = 1_700_000_000_000i64;
+        let c = add_record(&mut recs, "site.com", "bob", "old-pw", "", t1);
+        let t2 = t1 + 1000;
+        let found = update_record(&mut recs, &c.uuid, None, None, Some("new-pw"), None, t2);
+        assert!(found, "update_record must return true for a known uuid");
+        assert_eq!(recs[0].password, "new-pw");
+        assert_eq!(recs[0].site, "site.com", "unchanged field must stay");
+        assert_eq!(recs[0].updated_at, t2, "updated_at must be bumped");
+    }
+
+    /// remove_drops_the_record: uuid is gone after retain.
+    #[test]
+    fn remove_drops_the_record() {
+        let mut recs: Vec<Cred> = Vec::new();
+        let c = add_record(&mut recs, "a.com", "u", "p", "", now_ms());
+        add_record(&mut recs, "b.com", "v", "q", "", now_ms());
+        recs.retain(|r| r.uuid != c.uuid);
+        assert_eq!(recs.len(), 1);
+        assert!(recs.iter().all(|r| r.uuid != c.uuid));
+    }
+
+    /// search matches site and username case-insensitively; empty query returns all.
+    #[test]
+    fn search_matches_site_and_username_case_insensitively() {
+        let mut recs: Vec<Cred> = Vec::new();
+        add_record(&mut recs, "https://Example.com", "alice", "p", "", now_ms());
+        add_record(
+            &mut recs,
+            "https://other.net",
+            "ALICE_work",
+            "p",
+            "",
+            now_ms(),
+        );
+        add_record(&mut recs, "https://nomatch.io", "bob", "p", "", now_ms());
+
+        // Matches site of first record
+        let hits = search(&recs, "exam");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].site, "https://Example.com");
+
+        // Matches username of second record
+        let hits2 = search(&recs, "alice");
+        assert_eq!(hits2.len(), 2, "both alice records must match");
+
+        // Empty query returns all
+        let all = search(&recs, "");
+        assert_eq!(all.len(), 3);
+
+        // Whitespace-only also returns all
+        let all2 = search(&recs, "   ");
+        assert_eq!(all2.len(), 3);
+
+        // No match
+        let none = search(&recs, "zzznomatch");
+        assert!(none.is_empty());
+    }
+
+    // ── Task-2 file-roundtrip tests (via with_tmp_app) ────────────────────────
+
+    /// create → persist → file exists → fresh state → unlock → list is empty.
+    #[test]
+    fn create_persists_file_and_roundtrips_empty() {
+        crate::test_support::with_tmp_app(|app| {
+            let vs = VaultState::default();
+            // Create transitions to unlocked and returns the on-disk JSON.
+            let file_json_val = vs.create("master-pw").expect("create failed");
+
+            // Persist to the temp dir.
+            {
+                let g = vs.0.lock().unwrap();
+                persist(app, &g).expect("persist failed");
+            }
+
+            // File must exist.
+            assert!(vault_exists(app), "vault file must exist after persist");
+
+            // read_file must round-trip as valid JSON.
+            let loaded = read_file(app).expect("read_file must return Some after persist");
+            assert_eq!(loaded.get("v").and_then(Value::as_i64), Some(1));
+
+            // Fresh VaultState + unlock → empty list.
+            let vs2 = VaultState::default();
+            vs2.unlock(Some(&loaded), "master-pw")
+                .expect("unlock from file failed");
+            let creds = vs2.list().expect("list failed");
+            assert!(creds.is_empty(), "no creds yet");
+
+            // Wrong password must fail.
+            let vs3 = VaultState::default();
+            assert!(matches!(
+                vs3.unlock(Some(&file_json_val), "wrong-pw"),
+                Err(VaultError::WrongPassword)
+            ));
+        });
+    }
+
+    /// add cred → persist → reload → cred is present.
+    #[test]
+    fn add_cred_persists_and_reloads() {
+        crate::test_support::with_tmp_app(|app| {
+            let vs = VaultState::default();
+            vs.create("pw2").expect("create");
+
+            // Add a record via add_record then upsert it.
+            let t = now_ms();
+            let cred = {
+                let mut g = vs.0.lock().unwrap();
+                let c = add_record(
+                    &mut g.records,
+                    "https://vault.test",
+                    "carol",
+                    "s3cr3t",
+                    "notes",
+                    t,
+                );
+                persist(app, &g).expect("persist after add");
+                c
+            };
+
+            // Reload and verify.
+            let loaded = read_file(app).expect("read_file");
+            let vs2 = VaultState::default();
+            vs2.unlock(Some(&loaded), "pw2").expect("unlock");
+            let creds = vs2.list().expect("list");
+            assert_eq!(creds.len(), 1);
+            assert_eq!(creds[0].uuid, cred.uuid);
+            assert_eq!(creds[0].site, "https://vault.test");
+            assert_eq!(creds[0].username, "carol");
+        });
+    }
+
+    /// update cred → persist → reload → updated fields present.
+    #[test]
+    fn update_cred_persists_and_reloads() {
+        crate::test_support::with_tmp_app(|app| {
+            let vs = VaultState::default();
+            vs.create("pw3").expect("create");
+
+            // Add then update.
+            let uuid = {
+                let mut g = vs.0.lock().unwrap();
+                let c = add_record(&mut g.records, "old.site", "dan", "old-pw", "", now_ms());
+                let uuid = c.uuid.clone();
+                update_record(
+                    &mut g.records,
+                    &uuid,
+                    Some("new.site"),
+                    None,
+                    Some("new-pw"),
+                    None,
+                    now_ms() + 1,
+                );
+                persist(app, &g).expect("persist after update");
+                uuid
+            };
+
+            // Reload.
+            let loaded = read_file(app).expect("read_file");
+            let vs2 = VaultState::default();
+            vs2.unlock(Some(&loaded), "pw3").expect("unlock");
+            let creds = vs2.list().expect("list");
+            assert_eq!(creds.len(), 1);
+            assert_eq!(creds[0].uuid, uuid);
+            assert_eq!(creds[0].site, "new.site");
+            assert_eq!(creds[0].password, "new-pw");
+            assert_eq!(creds[0].username, "dan", "unchanged field must persist");
+        });
+    }
+
+    /// remove cred → persist → reload → gone.
+    #[test]
+    fn remove_cred_persists_and_is_gone_on_reload() {
+        crate::test_support::with_tmp_app(|app| {
+            let vs = VaultState::default();
+            vs.create("pw4").expect("create");
+
+            // Add two creds, remove one.
+            let uuid_to_remove = {
+                let mut g = vs.0.lock().unwrap();
+                let c1 = add_record(&mut g.records, "keep.io", "eve", "p1", "", now_ms());
+                let c2 = add_record(&mut g.records, "remove.io", "frank", "p2", "", now_ms());
+                let remove_uuid = c2.uuid.clone();
+                g.records.retain(|r| r.uuid != remove_uuid);
+                persist(app, &g).expect("persist after remove");
+                (c1.uuid.clone(), remove_uuid)
+            };
+
+            // Reload → only the kept cred is present.
+            let loaded = read_file(app).expect("read_file");
+            let vs2 = VaultState::default();
+            vs2.unlock(Some(&loaded), "pw4").expect("unlock");
+            let creds = vs2.list().expect("list");
+            assert_eq!(creds.len(), 1);
+            assert_eq!(creds[0].uuid, uuid_to_remove.0);
+            assert!(creds.iter().all(|c| c.uuid != uuid_to_remove.1));
+        });
+    }
+
+    /// Locked-state op returns Locked.
+    #[test]
+    fn locked_state_returns_locked_error() {
+        let vs = VaultState::default();
+        // Not created or unlocked → list returns Locked.
+        assert!(matches!(vs.list(), Err(VaultError::Locked)));
+        // upsert while locked → Locked.
+        let cred = make_cred("uid", "x.com", "user", "pw");
+        assert!(matches!(vs.upsert(cred), Err(VaultError::Locked)));
+        // remove while locked → Locked.
+        assert!(matches!(vs.remove("uid"), Err(VaultError::Locked)));
+    }
+
+    /// Wrong password on reload fails with WrongPassword.
+    #[test]
+    fn wrong_password_reload_fails() {
+        crate::test_support::with_tmp_app(|app| {
+            let vs = VaultState::default();
+            vs.create("correct-pw").expect("create");
+            {
+                let g = vs.0.lock().unwrap();
+                persist(app, &g).expect("persist");
+            }
+            let loaded = read_file(app).expect("read_file");
+            let vs2 = VaultState::default();
+            assert!(matches!(
+                vs2.unlock(Some(&loaded), "wrong-pw"),
+                Err(VaultError::WrongPassword)
+            ));
+        });
+    }
+
+    /// search filters correctly over the live records.
+    #[test]
+    fn search_filters_correctly_over_live_records() {
+        let mut recs: Vec<Cred> = Vec::new();
+        add_record(
+            &mut recs,
+            "https://github.com",
+            "gh-user",
+            "p",
+            "",
+            now_ms(),
+        );
+        add_record(
+            &mut recs,
+            "https://gitlab.com",
+            "gl-user",
+            "p",
+            "",
+            now_ms(),
+        );
+        add_record(
+            &mut recs,
+            "https://bitbucket.org",
+            "bb-user",
+            "p",
+            "",
+            now_ms(),
+        );
+
+        let hits = search(&recs, "git");
+        assert_eq!(hits.len(), 2, "github + gitlab must match 'git'");
+
+        let hits2 = search(&recs, "bb-user");
+        assert_eq!(hits2.len(), 1);
+        assert_eq!(hits2[0].site, "https://bitbucket.org");
     }
 
     /// upsert + remove mutation paths: exercises the Zeroizing-fixed key copy end-to-end.
