@@ -8,7 +8,7 @@ publish = false
 # Standalone (NOT a workspace member of the Tauri app) so it builds/deploys independently.
 
 [dependencies]
-axum = "0.7"
+axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
