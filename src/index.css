@@ -2480,6 +2480,17 @@ body.aegis-fullscreen {
   min-width: 0;
 }
 
+/* "Built-in" badge — shown in place of Remove for the seeded default lists */
+.filter-lists-tab__builtin {
+  flex: 0 0 auto;
+  padding: 3px 8px;
+  border-radius: var(--radius-pill);
+  border: 1px dashed var(--border);
+  font-size: 12px;
+  color: var(--fg-muted);
+  white-space: nowrap;
+}
+
 /* Toggle switch button (On/Off) */
 .filter-lists-tab__row button[role='switch'] {
   padding: 3px 8px;

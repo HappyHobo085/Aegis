@@ -57,13 +57,21 @@ export function FilterListsTab({ subs, setEnabled, add, remove, updateNow }: Fil
             </button>
             <span className="filter-lists-tab__id">{s.listId}</span>
             <span className="filter-lists-tab__url">{s.url}</span>
-            <button
-              type="button"
-              aria-label={`Remove list ${s.listId}`}
-              onClick={() => void remove(s.listId)}
-            >
-              Remove
-            </button>
+            {s.builtin ? (
+              // Built-in defaults are toggleable but not removable (disable, don't delete)
+              // — re-seeding respects a removal, so hiding Remove keeps them present.
+              <span className="filter-lists-tab__builtin" title="Default list (toggle to disable)">
+                Built-in
+              </span>
+            ) : (
+              <button
+                type="button"
+                aria-label={`Remove list ${s.listId}`}
+                onClick={() => void remove(s.listId)}
+              >
+                Remove
+              </button>
+            )}
           </li>
         ))}
       </ul>

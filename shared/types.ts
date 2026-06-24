@@ -370,6 +370,13 @@ export interface Subscription {
   lastUpdated: number | null;
   etag: string | null;
   hash: string | null;
+  /**
+   * True for the seeded default lists (EasyList, EasyPrivacy, Peter Lowe's). These are
+   * toggleable but not removable from the UI — disabling, not deleting, is the control
+   * (re-seeding respects a removal, but the UI hides Remove to keep the defaults present).
+   * Absent/false for user-added lists.
+   */
+  builtin?: boolean;
 }
 
 export interface SearchEngine {

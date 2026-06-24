@@ -73,9 +73,21 @@ dotted event name.
   - `downloads.rs` — **unit-tested via `test_support::with_tmp_app`:** private-tab
     skip, `on_requested` filename derivation + state, `on_finished` complete/
     interrupted, `remove` tombstone, `clear` keeps in-progress (6 tests).
-  - `subs.rs` (filter subscriptions + fetch) — **unit-tested via
-    `test_support::with_tmp_app`:** `list_id_from_url`, `hash_text`, `url_of`,
-    scheme rejection, add/list/remove, `set_enabled`, `enabled_text` (7 tests).
+  - `subs.rs` (filter subscriptions + fetch) — also **seeds the built-in default
+    subscriptions** (EasyList, EasyPrivacy, Peter Lowe's) on first run via
+    `seed_defaults` (called from `lib.rs` setup): idempotent + tombstone-aware
+    (`ensure_default_rows` skips a `listId` that already exists, even tombstoned — so a
+    removed default is never resurrected), seeded rows carry `builtin: true` + `enabled:
+    true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies already
+    provide the rules, and an immediate fetch would re-apply the WebKit content filters
+    mid-launch (heavy + disrupts an in-flight find / the active page — the live autopilot
+    caught exactly this). Defaults refresh on the user's "Update all" or an off→on toggle.
+    The baked-in copies still block day-one/offline (and feed the Win/macOS injector,
+    which isn't fed subs), so the defaults exist BOTH baked + as refreshable subscriptions;
+    `abuse-tlds` is baked-only (no upstream URL). **Unit-tested via `test_support::with_tmp_app`:** `list_id_from_url`,
+    `hash_text`, `url_of`, scheme rejection, add/list/remove, `set_enabled`, `enabled_text`,
+    `ensure_default_rows` (seed/idempotent/tombstone-respecting/builtin-survives-toggle)
+    (11 tests).
   - `customfilters.rs`, `settings.rs`.
 - **Ad-block (layered, platform-gated):**
   - `adblock_lists.rs` — **single source of truth for the bundled filter lists**:

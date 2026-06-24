@@ -400,17 +400,20 @@ export const CATALOG: FeatureCheck[] = [
     exercise: async (a) => {
       assertArray(await a.subs.list());
     },
+    // READ-ONLY verify: assert the built-in defaults are seeded + flagged. The
+    // setEnabled round-trip lives in the `settings.filterLists.toggleSub` interaction
+    // (a separate tour phase) + the Rust unit tests — deliberately NOT here, because a
+    // live setEnabled triggers a content-filter reinstall (install_adblock re-converts
+    // every list) and, with subs now seeded, that reinstall collided with the find
+    // verify a few steps later (the live autopilot caught it).
     verify: async (a) => {
       const list = await a.subs.list();
-      if (list.length === 0) return 'no subscriptions (skipped)';
-      const sub = list[0];
-      const toggled = await a.subs.setEnabled(sub.listId, !sub.enabled);
-      const found = toggled.find((s) => s.listId === sub.listId);
-      if (!found) throw new Error('setEnabled: sub not in returned list');
-      if (found.enabled !== !sub.enabled)
-        throw new Error(`setEnabled: expected ${!sub.enabled}, got ${found.enabled}`);
-      await a.subs.setEnabled(sub.listId, sub.enabled); // restore
-      return `subs toggle(${sub.listId}) ${sub.enabled}→${!sub.enabled}→restore ok`;
+      for (const id of ['easylist', 'easyprivacy', 'peter-lowe']) {
+        const def = list.find((s) => s.listId === id);
+        if (!def) throw new Error(`seeded default subscription missing: ${id}`);
+        if (!def.builtin) throw new Error(`default subscription ${id} not flagged builtin`);
+      }
+      return `subs defaults seeded + builtin (easylist/easyprivacy/peter-lowe); ${list.length} total`;
     },
   },
   // customFilters

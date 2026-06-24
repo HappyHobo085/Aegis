@@ -87,6 +87,79 @@ pub fn enabled_text<R: Runtime>(app: &AppHandle<R>) -> String {
     out
 }
 
+/// The built-in default subscriptions seeded on first run — uBlock Origin's
+/// default-enabled set. Their rules ALSO ship baked-in via `adblock_lists` (the static
+/// bundle still blocks day-one + offline and feeds the Win/macOS cosmetic injector,
+/// which is NOT fed subscriptions), so seeding them here just makes them visible and
+/// self-refreshing in the Filter Lists UI. The `listId` is FIXED (not derived from the
+/// URL) so the cache file is a clean `<listId>.txt` matching the bundled list name —
+/// Peter Lowe's has no plain `.txt` URL, hence the explicit id. `abuse-tlds` is NOT here:
+/// it is Aegis-curated with no upstream URL, so it stays baked-only.
+const DEFAULTS: &[(&str, &str)] = &[
+    ("easylist", "https://easylist.to/easylist/easylist.txt"),
+    (
+        "easyprivacy",
+        "https://easylist.to/easylist/easyprivacy.txt",
+    ),
+    (
+        "peter-lowe",
+        "https://pgl.yoyo.org/adservers/serverlist.php?hostformat=adblockplus&mimetype=plaintext",
+    ),
+];
+
+/// Ensure the built-in default subscriptions exist in the `subs` store (idempotent,
+/// tombstone-aware). Returns the `(listId, url)` of rows newly added this call. A
+/// default is skipped if a row with its `listId` already exists — INCLUDING a
+/// tombstoned one — so a user who removed a default is never overruled. Pure store
+/// mutation, triggers no network (`seed_defaults` is the boot wrapper; it does NOT fetch).
+fn ensure_default_rows<R: Runtime>(app: &AppHandle<R>) -> Vec<(String, String)> {
+    let mut items = jsonstore::load_synced(app, "subs");
+    let mut added = Vec::new();
+    for (list_id, url) in DEFAULTS {
+        let exists = items
+            .iter()
+            .any(|it| it.get("listId").and_then(Value::as_str) == Some(*list_id));
+        if exists {
+            continue; // present (live or tombstoned) → respect the existing row
+        }
+        let mut item = json!({
+            "listId": list_id, "url": url, "enabled": true, "builtin": true,
+            "lastUpdated": Value::Null, "etag": Value::Null, "hash": Value::Null,
+        });
+        jsonstore::stamp_new(&mut item, app);
+        items.push(item);
+        added.push(((*list_id).to_string(), (*url).to_string()));
+    }
+    if !added.is_empty() {
+        let _ = jsonstore::save(app, "subs", &items);
+    }
+    added
+}
+
+/// Seed the built-in default subscriptions on first run. Called once from `lib.rs`
+/// setup (alongside `adblock::seed_from_disk`). Seeds the ROWS only — it deliberately
+/// does NOT kick off a fetch: the baked-in `adblock_lists` copies already provide these
+/// rules, so blocking is unaffected, and an immediate boot fetch would trigger a
+/// content-filter reinstall storm — on Linux each completed fetch re-applies the WebKit
+/// content filters (`install_adblock`, heavy + disruptive to an in-flight find-in-page
+/// or the active page). The defaults refresh on the user's "Update all"
+/// (`lists.updateNow`) or when toggled off→on (both already fetch + reinstall, which is
+/// expected at that point). No-op once seeded; never resurrects a removed default.
+pub fn seed_defaults<R: Runtime>(app: &AppHandle<R>) {
+    ensure_default_rows(app);
+}
+
+/// Whether enabling a subscription should trigger an immediate background fetch. A list
+/// we've never fetched (no cache) normally fetches when first enabled — EXCEPT a built-in
+/// default, which is already covered by the baked-in `adblock_lists` copy and refreshes
+/// only on explicit "Update all". This keeps toggling a default off→on from surprising the
+/// user with a multi-MB download + content-filter reinstall (and keeps the engine reapply
+/// off the critical path — the live autopilot's find-in-page check caught exactly that
+/// collision when the seeded `easylist` re-fetched on toggle).
+fn should_fetch_on_enable(enabled: bool, never_fetched: bool, builtin: bool) -> bool {
+    enabled && never_fetched && !builtin
+}
+
 /// Rebuild + reapply ad-block after a subscription change, on every platform (Linux
 /// WebKit filters + the engine FilterSet reload via adblock_refresh).
 fn reinstall_adblock<R: Runtime>(app: &AppHandle<R>) {
@@ -265,9 +338,12 @@ pub fn dispatch<R: Runtime>(
                     && it.get("listId").and_then(Value::as_str) == Some(list_id.as_str())
                 {
                     it["enabled"] = json!(enabled);
-                    // Enabling a list we've never fetched → fetch it now.
-                    need_fetch =
-                        enabled && it.get("lastUpdated").map(Value::is_null).unwrap_or(true);
+                    // Enabling a list we've never fetched → fetch it now (but NOT a built-in
+                    // default — it's baked in and refreshes via "Update all"; see
+                    // should_fetch_on_enable).
+                    let never_fetched = it.get("lastUpdated").map(Value::is_null).unwrap_or(true);
+                    let builtin = it.get("builtin").and_then(Value::as_bool).unwrap_or(false);
+                    need_fetch = should_fetch_on_enable(enabled, never_fetched, builtin);
                     jsonstore::touch(it, app);
                 }
             }
@@ -422,6 +498,126 @@ mod tests {
                 "enabled cached list contributes its text"
             );
             assert!(!text.contains("off"), "a disabled list contributes nothing");
+        });
+    }
+
+    #[test]
+    fn ensure_default_rows_adds_three_builtin_defaults_to_empty_store() {
+        with_tmp_app(|app| {
+            let added = ensure_default_rows(app);
+            assert_eq!(added.len(), 3, "all three defaults added to an empty store");
+            let listed = dispatch(app, "subs.list", &json!({})).unwrap().unwrap();
+            let rows = listed.as_array().unwrap();
+            let ids: Vec<&str> = rows
+                .iter()
+                .filter_map(|r| r.get("listId").and_then(Value::as_str))
+                .collect();
+            for id in ["easylist", "easyprivacy", "peter-lowe"] {
+                assert!(ids.contains(&id), "default {id} present");
+            }
+            for r in rows {
+                assert_eq!(
+                    r.get("enabled").and_then(Value::as_bool),
+                    Some(true),
+                    "default seeded enabled"
+                );
+                assert_eq!(
+                    r.get("builtin").and_then(Value::as_bool),
+                    Some(true),
+                    "default marked builtin"
+                );
+                assert!(
+                    r.get("lastUpdated").map(Value::is_null).unwrap_or(false),
+                    "not fetched yet (static bundle covers day-one)"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn ensure_default_rows_is_idempotent() {
+        with_tmp_app(|app| {
+            assert_eq!(ensure_default_rows(app).len(), 3);
+            assert!(
+                ensure_default_rows(app).is_empty(),
+                "re-seeding an already-seeded store adds nothing"
+            );
+            let listed = dispatch(app, "subs.list", &json!({})).unwrap().unwrap();
+            assert_eq!(
+                listed.as_array().unwrap().len(),
+                3,
+                "no duplicate default rows"
+            );
+        });
+    }
+
+    #[test]
+    fn ensure_default_rows_does_not_resurrect_a_removed_default() {
+        with_tmp_app(|app| {
+            ensure_default_rows(app);
+            // The user removes a default (tombstones it).
+            dispatch(app, "subs.remove", &json!({ "listId": "easylist" }))
+                .unwrap()
+                .unwrap();
+            // Re-seeding must respect that choice and NOT bring it back.
+            let added = ensure_default_rows(app);
+            assert!(
+                !added.iter().any(|(id, _)| id == "easylist"),
+                "a removed default is not re-added"
+            );
+            let listed = dispatch(app, "subs.list", &json!({})).unwrap().unwrap();
+            let ids: Vec<&str> = listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|r| r.get("listId").and_then(Value::as_str))
+                .collect();
+            assert!(!ids.contains(&"easylist"), "removed default stays gone");
+            assert!(ids.contains(&"easyprivacy"), "other defaults remain");
+        });
+    }
+
+    #[test]
+    fn builtin_default_does_not_fetch_on_enable_but_user_list_does() {
+        // A user-added list never fetched yet → fetch when first enabled (existing behavior).
+        assert!(should_fetch_on_enable(true, true, false));
+        // A built-in default never fetched → do NOT auto-fetch on enable (the baked copy
+        // covers it; refresh is via "Update all" only — no surprise multi-MB download).
+        assert!(!should_fetch_on_enable(true, true, true));
+        // Disabling never fetches.
+        assert!(!should_fetch_on_enable(false, true, false));
+        assert!(!should_fetch_on_enable(false, true, true));
+        // An already-fetched list (lastUpdated set) never re-fetches on enable.
+        assert!(!should_fetch_on_enable(true, false, false));
+    }
+
+    #[test]
+    fn builtin_flag_survives_set_enabled() {
+        with_tmp_app(|app| {
+            ensure_default_rows(app);
+            let after = dispatch(
+                app,
+                "subs.setEnabled",
+                &json!({ "listId": "easyprivacy", "enabled": false }),
+            )
+            .unwrap()
+            .unwrap();
+            let row = after
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r.get("listId").and_then(Value::as_str) == Some("easyprivacy"))
+                .unwrap();
+            assert_eq!(
+                row.get("enabled").and_then(Value::as_bool),
+                Some(false),
+                "toggled off"
+            );
+            assert_eq!(
+                row.get("builtin").and_then(Value::as_bool),
+                Some(true),
+                "still flagged builtin after a toggle"
+            );
         });
     }
 }

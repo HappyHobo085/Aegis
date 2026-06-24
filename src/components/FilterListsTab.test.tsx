@@ -122,6 +122,28 @@ describe('FilterListsTab', () => {
     expect(p.remove).toHaveBeenCalledWith('easyprivacy');
   });
 
+  it('hides the Remove button for a built-in default subscription', () => {
+    render(<FilterListsTab {...props({ subs: [sub({ listId: 'easylist', builtin: true })] })} />);
+    expect(screen.queryByRole('button', { name: /remove list easylist/i })).toBeNull();
+  });
+
+  it('marks a built-in default subscription as built-in', () => {
+    render(<FilterListsTab {...props({ subs: [sub({ listId: 'easylist', builtin: true })] })} />);
+    expect(screen.getByText(/built-in/i)).toBeInTheDocument();
+  });
+
+  it('still lets the user toggle a built-in default off (toggleable, not locked)', async () => {
+    const p = props({ subs: [sub({ listId: 'easylist', builtin: true, enabled: true })] });
+    render(<FilterListsTab {...p} />);
+    await userEvent.click(screen.getByRole('switch', { name: /enable list easylist/i }));
+    expect(p.setEnabled).toHaveBeenCalledWith('easylist', false);
+  });
+
+  it('keeps the Remove button for a user-added (non-built-in) subscription', () => {
+    render(<FilterListsTab {...props({ subs: [sub({ listId: 'custom', builtin: false })] })} />);
+    expect(screen.getByRole('button', { name: /remove list custom/i })).toBeInTheDocument();
+  });
+
   it('force-update-all calls updateNow and renders the per-source results', async () => {
     const updateNow = vi.fn<[], Promise<ListUpdateResult>>(async () => ({
       perSource: [

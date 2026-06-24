@@ -502,6 +502,14 @@ pub fn run() {
         // created empty at builder time) — so allowlisted hosts survive a restart.
         crate::farble::seed_from_disk(app.handle());
 
+        // Seed the built-in default filter-list subscriptions (EasyList, EasyPrivacy,
+        // Peter Lowe's) on first run so they show in the Filter Lists UI and are
+        // refreshable. Idempotent + tombstone-aware (never resurrects a default the user
+        // removed). Seeds ROWS only (no boot fetch — the baked-in adblock_lists copies
+        // already block, and a boot fetch would re-apply the WebKit content filters
+        // mid-launch); the defaults refresh on "Update all" or an off→on toggle.
+        crate::subs::seed_defaults(app.handle());
+
         // Seed ProxyState from persisted settings so a saved proxy config is live on the
         // first tab spawn (Tasks 3-6 apply it to the content webview).
         {
