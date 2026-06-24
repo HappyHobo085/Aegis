@@ -35,7 +35,7 @@ fn defaults() -> Value {
 }
 
 /// The full settings object (for data export).
-pub fn all(app: &AppHandle) -> Value {
+pub fn all<R: Runtime>(app: &AppHandle<R>) -> Value {
     load(app)
 }
 
@@ -287,7 +287,7 @@ pub fn sync_records<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
 /// Wipe + rebuild the per-key projection from the current flat settings — used after a
 /// data import replaces the flat file, so the projection reflects the imported values
 /// (with fresh HLCs) rather than the pre-import keys.
-pub fn rebuild_projection_from_current(app: &AppHandle) {
+pub fn rebuild_projection_from_current<R: Runtime>(app: &AppHandle<R>) {
     save_sync_records(app, &[]);
     let _ = ensure_sync_projection(app);
 }

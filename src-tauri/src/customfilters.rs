@@ -39,7 +39,7 @@ const CUSTOM_FILTERS_UUID: &str = "custom-filters";
 /// Update the single sync record after the `.txt` is written, bumping its HLC so peers pick
 /// up the change. Done in `write` (not just the `set` dispatch) so picker-added rules
 /// (picker.rs calls `write`) and imports also sync.
-fn stamp_sync_record(app: &AppHandle, text: &str) {
+fn stamp_sync_record<R: Runtime>(app: &AppHandle<R>, text: &str) {
     let Some(p) = sync_path(app) else { return };
     let node = crate::sync_identity::node_id(app);
     let hlc = crate::sync_envelope::tick(&node, crate::jsonstore::now_ms());
@@ -113,7 +113,7 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &Value) -> bool {
 /// temp→rename + .bak). The single write path for custom filters: the `set` dispatch,
 /// data-import, and the element picker all go through here, so all of them stamp the sync
 /// record.
-pub fn write(app: &AppHandle, text: &str) {
+pub fn write<R: Runtime>(app: &AppHandle<R>, text: &str) {
     if let Some(p) = path(app) {
         let _ = crate::jsonstore::write_atomic(&p, text.as_bytes());
     }
