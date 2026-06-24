@@ -91,9 +91,9 @@ export async function reachScreen(
       control.setSidebar(false);
       control.setShield(false);
       control.exitFullscreen();
-      if (screen.id === 'theme:dark') applyTheme({ primaryColor: '#3b82f6', themeMode: 'dark' });
+      if (screen.id === 'theme:dark') applyTheme({ primaryColor: '#2563eb', themeMode: 'dark' });
       else if (screen.id === 'theme:light')
-        applyTheme({ primaryColor: '#3b82f6', themeMode: 'light' });
+        applyTheme({ primaryColor: '#2563eb', themeMode: 'light' });
       break;
     case 'overlay':
       if (screen.id === 'downloads') control.openDownloads();
@@ -159,7 +159,7 @@ export async function leaveScreen(
     (document.querySelector('.redirect-bar__dismiss') as HTMLElement | null)?.click();
   // Restore the dark palette after either theme screenshot (keeps later screens consistent).
   else if (screen.id === 'theme:dark' || screen.id === 'theme:light')
-    applyTheme({ primaryColor: '#3b82f6', themeMode: 'dark' });
+    applyTheme({ primaryColor: '#2563eb', themeMode: 'dark' });
   await tick();
 }
 

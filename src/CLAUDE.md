@@ -172,10 +172,33 @@ reset, onOpenChange }` from `useZoom`. `onOpenChange` lets `App.tsx` raise the c
 data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
   first-paint flash. `lib/theme.ts` (`applyTheme`, `resolveTheme`, `watchSystemTheme`)
   reads `Settings.themeMode` (`'system' | 'dark' | 'light'`) and sets the attribute.
-  **Known limitation (documented follow-up, not yet fixed):** two sections are
-  hardcoded-dark and NOT yet tokenized — the Android mobile bottom-sheet
-  (`MobileMenuSheet`) and the desktop `TabStrip`. Both stay dark regardless of the
-  active theme under light/system mode. Tokenizing them is the next theming task.
+  **Fully tokenized (2026-06):** the desktop `TabStrip`, the entire Android `mobile-*`
+  chrome, and the `SafetyInterstitial` now derive their colors from the theme tokens
+  (previously hardcoded-dark), so light theme is consistent across all chrome. The
+  malware interstitial keeps a danger accent via `--danger`/`color-mix`. The default
+  accent is `#2563eb` (white-on-accent ≈ AA); muted text is `--fg-muted` lifted to
+  meet AA on input surfaces. `index.css` also ships a `prefers-reduced-motion` block,
+  an `.sr-only` utility, a `--font-size-*` type ramp, and a styled native `<select>`.
+- **`components/SettingsModal`** groups its tabs into labelled sections via `TAB_GROUPS`
+  (the flattened group order IS `TAB_ORDER`) rendered as a vertical left rail with
+  roving arrow-key navigation; on `.aegis-mobile`/`.aegis-narrow` the rail becomes a
+  horizontal strip. Adding a settings tab still means: add to `SettingsTab`,
+  `TAB_LABELS`, `TAB_GROUPS`, the `SettingsModalProps`/`panels` wiring, AND the
+  `screens.ts` `settings:<tab>` walk (autopilot drift).
+- **`components/Onboarding`** is the first-run welcome modal (replaced the one-line
+  `WelcomeHint`): surfaces the signature features + a default-search-engine picker,
+  rendered by both shells. It is localStorage-gated (`ONBOARDING_STORAGE_KEY`), **not**
+  shown during the live autopilot (`VITE_AEGIS_AUTOPILOT`), and defaulted to "completed"
+  for vitest in `vitest.setup.ts` so the tours aren't blocked (its own test opts in via
+  `forceOpen`).
+- **Responsive desktop shell.** `hooks/useNarrowViewport` (matchMedia, `≤680px`) toggles
+  `.aegis-narrow` on `<html>` and drives `Toolbar`'s overflow ("More tools") menu so a
+  narrow desktop window keeps a usable address bar. The desktop never swaps to the Android
+  `MobileApp` shell — that shell is wired to the native content bridge and can't drive the
+  Tauri content webview; the narrow desktop layout adapts in place instead.
+- **`useDialog(onClose, { initialFocus })`** — optional `initialFocus` lands focus on a
+  specific element (used to focus the SAFE button in confirm/permission dialogs). The
+  `confirm(message, { destructive })` helper styles the affirmative button as dangerous.
 
 ## Mobile shell (`components/mobile/`, Android)
 
@@ -205,9 +228,12 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
 - **Sheets** (incl. the tab switcher) route through `view.setChromeOverlay` so the native
   content webview lowers. The native **Back** button precedence is: close an open sheet →
   exit fullscreen → page-back (`setBackInterceptActive` + `window.__aegisMobileBack`).
-- **Chrome heights** live in `lib/layout.ts` (`MOBILE_ADDRESS_H` 48 / `MOBILE_FAV_H` 24 /
-  `MOBILE_BOTTOMBAR_H` 56) and **must stay in sync with the content-WebView margins in
-  `MainActivity.kt`**.
+- **Chrome heights** live in `lib/layout.ts` (`MOBILE_ADDRESS_H` 48 / `MOBILE_FAV_H` 36 /
+  `MOBILE_BOTTOMBAR_H` 56; top chrome = 84dp) and **must stay in sync with the
+  content-WebView margins in `MainActivity.kt`**. (`MOBILE_FAV_H` was raised 24→36 so the
+  favourites chips clear the ~36px touch-target floor.) The mobile `MobileSheet` dismiss is
+  a Close (X) button (focus-trapped via `useDialog`), and touch targets in the mobile
+  chrome are ≥44px.
 - **Bottom-bar toggle** and **fullscreen** (hide all chrome — desktop parity) call
   `setBottomBarHidden` / `setFullscreen` on the bridge; the native side shrinks the
   content webview's margins so the page reclaims the space.

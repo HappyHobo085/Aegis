@@ -37,24 +37,60 @@ describe('SitePermissionsTab', () => {
     expect(screen.getByText(/no remembered site permissions/i)).toBeInTheDocument();
   });
 
-  it('lists each (origin, permission, decision) row', () => {
+  it('lists each row with FRIENDLY permission + decision labels (not the raw enum)', () => {
     render(
       <SitePermissionsTab
         {...props({
-          permissions: [perm({ origin: 'https://a.test', permission: 'media', decision: 'deny' })],
+          permissions: [
+            perm({ origin: 'https://a.test', permission: 'geolocation', decision: 'deny' }),
+          ],
         })}
       />,
     );
     expect(screen.getByText('https://a.test')).toBeInTheDocument();
-    expect(screen.getByText('media')).toBeInTheDocument();
-    expect(screen.getByText('deny')).toBeInTheDocument();
+    // "geolocation" → "Location", "deny" → "Blocked"
+    expect(screen.getByText('Location')).toBeInTheDocument();
+    expect(screen.getByText('Blocked')).toBeInTheDocument();
+    expect(screen.queryByText('geolocation')).not.toBeInTheDocument();
+    expect(screen.queryByText('deny')).not.toBeInTheDocument();
   });
 
-  it('revokes a row via remove(origin, permission)', async () => {
+  it('maps common permissions and decisions to friendly labels', () => {
+    render(
+      <SitePermissionsTab
+        {...props({
+          permissions: [
+            perm({ origin: 'https://cam.test', permission: 'camera', decision: 'allow' }),
+            perm({ origin: 'https://mic.test', permission: 'microphone', decision: 'allow' }),
+            perm({ origin: 'https://n.test', permission: 'notifications', decision: 'deny' }),
+          ],
+        })}
+      />,
+    );
+    expect(screen.getByText('Camera')).toBeInTheDocument();
+    expect(screen.getByText('Microphone')).toBeInTheDocument();
+    expect(screen.getByText('Notifications')).toBeInTheDocument();
+    expect(screen.getAllByText('Allowed')).toHaveLength(2);
+    expect(screen.getByText('Blocked')).toBeInTheDocument();
+  });
+
+  it('title-cases an unmapped permission as a sensible fallback', () => {
+    render(
+      <SitePermissionsTab
+        {...props({
+          permissions: [perm({ permission: 'midi-sysex', decision: 'allow' })],
+        })}
+      />,
+    );
+    expect(screen.getByText('Midi Sysex')).toBeInTheDocument();
+  });
+
+  it('revokes a row via remove(origin, permission) — passing the RAW permission value', async () => {
     const p = props({
       permissions: [perm({ origin: 'https://b.test', permission: 'notifications' })],
     });
     render(<SitePermissionsTab {...p} />);
+    // The aria-label uses the friendly label, but remove() receives the raw enum.
     await userEvent.click(
       screen.getByRole('button', { name: /revoke notifications for https:\/\/b\.test/i }),
     );

@@ -198,6 +198,11 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
       const continueBtn = ctx.byRole('button', /continue anyway/i);
       if (!continueBtn) throw new Error('"Continue anyway" button not found in SafetyInterstitial');
       await ctx.click(continueBtn);
+      // Malware "Continue anyway" now requires an explicit confirm — click OK in the
+      // ConfirmDialog that surfaces before safety.proceed fires.
+      const okBtn = ctx.byRole('button', /^OK$/);
+      if (okBtn) await ctx.click(okBtn);
+      await new Promise((r) => setTimeout(r, 50));
       // Clear the interstitial so it doesn't linger.
       await ctx.emitSafetyInterstitial?.(null);
     },

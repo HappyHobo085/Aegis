@@ -330,10 +330,13 @@ export const VAULT_INTERACTIONS: InteractionSpec[] = [
         },
         { timeout: 2000, interval: 50 },
       );
-      // aria-label is "Delete entry for {site}" (VaultSettingsTab.tsx line 360).
+      // aria-label is "Delete entry for {site}" (VaultSettingsTab.tsx).
       const deleteBtn = ctx.byRole('button', /^Delete entry for /);
       if (!deleteBtn) throw new Error('"Delete entry for …" button not found');
       await ctx.click(deleteBtn);
+      // Delete now opens a ConfirmDialog ("Delete this saved password?") — click OK.
+      const okBtn = ctx.byRole('button', /^OK$/);
+      if (okBtn) await ctx.click(okBtn);
       await new Promise((r) => setTimeout(r, 100));
     },
     assert: async (ctx: InteractionCtx) => {

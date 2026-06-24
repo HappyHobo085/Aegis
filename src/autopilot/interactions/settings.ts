@@ -85,17 +85,15 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       id: 'settings.search.addEngine',
       domain: 'settings.search',
       description:
-        'Fill engine id/name/template and click "Add engine" → settings.set({searchEngines}) called',
+        'Fill engine name/template and click "Add engine" → settings.set({searchEngines}) called (id is auto-slugified from the name)',
       screen: 'settings:search',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
-        const idInput = ctx.byLabel(/^Engine id$/i);
-        if (!idInput) throw new Error('"Engine id" input not found on Search tab');
+        // The "Engine id" input was removed — the id is now slugified from the name.
         const nameInput = ctx.byLabel(/^Engine name$/i);
         if (!nameInput) throw new Error('"Engine name" input not found on Search tab');
         const templateInput = ctx.byLabel(/^Engine template$/i);
         if (!templateInput) throw new Error('"Engine template" input not found on Search tab');
-        await ctx.type(idInput, 'ap7test');
         await ctx.type(nameInput, 'AP7 Test Engine');
         await ctx.type(templateInput, 'https://ap7test.example/?q=%s');
         const addBtn = ctx.byRole('button', /^Add engine$/);
@@ -113,16 +111,18 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
             throw new Error('settings.set not called with searchEngines after Add engine');
           return 'Add engine → settings.set({searchEngines:[…]})';
         }
-        // Live: settings.get().searchEngines must now include the new engine.
+        // Live: settings.get().searchEngines must now include the new engine, with the
+        // id slugified from the name ("AP7 Test Engine" → "ap7-test-engine").
         await new Promise((r) => setTimeout(r, 400));
         const s = await ctx.aegis.settings.get();
-        const added = s.searchEngines.find((e) => e.id === 'ap7test');
-        if (!added) throw new Error('live: "ap7test" engine not found in searchEngines after add');
+        const added = s.searchEngines.find((e) => e.id === 'ap7-test-engine');
+        if (!added)
+          throw new Error('live: "ap7-test-engine" engine not found in searchEngines after add');
         // Restore: remove the probe engine.
         await ctx.aegis.settings.set({
-          searchEngines: s.searchEngines.filter((e) => e.id !== 'ap7test'),
+          searchEngines: s.searchEngines.filter((e) => e.id !== 'ap7-test-engine'),
         });
-        return `Add engine → searchEngines now has ap7test (restored)`;
+        return `Add engine → searchEngines now has ap7-test-engine (restored)`;
       },
     } satisfies InteractionSpec;
   })(),
@@ -625,6 +625,10 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         if (!clearBtn)
           throw new Error('"Clear all" button not found on Allowlist tab — list may be empty');
         await ctx.click(clearBtn);
+        // "Clear all" now opens a ConfirmDialog ("Remove all allowlisted sites?") — click OK.
+        const okBtn = ctx.byRole('button', /^OK$/);
+        if (okBtn) await ctx.click(okBtn);
+        await new Promise((r) => setTimeout(r, 100));
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
@@ -755,9 +759,13 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         // Seed: inject the probe permission via the control-surface seam (emitSitePermissions
         // → setSitePermissions → usePermissions._setPermissions → React state update).
         await ctx.emitSitePermissions?.([PROBE]);
-        const revokeBtn = ctx.byLabel(new RegExp(`Revoke ${PROBE.permission} for ${PROBE.origin}`));
+        // The Revoke aria-label uses the FRIENDLY permission label ("camera" → "Camera"),
+        // so match case-insensitively (the origin is regex-escaped via the literal string).
+        const revokeBtn = ctx.byLabel(
+          new RegExp(`Revoke .* for ${PROBE.origin.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`, 'i'),
+        );
         if (!revokeBtn)
-          throw new Error(`"Revoke ${PROBE.permission} for ${PROBE.origin}" button not found`);
+          throw new Error(`"Revoke … for ${PROBE.origin}" button not found`);
         await ctx.click(revokeBtn);
       },
       assert: async (ctx) => {
