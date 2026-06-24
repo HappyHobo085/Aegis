@@ -528,9 +528,12 @@ malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt
   `setBottomBarHidden` (the top-bar chevron — content reclaims the bar's gap), and
   `setFullscreen` (desktop-parity hide-all-chrome — content fills the safe area, Back
   exits). The chrome installs `window.__aegisMobileBack` for native Back to call.
-- **Safe-area insets:** `env(safe-area-inset-*)` in an Android WebView reports the
-  display cutout, NOT the system bars, so the insets listener pushes the real status/nav
-  insets to the chrome as `--aegis-inset-top/bottom` CSS vars (px ÷ density).
+- **Safe-area insets (all four edges):** the insets listener reads
+  `systemBars() ∪ displayCutout()` and pushes the real status/nav/side insets to the chrome
+  as `--aegis-inset-top/bottom/left/right` CSS vars (px ÷ density); `onCreate` sets
+  `layoutInDisplayCutoutMode = ALWAYS` (API ≥ 30; `SHORT_EDGES` on 28–29) so cutouts are
+  reported as insets. `applyContentMargins()` also applies `leftMargin`/`rightMargin`
+  (= side insets, 0 in fullscreen) so the page clears side bars/cutouts in landscape.
 - A **`WebChromeClient`** (`onShowCustomView`/`onHideCustomView` + immersive bars) gives
   pages HTML5 fullscreen (video, etc.) — distinct from the chrome-hiding `setFullscreen`.
 - **Multi-tab (live tabs).** `MainActivity` keeps a `tabId → WebView` map; the active
