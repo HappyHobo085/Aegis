@@ -44,7 +44,10 @@ dotted event name.
   (`start_idle_sweep`), `tabs.json` session persistence, `open_background`
   (called from `on_new_window` to open target=\_blank links as background tabs —
   but `on_new_window` first drops the request if the ad-block engine flags the
-  destination as an ad pop-under; see Ad-block below).
+  destination as an ad pop-under; see Ad-block below). **Unit-tested via
+  `test_support::with_tmp_app`:** session round-trip, private-tab exclusion,
+  title/pinned persistence, reorder, idempotent persist, `managed_registry`
+  well-formedness, `is_private` (10 tests).
 - **`nav.rs`** — content webview creation (`spawn_tab(id, url)`, replaces the
   old `spawn_content`), navigation callbacks (malware guard, HTTPS-Only upgrade,
   **ad-block: `on_navigation` cancels loads of blocked ad/tracker destinations** via
@@ -55,9 +58,25 @@ dotted event name.
   `CONTENT_LABEL` constant).
 - **`view.rs`** — content webview geometry: insets, sidebar, fullscreen, overlay.
 - **`data.rs`** — `data.export` / `data.import` (bundles all stores + settings).
-- **Data stores** — `jsonstore.rs` (tiny JSON-array helper) backs `places.rs`
-  (favorites + saved), `history.rs`, `downloads.rs`, `subs.rs` (filter
-  subscriptions + fetch), `customfilters.rs`, `settings.rs`.
+  **Unit-tested via `test_support::with_tmp_app`:** export produces a v2 bundle
+  with every store present; cross-app import round-trip (export → fresh app →
+  import) restores favorites, saved, history, downloads, allowlist, settings, and
+  customFilters; error cases (garbage input, partial bundle) (4 tests).
+- **Data stores** — `jsonstore.rs` (tiny JSON-array helper, unit-tested via
+  `test_support::with_tmp_app` in `test_support::tests`) backs:
+  - `places.rs` (favorites + saved) — **unit-tested via `test_support::with_tmp_app`:**
+    add/list/remove/update/reorder for favorites; add/dedup/remove/tag/union for
+    saved (6 tests).
+  - `history.rs` — **unit-tested via `test_support::with_tmp_app`:** record
+    dedup, scheme filter, private-tab skip, list order + pagination, search,
+    remove + clear, unknown-channel dispatch (6 tests).
+  - `downloads.rs` — **unit-tested via `test_support::with_tmp_app`:** private-tab
+    skip, `on_requested` filename derivation + state, `on_finished` complete/
+    interrupted, `remove` tombstone, `clear` keeps in-progress (6 tests).
+  - `subs.rs` (filter subscriptions + fetch) — **unit-tested via
+    `test_support::with_tmp_app`:** `list_id_from_url`, `hash_text`, `url_of`,
+    scheme rejection, add/list/remove, `set_enabled`, `enabled_text` (7 tests).
+  - `customfilters.rs`, `settings.rs`.
 - **Ad-block (layered, platform-gated):**
   - `adblock_lists.rs` — **single source of truth for the bundled filter lists**:
     EasyList (ads) **+ EasyPrivacy (trackers/analytics)** **+ Peter Lowe's** (ad+tracking
@@ -81,6 +100,9 @@ dotted event name.
     count on mount/tab-switch (live events emitted before the chrome subscribed —
     e.g. the restored boot page — are otherwise lost). Counting is wired on **Linux**
     only so far (`linux_layout::connect_block_counter`); Win/Android is a follow-up.
+    **Unit-tested via `test_support::with_tmp_app`:** default state, `set_enabled`,
+    `toggle_allowlist` + subdomain coverage + persist, `clear_allowlist`,
+    `note_blocked` session/page counters, per-tab page count + reset (8 tests).
   - `adblock_engine.rs` — Brave `adblock::Engine`. **`Engine` is `!Send`**, so it
     lives on one dedicated thread (OnceLock); queries cross via mpsc. Android JNI
     entry `should_block(...)`. Compiled on **all desktop + Android** (not just
@@ -183,7 +205,12 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     wired. Ctrl-wheel over the content page may or may not reach the chrome handler depending
     on the platform/engine — confirm on device.
 - **Security** — `safety.rs` (URLhaus malware host set from `resources/`, JNI
-  `isMalwareHost`), `permissions.rs` (site permission prompts).
+  `isMalwareHost`) — **unit-tested via `test_support::with_tmp_app`:** bundle
+  non-empty, `is_blocked` true/false, session exception unblock, `proceed`
+  records exception, `remove_exception`, list decisions (5 tests).
+  `permissions.rs` (site permission prompts) — **unit-tested via
+  `test_support::with_tmp_app`:** list/remove/clear, `origin_of` strip (4
+  tests).
 - **E2E sync ("F2b") + crypto** — `sync.rs` (per-namespace pull→merge→push over
   `reqwest::blocking`, `GET/POST /v1/records`, a debounced periodic background pass),
   `sync_auth.rs` (per-device **Ed25519** signed access tokens — the server authorizes
@@ -280,6 +307,79 @@ by the launcher (`run-autopilot.sh`); in tests it defaults to a temp dir.
 `tauri-plugin-log`, `reqwest` (blocking), `rustls`. Platform-gated blocks:
 Linux → `gtk`/`webkit2gtk`/`glib`/`gio`; Android → `jni`; Windows →
 `webview2-com` (pinned) + `windows`.
+
+## Unit-test harness (`src/test_support.rs`)
+
+The crate's `#[cfg(test)]` harness lives in `src/test_support.rs` and is compiled
+only into test binaries (never into the release artifact). It solves two problems
+that the AppHandle-backed modules share:
+
+**Problem 1 — path isolation.** Every data store resolves its path from
+`app.path().app_data_dir()`, which on Linux reads `$XDG_DATA_HOME` (and similarly
+`$XDG_CACHE_HOME` / `$XDG_CONFIG_HOME`). A `tauri::test::mock_app()` has an empty
+bundle identifier, so `app_data_dir()` resolves directly to `$XDG_DATA_HOME`. The
+harness redirects all three env vars to a fresh per-test temp dir before the mock
+app is built, and removes the dir on exit — so test IO never touches real user data.
+
+**Problem 2 — process-global serialization.** Env vars are process-global and
+`cargo test` runs tests on many threads. A process-global `static Mutex<()>` (`LOCK`)
+serializes every call to `with_tmp_app`, so two tests can't race on the env vars or
+on process-global statics like `sync_identity::NODE_ID` and the adblock
+session/page counters. A poisoned lock (from a panicking test) is recovered via
+`into_inner()` so one failing test doesn't cascade-fail the rest.
+
+**The pattern — `with_tmp_app`:**
+
+```rust
+// In any test module:
+use crate::test_support::with_tmp_app;
+
+#[test]
+fn my_test() {
+    with_tmp_app(|app| {
+        // `app` is an &AppHandle<MockRuntime>
+        // all store IO lands in a temp dir; no real webview is spawned
+    });
+}
+```
+
+`with_tmp_app` constructs a `MockRuntime` app (via `tauri::test::mock_builder`) and
+registers all 11 managed states that the real `lib.rs` builder + `setup()` install:
+
+| State                                                        | Source in `lib.rs` |
+| ------------------------------------------------------------ | ------------------ |
+| `view::ContentInset`                                         | builder            |
+| `update::UpdateState`                                        | builder            |
+| `adblock::AdblockState`                                      | builder            |
+| `safety::SafetyState`                                        | builder            |
+| `sync::SyncState`                                            | builder            |
+| `redirect_guard::PendingNavs`                                | builder            |
+| `redirect_guard::NavActions`                                 | builder            |
+| `redirect_guard::Chains`                                     | builder            |
+| `zoom::ZoomStore`                                            | builder            |
+| `tabs::Tabs` (single-tab Registry, home `"about:blank"`)     | `setup()`          |
+| `linux_layout::LayoutInsets` (`#[cfg(target_os = "linux")]`) | `setup()`          |
+
+The mock never spawns real webviews, so dispatchers that call `spawn_tab` or
+touch native webview handles skip or no-op silently in tests — that is expected
+behavior (these are unit tests against a mock app, not GUI/runtime tests).
+
+**Convention for new AppHandle tests.** To add a test for a module whose
+dispatcher takes `app: AppHandle<R>` (or any generic `<R: Runtime>`):
+
+1. Add `#[cfg(test)] mod test_support;` to `lib.rs` (already done).
+2. In the new module, add `#[cfg(test)] mod tests { ... }`.
+3. Call `crate::test_support::with_tmp_app(|app| { ... })` in every test body.
+4. If the dispatcher fn is not already generic over `<R: Runtime>`, make it so —
+   `tauri::test::MockRuntime` implements `Runtime`, so a `fn foo<R: Runtime>(app:
+&AppHandle<R>, …)` is callable with a `&AppHandle<MockRuntime>` without any
+   test-only wiring. Keep platform-specific code (`#[cfg(target_os = "linux")]`
+   etc.) in separate helper fns so the generic dispatcher compiles on all targets.
+5. Do NOT assert absolute counter values — assert deltas (before → after) because
+   the session-global counters persist across tests in one binary.
+6. The `tauri` dev-dependency that enables `MockRuntime` is already declared in
+   `Cargo.toml` (`[dev-dependencies] tauri … features = ["test"]`); no additional
+   dep changes are needed.
 
 ## Android (`gen/android/`)
 
