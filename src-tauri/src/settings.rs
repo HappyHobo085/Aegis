@@ -4,9 +4,9 @@
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, Url};
+use tauri::{AppHandle, Manager, Runtime, Url};
 
-fn store_path(app: &AppHandle) -> Option<PathBuf> {
+fn store_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
@@ -40,7 +40,7 @@ pub fn all(app: &AppHandle) -> Value {
 }
 
 /// Overwrite the settings file (for data import). Durable (atomic temp→rename + .bak).
-pub fn write(app: &AppHandle, value: &Value) {
+pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) {
     if let Some(p) = store_path(app) {
         let txt = serde_json::to_string_pretty(value).unwrap_or_default();
         let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
@@ -66,7 +66,7 @@ pub fn https_only(app: &AppHandle) -> bool {
 
 /// The WebRTC IP-leak policy: "default" | "public-only" | "disable" (default
 /// "public-only"). Single source for the shim builder + the native backstops.
-pub fn webrtc_policy(app: &AppHandle) -> String {
+pub fn webrtc_policy<R: Runtime>(app: &AppHandle<R>) -> String {
     load(app)
         .get("webrtcPolicy")
         .and_then(Value::as_str)
@@ -75,7 +75,7 @@ pub fn webrtc_policy(app: &AppHandle) -> String {
 }
 
 /// The sync server endpoint ("" = sync not configured; data stays local until set).
-pub fn sync_server_url(app: &AppHandle) -> String {
+pub fn sync_server_url<R: Runtime>(app: &AppHandle<R>) -> String {
     load(app)
         .get("syncServerUrl")
         .and_then(Value::as_str)
@@ -105,7 +105,7 @@ pub fn home_url(app: &AppHandle) -> Url {
 }
 
 /// Defaults overlaid with any persisted values.
-fn load(app: &AppHandle) -> Value {
+fn load<R: Runtime>(app: &AppHandle<R>) -> Value {
     let mut s = defaults();
     if let Some(p) = store_path(app) {
         // read_with_backup recovers from settings.json.bak if the primary is corrupt,
@@ -137,21 +137,21 @@ fn merge(base: &mut Value, over: &Value) {
 // write the result back into the flat file (or remove a key → it falls to default).
 // ---------------------------------------------------------------------------
 
-fn sync_path(app: &AppHandle) -> Option<PathBuf> {
+fn sync_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
         .map(|d| d.join("settings-sync.json"))
 }
 
-fn load_sync_records(app: &AppHandle) -> Vec<Value> {
+fn load_sync_records<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
     sync_path(app)
         .and_then(|p| crate::jsonstore::read_with_backup(&p))
         .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
         .unwrap_or_default()
 }
 
-fn save_sync_records(app: &AppHandle, recs: &[Value]) {
+fn save_sync_records<R: Runtime>(app: &AppHandle<R>, recs: &[Value]) {
     if let Some(p) = sync_path(app) {
         if let Ok(txt) = serde_json::to_string_pretty(recs) {
             let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
@@ -167,7 +167,7 @@ fn save_sync_records(app: &AppHandle, recs: &[Value]) {
 /// the default value over a peer's deliberate older change (settings merge by key). And
 /// each migration HLC is the FLOOR (`Hlc::zero`): the real edit time is unknown, so any
 /// genuine post-migration edit on ANY device must strictly dominate the migration seed.
-fn ensure_sync_projection(app: &AppHandle) -> Vec<Value> {
+fn ensure_sync_projection<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
     let mut recs = load_sync_records(app);
     if !recs.is_empty() {
         return recs;
@@ -264,7 +264,7 @@ fn merge_projection(mut local: Vec<Value>, remote: &[Value]) -> (Vec<Value>, Vec
 /// Merge remote per-key records into the local projection (per-KEY HLC-LWW) and apply the
 /// result to the flat settings. Returns the keys that changed. The sync engine calls this
 /// for the `settings` namespace.
-pub fn merge_remote(app: &AppHandle, remote: &[Value]) -> Vec<String> {
+pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &[Value]) -> Vec<String> {
     let node = crate::sync_identity::node_id(app);
     for r in remote {
         if let Some(h) = crate::sync_envelope::from_value(r) {
@@ -280,7 +280,7 @@ pub fn merge_remote(app: &AppHandle, remote: &[Value]) -> Vec<String> {
 
 /// The per-key sync records (for the merge seam / export). Migrates lazily on first call.
 #[allow(dead_code)] // consumed by the F2b sync merge — dead on the Android cdylib until then
-pub fn sync_records(app: &AppHandle) -> Vec<Value> {
+pub fn sync_records<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
     ensure_sync_projection(app)
 }
 
@@ -296,7 +296,7 @@ pub fn rebuild_projection_from_current(app: &AppHandle) {
 /// value, or REMOVE a tombstoned key so `load()` falls to its default (= "reset to
 /// default"). Consumed by F2b's merge. (Also rebuilds the projection from `records`.)
 #[allow(dead_code)] // consumed by the F2b sync merge
-pub fn apply_synced(app: &AppHandle, records: &[Value]) {
+pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, records: &[Value]) {
     // Start from the saved flat file (NOT defaults overlay) so we only touch synced keys.
     let mut flat = store_path(app)
         .and_then(|p| crate::jsonstore::read_with_backup(&p))

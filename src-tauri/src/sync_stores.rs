@@ -16,7 +16,7 @@
 #![allow(dead_code)]
 
 use serde_json::Value;
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 /// Array stores that participate in sync. History is intentionally absent — it is NOT
 /// syncable (product decision): it stays device-local with plain hard-delete storage, so a
@@ -25,7 +25,7 @@ use tauri::AppHandle;
 pub const SYNCABLE: &[&str] = &["favorites", "saved", "allowlist"];
 
 /// The full local array (incl. tombstones), lazily migrated to carry sync metadata.
-pub fn read_all(app: &AppHandle, name: &str) -> Vec<Value> {
+pub fn read_all<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
     crate::jsonstore::load_synced(app, name)
 }
 
@@ -90,7 +90,7 @@ fn merge_records(
 
 /// Merge `remote` into the local `name` store (HLC-LWW), persist if anything changed, and
 /// return the changed uuids. An allowlist merge re-seeds the in-memory allowlist + engine.
-pub fn merge_into(app: &AppHandle, name: &str, remote: &[Value]) -> Vec<String> {
+pub fn merge_into<R: Runtime>(app: &AppHandle<R>, name: &str, remote: &[Value]) -> Vec<String> {
     let node = crate::sync_identity::node_id(app);
     let local = read_all(app, name);
     let (mut merged, mut changed) = merge_records(local, remote, &node, crate::jsonstore::now_ms());

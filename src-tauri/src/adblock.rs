@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::jsonstore;
 
@@ -30,7 +30,7 @@ pub fn session_blocked() -> u32 {
 /// The active tab's current-page blocked count. `getState` returns this so the chrome
 /// recovers the count on mount / tab-switch — live `adblock.blockedCount` events emitted
 /// before the chrome subscribed (e.g. the restored boot page) would otherwise be lost.
-fn active_page_blocked(app: &AppHandle) -> u32 {
+fn active_page_blocked<R: Runtime>(app: &AppHandle<R>) -> u32 {
     let id = app
         .try_state::<crate::tabs::Tabs>()
         .map(|s| s.reg.lock().unwrap().active_id())
@@ -128,7 +128,7 @@ pub fn host_allowlisted(app: &AppHandle, host: &str) -> bool {
 // and at boot.
 
 /// The live allowlisted hosts from the persisted store.
-pub fn load_allowlist_hosts(app: &AppHandle) -> Vec<String> {
+pub fn load_allowlist_hosts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
     jsonstore::live(jsonstore::load_synced(app, "allowlist"))
         .iter()
         .filter_map(|it| it.get("host").and_then(Value::as_str).map(String::from))
@@ -178,7 +178,7 @@ fn clear_hosts(app: &AppHandle) {
 }
 
 /// Refresh the in-memory Inner.allowlist cache from the persisted store.
-fn reseed_inner(app: &AppHandle) {
+fn reseed_inner<R: Runtime>(app: &AppHandle<R>) {
     let hosts = load_allowlist_hosts(app);
     if let Some(s) = app.try_state::<AdblockState>() {
         s.0.lock().unwrap().allowlist = hosts;
@@ -188,12 +188,12 @@ fn reseed_inner(app: &AppHandle) {
 /// Seed the (already `.manage()`'d) AdblockState from disk at boot — MUTATE the managed
 /// state (it's managed before `setup()` runs, so it can't be constructed with data) — then
 /// mirror the policy into the engine. Fixes the restart-loses-allowlist bug on all platforms.
-pub fn seed_from_disk(app: &AppHandle) {
+pub fn seed_from_disk<R: Runtime>(app: &AppHandle<R>) {
     reseed_inner(app);
     sync_engine(app);
 }
 
-fn state_json(app: &AppHandle) -> Value {
+fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     match app.try_state::<AdblockState>() {
         Some(s) => {
             let g = s.0.lock().unwrap();
@@ -210,7 +210,7 @@ fn state_json(app: &AppHandle) -> Value {
 /// desktops in `nav::on_new_window` (pop-under blocking). On Linux the page-resource
 /// blocking is the WebKit content filters (reconfigured directly above) — the engine
 /// is consulted only for pop-unders, but it still must honor the toggle + allowlist.
-fn sync_engine(app: &AppHandle) {
+fn sync_engine<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(any(desktop, target_os = "android", test))]
     if let Some(s) = app.try_state::<AdblockState>() {
         let g = s.0.lock().unwrap();

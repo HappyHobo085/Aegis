@@ -28,19 +28,13 @@ fn live_has_url(items: &[Value], url: &str) -> bool {
         .any(|it| !jsonstore::is_deleted(it) && it.get("url").and_then(Value::as_str) == Some(url))
 }
 
-/// Generic dispatch core — all match logic delegated through a `do_persist` closure so
-/// the caller can decide whether to call `sync::nudge` (production) or skip it (tests).
-/// The closure receives `(store_name, full_items_array)` and returns the live-only JSON.
-fn dispatch_inner<R, F>(
+/// Dispatch a `favorites.*` / `saved.*` channel. Mutations persist the full array
+/// (tombstones included) and nudge a background sync pass (no-op when sync is disabled).
+pub fn dispatch<R: Runtime>(
     app: &AppHandle<R>,
     channel: &str,
     payload: &Value,
-    do_persist: &F,
-) -> Option<Result<Value, String>>
-where
-    R: Runtime,
-    F: Fn(&str, Vec<Value>) -> Result<Value, String>,
-{
+) -> Option<Result<Value, String>> {
     match channel {
         // ---- favorites ----
         "favorites.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
@@ -62,7 +56,7 @@ where
             });
             jsonstore::stamp_new(&mut item, app);
             items.push(item);
-            Some(do_persist("favorites", items))
+            Some(persist(app, "favorites", items))
         }
 
         "favorites.update" => {
@@ -74,14 +68,14 @@ where
                     jsonstore::touch(it, app);
                 }
             }
-            Some(do_persist("favorites", items))
+            Some(persist(app, "favorites", items))
         }
 
         "favorites.remove" => {
             let mut items = jsonstore::load_synced(app, "favorites");
             let id = payload.get("id").and_then(Value::as_i64);
             jsonstore::tombstone(&mut items, |it| id_of(it) == id, app);
-            Some(do_persist("favorites", items))
+            Some(persist(app, "favorites", items))
         }
 
         "favorites.reorder" => {
@@ -108,7 +102,7 @@ where
                 pos += 1;
                 jsonstore::touch(it, app);
             }
-            Some(do_persist("favorites", items))
+            Some(persist(app, "favorites", items))
         }
 
         // ---- saved (with tags) ----
@@ -139,14 +133,14 @@ where
                 jsonstore::stamp_new(&mut item, app);
                 items.push(item);
             }
-            Some(do_persist("saved", items))
+            Some(persist(app, "saved", items))
         }
 
         "saved.remove" => {
             let mut items = jsonstore::load_synced(app, "saved");
             let id = payload.get("id").and_then(Value::as_i64);
             jsonstore::tombstone(&mut items, |it| id_of(it) == id, app);
-            Some(do_persist("saved", items))
+            Some(persist(app, "saved", items))
         }
 
         "saved.update" => {
@@ -158,7 +152,7 @@ where
                     jsonstore::touch(it, app);
                 }
             }
-            Some(do_persist("saved", items))
+            Some(persist(app, "saved", items))
         }
 
         "saved.renameTag" => {
@@ -179,7 +173,7 @@ where
                     jsonstore::touch(it, app);
                 }
             }
-            Some(do_persist("saved", items))
+            Some(persist(app, "saved", items))
         }
 
         "saved.deleteTag" => {
@@ -198,7 +192,7 @@ where
                     jsonstore::touch(it, app);
                 }
             }
-            Some(do_persist("saved", items))
+            Some(persist(app, "saved", items))
         }
 
         "saved.tagUnion" => {
@@ -218,33 +212,9 @@ where
     }
 }
 
-/// Production dispatch: takes a concrete `AppHandle<Wry>` so `sync::nudge` can be called.
-#[cfg(not(test))]
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
-    dispatch_inner(app, channel, payload, &|name, items| {
-        persist(app, name, items)
-    })
-}
-
-/// Test dispatch: generic over `Runtime` so tests can pass `AppHandle<MockRuntime>`.
-/// `sync::nudge` is NOT called — `SyncState::enabled` is always `false` in tests so it
-/// would be a no-op, and `nudge` is not generic (it requires `AppHandle<Wry>`).
-#[cfg(test)]
-pub fn dispatch<R: Runtime>(
-    app: &AppHandle<R>,
-    channel: &str,
-    payload: &Value,
-) -> Option<Result<Value, String>> {
-    dispatch_inner(app, channel, payload, &|name, items| {
-        jsonstore::save(app, name, &items)?;
-        Ok(json!(jsonstore::live(items)))
-    })
-}
-
 /// Save the FULL array (tombstones kept on disk) and return only the LIVE records.
-/// Nudges a sync pass (no-op when sync is disabled). Only used in production builds.
-#[cfg(not(test))]
-fn persist(app: &AppHandle, name: &str, items: Vec<Value>) -> Result<Value, String> {
+/// Nudges a background sync pass (no-op when sync is disabled).
+fn persist<R: Runtime>(app: &AppHandle<R>, name: &str, items: Vec<Value>) -> Result<Value, String> {
     jsonstore::save(app, name, &items)?;
     // favorites + saved are SYNCABLE → nudge a sync (no-op when sync is disabled).
     crate::sync::nudge(app);

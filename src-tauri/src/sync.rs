@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use ed25519_dalek::Signer;
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use zeroize::Zeroizing;
 
 use crate::crypto::{self, RootSecret};
@@ -114,7 +114,7 @@ fn is_disabled_flag(app: &AppHandle) -> bool {
     disabled_flag_path(app).map(|p| p.exists()).unwrap_or(false)
 }
 
-fn state_json(app: &AppHandle) -> Value {
+fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     let st = app.state::<SyncState>();
     let g = st.0.lock().unwrap();
     json!({
@@ -129,7 +129,7 @@ fn state_json(app: &AppHandle) -> Value {
     })
 }
 
-fn emit_state(app: &AppHandle) {
+fn emit_state<R: Runtime>(app: &AppHandle<R>) {
     crate::emit_event(app, "sync.state", state_json(app));
 }
 
@@ -231,7 +231,7 @@ fn auth_header(account_id: &str, device_seed: &[u8; 32]) -> Result<String, Strin
 }
 
 /// One sync pass: per namespace pull→merge→push. Runs on the caller's (background) thread.
-fn sync_once(app: &AppHandle) -> Result<(), String> {
+fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     // Snapshot what we need under the lock (clone the root; the clone zeroizes on drop).
     let (root, account_id, device_seed) = {
         let st = app.state::<SyncState>();
@@ -310,7 +310,7 @@ fn sync_once(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-fn emit_changed(app: &AppHandle, ns: &str, changed: &[String]) {
+fn emit_changed<R: Runtime>(app: &AppHandle<R>, ns: &str, changed: &[String]) {
     if !changed.is_empty() {
         crate::emit_event(
             app,
@@ -324,8 +324,8 @@ fn emit_changed(app: &AppHandle, ns: &str, changed: &[String]) {
 /// the push reflects the merged-latest (the server applies HLC-LWW, so a stale push is
 /// ignored). Decrypt/seal failures on a single record are skipped + logged, never aborting.
 #[allow(clippy::too_many_arguments)]
-fn sync_ns(
-    _app: &AppHandle,
+fn sync_ns<R: Runtime>(
+    _app: &AppHandle<R>,
     base: &str,
     ns: &str,
     data_key: &[u8; 32],
@@ -432,7 +432,7 @@ fn enable_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<&str>)
 }
 
 /// Trigger a background sync pass (no-op if disabled). Debounced only by the engine status.
-pub fn nudge(app: &AppHandle) {
+pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
     {
         let st = app.state::<SyncState>();
         let mut g = st.0.lock().unwrap();

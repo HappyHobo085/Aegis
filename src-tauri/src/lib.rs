@@ -189,7 +189,7 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
 /// WebKit content filters (cached after the first compile). Called at boot and
 /// whenever ad-blocking is re-enabled.
 #[cfg(target_os = "linux")]
-pub fn install_adblock(app: tauri::AppHandle) {
+pub fn install_adblock<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     let store_dir = app
         .path()
         .app_cache_dir()

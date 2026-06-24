@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, Url, WebviewUrl};
+use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl};
 
 /// Tabs that have committed at least one real (non-`about:blank`) top-frame page.
 /// Used to auto-close pop-under shells: a background tab opened by `window.open` that
@@ -60,7 +60,7 @@ pub fn navigate_tab(app: &AppHandle, id: u32, url: Url) {
     }
 }
 /// The active tab's webview label (from the registry).
-pub fn active_content_label(app: &AppHandle) -> String {
+pub fn active_content_label<R: Runtime>(app: &AppHandle<R>) -> String {
     let id = app
         .try_state::<crate::tabs::Tabs>()
         .map(|s| s.reg.lock().unwrap().active_id())
@@ -68,7 +68,7 @@ pub fn active_content_label(app: &AppHandle) -> String {
     content_label(id)
 }
 /// The active tab's webview, if it exists.
-pub fn active_webview(app: &AppHandle) -> Option<tauri::Webview> {
+pub fn active_webview<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::Webview<R>> {
     app.get_webview(&active_content_label(app))
 }
 

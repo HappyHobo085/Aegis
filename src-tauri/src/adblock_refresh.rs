@@ -13,10 +13,10 @@
 //!
 //! Toggle/allowlist-only changes (`adblock.rs`) don't change the LISTS, so they call
 //! `set_policy` directly and skip the (~20 MB) FilterSet reload this does.
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 /// Re-apply the full ad-block config across every platform after a filter-list change.
-pub fn refresh(app: &AppHandle) {
+pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
     // Linux: the declarative WebKit content filters (cached by hash → fast on a no-op).
     #[cfg(target_os = "linux")]
     crate::install_adblock(app.clone());

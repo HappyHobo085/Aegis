@@ -4,9 +4,9 @@
 use std::path::PathBuf;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
-fn path(app: &AppHandle) -> Option<PathBuf> {
+fn path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
@@ -17,7 +17,7 @@ fn path(app: &AppHandle) -> Option<PathBuf> {
 /// deleted}`. The plain `.txt` stays the source of truth for the engine; this projection
 /// (kept in sync by `write`) is what the sync layer ships, so the renderer-visible text
 /// format is untouched. F2b merges this single record specially (not via the array merge).
-fn sync_path(app: &AppHandle) -> Option<PathBuf> {
+fn sync_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
@@ -26,7 +26,7 @@ fn sync_path(app: &AppHandle) -> Option<PathBuf> {
 
 /// The user's custom filter-list text (empty if none). Plain text, not JSON, so a
 /// corrupt/empty primary falls back to custom-filters.txt.bak (no structural check).
-pub fn load(app: &AppHandle) -> String {
+pub fn load<R: Runtime>(app: &AppHandle<R>) -> String {
     path(app)
         .and_then(|p| crate::jsonstore::read_text_with_backup(&p))
         .unwrap_or_default()
@@ -56,7 +56,7 @@ fn stamp_sync_record(app: &AppHandle, text: &str) {
 /// The single custom-filter sync record (synthesized from the current text with a FLOOR
 /// HLC if none exists yet, so any genuine edit on any device dominates the migration seed).
 /// Read by the sync engine for the `customFilters` namespace.
-pub fn sync_record(app: &AppHandle) -> Value {
+pub fn sync_record<R: Runtime>(app: &AppHandle<R>) -> Value {
     if let Some(rec) = sync_path(app)
         .and_then(|p| crate::jsonstore::read_with_backup(&p))
         .and_then(|t| serde_json::from_str::<Value>(&t).ok())
@@ -75,7 +75,7 @@ pub fn sync_record(app: &AppHandle) -> Value {
 /// Merge a remote custom-filter record (single-record HLC last-writer-wins). On a win, write
 /// the `.txt` to the remote's text (empty if tombstoned), persist the remote record verbatim
 /// (keeping its HLC — do NOT re-stamp), and re-apply ad-block. Returns whether it changed.
-pub fn merge_remote(app: &AppHandle, remote: &Value) -> bool {
+pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &Value) -> bool {
     let Some(rhlc) = crate::sync_envelope::from_value(remote) else {
         return false;
     };

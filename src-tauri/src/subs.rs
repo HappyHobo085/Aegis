@@ -7,7 +7,7 @@
 //! cache, stamps `lastUpdated`/`hash`, and re-installs the engine. `enabled_text`
 //! concatenates the cached text of every enabled subscription for install_adblock.
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::jsonstore;
 
@@ -18,7 +18,7 @@ fn list_id_from_url(url: &str) -> String {
     last.strip_suffix(".txt").unwrap_or(last).to_string()
 }
 
-fn subs_dir(app: &AppHandle) -> std::path::PathBuf {
+fn subs_dir<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
     let dir = app
         .path()
         .app_cache_dir()
@@ -28,7 +28,7 @@ fn subs_dir(app: &AppHandle) -> std::path::PathBuf {
     dir
 }
 
-fn cache_path(app: &AppHandle, list_id: &str) -> std::path::PathBuf {
+fn cache_path<R: Runtime>(app: &AppHandle<R>, list_id: &str) -> std::path::PathBuf {
     subs_dir(app).join(format!("{list_id}.txt"))
 }
 
@@ -68,7 +68,7 @@ fn fetch_text(url: String) -> Result<String, String> {
 /// Concatenated text of every ENABLED subscription, read from cache. Folded into
 /// the engine by `install_adblock`. Subscriptions with no cache yet contribute
 /// nothing (so a still-fetching or failed list is simply absent).
-pub fn enabled_text(app: &AppHandle) -> String {
+pub fn enabled_text<R: Runtime>(app: &AppHandle<R>) -> String {
     let mut out = String::new();
     for row in jsonstore::load(app, "subs") {
         if jsonstore::is_deleted(&row) {

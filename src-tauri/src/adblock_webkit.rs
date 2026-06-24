@@ -22,7 +22,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use glib::translate::ToGlibPtr;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use webkit2gtk::{
     UserContentInjectedFrames, UserContentManagerExt, UserStyleLevel, UserStyleSheet, WebViewExt,
 };
@@ -90,7 +90,12 @@ fn note_save_complete() {
 /// so tabs spawned afterwards are filtered too (`apply_to_new_tab`). When `cached`
 /// is true the filters are loaded from `store_dir` (fast); otherwise compiled and
 /// saved (slow, first run). `store_dir` persists compiled filters across runs.
-pub fn apply_filters(app: &AppHandle, chunks: Vec<String>, store_dir: PathBuf, cached: bool) {
+pub fn apply_filters<R: Runtime>(
+    app: &AppHandle<R>,
+    chunks: Vec<String>,
+    store_dir: PathBuf,
+    cached: bool,
+) {
     if chunks.is_empty() {
         return;
     }
@@ -109,7 +114,7 @@ pub fn apply_filters(app: &AppHandle, chunks: Vec<String>, store_dir: PathBuf, c
 /// Apply the cached filters to a single just-spawned tab's webview (called from
 /// `nav::spawn_tab`). No-op when ad-block is off or the filters aren't converted
 /// yet (the boot `apply_filters` covers tabs that exist at startup).
-pub fn apply_to_new_tab(app: &AppHandle, label: &str) {
+pub fn apply_to_new_tab<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let enabled = app
         .try_state::<crate::adblock::AdblockState>()
         .map(|s| s.0.lock().unwrap().enabled)
@@ -130,7 +135,12 @@ fn is_content_label(label: &str) -> bool {
 
 /// Install `chunks` as WebKit content filters on one webview's UserContentManager.
 #[allow(clippy::ptr_arg)] // store_dir is cloned into an async closure that must be 'static; &Path can't be moved into it
-fn install_on(content: tauri::Webview, chunks: &[String], store_dir: &PathBuf, cached: bool) {
+fn install_on<R: Runtime>(
+    content: tauri::Webview<R>,
+    chunks: &[String],
+    store_dir: &PathBuf,
+    cached: bool,
+) {
     let chunks = chunks.to_vec();
     let store_dir = store_dir.clone();
     let _ = content.with_webview(move |pw| {
@@ -158,7 +168,7 @@ fn install_on(content: tauri::Webview, chunks: &[String], store_dir: &PathBuf, c
 }
 
 /// Remove all content filters from **every** content webview (ad-block disabled).
-pub fn remove_all(app: &AppHandle) {
+pub fn remove_all<R: Runtime>(app: &AppHandle<R>) {
     for (label, content) in app.webviews() {
         if !is_content_label(&label) {
             continue;
@@ -173,7 +183,7 @@ pub fn remove_all(app: &AppHandle) {
 
 /// Inject an element-hiding stylesheet (safe API), for cosmetic rules beyond what
 /// the content filter expresses.
-pub fn apply_cosmetic_css(app: &AppHandle, css: String) {
+pub fn apply_cosmetic_css<R: Runtime>(app: &AppHandle<R>, css: String) {
     if css.is_empty() {
         return;
     }
