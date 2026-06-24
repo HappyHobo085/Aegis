@@ -1,10 +1,16 @@
 // Runtime test of the SHIPPED farble shim JS (src-tauri/src/farble.*.js). The Rust side
-// include_str!'s these exact files (prefixing a seed literal), so executing them here tests
-// the actual shipped bytes. Mirrors webrtcShim.test.ts. Runs in the vitest jsdom project.
+// include_str!'s these exact files (substituting the __AEGIS_FARBLE_SEED__ placeholder),
+// so executing them here tests the actual shipped bytes. Mirrors webrtcShim.test.ts. Runs
+// in the vitest jsdom project.
 //
 // jsdom does not implement Canvas or AudioBuffer natively; this test stubs those surfaces
 // exactly as the webrtcShim.test.ts stubs RTCPeerConnection — so the test covers the actual
 // shipped shim bytes against real stand-ins, catching behavioral bugs string assertions cannot.
+//
+// SCOPE: run() uses indirect eval — (0, eval)(script) — which executes in TRUE GLOBAL scope
+// (not function scope). This means patched globals ARE visible on `window` and any top-level
+// `var` would also land on `window`. The no-seed-on-window test relies on this: if the seed
+// were a top-level var the assertion would catch it.
 import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -12,9 +18,10 @@ import { join } from 'node:path';
 const read = (n: string) => readFileSync(join(process.cwd(), 'src-tauri/src', n), 'utf8');
 const STANDARD = read('farble.standard.js');
 
-// Compose like Rust does: prepend the public-seed literal, then the shipped artifact.
+// Compose like Rust does: substitute the placeholder with the real seed in the IIFE argument.
+// The seed is NEVER a top-level var — it lives only in the IIFE closure parameter.
 const withSeed = (js: string, hex: string) =>
-  `var __aegisFarbleSeed=${JSON.stringify(hex)};\n${js}`;
+  js.replace("'__AEGIS_FARBLE_SEED__'", JSON.stringify(hex));
 const SEED_A = 'a1b2c3d4e5f60718293a4b5c6d7e8f90';
 const SEED_B = '00112233445566778899aabbccddeeff';
 
@@ -102,8 +109,13 @@ function run(js: string, hex: string, origin = 'https://example.com') {
     value: { origin, href: origin + '/' },
     configurable: true,
   });
-  // The shim is an IIFE; run it in global scope (it patches window/navigator prototypes).
-  new Function(withSeed(js, hex))();
+  // Run in TRUE GLOBAL scope via indirect eval so any top-level `var` would land on
+  // `window` — exactly as the browser's document-start injection does. This makes the
+  // no-seed-on-window assertion authoritative: if the seed were a top-level var it would
+  // appear on `window.__aegisFarbleSeed` and the test would catch it.
+  // Indirect eval: runs in true global scope (the `0,eval` trick de-references the local binding).
+  // eslint-disable-next-line @typescript-eslint/no-implied-eval
+  (0, eval)(withSeed(js, hex));
 }
 
 // After each test, restore stub prototypes so patches don't bleed between tests.
@@ -316,9 +328,16 @@ describe('farble shim (standard) — shipped JS, runtime', () => {
     }
   });
 
-  it('SEED is NOT readable as a window.* global (shim uses closure, not window assignment)', () => {
+  it('SEED is NOT readable as a window.* global (seed is closure param, not top-level var)', () => {
     run(STANDARD, SEED_A);
     const w = window as unknown as Record<string, unknown>;
+
+    // CRITICAL super-cookie regression guard: the session seed must NOT appear on window.
+    // This test runs in true global scope (indirect eval), so if the seed were a top-level
+    // `var` it would land here. Failure here = the fix is broken / reverted.
+    expect(w['__aegisFarbleSeed']).toBeUndefined();
+    expect('__aegisFarbleSeed' in window).toBe(false);
+
     // The per-ORIGIN sub-seed must NOT be on window — it is derived inside the IIFE closure.
     expect(w['__aegisFarbleOriginSeed']).toBeUndefined();
     expect(w['__aegisFarblesub']).toBeUndefined();
@@ -327,9 +346,6 @@ describe('farble shim (standard) — shipped JS, runtime', () => {
     expect(w['__aegisS0']).toBeUndefined();
     expect(w['__aegisS1']).toBeUndefined();
     // The shim's internal variables (var-scoped inside the IIFE) must not bleed out.
-    // Note: __aegisFarbleSeed IS set as a var by the Rust-prepended line (in the new Function
-    // scope, which is global) — but the shim itself must NEVER assign to window.__aegisFarbleSeed.
-    // The key invariant: no other-origin's sub-seed is accessible.
     expect(w['_s0']).toBeUndefined();
     expect(w['_s1']).toBeUndefined();
     expect(w['sub']).toBeUndefined();
@@ -341,8 +357,10 @@ describe('farble shim (standard) — shipped JS, runtime', () => {
     const CRC2D = w['CanvasRenderingContext2D'] as { prototype: AnyProto };
     const origGID = CRC2D?.prototype?.['getImageData'];
 
-    // Run with an empty seed — the shim should return immediately without patching.
-    new Function(`var __aegisFarbleSeed="";\n${STANDARD}`)();
+    // Run with an empty seed (placeholder substituted with "") — the shim should return
+    // immediately without patching (the !SEEDHEX guard in the IIFE fires).
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    (0, eval)(STANDARD.replace("'__AEGIS_FARBLE_SEED__'", '""'));
 
     // Prototype must be unchanged when no seed is present.
     expect(CRC2D?.prototype?.['getImageData']).toBe(origGID);

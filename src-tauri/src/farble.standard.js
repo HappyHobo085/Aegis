@@ -1,16 +1,18 @@
 // Farble "standard" document-start shim — perturbs canvas/audio/navigator-UA-CH reads with
 // deterministic per-frame-origin, per-session noise. FAIL-OPEN: any error leaves the original
-// value, and nothing throws at document-start. Seed literal `__aegisFarbleSeed` (hex) is
-// prepended by Rust; it is HKDF(salt) — one-way, never the raw salt. Per-FRAME-origin: a
-// cross-origin iframe seeds on its own location.origin (window.top is unreadable cross-origin).
+// value, and nothing throws at document-start. The seed (hex) is baked into the IIFE parameter
+// call by Rust (placeholder substitution of `__AEGIS_FARBLE_SEED__`), so SEEDHEX is a
+// closure-local parameter — NEVER a top-level var, NEVER window.*. After the shim runs,
+// window.__aegisFarbleSeed is undefined. Seed is HKDF(salt) — one-way, never the raw salt.
+// Per-FRAME-origin: a cross-origin iframe seeds on its own location.origin (window.top is
+// unreadable cross-origin).
 //
 // This file is the SHIPPED artifact: Rust includes it verbatim via include_str! and the
 // vitest runtime test (src/lib/farbleShim.test.ts) executes it — catching behavioral bugs
 // that a string-assertion (the Rust marker test) cannot.
-(function () {
+(function (SEEDHEX) {
   try {
-    var SEEDHEX = typeof __aegisFarbleSeed === 'string' ? __aegisFarbleSeed : '';
-    if (!SEEDHEX) return; // no seed → no-op (fail-open)
+    if (typeof SEEDHEX !== 'string' || !SEEDHEX) return; // no seed → no-op (fail-open)
 
     // ---- hex → byte array ----
     function hexToBytes(h) {
@@ -399,4 +401,4 @@
       }
     } catch (e) {}
   } catch (e) {}
-})();
+})('__AEGIS_FARBLE_SEED__');

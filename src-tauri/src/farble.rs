@@ -82,7 +82,9 @@ pub fn seed_hex() -> String {
 }
 
 /// The document-start JS shim for `level`. Returns `""` (no interference) when
-/// `off`/allowlisted, else the seed-prefixed standard artifact.
+/// `off`/allowlisted, else the STANDARD_JS with the `__AEGIS_FARBLE_SEED__` placeholder
+/// replaced by the real hex seed — so the seed is baked into the IIFE parameter call and
+/// is NEVER a top-level `var` or `window.*` global.
 #[allow(dead_code)] // will be consumed by adblock_inject::script in the injection task
 pub fn shim_for(level: &str, host_allowlisted: bool) -> String {
     if host_allowlisted {
@@ -90,7 +92,9 @@ pub fn shim_for(level: &str, host_allowlisted: bool) -> String {
     }
     match level {
         "standard" | "strict" => {
-            format!("var __aegisFarbleSeed=\"{}\";\n{}", seed_hex(), STANDARD_JS)
+            // Substitute the placeholder with the real seed inside the IIFE argument.
+            // The emitted script has NO top-level var and NO window.* seed assignment.
+            STANDARD_JS.replace("'__AEGIS_FARBLE_SEED__'", &format!("'{}'", seed_hex()))
         }
         _ => String::new(), // "off" or any unrecognised level → no interference
     }
@@ -209,14 +213,32 @@ mod tests {
         assert_eq!(shim_for("standard", true), ""); // allowlisted host
         assert_eq!(shim_for("strict", true), "");
 
-        // standard → the emitted JS embeds a seed line + the shipped canvas/audio/navigator
-        // farble markers (tests the shipped string, not just the Rust code path).
+        // standard → the emitted JS has the placeholder REPLACED with the real seed,
+        // baked into the IIFE argument — no top-level var, no window.* assignment.
         let js = shim_for("standard", false);
-        // The seed line must come first.
+
+        // Placeholder must be gone — the real seed is substituted in.
         assert!(
-            js.starts_with("var __aegisFarbleSeed="),
-            "seed literal missing from standard shim: {js:.80}..."
+            !js.contains("'__AEGIS_FARBLE_SEED__'"),
+            "placeholder must be replaced in standard shim"
         );
+        // The IIFE must be called with the real 32-char hex seed as its argument.
+        // The real seed is 32 hex chars; the call ends the script as })('<seed>');
+        assert!(
+            js.contains("})('") && js.trim_end().ends_with("');"),
+            "IIFE must be called with seed arg: {js:.80}..."
+        );
+        // No top-level var seed assignment and no window.* seed.
+        assert!(
+            !js.contains("var __aegisFarbleSeed"),
+            "emitted JS must not have a top-level var __aegisFarbleSeed"
+        );
+        // A comment mentioning "window.__aegisFarbleSeed" is harmless; check for an assignment.
+        assert!(
+            !js.contains("window.__aegisFarbleSeed ="),
+            "SEED must not be assigned to window.*"
+        );
+
         for marker in [
             "getImageData",
             "[native code]",
@@ -225,21 +247,22 @@ mod tests {
             "userAgentData",
             "sha256",
             "xoshiro128",
-            "__aegisFarbleSeed",
         ] {
             assert!(
                 js.contains(marker),
                 "standard shim missing marker: {marker}"
             );
         }
-        // SEED must NOT appear as a window global (closured, not assigned to window.*).
-        assert!(
-            !js.contains("window.__aegisFarbleSeed"),
-            "SEED must not be assigned to window.*"
-        );
 
         // strict also works (same artifact for now).
         let js_strict = shim_for("strict", false);
-        assert!(js_strict.starts_with("var __aegisFarbleSeed="));
+        assert!(
+            !js_strict.contains("'__AEGIS_FARBLE_SEED__'"),
+            "placeholder must be replaced in strict shim"
+        );
+        assert!(
+            !js_strict.contains("var __aegisFarbleSeed"),
+            "strict shim must not have a top-level var __aegisFarbleSeed"
+        );
     }
 }
