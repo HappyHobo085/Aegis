@@ -18,7 +18,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use axum::extract::{Query, State};
+use axum::extract::{DefaultBodyLimit, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -28,7 +28,7 @@ use serde_json::{json, Value};
 
 // ----------------------------------------------------------------------------- auth
 
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct AuthToken {
     account_id: String,
     device_id: String,
@@ -66,12 +66,14 @@ fn now_ms() -> i64 {
 /// Verify the `Authorization: AegisSig {accountId}.{tokenHex}.{sigHex}` header. Returns the
 /// authenticated (accountId, deviceId). Does NOT check registration — the caller decides
 /// whether to require it (data endpoints do; device registration is self-bootstrapping).
-fn verify_auth(headers: &HeaderMap) -> Result<(String, String), StatusCode> {
+fn verify_auth(headers: &HeaderMap, state: &AppState) -> Result<(String, String), StatusCode> {
     let raw = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
-    let rest = raw.strip_prefix("AegisSig ").ok_or(StatusCode::UNAUTHORIZED)?;
+    let rest = raw
+        .strip_prefix("AegisSig ")
+        .ok_or(StatusCode::UNAUTHORIZED)?;
     let mut parts = rest.splitn(3, '.');
     let account = parts.next().ok_or(StatusCode::UNAUTHORIZED)?;
     let token_hex = parts.next().ok_or(StatusCode::UNAUTHORIZED)?;
@@ -95,7 +97,23 @@ fn verify_auth(headers: &HeaderMap) -> Result<(String, String), StatusCode> {
         .and_then(|b| b.try_into().ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
     let sig = Signature::from_bytes(&sig_bytes);
-    vk.verify_strict(&canonical(&token), &sig).map_err(|_| StatusCode::UNAUTHORIZED)?;
+    vk.verify_strict(&canonical(&token), &sig)
+        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    // Replay defense: a (device, nonce) pair is single-use. Recorded only AFTER the signature
+    // verifies (so unauthenticated tokens can't bloat the set), and bounded by the TTL —
+    // expired entries are swept (their tokens already fail the `now > expires_ms` check above).
+    // The client mints a FRESH nonce per request (sync.rs `sync_ns`), so a legitimate request is
+    // never rejected. Honest residual: the set is in-memory, so a server RESTART forgets spent
+    // nonces — a token captured before a restart could replay within its (≤5-min) TTL after it.
+    {
+        let mut seen = state.seen_nonces.lock().unwrap();
+        seen.retain(|_, exp| *exp > now);
+        let key = (token.device_id.clone(), token.nonce.clone());
+        if seen.contains_key(&key) {
+            return Err(StatusCode::UNAUTHORIZED);
+        }
+        seen.insert(key, token.expires_ms);
+    }
     Ok((token.account_id, token.device_id))
 }
 
@@ -115,7 +133,10 @@ fn hlc_key(hlc: &Value) -> (i64, u64, String) {
     (
         hlc.get("wall_ms").and_then(Value::as_i64).unwrap_or(0),
         hlc.get("counter").and_then(Value::as_u64).unwrap_or(0),
-        hlc.get("node").and_then(Value::as_str).unwrap_or("").to_string(),
+        hlc.get("node")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string(),
     )
 }
 
@@ -173,7 +194,10 @@ impl Snapshot {
             .devices
             .iter()
             .flat_map(|(account, set)| {
-                set.values().map(move |d| SnapDevice { account: account.clone(), device: d.clone() })
+                set.values().map(move |d| SnapDevice {
+                    account: account.clone(),
+                    device: d.clone(),
+                })
             })
             .collect();
         Snapshot { records, devices }
@@ -187,7 +211,11 @@ impl Snapshot {
         }
         for sd in self.devices {
             let device_id = sd.device.device_id.clone();
-            store.devices.entry(sd.account).or_default().insert(device_id, sd.device);
+            store
+                .devices
+                .entry(sd.account)
+                .or_default()
+                .insert(device_id, sd.device);
         }
         store
     }
@@ -234,6 +262,10 @@ struct AppState {
     db: Db,
     data_path: Option<Arc<PathBuf>>,
     writer: Arc<Mutex<()>>,
+    // Spent auth-token nonces for replay defense: (device_id, nonce) -> token expiry_ms.
+    // Bounded by the token TTL (expired entries are swept on each verify). In-memory only —
+    // a restart forgets them (documented residual, bounded by the ≤5-min TTL).
+    seen_nonces: Arc<Mutex<HashMap<(String, String), i64>>>,
 }
 
 impl AppState {
@@ -242,6 +274,7 @@ impl AppState {
             db: Arc::new(Mutex::new(store)),
             data_path: data_path.map(Arc::new),
             writer: Arc::new(Mutex::new(())),
+            seen_nonces: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -256,14 +289,19 @@ impl AppState {
     /// the db mutex and is authoritative for all reads. Acceptable at the intended personal
     /// scale; tightening it (snapshot under the writer lock) would hold up writers on fsync.
     fn persist(&self) {
-        let Some(path) = self.data_path.clone() else { return };
+        let Some(path) = self.data_path.clone() else {
+            return;
+        };
         let snap = {
             let g = self.db.lock().unwrap();
             Snapshot::from_store(&g)
         };
         let _w = self.writer.lock().unwrap();
         if let Err(e) = save_snapshot(&path, &snap) {
-            eprintln!("[aegis-sync-server] WARN failed to persist to {}: {e}", path.display());
+            eprintln!(
+                "[aegis-sync-server] WARN failed to persist to {}: {e}",
+                path.display()
+            );
         }
     }
 }
@@ -275,6 +313,17 @@ fn require_registered(db: &Db, account: &str, device: &str) -> Result<(), Status
         _ => Err(StatusCode::FORBIDDEN),
     }
 }
+
+// ----------------------------------------------------------------------------- quotas
+// Bound authenticated resource use: a registered-but-malicious paired device (any holder of
+// the recovery phrase, or a compromised device) must not be able to OOM the process or fill
+// disk. Generous for a personal deployment; tighten via these constants if needed.
+const MAX_RECORDS_PER_REQUEST: usize = 1000; // records in one POST /v1/records body
+const MAX_RECORDS_PER_ACCOUNT: usize = 50_000; // total live records an account may hold
+const MAX_FIELD_LEN: usize = 1024; // ns / uuid / nonce (short ids / hex)
+const MAX_CT_LEN: usize = 64 * 1024; // ciphertext bytes per record (very generous for one item)
+const MAX_LABEL_LEN: usize = 256; // device label
+const MAX_BODY_BYTES: usize = 8 * 1024 * 1024; // coarse request-body backstop (axum layer)
 
 // ----------------------------------------------------------------------------- handlers
 
@@ -288,7 +337,7 @@ async fn get_records(
     headers: HeaderMap,
     Query(q): Query<RecordsQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let (account, device) = verify_auth(&headers)?;
+    let (account, device) = verify_auth(&headers, &state)?;
     require_registered(&state.db, &account, &device)?;
     let g = state.db.lock().unwrap();
     let records: Vec<WireRecord> = g
@@ -311,11 +360,35 @@ async fn post_records(
     headers: HeaderMap,
     Json(body): Json<PostRecords>,
 ) -> Result<Json<Value>, StatusCode> {
-    let (account, device) = verify_auth(&headers)?;
+    let (account, device) = verify_auth(&headers, &state)?;
     require_registered(&state.db, &account, &device)?;
+    // Quota: reject excessive / oversized input before touching the store.
+    if body.records.len() > MAX_RECORDS_PER_REQUEST || body.ns.len() > MAX_FIELD_LEN {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    for r in &body.records {
+        if r.uuid.len() > MAX_FIELD_LEN || r.nonce.len() > MAX_FIELD_LEN || r.ct.len() > MAX_CT_LEN
+        {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+    }
     let mut changed = false;
     {
         let mut g = state.db.lock().unwrap();
+        // Per-account total cap: refuse to GROW an account past the cap (updates to existing
+        // records always pass — they don't add a key). Counts the new keys this request adds.
+        let current = g.records.keys().filter(|(a, _, _)| a == &account).count();
+        let new_keys = body
+            .records
+            .iter()
+            .filter(|r| {
+                !g.records
+                    .contains_key(&(account.clone(), body.ns.clone(), r.uuid.clone()))
+            })
+            .count();
+        if current + new_keys > MAX_RECORDS_PER_ACCOUNT {
+            return Err(StatusCode::INSUFFICIENT_STORAGE);
+        }
         for rec in body.records {
             let key = (account.clone(), body.ns.clone(), rec.uuid.clone());
             // HLC last-writer-wins: keep the incoming record only if it strictly dominates the
@@ -374,9 +447,12 @@ async fn post_device(
 ) -> Result<Json<Value>, StatusCode> {
     // The device token proves possession of the DEVICE key; it must name the same account +
     // device as the body.
-    let (account, device) = verify_auth(&headers)?;
+    let (account, device) = verify_auth(&headers, &state)?;
     if account != body.account_id || device != body.device_id {
         return Err(StatusCode::FORBIDDEN);
+    }
+    if body.label.len() > MAX_LABEL_LEN {
+        return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     // PROOF-OF-ROOT: registration must be signed by the account key (whose public half IS
     // the account id). Without this, anyone who learned the public account id could
@@ -388,7 +464,11 @@ async fn post_device(
         let mut g = state.db.lock().unwrap();
         g.devices.entry(account).or_default().insert(
             device.clone(),
-            Device { device_id: device, label: body.label, last_seen_ms: now_ms() },
+            Device {
+                device_id: device,
+                label: body.label,
+                last_seen_ms: now_ms(),
+            },
         );
     }
     state.persist();
@@ -399,11 +479,14 @@ async fn get_devices(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, StatusCode> {
-    let (account, device) = verify_auth(&headers)?;
+    let (account, device) = verify_auth(&headers, &state)?;
     require_registered(&state.db, &account, &device)?;
     let g = state.db.lock().unwrap();
-    let devices: Vec<Device> =
-        g.devices.get(&account).map(|m| m.values().cloned().collect()).unwrap_or_default();
+    let devices: Vec<Device> = g
+        .devices
+        .get(&account)
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default();
     Ok(Json(json!({ "devices": devices })))
 }
 
@@ -418,7 +501,7 @@ async fn remove_device(
     headers: HeaderMap,
     Json(body): Json<RemoveDevice>,
 ) -> Result<Json<Value>, StatusCode> {
-    let (account, device) = verify_auth(&headers)?;
+    let (account, device) = verify_auth(&headers, &state)?;
     require_registered(&state.db, &account, &device)?;
     let mut removed = false;
     {
@@ -444,6 +527,9 @@ fn app(state: AppState) -> Router {
         .route("/v1/devices", get(get_devices).post(post_device))
         .route("/v1/devices/remove", post(remove_device))
         .route("/healthz", get(healthz))
+        // Coarse pre-deserialization backstop on the request body (axum default is 2 MiB); the
+        // per-field / per-request quotas above do the fine-grained bounding.
+        .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .with_state(state)
 }
 
@@ -462,13 +548,215 @@ async fn main() {
         .as_ref()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| "in-memory".to_string());
-    println!("[aegis-sync-server] listening on http://{addr} (storage: {storage}, ciphertext-only)");
+    println!(
+        "[aegis-sync-server] listening on http://{addr} (storage: {storage}, ciphertext-only)"
+    );
     axum::serve(listener, app(state)).await.expect("serve");
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
+
+    fn hex_bytes(b: &[u8]) -> String {
+        b.iter().map(|x| format!("{x:02x}")).collect()
+    }
+
+    /// Build an `Authorization: AegisSig …` header for a device key, with the given nonce.
+    fn signed(key: &SigningKey, account: &str, nonce: &str, expires_ms: i64) -> HeaderMap {
+        let device_id = hex_bytes(&key.verifying_key().to_bytes());
+        let token = AuthToken {
+            account_id: account.into(),
+            device_id,
+            issued_ms: now_ms(),
+            expires_ms,
+            nonce: nonce.into(),
+        };
+        let token_hex = hex_bytes(&serde_json::to_vec(&token).unwrap());
+        let sig_hex = hex_bytes(&key.sign(&canonical(&token)).to_bytes());
+        let mut h = HeaderMap::new();
+        h.insert(
+            "authorization",
+            format!("AegisSig {account}.{token_hex}.{sig_hex}")
+                .parse()
+                .unwrap(),
+        );
+        h
+    }
+
+    /// A fresh AppState with one device registered under `account`, returning the device key.
+    fn registered(seed: u8) -> (AppState, SigningKey, String) {
+        let key = SigningKey::from_bytes(&[seed; 32]);
+        let account = format!("acct-{seed}");
+        let device_id = hex_bytes(&key.verifying_key().to_bytes());
+        let state = AppState::new(Store::default(), None);
+        state
+            .db
+            .lock()
+            .unwrap()
+            .devices
+            .entry(account.clone())
+            .or_default()
+            .insert(
+                device_id.clone(),
+                Device {
+                    device_id,
+                    label: "L".into(),
+                    last_seen_ms: 0,
+                },
+            );
+        (state, key, account)
+    }
+
+    fn rec(uuid: &str, wall: i64, ct: &str) -> WireRecord {
+        WireRecord {
+            uuid: uuid.into(),
+            hlc: json!({ "wall_ms": wall, "counter": 0, "node": "n" }),
+            deleted: false,
+            nonce: "n".into(),
+            ct: ct.into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn replayed_token_rejected_distinct_nonce_accepted() {
+        let (state, key, account) = registered(20);
+        let ttl = now_ms() + 300_000;
+        let h1 = signed(&key, &account, "nonce-1", ttl);
+        // First use of a token: accepted.
+        assert!(post_records(
+            State(state.clone()),
+            h1.clone(),
+            Json(PostRecords {
+                ns: "bm".into(),
+                records: vec![]
+            }),
+        )
+        .await
+        .is_ok());
+        // Replaying the EXACT same token (same nonce) must be rejected.
+        let replay = post_records(
+            State(state.clone()),
+            h1,
+            Json(PostRecords {
+                ns: "bm".into(),
+                records: vec![],
+            }),
+        )
+        .await;
+        assert_eq!(replay.unwrap_err(), StatusCode::UNAUTHORIZED);
+        // A fresh token (distinct nonce) is accepted.
+        let h2 = signed(&key, &account, "nonce-2", ttl);
+        assert!(post_records(
+            State(state),
+            h2,
+            Json(PostRecords {
+                ns: "bm".into(),
+                records: vec![]
+            }),
+        )
+        .await
+        .is_ok());
+    }
+
+    #[tokio::test]
+    async fn oversized_or_excessive_records_rejected() {
+        let (state, key, account) = registered(21);
+        let ttl = now_ms() + 300_000;
+        // Oversized ciphertext → 413.
+        let big = post_records(
+            State(state.clone()),
+            signed(&key, &account, "a1", ttl),
+            Json(PostRecords {
+                ns: "bm".into(),
+                records: vec![rec("u", 1, &"a".repeat(MAX_CT_LEN + 1))],
+            }),
+        )
+        .await;
+        assert_eq!(big.unwrap_err(), StatusCode::PAYLOAD_TOO_LARGE);
+        // Too many records in one request → 413.
+        let many: Vec<WireRecord> = (0..=MAX_RECORDS_PER_REQUEST)
+            .map(|i| rec(&format!("u{i}"), 1, "c"))
+            .collect();
+        let flood = post_records(
+            State(state.clone()),
+            signed(&key, &account, "a2", ttl),
+            Json(PostRecords {
+                ns: "bm".into(),
+                records: many,
+            }),
+        )
+        .await;
+        assert_eq!(flood.unwrap_err(), StatusCode::PAYLOAD_TOO_LARGE);
+        // Oversized namespace → 413.
+        let ns = post_records(
+            State(state),
+            signed(&key, &account, "a3", ttl),
+            Json(PostRecords {
+                ns: "x".repeat(MAX_FIELD_LEN + 1),
+                records: vec![],
+            }),
+        )
+        .await;
+        assert_eq!(ns.unwrap_err(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+
+    #[tokio::test]
+    async fn per_account_record_cap_enforced_but_updates_allowed() {
+        let (state, key, account) = registered(22);
+        let ttl = now_ms() + 300_000;
+        // Fill the account to capacity directly.
+        {
+            let mut g = state.db.lock().unwrap();
+            for i in 0..MAX_RECORDS_PER_ACCOUNT {
+                g.records.insert(
+                    (account.clone(), "bm".into(), format!("u{i}")),
+                    rec(&format!("u{i}"), 1, "c"),
+                );
+            }
+        }
+        // A NEW record is refused (account full) → 507.
+        let grow = post_records(
+            State(state.clone()),
+            signed(&key, &account, "b1", ttl),
+            Json(PostRecords {
+                ns: "bm".into(),
+                records: vec![rec("brand-new", 1, "c")],
+            }),
+        )
+        .await;
+        assert_eq!(grow.unwrap_err(), StatusCode::INSUFFICIENT_STORAGE);
+        // UPDATING an existing record (no growth) is still allowed.
+        let update = post_records(
+            State(state),
+            signed(&key, &account, "b2", ttl),
+            Json(PostRecords {
+                ns: "bm".into(),
+                records: vec![rec("u0", 99, "updated")],
+            }),
+        )
+        .await;
+        assert!(update.is_ok(), "an update at capacity must not be blocked");
+    }
+
+    #[tokio::test]
+    async fn oversized_device_label_rejected() {
+        let (state, key, account) = registered(23);
+        let device_id = hex_bytes(&key.verifying_key().to_bytes());
+        let r = post_device(
+            State(state),
+            signed(&key, &account, "c1", now_ms() + 300_000),
+            Json(RegisterDevice {
+                account_id: account.clone(),
+                device_id,
+                label: "x".repeat(MAX_LABEL_LEN + 1),
+                account_sig: "00".into(), // never reached — the label is validated first
+            }),
+        )
+        .await;
+        assert_eq!(r.unwrap_err(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
 
     #[test]
     fn hlc_lww_keeps_the_dominant_record() {
@@ -490,7 +778,10 @@ mod tests {
             expires_ms: 20,
             nonce: "ab".into(),
         };
-        assert_eq!(canonical(&t), b"aegis-auth-v1\nacct\ndev\n10\n20\nab".to_vec());
+        assert_eq!(
+            canonical(&t),
+            b"aegis-auth-v1\nacct\ndev\n10\n20\nab".to_vec()
+        );
     }
 
     #[test]
@@ -532,11 +823,14 @@ mod tests {
         let path = dir.join("data.json");
 
         let mut store = Store::default();
-        store
-            .devices
-            .entry("acct".into())
-            .or_default()
-            .insert("dev1".into(), Device { device_id: "dev1".into(), label: "L".into(), last_seen_ms: 7 });
+        store.devices.entry("acct".into()).or_default().insert(
+            "dev1".into(),
+            Device {
+                device_id: "dev1".into(),
+                label: "L".into(),
+                last_seen_ms: 7,
+            },
+        );
         // Also exercise a record through the disk path (devices alone wouldn't catch a
         // broken SnapRecord (de)serialization).
         store.records.insert(
@@ -553,15 +847,32 @@ mod tests {
         save_snapshot(&path, &Snapshot::from_store(&store)).unwrap();
         let loaded = load_store(&path).unwrap();
 
-        assert_eq!(loaded.devices.get("acct").unwrap().get("dev1").unwrap().last_seen_ms, 7);
+        assert_eq!(
+            loaded
+                .devices
+                .get("acct")
+                .unwrap()
+                .get("dev1")
+                .unwrap()
+                .last_seen_ms,
+            7
+        );
         assert_eq!(loaded.records.len(), 1);
-        assert_eq!(loaded.records.get(&("acct".into(), "bm".into(), "u1".into())).unwrap().ct, "c");
+        assert_eq!(
+            loaded
+                .records
+                .get(&("acct".into(), "bm".into(), "u1".into()))
+                .unwrap()
+                .ct,
+            "c"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn missing_file_loads_empty() {
-        let path = std::env::temp_dir().join(format!("aegis-sync-absent-{}.json", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("aegis-sync-absent-{}.json", std::process::id()));
         let _ = std::fs::remove_file(&path);
         let store = load_store(&path).unwrap();
         assert!(store.records.is_empty() && store.devices.is_empty());
@@ -584,14 +895,34 @@ mod tests {
         let path = dir.join("data.json");
 
         let state = AppState::new(Store::default(), Some(path.clone()));
-        state.db.lock().unwrap().devices.entry("acct".into()).or_default().insert(
-            "dev1".into(),
-            Device { device_id: "dev1".into(), label: "laptop".into(), last_seen_ms: 99 },
-        );
+        state
+            .db
+            .lock()
+            .unwrap()
+            .devices
+            .entry("acct".into())
+            .or_default()
+            .insert(
+                "dev1".into(),
+                Device {
+                    device_id: "dev1".into(),
+                    label: "laptop".into(),
+                    last_seen_ms: 99,
+                },
+            );
         state.persist();
 
         let reloaded = load_store(&path).unwrap();
-        assert_eq!(reloaded.devices.get("acct").unwrap().get("dev1").unwrap().label, "laptop");
+        assert_eq!(
+            reloaded
+                .devices
+                .get("acct")
+                .unwrap()
+                .get("dev1")
+                .unwrap()
+                .label,
+            "laptop"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -614,18 +945,35 @@ mod tests {
                 ct: "cc".into(),
             },
         );
-        store
-            .devices
-            .entry("acct".into())
-            .or_default()
-            .insert("dev1".into(), Device { device_id: "dev1".into(), label: "phone".into(), last_seen_ms: 42 });
+        store.devices.entry("acct".into()).or_default().insert(
+            "dev1".into(),
+            Device {
+                device_id: "dev1".into(),
+                label: "phone".into(),
+                last_seen_ms: 42,
+            },
+        );
 
         let back = Snapshot::from_store(&store).into_store();
 
         assert_eq!(back.records.len(), 1);
-        let r = back.records.get(&("acct".into(), "bookmarks".into(), "u1".into())).unwrap();
+        let r = back
+            .records
+            .get(&("acct".into(), "bookmarks".into(), "u1".into()))
+            .unwrap();
         assert_eq!(r.ct, "cc");
-        assert_eq!(back.devices.get("acct").unwrap().get("dev1").unwrap().label, "phone");
-        assert_eq!(back.devices.get("acct").unwrap().get("dev1").unwrap().last_seen_ms, 42);
+        assert_eq!(
+            back.devices.get("acct").unwrap().get("dev1").unwrap().label,
+            "phone"
+        );
+        assert_eq!(
+            back.devices
+                .get("acct")
+                .unwrap()
+                .get("dev1")
+                .unwrap()
+                .last_seen_ms,
+            42
+        );
     }
 }

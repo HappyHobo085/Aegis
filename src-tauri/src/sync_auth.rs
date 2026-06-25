@@ -5,9 +5,14 @@
 //! recovery phrase. A request carries `Authorization: AegisSig {accountId}.{tokenHex}.{sigHex}`
 //! where the token is a short-TTL claim signed by the device key. The server authorizes iff
 //! the signature verifies AND the device id is in the account's registered-pubkey set
-//! (registration happens at pairing). Short TTL + a per-token nonce defeats long-term replay.
+//! (registration happens at pairing). Replay defense: each token carries a random per-token
+//! nonce, and the server records spent `(device, nonce)` pairs and rejects a repeat — so a
+//! captured `Authorization` header can't be replayed. For this to hold, the client mints a
+//! FRESH token per HTTP request (see `sync::sync_ns`), never reusing one across a GET+POST.
 //!
-//! Honest residual: a stolen device key grants access until `removeDevice` revokes it.
+//! Honest residuals: a stolen device key grants access until `removeDevice` revokes it; and the
+//! server's spent-nonce set is in-memory, so a server restart forgets it (a token captured
+//! pre-restart could replay within its ≤5-min TTL afterward).
 //!
 //! The signed bytes use a CANONICAL fixed-field-order encoding (NOT serde — serde's object
 //! key order isn't guaranteed); the reference server MUST reproduce `canonical()` byte-for-byte.
