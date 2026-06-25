@@ -93,8 +93,7 @@ export function useSaved(currentUrl: string): UseSaved {
   const add = useCallback(
     async (input: { url: string; title: string; tags?: string[] }): Promise<void> => {
       setItems(await aegis.saved.add(input));
-      await refreshHas();
-      await refreshTagUnion();
+      await Promise.all([refreshHas(), refreshTagUnion()]);
     },
     [refreshHas, refreshTagUnion],
   );
@@ -107,8 +106,7 @@ export function useSaved(currentUrl: string): UseSaved {
       addingRef.current = true;
       try {
         setItems(await aegis.saved.add({ url: urlRef.current, title }));
-        await refreshHas();
-        await refreshTagUnion();
+        await Promise.all([refreshHas(), refreshTagUnion()]);
       } finally {
         addingRef.current = false;
       }
@@ -119,8 +117,7 @@ export function useSaved(currentUrl: string): UseSaved {
   const remove = useCallback(
     async (id: number): Promise<void> => {
       setItems(await aegis.saved.remove(id));
-      await refreshHas();
-      await refreshTagUnion();
+      await Promise.all([refreshHas(), refreshTagUnion()]);
     },
     [refreshHas, refreshTagUnion],
   );
@@ -129,8 +126,7 @@ export function useSaved(currentUrl: string): UseSaved {
     const match = itemsRef.current.find((i) => i.url === urlRef.current);
     if (!match) return;
     setItems(await aegis.saved.remove(match.id));
-    await refreshHas();
-    await refreshTagUnion();
+    await Promise.all([refreshHas(), refreshTagUnion()]);
   }, [refreshHas, refreshTagUnion]);
 
   const update = useCallback(

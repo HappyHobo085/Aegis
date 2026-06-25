@@ -1,5 +1,5 @@
 // src/components/SavedPanel.tsx
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useMemo, useState } from 'react';
 import { Bookmark, Pencil, Plus, X } from 'lucide-react';
 import type { SavedItem } from '../../shared/types';
 import { normalizeSavedUrl } from '../lib/addressParse';
@@ -59,12 +59,18 @@ export function SavedPanel({
   }, [tagUnion]);
 
   const q = query.trim().toLowerCase();
-  const filtered = items.filter((i) => {
-    const matchesSearch =
-      q.length === 0 || i.title.toLowerCase().includes(q) || i.url.toLowerCase().includes(q);
-    const matchesTags = activeTags.every((t) => i.tags.includes(t));
-    return matchesSearch && matchesTags;
-  });
+  // Memoized so the filter only recomputes when its inputs change — not on every
+  // unrelated re-render (e.g. typing in the add/edit forms, which live in local state).
+  const filtered = useMemo(
+    () =>
+      items.filter((i) => {
+        const matchesSearch =
+          q.length === 0 || i.title.toLowerCase().includes(q) || i.url.toLowerCase().includes(q);
+        const matchesTags = activeTags.every((t) => i.tags.includes(t));
+        return matchesSearch && matchesTags;
+      }),
+    [items, q, activeTags],
+  );
 
   const startEdit = (item: SavedItem): void => {
     setEditingId(item.id);
