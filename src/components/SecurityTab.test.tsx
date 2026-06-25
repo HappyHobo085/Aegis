@@ -126,6 +126,22 @@ describe('SecurityTab', () => {
     expect(input).toHaveValue('');
   });
 
+  it('Add does NOT toggle a host that is already allowlisted (would remove it)', async () => {
+    const toggleFingerprintAllowlist = vi.fn();
+    const fingerprintState: FingerprintState = {
+      level: 'standard',
+      allowlistedHosts: ['already.com'],
+    };
+    renderSecurityTab({ fingerprintState, toggleFingerprintAllowlist });
+    const input = screen.getByRole('textbox', { name: /host to add to fingerprint allowlist/i });
+    const btn = screen.getByRole('button', { name: /add host to fingerprint allowlist/i });
+    await userEvent.type(input, 'already.com');
+    await userEvent.click(btn);
+    // It's already on the allowlist — Add must be a no-op, NOT toggle it back off.
+    expect(toggleFingerprintAllowlist).not.toHaveBeenCalled();
+    expect(input).toHaveValue('');
+  });
+
   it('shows the honest-limit note about detectability', () => {
     renderSecurityTab();
     expect(screen.getByText(/opt-in/i)).toBeInTheDocument();

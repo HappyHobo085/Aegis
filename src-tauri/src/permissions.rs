@@ -55,15 +55,25 @@ fn persist<R: Runtime>(app: &AppHandle<R>, origin: &str, permission: &str, allow
     let _ = jsonstore::save(app, "permissions", &items);
 }
 
-/// scheme://host[:port] of a URL (the permission origin).
+/// scheme://host[:port] of a URL (the permission origin). Parsed with `Url` so the
+/// remembered-decision key is a NORMALIZED origin — host lowercased, default ports dropped,
+/// userinfo/path/query stripped — instead of a hand-rolled string split that mis-keys on
+/// case/port variants (re-prompting, or matching a visually-distinct origin). Falls back to
+/// the raw string for opaque/unparseable URIs.
 #[cfg(target_os = "linux")]
 fn origin_of(uri: &str) -> String {
-    if let Some(i) = uri.find("://") {
-        let after = &uri[i + 3..];
-        let end = after.find('/').unwrap_or(after.len());
-        format!("{}{}", &uri[..i + 3], &after[..end])
-    } else {
-        uri.to_string()
+    match tauri::Url::parse(uri) {
+        Ok(u) => match u.host_str() {
+            Some(host) => {
+                let host = host.to_ascii_lowercase();
+                match u.port() {
+                    Some(p) => format!("{}://{}:{}", u.scheme(), host, p),
+                    None => format!("{}://{}", u.scheme(), host),
+                }
+            }
+            None => uri.to_string(),
+        },
+        Err(_) => uri.to_string(),
     }
 }
 
@@ -280,6 +290,14 @@ mod tests {
             );
             assert_eq!(origin_of("https://example.com/"), "https://example.com");
             assert_eq!(origin_of("not-a-url"), "not-a-url");
+            // Normalized origin key: host lowercased, default port dropped, userinfo stripped —
+            // so visually-distinct URIs for the same origin share one remembered decision.
+            assert_eq!(origin_of("https://EXAMPLE.com/x"), "https://example.com");
+            assert_eq!(origin_of("https://example.com:443/"), "https://example.com");
+            assert_eq!(
+                origin_of("https://user@example.com/"),
+                "https://example.com"
+            );
         }
     }
 }

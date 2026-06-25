@@ -38,6 +38,18 @@ export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabPro
   async function handleModeChange(newMode: 'off' | 'proxy') {
     setModeLocal(newMode);
     setTestStatus('');
+    if (newMode === 'off') {
+      // Turning off must NOT commit unsaved host/port/bypass drafts — base the write on
+      // the last-applied state (the parent's `state`), flipping only the mode.
+      await setConfig({
+        mode: 'off',
+        scheme: state.scheme,
+        host: state.host,
+        port: state.port,
+        bypassHosts: state.bypassHosts,
+      });
+      return;
+    }
     const cfg = { ...currentCfg(), mode: newMode };
     await setConfig(cfg);
   }

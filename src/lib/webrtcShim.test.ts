@@ -105,6 +105,18 @@ describe('webrtc shim (public-only) — shipped JS, runtime', () => {
     expect(got).toEqual([PUBLIC_SRFLX, RELAY]);
   });
 
+  it('drops IPv4-mapped IPv6 private host candidates (::ffff:192.168.x.x)', () => {
+    const PC = install(PUBLIC_ONLY_JS);
+    const pc = new PC();
+    const MAPPED_PRIVATE = 'candidate:4 1 udp 1 ::ffff:192.168.1.5 5000 typ host';
+    const got: (string | null)[] = [];
+    pc.onicecandidate = (ev: any) => got.push(ev.candidate ? ev.candidate.candidate : null);
+    pc._emitIce(MAPPED_PRIVATE);
+    pc._emitIce(PUBLIC_SRFLX);
+    // The mapped private host must be dropped (it would leak the LAN IP otherwise).
+    expect(got).toEqual([PUBLIC_SRFLX]);
+  });
+
   it('onicecandidate REPLACES (no listener accumulation)', () => {
     const PC = install(PUBLIC_ONLY_JS);
     const pc = new PC();

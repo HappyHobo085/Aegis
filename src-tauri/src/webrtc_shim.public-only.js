@@ -15,11 +15,13 @@
       if(!a) return false;
       a = String(a).toLowerCase();
       if(a.endsWith('.local')) return true;                 // mDNS host (suffix, matches Rust)
-      if(a.indexOf(':') >= 0){                               // IPv6
+      if(a.indexOf(':') >= 0){                               // IPv6 (or IPv4-mapped IPv6)
         if(a === '::1') return true;                         // loopback
-        return a.indexOf('fc')===0||a.indexOf('fd')===0||a.indexOf('fe8')===0||a.indexOf('fe9')===0||a.indexOf('fea')===0||a.indexOf('feb')===0;
+        var c = a.lastIndexOf(':');
+        if(a.indexOf('.') > c){ a = a.slice(c+1); }          // ::ffff:192.168.1.5 → classify the IPv4
+        else return a.indexOf('fc')===0||a.indexOf('fd')===0||a.indexOf('fe8')===0||a.indexOf('fe9')===0||a.indexOf('fea')===0||a.indexOf('feb')===0;
       }
-      var p = a.split('.');                                  // IPv4 dotted-quad
+      var p = a.split('.');                                  // IPv4 dotted-quad (or a mapped ::ffff:x.x.x.x)
       if(p.length !== 4) return false;
       var n0 = parseInt(p[0],10), n1 = parseInt(p[1],10);
       if(isNaN(n0)||isNaN(n1)) return false;

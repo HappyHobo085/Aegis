@@ -8,6 +8,7 @@ const setEnabled = vi.fn();
 const add = vi.fn();
 const remove = vi.fn();
 const updateNow = vi.fn();
+const onUpdateResult = vi.fn();
 
 vi.mock('../lib/ipcClient', () => ({
   aegis: {
@@ -17,9 +18,18 @@ vi.mock('../lib/ipcClient', () => ({
       add: (...a: any[]) => add(...a),
       remove: (...a: any[]) => remove(...a),
     },
-    lists: { updateNow: (...a: any[]) => updateNow(...a) },
+    lists: {
+      updateNow: (...a: any[]) => updateNow(...a),
+      onUpdateResult: (...a: any[]) => onUpdateResult(...a),
+    },
   },
 }));
+
+/** Resolve the most recent onUpdateResult subscriber with `r` (simulate the core event). */
+function emitUpdateResult(r: ListUpdateResult): void {
+  const cb = onUpdateResult.mock.calls.at(-1)?.[0] as (result: ListUpdateResult) => void;
+  cb(r);
+}
 
 import { useSubscriptions } from './useSubscriptions';
 
@@ -44,7 +54,8 @@ beforeEach(() => {
   setEnabled.mockResolvedValue(seed);
   add.mockResolvedValue(seed);
   remove.mockResolvedValue(seed);
-  updateNow.mockResolvedValue({ perSource: [], lastUpdated: 123 } as ListUpdateResult);
+  updateNow.mockResolvedValue(undefined);
+  onUpdateResult.mockReturnValue(() => {});
 });
 
 describe('useSubscriptions', () => {
@@ -97,24 +108,30 @@ describe('useSubscriptions', () => {
     expect(result.current.subs.map((s) => s.listId)).toEqual(['easylist']);
   });
 
-  it('updateNow() delegates to aegis.lists.updateNow and returns its result', async () => {
+  it('updateNow() starts the update and resolves with the result delivered via the event', async () => {
     const { result } = renderHook(() => useSubscriptions());
     await waitFor(() => expect(result.current.subs).toHaveLength(2));
     let res: ListUpdateResult | undefined;
     await act(async () => {
-      res = await result.current.updateNow();
+      const p = result.current.updateNow();
+      // The hook kicked off the (non-blocking) core update and subscribed for the result;
+      // deliver it via the event → the promise resolves.
+      emitUpdateResult({ perSource: [], lastUpdated: 123 });
+      res = await p;
     });
     expect(updateNow).toHaveBeenCalledTimes(1);
     expect(res).toEqual({ perSource: [], lastUpdated: 123 });
   });
 
-  it('refreshes the subscription list after updateNow', async () => {
+  it('refreshes the subscription list after the update result arrives', async () => {
     const refreshed = seed.map((s) => sub({ ...s, lastUpdated: 9999 }));
     list.mockResolvedValueOnce(seed).mockResolvedValue(refreshed);
     const { result } = renderHook(() => useSubscriptions());
     await waitFor(() => expect(result.current.subs).toHaveLength(2));
     await act(async () => {
-      await result.current.updateNow();
+      const p = result.current.updateNow();
+      emitUpdateResult({ perSource: [], lastUpdated: 123 });
+      await p;
     });
     expect(list).toHaveBeenCalledTimes(2);
     expect(result.current.subs.every((s) => s.lastUpdated === 9999)).toBe(true);

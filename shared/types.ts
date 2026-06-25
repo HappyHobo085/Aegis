@@ -24,6 +24,7 @@ export const IPC = {
   adblockToggleAllowlist: 'adblock.toggleAllowlist',
   adblockGetState: 'adblock.getState',
   listsUpdateNow: 'lists.updateNow',
+  evtListsUpdateResult: 'lists.updateResult',
   // favorites (chrome -> main)
   favoritesList: 'favorites.list',
   favoritesAdd: 'favorites.add',
@@ -538,7 +539,14 @@ export interface AegisApi {
     onBlocked(cb: (r: RedirectBlocked) => void): () => void;
   };
   lists: {
-    updateNow(): Promise<ListUpdateResult>;
+    /**
+     * Start a background refresh of every enabled subscription. Resolves immediately —
+     * the (synchronous, main-thread) core command must not block on the up-to-25s fetch.
+     * The per-source result arrives later via `onUpdateResult`.
+     */
+    updateNow(): Promise<void>;
+    /** Fires when a background `updateNow` finishes, carrying its per-source result. */
+    onUpdateResult(cb: (result: ListUpdateResult) => void): () => void;
   };
   subs: {
     list(): Promise<Subscription[]>;

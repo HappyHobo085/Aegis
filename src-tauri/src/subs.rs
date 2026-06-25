@@ -200,11 +200,24 @@ fn url_of(items: &[Value], list_id: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Kick off a background refresh of every enabled subscription and return immediately. The
+/// `ipc` command is synchronous and runs on the UI thread (wry delivers the IPC message
+/// there), so doing the up-to-25s network fetch inline would freeze the whole window. The
+/// per-source result is delivered to the renderer via the `lists.updateResult` event when the
+/// background pass finishes (`run_update` also emits `subs.changed` if anything changed).
+pub fn update_now<R: Runtime>(app: &AppHandle<R>) {
+    let app = app.clone();
+    std::thread::spawn(move || {
+        let result = run_update(&app);
+        crate::emit_event(&app, "lists.updateResult", result);
+    });
+}
+
 /// Re-fetch every ENABLED subscription, refresh its cache + stamp, re-install the
 /// engine once, and return a `ListUpdateResult` (per-source ok/error + timestamp).
-/// Fetches run concurrently so wall-time is the slowest single list. Backs
-/// `lists.updateNow`.
-pub fn update_all<R: Runtime>(app: &AppHandle<R>) -> Value {
+/// Fetches run concurrently so wall-time is the slowest single list. Runs on the
+/// `update_now` background thread.
+fn run_update<R: Runtime>(app: &AppHandle<R>) -> Value {
     let now = jsonstore::now_ms();
     let enabled: Vec<(String, String)> = jsonstore::load(app, "subs")
         .iter()

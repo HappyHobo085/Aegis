@@ -4,6 +4,7 @@ import type { Settings } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { applyTheme, watchSystemTheme } from '../lib/theme';
 import { onSyncChange } from '../lib/syncBus';
+import { publishSettings } from '../lib/settingsBus';
 
 const emptySettings: Settings = {
   homeUrl: '',
@@ -48,6 +49,8 @@ export function useSettings(): {
         // Re-apply the resolved theme (accent + palette) so a synced primaryColor OR
         // themeMode recolors the chrome without a reload.
         applyTheme(s);
+        // Notify settings-derived hooks (e.g. useNav's search template) of the change.
+        publishSettings(s);
       });
     });
     // Subscribe to OS color-scheme changes so `system` mode follows the OS live.
@@ -69,6 +72,9 @@ export function useSettings(): {
     if (partial.primaryColor !== undefined || partial.themeMode !== undefined) {
       applyTheme(next);
     }
+    // Notify settings-derived hooks (e.g. useNav's search template) so a changed
+    // default search engine takes effect immediately, without a reload.
+    publishSettings(next);
   }, []);
 
   return { settings, update };

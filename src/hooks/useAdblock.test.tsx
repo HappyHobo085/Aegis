@@ -2,13 +2,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
-import type { AdblockState, BlockedCount, ListUpdateResult } from '../../shared/types';
+import type { AdblockState, BlockedCount } from '../../shared/types';
 
 const getState = vi.fn();
 const setEnabled = vi.fn();
 const toggleAllowlist = vi.fn();
 const onBlockedCount = vi.fn();
-const updateNow = vi.fn();
 const removeAllowlist = vi.fn();
 const clearAllowlist = vi.fn();
 
@@ -22,7 +21,6 @@ vi.mock('../lib/ipcClient', () => ({
       removeAllowlist: (...a: any[]) => removeAllowlist(...a),
       clearAllowlist: (...a: any[]) => clearAllowlist(...a),
     },
-    lists: { updateNow: (...a: any[]) => updateNow(...a) },
   },
 }));
 
@@ -40,7 +38,6 @@ beforeEach(() => {
   setEnabled.mockResolvedValue({ ...baseState, enabled: false });
   toggleAllowlist.mockResolvedValue({ ...baseState, allowlistedHosts: ['example.com'] });
   onBlockedCount.mockReturnValue(() => {});
-  updateNow.mockResolvedValue({ perSource: [], lastUpdated: 123 } as ListUpdateResult);
   removeAllowlist.mockResolvedValue({ ...baseState, allowlistedHosts: [] });
   clearAllowlist.mockResolvedValue({ ...baseState, allowlistedHosts: [] });
 });
@@ -110,17 +107,6 @@ describe('useAdblock', () => {
     await waitFor(() => expect(result.current.state.enabled).toBe(true));
     await act(async () => result.current.toggleAllowlist());
     expect(toggleAllowlist).not.toHaveBeenCalled();
-  });
-
-  it('updateNow delegates to aegis.lists.updateNow and returns its result', async () => {
-    const { result } = renderHook(() => useAdblock(PRIMARY_VIEW_ID, 'https://example.com/'));
-    await waitFor(() => expect(result.current.state.enabled).toBe(true));
-    let res: ListUpdateResult | undefined;
-    await act(async () => {
-      res = await result.current.updateNow();
-    });
-    expect(updateNow).toHaveBeenCalledTimes(1);
-    expect(res).toEqual({ perSource: [], lastUpdated: 123 });
   });
 
   it('unsubscribes from onBlockedCount on unmount', async () => {
