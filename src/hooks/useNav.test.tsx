@@ -32,6 +32,7 @@ vi.mock('../lib/ipcClient', () => ({
 }));
 
 import { useNav } from './useNav';
+import { publishSettings } from '../lib/settingsBus';
 
 const baseState: NavState = {
   viewId: PRIMARY_VIEW_ID,
@@ -99,6 +100,23 @@ describe('useNav', () => {
     await waitFor(() => expect(result.current.state.url).toBe('https://example.com/'));
     act(() => result.current.navigate('cats'));
     expect(navigate).toHaveBeenCalledWith(PRIMARY_VIEW_ID, 'https://duckduckgo.com/?q=cats');
+  });
+
+  it('updates the search template live when settings change (no reload needed)', async () => {
+    const { result } = renderHook(() => useNav(PRIMARY_VIEW_ID));
+    await waitFor(() => expect(result.current.state.url).toBe('https://example.com/'));
+    // User switches their default search engine in Settings → the bus publishes it.
+    act(() =>
+      publishSettings({
+        ...baseSettings,
+        defaultSearchTemplate: 'https://www.google.com/search?q=%s',
+      }),
+    );
+    act(() => result.current.navigate('cats'));
+    expect(navigate).toHaveBeenCalledWith(
+      PRIMARY_VIEW_ID,
+      'https://www.google.com/search?q=cats',
+    );
   });
 
   it('back/forward/reloadOrStop/home delegate to aegis.nav', async () => {

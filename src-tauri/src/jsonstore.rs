@@ -115,6 +115,19 @@ pub fn read_with_backup(path: &Path) -> Option<String> {
         .filter(|t| serde_json::from_str::<Value>(t).is_ok())
 }
 
+/// Like `read_with_backup` but returns the PARSED JSON — one parse, not two — for callers
+/// that immediately deserialize (the `load` paths). Same `.bak`-on-invalid fallback.
+pub fn read_value_with_backup(path: &Path) -> Option<Value> {
+    if let Ok(t) = fs::read_to_string(path) {
+        if let Ok(v) = serde_json::from_str::<Value>(&t) {
+            return Some(v);
+        }
+    }
+    fs::read_to_string(bak_path(path))
+        .ok()
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+}
+
 /// Non-JSON (plain text, e.g. filter rules) read with `.bak` fallback — no structural
 /// validation. An EXISTING file (even empty) is authoritative; we fall back to the
 /// backup ONLY when the primary can't be read (missing/unreadable). An empty file is a
@@ -130,18 +143,23 @@ pub fn read_text_with_backup(path: &Path) -> Option<String> {
 /// Load a collection (empty if missing/corrupt). A corrupt primary recovers from the
 /// `.bak` written on the last good save instead of silently zeroing the store.
 pub fn load<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
-    path(app, name)
-        .and_then(|p| read_with_backup(&p))
-        .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
-        .unwrap_or_default()
+    // Parse once (read_value_with_backup) and move the array out, instead of validating as
+    // a Value then re-parsing the same text into Vec<Value>.
+    match path(app, name).and_then(|p| read_value_with_backup(&p)) {
+        Some(Value::Array(arr)) => arr,
+        _ => Vec::new(),
+    }
 }
 
-/// Persist a collection durably (atomic temp→rename, keeps a `.bak`).
+/// Persist a collection durably (atomic temp→rename, keeps a `.bak`). These stores are
+/// machine-only (never hand-edited; `data.export` re-serializes its own pretty bundle),
+/// so use compact JSON — ~30-40% fewer bytes to serialize + fsync on every write, which
+/// matters most for the largest/most-frequently-written stores (e.g. history at its cap).
 pub fn save<R: Runtime>(app: &AppHandle<R>, name: &str, items: &[Value]) -> Result<(), String> {
     let Some(p) = path(app, name) else {
         return Err("no app data dir".into());
     };
-    let txt = serde_json::to_string_pretty(items).map_err(|e| e.to_string())?;
+    let txt = serde_json::to_string(items).map_err(|e| e.to_string())?;
     write_atomic(&p, txt.as_bytes()).map_err(|e| e.to_string())
 }
 
@@ -342,6 +360,22 @@ mod tests {
         fs::write(&p, b"{ this is not valid json").unwrap();
         let recovered = read_with_backup(&p).expect("should recover from .bak");
         assert_eq!(recovered, "[\"good\"]");
+    }
+
+    #[test]
+    fn read_value_with_backup_parses_once_and_recovers_from_bak() {
+        let dir = std::env::temp_dir().join(format!("aegis-rvb-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let p = dir.join("v.json");
+        // Corrupt primary + valid .bak → recovers the PARSED value from the backup.
+        std::fs::write(&p, b"{ not json").unwrap();
+        std::fs::write(bak_path(&p), br#"[{"id":7}]"#).unwrap();
+        let v = read_value_with_backup(&p).expect("recovers parsed value from .bak");
+        assert_eq!(v[0]["id"], serde_json::json!(7));
+        // Both invalid → None.
+        std::fs::write(bak_path(&p), b"also broken").unwrap();
+        assert!(read_value_with_backup(&p).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

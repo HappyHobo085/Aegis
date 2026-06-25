@@ -2,9 +2,27 @@
 //! a single config object doesn't need a DB. Lists (favorites/history/…) get a
 //! real store in Phase 2; settings staying JSON is fine and keeps this contained.
 use std::path::PathBuf;
+use std::sync::RwLock;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime, Url};
+
+/// Process-lifetime cache of the merged settings object, invalidated on every write.
+/// Without it, `load()` re-reads + triple-parses `settings.json` on every getter — and
+/// `load()` is on the per-navigation (per-subframe) hot path via `https_only` /
+/// `webrtc_policy`. Managed per-AppHandle (registered in `lib.rs` setup + `test_support`).
+#[derive(Default)]
+pub struct SettingsCache(pub RwLock<Option<Value>>);
+
+/// Drop the cached settings so the next `load()` re-reads from disk. Must be called after
+/// every write to `settings.json`, or a getter could return a stale value.
+fn invalidate_cache<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(cache) = app.try_state::<SettingsCache>() {
+        if let Ok(mut g) = cache.0.write() {
+            *g = None;
+        }
+    }
+}
 
 fn store_path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path()
@@ -47,6 +65,8 @@ pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) {
         let txt = serde_json::to_string_pretty(value).unwrap_or_default();
         let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
     }
+    // The file changed — drop the cache so getters re-read the new values.
+    invalidate_cache(app);
 }
 
 /// Configured download directory ("" = use the OS Downloads dir).
@@ -124,16 +144,26 @@ pub fn home_url(app: &AppHandle) -> Url {
     Url::parse(target).unwrap_or_else(|_| Url::parse("about:blank").expect("about:blank is valid"))
 }
 
-/// Defaults overlaid with any persisted values.
+/// Defaults overlaid with any persisted values. Cached (see `SettingsCache`) so the hot
+/// per-navigation getters don't re-read + re-parse the file each call; the cache is
+/// invalidated on every write via `invalidate_cache`.
 fn load<R: Runtime>(app: &AppHandle<R>) -> Value {
+    if let Some(cache) = app.try_state::<SettingsCache>() {
+        if let Some(v) = cache.0.read().ok().and_then(|g| g.clone()) {
+            return v;
+        }
+    }
     let mut s = defaults();
     if let Some(p) = store_path(app) {
-        // read_with_backup recovers from settings.json.bak if the primary is corrupt,
-        // instead of resetting every key to its default.
-        if let Some(txt) = crate::jsonstore::read_with_backup(&p) {
-            if let Ok(saved) = serde_json::from_str::<Value>(&txt) {
-                merge(&mut s, &saved);
-            }
+        // read_value_with_backup recovers from settings.json.bak if the primary is corrupt
+        // (instead of resetting every key to its default) and parses it just once.
+        if let Some(saved) = crate::jsonstore::read_value_with_backup(&p) {
+            merge(&mut s, &saved);
+        }
+    }
+    if let Some(cache) = app.try_state::<SettingsCache>() {
+        if let Ok(mut g) = cache.0.write() {
+            *g = Some(s.clone());
         }
     }
     s
@@ -370,6 +400,8 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     Err(e) => return Some(Err(e.to_string())),
                 }
             }
+            // The file changed — drop the cache so getters re-read the new values.
+            invalidate_cache(app);
             // Update the per-key sync projection for each key the renderer set.
             if let Some(partial) = payload.get("partial").and_then(Value::as_object) {
                 for (k, v) in partial {
@@ -403,6 +435,26 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::with_tmp_app;
+
+    /// The settings cache must reflect a write: prime it with the defaults, write a new
+    /// value, and the next read must see the new value (a stale cache would report the
+    /// old one). Guards `invalidate_cache` on the `write()` path (import / sync-merge).
+    #[test]
+    fn settings_cache_reflects_writes() {
+        with_tmp_app(|app| {
+            // Prime the cache with the default httpsOnly = true.
+            assert_eq!(load(app).get("httpsOnly"), Some(&json!(true)));
+            // Write httpsOnly = false through the same path data-import / sync use.
+            let mut next = load(app);
+            next.as_object_mut()
+                .unwrap()
+                .insert("httpsOnly".into(), json!(false));
+            write(app, &next);
+            // Must observe the new value, not the primed-cache default.
+            assert_eq!(load(app).get("httpsOnly"), Some(&json!(false)));
+        });
+    }
 
     fn rec(key: &str, wall: i64, value: Value) -> Value {
         json!({ "key": key, "uuid": key, "value": value,

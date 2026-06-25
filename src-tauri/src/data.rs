@@ -36,6 +36,9 @@ pub fn dispatch<R: Runtime>(
 ) -> Option<Result<Value, String>> {
     match channel {
         "data.export" => {
+            // History is batched in memory (see history.rs) — flush it so the export reads
+            // the latest visits from disk, not a stale file.
+            crate::history::flush(app);
             let mut bundle = Map::new();
             bundle.insert("version".into(), json!(2));
             bundle.insert("settings".into(), crate::settings::all(app));
@@ -96,6 +99,9 @@ pub fn dispatch<R: Runtime>(
                     counts.insert((*s).into(), json!(arr.len()));
                 }
             }
+            // History's file was just overwritten — drop its in-memory cache so the next
+            // read reloads the imported rows (see history.rs "Write batching").
+            crate::history::invalidate(app);
             if let Some(settings) = bundle.get("settings") {
                 crate::settings::write(app, settings);
                 // Rebuild the per-key sync projection from the imported flat settings.

@@ -155,7 +155,11 @@ export function SecurityTab({
           onClick={() => {
             const h = addHost.trim();
             if (!h) return;
-            toggleFingerprintAllowlist(h);
+            // "Add" must only ADD. toggleAllowlist would REMOVE an already-listed host,
+            // so guard against the host already being present (idempotent add).
+            if (!fingerprintState.allowlistedHosts.includes(h)) {
+              toggleFingerprintAllowlist(h);
+            }
             setAddHost('');
           }}
         >

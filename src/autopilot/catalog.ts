@@ -393,7 +393,9 @@ export const CATALOG: FeatureCheck[] = [
     title: 'Update filter lists',
     channels: [IPC.listsUpdateNow],
     exercise: async (a) => {
-      assertObject(await a.lists.updateNow());
+      // Non-blocking now: it starts a background refresh and resolves to void (the
+      // per-source result arrives via lists.updateResult). Just confirm it doesn't throw.
+      await a.lists.updateNow();
     },
   },
   // subs

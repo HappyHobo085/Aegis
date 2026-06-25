@@ -40,7 +40,8 @@
 /// `isLocalAddr` in `shim_for`.
 #[allow(dead_code)] // reference rule-set; production filtering runs in the shim JS (see module doc)
 pub fn is_local_address(addr: &str) -> bool {
-    let a = addr.trim().to_ascii_lowercase();
+    let lower = addr.trim().to_ascii_lowercase();
+    let mut a: &str = &lower; // may be narrowed to the embedded IPv4 of a mapped address below
     if a.is_empty() {
         return false;
     }
@@ -48,20 +49,27 @@ pub fn is_local_address(addr: &str) -> bool {
         return true; // mDNS host
     }
     if a.contains(':') {
-        // IPv6
+        // IPv6 (or IPv4-mapped IPv6).
         if a == "::1" {
             return true; // loopback
         }
-        // ULA fc00::/7 (fc.. / fd..) + link-local fe80::/10 (fe8../fe9../fea../feb..).
-        // Any other IPv6 form (incl. unexpected) → keep (fail open).
-        return a.starts_with("fc")
-            || a.starts_with("fd")
-            || a.starts_with("fe8")
-            || a.starts_with("fe9")
-            || a.starts_with("fea")
-            || a.starts_with("feb");
+        // IPv4-mapped (e.g. `::ffff:192.168.1.5`): classify by the embedded IPv4 — the dotted
+        // quad sits after the last ':'. Otherwise it's a pure IPv6 form.
+        let c = a.rfind(':').unwrap_or(0);
+        if a.find('.').is_some_and(|d| d > c) {
+            a = &a[c + 1..]; // fall through to the IPv4 logic below
+        } else {
+            // ULA fc00::/7 (fc.. / fd..) + link-local fe80::/10 (fe8../fe9../fea../feb..).
+            // Any other IPv6 form (incl. unexpected) → keep (fail open).
+            return a.starts_with("fc")
+                || a.starts_with("fd")
+                || a.starts_with("fe8")
+                || a.starts_with("fe9")
+                || a.starts_with("fea")
+                || a.starts_with("feb");
+        }
     }
-    // IPv4 dotted-quad.
+    // IPv4 dotted-quad (or a mapped ::ffff:x.x.x.x narrowed above).
     let octets: Vec<&str> = a.split('.').collect();
     if octets.len() != 4 {
         return false; // not a dotted quad → keep (fail open)
@@ -261,10 +269,19 @@ mod tests {
             "fc00::1",
             "fd12:3456::1",
             "FE80::1",
+            // IPv4-mapped IPv6: classify by the embedded private IPv4 (the leak this closes).
+            "::ffff:192.168.1.5",
+            "::ffff:10.0.0.1",
+            "::ffff:127.0.0.1",
         ] {
             assert!(is_local_address(a), "{a} should be local/private");
         }
-        for a in ["2001:4860:4860::8888", "2606:4700::1111"] {
+        for a in [
+            "2001:4860:4860::8888",
+            "2606:4700::1111",
+            // A mapped PUBLIC IPv4 must stay keepable.
+            "::ffff:8.8.8.8",
+        ] {
             assert!(!is_local_address(a), "{a} should be public/keepable");
         }
     }

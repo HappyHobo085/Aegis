@@ -1,6 +1,6 @@
 // src/hooks/useAdblock.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { AdblockState, BlockedCount, ListUpdateResult, ViewId } from '../../shared/types';
+import type { AdblockState, BlockedCount, ViewId } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { onSyncChange } from '../lib/syncBus';
 
@@ -30,7 +30,6 @@ export function useAdblock(
   toggleAllowlist(): void;
   removeAllowlist(host: string): void;
   clearAllowlist(): void;
-  updateNow(): Promise<ListUpdateResult>;
   /** Autopilot seeding only — directly sets the allowlisted hosts without an IPC round-trip. */
   _setAllowlistedHosts(hosts: string[]): void;
 } {
@@ -91,10 +90,6 @@ export function useAdblock(
     void aegis.adblock.clearAllowlist().then((s) => setState(s));
   }, []);
 
-  const updateNow = useCallback((): Promise<ListUpdateResult> => {
-    return aegis.lists.updateNow();
-  }, []);
-
   return {
     state,
     page,
@@ -102,7 +97,6 @@ export function useAdblock(
     toggleAllowlist,
     removeAllowlist,
     clearAllowlist,
-    updateNow,
     _setAllowlistedHosts: (hosts: string[]) =>
       setState((prev) => ({ ...prev, allowlistedHosts: hosts })),
   };

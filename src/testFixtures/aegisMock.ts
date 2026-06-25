@@ -100,7 +100,10 @@ export function aegisMockModule() {
       redirect: {
         onBlocked: vi.fn().mockReturnValue(() => {}),
       },
-      lists: { updateNow: vi.fn().mockResolvedValue({ perSource: [], lastUpdated: 0 }) },
+      lists: {
+        updateNow: vi.fn().mockResolvedValue(undefined),
+        onUpdateResult: vi.fn().mockReturnValue(() => {}),
+      },
       sync: (() => {
         const baseSyncState = {
           enabled: false,

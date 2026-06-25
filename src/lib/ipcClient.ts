@@ -272,7 +272,8 @@ export const aegis: AegisApi = {
     },
   },
   lists: {
-    updateNow: () => call<ListUpdateResult>(IPC.listsUpdateNow),
+    updateNow: () => call<void>(IPC.listsUpdateNow),
+    onUpdateResult: (cb) => on<ListUpdateResult>(IPC.evtListsUpdateResult, cb),
   },
   subs: {
     list: () => call<Subscription[]>(IPC.subsList),

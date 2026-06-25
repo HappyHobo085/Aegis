@@ -191,7 +191,11 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     }
 
     let v = match channel.as_str() {
-        "lists.updateNow" => subs::update_all(&app),
+        "lists.updateNow" => {
+            // Non-blocking: starts a background refresh, result arrives via lists.updateResult.
+            subs::update_now(&app);
+            Value::Null
+        }
 
         // Fire-and-forget actions (history.remove/clear, permissions.resolve,
         // downloads.openFile/showInFolder, update.*, safety.proceed/removeException)
@@ -457,7 +461,9 @@ pub fn run() {
         .manage(zoom::ZoomStore::default())
         .manage(vault::VaultState::default())
         .manage(farble::FarbleState::default())
-        .manage(proxy::ProxyState::default());
+        .manage(proxy::ProxyState::default())
+        .manage(settings::SettingsCache::default())
+        .manage(history::HistoryStore::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;
@@ -549,6 +555,9 @@ pub fn run() {
             }
         }
         tabs::start_idle_sweep(app.handle());
+        // Coalesce per-navigation history writes into a periodic background flush (the
+        // live history lives in an in-memory cache; see history.rs "Write batching").
+        history::start_flush(app.handle());
 
         // Tauri child-webview auto-resize is incomplete; recompute bounds on
         // window resize so the content view keeps filling the area below the chrome.

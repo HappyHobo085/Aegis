@@ -44,6 +44,24 @@ describe('ProxySettingsTab', () => {
     expect(setConfig).toHaveBeenCalledWith(expect.objectContaining({ mode: 'off' }));
   });
 
+  it('Turn off does NOT persist unsaved host/port drafts (uses applied state)', async () => {
+    const setConfig = vi.fn().mockResolvedValue(offState);
+    render(<ProxySettingsTab state={onState} setConfig={setConfig} test={vi.fn()} />);
+    // User edits the host but never clicks Apply, then clicks Turn off.
+    const hostField = screen.getByRole('textbox', { name: /proxy host/i });
+    await userEvent.clear(hostField);
+    await userEvent.type(hostField, '10.0.0.1');
+    await userEvent.click(screen.getByRole('button', { name: /turn off/i }));
+    // The unsaved draft (10.0.0.1) must NOT be committed — turning off keeps the
+    // last-applied host (127.0.0.1) and only flips the mode.
+    expect(setConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'off', host: '127.0.0.1' }),
+    );
+    expect(setConfig).not.toHaveBeenCalledWith(
+      expect.objectContaining({ host: '10.0.0.1' }),
+    );
+  });
+
   it('shows scheme, host, port, bypass fields when mode is proxy', async () => {
     const setConfig = vi.fn().mockResolvedValue(onState);
     render(<ProxySettingsTab state={onState} setConfig={setConfig} test={vi.fn()} />);

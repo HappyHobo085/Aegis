@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Sender};
+use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Mutex, OnceLock};
 
 use adblock::lists::{FilterSet, ParseOptions};
@@ -129,17 +129,29 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
             return false;
         }
     }
-    let (reply, answer) = channel();
-    let q = Query {
-        url: url.to_owned(),
-        source: source_url.to_owned(),
-        rtype: request_type.to_owned(),
-        reply,
-    };
-    if tx().send(Msg::Query(q)).is_err() {
-        return false;
-    }
-    answer.recv().unwrap_or(false)
+    // Reuse one reply channel per calling thread (the GTK main thread on Linux — where
+    // this runs for EVERY allowed subresource — and the WebView network threads on
+    // Android). Each call sends exactly one Query then immediately recvs its one reply,
+    // so the channel holds at most one in-flight value and never accumulates stale
+    // replies. This avoids a per-subresource `channel()` heap allocation on the hot path.
+    REPLY.with(|(reply, answer)| {
+        let q = Query {
+            url: url.to_owned(),
+            source: source_url.to_owned(),
+            rtype: request_type.to_owned(),
+            reply: reply.clone(),
+        };
+        if tx().send(Msg::Query(q)).is_err() {
+            return false;
+        }
+        answer.recv().unwrap_or(false)
+    })
+}
+
+thread_local! {
+    /// Per-thread reusable reply channel for `should_block` (see its body for why this is
+    /// safe: strictly one send → one recv per call). Created lazily on first use.
+    static REPLY: (Sender<bool>, Receiver<bool>) = channel();
 }
 
 /// Whether a new-window / pop-under request to `url` should be dropped rather than

@@ -35,7 +35,17 @@ export function useSubscriptions(): {
   }, []);
 
   const updateNow = useCallback(async (): Promise<ListUpdateResult> => {
-    const result = await aegis.lists.updateNow();
+    // The core refresh is non-blocking (the up-to-25s fetch must not freeze the UI thread):
+    // `updateNow` only kicks it off and the per-source result arrives via `onUpdateResult`.
+    // Bridge that one-shot event back into the promise this hook has always returned, so
+    // callers (FilterListsTab) are unchanged.
+    const result = await new Promise<ListUpdateResult>((resolve) => {
+      const off = aegis.lists.onUpdateResult((r) => {
+        off();
+        resolve(r);
+      });
+      void aegis.lists.updateNow();
+    });
     // A force-update mutates last-updated/etag/hash on every fetched row, so
     // re-read the list to reflect the fresh metadata in any open manager.
     setSubs(await aegis.subs.list());

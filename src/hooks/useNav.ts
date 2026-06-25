@@ -5,6 +5,7 @@ import { PRIMARY_VIEW_ID } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { addressParse } from '../lib/addressParse';
 import { toast } from '../lib/toast';
+import { onSettingsChange } from '../lib/settingsBus';
 
 const emptyState = (viewId: ViewId): NavState => ({
   viewId,
@@ -37,11 +38,17 @@ export function useNav(viewId: ViewId): {
     void aegis.settings.get().then((s) => {
       if (active) setSearchTemplate(s.defaultSearchTemplate);
     });
+    // Keep the address-bar search template current when the user changes their default
+    // search engine (or it syncs from another device) — without waiting for a reload.
+    const offSettings = onSettingsChange((s) => {
+      if (active) setSearchTemplate(s.defaultSearchTemplate);
+    });
     const unsubscribe = aegis.nav.onState((s) => {
       if (s.viewId === viewId) setState(s);
     });
     return () => {
       active = false;
+      offSettings();
       unsubscribe();
     };
   }, [viewId]);

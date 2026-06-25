@@ -4,8 +4,9 @@ GitHub Actions workflows and Dependabot config for Aegis.
 
 ## Workflows (`workflows/`)
 
-- **`ci.yml`** (CI) — the always-on gate. Runs on every PR, weekly (Mon 06:17 UTC),
-  and on demand. Ubuntu only; two parallel jobs:
+- **`ci.yml`** (CI) — the always-on gate. Runs on every PR, on every push to `main`
+  (so a direct push is gated too, not just PRs), weekly (Mon 06:17 UTC), and on
+  demand. Ubuntu only; two parallel jobs:
   - **`web`**: `npm ci` → `npm run typecheck` (scoped `tsc --noEmit` via
     `tsconfig.build.json`, which excludes test files + `src/testFixtures` to skip the
     known test-only type noise) → `npm run lint` (ESLint flat config, errors fail /
@@ -18,7 +19,9 @@ GitHub Actions workflows and Dependabot config for Aegis.
     The standalone `sync-server/` crate is NOT gated here (separate non-workspace crate).
 - **`tauri-build-check.yml`** (Tauri Build Check) — proves the app compiles, links,
   and bundles on real OSes and produces downloadable artifacts for on-device
-  testing. Triggers on push to `main` and on demand. Matrix:
+  testing. Triggers on demand only (`workflow_dispatch`) — deliberately NOT on push,
+  to avoid spending heavy multi-OS + Android build minutes on every commit; trigger it
+  from the Actions tab when you want fresh cross-OS artifacts. Matrix:
   - `windows-latest` → portable `Aegis_x64_portable.exe` (`--no-bundle`, raw exe)
   - `macos-latest` → `.app` + `.dmg`
   - `ubuntu-24.04` → portable `.AppImage` (`--bundles appimage`). NOT 22.04: its
@@ -50,5 +53,6 @@ PRs are the currency mechanism for the crypto/keyring/TLS surface.
   equivalents of the Fedora dev deps.
 - CI uses Node 22 with npm cache; cargo registry + `src-tauri/target` are cached by
   `Cargo.lock` hash.
-- `tauri-build-check.yml` runs the full multi-OS + Android build on every push to
-  `main` (and on demand) — heavier than `ci.yml`.
+- `tauri-build-check.yml` runs the full multi-OS + Android build **on demand only**
+  (`workflow_dispatch`) — heavier than `ci.yml`; cross-OS compile/link/bundle is not
+  auto-gated on push (run it manually, or rely on branch protection if you add it).
