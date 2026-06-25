@@ -16,7 +16,7 @@ use chacha20poly1305::{Key as ChachaKey, KeyInit, XChaCha20Poly1305, XNonce};
 use ed25519_dalek::SigningKey;
 use hkdf::Hkdf;
 use sha2::Sha256;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 /// HKDF salt = the wire-format version tag, so a future cipher/KDF bump changes every key.
 const HKDF_SALT: &[u8] = b"aegis-sync-v1";
@@ -84,20 +84,21 @@ pub fn account_id(root: &RootSecret) -> String {
     hex(&account_signing_key(root).verifying_key().to_bytes())
 }
 
-/// The 256-bit data key for namespace `ns`.
-pub fn data_key(root: &RootSecret, ns: &str) -> [u8; 32] {
-    let mut out = [0u8; 32];
-    expand(&root.0, format!("data-key:{ns}").as_bytes(), &mut out);
+/// The 256-bit data key for namespace `ns`. Returned in `Zeroizing` so the key bytes are
+/// wiped on drop structurally — callers don't have to remember to wrap it.
+pub fn data_key(root: &RootSecret, ns: &str) -> Zeroizing<[u8; 32]> {
+    let mut out = Zeroizing::new([0u8; 32]);
+    expand(&root.0, format!("data-key:{ns}").as_bytes(), &mut out[..]);
     out
 }
 
 /// The per-install Ed25519 device signing seed = HKDF(root, "device-sign:" + salt). The
 /// per-install `salt` makes every install's key distinct so `removeDevice` can revoke one.
-pub fn device_signing_seed(root: &RootSecret, device_salt: &[u8]) -> [u8; 32] {
-    let mut out = [0u8; 32];
+pub fn device_signing_seed(root: &RootSecret, device_salt: &[u8]) -> Zeroizing<[u8; 32]> {
+    let mut out = Zeroizing::new([0u8; 32]);
     let mut label = b"device-sign:".to_vec();
     label.extend_from_slice(device_salt);
-    expand(&root.0, &label, &mut out);
+    expand(&root.0, &label, &mut out[..]);
     out
 }
 
@@ -198,8 +199,8 @@ mod tests {
     #[test]
     fn data_keys_differ_per_namespace_and_are_deterministic() {
         let r = RootSecret([7u8; 32]);
-        assert_eq!(data_key(&r, "favorites"), data_key(&r, "favorites"));
-        assert_ne!(data_key(&r, "favorites"), data_key(&r, "saved"));
+        assert_eq!(*data_key(&r, "favorites"), *data_key(&r, "favorites"));
+        assert_ne!(*data_key(&r, "favorites"), *data_key(&r, "saved"));
         // The data key is not the account id material.
         assert_ne!(&data_key(&r, "favorites")[..], account_id(&r).as_bytes());
     }
@@ -208,12 +209,12 @@ mod tests {
     fn device_seed_differs_per_install_salt() {
         let r = RootSecret([9u8; 32]);
         assert_ne!(
-            device_signing_seed(&r, b"salt-A"),
-            device_signing_seed(&r, b"salt-B")
+            *device_signing_seed(&r, b"salt-A"),
+            *device_signing_seed(&r, b"salt-B")
         );
         assert_eq!(
-            device_signing_seed(&r, b"salt-A"),
-            device_signing_seed(&r, b"salt-A")
+            *device_signing_seed(&r, b"salt-A"),
+            *device_signing_seed(&r, b"salt-A")
         );
     }
 

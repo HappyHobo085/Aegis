@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FingerprintState } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
+import { onSyncChange } from '../lib/syncBus';
 
 const emptyState: FingerprintState = {
   level: 'off',
@@ -20,11 +21,18 @@ export function useFingerprint(): {
 
   useEffect(() => {
     let active = true;
-    void aegis.fingerprint.getState().then((s) => {
-      if (active) setState(s);
-    });
+    const load = () => {
+      void aegis.fingerprint.getState().then((s) => {
+        if (active) setState(s);
+      });
+    };
+    load();
+    // The fp-allowlist is a syncable store — a peer-merged change must refresh the Security
+    // tab live (mirrors useFavorites/useSaved subscribing to their namespace).
+    const off = onSyncChange('fp-allowlist', load);
     return () => {
       active = false;
+      off();
     };
   }, []);
 

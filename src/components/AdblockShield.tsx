@@ -1,5 +1,6 @@
 // src/components/AdblockShield.tsx
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
+import type { RefObject } from 'react';
 import { Shield, ShieldOff } from 'lucide-react';
 import type { AdblockState } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
@@ -29,9 +30,26 @@ function Popover({
   toggleAllowlist,
   onReload,
   onClose,
-}: AdblockShieldProps & { onClose: () => void }) {
+  wrapperRef,
+}: AdblockShieldProps & { onClose: () => void; wrapperRef: RefObject<HTMLElement | null> }) {
   const labelId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+  // Close on an outside click, consistent with ZoomIndicator / ToolbarOverflow (the shield
+  // popover previously only closed on Escape / re-click).
+  useEffect(() => {
+    const handlePointerDown = (event: PointerEvent): void => {
+      const wrapper = wrapperRef.current;
+      if (wrapper && event.target instanceof Node && !wrapper.contains(event.target)) {
+        onCloseRef.current();
+      }
+    };
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [wrapperRef]);
   const allowlisted = host !== null && state.allowlistedHosts.includes(host);
   const allowLabel = host ? `Allow ads on ${host}` : 'Allow ads on this site';
 
@@ -84,6 +102,7 @@ function Popover({
 
 export function AdblockShield(props: AdblockShieldProps) {
   const [open, setOpen] = useState(false);
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
   const changeOpen = (v: boolean) => {
     setOpen(v);
     props.onOpenChange?.(v);
@@ -97,7 +116,7 @@ export function AdblockShield(props: AdblockShieldProps) {
   const page = props.page;
 
   return (
-    <div className="adblock-shield">
+    <div ref={wrapperRef} className="adblock-shield">
       <button
         type="button"
         className="adblock-shield__button"
@@ -116,7 +135,7 @@ export function AdblockShield(props: AdblockShieldProps) {
           </span>
         )}
       </button>
-      {open && <Popover {...props} onClose={() => changeOpen(false)} />}
+      {open && <Popover {...props} onClose={() => changeOpen(false)} wrapperRef={wrapperRef} />}
     </div>
   );
 }

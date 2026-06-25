@@ -165,6 +165,39 @@ describe('ProxySettingsTab', () => {
     expect(screen.queryByText(/unsaved changes/i)).not.toBeInTheDocument();
   });
 
+  it('adopts an external state change when the form is not edited', () => {
+    const { rerender } = render(<ProxySettingsTab state={onState} setConfig={vi.fn()} test={vi.fn()} />);
+    expect(screen.getByRole('textbox', { name: /proxy host/i })).toHaveValue('127.0.0.1');
+    rerender(
+      <ProxySettingsTab
+        state={{ ...onState, host: '10.9.9.9', uri: 'http://10.9.9.9:8080' }}
+        setConfig={vi.fn()}
+        test={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole('textbox', { name: /proxy host/i })).toHaveValue('10.9.9.9');
+  });
+
+  it('keeps an in-progress host edit when the state changes externally', async () => {
+    const { rerender } = render(<ProxySettingsTab state={onState} setConfig={vi.fn()} test={vi.fn()} />);
+    const hostField = screen.getByRole('textbox', { name: /proxy host/i });
+    await userEvent.clear(hostField);
+    await userEvent.type(hostField, '5.5.5.5');
+    rerender(
+      <ProxySettingsTab state={{ ...onState, host: '10.9.9.9' }} setConfig={vi.fn()} test={vi.fn()} />,
+    );
+    expect(hostField).toHaveValue('5.5.5.5');
+  });
+
+  it('rejects an empty/invalid port on Apply (does not call setConfig)', async () => {
+    const setConfig = vi.fn().mockResolvedValue(onState);
+    render(<ProxySettingsTab state={onState} setConfig={setConfig} test={vi.fn()} />);
+    await userEvent.clear(screen.getByRole('spinbutton', { name: /proxy port/i }));
+    await userEvent.click(screen.getByRole('button', { name: /apply proxy settings/i }));
+    expect(setConfig).not.toHaveBeenCalled();
+    expect(screen.getByText(/port must be/i)).toBeInTheDocument();
+  });
+
   it('sets scheme via select', async () => {
     const setConfig = vi.fn().mockResolvedValue(onState);
     render(<ProxySettingsTab state={onState} setConfig={setConfig} test={vi.fn()} />);
