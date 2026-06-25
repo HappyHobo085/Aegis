@@ -285,7 +285,25 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             // not just the content-webview geometry. Backend call — no capability needed.
             #[cfg(desktop)]
             if let Some(window) = app.get_window("main") {
+                use std::sync::{Mutex, OnceLock};
+                // The windowed size captured on enter, restored on exit. tao's
+                // unfullscreen just calls gtk_window_unfullscreen() and leaves the geometry
+                // restore to the WM, which is unreliable on GTK — without this the window
+                // stays monitor-sized on exit and the content tracks it (the reported
+                // "keeps fullscreen-ish width" bug). Restoring the saved size fixes it.
+                static SAVED: OnceLock<Mutex<Option<tauri::PhysicalSize<u32>>>> = OnceLock::new();
+                let saved = SAVED.get_or_init(|| Mutex::new(None));
+                if on {
+                    if let Ok(sz) = window.inner_size() {
+                        *saved.lock().unwrap() = Some(sz);
+                    }
+                }
                 let _ = window.set_fullscreen(on);
+                if !on {
+                    if let Some(sz) = saved.lock().unwrap().take() {
+                        let _ = window.set_size(sz);
+                    }
+                }
             }
             Ok(Value::Null)
         }
