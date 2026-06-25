@@ -20,7 +20,7 @@ use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 use zeroize::Zeroizing;
 
-use crate::crypto::{self, RootSecret};
+use crate::crypto::{self, hex, unhex, RootSecret};
 use crate::sync_keystore;
 use crate::{sync_auth, sync_stores};
 
@@ -73,24 +73,6 @@ impl Default for SyncState {
             last_error: String::new(),
         }))
     }
-}
-
-fn hex(b: &[u8]) -> String {
-    let mut s = String::with_capacity(b.len() * 2);
-    for x in b {
-        s.push_str(&format!("{x:02x}"));
-    }
-    s
-}
-
-fn unhex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return None;
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
-        .collect()
 }
 
 // A durable "user disabled sync" marker so disable() sticks across restarts (the seed may

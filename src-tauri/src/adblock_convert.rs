@@ -30,33 +30,23 @@ pub fn to_content_blocker_chunks(
     Ok(chunks)
 }
 
-/// Single-chunk convenience (used by tests): returns (json, rule_count).
-pub fn to_content_blocker_json(filter_lists: &[&str]) -> Result<(String, usize), String> {
-    let chunks = to_content_blocker_chunks(filter_lists, usize::MAX)?;
-    let json = chunks
-        .into_iter()
-        .next()
-        .unwrap_or_else(|| "[]".to_string());
-    // count = number of array elements; cheap parse-free count via the converter
-    let mut set = FilterSet::new(true);
-    for list in filter_lists {
-        set.add_filters(list.lines(), ParseOptions::default());
-    }
-    let count = set
-        .into_content_blocking()
-        .map(|(r, _)| r.len())
-        .unwrap_or(0);
-    Ok((json, count))
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{to_content_blocker_chunks, to_content_blocker_json};
+    use super::to_content_blocker_chunks;
+
+    /// Convert one filter list and return the first (single) chunk's JSON, or `"[]"`.
+    fn convert_one(list: &str) -> String {
+        to_content_blocker_chunks(&[list], usize::MAX)
+            .unwrap()
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "[]".to_string())
+    }
 
     #[test]
     fn converts_a_network_rule_to_a_block_action() {
-        let (json, count) = to_content_blocker_json(&["||ads.example.com^"]).unwrap();
-        assert!(count >= 1, "expected at least one rule, got {count}");
+        let json = convert_one("||ads.example.com^");
+        assert_ne!(json, "[]", "expected at least one rule");
         assert!(
             json.contains("ads.example.com") || json.contains("ads\\\\.example"),
             "json: {json}"
@@ -69,9 +59,7 @@ mod tests {
 
     #[test]
     fn empty_input_yields_empty_array() {
-        let (json, count) = to_content_blocker_json(&[""]).unwrap();
-        assert_eq!(count, 0);
-        assert_eq!(json, "[]");
+        assert_eq!(convert_one(""), "[]");
     }
 
     #[test]

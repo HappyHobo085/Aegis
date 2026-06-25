@@ -227,52 +227,22 @@ pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
 
 /// The live farble-allowlisted hosts from the persisted store.
 fn load_fp_allowlist_hosts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
-    jsonstore::live(jsonstore::load_synced(app, "fp-allowlist"))
-        .iter()
-        .filter_map(|it| it.get("host").and_then(Value::as_str).map(String::from))
-        .collect()
+    jsonstore::live_hosts(app, "fp-allowlist")
 }
 
 /// Add a host to the fp-allowlist (revive a tombstone in place, or stamp a new record).
 fn add_fp_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
-    let mut items = jsonstore::load_synced(app, "fp-allowlist");
-    match items
-        .iter_mut()
-        .find(|it| it.get("host").and_then(Value::as_str) == Some(host))
-    {
-        Some(it) => {
-            if jsonstore::is_deleted(it) {
-                if let Some(o) = it.as_object_mut() {
-                    o.insert("deleted".into(), json!(false));
-                }
-                jsonstore::touch(it, app);
-            }
-        }
-        None => {
-            let mut item = json!({ "host": host });
-            jsonstore::stamp_new(&mut item, app);
-            items.push(item);
-        }
-    }
-    let _ = jsonstore::save(app, "fp-allowlist", &items);
+    jsonstore::add_host(app, "fp-allowlist", host);
 }
 
 /// Tombstone a host in the fp-allowlist.
 fn remove_fp_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
-    let mut items = jsonstore::load_synced(app, "fp-allowlist");
-    jsonstore::tombstone(
-        &mut items,
-        |it| it.get("host").and_then(Value::as_str) == Some(host),
-        app,
-    );
-    let _ = jsonstore::save(app, "fp-allowlist", &items);
+    jsonstore::remove_host(app, "fp-allowlist", host);
 }
 
 /// Tombstone every live fp-allowlist host (clear all).
 fn clear_fp_hosts<R: Runtime>(app: &AppHandle<R>) {
-    let mut items = jsonstore::load_synced(app, "fp-allowlist");
-    jsonstore::tombstone(&mut items, |it| !jsonstore::is_deleted(it), app);
-    let _ = jsonstore::save(app, "fp-allowlist", &items);
+    jsonstore::clear_hosts(app, "fp-allowlist");
 }
 
 /// Refresh the in-memory FarbleState.allowlist cache from the persisted store.

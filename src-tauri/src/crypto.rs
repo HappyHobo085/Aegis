@@ -57,12 +57,28 @@ fn expand(root: &[u8; 32], label: &[u8], out: &mut [u8]) {
         .expect("HKDF output length is within the 255*HashLen limit");
 }
 
-fn hex(b: &[u8]) -> String {
+/// Lowercase hex encode — the crate's single hex helper. `sync`, `sync_auth`,
+/// `sync_keystore`, and `vault` all use this (and [`unhex`]) instead of re-defining
+/// their own byte-identical copies. Table-based (no per-byte `format!` allocation).
+pub fn hex(b: &[u8]) -> String {
+    const LUT: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(b.len() * 2);
-    for x in b {
-        s.push_str(&format!("{x:02x}"));
+    for &x in b {
+        s.push(LUT[(x >> 4) as usize] as char);
+        s.push(LUT[(x & 0x0f) as usize] as char);
     }
     s
+}
+
+/// Decode a hex string to bytes; `None` on odd length or any non-hex digit.
+pub fn unhex(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
+        .collect()
 }
 
 /// The account-level Ed25519 signing key (root-derived). Its PUBLIC key IS the account id,

@@ -13,7 +13,7 @@
 //! (the JavaVM is captured in `JNI_OnLoad` — Tauri doesn't run ndk-glue, so `ndk_context` is
 //! never initialized). Either path falls back to the passphrase-wrapped file, or in-memory-only
 //! if no passphrase is set, on any error.
-use crate::crypto::RootSecret;
+use crate::crypto::{hex, unhex, RootSecret};
 use tauri::{AppHandle, Manager};
 use zeroize::Zeroize;
 
@@ -38,24 +38,6 @@ impl VaultBacking {
             VaultBacking::None => "none",
         }
     }
-}
-
-fn hex(b: &[u8]) -> String {
-    let mut s = String::with_capacity(b.len() * 2);
-    for x in b {
-        s.push_str(&format!("{x:02x}"));
-    }
-    s
-}
-
-fn unhex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return None;
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
-        .collect()
 }
 
 /// Derive a 256-bit key-encryption key from a passphrase + salt (Argon2id, default params).

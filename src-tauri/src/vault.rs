@@ -4,6 +4,7 @@
 //! (crypto::seal/open) under the dedicated "vault" namespace, gated by a master-password
 //! Argon2id KDF (mirroring sync_keystore::derive_kek). The vault is NOT synced and NEVER
 //! reachable from the content webview — there is no page->core bridge (locked decision).
+use crate::crypto::{hex, unhex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Mutex;
@@ -25,24 +26,6 @@ pub struct Cred {
     pub username: String,
     pub password: String,
     pub notes: String,
-}
-
-fn hex(b: &[u8]) -> String {
-    let mut s = String::with_capacity(b.len() * 2);
-    for x in b {
-        s.push_str(&format!("{x:02x}"));
-    }
-    s
-}
-
-fn unhex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return None;
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
-        .collect()
 }
 
 /// Argon2id(master_password, salt) -> 256-bit vault key. Reuses the exact derivation the

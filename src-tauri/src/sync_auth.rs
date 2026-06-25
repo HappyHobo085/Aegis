@@ -19,6 +19,8 @@
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize};
 
+use crate::crypto::{hex, unhex};
+
 /// Default token lifetime (5 min) — long enough for a sync round, short enough to bound replay.
 pub const DEFAULT_TTL_MS: i64 = 300_000;
 
@@ -33,24 +35,6 @@ pub struct AuthToken {
     pub expires_ms: i64,
     /// random per-token (replay defense).
     pub nonce: String,
-}
-
-fn hex(b: &[u8]) -> String {
-    let mut s = String::with_capacity(b.len() * 2);
-    for x in b {
-        s.push_str(&format!("{x:02x}"));
-    }
-    s
-}
-
-fn unhex(s: &str) -> Option<Vec<u8>> {
-    if s.len() % 2 != 0 {
-        return None;
-    }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
-        .collect()
 }
 
 /// Deterministic, fixed-field-order bytes that get signed/verified. A version tag prefix
