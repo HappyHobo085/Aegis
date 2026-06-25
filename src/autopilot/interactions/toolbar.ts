@@ -316,7 +316,10 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
         // reachScreen sets the App-level shieldOpen flag (for z-order/layout) but does NOT
         // open the AdblockShield's own internal popover state. Click the shield button to
         // actually render the popover, then click the toggle inside it.
-        const shieldBtn = ctx.byRole('button', /^Ad blocking$/);
+        // Prefix match (not /^Ad blocking$/): once ads are blocked on the active page the
+        // button's accessible name gains a count suffix ("Ad blocking, N blocked on this page"),
+        // which an anchored exact match missed → intermittent "button not found".
+        const shieldBtn = ctx.byRole('button', /^Ad blocking\b/);
         if (!shieldBtn) throw new Error('Ad blocking shield button not found');
         await ctx.click(shieldBtn);
         // Now the popover is rendered; find the toggle switch (role="switch" aria-label="Ad blocking").
@@ -358,7 +361,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       // Ensure the nav URL has a parseable host so the allowlist checkbox is enabled.
       await emitNavState(ctx, { ...BASE_NAV, url: 'https://example.com/', title: 'Example' });
       // Open the shield popover (same as above — reachScreen only sets z-order, not UI state).
-      const shieldBtn = ctx.byRole('button', /^Ad blocking$/);
+      const shieldBtn = ctx.byRole('button', /^Ad blocking\b/);
       if (!shieldBtn) throw new Error('Ad blocking shield button not found');
       await ctx.click(shieldBtn);
       // The allowlist label is "Allow ads on <host>" (host = example.com from nav state).
@@ -397,7 +400,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       // Emit a BlockedCount for the active view through the mocked onBlockedCount callback,
       // then open the shield popover to read the page-count figure.
       ctx.emitBlockedCount?.({ viewId: BASE_NAV.viewId, page: 3, session: 7 });
-      const shield = ctx.byRole('button', /^Ad blocking$/);
+      const shield = ctx.byRole('button', /^Ad blocking\b/);
       if (shield) await ctx.click(shield);
     },
     assert: async (ctx) => {
