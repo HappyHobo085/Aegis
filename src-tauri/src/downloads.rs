@@ -2,12 +2,128 @@
 //! sets the save path and records an entry; on finish the entry's state is updated.
 //! Backed by the JSON store. No live byte-progress (Tauri emits Requested/Finished
 //! only) and no mid-flight cancel (no API) — cancel just drops the entry.
+//!
+//! ## Write batching
+//! Like `history`, the live downloads list is an in-memory cache (`DownloadsStore`, managed
+//! state). Download events (`on_requested`/`on_finished`) and `remove`/`clear` mutate the
+//! cache and mark it dirty; a background flush (`start_flush`) coalesces those into one write
+//! instead of a full read-modify-serialize-double-fsync of the whole file per event. Reads
+//! (`list`, and the `openFile`/`showInFolder` path lookup) serve from the cache; user-initiated
+//! `remove`/`clear` flush synchronously; `data.export` flushes first so a backup is never stale
+//! and `data.import` invalidates so the next read reloads. Downloads is NOT synced, so the
+//! cache is self-contained (unlike favorites/saved, which the sync engine reads from disk).
+//! Crash within the flush window loses at most the last few seconds of download-state updates.
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 
 use crate::jsonstore;
+
+/// In-memory downloads cache (managed state) — the source of truth while the app runs.
+#[derive(Default)]
+pub struct DownloadsStore(Mutex<DlInner>);
+
+#[derive(Default)]
+struct DlInner {
+    items: Vec<Value>,
+    loaded: bool,
+    dirty: bool,
+}
+
+/// Load the on-disk downloads (migrating to sync-record shape once) into the cache on first access.
+fn ensure_loaded<R: Runtime>(app: &AppHandle<R>, inner: &mut DlInner) {
+    if !inner.loaded {
+        inner.items = jsonstore::load_synced(app, "downloads");
+        inner.loaded = true;
+        inner.dirty = false;
+    }
+}
+
+/// A copy of the full downloads array (incl. tombstones — use `jsonstore::live` for UI reads).
+/// Serves from the in-memory cache when managed; falls back to disk otherwise.
+fn snapshot<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
+    if let Some(store) = app.try_state::<DownloadsStore>() {
+        let mut inner = store.0.lock().unwrap();
+        ensure_loaded(app, &mut inner);
+        inner.items.clone()
+    } else {
+        jsonstore::load_synced(app, "downloads")
+    }
+}
+
+/// Apply a mutation to the downloads items — through the cache when managed, else directly on
+/// disk — persisting now iff `flush_now`. Returns whether the items changed.
+fn mutate<R: Runtime>(
+    app: &AppHandle<R>,
+    flush_now: bool,
+    f: impl FnOnce(&mut Vec<Value>) -> bool,
+) -> bool {
+    if let Some(store) = app.try_state::<DownloadsStore>() {
+        let changed = {
+            let mut inner = store.0.lock().unwrap();
+            ensure_loaded(app, &mut inner);
+            let changed = f(&mut inner.items);
+            if changed {
+                inner.dirty = true;
+            }
+            changed
+        };
+        if flush_now {
+            flush(app);
+        }
+        changed
+    } else {
+        let mut items = jsonstore::load_synced(app, "downloads");
+        let changed = f(&mut items);
+        if changed {
+            let _ = jsonstore::save(app, "downloads", &items);
+        }
+        changed
+    }
+}
+
+/// Persist the cache to disk if dirty. Clones under the lock and writes OUTSIDE it so a slow
+/// fsync never blocks a download event; re-marks dirty on write failure so the next flush
+/// retries. No-op when the cache isn't managed or isn't dirty.
+pub fn flush<R: Runtime>(app: &AppHandle<R>) {
+    let Some(store) = app.try_state::<DownloadsStore>() else {
+        return;
+    };
+    let pending = {
+        let mut inner = store.0.lock().unwrap();
+        if !inner.loaded || !inner.dirty {
+            return;
+        }
+        inner.dirty = false;
+        inner.items.clone()
+    };
+    if jsonstore::save(app, "downloads", &pending).is_err() {
+        store.0.lock().unwrap().dirty = true;
+    }
+}
+
+/// Drop the cache so the next read reloads from disk — used after `data.import` overwrites the
+/// downloads file.
+pub fn invalidate<R: Runtime>(app: &AppHandle<R>) {
+    if let Some(store) = app.try_state::<DownloadsStore>() {
+        let mut inner = store.0.lock().unwrap();
+        inner.items.clear();
+        inner.loaded = false;
+        inner.dirty = false;
+    }
+}
+
+/// Background flush loop: every few seconds, persist the cache if dirty. Started once from
+/// lib.rs setup (mirrors `history::start_flush`).
+pub fn start_flush(app: &AppHandle) {
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        flush(&app);
+    });
+}
 
 /// Resolve the directory downloads are saved to.
 fn dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
@@ -56,43 +172,52 @@ pub fn on_requested<R: Runtime>(
         return;
     }
 
-    let mut items = jsonstore::load_synced(app, "downloads");
-    let id = jsonstore::next_id(&items);
-    let mut item = json!({
-        "id": id,
-        "url": url,
-        "filename": filename,
-        "savePath": save.to_string_lossy(),
-        "state": "progressing",
-        "receivedBytes": 0,
-        "totalBytes": 0,
-        "startedAt": jsonstore::now_ms()
+    let save_path = save.to_string_lossy().to_string();
+    let url = url.to_string();
+    let now = jsonstore::now_ms();
+    let changed = mutate(app, false, |items| {
+        let id = jsonstore::next_id(items);
+        let mut item = json!({
+            "id": id,
+            "url": url,
+            "filename": filename,
+            "savePath": save_path,
+            "state": "progressing",
+            "receivedBytes": 0,
+            "totalBytes": 0,
+            "startedAt": now
+        });
+        jsonstore::stamp_new(&mut item, app);
+        items.push(item);
+        true
     });
-    jsonstore::stamp_new(&mut item, app);
-    items.push(item);
-    let _ = jsonstore::save(app, "downloads", &items);
-    crate::emit_event(app, "downloads.changed", Value::Null);
+    if changed {
+        crate::emit_event(app, "downloads.changed", Value::Null);
+    }
 }
 
 /// On DownloadEvent::Finished: mark the newest progressing entry completed/interrupted.
 pub fn on_finished<R: Runtime>(app: &AppHandle<R>, success: bool) {
-    let mut items = jsonstore::load_synced(app, "downloads");
-    for it in items.iter_mut().rev() {
-        if !jsonstore::is_deleted(it)
-            && it.get("state").and_then(Value::as_str) == Some("progressing")
-        {
-            if let Some(o) = it.as_object_mut() {
-                o.insert(
-                    "state".into(),
-                    json!(if success { "completed" } else { "interrupted" }),
-                );
+    let changed = mutate(app, false, |items| {
+        for it in items.iter_mut().rev() {
+            if !jsonstore::is_deleted(it)
+                && it.get("state").and_then(Value::as_str) == Some("progressing")
+            {
+                if let Some(o) = it.as_object_mut() {
+                    o.insert(
+                        "state".into(),
+                        json!(if success { "completed" } else { "interrupted" }),
+                    );
+                }
+                jsonstore::touch(it, app);
+                return true;
             }
-            jsonstore::touch(it, app);
-            break;
         }
+        false
+    });
+    if changed {
+        crate::emit_event(app, "downloads.changed", Value::Null);
     }
-    let _ = jsonstore::save(app, "downloads", &items);
-    crate::emit_event(app, "downloads.changed", Value::Null);
 }
 
 pub fn dispatch<R: Runtime>(
@@ -102,36 +227,34 @@ pub fn dispatch<R: Runtime>(
 ) -> Option<Result<Value, String>> {
     let id = || payload.get("id").and_then(Value::as_i64);
     match channel {
-        "downloads.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
-            app,
-            "downloads"
-        ))))),
+        "downloads.list" => Some(Ok(json!(jsonstore::live(snapshot(app))))),
 
         "downloads.remove" | "downloads.cancel" => {
-            let mut items = jsonstore::load_synced(app, "downloads");
             let want = id();
-            jsonstore::tombstone(
-                &mut items,
-                |it| it.get("id").and_then(Value::as_i64) == want,
-                app,
-            );
-            let _ = jsonstore::save(app, "downloads", &items);
-            Some(Ok(json!(jsonstore::live(items))))
+            // User-initiated → flush now so the removal hits disk immediately.
+            mutate(app, true, |items| {
+                jsonstore::tombstone(
+                    items,
+                    |it| it.get("id").and_then(Value::as_i64) == want,
+                    app,
+                )
+            });
+            Some(Ok(json!(jsonstore::live(snapshot(app)))))
         }
 
         "downloads.clear" => {
             // Tombstone finished rows (completed/interrupted); keep in-progress live.
-            let mut items = jsonstore::load_synced(app, "downloads");
-            jsonstore::tombstone(
-                &mut items,
-                |it| {
-                    !jsonstore::is_deleted(it)
-                        && it.get("state").and_then(Value::as_str) != Some("progressing")
-                },
-                app,
-            );
-            let _ = jsonstore::save(app, "downloads", &items);
-            Some(Ok(json!(jsonstore::live(items))))
+            mutate(app, true, |items| {
+                jsonstore::tombstone(
+                    items,
+                    |it| {
+                        !jsonstore::is_deleted(it)
+                            && it.get("state").and_then(Value::as_str) != Some("progressing")
+                    },
+                    app,
+                )
+            });
+            Some(Ok(json!(jsonstore::live(snapshot(app)))))
         }
 
         "downloads.openFile" => {
@@ -155,7 +278,7 @@ pub fn dispatch<R: Runtime>(
 }
 
 fn path_of<R: Runtime>(app: &AppHandle<R>, id: Option<i64>) -> Option<String> {
-    jsonstore::load(app, "downloads")
+    snapshot(app)
         .iter()
         .find(|it| it.get("id").and_then(Value::as_i64) == id)
         .and_then(|it| it.get("savePath").and_then(Value::as_str))
@@ -184,8 +307,10 @@ mod tests {
     use super::*;
     use crate::test_support::with_tmp_app;
 
+    /// Live rows from the cache (the source of truth) — NOT a fresh disk read, since writes
+    /// now batch in memory and only flush periodically.
     fn live_rows(app: &tauri::AppHandle<tauri::test::MockRuntime>) -> Vec<Value> {
-        jsonstore::live(jsonstore::load_synced(app, "downloads"))
+        jsonstore::live(snapshot(app))
     }
 
     #[test]
@@ -214,6 +339,27 @@ mod tests {
             assert_eq!(
                 rows[0].get("state").and_then(Value::as_str),
                 Some("progressing")
+            );
+        });
+    }
+
+    #[test]
+    fn on_requested_batches_in_memory_and_flush_persists() {
+        with_tmp_app(|app| {
+            let mut dest = PathBuf::new();
+            on_requested(app, "https://files.test/a.bin", &mut dest, false);
+            // Batched: nothing written to disk yet (the win — no per-event fsync)…
+            assert!(
+                jsonstore::live(jsonstore::load_synced(app, "downloads")).is_empty(),
+                "on_requested must batch in memory, not write to disk per event"
+            );
+            // …but it IS visible to reads (served from the cache).
+            assert_eq!(live_rows(app).len(), 1);
+            // An explicit flush persists it.
+            flush(app);
+            assert_eq!(
+                jsonstore::live(jsonstore::load_synced(app, "downloads")).len(),
+                1
             );
         });
     }
@@ -256,6 +402,8 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert!(after.as_array().unwrap().is_empty());
+            // remove flushes synchronously → the tombstone is on disk immediately.
+            assert!(jsonstore::live(jsonstore::load_synced(app, "downloads")).is_empty());
         });
     }
 

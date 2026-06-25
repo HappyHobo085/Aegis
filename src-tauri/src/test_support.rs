@@ -89,6 +89,7 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
         .manage(crate::proxy::ProxyState::default())
         .manage(crate::settings::SettingsCache::default())
         .manage(crate::history::HistoryStore::default())
+        .manage(crate::downloads::DownloadsStore::default())
         // --- setup()-time managed state ---
         // tabs::Tabs: lib.rs adds this in setup() after loading/restoring the session.
         // In tests we construct a minimal single-tab registry (home = "about:blank") so
