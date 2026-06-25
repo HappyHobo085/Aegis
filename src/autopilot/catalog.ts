@@ -137,8 +137,13 @@ export const CATALOG: FeatureCheck[] = [
       const normalTabId = normalTab.tabs.find((t) => !beforeIds.has(t.id) && !t.private)?.id;
       if (normalTabId === undefined) throw new Error('private-sanity: no normal tab created');
       await a.nav.navigate(normalTabId, normalProbe);
-      await new Promise((r) => setTimeout(r, 1500));
-      const normalHits = (await a.history.search(normalProbe)).length;
+      // History recording is async (page load → record on title/load signal). A fixed wait
+      // raced it under load (left 0 rows). Poll up to ~6s for the row to appear instead.
+      let normalHits = 0;
+      for (let i = 0; i < 20 && normalHits === 0; i++) {
+        await new Promise((r) => setTimeout(r, 300));
+        normalHits = (await a.history.search(normalProbe)).length;
+      }
       await a.tabs.close(normalTabId);
       if (normalHits === 0)
         throw new Error(

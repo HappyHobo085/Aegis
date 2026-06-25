@@ -92,10 +92,13 @@ function liveDeps(): RunDeps {
       // content filter is blocking pre-signal, so the measured ?ab=on nav is guaranteed filtered.
       // Bounded, so a genuine blocking regression still surfaces (ads keep loading → on>0 → fail).
       await aegis.adblock.setEnabled(true);
-      for (let i = 0; i < 6; i++) {
+      // Up to ~30s (10 × 3s): an UNCACHED filter recompiles from scratch (8 chunks) when the
+      // tour mutated the rule set, which under load can take many seconds — give it room. Still
+      // bounded, so a filter that genuinely never applies surfaces as on>0 (a real miss).
+      for (let i = 0; i < 10; i++) {
         const warmBefore = (await aegis.adblock.getState()).sessionBlocked ?? 0;
         await aegis.nav.navigate(vid, base + `?ab=warm-${i}`);
-        await new Promise((r) => setTimeout(r, 2500));
+        await new Promise((r) => setTimeout(r, 3000));
         const warmAfter = (await aegis.adblock.getState()).sessionBlocked ?? 0;
         if (warmAfter === warmBefore) break; // no ad reached the engine ⇒ filter is effective
       }
