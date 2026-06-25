@@ -294,6 +294,12 @@ export interface VaultState {
   exists: boolean;
   unlocked: boolean;
   count: number;
+  /**
+   * Count of on-disk records that could not be decrypted on unlock (corrupt/truncated).
+   * They are PRESERVED on disk (not dropped), so the UI warns rather than silently losing
+   * credentials. 0 in the normal case.
+   */
+  undecryptable: number;
 }
 export interface VaultRecord {
   uuid: string;

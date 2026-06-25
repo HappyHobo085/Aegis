@@ -15,7 +15,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { VaultState, VaultRecord, VaultRecordInput } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 
-const EMPTY: VaultState = { exists: false, unlocked: false, count: 0 };
+const EMPTY: VaultState = { exists: false, unlocked: false, count: 0, undecryptable: 0 };
 
 export interface UseVault {
   state: VaultState;
