@@ -665,7 +665,7 @@ function DesktopApp() {
             <SecurityTab
               settings={settings.settings}
               update={settings.update}
-              listExceptions={() => aegis.safety.listExceptions()}
+              listExceptions={aegis.safety.listExceptions}
               removeException={(h) => void aegis.safety.removeException(h)}
               fingerprintState={fingerprint.state}
               toggleFingerprintAllowlist={fingerprint.toggleAllowlist}

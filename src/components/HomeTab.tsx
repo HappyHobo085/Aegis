@@ -1,5 +1,5 @@
 // src/components/HomeTab.tsx
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { Settings } from '../../shared/types';
 import { toast } from '../lib/toast';
 
@@ -10,6 +10,15 @@ export interface HomeTabProps {
 
 export function HomeTab({ settings, update }: HomeTabProps) {
   const [homeUrl, setHomeUrl] = useState(settings.homeUrl);
+  // Re-sync the draft when the persisted value changes externally (sync push / data import) —
+  // but keep the user's in-progress edit (only adopt when they haven't touched it).
+  const lastPropRef = useRef(settings.homeUrl);
+  useEffect(() => {
+    if (settings.homeUrl !== lastPropRef.current) {
+      if (homeUrl === lastPropRef.current) setHomeUrl(settings.homeUrl);
+      lastPropRef.current = settings.homeUrl;
+    }
+  }, [settings.homeUrl, homeUrl]);
 
   const handleSave = (): void => {
     void (async () => {

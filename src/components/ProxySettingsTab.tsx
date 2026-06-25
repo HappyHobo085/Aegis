@@ -2,7 +2,7 @@
 //
 // The "Proxy" Settings tab.  Configures the content-webview proxy.
 // IMPORTANT: This is NOT a VPN.  Honest limits are surfaced in-UI.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ProxyConfig, ProxyState } from '../../shared/types';
 
 export interface ProxySettingsTabProps {
@@ -21,6 +21,29 @@ export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabPro
   const [bypassRaw, setBypassRaw] = useState(state.bypassHosts.join(', '));
   const [testStatus, setTestStatus] = useState('');
   const [busy, setBusy] = useState(false);
+
+  // Re-sync the draft when the applied state changes externally (a `proxy.state` event, or a
+  // clear() elsewhere) — but only if the user hasn't edited any field, so in-progress edits are
+  // never clobbered. Without this the form (and the dirty hint) can show stale values.
+  const lastStateRef = useRef(state);
+  useEffect(() => {
+    const prev = lastStateRef.current;
+    if (state === prev) return;
+    const clean =
+      mode === prev.mode &&
+      scheme === prev.scheme &&
+      host === prev.host &&
+      port === prev.port &&
+      bypassRaw === prev.bypassHosts.join(', ');
+    if (clean) {
+      setModeLocal(state.mode);
+      setScheme(state.scheme);
+      setHost(state.host);
+      setPort(state.port);
+      setBypassRaw(state.bypassHosts.join(', '));
+    }
+    lastStateRef.current = state;
+  }, [state, mode, scheme, host, port, bypassRaw]);
 
   function currentCfg(): ProxyConfig {
     return {
@@ -55,6 +78,11 @@ export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabPro
   }
 
   async function handleApply() {
+    // Reject an invalid port (clearing the number field yields Number('') === 0).
+    if (!Number.isInteger(port) || port < 1 || port > 65535) {
+      setTestStatus('Port must be between 1 and 65535.');
+      return;
+    }
     await setConfig(currentCfg());
     setTestStatus('');
   }
@@ -191,13 +219,14 @@ export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabPro
           <div className="proxy-tab__status-row">
             <small>
               {state.active
-                ? (() => {
-                    const ua = typeof navigator !== 'undefined' ? navigator.userAgent : '';
-                    if (/Android/i.test(ua)) return 'Applies to all tabs (and the app)';
-                    if (/Windows/i.test(ua))
-                      return 'Applies to new tabs — reload existing tabs to apply';
-                    return 'Applies live';
-                  })()
+                ? // The chrome can't tell the desktop OS apart — the User-Agent is a fixed
+                  // spoof (sniffing it mislabels the platform). Use the reliable Android bridge
+                  // check; for desktop give a conservative hint (Linux applies live, Windows is
+                  // spawn-time, so "reload to route an older tab" is correct on Windows and
+                  // harmless on Linux).
+                  typeof window !== 'undefined' && 'AegisAndroid' in window
+                  ? 'Applies to all tabs (and the app).'
+                  : 'Active — reload any tab opened before you applied this to route it.'
                 : 'Not active yet — click Apply.'}
             </small>
           </div>

@@ -50,6 +50,27 @@ describe('AdblockShield', () => {
     expect(btn).not.toHaveTextContent('0');
   });
 
+  it('closes the popover on an outside click', async () => {
+    render(
+      <div>
+        <AdblockShield {...props()} />
+        <button type="button">outside</button>
+      </div>,
+    );
+    await userEvent.click(screen.getByRole('button', { name: /^ad blocking/i }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: 'outside' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('keeps the popover open on a click inside it', async () => {
+    render(<AdblockShield {...props()} />);
+    await userEvent.click(screen.getByRole('button', { name: /^ad blocking/i }));
+    const dialog = screen.getByRole('dialog');
+    await userEvent.click(within(dialog).getByText(/blocked here/i));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+  });
+
   it('does not render a Reload-to-apply button when onReload is omitted', async () => {
     render(<AdblockShield {...props()} />);
     await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));

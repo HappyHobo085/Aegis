@@ -34,6 +34,23 @@ describe('MyFiltersTab', () => {
     expect(screen.getByText(/2 rules/i)).toBeInTheDocument();
   });
 
+  it('adopts externally-changed filter text when the textarea is not edited', () => {
+    const { rerender } = render(<MyFiltersTab text="||a.example^" save={vi.fn(async () => {})} />);
+    const area = screen.getByRole('textbox', { name: /custom filters/i });
+    expect(area).toHaveValue('||a.example^');
+    rerender(<MyFiltersTab text="||b.example^" save={vi.fn(async () => {})} />);
+    expect(area).toHaveValue('||b.example^');
+  });
+
+  it('keeps an in-progress edit when the prop changes externally', async () => {
+    const { rerender } = render(<MyFiltersTab text="||a.example^" save={vi.fn(async () => {})} />);
+    const area = screen.getByRole('textbox', { name: /custom filters/i });
+    await userEvent.clear(area);
+    await userEvent.type(area, '||my-edit^');
+    rerender(<MyFiltersTab text="||b.example^" save={vi.fn(async () => {})} />);
+    expect(area).toHaveValue('||my-edit^');
+  });
+
   it('recomputes the rule count as the textarea is edited', async () => {
     render(<MyFiltersTab text="" save={vi.fn(async () => {})} />);
     expect(screen.getByText(/0 rules/i)).toBeInTheDocument();

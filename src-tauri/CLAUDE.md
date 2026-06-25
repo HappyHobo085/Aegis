@@ -310,9 +310,12 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   `--autoplay-policy=no-user-gesture-required`). Android: the policy lives in a global
   (`note_policy`, seeded at boot + on `settings.set`), read by the `NativeWebrtc.shimScript`
   JNI getter and registered per-tab. **Residual matrix (honest):** the shim covers page +
-  iframe frames but NOT Web Worker scopes. `disable` is worker-tight on Linux/Windows
-  (native), shim-only (workers leak) on macOS/Android. `public-only` is native (worker-tight)
-  on Windows, shim-only on Linux/macOS/Android. Per-site hatch is desktop-only in v1.
+  iframe frames but NOT Web Worker scopes — which is moot for the leak vector, since
+  `RTCPeerConnection` is `[Exposed=Window]` per the WebRTC spec and is NOT constructible in a
+  Worker on spec-compliant engines (WebKit/Chromium), so there's nothing to leak there. The
+  native backstops (`disable` worker-tight on Linux/Windows; `public-only` native on Windows)
+  remain belt-and-suspenders for engine-wide coverage; macOS/Android are shim-only and rely on
+  the Window-only exposure holding. Per-site hatch is desktop-only in v1.
 - **Linux** — `linux_layout.rs`: works around **tauri#10420** by reparenting
   webkit2gtk widgets GtkBox → GtkFixed; title-changed signal feeds history +
   routes the element-picker sentinel; Esc-exits-fullscreen; GTK key hook

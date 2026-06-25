@@ -252,7 +252,7 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 
     // Array stores (favorites/saved/allowlist) — per-uuid HLC-LWW via merge_into.
     for &ns in sync_stores::SYNCABLE {
-        let dk = Zeroizing::new(crypto::data_key(&root, ns));
+        let dk = crypto::data_key(&root, ns);
         let changed = sync_ns(
             app,
             &base,
@@ -268,7 +268,7 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 
     // Settings — per-KEY HLC-LWW applied to the flat file.
     {
-        let dk = Zeroizing::new(crypto::data_key(&root, "settings"));
+        let dk = crypto::data_key(&root, "settings");
         let changed = sync_ns(
             app,
             &base,
@@ -284,7 +284,7 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
 
     // Custom filters — a single record (HLC-LWW).
     {
-        let dk = Zeroizing::new(crypto::data_key(&root, "customFilters"));
+        let dk = crypto::data_key(&root, "customFilters");
         let changed = sync_ns(
             app,
             &base,
@@ -421,7 +421,7 @@ fn enable_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<&str>)
         let st = app.state::<SyncState>();
         let mut g = st.0.lock().unwrap();
         g.root = Some(root);
-        g.device_seed = Some(Zeroizing::new(device_seed));
+        g.device_seed = Some(device_seed); // already Zeroizing (crypto::device_signing_seed)
         g.enabled = true;
         g.account_id = account_id;
         g.device_id = device_id;

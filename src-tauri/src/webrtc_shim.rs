@@ -29,10 +29,13 @@
 //!
 //! ## Coverage residual (honest)
 //! Document-start injection covers the page + iframe frames but NOT Web Worker /
-//! SharedWorker scopes, where `RTCPeerConnection` also exists — a page constructing a
-//! peer connection in a Worker bypasses this shim. The native backstops (Linux
-//! `set_enable_webrtc`, Windows `--force-webrtc-ip-handling-policy`) ARE engine-wide
-//! (incl. workers); macOS and Android are shim-only. See the matrix in src-tauri/CLAUDE.md.
+//! SharedWorker global scopes. In practice this is moot for the leak vector: per the WebRTC
+//! spec `RTCPeerConnection` is `[Exposed=Window]` — it is NOT constructible in a Worker scope
+//! on spec-compliant engines (WebKit/Chromium), so there's no peer connection there to leak
+//! through. The native backstops (Linux `set_enable_webrtc`, Windows
+//! `--force-webrtc-ip-handling-policy`) ARE engine-wide and remain belt-and-suspenders should a
+//! non-standard engine ever expose it in a worker; macOS and Android are shim-only (so they'd
+//! rely solely on the Window-only exposure holding). See the matrix in src-tauri/CLAUDE.md.
 
 /// True if `addr` is a local/private/loopback/link-local/mDNS address that must be
 /// dropped so it can't leak. FAIL-OPEN: anything we can't classify (unexpected form,

@@ -1,5 +1,5 @@
 // src/components/MyFiltersTab.tsx
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from '../lib/toast';
 
 export interface MyFiltersTabProps {
@@ -17,6 +17,15 @@ export function countRules(text: string): number {
 
 export function MyFiltersTab({ text, save }: MyFiltersTabProps) {
   const [draft, setDraft] = useState(text);
+  // Re-sync when the persisted filters change externally (sync push / data import), unless the
+  // user has unsaved edits (only adopt when the draft still matches the last-seen value).
+  const lastPropRef = useRef(text);
+  useEffect(() => {
+    if (text !== lastPropRef.current) {
+      if (draft === lastPropRef.current) setDraft(text);
+      lastPropRef.current = text;
+    }
+  }, [text, draft]);
 
   const handleSave = (): void => {
     void (async () => {
