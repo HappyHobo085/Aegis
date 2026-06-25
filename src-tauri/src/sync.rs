@@ -161,15 +161,22 @@ fn open_wire(data_key: &[u8; 32], ns: &str, w: &Value) -> Result<Value, String> 
 
 // --- HTTP (reqwest blocking on a dedicated thread, per the subs.rs pattern) ---
 
+/// Background sync/registration HTTP timeout (these run off the UI thread, so generous).
+const SYNC_TIMEOUT_SECS: u64 = 30;
+/// Interactive HTTP timeout for user-initiated device calls that still run on the IPC
+/// thread — kept short so a slow/unreachable server can't freeze the window for long.
+const INTERACTIVE_TIMEOUT_SECS: u64 = 8;
+
 fn http(
     method: &'static str,
     url: String,
     auth: String,
     body: Option<Value>,
+    timeout_secs: u64,
 ) -> Result<Value, String> {
     std::thread::spawn(move || -> Result<Value, String> {
         let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(30))
+            .timeout(Duration::from_secs(timeout_secs))
             .build()
             .map_err(|e| e.to_string())?;
         let mut req = match method {
@@ -324,6 +331,7 @@ fn sync_ns<R: Runtime>(
         format!("{base}/v1/records?ns={ns}"),
         auth_header(account_id, device_seed)?,
         None,
+        SYNC_TIMEOUT_SECS,
     )?;
     let mut decrypted = Vec::new();
     if let Some(arr) = pulled.get("records").and_then(Value::as_array) {
@@ -348,6 +356,7 @@ fn sync_ns<R: Runtime>(
         format!("{base}/v1/records"),
         auth_header(account_id, device_seed)?,
         Some(json!({ "ns": ns, "records": wire })),
+        SYNC_TIMEOUT_SECS,
     )?;
     Ok(changed)
 }
@@ -383,6 +392,7 @@ fn register_device(
                 "accountId": account_id, "deviceId": device_id,
                 "label": label, "accountSig": account_sig,
             })),
+            SYNC_TIMEOUT_SECS,
         );
     }
 }
@@ -413,6 +423,24 @@ fn enable_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<&str>)
     }
     emit_state(app);
     nudge(app); // kick off an initial sync if a server is configured
+}
+
+/// Run `enable_with_root` (which does Argon2 on the passphrase path + a device-registration
+/// HTTP) on a worker thread so the IPC/main thread isn't frozen during sync setup. The status
+/// flips to `syncing` immediately; the worker emits the final `sync.state` when enable
+/// completes (and `enable_with_root` then nudges an initial sync).
+fn spawn_enable(app: &AppHandle, root: RootSecret, passphrase: Option<String>) {
+    {
+        let st = app.state::<SyncState>();
+        let mut g = st.0.lock().unwrap();
+        g.status = Status::Syncing;
+        g.last_error.clear();
+    }
+    emit_state(app);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        enable_with_root(&app, root, passphrase.as_deref());
+    });
 }
 
 /// Trigger a background sync pass (no-op if disabled). Debounced only by the engine status.
@@ -530,8 +558,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 Ok(p) => p,
                 Err(e) => return Some(Err(e)),
             };
-            let passphrase = payload.get("passphrase").and_then(Value::as_str);
-            enable_with_root(app, root, passphrase);
+            let passphrase = payload
+                .get("passphrase")
+                .and_then(Value::as_str)
+                .map(String::from);
+            // Enable off-thread (Argon2 + registration HTTP can be slow); the phrase is
+            // already computed and returned now — the enabled state arrives via sync.state.
+            spawn_enable(app, root, passphrase);
             // Show-once: the phrase is returned here and never retrievable without confirm.
             Some(Ok(json!({ "recoveryPhrase": phrase })))
         }
@@ -542,8 +575,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 Ok(r) => r,
                 Err(e) => return Some(Err(e)),
             };
-            let passphrase = payload.get("passphrase").and_then(Value::as_str);
-            enable_with_root(app, root, passphrase);
+            let passphrase = payload
+                .get("passphrase")
+                .and_then(Value::as_str)
+                .map(String::from);
+            // Enable off-thread (see enableNew); return the now-"syncing" state immediately —
+            // the final enabled state arrives via sync.state.
+            spawn_enable(app, root, passphrase);
             Some(Ok(state_json(app)))
         }
 
@@ -620,7 +658,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 Ok(a) => a,
                 Err(e) => return Some(Err(e)),
             };
-            match http("GET", format!("{base}/v1/devices"), auth, None) {
+            match http(
+                "GET",
+                format!("{base}/v1/devices"),
+                auth,
+                None,
+                INTERACTIVE_TIMEOUT_SECS,
+            ) {
                 Ok(v) => {
                     let this = app.state::<SyncState>().0.lock().unwrap().device_id.clone();
                     let devices: Vec<Value> = v
@@ -669,6 +713,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 format!("{base}/v1/devices/remove"),
                 auth,
                 Some(json!({ "deviceId": device_id })),
+                INTERACTIVE_TIMEOUT_SECS,
             );
             // Return the refreshed list.
             dispatch(app, "sync.listDevices", &Value::Null)

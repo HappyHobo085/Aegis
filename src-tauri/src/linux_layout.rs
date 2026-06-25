@@ -83,7 +83,45 @@ pub fn connect_url_tracker(app: &AppHandle, label: &str) {
 /// that slip past the ~50k-rule filter cap but the engine still catches. Well-known hosts
 /// (top of EasyList) are always within the cap, so they're filter-blocked pre-signal and
 /// never counted here; their blocking is real but invisible to the badge. `note_blocked`
-/// pushes the totals to the chrome.
+/// pushes the totals to the chrome. The engine round-trip + `note_blocked` run on a
+/// dedicated background thread (`block_counter_tx`), NOT the GTK main thread, so the
+/// signal handler — which fires for every allowed subresource — never blocks the UI on
+/// the engine reply.
+struct CountMsg {
+    app: AppHandle,
+    id: u32,
+    url: String,
+    page: String,
+}
+
+/// Lazily-started background thread for the block-counter pipeline. The signal handler
+/// hands it each subresource via a non-blocking `send`; it does the blocking `should_block`
+/// engine query, the badge update, and the autopilot A/B-trace line here — off the main
+/// thread. The trace verdict is identical to the old inline computation, just async.
+fn block_counter_tx() -> &'static std::sync::mpsc::Sender<CountMsg> {
+    static TX: std::sync::OnceLock<std::sync::mpsc::Sender<CountMsg>> = std::sync::OnceLock::new();
+    TX.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<CountMsg>();
+        std::thread::spawn(move || {
+            // The trace env var is set before launch and never changes, so read it once.
+            let trace = std::env::var("AEGIS_AUTOPILOT_TRACE").is_ok();
+            while let Ok(m) = rx.recv() {
+                let blocked = crate::adblock_engine::should_block(&m.url, &m.page, "other");
+                if trace {
+                    eprintln!(
+                        "[aegis-count] block={blocked} page={} url={}",
+                        m.page, m.url
+                    );
+                }
+                if blocked {
+                    crate::adblock::note_blocked(&m.app, m.id);
+                }
+            }
+        });
+        tx
+    })
+}
+
 pub fn connect_block_counter(app: &AppHandle, label: &str) {
     let Some(content) = app.get_webview(label) else {
         return;
@@ -99,17 +137,17 @@ pub fn connect_block_counter(app: &AppHandle, label: &str) {
         pw.inner()
             .connect_resource_load_started(move |wv, _res, request| {
                 use webkit2gtk::URIRequestExt;
+                // Capture the request + page URL and hand them to the counter thread; the
+                // engine query + badge update happen there so this main-thread signal never
+                // blocks on the engine reply (it fires for EVERY allowed subresource).
                 let url = request.uri().map(|s| s.to_string()).unwrap_or_default();
                 let page = wv.uri().map(|s| s.to_string()).unwrap_or_default();
-                let blocked = crate::adblock_engine::should_block(&url, &page, "other");
-                // Diagnostic: when AEGIS_AUTOPILOT_TRACE is set, log every subresource the
-                // counter signal sees + its should_block verdict (goes to the autopilot app.log).
-                if std::env::var("AEGIS_AUTOPILOT_TRACE").is_ok() {
-                    eprintln!("[aegis-count] block={blocked} page={page} url={url}");
-                }
-                if blocked {
-                    crate::adblock::note_blocked(&app, id);
-                }
+                let _ = block_counter_tx().send(CountMsg {
+                    app: app.clone(),
+                    id,
+                    url,
+                    page,
+                });
             });
     });
 }
