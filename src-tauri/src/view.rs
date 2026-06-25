@@ -281,6 +281,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "view.setFullscreen" => {
             let on = payload.get("on").and_then(Value::as_bool).unwrap_or(false);
             update(app, |l| l.fullscreen = on);
+            // Drive the real OS window so it takes over the monitor (hides the titlebar),
+            // not just the content-webview geometry. Backend call — no capability needed.
+            #[cfg(desktop)]
+            if let Some(window) = app.get_window("main") {
+                let _ = window.set_fullscreen(on);
+            }
             Ok(Value::Null)
         }
         _ => return None,

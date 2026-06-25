@@ -260,6 +260,12 @@ fn exit_fullscreen(app: &AppHandle) {
         if g.fullscreen {
             g.fullscreen = false;
             drop(g);
+            // Leave OS-window fullscreen too: the desktop view.setFullscreen path entered it,
+            // so Esc / the floating exit button must clear it directly (idempotent alongside
+            // the view.fullscreen → React → view.setFullscreen round-trip).
+            if let Some(window) = app.get_window("main") {
+                let _ = window.set_fullscreen(false);
+            }
             crate::view::apply_inset(app);
             crate::emit_event(app, "view.fullscreen", serde_json::json!({ "on": false }));
         }

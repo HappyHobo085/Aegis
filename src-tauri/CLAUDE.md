@@ -57,6 +57,12 @@ dotted event name.
   `active_content_label()`/`active_webview()` (refactored from the old single
   `CONTENT_LABEL` constant).
 - **`view.rs`** — content webview geometry: insets, sidebar, fullscreen, overlay.
+  **Desktop fullscreen now drives the OS window.** `view.setFullscreen` calls
+  `Window::set_fullscreen(on)` (`#[cfg(desktop)]`) in addition to the content-webview
+  relayout, so the window takes over the monitor (titlebar hidden). On Linux,
+  `linux_layout::exit_fullscreen` (Esc / floating exit button) also calls
+  `set_fullscreen(false)` directly. Backend call — no capability change. Android fullscreen
+  is the immersive `setFullscreen` bridge (hides the system bars) instead.
 - **`data.rs`** — `data.export` / `data.import` (bundles all stores + settings).
   **Unit-tested via `test_support::with_tmp_app`:** export produces a v2 bundle
   with every store present; cross-app import round-trip (export → fresh app →
@@ -528,9 +534,16 @@ malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt
   `setBottomBarHidden` (the top-bar chevron — content reclaims the bar's gap), and
   `setFullscreen` (desktop-parity hide-all-chrome — content fills the safe area, Back
   exits). The chrome installs `window.__aegisMobileBack` for native Back to call.
-- **Safe-area insets:** `env(safe-area-inset-*)` in an Android WebView reports the
-  display cutout, NOT the system bars, so the insets listener pushes the real status/nav
-  insets to the chrome as `--aegis-inset-top/bottom` CSS vars (px ÷ density).
+  `setFullscreen` (desktop-parity hide-all-chrome) now ALSO goes immersive —
+  `WindowInsetsControllerCompat.hide(systemBars())` on enter / `show(...)` on exit, with
+  `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` — so the page truly owns the whole screen (status
+  + nav bars hidden), matching the HTML5-video `onShowCustomView` path. Back exits.
+- **Safe-area insets (all four edges):** the insets listener reads
+  `systemBars() ∪ displayCutout()` and pushes the real status/nav/side insets to the chrome
+  as `--aegis-inset-top/bottom/left/right` CSS vars (px ÷ density); `onCreate` sets
+  `layoutInDisplayCutoutMode = ALWAYS` (API ≥ 30; `SHORT_EDGES` on 28–29) so cutouts are
+  reported as insets. `applyContentMargins()` also applies `leftMargin`/`rightMargin`
+  (= side insets, 0 in fullscreen) so the page clears side bars/cutouts in landscape.
 - A **`WebChromeClient`** (`onShowCustomView`/`onHideCustomView` + immersive bars) gives
   pages HTML5 fullscreen (video, etc.) — distinct from the chrome-hiding `setFullscreen`.
 - **Multi-tab (live tabs).** `MainActivity` keeps a `tabId → WebView` map; the active

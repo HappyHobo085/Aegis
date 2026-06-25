@@ -2,10 +2,12 @@ package com.aegis.browser
 
 import android.graphics.Bitmap
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
@@ -91,6 +93,8 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // applyContentMargins() uses them so the content sits in the safe area + chrome gaps.
   @Volatile private var statusTop = 0
   @Volatile private var navBottom = 0
+  @Volatile private var sideLeft = 0
+  @Volatile private var sideRight = 0
 
   // Chrome heights (px), cached for the bridges: top chrome = address bar + favourites
   // (72dp); bottom action bar = 56dp.
@@ -120,6 +124,8 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     (gc.layoutParams as? FrameLayout.LayoutParams)?.let { p ->
       p.topMargin = (if (fullscreen) 0 else topChromePx) + statusTop
       p.bottomMargin = (if (fullscreen || bottomBarHidden) 0 else bottomBarPx) + navBottom
+      p.leftMargin = if (fullscreen) 0 else sideLeft
+      p.rightMargin = if (fullscreen) 0 else sideRight
       gc.layoutParams = p
     }
   }
@@ -127,6 +133,18 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
     super.onCreate(savedInstanceState)
+    // Draw into the display cutout on every edge so notches / punch-holes / curved
+    // edges are reported as insets (which we push to the chrome) instead of letterboxed.
+    // minSdk is 24: _ALWAYS is API 30, _SHORT_EDGES is API 28, below 28 has no cutouts.
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+      window.attributes = window.attributes.apply {
+        layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+      }
+    } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+      window.attributes = window.attributes.apply {
+        layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+      }
+    }
   }
 
   // Back-press precedence: (a) a chrome sheet/menu is open -> tell the chrome to close
@@ -463,13 +481,19 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       // on Android WebView env(safe-area-inset-*) reports the display cutout, NOT the
       // status/nav bars, so the chrome's fixed top/bottom bars need these to clear them.
       ViewCompat.setOnApplyWindowInsetsListener(parent) { _, insets ->
-        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
+        val bars = insets.getInsets(
+          WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout(),
+        )
         statusTop = bars.top
         navBottom = bars.bottom
+        sideLeft = bars.left
+        sideRight = bars.right
         applyContentMargins()
         val js =
           "document.documentElement.style.setProperty('--aegis-inset-top','${bars.top / density}px');" +
-          "document.documentElement.style.setProperty('--aegis-inset-bottom','${bars.bottom / density}px');"
+          "document.documentElement.style.setProperty('--aegis-inset-bottom','${bars.bottom / density}px');" +
+          "document.documentElement.style.setProperty('--aegis-inset-left','${bars.left / density}px');" +
+          "document.documentElement.style.setProperty('--aegis-inset-right','${bars.right / density}px');"
         webView.evaluateJavascript(js, null)
         insets
       }
@@ -813,6 +837,11 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     @JavascriptInterface
     fun setFullscreen(on: Boolean) = runOnUiThread {
       fullscreen = on
+      WindowInsetsControllerCompat(window, window.decorView).apply {
+        systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (on) hide(WindowInsetsCompat.Type.systemBars())
+        else show(WindowInsetsCompat.Type.systemBars())
+      }
       applyContentMargins()
     }
 
