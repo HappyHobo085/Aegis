@@ -126,6 +126,25 @@ mod tests {
         assert_eq!(token.device_id, device_id_for(&seed()));
     }
 
+    /// The signed byte shape MUST stay byte-for-byte identical to the reference server's
+    /// `canonical()` (sync-server/src/main.rs, which has the SAME literal assertion). A
+    /// drift on either side silently breaks every sync auth, so both are pinned. Keep them
+    /// in lockstep — change one, change the other in the same commit.
+    #[test]
+    fn canonical_matches_the_documented_shape() {
+        let t = AuthToken {
+            account_id: "acct".into(),
+            device_id: "dev".into(),
+            issued_ms: 10,
+            expires_ms: 20,
+            nonce: "ab".into(),
+        };
+        assert_eq!(
+            canonical(&t),
+            b"aegis-auth-v1\nacct\ndev\n10\n20\nab".to_vec()
+        );
+    }
+
     #[test]
     fn expired_token_is_rejected() {
         let (token, sig) = mint(&seed(), "acct-1", 1_000, DEFAULT_TTL_MS).unwrap();
