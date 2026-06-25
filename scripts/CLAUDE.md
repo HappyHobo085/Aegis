@@ -30,6 +30,29 @@ node scripts/check-npm-audit.mjs   # the gate
 npm test                           # includes auditCheck.test.mjs (node project)
 ```
 
+## Build & deploy scripts
+
+Convenience wrappers around the release builds (each resolves the repo root via
+`git rev-parse --show-toplevel`, so they run from anywhere):
+
+- **`deploy-android.sh`** — build the arm64 **release** APK (debug-key-signed) and
+  `adb install -r` it onto the connected phone, updating `com.aegis.browser` in place.
+  Sets `JAVA_HOME` to the Android Studio JBR (JDK 21 — Gradle/AGP break under JDK 25).
+  Flags: `--universal` (all ABIs), `--reinstall` (uninstall first on a signing-key
+  mismatch — wipes that app's data).
+- **`build-appimage.sh`** — the release AppImage. Mirrors the CI `aegis-linux-appimage`
+  job: `tauri build --bundles appimage --config src-tauri/tauri.appimage-mediaframework.conf.json`
+  (the media-framework override ships matched GStreamer plugins — see `src-tauri/CLAUDE.md`
+  gotcha 12). Output under `src-tauri/target/release/bundle/appimage/*.AppImage`.
+- **`build-windows-portable.ps1`** — **run on a Windows host** (MSVC + NASM + CMake). Mirrors
+  the CI `aegis-windows-portable` job: `tauri build --no-bundle` then copy
+  `src-tauri/target/release/app.exe` → `Aegis_x64_portable.exe`. The canonical
+  (shipping-equivalent) portable exe.
+- **`build-windows-portable-cross.sh`** — best-effort **GNU cross-compile from Linux**
+  (`cargo build --release --target x86_64-pc-windows-gnu` after `npm run build:renderer`).
+  NOT the MSVC build that ships — validate on real Windows; use the `.ps1`/CI for the
+  canonical artifact. Needs `mingw64-gcc` + the `x86_64-pc-windows-gnu` rust target.
+
 ## Autopilot launcher (`scripts/autopilot/`)
 
 **Linux only. Needs a real display (X11 or Wayland).** Drives the entire Aegis feature
