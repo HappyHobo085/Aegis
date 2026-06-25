@@ -463,7 +463,8 @@ pub fn run() {
         .manage(farble::FarbleState::default())
         .manage(proxy::ProxyState::default())
         .manage(settings::SettingsCache::default())
-        .manage(history::HistoryStore::default());
+        .manage(history::HistoryStore::default())
+        .manage(downloads::DownloadsStore::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;
@@ -558,6 +559,8 @@ pub fn run() {
         // Coalesce per-navigation history writes into a periodic background flush (the
         // live history lives in an in-memory cache; see history.rs "Write batching").
         history::start_flush(app.handle());
+        // Same batching for downloads (per-event full-file fsync → periodic flush).
+        downloads::start_flush(app.handle());
 
         // Tauri child-webview auto-resize is incomplete; recompute bounds on
         // window resize so the content view keeps filling the area below the chrome.

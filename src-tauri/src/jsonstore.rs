@@ -295,6 +295,61 @@ pub fn load_synced<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
     items
 }
 
+// --- Host-keyed allowlist stores (ad-block `allowlist`, farble `fp-allowlist`) ---
+// Both are arrays of `{ host, uuid, hlc, deleted }` and their CRUD is identical save for
+// the store NAME, so it lives here once rather than duplicated per owning module. The
+// in-memory cache reseed stays in each module (it touches a different managed state).
+
+/// The live (non-tombstoned) `host` strings in a host-keyed store.
+pub fn live_hosts<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<String> {
+    live(load_synced(app, name))
+        .iter()
+        .filter_map(|it| it.get("host").and_then(Value::as_str).map(String::from))
+        .collect()
+}
+
+/// Add `host` to a host-keyed store: revive a tombstone in place, or stamp a new record.
+pub fn add_host<R: Runtime>(app: &AppHandle<R>, name: &str, host: &str) {
+    let mut items = load_synced(app, name);
+    match items
+        .iter_mut()
+        .find(|it| it.get("host").and_then(Value::as_str) == Some(host))
+    {
+        Some(it) => {
+            if is_deleted(it) {
+                if let Some(o) = it.as_object_mut() {
+                    o.insert("deleted".into(), json!(false));
+                }
+                touch(it, app);
+            }
+        }
+        None => {
+            let mut item = json!({ "host": host });
+            stamp_new(&mut item, app);
+            items.push(item);
+        }
+    }
+    let _ = save(app, name, &items);
+}
+
+/// Tombstone `host` in a host-keyed store.
+pub fn remove_host<R: Runtime>(app: &AppHandle<R>, name: &str, host: &str) {
+    let mut items = load_synced(app, name);
+    tombstone(
+        &mut items,
+        |it| it.get("host").and_then(Value::as_str) == Some(host),
+        app,
+    );
+    let _ = save(app, name, &items);
+}
+
+/// Tombstone every live host in a host-keyed store (clear all).
+pub fn clear_hosts<R: Runtime>(app: &AppHandle<R>, name: &str) {
+    let mut items = load_synced(app, name);
+    tombstone(&mut items, |it| !is_deleted(it), app);
+    let _ = save(app, name, &items);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

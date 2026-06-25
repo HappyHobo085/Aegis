@@ -12,7 +12,7 @@
 // filter is added to the UserContentManager in the callback.
 //
 // Converted rules already include cosmetic `css-display-none`, so the content filters
-// cover element hiding too; `apply_cosmetic_css` remains for extra rules.
+// cover element hiding too.
 //
 // Mechanism proven (a content filter blocks a target URL; verified 2026-06-13).
 #![allow(dead_code)]
@@ -23,9 +23,7 @@ use std::sync::{Mutex, OnceLock};
 
 use glib::translate::ToGlibPtr;
 use tauri::{AppHandle, Manager, Runtime};
-use webkit2gtk::{
-    UserContentInjectedFrames, UserContentManagerExt, UserStyleLevel, UserStyleSheet, WebViewExt,
-};
+use webkit2gtk::{UserContentManagerExt, WebViewExt};
 
 /// The converted EasyList filters, cached after the first conversion so tabs
 /// spawned *later* (`apply_to_new_tab`) get the same filters as the boot tab.
@@ -179,30 +177,6 @@ pub fn remove_all<R: Runtime>(app: &AppHandle<R>) {
             }
         });
     }
-}
-
-/// Inject an element-hiding stylesheet (safe API), for cosmetic rules beyond what
-/// the content filter expresses.
-pub fn apply_cosmetic_css<R: Runtime>(app: &AppHandle<R>, css: String) {
-    if css.is_empty() {
-        return;
-    }
-    let Some(content) = crate::nav::active_webview(app) else {
-        return;
-    };
-    let _ = content.with_webview(move |pw| {
-        if let Some(ucm) = pw.inner().user_content_manager() {
-            let empty: [&str; 0] = [];
-            let sheet = UserStyleSheet::new(
-                &css,
-                UserContentInjectedFrames::AllFrames,
-                UserStyleLevel::User,
-                &empty,
-                &empty,
-            );
-            ucm.add_style_sheet(&sheet);
-        }
-    });
 }
 
 /// Heap state carried through the async load/save callback so the filter can be

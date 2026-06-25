@@ -22,11 +22,10 @@
 //! Lowe's). User subscriptions (`subs.rs`) and custom rules (`customfilters.rs`) are
 //! layered on top of these by the callers that support them.
 //!
-//! `combined()`/some consts are unused under certain target cfgs (e.g. only the
-//! engine consumes them on Android), so the module allows dead code like its
-//! sibling `adblock_convert`/`adblock_webkit`.
+//! Some consts/items are unused under certain target cfgs (e.g. only the engine
+//! consumes the lists on Android), so the module allows dead code like its sibling
+//! `adblock_convert`/`adblock_webkit`.
 #![allow(dead_code)]
-use std::sync::OnceLock;
 
 /// EasyList — ad servers (baseline ad blocking).
 pub const EASYLIST: &str = include_str!("../resources/easylist.txt");
@@ -49,17 +48,9 @@ pub const ALL: [&str; 4] = [EASYLIST, EASYPRIVACY, PETER_LOWE, ABUSE_TLDS];
 #[cfg(test)]
 const LARGE_LISTS: [&str; 3] = [EASYLIST, EASYPRIVACY, PETER_LOWE];
 
-static COMBINED: OnceLock<String> = OnceLock::new();
-
-/// All bundled lists newline-joined into one text blob (built once). For consumers
-/// that want a single `&str` of every rule rather than iterating [`ALL`].
-pub fn combined() -> &'static str {
-    COMBINED.get_or_init(|| ALL.join("\n")).as_str()
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{combined, ABUSE_TLDS, EASYLIST, EASYPRIVACY, LARGE_LISTS};
+    use super::{ABUSE_TLDS, EASYLIST, EASYPRIVACY, LARGE_LISTS};
 
     #[test]
     fn bundles_easylist_and_easyprivacy_and_peter_lowe() {
@@ -85,13 +76,5 @@ mod tests {
             ABUSE_TLDS.contains("||cfd^"),
             "abuse-TLD list must block .cfd"
         );
-    }
-
-    #[test]
-    fn combined_contains_every_list() {
-        let c = combined();
-        assert!(c.contains("doubleclick.net")); // EasyList
-        assert!(c.contains("google-analytics.com")); // EasyPrivacy
-        assert!(c.len() > EASYLIST.len()); // strictly larger than any single list
     }
 }

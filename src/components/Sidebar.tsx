@@ -1,5 +1,5 @@
 // src/components/Sidebar.tsx
-import { useEffect, useId, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type {
   KeyboardEvent as ReactKeyboardEvent,
   PointerEvent as ReactPointerEvent,
@@ -58,16 +58,53 @@ export function Sidebar({ open, onClose, history, saved, onWidthChange }: Sideba
   const historyPanelId = useId();
   const savedPanelId = useId();
 
-  // Persist the width whenever it changes (idempotent — StrictMode-safe) and report it
-  // up so the content webview's right inset tracks the (resizable) panel exactly.
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(WIDTH_KEY, String(width));
-    } catch {
-      // localStorage unavailable — width simply isn't remembered.
+  // Report the width up so the content webview's right inset tracks the (resizable)
+  // panel. A pointer DRAG fires dozens of moves/sec and each onWidthChange drives a
+  // synchronous view.setLayout IPC on the GTK main thread, so while dragging we coalesce
+  // to at most one report per animation frame; keyboard/open changes report immediately.
+  // onWidthChange is read through a ref so a queued rAF callback never goes stale.
+  const onWidthChangeRef = useRef(onWidthChange);
+  onWidthChangeRef.current = onWidthChange;
+  const rafRef = useRef<number | null>(null);
+  const pendingWidthRef = useRef<number | null>(null);
+
+  const reportWidth = useCallback((w: number, immediate: boolean): void => {
+    if (immediate) {
+      if (rafRef.current != null) {
+        cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
+      onWidthChangeRef.current?.(w);
+      return;
     }
-    onWidthChange?.(width);
-  }, [width, onWidthChange]);
+    pendingWidthRef.current = w;
+    if (rafRef.current != null) return;
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      if (pendingWidthRef.current != null) onWidthChangeRef.current?.(pendingWidthRef.current);
+    });
+  }, []);
+
+  // Cancel any queued frame on unmount (the panel unmounts when closed).
+  useEffect(
+    () => () => {
+      if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    },
+    [],
+  );
+
+  // Report the width (coalesced while dragging) and persist it once the drag settles —
+  // a per-pixel localStorage write during a drag is wasteful and unnecessary.
+  useEffect(() => {
+    reportWidth(width, !dragging);
+    if (!dragging) {
+      try {
+        window.localStorage.setItem(WIDTH_KEY, String(width));
+      } catch {
+        // localStorage unavailable — width simply isn't remembered.
+      }
+    }
+  }, [width, dragging, reportWidth]);
 
   // Escape closes the panel while it's open. The sidebar is an INSET panel (the page
   // stays visible beside it), not a modal, so we don't trap focus — we just listen for
