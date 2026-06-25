@@ -108,3 +108,21 @@ keyring = { version = "3", features = ["linux-native-sync-persistent", "windows-
 # feature) so AppHandle-backed dispatchers can be unit-tested. Dev-only: release
 # builds never pull the test runtime. Version must match the normal `tauri` dep.
 tauri = { version = "2.11.2", features = ["test"] }
+
+# Release binary: whole-program optimization (lto) + single codegen unit + symbol
+# stripping. Cuts size and improves startup vs. the cargo defaults (no lto,
+# codegen-units = 256, no strip). DELIBERATELY NOT `panic = "abort"`: the
+# `catch_unwind` guards in sync_keystore/farble/proxy/sync turn a panic beneath an
+# `extern "C"`/JNI frame into a caught error instead of a SIGABRT (see those modules
+# + the Android JNI up-call notes in CLAUDE.md). `panic = "abort"` would make those
+# guards no-ops and reintroduce that crash class.
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
+
+# Faster local/CI iteration: opt-level 1 lightly optimizes deps + the crate, making
+# the `cargo test` suite noticeably quicker to run for a small compile-time cost.
+# Release output is unaffected.
+[profile.dev]
+opt-level = 1
