@@ -12,7 +12,17 @@ import { resolve } from 'node:path';
  */
 export default defineConfig({
   root: resolve(__dirname, 'src'),
-  plugins: [react()],
+  plugins: [
+    react({
+      // React 19 Compiler: auto-memoizes components/hooks at build time, so the renderer
+      // doesn't depend on hand-written React.memo/useCallback to avoid re-renders. It bails
+      // out safely (leaving a component un-optimized) on any code it can't prove safe, so
+      // enabling it never changes behavior — it only removes unnecessary re-renders. Runs in
+      // dev, prod, AND the vitest transform pipeline, so the test suite exercises the
+      // compiled output.
+      babel: { plugins: [['babel-plugin-react-compiler', {}]] },
+    }),
+  ],
   clearScreen: false,
   // Port is overridable via VITE_DEV_PORT so the autopilot harness can run on its own
   // port (e.g. 5199) alongside a normal `tauri dev` on 5174 without colliding.
