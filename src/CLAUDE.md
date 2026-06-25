@@ -69,8 +69,10 @@ width)` so the page insets from the right and stays visible. Width is remembered
   state — `list`, `add`, `update`, `remove`, and `search` each call the IPC directly and
   return the list without storing it in the hook, so plaintext credentials are not resident
   in the React tree between operations. The hook only persists `VaultState` (the safe
-  `{exists, unlocked, count}` summary) and the `_setRecordsRef` escape hatch used by
-  `VaultSettingsTab` to sync its local records display with the optimistic-update flow.
+  `{exists, unlocked, count, undecryptable}` summary — `undecryptable > 0` drives a warning
+  banner in `VaultSettingsTab` for records preserved-but-not-decryptable) and the
+  `_setRecordsRef` escape hatch used by `VaultSettingsTab` to sync its local records display
+  with the optimistic-update flow.
 - **`hooks/useFingerprint`** — owns anti-fingerprinting state (`FingerprintState`:
   `{ level, allowlistedHosts }`). Seeds from `aegis.fingerprint.getState()` on mount;
   exposes `setLevel(level)` (calls `settings.set` to persist and re-calls `getState`),

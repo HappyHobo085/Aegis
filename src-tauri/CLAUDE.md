@@ -346,8 +346,10 @@ records[{uuid, updatedAt, nonce, ct}]}`. The only cleartext fields are the
     empty) by default and at every boot — never auto-unlocked from a keychain in Phase A.
     On `vault.lock`, `Zeroizing` wipes the DEK on drop; `Cred` is `Zeroize+ZeroizeOnDrop`.
     Every read/mutate channel returns `Err("vault is locked")` when `key` is `None`.
-  - **No page bridge:** the `vault.state` event carries only `{exists, unlocked, count}`
-    — no credential data. Plaintext credentials live only in `Inner.records` (in-process,
+  - **No page bridge:** the `vault.state` event carries only `{exists, unlocked, count,
+    undecryptable}` — no credential data (`undecryptable` = on-disk records that failed to
+    decrypt; preserved verbatim by `persist`/`Inner.orphans`, surfaced so the UI warns instead
+    of silently dropping them). Plaintext credentials live only in `Inner.records` (in-process,
     while unlocked) and transiently in the serde_json `Zeroizing` buffer during seal/open.
     The content webview has no vault path: no `vault` reference in `adblock_inject.rs`,
     `nav.rs`, `webrtc_shim.rs`, or `MainActivity.kt` (grep-verified).

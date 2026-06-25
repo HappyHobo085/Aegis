@@ -159,6 +159,16 @@ describe('VaultSettingsTab — unlocked', () => {
     expect(screen.getByText(/does not autofill/i)).toBeInTheDocument();
   });
 
+  it('warns when some records could not be decrypted (preserved, not lost)', () => {
+    renderUnlocked({ state: { exists: true, unlocked: true, count: 1, undecryptable: 2 } });
+    expect(screen.getByText(/could not be decrypted/i)).toBeInTheDocument();
+  });
+
+  it('shows no undecryptable warning when all records decrypt', () => {
+    renderUnlocked({ state: { exists: true, unlocked: true, count: 1, undecryptable: 0 } });
+    expect(screen.queryByText(/could not be decrypted/i)).not.toBeInTheDocument();
+  });
+
   it('renders the Lock button', () => {
     renderUnlocked();
     expect(screen.getByRole('button', { name: /lock vault/i })).toBeInTheDocument();

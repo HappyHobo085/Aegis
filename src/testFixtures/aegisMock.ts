@@ -239,10 +239,18 @@ export function aegisMockModule() {
         };
       })(),
       vault: {
-        getState: vi.fn().mockResolvedValue({ exists: false, unlocked: false, count: 0 }),
-        create: vi.fn().mockResolvedValue({ exists: true, unlocked: true, count: 0 }),
-        unlock: vi.fn().mockResolvedValue({ exists: true, unlocked: true, count: 0 }),
-        lock: vi.fn().mockResolvedValue({ exists: true, unlocked: false, count: 0 }),
+        getState: vi
+          .fn()
+          .mockResolvedValue({ exists: false, unlocked: false, count: 0, undecryptable: 0 }),
+        create: vi
+          .fn()
+          .mockResolvedValue({ exists: true, unlocked: true, count: 0, undecryptable: 0 }),
+        unlock: vi
+          .fn()
+          .mockResolvedValue({ exists: true, unlocked: true, count: 0, undecryptable: 0 }),
+        lock: vi
+          .fn()
+          .mockResolvedValue({ exists: true, unlocked: false, count: 0, undecryptable: 0 }),
         list: vi.fn().mockResolvedValue([]),
         add: vi.fn().mockResolvedValue([]),
         update: vi.fn().mockResolvedValue([]),

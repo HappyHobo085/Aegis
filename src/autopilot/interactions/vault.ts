@@ -47,10 +47,10 @@ const PROBE_RECORD: VaultRecord = {
  */
 async function seedUnlockedState(ctx: InteractionCtx, count = 0): Promise<void> {
   // Step 1: force to locked so the useEffect dependency changes on step 2.
-  await ctx.emitVaultState?.({ exists: true, unlocked: false, count });
+  await ctx.emitVaultState?.({ exists: true, unlocked: false, count, undecryptable: 0 });
   await new Promise<void>((r) => setTimeout(r, 0));
   // Step 2: transition to unlocked — triggers the useEffect which loads records.
-  await ctx.emitVaultState?.({ exists: true, unlocked: true, count });
+  await ctx.emitVaultState?.({ exists: true, unlocked: true, count, undecryptable: 0 });
   await new Promise<void>((r) => setTimeout(r, 0));
   // Wait for the unlocked UI to appear.
   await waitFor(
@@ -97,7 +97,7 @@ export const VAULT_INTERACTIONS: InteractionSpec[] = [
     run: async (ctx: InteractionCtx) => {
       // Default mock state: { exists: false } — "Create vault" form renders on first reach.
       // Seed "no vault" state to ensure we're in the create form regardless of prior specs.
-      await ctx.emitVaultState?.({ exists: false, unlocked: false, count: 0 });
+      await ctx.emitVaultState?.({ exists: false, unlocked: false, count: 0, undecryptable: 0 });
       const masterInput = ctx.byLabel(/^Master password$/);
       if (!masterInput) throw new Error('"Master password" input not found on vault create form');
       const confirmInput = ctx.byLabel(/^Confirm password$/);
@@ -127,7 +127,7 @@ export const VAULT_INTERACTIONS: InteractionSpec[] = [
     layers: ['vitest'] as InteractionLayer[],
     run: async (ctx: InteractionCtx) => {
       // Push the "locked" state so the Unlock form renders.
-      await ctx.emitVaultState?.({ exists: true, unlocked: false, count: 2 });
+      await ctx.emitVaultState?.({ exists: true, unlocked: false, count: 2, undecryptable: 0 });
       const masterInput = ctx.byLabel(/^Master password$/);
       if (!masterInput) throw new Error('"Master password" input not found on vault unlock form');
       await ctx.type(masterInput, 'test-master-pw-1');

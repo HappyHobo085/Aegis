@@ -52,9 +52,12 @@ from, to }`) — the native redirect guard cancelled a scripted cross-origin top
     - `vault.search(q)` → `VaultRecord[]` — case-insensitive filter across site/username/notes.
     - `vault.state` event (`evtVaultState`, payload `VaultState`) — pushed after every
       create/unlock/lock/add/update/remove so the chrome stays in sync. Carries **no
-      credential data** (`{exists, unlocked, count}` only).
-  - **Vault data models:** - `VaultState { exists: boolean; unlocked: boolean; count: number }` — safe summary; no
-    credentials. This is the ONLY vault data emitted as a Tauri event. - `VaultRecord { uuid: string; updatedAt: number; site: string; username: string;
+      credential data** (`{exists, unlocked, count, undecryptable}` only).
+  - **Vault data models:** - `VaultState { exists: boolean; unlocked: boolean; count: number; undecryptable: number }`
+    — safe summary; no credentials. `undecryptable` = on-disk records that failed to decrypt
+    on unlock (corrupt/truncated); they are PRESERVED on disk (re-written by `persist`, never
+    dropped) and the UI warns rather than silently losing them. This is the ONLY vault data
+    emitted as a Tauri event. - `VaultRecord { uuid: string; updatedAt: number; site: string; username: string;
 password: string; notes: string }` — decrypted record; returned only by direct IPC
     commands (`list`/`add`/`update`/`remove`/`search`) to the chrome, never to the content
     webview. - `VaultRecordInput { site: string; username: string; password: string; notes?: string }` —

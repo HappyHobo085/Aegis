@@ -315,6 +315,15 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
         need it.
       </p>
 
+      {state.undecryptable > 0 && (
+        <p className="vault-tab__warning" role="alert">
+          {state.undecryptable} saved password{state.undecryptable !== 1 ? 's' : ''} could not be
+          decrypted and {state.undecryptable !== 1 ? 'are' : 'is'} hidden. They are kept on disk
+          (not deleted) &mdash; this can happen if the vault file was damaged. Restore a backup if
+          you have one.
+        </p>
+      )}
+
       {error && (
         <p className="vault-tab__error" role="alert">
           {error}

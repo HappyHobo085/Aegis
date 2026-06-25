@@ -137,6 +137,12 @@ fn file_json(salt: &[u8], verifier: Value, records: &[Value]) -> Value {
 pub struct Inner {
     key: Option<Zeroizing<[u8; 32]>>,
     records: Vec<Cred>,
+    // Raw wire records that failed to decrypt on unlock (corrupt/truncated ciphertext). Kept
+    // VERBATIM and re-written by `persist` so a later mutation's re-seal never silently drops
+    // them — a password vault must not destroy data it can't read. Surfaced as the
+    // `undecryptable` count in `vault.state` so the user is warned. These are sealed
+    // ciphertext, never plaintext.
+    orphans: Vec<Value>,
     salt: Vec<u8>, // the Argon2 salt for THIS vault (loaded from the file)
     created: bool, // a vault file exists
 }
@@ -284,6 +290,7 @@ impl VaultState {
         inner.key = None; // Zeroizing<[u8;32]> zeroizes on drop
         inner.records.clear(); // Cred implements ZeroizeOnDrop
         inner.records.shrink_to_fit();
+        inner.orphans.clear(); // re-read from disk on next unlock
     }
 
     /// Returns true if the vault is currently unlocked.
@@ -422,10 +429,13 @@ pub fn read_file<R: Runtime>(app: &AppHandle<R>) -> Option<Value> {
 pub fn persist<R: Runtime>(app: &AppHandle<R>, g: &Inner) -> Result<(), String> {
     let vk = g.key.as_ref().ok_or("vault is locked")?;
     let verifier = seal_verifier(vk)?;
-    let mut records = Vec::with_capacity(g.records.len());
+    let mut records = Vec::with_capacity(g.records.len() + g.orphans.len());
     for c in &g.records {
         records.push(seal_record(vk, c)?);
     }
+    // Pass through records that couldn't be decrypted on unlock verbatim — re-sealing only the
+    // decrypted set would permanently drop them (silent credential loss). They stay sealed as-is.
+    records.extend(g.orphans.iter().cloned());
     let file = file_json(&g.salt, verifier, &records);
     let p = vault_path(app).ok_or("no app data dir")?;
     let txt = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
@@ -444,7 +454,10 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     json!({
         "exists": g.created || vault_exists(app),
         "unlocked": g.key.is_some(),
-        "count": g.records.len()
+        "count": g.records.len(),
+        // Records present on disk that couldn't be decrypted (corrupt/truncated). Preserved,
+        // not dropped — the UI warns the user instead of silently losing credentials.
+        "undecryptable": g.orphans.len()
     })
 }
 
@@ -506,6 +519,7 @@ pub fn dispatch<R: Runtime>(
                 g.salt = salt.to_vec();
                 g.key = Some(vk);
                 g.records = Vec::new();
+                g.orphans = Vec::new();
                 g.created = true;
                 if let Err(e) = persist(app, &g) {
                     return Some(Err(e));
@@ -535,11 +549,15 @@ pub fn dispatch<R: Runtime>(
                 return Some(Err("vault file: no verifier".into()));
             }
             let mut records = Vec::new();
+            let mut orphans = Vec::new();
             if let Some(arr) = file.get("records").and_then(Value::as_array) {
                 for w in arr {
                     match open_record(&vk, w) {
                         Ok(c) => records.push(c),
-                        Err(e) => eprintln!("[aegis-vault] skip undecryptable record: {e}"),
+                        // Don't drop an undecryptable record — keep its wire form so a later
+                        // persist re-writes it, and surface the count via state (never plaintext,
+                        // and no error detail to stderr).
+                        Err(_) => orphans.push(w.clone()),
                     }
                 }
             }
@@ -549,6 +567,7 @@ pub fn dispatch<R: Runtime>(
                 g.salt = salt;
                 g.key = Some(vk);
                 g.records = records;
+                g.orphans = orphans;
                 g.created = true;
             }
             emit_state(app);
@@ -561,6 +580,7 @@ pub fn dispatch<R: Runtime>(
                 let mut g = st.0.lock().unwrap();
                 g.key = None;
                 g.records.clear();
+                g.orphans.clear();
             }
             emit_state(app);
             Some(Ok(state_json(app)))
@@ -1205,6 +1225,68 @@ mod tests {
     }
 
     // ── Task-3 dispatch tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn unlock_preserves_undecryptable_records_across_a_later_mutation() {
+        crate::test_support::with_tmp_app(|app| {
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "pw"}))
+                .unwrap()
+                .unwrap();
+            super::dispatch(
+                app,
+                "vault.add",
+                &json!({"input": {"site": "a.com", "username": "alice", "password": "p1", "notes": ""}}),
+            )
+            .unwrap()
+            .unwrap();
+            super::dispatch(app, "vault.lock", &json!({}))
+                .unwrap()
+                .unwrap();
+
+            // Corrupt the single record's ciphertext on disk so it can't be decrypted on unlock.
+            let p = vault_path(app).expect("vault path");
+            let mut file: Value =
+                serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+            let ct = file["records"][0]["ct"].as_str().unwrap().to_string();
+            let mut chars: Vec<char> = ct.chars().collect();
+            chars[0] = if chars[0] == 'a' { 'b' } else { 'a' }; // flip a nibble: valid hex, broken AEAD
+            file["records"][0]["ct"] = json!(chars.into_iter().collect::<String>());
+            std::fs::write(&p, serde_json::to_string(&file).unwrap()).unwrap();
+
+            // Unlock: the corrupted record is undecryptable — it must NOT appear as a live record,
+            // and the count MUST be surfaced (not silently swallowed).
+            let st = super::dispatch(app, "vault.unlock", &json!({"masterPassword": "pw"}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                st["count"],
+                json!(0),
+                "the corrupted record is not a live record"
+            );
+            assert_eq!(
+                st["undecryptable"],
+                json!(1),
+                "the undecryptable-record count must be surfaced to the UI"
+            );
+
+            // A later mutation (add) must PRESERVE the undecryptable record, not erase it.
+            super::dispatch(
+                app,
+                "vault.add",
+                &json!({"input": {"site": "b.com", "username": "bob", "password": "p2", "notes": ""}}),
+            )
+            .unwrap()
+            .unwrap();
+
+            let after: Value = serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+            let recs = after["records"].as_array().unwrap();
+            assert_eq!(
+                recs.len(),
+                2,
+                "the undecryptable record must survive a re-seal (1 orphan + 1 new)"
+            );
+        });
+    }
 
     #[test]
     fn dispatch_roundtrip_create_unlock_add_list_search_update_remove_lock() {
