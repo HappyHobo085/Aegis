@@ -59,32 +59,58 @@ function liveDeps(): RunDeps {
       await devEmit.emitEvent(IPC.evtSafetyInterstitial, null);
       await devEmit.emitEvent(IPC.evtPermissionsPrompt, null);
 
+      // Normalize tabs before the trace: the interaction tour can leave a non-primary tab
+      // active, or close view 1 and reopen it under a NEW id. The WebKit content filter applies
+      // to the active content view, so drive the CURRENT active view (not a hardcoded id) and
+      // close every other tab — one known view whose filter state we control.
+      let vid = PRIMARY_VIEW_ID;
+      try {
+        const state = await aegis.tabs.list();
+        vid = state.activeId;
+        for (const t of state.tabs) if (t.id !== vid) await aegis.tabs.close(t.id);
+      } catch {
+        /* best effort — fall back to the primary view */
+      }
+
       // A/B induction. The fixture fires the same third-party ad requests on every load
-      // (cache-busted). OFF pass first (content filter removed) — confirms the page
-      // actually generates ad traffic and the resource-load signal fires when unfiltered;
-      // ON pass second — the same requests should then be blocked + counted. The ?ab=
-      // marker forces a full reload (re-runs the JS) and tags each phase in the trace.
+      // (cache-busted). OFF pass first (content filter removed) — confirms the page actually
+      // generates ad traffic; ON pass second — the same requests should be blocked. The ?ab=
+      // marker forces a full reload and tags each phase in the trace; summarize.mjs counts
+      // external ad loads per phase (a [aegis-count] line means the request was ALLOWED through
+      // and LOADED — block=true there only means the engine counted it, it does NOT cancel it;
+      // see linux_layout::connect_block_counter).
       await aegis.adblock.setEnabled(false);
-      await aegis.nav.navigate(1, base + '?ab=off');
+      await aegis.nav.navigate(vid, base + '?ab=off');
       await new Promise((r) => setTimeout(r, 2500));
 
+      // ON pass. setEnabled(true) re-applies the WebKit content filter ASYNCHRONOUSLY on the
+      // GTK main loop; a fixed sleep raced it under load (the ?ab=on page loaded + fired its ad
+      // requests before the filter landed → false off=5/on=5). Instead WARM UP until the filter
+      // is proven effective: navigate the same ad fixture (warm-tagged, so summarize ignores it)
+      // and watch the session block counter — an ad that slips the not-yet-applied filter reaches
+      // the engine counter and the count RISES; once a warmup load no longer raises it, the
+      // content filter is blocking pre-signal, so the measured ?ab=on nav is guaranteed filtered.
+      // Bounded, so a genuine blocking regression still surfaces (ads keep loading → on>0 → fail).
       await aegis.adblock.setEnabled(true);
-      // setEnabled(true) → install_adblock re-applies the WebKit content filter
-      // ASYNCHRONOUSLY (the filter is added in a store load/save callback on the GTK main
-      // loop). 600ms lost the race after a heavy interaction tour: the ?ab=on page loaded
-      // and fired its ad requests BEFORE the filter landed on the webview's UCM (proven by
-      // the app.log — "[aegis-cf] filter loaded+added" appeared AFTER the ?ab=on counts),
-      // so the ads weren't blocked (off=5/on=5). Wait long enough for the re-apply to land.
-      await new Promise((r) => setTimeout(r, 4000));
+      for (let i = 0; i < 6; i++) {
+        const warmBefore = (await aegis.adblock.getState()).sessionBlocked ?? 0;
+        await aegis.nav.navigate(vid, base + `?ab=warm-${i}`);
+        await new Promise((r) => setTimeout(r, 2500));
+        const warmAfter = (await aegis.adblock.getState()).sessionBlocked ?? 0;
+        if (warmAfter === warmBefore) break; // no ad reached the engine ⇒ filter is effective
+      }
+
       const before = (await aegis.adblock.getState()).sessionBlocked ?? 0;
-      await aegis.nav.navigate(1, base + '?ab=on');
-      // Poll up to ~12s: the page's external ad requests fire + get counted asynchronously.
+      await aegis.nav.navigate(vid, base + '?ab=on');
+      // Poll up to ~12s for the shield count. With the filter warmed effective above, the
+      // fixture's well-known hosts are filter-blocked PRE-signal so the count won't rise — the
+      // honest "blocked but invisible to the badge" case the caller reports as a skip.
       let after = before;
       for (let i = 0; i < 24 && after <= before; i++) {
         await new Promise((r) => setTimeout(r, 500));
         after = (await aegis.adblock.getState()).sessionBlocked ?? 0;
       }
-      const navUrl = (await aegis.nav.getState(1)).url;
+      const navUrl = (await aegis.nav.getState(vid)).url;
       return { before, after, url: navUrl };
     },
     live: true,
@@ -215,24 +241,9 @@ export async function runAutopilot(partial?: Partial<RunDeps>): Promise<Report> 
     }
   }
 
-  // 2c-cleanup) The interaction tour exercises the tab specs, which can leave a NON-primary
-  // tab active. The ad-block A/B trace below navigates PRIMARY_VIEW_ID and needs it to be the
-  // VISIBLE active view: the WebKit content filter applies to the active content view, so a
-  // backgrounded view 1 would load the fixture's ads UNfiltered and the trace would falsely
-  // fail (off=5, on=5). Close any extra tabs the tour opened — closing the active non-primary
-  // tab re-activates the remaining (primary) one — restoring the trace's precondition.
-  if (deps.live) {
-    try {
-      const { tabs } = await deps.api.tabs.list();
-      if (tabs.some((t) => t.id === PRIMARY_VIEW_ID)) {
-        for (const t of tabs) if (t.id !== PRIMARY_VIEW_ID) await deps.api.tabs.close(t.id);
-      }
-    } catch {
-      /* best effort — the trace still self-reports */
-    }
-  }
-
-  // 3) End-to-end ad-block induction. navigateFixture drives a real A/B on the live core:
+  // 3) End-to-end ad-block induction. (Tab normalization + the filter-apply warm-up that the
+  // A/B trace needs now live inside navigateFixture, so they run against the resolved active
+  // view immediately before the measured passes.) navigateFixture drives a real A/B on the live core:
   // load the ad fixture with ad-block OFF, then ON — exercising nav + the on/off toggle for
   // real. Two complementary signals verify blocking:
   //   - The LIVE shield COUNT (recorded here). It is environment-sensitive: the WebKit
