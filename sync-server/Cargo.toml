@@ -2,6 +2,9 @@
 name = "aegis-sync-server"
 version = "0.1.0"
 edition = "2021"
+# Mirror the main crate's MSRV (src-tauri = 1.77.2) so clippy lints consistently across the
+# repo (e.g. it won't suggest `is_multiple_of`, stabilized in 1.87, over the existing `% 2`).
+rust-version = "1.77.2"
 description = "Reference self-hosted sync server for Aegis — stores opaque ciphertext only."
 publish = false
 

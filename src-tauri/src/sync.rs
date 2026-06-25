@@ -334,11 +334,13 @@ fn sync_ns<R: Runtime>(
     read_local: impl Fn() -> Vec<Value>,
     merge: impl Fn(&[Value]) -> Vec<String>,
 ) -> Result<Vec<String>, String> {
-    let auth = auth_header(account_id, device_seed)?;
+    // A fresh token (fresh nonce) per HTTP request: the server enforces single-use nonces for
+    // replay defense (sync-server `verify_auth`), so reusing one token across the GET + POST
+    // below would get the second request rejected. Minting is cheap (one Ed25519 sign).
     let pulled = http(
         "GET",
         format!("{base}/v1/records?ns={ns}"),
-        auth.clone(),
+        auth_header(account_id, device_seed)?,
         None,
     )?;
     let mut decrypted = Vec::new();
@@ -362,7 +364,7 @@ fn sync_ns<R: Runtime>(
     http(
         "POST",
         format!("{base}/v1/records"),
-        auth,
+        auth_header(account_id, device_seed)?,
         Some(json!({ "ns": ns, "records": wire })),
     )?;
     Ok(changed)

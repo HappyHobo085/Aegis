@@ -13,6 +13,21 @@ unauthenticated liveness probe (`/healthz`). Auth is the per-device Ed25519 `Aeg
 device registration additionally requires an account-root signature, so only a holder of the
 recovery phrase can register a device.
 
+## Hardening (replay + quotas)
+
+- **Replay defense:** `verify_auth` records each spent `(device, nonce)` pair (after the
+  signature verifies) and rejects a repeat — a captured `Authorization` header can't be
+  replayed. The set is bounded by the token TTL (expired entries are swept) and is in-memory
+  (a restart forgets it → a token captured pre-restart could replay within its ≤5-min TTL).
+  **Client compat:** the client mints a FRESH nonce per HTTP request (`sync::sync_ns` no longer
+  reuses one token across the GET+POST); an OLD client that reuses a token will have its second
+  request rejected — update client + server together.
+- **Quotas** (constants near the handlers): per-request record count (`MAX_RECORDS_PER_REQUEST`),
+  per-field lengths (`MAX_FIELD_LEN` for ns/uuid/nonce, `MAX_CT_LEN` for ciphertext, `MAX_LABEL_LEN`)
+  → `413`; per-account total records (`MAX_RECORDS_PER_ACCOUNT`) → `507`; plus a coarse
+  `DefaultBodyLimit` (`MAX_BODY_BYTES`). A registered-but-malicious paired device can't OOM the
+  process or fill disk. Updates to existing records bypass the per-account cap (no growth).
+
 ## Storage
 
 - In-memory `Store` behind an `Arc<Mutex<…>>`, served from `AppState`.
