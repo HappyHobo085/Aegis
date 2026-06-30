@@ -26,7 +26,7 @@ jobs:
             args: '--target aarch64-apple-darwin'
           - platform: macos-latest # Intel
             args: '--target x86_64-apple-darwin'
-          - platform: ubuntu-22.04
+          - platform: ubuntu-24.04
             args: ''
           - platform: windows-latest
             args: ''
@@ -37,7 +37,7 @@ jobs:
       # Tauri's Linux build links webkit2gtk; install the apt equivalents of the
       # Fedora deps used in dev.
       - name: Install Linux dependencies
-        if: matrix.platform == 'ubuntu-22.04'
+        if: matrix.platform == 'ubuntu-24.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -68,7 +68,7 @@ jobs:
       - run: npm ci
 
       - name: Build + publish (signed updater artifacts)
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Update-signing keypair (tauri signer generate). Absent today -> build
