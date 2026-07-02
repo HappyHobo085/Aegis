@@ -71,6 +71,7 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: '-'
           # Update-signing keypair (tauri signer generate). Absent today -> build
           # still succeeds but produces no signature; add the secret to enable
           # auto-update. Windows/macOS OS code-signing secrets are separate and

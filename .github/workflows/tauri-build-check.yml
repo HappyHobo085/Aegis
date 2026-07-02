@@ -108,6 +108,7 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: '1'
+          APPLE_SIGNING_IDENTITY: '-'
         run: npm run tauri -- build ${{ matrix.bundles }}
 
       # Windows: the portable build is the raw release binary. The bundler doesn't emit
