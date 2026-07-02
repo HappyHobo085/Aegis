@@ -119,9 +119,11 @@ export function AdblockShield(props: AdblockShieldProps) {
     <div ref={wrapperRef} className="adblock-shield">
       <button
         type="button"
-        className="adblock-shield__button"
+        className={`adblock-shield__button${
+          blockingActive ? ' adblock-shield__button--active' : ' adblock-shield__button--inactive'
+        }`}
         aria-label={page > 0 ? `Ad blocking, ${page} blocked on this page` : 'Ad blocking'}
-        title="Ad blocking"
+        title={blockingActive ? 'Ad blocking is active' : 'Ad blocking is off or allowlisted'}
         aria-haspopup="dialog"
         aria-expanded={open}
         onClick={() => changeOpen(!open)}

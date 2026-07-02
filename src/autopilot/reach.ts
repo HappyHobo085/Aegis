@@ -13,8 +13,16 @@ const V = PRIMARY_VIEW_ID;
 
 /** Click a tab/button by its visible text (Settings + sidebar sub-tabs). */
 export function clickTabByLabel(label: string): boolean {
-  const els = Array.from(document.querySelectorAll('button,[role="tab"]')) as HTMLElement[];
-  const el = els.find((e) => e.textContent?.trim() === label);
+  const tabEls = Array.from(document.querySelectorAll('[role="tab"]')) as HTMLElement[];
+  const els = [
+    ...tabEls,
+    ...(Array.from(document.querySelectorAll('button')) as HTMLElement[]).filter(
+      (el) => !tabEls.includes(el),
+    ),
+  ];
+  const el = els.find(
+    (e) => e.getAttribute('aria-label') === label || e.textContent?.trim() === label,
+  );
   if (el) {
     el.click();
     return true;

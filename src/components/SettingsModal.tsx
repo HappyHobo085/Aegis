@@ -1,5 +1,5 @@
 // src/components/SettingsModal.tsx
-import { useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
@@ -37,6 +37,23 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   vault: 'Passwords',
   sync: 'Sync',
   data: 'Data',
+};
+
+const TAB_SUMMARIES: Record<SettingsTab, string> = {
+  appearance: 'Theme, accent, and visual preferences',
+  search: 'Default search behavior',
+  home: 'Home page and start destination',
+  tabs: 'Tab behavior and private browsing',
+  filterLists: 'Built-in and subscribed block lists',
+  myFilters: 'Custom blocking rules',
+  allowlist: 'Sites exempt from ad blocking',
+  downloads: 'File download behavior',
+  sitePermissions: 'Camera, microphone, and site access',
+  security: 'Safety, WebRTC, and fingerprinting',
+  proxy: 'Network proxy routing',
+  vault: 'Saved passwords and vault lock',
+  sync: 'Encrypted sync across devices',
+  data: 'Import, export, and local data controls',
 };
 
 /** Settings tabs grouped into labelled sections so related controls sit together
@@ -95,13 +112,38 @@ export function SettingsModal({
   const dialogRef = useDialog<HTMLDivElement>(onClose);
   const tabsRef = useHorizontalWheel<HTMLDivElement>();
   const [tab, setTab] = useState<SettingsTab>('appearance');
+  const [tabQuery, setTabQuery] = useState('');
+  const normalizedQuery = tabQuery.trim().toLowerCase();
+  const visibleGroups = useMemo(
+    () =>
+      TAB_GROUPS.map((group) => ({
+        ...group,
+        tabs: group.tabs.filter((t) => {
+          if (normalizedQuery.length === 0) return true;
+          return (
+            TAB_LABELS[t].toLowerCase().includes(normalizedQuery) ||
+            TAB_SUMMARIES[t].toLowerCase().includes(normalizedQuery) ||
+            group.title.toLowerCase().includes(normalizedQuery)
+          );
+        }),
+      })).filter((group) => group.tabs.length > 0),
+    [normalizedQuery],
+  );
+  const visibleTabOrder = useMemo(() => visibleGroups.flatMap((g) => g.tabs), [visibleGroups]);
+
+  useEffect(() => {
+    if (visibleTabOrder.length > 0 && !visibleTabOrder.includes(tab)) {
+      setTab(visibleTabOrder[0]);
+    }
+  }, [tab, visibleTabOrder]);
 
   // Roving arrow-key navigation across the (grouped) tab rail. Up/Left and Down/Right
   // move + activate the previous/next tab; Home/End jump to the ends.
   const tabRefs = useRef<Partial<Record<SettingsTab, HTMLButtonElement | null>>>({});
   const moveTab = (delta: number): void => {
-    const i = TAB_ORDER.indexOf(tab);
-    const next = TAB_ORDER[(i + delta + TAB_ORDER.length) % TAB_ORDER.length];
+    const order = visibleTabOrder.length > 0 ? visibleTabOrder : TAB_ORDER;
+    const i = order.indexOf(tab);
+    const next = order[(i + delta + order.length) % order.length];
     setTab(next);
     tabRefs.current[next]?.focus();
   };
@@ -119,12 +161,14 @@ export function SettingsModal({
         break;
       case 'Home':
         e.preventDefault();
-        setTab(TAB_ORDER[0]);
-        tabRefs.current[TAB_ORDER[0]]?.focus();
+        if (visibleTabOrder.length === 0) return;
+        setTab(visibleTabOrder[0]);
+        tabRefs.current[visibleTabOrder[0]]?.focus();
         break;
       case 'End': {
         e.preventDefault();
-        const last = TAB_ORDER[TAB_ORDER.length - 1];
+        if (visibleTabOrder.length === 0) return;
+        const last = visibleTabOrder[visibleTabOrder.length - 1];
         setTab(last);
         tabRefs.current[last]?.focus();
         break;
@@ -215,7 +259,19 @@ export function SettingsModal({
             aria-label="Settings sections"
             onKeyDown={onTabKeyDown}
           >
-            {TAB_GROUPS.map((group) => (
+            <div className="settings-modal__search" role="search">
+              <label className="sr-only" htmlFor={`${titleId}-search`}>
+                Search settings
+              </label>
+              <input
+                id={`${titleId}-search`}
+                type="search"
+                placeholder="Search settings"
+                value={tabQuery}
+                onChange={(e) => setTabQuery(e.target.value)}
+              />
+            </div>
+            {visibleGroups.map((group) => (
               <div key={group.title} className="settings-modal__tab-group" role="presentation">
                 <div className="settings-modal__tab-group-label" aria-hidden="true">
                   {group.title}
@@ -229,17 +285,22 @@ export function SettingsModal({
                     type="button"
                     role="tab"
                     id={tabIds[t]}
+                    aria-label={TAB_LABELS[t]}
                     aria-controls={panelId}
                     aria-selected={tab === t}
                     tabIndex={tab === t ? 0 : -1}
                     className="settings-modal__tab"
                     onClick={() => setTab(t)}
                   >
-                    {TAB_LABELS[t]}
+                    <span className="settings-modal__tab-label">{TAB_LABELS[t]}</span>
+                    <span className="settings-modal__tab-summary">{TAB_SUMMARIES[t]}</span>
                   </button>
                 ))}
               </div>
             ))}
+            {visibleGroups.length === 0 && (
+              <p className="settings-modal__no-results">No settings match “{tabQuery.trim()}”.</p>
+            )}
           </div>
           <div
             role="tabpanel"
@@ -247,7 +308,13 @@ export function SettingsModal({
             aria-labelledby={tabIds[tab]}
             className="settings-modal__panel"
           >
-            {panels[tab]}
+            {visibleGroups.length === 0 ? (
+              <div className="settings-modal__empty-panel">
+                Try searching for privacy, downloads, proxy, sync, or tabs.
+              </div>
+            ) : (
+              panels[tab]
+            )}
           </div>
         </div>
       </div>

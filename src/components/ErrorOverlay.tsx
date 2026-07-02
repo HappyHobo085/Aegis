@@ -1,6 +1,7 @@
 // src/components/ErrorOverlay.tsx
 import type { NavCrashed, NavFailed } from '../../shared/types';
 import { useChromeSurface } from '../hooks/useChromeSurfaces';
+import { toast } from '../lib/toast';
 
 export interface ErrorOverlayProps {
   failed: NavFailed | null;
@@ -34,12 +35,36 @@ export function ErrorOverlay({ failed, crashed, onRetry, onHome }: ErrorOverlayP
     detail = failed ? `${failed.errorDescription} (${failed.errorCode})` : null;
   }
 
+  const copyDetail = (): void => {
+    const text = [heading, body, detail].filter(Boolean).join('\n');
+    if (!navigator.clipboard?.writeText) {
+      toast.error('Could not copy diagnostics');
+      return;
+    }
+    void navigator.clipboard.writeText(text).then(
+      () => toast.success('Copied diagnostics'),
+      () => toast.error('Could not copy diagnostics'),
+    );
+  };
+
   return (
     <div className="error-overlay" role="alert">
       <div className="error-overlay__panel">
+        <div className="error-overlay__eyebrow">
+          {crashed
+            ? 'Renderer stopped'
+            : failed?.kind === 'cert'
+              ? 'Connection blocked'
+              : 'Navigation failed'}
+        </div>
         <h1 className="error-overlay__heading">{heading}</h1>
         <p className="error-overlay__body">{body}</p>
-        {detail && <pre className="error-overlay__detail">{detail}</pre>}
+        {detail && (
+          <details className="error-overlay__details">
+            <summary>Technical details</summary>
+            <pre className="error-overlay__detail">{detail}</pre>
+          </details>
+        )}
         <div className="error-overlay__actions">
           <button type="button" onClick={onRetry}>
             Retry
@@ -47,6 +72,11 @@ export function ErrorOverlay({ failed, crashed, onRetry, onHome }: ErrorOverlayP
           <button type="button" onClick={onHome}>
             Home
           </button>
+          {detail && (
+            <button type="button" className="error-overlay__secondary" onClick={copyDetail}>
+              Copy details
+            </button>
+          )}
         </div>
       </div>
     </div>

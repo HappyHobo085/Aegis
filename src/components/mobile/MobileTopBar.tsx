@@ -29,7 +29,7 @@ export function MobileTopBar({
   return (
     <div className="mobile-topbar">
       <div className="mobile-topbar__row">
-        <AddressBar url={url} onSubmit={onNavigate} />
+        <AddressBar url={url} isLoading={isLoading} onSubmit={onNavigate} />
         <button
           type="button"
           className="mobile-topbar__reload"

@@ -105,11 +105,13 @@ export function Toolbar({
 }: ToolbarProps) {
   const secondary = (
     <>
-      {bookmark}
-      {downloads}
-      {fullscreen}
-      {gear}
-      {zoom}
+      <span className="toolbar__cluster toolbar__cluster--page">{bookmark}</span>
+      <span className="toolbar__cluster toolbar__cluster--system">{downloads}</span>
+      <span className="toolbar__cluster toolbar__cluster--view">
+        {fullscreen}
+        {gear}
+        {zoom}
+      </span>
     </>
   );
   return (
@@ -121,7 +123,7 @@ export function Toolbar({
         reloadOrStop={reloadOrStop}
         home={home}
       />
-      <AddressBar url={state.url} onSubmit={navigate} />
+      <AddressBar url={state.url} isLoading={state.isLoading} onSubmit={navigate} />
       <AdblockShield
         state={adblock.state}
         page={adblock.page}
@@ -132,7 +134,7 @@ export function Toolbar({
         onReload={adblock.onReload}
       />
       {isNarrow ? <ToolbarOverflow>{secondary}</ToolbarOverflow> : secondary}
-      {menu}
+      <span className="toolbar__cluster toolbar__cluster--sidebar">{menu}</span>
     </div>
   );
 }
