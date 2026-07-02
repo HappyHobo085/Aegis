@@ -57,6 +57,14 @@ describe('SettingsModal', () => {
     }
   });
 
+  it('renders settings search as its own row outside the tablist', () => {
+    render(<SettingsModal {...props()} />);
+    const tablist = screen.getByRole('tablist', { name: /settings sections/i });
+    const search = screen.getByRole('search');
+    expect(search).toContainElement(screen.getByPlaceholderText(/search settings/i));
+    expect(tablist).not.toContainElement(search);
+  });
+
   it('shows the Appearance panel by default and marks its tab selected', () => {
     render(<SettingsModal {...props()} />);
     expect(screen.getByRole('tab', { name: /appearance/i })).toHaveAttribute(

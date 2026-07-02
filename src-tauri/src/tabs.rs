@@ -41,6 +41,20 @@ fn emit_and_persist<R: Runtime>(app: &AppHandle<R>) {
     persist(app);
 }
 
+fn record_nav<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str, title: &str) {
+    {
+        let tabs = app.state::<Tabs>();
+        let mut reg = tabs.reg.lock().unwrap();
+        if !url.is_empty() {
+            reg.record_nav(id, url);
+        }
+        if !title.is_empty() {
+            reg.set_title(id, title.to_string());
+        }
+    }
+    emit_and_persist(app);
+}
+
 /// Record a tab's current URL (called from nav.rs on_page_load) for restore.
 pub fn on_tab_url<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
@@ -209,6 +223,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .to_string();
             app.state::<Tabs>().reg.lock().unwrap().set_title(id, title);
             emit_and_persist(app);
+            Some(Ok(state_value(app)))
+        }
+        "tabs.recordNav" => {
+            let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
+            let url = payload.get("url").and_then(Value::as_str).unwrap_or("");
+            let title = payload.get("title").and_then(Value::as_str).unwrap_or("");
+            record_nav(app, id, url, title);
             Some(Ok(state_value(app)))
         }
         _ => None,
@@ -473,6 +494,22 @@ mod tests {
                 boot_tab.title, "Hello",
                 "title must survive persist/load roundtrip"
             );
+        });
+    }
+
+    #[test]
+    fn record_nav_persists_url_and_title() {
+        with_tmp_app(|app| {
+            record_nav(app, 1, "https://restored.example/path", "Restored");
+
+            let loaded = load_session(app).expect("load_session must succeed");
+            let boot_tab = loaded
+                .tabs
+                .iter()
+                .find(|t| t.id == 1)
+                .expect("boot tab must be in session");
+            assert_eq!(boot_tab.url, "https://restored.example/path");
+            assert_eq!(boot_tab.title, "Restored");
         });
     }
 

@@ -311,6 +311,12 @@ export function aegisMockModule() {
           ],
           activeId: 1,
         }),
+        recordNav: vi.fn().mockResolvedValue({
+          tabs: [
+            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+          ],
+          activeId: 1,
+        }),
         onState: vi.fn(() => () => {}),
         onShortcut: vi.fn(() => () => {}),
       },

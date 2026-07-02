@@ -250,6 +250,19 @@ export function SettingsModal({
           </button>
         </div>
 
+        <div className="settings-modal__search" role="search">
+          <label className="sr-only" htmlFor={`${titleId}-search`}>
+            Search settings
+          </label>
+          <input
+            id={`${titleId}-search`}
+            type="search"
+            placeholder="Search settings"
+            value={tabQuery}
+            onChange={(e) => setTabQuery(e.target.value)}
+          />
+        </div>
+
         <div className="settings-modal__body">
           <div
             ref={tabsRef}
@@ -259,18 +272,6 @@ export function SettingsModal({
             aria-label="Settings sections"
             onKeyDown={onTabKeyDown}
           >
-            <div className="settings-modal__search" role="search">
-              <label className="sr-only" htmlFor={`${titleId}-search`}>
-                Search settings
-              </label>
-              <input
-                id={`${titleId}-search`}
-                type="search"
-                placeholder="Search settings"
-                value={tabQuery}
-                onChange={(e) => setTabQuery(e.target.value)}
-              />
-            </div>
             {visibleGroups.map((group) => (
               <div key={group.title} className="settings-modal__tab-group" role="presentation">
                 <div className="settings-modal__tab-group-label" aria-hidden="true">

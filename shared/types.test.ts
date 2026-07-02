@@ -217,6 +217,7 @@ describe('shared/types — tabs (multi-tab) additions', () => {
     expect(IPC.tabsSetPinned).toBe('tabs.setPinned');
     expect(IPC.tabsReopenClosed).toBe('tabs.reopenClosed');
     expect(IPC.tabsList).toBe('tabs.list');
+    expect(IPC.tabsRecordNav).toBe('tabs.recordNav');
     expect(IPC.evtTabsState).toBe('tabs.state');
   });
 });

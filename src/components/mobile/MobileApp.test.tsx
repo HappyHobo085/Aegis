@@ -254,6 +254,10 @@ vi.mock('../../lib/ipcClient', () => ({
         tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false }],
         activeId: 1,
       }),
+      recordNav: vi.fn().mockResolvedValue({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false }],
+        activeId: 1,
+      }),
       onState: vi.fn(() => () => {}),
       onShortcut: vi.fn(() => () => {}),
     },
@@ -266,6 +270,7 @@ vi.mock('../../lib/ipcClient', () => ({
   discardTab: vi.fn(),
 }));
 
+import { aegis } from '../../lib/ipcClient';
 import { MobileApp } from './MobileApp';
 
 beforeEach(() => {
@@ -318,5 +323,12 @@ describe('MobileApp', () => {
     await waitFor(() => expect(applyThemeSpy).toHaveBeenCalled());
     const [called] = applyThemeSpy.mock.calls[0] as [Record<string, unknown>];
     expect(called).toMatchObject({ primaryColor: '#4f8cff', themeMode: 'system' });
+  });
+
+  it('records mobile native nav state back into the persistent tab registry', async () => {
+    render(<MobileApp />);
+    await waitFor(() =>
+      expect(aegis.tabs.recordNav).toHaveBeenCalledWith(1, 'https://example.com/', 'Example'),
+    );
   });
 });

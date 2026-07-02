@@ -104,6 +104,7 @@ export const IPC = {
   tabsReopenClosed: 'tabs.reopenClosed',
   tabsList: 'tabs.list',
   tabsSetTitle: 'tabs.setTitle',
+  tabsRecordNav: 'tabs.recordNav',
   // events (main -> chrome): the tab list + which is active
   evtTabsState: 'tabs.state',
   evtTabsShortcut: 'tabs.shortcut',
@@ -484,6 +485,9 @@ export interface AegisApi {
      * title isn't observed by the Rust core (no WebKit title signal), so the chrome
      * relays it from the nav state to keep the tab switcher labels accurate. */
     setTitle(id: ViewId, title: string): Promise<TabsState>;
+    /** Record a tab's current URL/title in the registry. Android navigation happens in
+     * the native WebView bridge, so the chrome relays nav state back for session restore. */
+    recordNav(id: ViewId, url: string, title?: string): Promise<TabsState>;
     onState(cb: (s: TabsState) => void): () => void;
     onShortcut(cb: (s: TabShortcut) => void): () => void;
   };

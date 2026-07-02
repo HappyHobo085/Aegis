@@ -2021,11 +2021,10 @@ body.aegis-fullscreen {
 }
 
 .settings-modal__search {
-  position: sticky;
-  top: 0;
-  z-index: 1;
-  padding-bottom: 8px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
   background: var(--bg-elevated);
+  flex-shrink: 0;
 }
 
 .settings-modal__search input {
@@ -2133,11 +2132,7 @@ body.aegis-fullscreen {
 }
 .aegis-mobile .settings-modal__search,
 .aegis-narrow .settings-modal__search {
-  position: sticky;
-  left: 0;
-  min-width: 180px;
-  padding-bottom: 0;
-  padding-right: 4px;
+  padding: 10px 12px;
 }
 .aegis-mobile .settings-modal__tab-group,
 .aegis-narrow .settings-modal__tab-group {

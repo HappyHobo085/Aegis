@@ -142,16 +142,15 @@ export function MobileApp() {
     };
   }, [tabs.create]);
 
-  // On Android the Rust core can't observe the content WebView's title (there's no
-  // WebKit title signal like desktop), so the tab switcher would show host fallbacks.
-  // Relay the active tab's title from its nav state into the registry. Guard on the
-  // nav state's own viewId so a transient (pre-activate) state from the previous tab
-  // isn't recorded against the newly-active tab.
+  // On Android the Rust core can't observe the native content WebView's navigations
+  // (nav.navigate goes through the bridge, not the Rust child-webview path). Relay the
+  // active tab's URL/title back into the registry so tabs.json restores real pages
+  // after the app process closes.
   useEffect(() => {
-    if (nav.state.title && nav.state.viewId === tabs.activeId) {
-      void aegis.tabs.setTitle(tabs.activeId, nav.state.title);
+    if (nav.state.url && nav.state.viewId === tabs.activeId) {
+      void aegis.tabs.recordNav(tabs.activeId, nav.state.url, nav.state.title);
     }
-  }, [nav.state.title, nav.state.viewId, tabs.activeId]);
+  }, [nav.state.url, nav.state.title, nav.state.viewId, tabs.activeId]);
 
   const host = hostOf(nav.state.url);
   const shield = (

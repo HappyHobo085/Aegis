@@ -94,6 +94,7 @@ export const CATALOG: FeatureCheck[] = [
       IPC.tabsReorder,
       IPC.tabsSetPinned,
       IPC.tabsSetTitle,
+      IPC.tabsRecordNav,
     ],
     exercise: async (a) => {
       assertObject(await a.tabs.create('https://example.org/', true));
@@ -101,6 +102,7 @@ export const CATALOG: FeatureCheck[] = [
       await a.tabs.setPinned(V, true);
       await a.tabs.setPinned(V, false);
       await a.tabs.setTitle(V, 'AP');
+      await a.tabs.recordNav(V, 'https://example.org/', 'Example');
       await a.tabs.activate(V);
       await a.tabs.reopenClosed();
     },
