@@ -78,12 +78,22 @@ const isMobile =
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
+const CHROME_NAV_REDIRECT_GRACE_MS = 1500;
+const CHROME_NAV_REASSERT_MS = 250;
 
 /** Returns the hostname of `url`, or null when `url` has no parseable host. */
 function hostOf(url: string): string | null {
   try {
     const h = new URL(url).hostname;
     return h.length > 0 ? h : null;
+  } catch {
+    return null;
+  }
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
   } catch {
     return null;
   }
@@ -130,11 +140,33 @@ function DesktopApp() {
   // switch (see the onBlocked effect). Ref, not state — the onBlocked callback reads the latest
   // set without re-subscribing.
   const dismissedRedirectsRef = useRef<Set<string>>(new Set());
+  // When the user explicitly navigates from chrome (address bar, saved/history/favorites),
+  // the page being left can still fire a resize/timer redirect before the new navigation
+  // commits. Streamex-style pages do this during sidebar/sheet changes. Suppress only those
+  // old-page redirect events briefly; redirects from the destination page still surface.
+  const pendingChromeNavRef = useRef<{ fromOrigin: string | null; startedAt: number } | null>(null);
   const update = useUpdate();
   const safety = useSafety();
   const fingerprint = useFingerprint();
   const proxy = useProxy();
   const find = useFind(tabs.activeId);
+  const navUrlRef = useRef(nav.state.url);
+  navUrlRef.current = nav.state.url;
+
+  const navigateFromChrome = (raw: string): void => {
+    const fromOrigin = originOf(nav.state.url);
+    pendingChromeNavRef.current = {
+      fromOrigin,
+      startedAt: Date.now(),
+    };
+    setBlockedRedirect(null);
+    nav.navigate(raw);
+    window.setTimeout(() => {
+      if (fromOrigin !== null && originOf(navUrlRef.current) === fromOrigin) {
+        nav.navigate(raw);
+      }
+    }, CHROME_NAV_REASSERT_MS);
+  };
 
   // Dev-only: expose an imperative control surface so the autopilot can reach every
   // overlay/state deterministically. Gated so it can NEVER run in a production build.
@@ -402,6 +434,13 @@ function DesktopApp() {
     dismissedRedirectsRef.current = new Set();
     return aegis.redirect.onBlocked((r) => {
       if (r.viewId !== tabs.activeId) return;
+      const pending = pendingChromeNavRef.current;
+      if (pending) {
+        const fresh = Date.now() - pending.startedAt <= CHROME_NAV_REDIRECT_GRACE_MS;
+        const fromOldPage = pending.fromOrigin !== null && originOf(r.from) === pending.fromOrigin;
+        if (fresh && fromOldPage) return;
+        if (!fresh) pendingChromeNavRef.current = null;
+      }
       // Stay quiet about a destination the user already dismissed — the page keeps re-firing the
       // same blocked redirect (timer + the bar's own resize), so re-showing it makes the bar
       // impossible to close. A different destination still surfaces a fresh bar.
@@ -464,7 +503,7 @@ function DesktopApp() {
       )}
       <Toolbar
         state={nav.state}
-        navigate={nav.navigate}
+        navigate={navigateFromChrome}
         back={nav.back}
         forward={nav.forward}
         reloadOrStop={nav.reloadOrStop}
@@ -546,7 +585,7 @@ function DesktopApp() {
       />
       <FavoritesBar
         favorites={favorites.favorites}
-        onOpenFavorite={(url) => void nav.navigate(url)}
+        onOpenFavorite={(url) => navigateFromChrome(url)}
         onOpenManager={() => setManagerOpen(true)}
       />
       {blockedRedirect && (
@@ -584,7 +623,10 @@ function DesktopApp() {
             search={history.search}
             remove={history.remove}
             clear={history.clear}
-            onOpen={(url) => void nav.navigate(url)}
+            onOpen={(url) => {
+              navigateFromChrome(url);
+              setSidebarOpen(false);
+            }}
           />
         }
         saved={
@@ -598,7 +640,10 @@ function DesktopApp() {
             update={(id, partial) => void saved.update(id, partial)}
             renameTag={(oldT, newT) => void saved.renameTag(oldT, newT)}
             deleteTag={(tag) => void saved.deleteTag(tag)}
-            onOpen={(url) => void nav.navigate(url)}
+            onOpen={(url) => {
+              navigateFromChrome(url);
+              setSidebarOpen(false);
+            }}
           />
         }
       />

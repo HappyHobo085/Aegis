@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, act, waitFor } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../shared/types';
-import type { NavState, NavFailed, NavCrashed } from '../shared/types';
+import type { NavState, NavFailed, NavCrashed, RedirectBlocked, SavedItem } from '../shared/types';
 
 const baseState: NavState = {
   viewId: PRIMARY_VIEW_ID,
@@ -22,6 +22,7 @@ const setLayout = vi.fn(async () => {});
 const setFullscreen = vi.fn(async () => {});
 let failedCb: ((f: NavFailed) => void) | undefined;
 let crashedCb: ((c: NavCrashed) => void) | undefined;
+let redirectCb: ((r: RedirectBlocked) => void) | undefined;
 // Multiple hooks (useNav) subscribe to onState.
 // We fan out to all registered callbacks so firing stateCb drives all of them.
 const stateCbs: Array<(s: NavState) => void> = [];
@@ -47,6 +48,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   failedCb = undefined;
   crashedCb = undefined;
+  redirectCb = undefined;
   stateCbs.length = 0;
 
   // Wire the file-local spy aliases and captured-callback references into the
@@ -94,6 +96,12 @@ beforeEach(async () => {
   (aegis.nav.onCrashed as ReturnType<typeof vi.fn>).mockImplementation(
     (cb: (c: NavCrashed) => void) => {
       crashedCb = cb;
+      return () => {};
+    },
+  );
+  (aegis.redirect.onBlocked as ReturnType<typeof vi.fn>).mockImplementation(
+    (cb: (r: RedirectBlocked) => void) => {
+      redirectCb = cb;
       return () => {};
     },
   );
@@ -184,6 +192,43 @@ describe('App', () => {
     const { default: userEvent } = await import('@testing-library/user-event');
     await userEvent.click(await screen.findByRole('button', { name: /toggle sidebar/i }));
     expect(screen.getByRole('complementary', { name: /sidebar/i })).toBeInTheDocument();
+  });
+
+  it('does not show a stale Streamex redirect when opening a saved page', async () => {
+    const { aegis } = await import('./lib/ipcClient');
+    const savedItem: SavedItem = {
+      id: 1,
+      url: 'https://saved.example/watch',
+      title: 'Saved destination',
+      tags: [],
+      savedAt: 1,
+    };
+    (aegis.nav.getState as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      ...baseState,
+      url: 'https://streamex.example/watch',
+      title: 'Streamex',
+    });
+    (aegis.saved.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce([savedItem]);
+
+    render(<App />);
+    const { default: userEvent } = await import('@testing-library/user-event');
+    await userEvent.click(await screen.findByRole('button', { name: /toggle sidebar/i }));
+    await userEvent.click(screen.getByRole('tab', { name: /saved/i }));
+    await userEvent.click(await screen.findByRole('button', { name: `Open ${savedItem.url}` }));
+    expect(aegis.nav.navigate).toHaveBeenCalledWith(PRIMARY_VIEW_ID, savedItem.url);
+
+    await waitFor(() => expect(redirectCb).toBeTypeOf('function'));
+    act(() =>
+      redirectCb!({
+        viewId: PRIMARY_VIEW_ID,
+        from: 'https://streamex.example/watch',
+        to: 'https://ad.example/pop',
+      }),
+    );
+
+    expect(screen.queryByText(/blocked a redirect/i)).not.toBeInTheDocument();
+    await waitFor(() => expect(aegis.nav.navigate).toHaveBeenCalledTimes(2));
+    expect(aegis.nav.navigate).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, savedItem.url);
   });
 
   it('reports the constant top inset on mount (tab strip + toolbar + favbar, no left inset)', async () => {
