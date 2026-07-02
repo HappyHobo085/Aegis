@@ -724,7 +724,7 @@ function DesktopApp() {
           sync={
             <SyncSettingsTab
               sync={sync}
-              onSetServerUrl={(url) => void settings.update({ syncServerUrl: url })}
+              onSetServerUrl={(url) => settings.update({ syncServerUrl: url })}
             />
           }
           data={

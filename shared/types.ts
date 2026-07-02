@@ -111,6 +111,7 @@ export const IPC = {
   syncGetState: 'sync.getState',
   syncEnableNew: 'sync.enableNew',
   syncEnableFromPhrase: 'sync.enableFromPhrase',
+  syncUnlock: 'sync.unlock',
   syncDisable: 'sync.disable',
   syncNow: 'sync.syncNow',
   syncTestConnection: 'sync.testConnection',
@@ -433,6 +434,7 @@ export interface SyncState {
   deviceId: string;
   accountId: string;
   vaultBacking: 'keychain' | 'passphrase' | 'none';
+  hasStoredRoot: boolean;
 }
 
 export interface SyncDevice {
@@ -608,6 +610,7 @@ export interface AegisApi {
     /** Start fresh — returns the 24-word recovery phrase ONCE (show, then discard). */
     enableNew(opts?: { passphrase?: string }): Promise<{ recoveryPhrase: string }>;
     enableFromPhrase(opts: { phrase: string; passphrase?: string }): Promise<SyncState>;
+    unlock(opts: { passphrase: string }): Promise<SyncState>;
     disable(opts?: { forget?: boolean }): Promise<SyncState>;
     syncNow(): Promise<SyncState>;
     testConnection(url: string): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;

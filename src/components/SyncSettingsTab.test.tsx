@@ -20,6 +20,7 @@ const disabled: SyncState = {
   deviceId: '',
   accountId: '',
   vaultBacking: 'none',
+  hasStoredRoot: false,
 };
 const enabled: SyncState = {
   ...disabled,
@@ -35,6 +36,7 @@ function fakeSync(over: Partial<UseSync> = {}): UseSync {
     state: disabled,
     enableNew: vi.fn(async () => 'alpha bravo charlie'),
     enableFromPhrase: vi.fn(async () => {}),
+    unlock: vi.fn(async () => {}),
     disable: vi.fn(async () => {}),
     syncNow: vi.fn(async () => {}),
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
@@ -56,13 +58,24 @@ beforeEach(() => {
 describe('SyncSettingsTab', () => {
   it('disabled: "Start new sync" enables and shows the recovery phrase once', async () => {
     const enableNew = vi.fn(async () => 'alpha bravo charlie');
-    render(<SyncSettingsTab sync={fakeSync({ enableNew })} onSetServerUrl={vi.fn()} />);
+    const onSetServerUrl = vi.fn();
+    render(<SyncSettingsTab sync={fakeSync({ enableNew })} onSetServerUrl={onSetServerUrl} />);
     await userEvent.click(screen.getByRole('button', { name: /start new sync/i }));
     expect(enableNew).toHaveBeenCalled();
+    expect(onSetServerUrl).toHaveBeenCalledWith('');
     expect(await screen.findByText('alpha bravo charlie')).toBeInTheDocument();
     // Dismissing the phrase hides it.
     await userEvent.click(screen.getByRole('button', { name: /i've saved it/i }));
     expect(screen.queryByText('alpha bravo charlie')).not.toBeInTheDocument();
+  });
+
+  it('disabled: "Start new sync" can persist with a passphrase fallback', async () => {
+    const enableNew = vi.fn(async () => 'alpha bravo charlie');
+    render(<SyncSettingsTab sync={fakeSync({ enableNew })} onSetServerUrl={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText(/sync passphrase optional/i), 'correct horse');
+    await userEvent.click(screen.getByRole('button', { name: /start new sync/i }));
+    expect(enableNew).toHaveBeenCalledWith('correct horse');
+    expect(await screen.findByText('alpha bravo charlie')).toBeInTheDocument();
   });
 
   it('disabled: editing the server URL commits on blur', async () => {
@@ -85,13 +98,60 @@ describe('SyncSettingsTab', () => {
     expect(enableFromPhrase).toHaveBeenCalledWith('word word word');
   });
 
+  it('disabled: restore can use the sync passphrase vault', async () => {
+    const enableFromPhrase = vi.fn(async () => {});
+    render(<SyncSettingsTab sync={fakeSync({ enableFromPhrase })} onSetServerUrl={vi.fn()} />);
+    await userEvent.type(screen.getByLabelText(/recovery phrase/i), 'word word word');
+    await userEvent.type(screen.getByLabelText(/sync passphrase for restore/i), 'correct horse');
+    await userEvent.click(screen.getByRole('button', { name: /^restore$/i }));
+    expect(enableFromPhrase).toHaveBeenCalledWith('word word word', 'correct horse');
+  });
+
+  it('disabled: unlocks a stored sync vault after app restart', async () => {
+    const unlock = vi.fn(async () => {});
+    const onSetServerUrl = vi.fn();
+    render(
+      <SyncSettingsTab
+        sync={fakeSync({ state: { ...disabled, hasStoredRoot: true }, unlock })}
+        onSetServerUrl={onSetServerUrl}
+      />,
+    );
+    expect(screen.getByRole('heading', { name: /unlock sync/i })).toBeInTheDocument();
+    const button = screen.getByRole('button', { name: /unlock sync/i });
+    expect(button).toBeDisabled();
+    await userEvent.type(screen.getByLabelText(/sync unlock passphrase/i), 'correct horse');
+    expect(button).toBeEnabled();
+    await userEvent.click(button);
+    expect(onSetServerUrl).toHaveBeenCalledWith('');
+    expect(unlock).toHaveBeenCalledWith('correct horse');
+  });
+
+  it('disabled: a failed unlock shows the backend recovery guidance', async () => {
+    const unlock = vi.fn(async () => {
+      throw new Error(
+        'No saved sync vault was found. Restore with your recovery phrase once, then set a sync passphrase.',
+      );
+    });
+    render(
+      <SyncSettingsTab
+        sync={fakeSync({ state: { ...disabled, hasStoredRoot: true }, unlock })}
+        onSetServerUrl={vi.fn()}
+      />,
+    );
+    await userEvent.type(screen.getByLabelText(/sync unlock passphrase/i), 'wrong');
+    await userEvent.click(screen.getByRole('button', { name: /unlock sync/i }));
+    expect(await screen.findByText(/no saved sync vault was found/i)).toBeInTheDocument();
+  });
+
   it('disabled: Test connection reports success with latency', async () => {
     const testConnection = vi.fn(async () => ({ ok: true, latencyMs: 42 }));
-    render(<SyncSettingsTab sync={fakeSync({ testConnection })} onSetServerUrl={vi.fn()} />);
+    const onSetServerUrl = vi.fn();
+    render(<SyncSettingsTab sync={fakeSync({ testConnection })} onSetServerUrl={onSetServerUrl} />);
     const url = screen.getByLabelText(/sync server url/i);
     await userEvent.clear(url);
     await userEvent.type(url, 'http://localhost:8787');
     await userEvent.click(screen.getByRole('button', { name: /test connection/i }));
+    expect(onSetServerUrl).toHaveBeenCalledWith('http://localhost:8787');
     expect(testConnection).toHaveBeenCalledWith('http://localhost:8787');
     expect(await screen.findByText(/connected/i)).toBeInTheDocument();
   });

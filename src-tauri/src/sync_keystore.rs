@@ -14,7 +14,7 @@
 //! never initialized). Either path falls back to the passphrase-wrapped file, or in-memory-only
 //! if no passphrase is set, on any error.
 use crate::crypto::{hex, unhex, RootSecret};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use zeroize::Zeroize;
 
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
@@ -91,14 +91,14 @@ pub fn unwrap_with_passphrase(blob: &str, passphrase: &str) -> Result<RootSecret
     Ok(RootSecret(arr))
 }
 
-fn vault_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+fn vault_path<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
         .map(|d| d.join("sync-vault.json"))
 }
 
-fn salt_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+fn salt_path<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
@@ -140,7 +140,7 @@ pub fn device_local_salt(app: &AppHandle) -> Vec<u8> {
 // (→ the passphrase/in-memory fallback), so a runtime failure degrades gracefully and never
 // crashes — the worst case is the same as before this path existed.
 #[cfg(target_os = "android")]
-fn keystore_vault_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+fn keystore_vault_path<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
@@ -287,7 +287,9 @@ pub fn store_root(app: &AppHandle, root: &RootSecret, passphrase: Option<&str>) 
         let wrapped = android_keystore::wrap(&root.0);
         if let (Some(blob), Some(p)) = (&wrapped, keystore_vault_path(app)) {
             if crate::jsonstore::write_atomic(&p, blob.as_bytes()).is_ok() {
-                if let Some(vp) = vault_path(app) {
+                if let Some(pp) = passphrase {
+                    let _ = store_passphrase_vault(app, root, pp);
+                } else if let Some(vp) = vault_path(app) {
                     let _ = std::fs::remove_file(vp); // no stale passphrase vault
                 }
                 return VaultBacking::Keychain;
@@ -302,19 +304,30 @@ pub fn store_root(app: &AppHandle, root: &RootSecret, passphrase: Option<&str>) 
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     {
         if keyring_set(root.0.to_vec()).is_ok() {
-            if let Some(p) = vault_path(app) {
+            if let Some(pp) = passphrase {
+                let _ = store_passphrase_vault(app, root, pp);
+            } else if let Some(p) = vault_path(app) {
                 let _ = std::fs::remove_file(p); // don't leave a stale passphrase vault
             }
             return VaultBacking::Keychain;
         }
     }
     if let Some(pp) = passphrase {
-        if let (Ok(blob), Some(p)) = (wrap_with_passphrase(root, pp), vault_path(app)) {
-            let _ = crate::jsonstore::write_atomic(&p, blob.as_bytes());
+        if store_passphrase_vault(app, root, pp).is_ok() {
             return VaultBacking::Passphrase;
         }
     }
     VaultBacking::None
+}
+
+fn store_passphrase_vault<R: Runtime>(
+    app: &AppHandle<R>,
+    root: &RootSecret,
+    passphrase: &str,
+) -> Result<(), String> {
+    let blob = wrap_with_passphrase(root, passphrase)?;
+    let p = vault_path(app).ok_or_else(|| "vault path unavailable".to_string())?;
+    crate::jsonstore::write_atomic(&p, blob.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Load the root at boot: OS keychain (desktop), else the passphrase vault if a passphrase
@@ -354,8 +367,28 @@ pub fn load_root(app: &AppHandle, passphrase: Option<&str>) -> Option<RootSecret
     None
 }
 
+/// Explicit user unlock for a passphrase-backed vault. This intentionally prefers the
+/// passphrase vault over the OS keychain because entering a passphrase means "unlock the
+/// saved vault", not "try any keychain entry first".
+pub fn unlock_with_passphrase<R: Runtime>(
+    app: &AppHandle<R>,
+    passphrase: &str,
+) -> Result<RootSecret, String> {
+    let p = vault_path(app)
+        .ok_or_else(|| "No saved sync vault was found. Restore with your recovery phrase once, then set a sync passphrase.".to_string())?;
+    if !p.exists() {
+        return Err("No saved sync vault was found. Restore with your recovery phrase once, then set a sync passphrase.".into());
+    }
+    let blob = std::fs::read_to_string(&p).map_err(|_| {
+        "Couldn't read the saved sync vault. Restore with your recovery phrase to repair it."
+            .to_string()
+    })?;
+    unwrap_with_passphrase(&blob, passphrase)
+        .map_err(|_| "That passphrase couldn't unlock the saved sync vault.".to_string())
+}
+
 /// Whether a persisted seed exists (keychain or vault file) — for the boot auto-unlock check.
-pub fn has_stored_root(app: &AppHandle) -> bool {
+pub fn has_stored_root<R: Runtime>(app: &AppHandle<R>) -> bool {
     #[cfg(target_os = "android")]
     {
         if keystore_vault_path(app)
@@ -440,5 +473,32 @@ mod tests {
         v["ct"] = serde_json::Value::String(chars.into_iter().collect());
         let tampered = serde_json::to_string(&v).unwrap();
         assert!(unwrap_with_passphrase(&tampered, "pw").is_err());
+    }
+
+    #[test]
+    fn passphrase_vault_file_is_written_and_unlockable() {
+        crate::test_support::with_tmp_app(|app| {
+            let root = RootSecret([9u8; 32]);
+            store_passphrase_vault(app, &root, "pw").unwrap();
+
+            let p = vault_path(app).expect("vault path resolves");
+            assert!(p.exists(), "passphrase vault must be written at {p:?}");
+            let blob = std::fs::read_to_string(p).unwrap();
+            let back = unwrap_with_passphrase(&blob, "pw").unwrap();
+            assert_eq!(back.0, root.0);
+            let unlocked = unlock_with_passphrase(app, "pw").unwrap();
+            assert_eq!(unlocked.0, root.0);
+        });
+    }
+
+    #[test]
+    fn passphrase_unlock_explains_missing_vault() {
+        crate::test_support::with_tmp_app(|app| {
+            let err = match unlock_with_passphrase(app, "pw") {
+                Ok(_) => panic!("unlock must fail without a vault file"),
+                Err(err) => err,
+            };
+            assert!(err.contains("No saved sync vault"));
+        });
     }
 }

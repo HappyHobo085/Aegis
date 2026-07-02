@@ -39,12 +39,15 @@ export function SyncSettingsTab({
   onSetServerUrl,
 }: {
   sync: UseSync;
-  onSetServerUrl: (url: string) => void;
+  onSetServerUrl: (url: string) => void | Promise<void>;
 }) {
   const { state } = sync;
   const [serverUrl, setServerUrl] = useState(state.serverUrl);
   const [phrase, setPhrase] = useState<string | null>(null);
   const [restore, setRestore] = useState('');
+  const [setupPassphrase, setSetupPassphrase] = useState('');
+  const [restorePassphrase, setRestorePassphrase] = useState('');
+  const [unlockPassphrase, setUnlockPassphrase] = useState('');
   const [devices, setDevices] = useState<SyncDevice[]>([]);
   const [forget, setForget] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -77,17 +80,52 @@ export function SyncSettingsTab({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.enabled, state.lastSyncMs]);
 
-  const run = async (fn: () => Promise<void>) => {
+  const run = async (
+    fn: () => Promise<void>,
+    message:
+      | string
+      | ((
+          error: unknown,
+        ) => string) = "Couldn't reach the sync server — check the URL and your connection.",
+  ) => {
     setBusy(true);
     setError('');
     try {
       await fn();
     } catch (e) {
       console.error('Sync action failed:', e);
-      setError("Couldn't reach the sync server — check the URL and your connection.");
+      setError(typeof message === 'function' ? message(e) : message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const commitServerUrl = async (): Promise<string> => {
+    const next = serverUrl.trim();
+    await onSetServerUrl(next);
+    return next;
+  };
+
+  const enableNew = async () => {
+    await commitServerUrl();
+    const passphrase = setupPassphrase.trim();
+    setPhrase(passphrase ? await sync.enableNew(passphrase) : await sync.enableNew());
+  };
+
+  const enableFromPhrase = async () => {
+    await commitServerUrl();
+    const phraseText = restore.trim();
+    const passphrase = restorePassphrase.trim();
+    if (passphrase) {
+      await sync.enableFromPhrase(phraseText, passphrase);
+    } else {
+      await sync.enableFromPhrase(phraseText);
+    }
+  };
+
+  const unlock = async () => {
+    await commitServerUrl();
+    await sync.unlock(unlockPassphrase.trim());
   };
 
   const copyPhrase = async (text: string) => {
@@ -119,7 +157,7 @@ export function SyncSettingsTab({
               setServerUrl(e.target.value);
               setTestStatus('');
             }}
-            onBlur={() => onSetServerUrl(serverUrl.trim())}
+            onBlur={() => void commitServerUrl()}
           />
         </label>
         <button
@@ -127,7 +165,8 @@ export function SyncSettingsTab({
           disabled={busy || serverUrl.trim().length === 0}
           onClick={() =>
             void run(async () => {
-              const r = await sync.testConnection(serverUrl.trim());
+              const url = await commitServerUrl();
+              const r = await sync.testConnection(url);
               setTestStatus(
                 r.ok ? `Connected — ${r.latencyMs} ms` : `Failed: ${r.error ?? 'unreachable'}`,
               );
@@ -163,12 +202,54 @@ export function SyncSettingsTab({
           </div>
         ) : (
           <>
+            {state.hasStoredRoot && (
+              <>
+                <h3>Unlock sync</h3>
+                <p>A sync vault is saved on this device. Enter its passphrase to resume syncing.</p>
+                <label className="sync-tab__field">
+                  <span>Sync passphrase</span>
+                  <input
+                    type="password"
+                    value={unlockPassphrase}
+                    placeholder="Enter your sync passphrase"
+                    aria-label="Sync unlock passphrase"
+                    autoComplete="current-password"
+                    onChange={(e) => setUnlockPassphrase(e.target.value)}
+                  />
+                </label>
+                <button
+                  type="button"
+                  disabled={busy || unlockPassphrase.trim().length === 0}
+                  onClick={() =>
+                    void run(unlock, (e) =>
+                      e instanceof Error && e.message
+                        ? e.message
+                        : "Couldn't unlock sync — check the passphrase.",
+                    )
+                  }
+                >
+                  Unlock sync
+                </button>
+              </>
+            )}
+
             <h3>Set up sync</h3>
-            <button
-              type="button"
-              disabled={busy}
-              onClick={() => void run(async () => setPhrase(await sync.enableNew()))}
-            >
+            <label className="sync-tab__field">
+              <span>Sync passphrase (optional)</span>
+              <input
+                type="password"
+                value={setupPassphrase}
+                placeholder="Protect keys if the device keychain is unavailable"
+                aria-label="Sync passphrase optional"
+                autoComplete="new-password"
+                onChange={(e) => setSetupPassphrase(e.target.value)}
+              />
+            </label>
+            <p className="sync-tab__status">
+              Recommended if your device keychain is unavailable; otherwise sync keys may only last
+              until the app closes.
+            </p>
+            <button type="button" disabled={busy} onClick={() => void run(enableNew)}>
               Start new sync
             </button>
 
@@ -179,10 +260,21 @@ export function SyncSettingsTab({
               placeholder="Enter your 24-word recovery phrase"
               onChange={(e) => setRestore(e.target.value)}
             />
+            <label className="sync-tab__field">
+              <span>Sync passphrase (if used)</span>
+              <input
+                type="password"
+                value={restorePassphrase}
+                placeholder="Enter the passphrase for this sync vault"
+                aria-label="Sync passphrase for restore"
+                autoComplete="current-password"
+                onChange={(e) => setRestorePassphrase(e.target.value)}
+              />
+            </label>
             <button
               type="button"
               disabled={busy || restore.trim().length === 0}
-              onClick={() => void run(() => sync.enableFromPhrase(restore.trim()))}
+              onClick={() => void run(enableFromPhrase)}
             >
               Restore
             </button>

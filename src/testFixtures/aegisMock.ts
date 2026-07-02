@@ -114,11 +114,15 @@ export function aegisMockModule() {
           deviceId: '',
           accountId: '',
           vaultBacking: 'none' as const,
+          hasStoredRoot: false,
         };
         return {
           getState: vi.fn().mockResolvedValue(baseSyncState),
           enableNew: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
           enableFromPhrase: vi
+            .fn()
+            .mockResolvedValue({ ...baseSyncState, enabled: true, status: 'idle' as const }),
+          unlock: vi
             .fn()
             .mockResolvedValue({ ...baseSyncState, enabled: true, status: 'idle' as const }),
           disable: vi.fn().mockResolvedValue(baseSyncState),

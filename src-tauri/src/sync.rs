@@ -108,6 +108,7 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
         "deviceId": g.device_id,
         "accountId": g.account_id,
         "vaultBacking": g.backing,
+        "hasStoredRoot": sync_keystore::has_stored_root(app),
     })
 }
 
@@ -407,29 +408,39 @@ fn enable_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<&str>)
     let account_id = crypto::account_id(&root);
     let backing = sync_keystore::store_root(app, &root, passphrase);
 
-    register_device(app, &account_id, &device_id, &device_seed, &root);
-
     {
         let st = app.state::<SyncState>();
         let mut g = st.0.lock().unwrap();
-        g.root = Some(root);
-        g.device_seed = Some(device_seed); // already Zeroizing (crypto::device_signing_seed)
+        g.root = Some(root.clone());
+        g.device_seed = Some(device_seed.clone()); // already Zeroizing (crypto::device_signing_seed)
         g.enabled = true;
-        g.account_id = account_id;
-        g.device_id = device_id;
+        g.account_id = account_id.clone();
+        g.device_id = device_id.clone();
         g.backing = backing.as_str().to_string();
         g.status = Status::Idle;
         g.last_error.clear();
     }
     emit_state(app);
-    nudge(app); // kick off an initial sync if a server is configured
+    let app_bg = app.clone();
+    let root_bg = root;
+    let account_id_bg = account_id;
+    let device_id_bg = device_id;
+    let device_seed_bg = Zeroizing::new(*device_seed);
+    std::thread::spawn(move || {
+        register_device(
+            &app_bg,
+            &account_id_bg,
+            &device_id_bg,
+            &device_seed_bg,
+            &root_bg,
+        );
+        nudge(&app_bg); // kick off an initial sync if a server is configured
+    });
 }
 
-/// Run `enable_with_root` (which does Argon2 on the passphrase path + a device-registration
-/// HTTP) on a worker thread so the IPC/main thread isn't frozen during sync setup. The status
-/// flips to `syncing` immediately; the worker emits the final `sync.state` when enable
-/// completes (and `enable_with_root` then nudges an initial sync).
-fn spawn_enable(app: &AppHandle, root: RootSecret, passphrase: Option<String>) {
+/// Persist the root and unlock sync before returning to the renderer. Device registration
+/// and the first sync still run in the background, but the seed is durable once this returns.
+fn unlock_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<String>) {
     {
         let st = app.state::<SyncState>();
         let mut g = st.0.lock().unwrap();
@@ -437,10 +448,7 @@ fn spawn_enable(app: &AppHandle, root: RootSecret, passphrase: Option<String>) {
         g.last_error.clear();
     }
     emit_state(app);
-    let app = app.clone();
-    std::thread::spawn(move || {
-        enable_with_root(&app, root, passphrase.as_deref());
-    });
+    enable_with_root(app, root, passphrase.as_deref());
 }
 
 /// Trigger a background sync pass (no-op if disabled). Debounced only by the engine status.
@@ -562,9 +570,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .get("passphrase")
                 .and_then(Value::as_str)
                 .map(String::from);
-            // Enable off-thread (Argon2 + registration HTTP can be slow); the phrase is
-            // already computed and returned now — the enabled state arrives via sync.state.
-            spawn_enable(app, root, passphrase);
+            unlock_with_root(app, root, passphrase);
             // Show-once: the phrase is returned here and never retrievable without confirm.
             Some(Ok(json!({ "recoveryPhrase": phrase })))
         }
@@ -579,9 +585,23 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .get("passphrase")
                 .and_then(Value::as_str)
                 .map(String::from);
-            // Enable off-thread (see enableNew); return the now-"syncing" state immediately —
-            // the final enabled state arrives via sync.state.
-            spawn_enable(app, root, passphrase);
+            unlock_with_root(app, root, passphrase);
+            Some(Ok(state_json(app)))
+        }
+
+        "sync.unlock" => {
+            let passphrase = payload
+                .get("passphrase")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if passphrase.trim().is_empty() {
+                return Some(Err("passphrase required".into()));
+            }
+            let root = match sync_keystore::unlock_with_passphrase(app, passphrase) {
+                Ok(root) => root,
+                Err(e) => return Some(Err(e)),
+            };
+            unlock_with_root(app, root, Some(passphrase.to_string()));
             Some(Ok(state_json(app)))
         }
 

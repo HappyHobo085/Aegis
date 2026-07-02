@@ -13,6 +13,7 @@ const EMPTY: SyncState = {
   deviceId: '',
   accountId: '',
   vaultBacking: 'none',
+  hasStoredRoot: false,
 };
 
 export interface UseSync {
@@ -20,6 +21,7 @@ export interface UseSync {
   /** Start fresh — returns the 24-word recovery phrase ONCE (caller shows then discards). */
   enableNew(passphrase?: string): Promise<string>;
   enableFromPhrase(phrase: string, passphrase?: string): Promise<void>;
+  unlock(passphrase: string): Promise<void>;
   disable(forget?: boolean): Promise<void>;
   syncNow(): Promise<void>;
   testConnection: (url: string) => Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
@@ -60,6 +62,10 @@ export function useSync(): UseSync {
     [],
   );
 
+  const unlock = useCallback(async (passphrase: string): Promise<void> => {
+    setState(await aegis.sync.unlock({ passphrase }));
+  }, []);
+
   const disable = useCallback(async (forget?: boolean): Promise<void> => {
     setState(await aegis.sync.disable({ forget }));
   }, []);
@@ -82,6 +88,7 @@ export function useSync(): UseSync {
     state,
     enableNew,
     enableFromPhrase,
+    unlock,
     disable,
     syncNow,
     testConnection,
