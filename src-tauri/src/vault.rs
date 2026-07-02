@@ -182,17 +182,25 @@ pub fn init_vault(password: &str) -> Result<(Value, Zeroizing<[u8; 32]>), VaultE
     Ok((file, vk))
 }
 
+/// The decrypted contents of an unlocked vault.
+#[derive(Debug)]
+pub struct UnlockedVault {
+    pub key: Zeroizing<[u8; 32]>,
+    pub records: Vec<Cred>,
+    pub orphans: Vec<Value>,
+}
+
 /// Unlock an existing vault from its on-disk JSON. Derives the key, verifies it against the
 /// verifier, then decrypts records. A record that fails to decrypt is NOT an error and is NOT
 /// dropped — its wire form is returned as an "orphan" so a later re-seal preserves it (a
 /// password vault must never destroy data it can't read); the caller surfaces the count.
-/// Returns `(key, decrypted_records, orphan_wire_records)`. `WrongPassword` iff the verifier
-/// (not a record) fails to authenticate. Used by `VaultState::unlock`, which the production
-/// `vault.unlock` dispatch now routes through — so this is the single unlock implementation.
+/// `WrongPassword` iff the verifier (not a record) fails to authenticate. Used by
+/// `VaultState::unlock`, which the production `vault.unlock` dispatch now routes through —
+/// so this is the single unlock implementation.
 pub fn unlock_vault(
     file: &Value,
     password: &str,
-) -> Result<(Zeroizing<[u8; 32]>, Vec<Cred>, Vec<Value>), VaultError> {
+) -> Result<UnlockedVault, VaultError> {
     let salt_hex = file
         .get("salt")
         .and_then(Value::as_str)
@@ -219,7 +227,11 @@ pub fn unlock_vault(
         }
     }
 
-    Ok((vk, records, orphans))
+    Ok(UnlockedVault {
+        key: vk,
+        records,
+        orphans,
+    })
 }
 
 /// Re-seal all records (and the verifier) under `vk`, returning an updated on-disk JSON.
@@ -242,11 +254,11 @@ impl VaultState {
     /// Returns `WrongPassword` if the password is wrong; `NotCreated` if `file` is None.
     pub fn unlock(&self, file: Option<&Value>, password: &str) -> Result<(), VaultError> {
         let file = file.ok_or(VaultError::NotCreated)?;
-        let (vk, records, orphans) = unlock_vault(file, password)?;
+        let unlocked = unlock_vault(file, password)?;
         let mut inner = self.0.lock().unwrap();
-        inner.key = Some(vk);
-        inner.records = records;
-        inner.orphans = orphans; // preserve undecryptable records (surfaced as `undecryptable`)
+        inner.key = Some(unlocked.key);
+        inner.records = unlocked.records;
+        inner.orphans = unlocked.orphans; // preserve undecryptable records (surfaced as `undecryptable`)
         inner.created = true;
         // Extract salt for re-sealing later.
         if let Some(s) = file.get("salt").and_then(Value::as_str).and_then(unhex) {
@@ -720,7 +732,10 @@ mod tests {
         let parsed: Value = serde_json::from_str(&json_str).expect("parse failed");
 
         // --- Unlock from the parsed file ---
-        let (vk2, records, orphans) = unlock_vault(&parsed, password).expect("unlock_vault failed");
+        let unlocked = unlock_vault(&parsed, password).expect("unlock_vault failed");
+        let vk2 = unlocked.key;
+        let records = unlocked.records;
+        let orphans = unlocked.orphans;
         assert_eq!(records.len(), 1);
         assert_eq!(records[0], cred);
         assert!(orphans.is_empty(), "a valid record must not be orphaned");
@@ -746,7 +761,9 @@ mod tests {
         let verifier = seal_verifier(&vk).expect("verifier");
         let on_disk = file_json(&salt, verifier, std::slice::from_ref(&wire));
 
-        let (_vk, records, orphans) = unlock_vault(&on_disk, "pw").expect("unlock must succeed");
+        let unlocked = unlock_vault(&on_disk, "pw").expect("unlock must succeed");
+        let records = unlocked.records;
+        let orphans = unlocked.orphans;
         assert!(
             records.is_empty(),
             "the corrupt record is not a live record"
