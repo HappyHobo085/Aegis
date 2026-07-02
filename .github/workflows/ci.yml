@@ -89,4 +89,8 @@ jobs:
         continue-on-error: true
         run: |
           cargo install cargo-audit --locked
-          cargo audit --file src-tauri/Cargo.lock
+          # quick-xml >=0.41 fixes these, but the current Tauri/plist chain pins
+          # plist 1.9.0, whose quick-xml constraint is still ^0.39.2.
+          cargo audit --file src-tauri/Cargo.lock \
+            --ignore RUSTSEC-2026-0194 \
+            --ignore RUSTSEC-2026-0195

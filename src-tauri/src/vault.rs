@@ -197,10 +197,7 @@ pub struct UnlockedVault {
 /// `WrongPassword` iff the verifier (not a record) fails to authenticate. Used by
 /// `VaultState::unlock`, which the production `vault.unlock` dispatch now routes through —
 /// so this is the single unlock implementation.
-pub fn unlock_vault(
-    file: &Value,
-    password: &str,
-) -> Result<UnlockedVault, VaultError> {
+pub fn unlock_vault(file: &Value, password: &str) -> Result<UnlockedVault, VaultError> {
     let salt_hex = file
         .get("salt")
         .and_then(Value::as_str)
