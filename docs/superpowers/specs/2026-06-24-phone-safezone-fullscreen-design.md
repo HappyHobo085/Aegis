@@ -19,7 +19,7 @@ on both phone and desktop. Four concrete, code-verified defects:
    safe-area padding** (`src/index.css:4341-4361`). The header draws up under the status
    bar (too high) and the body down under the navigation bar (too low). This is the
    originally reported symptom ("opening settings goes too high and too low on screen").
-   The purpose-built `.mobile-sheet` (`src/index.css:4248-4257`) *does* pad top/bottom —
+   The purpose-built `.mobile-sheet` (`src/index.css:4248-4257`) _does_ pad top/bottom —
    the reused modals were simply never given the same treatment.
 
 2. **Left/right insets are never captured.** `MainActivity.kt`'s insets listener reads
@@ -32,7 +32,7 @@ on both phone and desktop. Four concrete, code-verified defects:
 3. **Mobile "fullscreen" is not immersive.** The chrome-hide fullscreen
    (`MainActivity.kt setFullscreen`, `:814-817`) only zeros the content margins — it does
    **not** hide the Android status/navigation bars. The HTML5-video path
-   (`onShowCustomView`, `:277-281`) *does* hide them via
+   (`onShowCustomView`, `:277-281`) _does_ hide them via
    `WindowInsetsControllerCompat.hide(systemBars())`; the chrome-hide fullscreen never
    adopted that. The user wants fullscreen to hide the phone's nav + status bars.
 
@@ -43,17 +43,17 @@ on both phone and desktop. Four concrete, code-verified defects:
 
 ## 2. Core principle
 
-> **Not fullscreen → all phone UI (Aegis chrome *and* the browsed page) stays inside the
+> **Not fullscreen → all phone UI (Aegis chrome _and_ the browsed page) stays inside the
 > safe area on all four edges. Fullscreen → the system bars are hidden, so the page
 > legitimately owns the entire screen.**
 
-This single rule ties the four parts together. The "full-bleed" size is *only* correct
+This single rule ties the four parts together. The "full-bleed" size is _only_ correct
 in fullscreen, where there are no system bars to overlap.
 
 ## 3. Decisions (locked during brainstorming)
 
 - **Mechanism:** extend the existing per-surface CSS-inset pattern (push
-  `--aegis-inset-*` vars from native; each surface pads itself). *Not* the alternative of
+  `--aegis-inset-*` vars from native; each surface pads itself). _Not_ the alternative of
   insetting the whole chrome webview natively — that is a larger retrofit of the established
   inset contract with higher regression risk.
 - **Page edges:** inset the browsed page too (all four edges), so in landscape / on
@@ -85,7 +85,7 @@ in fullscreen, where there are no system bars to overlap.
   `(if fullscreen 0 else chrome) + inset` form; because the inset is now the
   systemBars∪displayCutout union, a top/bottom cutout is also covered.
 
-  *Note on the side slivers:* the content WebView sits above the chrome webview in the
+  _Note on the side slivers:_ the content WebView sits above the chrome webview in the
   content region. Adding left/right margins exposes a thin strip of the chrome webview on
   each side — but that strip is exactly where the side system bar / cutout sits, which the
   OS paints over anyway, so it is not visible chrome. No additional masking needed.
@@ -107,7 +107,7 @@ preserve the desktop-browser/iOS-WebKit path) to every full-window mobile surfac
 - **`.aegis-mobile .settings-modal__content`** (`:4344-4350`) and
   **`.aegis-mobile .downloads-modal`** (`:4355-4361`) — add four-edge padding
   (`padding: var(--aegis-inset-top) var(--aegis-inset-right) var(--aegis-inset-bottom)
-  var(--aegis-inset-left)`, each with `env()` fallback). The dim scrim (`.settings-modal`
+var(--aegis-inset-left)`, each with `env()` fallback). The dim scrim (`.settings-modal`
   / `.downloads-modal__scrim`, `inset:0`) stays full-bleed behind the bars; only the
   interactive card content is confined to the safe area. **This fixes the reported bug.**
 - **Other full-window surfaces reachable on mobile** — audit and pad the same way where
@@ -154,6 +154,7 @@ the video `onShowCustomView` path (which continues to work for HTML5 fullscreen)
   `Window::set_fullscreen` is a backend call, so **no Tauri capability change** is needed
   (`capabilities/default.json` stays as-is). This hides the titlebar and fills the monitor
   on Linux / Windows / macOS.
+
 - In `linux_layout::exit_fullscreen` (Esc / floating exit button, `linux_layout.rs:257`)
   also call `window.set_fullscreen(false)` directly. The existing `view.fullscreen`
   event → React `setFullscreen(false)` → `aegis.view.setFullscreen` round-trip would also

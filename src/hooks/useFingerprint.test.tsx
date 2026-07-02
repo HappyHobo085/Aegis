@@ -19,7 +19,10 @@ import { publishSyncChange } from '../lib/syncBus';
 
 beforeEach(() => {
   vi.clearAllMocks();
-  getState.mockResolvedValue({ level: 'standard', allowlistedHosts: ['a.com'] } as FingerprintState);
+  getState.mockResolvedValue({
+    level: 'standard',
+    allowlistedHosts: ['a.com'],
+  } as FingerprintState);
 });
 
 describe('useFingerprint', () => {

@@ -55,25 +55,37 @@ describe('HomeTab', () => {
 
   it('adopts an externally-changed home URL when the field is not edited', () => {
     const { rerender } = render(
-      <HomeTab settings={settings({ homeUrl: 'https://a.example/' })} update={vi.fn(async () => {})} />,
+      <HomeTab
+        settings={settings({ homeUrl: 'https://a.example/' })}
+        update={vi.fn(async () => {})}
+      />,
     );
     const field = screen.getByRole('textbox', { name: /home url/i });
     expect(field).toHaveValue('https://a.example/');
     rerender(
-      <HomeTab settings={settings({ homeUrl: 'https://b.example/' })} update={vi.fn(async () => {})} />,
+      <HomeTab
+        settings={settings({ homeUrl: 'https://b.example/' })}
+        update={vi.fn(async () => {})}
+      />,
     );
     expect(field).toHaveValue('https://b.example/');
   });
 
   it('keeps an in-progress edit when the prop changes externally', async () => {
     const { rerender } = render(
-      <HomeTab settings={settings({ homeUrl: 'https://a.example/' })} update={vi.fn(async () => {})} />,
+      <HomeTab
+        settings={settings({ homeUrl: 'https://a.example/' })}
+        update={vi.fn(async () => {})}
+      />,
     );
     const field = screen.getByRole('textbox', { name: /home url/i });
     await userEvent.clear(field);
     await userEvent.type(field, 'https://my-edit/');
     rerender(
-      <HomeTab settings={settings({ homeUrl: 'https://b.example/' })} update={vi.fn(async () => {})} />,
+      <HomeTab
+        settings={settings({ homeUrl: 'https://b.example/' })}
+        update={vi.fn(async () => {})}
+      />,
     );
     expect(field).toHaveValue('https://my-edit/');
   });

@@ -57,9 +57,7 @@ describe('ProxySettingsTab', () => {
     expect(setConfig).toHaveBeenCalledWith(
       expect.objectContaining({ mode: 'off', host: '127.0.0.1' }),
     );
-    expect(setConfig).not.toHaveBeenCalledWith(
-      expect.objectContaining({ host: '10.0.0.1' }),
-    );
+    expect(setConfig).not.toHaveBeenCalledWith(expect.objectContaining({ host: '10.0.0.1' }));
   });
 
   it('shows scheme, host, port, bypass fields when mode is proxy', async () => {
@@ -166,7 +164,9 @@ describe('ProxySettingsTab', () => {
   });
 
   it('adopts an external state change when the form is not edited', () => {
-    const { rerender } = render(<ProxySettingsTab state={onState} setConfig={vi.fn()} test={vi.fn()} />);
+    const { rerender } = render(
+      <ProxySettingsTab state={onState} setConfig={vi.fn()} test={vi.fn()} />,
+    );
     expect(screen.getByRole('textbox', { name: /proxy host/i })).toHaveValue('127.0.0.1');
     rerender(
       <ProxySettingsTab
@@ -179,12 +179,18 @@ describe('ProxySettingsTab', () => {
   });
 
   it('keeps an in-progress host edit when the state changes externally', async () => {
-    const { rerender } = render(<ProxySettingsTab state={onState} setConfig={vi.fn()} test={vi.fn()} />);
+    const { rerender } = render(
+      <ProxySettingsTab state={onState} setConfig={vi.fn()} test={vi.fn()} />,
+    );
     const hostField = screen.getByRole('textbox', { name: /proxy host/i });
     await userEvent.clear(hostField);
     await userEvent.type(hostField, '5.5.5.5');
     rerender(
-      <ProxySettingsTab state={{ ...onState, host: '10.9.9.9' }} setConfig={vi.fn()} test={vi.fn()} />,
+      <ProxySettingsTab
+        state={{ ...onState, host: '10.9.9.9' }}
+        setConfig={vi.fn()}
+        test={vi.fn()}
+      />,
     );
     expect(hostField).toHaveValue('5.5.5.5');
   });

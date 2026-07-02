@@ -113,10 +113,7 @@ describe('useNav', () => {
       }),
     );
     act(() => result.current.navigate('cats'));
-    expect(navigate).toHaveBeenCalledWith(
-      PRIMARY_VIEW_ID,
-      'https://www.google.com/search?q=cats',
-    );
+    expect(navigate).toHaveBeenCalledWith(PRIMARY_VIEW_ID, 'https://www.google.com/search?q=cats');
   });
 
   it('back/forward/reloadOrStop/home delegate to aegis.nav', async () => {

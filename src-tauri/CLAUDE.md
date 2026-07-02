@@ -350,7 +350,7 @@ records[{uuid, updatedAt, nonce, ct}]}`. The only cleartext fields are the
     On `vault.lock`, `Zeroizing` wipes the DEK on drop; `Cred` is `Zeroize+ZeroizeOnDrop`.
     Every read/mutate channel returns `Err("vault is locked")` when `key` is `None`.
   - **No page bridge:** the `vault.state` event carries only `{exists, unlocked, count,
-    undecryptable}` — no credential data (`undecryptable` = on-disk records that failed to
+undecryptable}` — no credential data (`undecryptable` = on-disk records that failed to
     decrypt; preserved verbatim by `persist`/`Inner.orphans`, surfaced so the UI warns instead
     of silently dropping them). Plaintext credentials live only in `Inner.records` (in-process,
     while unlocked) and transiently in the serde_json `Zeroizing` buffer during seal/open.
@@ -542,7 +542,7 @@ malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt
   `setFullscreen` (desktop-parity hide-all-chrome) now ALSO goes immersive —
   `WindowInsetsControllerCompat.hide(systemBars())` on enter / `show(...)` on exit, with
   `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` — so the page truly owns the whole screen (status
-  + nav bars hidden), matching the HTML5-video `onShowCustomView` path. Back exits.
+  - nav bars hidden), matching the HTML5-video `onShowCustomView` path. Back exits.
 - **Safe-area insets (all four edges):** the insets listener reads
   `systemBars() ∪ displayCutout()` and pushes the real status/nav/side insets to the chrome
   as `--aegis-inset-top/bottom/left/right` CSS vars (px ÷ density); `onCreate` sets

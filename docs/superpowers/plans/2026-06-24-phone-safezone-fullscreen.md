@@ -28,11 +28,13 @@
 Fixes the reported bug (Settings/Downloads draw under the status + nav bars) and extends every mobile surface to all four edges. TDD via a source-level drift guard over `src/index.css`.
 
 **Files:**
+
 - Create: `src/autopilot/safeArea.test.ts`
 - Modify: `src/index.css` (selectors `.mobile-topbar` ~4158, `.mobile-bottombar` ~4214, `.mobile-sheet` ~4248, `.aegis-mobile .settings-modal__content` ~4344, `.aegis-mobile .downloads-modal` ~4355, plus two new `.aegis-mobile` rules)
 - Modify: `src/CLAUDE.md` (the mobile-shell "Safe-area insets" bullet)
 
 **Interfaces:**
+
 - Consumes: the `--aegis-inset-top/bottom/left/right` CSS vars (pushed by Task 2; the `env()` fallback means this task is independently testable and renders correctly even before Task 2 lands).
 - Produces: the safe-area padding on the listed selectors that the Task 1 drift guard asserts.
 
@@ -60,10 +62,22 @@ function block(selector: string): string {
 const REQUIRED: Array<[string, string[]]> = [
   ['.mobile-topbar', ['--aegis-inset-top', '--aegis-inset-left', '--aegis-inset-right']],
   ['.mobile-bottombar', ['--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
-  ['.mobile-sheet', ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
-  ['.aegis-mobile .settings-modal__content', ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
-  ['.aegis-mobile .downloads-modal', ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
-  ['.aegis-mobile .onboarding', ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
+  [
+    '.mobile-sheet',
+    ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right'],
+  ],
+  [
+    '.aegis-mobile .settings-modal__content',
+    ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right'],
+  ],
+  [
+    '.aegis-mobile .downloads-modal',
+    ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right'],
+  ],
+  [
+    '.aegis-mobile .onboarding',
+    ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right'],
+  ],
   ['.aegis-mobile .toaster', ['--aegis-inset-bottom', '--aegis-inset-right']],
 ];
 
@@ -87,16 +101,16 @@ Expected: FAIL — `.mobile-bottombar` / `.mobile-sheet` lack left/right; `.aegi
 In `src/index.css`, replace the `.mobile-topbar` `padding` declaration:
 
 ```css
-  padding: var(--aegis-inset-top, env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) 0
-    calc(8px + env(safe-area-inset-left));
+padding: var(--aegis-inset-top, env(safe-area-inset-top)) calc(8px + env(safe-area-inset-right)) 0
+  calc(8px + env(safe-area-inset-left));
 ```
 
 with:
 
 ```css
-  padding: var(--aegis-inset-top, env(safe-area-inset-top))
-    calc(8px + var(--aegis-inset-right, env(safe-area-inset-right))) 0
-    calc(8px + var(--aegis-inset-left, env(safe-area-inset-left)));
+padding: var(--aegis-inset-top, env(safe-area-inset-top))
+  calc(8px + var(--aegis-inset-right, env(safe-area-inset-right))) 0
+  calc(8px + var(--aegis-inset-left, env(safe-area-inset-left)));
 ```
 
 - [ ] **Step 4: Add left/right to `.mobile-bottombar`**
@@ -104,15 +118,15 @@ with:
 Replace its single `padding-bottom` line:
 
 ```css
-  padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
+padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
 ```
 
 with:
 
 ```css
-  padding-left: var(--aegis-inset-left, env(safe-area-inset-left));
-  padding-right: var(--aegis-inset-right, env(safe-area-inset-right));
-  padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
+padding-left: var(--aegis-inset-left, env(safe-area-inset-left));
+padding-right: var(--aegis-inset-right, env(safe-area-inset-right));
+padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
 ```
 
 (`box-sizing: content-box` with `left:0; right:0` keeps the bar pinned to the viewport width; the horizontal padding shifts the buttons inward — correct.)
@@ -122,17 +136,17 @@ with:
 Replace its two padding lines:
 
 ```css
-  padding-top: var(--aegis-inset-top, env(safe-area-inset-top));
-  padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
+padding-top: var(--aegis-inset-top, env(safe-area-inset-top));
+padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
 ```
 
 with:
 
 ```css
-  padding-top: var(--aegis-inset-top, env(safe-area-inset-top));
-  padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
-  padding-left: var(--aegis-inset-left, env(safe-area-inset-left));
-  padding-right: var(--aegis-inset-right, env(safe-area-inset-right));
+padding-top: var(--aegis-inset-top, env(safe-area-inset-top));
+padding-bottom: var(--aegis-inset-bottom, env(safe-area-inset-bottom));
+padding-left: var(--aegis-inset-left, env(safe-area-inset-left));
+padding-right: var(--aegis-inset-right, env(safe-area-inset-right));
 ```
 
 (Covers History / Saved / Menu / Tabs — `MobileMenuSheet` and `MobileTabSwitcher` both render inside `<MobileSheet>`.)
@@ -239,10 +253,12 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 Capture the side insets + display cutout and push all four CSS vars; inset the page horizontally.
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt` (fields ~92, `onCreate` ~127, `applyContentMargins` ~118, insets listener ~465)
 - Modify: `src-tauri/CLAUDE.md` (Android "Mobile chrome" notes)
 
 **Interfaces:**
+
 - Consumes: existing `gestureContainer`, `density`, `topChromePx`, `bottomBarPx`, `fullscreen`, `bottomBarHidden`, `webView` (the chrome webview).
 - Produces: the `--aegis-inset-left` / `--aegis-inset-right` CSS vars consumed by Task 1; `leftMargin`/`rightMargin` on the content `GestureContainer`.
 
@@ -374,10 +390,12 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 `setFullscreen` currently only zeros margins. Make it hide/show the system bars, mirroring the HTML5-video path.
 
 **Files:**
+
 - Modify: `src-tauri/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt` (`setFullscreen` ~814)
 - Modify: `src-tauri/CLAUDE.md` (the `setFullscreen` bridge note)
 
 **Interfaces:**
+
 - Consumes: `window`, `applyContentMargins()`; `WindowInsetsControllerCompat` / `WindowInsetsCompat` (already imported, used by `onShowCustomView`).
 - Produces: immersive fullscreen — the same observable state the video path produces, but for the chrome-hide fullscreen.
 
@@ -411,10 +429,11 @@ Expected: `BUILD SUCCESSFUL`.
 Update the `setFullscreen` description in the Android bridge note to:
 
 ```markdown
-  `setFullscreen` (desktop-parity hide-all-chrome) now ALSO goes immersive —
-  `WindowInsetsControllerCompat.hide(systemBars())` on enter / `show(...)` on exit, with
-  `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` — so the page truly owns the whole screen (status
-  + nav bars hidden), matching the HTML5-video `onShowCustomView` path. Back exits.
+`setFullscreen` (desktop-parity hide-all-chrome) now ALSO goes immersive —
+`WindowInsetsControllerCompat.hide(systemBars())` on enter / `show(...)` on exit, with
+`BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` — so the page truly owns the whole screen (status
+
+- nav bars hidden), matching the HTML5-video `onShowCustomView` path. Back exits.
 ```
 
 - [ ] **Step 4: Commit**
@@ -433,11 +452,13 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 `view.setFullscreen` only relayouts the content webview; add a backend `Window::set_fullscreen` so the OS window actually fullscreens. Linux Esc/exit-button path also clears it directly.
 
 **Files:**
+
 - Modify: `src-tauri/src/view.rs` (`view.setFullscreen` handler ~281)
 - Modify: `src-tauri/src/linux_layout.rs` (`exit_fullscreen` ~257)
 - Modify: `src-tauri/CLAUDE.md` (note that desktop `view.setFullscreen` drives the OS window)
 
 **Interfaces:**
+
 - Consumes: `app.get_window("main")` (the `Manager` trait is already in scope in both files — `view.rs:107` and `linux_layout.rs:274` use `get_window`/`get_webview`); `tauri::Window::set_fullscreen(bool)`.
 - Produces: OS-window fullscreen toggled in lockstep with the in-app fullscreen flag, on all desktop platforms.
 
@@ -542,6 +563,7 @@ Expected: PASS, including `src/autopilot/safeArea.test.ts` and the desktop + mob
 - [ ] **Step 2: Rust + Android + Windows compile gates**
 
 Run, expecting success on each:
+
 - `cargo test --manifest-path src-tauri/Cargo.toml`
 - `cargo check --manifest-path src-tauri/Cargo.toml --target aarch64-linux-android`
 - `cargo check --manifest-path src-tauri/Cargo.toml --target x86_64-pc-windows-gnu`
@@ -575,8 +597,9 @@ Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>"
 ## Self-Review
 
 **1. Spec coverage**
+
 - Part 1 (native four-edge capture, cutout mode, push left/right, inset page horizontally) → **Task 2**. ✔
-- Part 2 (CSS consumption on every full-window mobile surface incl. the Settings/Downloads fix) → **Task 1**. ✔ Centered overlays: error/crash/SafetyInterstitial are **not rendered in the mobile shell** (verified in `MobileApp.tsx`) → correctly out of mobile scope; the centered Onboarding + Toaster (which *are* in the mobile shell and can reach an edge) are covered; small centered confirm/permission dialogs are already inside the viewport (no change). FindBar renders in-flow on mobile and its placement is a separate, unreported concern → **Task 5 device-verify**, not a CSS change.
+- Part 2 (CSS consumption on every full-window mobile surface incl. the Settings/Downloads fix) → **Task 1**. ✔ Centered overlays: error/crash/SafetyInterstitial are **not rendered in the mobile shell** (verified in `MobileApp.tsx`) → correctly out of mobile scope; the centered Onboarding + Toaster (which _are_ in the mobile shell and can reach an edge) are covered; small centered confirm/permission dialogs are already inside the viewport (no change). FindBar renders in-flow on mobile and its placement is a separate, unreported concern → **Task 5 device-verify**, not a CSS change.
 - Part 3 (immersive mobile fullscreen) → **Task 3**. ✔
 - Part 4 (desktop OS-window fullscreen + Linux Esc/exit clears it) → **Task 4**. ✔
 - Testing (drift guard, compile gates, live autopilot, device verifies) → **Tasks 1 & 5**. ✔

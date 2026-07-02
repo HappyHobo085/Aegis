@@ -18,10 +18,22 @@ function block(selector: string): string {
 const REQUIRED: Array<[string, string[]]> = [
   ['.mobile-topbar', ['--aegis-inset-top', '--aegis-inset-left', '--aegis-inset-right']],
   ['.mobile-bottombar', ['--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
-  ['.mobile-sheet', ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
-  ['.aegis-mobile .settings-modal__content', ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
-  ['.aegis-mobile .downloads-modal', ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
-  ['.aegis-mobile .onboarding', ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right']],
+  [
+    '.mobile-sheet',
+    ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right'],
+  ],
+  [
+    '.aegis-mobile .settings-modal__content',
+    ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right'],
+  ],
+  [
+    '.aegis-mobile .downloads-modal',
+    ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right'],
+  ],
+  [
+    '.aegis-mobile .onboarding',
+    ['--aegis-inset-top', '--aegis-inset-bottom', '--aegis-inset-left', '--aegis-inset-right'],
+  ],
   ['.aegis-mobile .toaster', ['--aegis-inset-bottom', '--aegis-inset-right']],
 ];
 
