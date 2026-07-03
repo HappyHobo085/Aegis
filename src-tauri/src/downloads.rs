@@ -278,11 +278,26 @@ pub fn dispatch<R: Runtime>(
 }
 
 fn path_of<R: Runtime>(app: &AppHandle<R>, id: Option<i64>) -> Option<String> {
-    snapshot(app)
+    let p = snapshot(app)
         .iter()
         .find(|it| it.get("id").and_then(Value::as_i64) == id)
         .and_then(|it| it.get("savePath").and_then(Value::as_str))
-        .map(String::from)
+        .map(String::from)?;
+    trusted_download_path(app, &p).then_some(p)
+}
+
+fn trusted_download_path<R: Runtime>(app: &AppHandle<R>, raw: &str) -> bool {
+    let p = Path::new(raw);
+    if !p.is_absolute() || !p.is_file() {
+        return false;
+    }
+    let Ok(canon) = p.canonicalize() else {
+        return false;
+    };
+    let Ok(base) = dir(app).canonicalize() else {
+        return false;
+    };
+    canon.starts_with(base)
 }
 
 /// Open a file or folder with the OS default handler (desktop only — mobile has
@@ -425,6 +440,30 @@ mod tests {
                 rows[0].get("state").and_then(Value::as_str),
                 Some("progressing")
             );
+        });
+    }
+
+    #[test]
+    fn trusted_download_path_requires_existing_file_under_download_dir() {
+        with_tmp_app(|app| {
+            let app_dir = app.path().app_data_dir().unwrap();
+            let dl_dir = app_dir.join("downloads");
+            std::fs::create_dir_all(&dl_dir).unwrap();
+            crate::settings::write(
+                app,
+                &json!({
+                    "downloadDir": dl_dir.to_string_lossy(),
+                }),
+            );
+            let inside = dl_dir.join("ok.bin");
+            std::fs::write(&inside, b"ok").unwrap();
+            let outside = app_dir.join("outside.bin");
+            std::fs::write(&outside, b"no").unwrap();
+
+            assert!(trusted_download_path(app, &inside.to_string_lossy()));
+            assert!(!trusted_download_path(app, &outside.to_string_lossy()));
+            assert!(!trusted_download_path(app, &dl_dir.join("missing.bin").to_string_lossy()));
+            assert!(!trusted_download_path(app, "relative.bin"));
         });
     }
 }

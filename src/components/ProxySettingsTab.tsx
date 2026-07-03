@@ -219,14 +219,11 @@ export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabPro
           <div className="proxy-tab__status-row">
             <small>
               {state.active
-                ? // The chrome can't tell the desktop OS apart — the User-Agent is a fixed
-                  // spoof (sniffing it mislabels the platform). Use the reliable Android bridge
-                  // check; for desktop give a conservative hint (Linux applies live, Windows is
-                  // spawn-time, so "reload to route an older tab" is correct on Windows and
-                  // harmless on Linux).
+                ? // The chrome can't reliably tell desktop OSes apart because the browser UA is
+                  // intentionally normalized. Give a conservative platform-parity hint.
                   typeof window !== 'undefined' && 'AegisAndroid' in window
                   ? 'Applies to all tabs (and the app).'
-                  : 'Active — reload any tab opened before you applied this to route it.'
+                  : 'Active. Linux applies live; Windows needs a tab reload; macOS saves this for future proxy support.'
                 : 'Not active yet — click Apply.'}
             </small>
           </div>
@@ -245,6 +242,10 @@ export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabPro
           <strong>macOS:</strong> No proxy support yet — the macOS content-webview back-end does not
           expose a proxy API in this version. Settings saved here will apply when macOS support
           lands.
+        </p>
+        <p>
+          <strong>Windows:</strong> Existing tabs must be reloaded after changing the proxy. Newly
+          opened tabs use the latest applied setting.
         </p>
       </div>
     </div>

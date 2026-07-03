@@ -86,7 +86,6 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml
       - name: cargo audit (advisory — crypto/keyring/TLS surface)
         if: ${{ !cancelled() }}
-        continue-on-error: true
         run: |
           cargo install cargo-audit --locked
           # quick-xml >=0.41 fixes these, but the current Tauri/plist chain pins

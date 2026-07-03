@@ -20,7 +20,7 @@
     "android:build": "tauri android build --apk",
     "test": "vitest run",
     "typecheck": "tsc --noEmit -p tsconfig.build.json",
-    "lint": "eslint .",
+    "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
