@@ -64,16 +64,19 @@ export interface SettingsGroup {
 }
 
 export const TAB_GROUPS: SettingsGroup[] = [
-  { title: 'Browser', tabs: ['appearance', 'home', 'search', 'tabs', 'downloads'] },
-  { title: 'Ad blocking', tabs: ['filterLists', 'myFilters', 'allowlist'] },
-  { title: 'Privacy & security', tabs: ['security', 'sitePermissions', 'proxy', 'vault'] },
-  { title: 'Data & sync', tabs: ['sync', 'data'] },
+  { title: 'Appearance', tabs: ['appearance', 'home', 'search', 'tabs'] },
+  { title: 'Privacy', tabs: ['security', 'sitePermissions', 'vault'] },
+  { title: 'Blocking', tabs: ['filterLists', 'myFilters', 'allowlist'] },
+  { title: 'Network', tabs: ['proxy', 'sync'] },
+  { title: 'Data', tabs: ['downloads', 'data'] },
 ];
 
 export const TAB_ORDER: SettingsTab[] = TAB_GROUPS.flatMap((g) => g.tabs);
 
 export interface SettingsModalProps {
   onClose(): void;
+  initialTab?: SettingsTab;
+  quickActions?: ReactNode;
   appearance: ReactNode;
   search: ReactNode;
   home: ReactNode;
@@ -92,6 +95,8 @@ export interface SettingsModalProps {
 
 export function SettingsModal({
   onClose,
+  initialTab = 'appearance',
+  quickActions,
   appearance,
   search,
   home,
@@ -111,7 +116,7 @@ export function SettingsModal({
   const titleId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
   const tabsRef = useHorizontalWheel<HTMLDivElement>();
-  const [tab, setTab] = useState<SettingsTab>('appearance');
+  const [tab, setTab] = useState<SettingsTab>(initialTab);
   const [tabQuery, setTabQuery] = useState('');
   const normalizedQuery = tabQuery.trim().toLowerCase();
   const visibleGroups = useMemo(
@@ -262,6 +267,8 @@ export function SettingsModal({
             onChange={(e) => setTabQuery(e.target.value)}
           />
         </div>
+
+        {quickActions && <div className="settings-modal__quick-actions">{quickActions}</div>}
 
         <div className="settings-modal__body">
           <div

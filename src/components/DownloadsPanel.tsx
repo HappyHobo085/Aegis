@@ -1,7 +1,8 @@
 // src/components/DownloadsPanel.tsx
 import { FileText, Folder, Inbox, Trash2, X } from 'lucide-react';
+import { useState } from 'react';
 import type { DownloadEntry } from '../../shared/types';
-import { confirm } from '../lib/toast';
+import { confirm, toast } from '../lib/toast';
 
 export interface DownloadsPanelProps {
   downloads: DownloadEntry[];
@@ -44,6 +45,17 @@ export function DownloadsPanel({
   showInFolder,
   cancel,
 }: DownloadsPanelProps) {
+  const [filter, setFilter] = useState<'active' | 'recent' | 'failed' | 'all'>('all');
+  const activeCount = downloads.filter((d) => d.state === 'progressing').length;
+  const failedCount = downloads.filter((d) => isErrorState(d.state)).length;
+  const completedCount = downloads.filter((d) => d.state === 'completed').length;
+  const visibleDownloads = downloads.filter((d) => {
+    if (filter === 'active') return d.state === 'progressing';
+    if (filter === 'failed') return isErrorState(d.state);
+    if (filter === 'recent') return d.state !== 'progressing';
+    return true;
+  });
+
   const handleClear = async (): Promise<void> => {
     const ok = await confirm('Clear the downloads list? This does not delete the files.');
     if (ok) void clear();
@@ -54,8 +66,56 @@ export function DownloadsPanel({
     if (ok) void cancel(id);
   };
 
+  const handleOpenFile = async (id: number): Promise<void> => {
+    try {
+      await openFile(id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not open that download.');
+    }
+  };
+
+  const handleShowInFolder = async (id: number): Promise<void> => {
+    try {
+      await showInFolder(id);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not show that download.');
+    }
+  };
+
   return (
     <div className="downloads-panel" role="group" aria-label="Downloads">
+      <div className="downloads-panel__summary" aria-label="Download activity summary">
+        <span>
+          <strong>{activeCount}</strong>
+          Active
+        </span>
+        <span>
+          <strong>{completedCount}</strong>
+          Complete
+        </span>
+        <span>
+          <strong>{failedCount}</strong>
+          Need attention
+        </span>
+      </div>
+      <div className="downloads-panel__filters" role="group" aria-label="Filter download list">
+        {(['all', 'active', 'recent', 'failed'] as const).map((next) => (
+          <button
+            key={next}
+            type="button"
+            aria-pressed={filter === next}
+            onClick={() => setFilter(next)}
+          >
+            {next === 'all'
+              ? 'All'
+              : next === 'active'
+                ? 'Active'
+                : next === 'recent'
+                  ? 'Recent'
+                  : 'Problems'}
+          </button>
+        ))}
+      </div>
       <button
         type="button"
         className="downloads-panel__clear"
@@ -70,11 +130,18 @@ export function DownloadsPanel({
         <div className="downloads-panel__empty">
           <Inbox size={32} aria-hidden="true" />
           <span>No downloads yet.</span>
-          <span className="downloads-panel__empty-hint">Downloaded files will show up here.</span>
+          <span className="downloads-panel__empty-hint">
+            Regular downloads show up here. Private-tab downloads are not recorded.
+          </span>
+        </div>
+      ) : visibleDownloads.length === 0 ? (
+        <div className="downloads-panel__empty downloads-panel__empty--compact">
+          <Inbox size={28} aria-hidden="true" />
+          <span>No downloads match this filter.</span>
         </div>
       ) : (
         <ul className="downloads-panel__list">
-          {downloads.map((d) => {
+          {visibleDownloads.map((d) => {
             const pct = percentOf(d.receivedBytes, d.totalBytes);
             return (
               <li key={d.id} className="downloads-panel__row">
@@ -105,7 +172,7 @@ export function DownloadsPanel({
                       <button
                         type="button"
                         aria-label={`Open file ${d.filename}`}
-                        onClick={() => void openFile(d.id)}
+                        onClick={() => void handleOpenFile(d.id)}
                       >
                         <FileText size={14} aria-hidden="true" />
                         Open file
@@ -113,7 +180,7 @@ export function DownloadsPanel({
                       <button
                         type="button"
                         aria-label={`Show ${d.filename} in folder`}
-                        onClick={() => void showInFolder(d.id)}
+                        onClick={() => void handleShowInFolder(d.id)}
                       >
                         <Folder size={14} aria-hidden="true" />
                         Show in folder

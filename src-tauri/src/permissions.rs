@@ -186,7 +186,13 @@ pub fn dispatch<R: Runtime>(
                 .get("requestId")
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
-            let allow = payload.get("decision").and_then(Value::as_str) == Some("allow");
+            let decision = payload
+                .get("decision")
+                .and_then(Value::as_str)
+                .unwrap_or("deny")
+                .to_string();
+            let allow = decision == "allow" || decision == "allow-once";
+            let remember = decision != "allow-once";
             #[cfg(target_os = "linux")]
             {
                 let app2 = app.clone();
@@ -199,14 +205,16 @@ pub fn dispatch<R: Runtime>(
                             } else {
                                 req.deny();
                             }
-                            persist(&app2, &origin, &permission, allow);
+                            if remember {
+                                persist(&app2, &origin, &permission, allow);
+                            }
                         }
                     });
                 });
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (id, allow);
+                let _ = (id, allow, remember);
             }
             Some(Ok(Value::Null))
         }

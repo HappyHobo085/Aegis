@@ -200,7 +200,7 @@ export function SavedPanel({
           <Bookmark size={32} aria-hidden="true" />
           <span>Nothing saved yet.</span>
           <span className="saved-panel__empty-hint">
-            Save the current page with the bookmark button.
+            Save the current page with the bookmark button, or use Add a page above.
           </span>
         </div>
       ) : filtered.length === 0 ? (

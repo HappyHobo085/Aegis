@@ -9,9 +9,15 @@ export interface ProxySettingsTabProps {
   state: ProxyState;
   setConfig(cfg: ProxyConfig): Promise<ProxyState>;
   test(cfg: ProxyConfig): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
+  onReloadActiveTab?(): void;
 }
 
-export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabProps) {
+export function ProxySettingsTab({
+  state,
+  setConfig,
+  test,
+  onReloadActiveTab,
+}: ProxySettingsTabProps) {
   // Local draft — mirrors the persisted state but lets the user edit without
   // auto-saving on every keystroke.
   const [mode, setModeLocal] = useState<'off' | 'proxy'>(state.mode);
@@ -226,6 +232,15 @@ export function ProxySettingsTab({ state, setConfig, test }: ProxySettingsTabPro
                   : 'Active. Linux applies live; Windows needs a tab reload; macOS saves this for future proxy support.'
                 : 'Not active yet — click Apply.'}
             </small>
+            {state.active && onReloadActiveTab && (
+              <button
+                type="button"
+                className="proxy-tab__reload"
+                onClick={() => onReloadActiveTab()}
+              >
+                Reload active tab
+              </button>
+            )}
           </div>
         </>
       )}

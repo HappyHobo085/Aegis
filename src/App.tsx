@@ -4,10 +4,12 @@ import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
 import type { NavCrashed, NavFailed, RedirectBlocked } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
-import { confirm } from './lib/toast';
+import { confirm, toast } from './lib/toast';
 import { REDIRECT_BAR_H, FIND_BAR_H } from './lib/layout';
 import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChromeSurfaces';
 import { computeContentLayout } from './lib/contentLayout';
+import { protectionSummary } from './lib/protectionSummary';
+import { useDownloadToasts } from './hooks/useDownloadToasts';
 import { useNav } from './hooks/useNav';
 import { useFind } from './hooks/useFind';
 import { useZoom } from './hooks/useZoom';
@@ -49,6 +51,10 @@ import { ConfirmDialog } from './components/ConfirmDialog';
 import { PermissionPromptDialog } from './components/PermissionPromptDialog';
 import { Onboarding } from './components/Onboarding';
 import { SettingsModal } from './components/SettingsModal';
+import type { SettingsTab } from './components/SettingsModal';
+import { CommandPalette } from './components/CommandPalette';
+import type { CommandAction } from './components/CommandPalette';
+import { PrivacyDashboard } from './components/PrivacyDashboard';
 import { AppearanceTab } from './components/AppearanceTab';
 import { SearchTab } from './components/SearchTab';
 import { HomeTab } from './components/HomeTab';
@@ -125,7 +131,10 @@ function DesktopApp() {
   const [crashed, setCrashed] = useState<NavCrashed | null>(null);
   const [managerOpen, setManagerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('appearance');
+  const [commandOpen, setCommandOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [sidebarInitialTab, setSidebarInitialTab] = useState<'history' | 'saved'>('history');
   // The sidebar panel is user-resizable; track its width so the content webview's right
   // inset matches it exactly (reported up from the Sidebar via onWidthChange).
   const [sidebarWidth, setSidebarWidth] = useState(280);
@@ -166,6 +175,11 @@ function DesktopApp() {
         nav.navigate(raw);
       }
     }, CHROME_NAV_REASSERT_MS);
+  };
+
+  const openSettings = (tab: SettingsTab = 'appearance'): void => {
+    setSettingsInitialTab(tab);
+    setSettingsOpen(true);
   };
 
   // Dev-only: expose an imperative control surface so the autopilot can reach every
@@ -352,6 +366,17 @@ function DesktopApp() {
     return () => window.removeEventListener('keydown', onKey);
   }, [tabs.tabs, tabs.activeId]);
 
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
+
   // Ctrl+F / Cmd+F opens the find bar (auto-focuses the input via FindBar's useEffect).
   // Esc closes it from within the FindBar input (handleKeyDown → onClose).
   useEffect(() => {
@@ -468,6 +493,125 @@ function DesktopApp() {
   };
 
   const activeDownloads = downloads.downloads.filter((d) => d.state === 'progressing').length;
+  const activeTab = tabs.tabs.find((t) => t.id === tabs.activeId);
+  const activeHost = hostOf(nav.state.url);
+  const activeOrigin = originOf(nav.state.url);
+  const activeProtection = protectionSummary({
+    activeTab,
+    settings: settings.settings,
+    fingerprint: fingerprint.state,
+    proxy: proxy.state,
+    host: activeHost,
+  });
+  useDownloadToasts(downloads.downloads, {
+    openFile: downloads.openFile,
+    showInFolder: downloads.showInFolder,
+  });
+
+  const forgetSitePermissions = (origin: string): void => {
+    for (const permission of permissions.permissions.filter((p) => p.origin === origin)) {
+      void permissions.remove(permission.origin, permission.permission);
+    }
+  };
+
+  const clearRememberedSiteData = (origin: string): void => {
+    forgetSitePermissions(origin);
+    for (const entry of history.entries.filter((entry) => originOf(entry.url) === origin)) {
+      void history.remove(entry.id);
+    }
+    toast.info('Cleared Aegis history and remembered permissions for this site.');
+  };
+
+  const commandActions: CommandAction[] = [
+    {
+      id: 'new-tab',
+      title: 'New tab',
+      subtitle: 'Open a blank tab',
+      group: 'Tabs',
+      keywords: 'tabs',
+      run: () => void tabs.create(),
+    },
+    {
+      id: 'new-private-tab',
+      title: 'New private tab',
+      subtitle: 'Browse without saving history',
+      group: 'Tabs',
+      keywords: 'incognito privacy',
+      run: () => void tabs.create(undefined, false, true),
+    },
+    {
+      id: 'downloads',
+      title: 'Open downloads',
+      subtitle: `${downloads.downloads.length} recent downloads`,
+      group: 'Browser',
+      keywords: 'files',
+      run: () => setDownloadsOpen(true),
+    },
+    {
+      id: 'history',
+      title: 'Open history',
+      subtitle: 'Show visited pages',
+      group: 'Browser',
+      keywords: 'sidebar',
+      run: () => {
+        setSidebarInitialTab('history');
+        setSidebarOpen(true);
+      },
+    },
+    {
+      id: 'saved',
+      title: 'Open saved pages',
+      subtitle: 'Bookmarks and reading list',
+      group: 'Browser',
+      keywords: 'bookmarks sidebar',
+      run: () => {
+        setSidebarInitialTab('saved');
+        setSidebarOpen(true);
+      },
+    },
+    {
+      id: 'settings-privacy',
+      title: 'Privacy settings',
+      subtitle: 'Security, permissions, and fingerprint protection',
+      group: 'Settings',
+      keywords: 'settings security permissions',
+      run: () => openSettings('security'),
+    },
+    {
+      id: 'settings-proxy',
+      title: 'Proxy settings',
+      subtitle: proxy.state.active ? 'Proxy is active' : 'Proxy is off',
+      group: 'Settings',
+      keywords: 'network vpn',
+      run: () => openSettings('proxy'),
+    },
+    {
+      id: 'settings-data',
+      title: 'Import or export data',
+      subtitle: 'Backups and local data controls',
+      group: 'Settings',
+      keywords: 'backup restore',
+      run: () => openSettings('data'),
+    },
+    {
+      id: 'update-lists',
+      title: 'Update filter lists',
+      subtitle: 'Refresh ad-block subscriptions',
+      group: 'Blocking',
+      keywords: 'adblock blocking filters',
+      run: () => void subscriptions.updateNow(),
+    },
+    ...tabs.tabs.map((tab) => ({
+      id: `tab-${tab.id}`,
+      title: `Switch to ${tab.title || tab.url || 'New tab'}`,
+      subtitle: tab.private ? 'Private tab' : tab.url,
+      group: 'Open tabs',
+      keywords: 'tab switch',
+      run: () => void tabs.activate(tab.id),
+      secondaryLabel: 'Close',
+      secondaryRun: () => void tabs.close(tab.id),
+    })),
+  ];
 
   // Fullscreen render: ALL hooks above must run on every render (rule of hooks).
   // In fullscreen the chrome is shrunk to a top-right corner by main; render only
@@ -487,7 +631,7 @@ function DesktopApp() {
   }
 
   return (
-    <div className="app">
+    <div className={`app${activeProtection.privateMode ? ' app--private' : ''}`}>
       <SkipLink targetId={CONTENT_ANCHOR_ID} />
       {!isMobile && (
         <TabStrip
@@ -512,16 +656,27 @@ function DesktopApp() {
         adblock={{
           state: adblock.state,
           page: adblock.page,
-          host: hostOf(nav.state.url),
+          host: activeHost,
           setEnabled: adblock.setEnabled,
           toggleAllowlist: adblock.toggleAllowlist,
           onOpenChange: setShieldOpen,
           onReload: nav.reloadOrStop,
+          protection: activeProtection,
+        }}
+        isPrivate={activeProtection.privateMode}
+        siteInfo={{
+          origin: activeOrigin,
+          host: activeHost,
+          permissions: permissions.permissions,
+          protection: activeProtection,
+          onForgetSitePermissions: forgetSitePermissions,
+          onClearRememberedSiteData: clearRememberedSiteData,
+          onOpenPrivacySettings: () => openSettings('security'),
         }}
         bookmark={
           <BookmarkButton
             saved={saved.isCurrentSaved}
-            canSave={hostOf(nav.state.url) !== null}
+            canSave={activeHost !== null}
             onSave={() => void saved.addCurrent(nav.state.title)}
             onUnsave={() => void saved.removeCurrent()}
           />
@@ -545,7 +700,7 @@ function DesktopApp() {
             className="toolbar__gear"
             aria-label="Open settings"
             title="Settings"
-            onClick={() => setSettingsOpen(true)}
+            onClick={() => openSettings()}
           >
             <Settings size={18} aria-hidden="true" />
           </button>
@@ -613,6 +768,7 @@ function DesktopApp() {
       )}
       <Sidebar
         open={sidebarOpen}
+        initialTab={sidebarInitialTab}
         onClose={() => setSidebarOpen(false)}
         onWidthChange={setSidebarWidth}
         history={
@@ -677,6 +833,23 @@ function DesktopApp() {
       {settingsOpen && (
         <SettingsModal
           onClose={() => setSettingsOpen(false)}
+          initialTab={settingsInitialTab}
+          quickActions={
+            <>
+              <button type="button" onClick={() => void tabs.create(undefined, false, true)}>
+                New private tab
+              </button>
+              <button type="button" onClick={() => void permissions.clear()}>
+                Clear permissions
+              </button>
+              <button type="button" onClick={() => void subscriptions.updateNow()}>
+                Update filter lists
+              </button>
+              <button type="button" onClick={() => setDownloadsOpen(true)}>
+                Downloads
+              </button>
+            </>
+          }
           appearance={<AppearanceTab settings={settings.settings} update={settings.update} />}
           search={<SearchTab settings={settings.settings} update={settings.update} />}
           home={<HomeTab settings={settings.settings} update={settings.update} />}
@@ -707,18 +880,38 @@ function DesktopApp() {
             />
           }
           security={
-            <SecurityTab
-              settings={settings.settings}
-              update={settings.update}
-              listExceptions={aegis.safety.listExceptions}
-              removeException={(h) => void aegis.safety.removeException(h)}
-              fingerprintState={fingerprint.state}
-              toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
-              removeFingerprintAllowlist={fingerprint.removeAllowlist}
-            />
+            <>
+              <PrivacyDashboard
+                protection={activeProtection}
+                adblock={adblock.state}
+                blockedHere={adblock.page}
+                onHarden={() =>
+                  void settings.update({
+                    httpsOnly: true,
+                    webrtcPolicy: 'disable',
+                    antiFingerprint: 'strict',
+                  })
+                }
+                onOpenProxy={() => openSettings('proxy')}
+              />
+              <SecurityTab
+                settings={settings.settings}
+                update={settings.update}
+                listExceptions={aegis.safety.listExceptions}
+                removeException={(h) => void aegis.safety.removeException(h)}
+                fingerprintState={fingerprint.state}
+                toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
+                removeFingerprintAllowlist={fingerprint.removeAllowlist}
+              />
+            </>
           }
           proxy={
-            <ProxySettingsTab state={proxy.state} setConfig={proxy.setConfig} test={proxy.test} />
+            <ProxySettingsTab
+              state={proxy.state}
+              setConfig={proxy.setConfig}
+              test={proxy.test}
+              onReloadActiveTab={nav.reloadOrStop}
+            />
           }
           vault={<VaultSettingsTab vault={vault} />}
           sync={
@@ -738,6 +931,8 @@ function DesktopApp() {
       {permissions.prompt && (
         <PermissionPromptDialog
           prompt={permissions.prompt}
+          isPrivate={activeProtection.privateMode}
+          onOpenSitePermissions={() => openSettings('sitePermissions')}
           onResolve={(_requestId, decision) => void permissions.resolve(decision)}
         />
       )}
@@ -745,7 +940,20 @@ function DesktopApp() {
         searchEngines={settings.settings.searchEngines}
         defaultSearchTemplate={settings.settings.defaultSearchTemplate}
         onChooseSearch={(template) => void settings.update({ defaultSearchTemplate: template })}
-        onOpenSettings={() => setSettingsOpen(true)}
+        onChoosePrivacyPreset={(preset) =>
+          void settings.update(
+            preset === 'strict'
+              ? { httpsOnly: true, webrtcPolicy: 'disable', antiFingerprint: 'strict' }
+              : { httpsOnly: true, webrtcPolicy: 'public-only', antiFingerprint: 'standard' },
+          )
+        }
+        onOpenSettings={() => openSettings()}
+        onImportData={() => openSettings('data')}
+      />
+      <CommandPalette
+        open={commandOpen}
+        actions={commandActions}
+        onClose={() => setCommandOpen(false)}
       />
       <Toaster />
       <ConfirmDialog />

@@ -7,6 +7,8 @@ import {
   setFullscreen as setNativeFullscreen,
 } from '../../lib/ipcClient';
 import { applyTheme } from '../../lib/theme';
+import { protectionSummary } from '../../lib/protectionSummary';
+import { useDownloadToasts } from '../../hooks/useDownloadToasts';
 import { useTabs } from '../../hooks/useTabs';
 import { useNav } from '../../hooks/useNav';
 import { useAdblock } from '../../hooks/useAdblock';
@@ -31,6 +33,9 @@ import { HistoryPanel } from '../HistoryPanel';
 import { SavedPanel } from '../SavedPanel';
 import { DownloadsModal } from '../DownloadsModal';
 import { SettingsModal } from '../SettingsModal';
+import type { SettingsTab } from '../SettingsModal';
+import { CommandPalette } from '../CommandPalette';
+import type { CommandAction } from '../CommandPalette';
 import { AppearanceTab } from '../AppearanceTab';
 import { SearchTab } from '../SearchTab';
 import { HomeTab } from '../HomeTab';
@@ -49,6 +54,8 @@ import { PermissionPromptDialog } from '../PermissionPromptDialog';
 import { Toaster } from '../Toaster';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { Onboarding } from '../Onboarding';
+import { PrivacyDashboard } from '../PrivacyDashboard';
+import { toast } from '../../lib/toast';
 import { MobileTopBar } from './MobileTopBar';
 import { MobileBottomBar } from './MobileBottomBar';
 import { MobileMenuSheet } from './MobileMenuSheet';
@@ -68,6 +75,14 @@ function hostOf(url: string): string | null {
   try {
     const h = new URL(url).hostname;
     return h.length > 0 ? h : null;
+  } catch {
+    return null;
+  }
+}
+
+function originOf(url: string): string | null {
+  try {
+    return new URL(url).origin;
   } catch {
     return null;
   }
@@ -93,6 +108,8 @@ export function MobileApp() {
   const downloads = useDownloads();
   const permissions = usePermissions();
   const [sheet, setSheet] = useState<Sheet>(null);
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('appearance');
+  const [commandOpen, setCommandOpen] = useState(false);
   const [shieldOpen, setShieldOpen] = useState(false);
   const [bottomBarHidden, setBottomBarHidden] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
@@ -100,6 +117,11 @@ export function MobileApp() {
   useEffect(() => {
     void aegis.settings.get().then((s) => applyTheme(s));
   }, []);
+
+  const openSettings = (tab: SettingsTab = 'appearance'): void => {
+    setSettingsInitialTab(tab);
+    setSheet('settings');
+  };
 
   // Manual bottom-bar toggle (the top-bar button): tell the native side to hide/show the
   // bar so the content webview reclaims (or restores) the bar's bottom-margin gap.
@@ -112,6 +134,17 @@ export function MobileApp() {
   useEffect(() => {
     setNativeFullscreen(fullscreen);
   }, [fullscreen]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && !e.altKey && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setCommandOpen(true);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const overlayOpen = sheet !== null || shieldOpen;
   useEffect(() => {
@@ -153,6 +186,110 @@ export function MobileApp() {
   }, [nav.state.url, nav.state.title, nav.state.viewId, tabs.activeId]);
 
   const host = hostOf(nav.state.url);
+  const origin = originOf(nav.state.url);
+  const activeTab = tabs.tabs.find((t) => t.id === tabs.activeId);
+  const activeProtection = protectionSummary({
+    activeTab,
+    settings: settings.settings,
+    fingerprint: fingerprint.state,
+    proxy: proxy.state,
+    host,
+  });
+  useDownloadToasts(downloads.downloads, {
+    openFile: downloads.openFile,
+    showInFolder: downloads.showInFolder,
+  });
+
+  const forgetSitePermissions = (siteOrigin: string): void => {
+    for (const permission of permissions.permissions.filter((p) => p.origin === siteOrigin)) {
+      void permissions.remove(permission.origin, permission.permission);
+    }
+  };
+
+  const clearRememberedSiteData = (siteOrigin: string): void => {
+    forgetSitePermissions(siteOrigin);
+    for (const entry of history.entries.filter((entry) => originOf(entry.url) === siteOrigin)) {
+      void history.remove(entry.id);
+    }
+    toast.info('Cleared Aegis history and remembered permissions for this site.');
+  };
+
+  const commandActions: CommandAction[] = [
+    {
+      id: 'new-tab',
+      title: 'New tab',
+      subtitle: 'Open a blank tab',
+      group: 'Tabs',
+      keywords: 'tabs',
+      run: () => void tabs.create('about:blank'),
+    },
+    {
+      id: 'new-private-tab',
+      title: 'New private tab',
+      subtitle: 'Browse without saving history',
+      group: 'Tabs',
+      keywords: 'incognito privacy',
+      run: () => void tabs.create(undefined, false, true),
+    },
+    {
+      id: 'downloads',
+      title: 'Open downloads',
+      subtitle: `${downloads.downloads.length} recent downloads`,
+      group: 'Browser',
+      keywords: 'files',
+      run: () => setSheet('downloads'),
+    },
+    {
+      id: 'history',
+      title: 'Open history',
+      subtitle: 'Show visited pages',
+      group: 'Browser',
+      keywords: 'sidebar',
+      run: () => setSheet('history'),
+    },
+    {
+      id: 'saved',
+      title: 'Open saved pages',
+      subtitle: 'Bookmarks and reading list',
+      group: 'Browser',
+      keywords: 'bookmarks',
+      run: () => setSheet('saved'),
+    },
+    {
+      id: 'settings-privacy',
+      title: 'Privacy settings',
+      subtitle: 'Security, permissions, and fingerprint protection',
+      group: 'Settings',
+      keywords: 'settings security permissions',
+      run: () => openSettings('security'),
+    },
+    {
+      id: 'settings-proxy',
+      title: 'Proxy settings',
+      subtitle: proxy.state.active ? 'Proxy is active' : 'Proxy is off',
+      group: 'Settings',
+      keywords: 'network vpn',
+      run: () => openSettings('proxy'),
+    },
+    {
+      id: 'settings-data',
+      title: 'Import or export data',
+      subtitle: 'Backups and local data controls',
+      group: 'Settings',
+      keywords: 'backup restore',
+      run: () => openSettings('data'),
+    },
+    ...tabs.tabs.map((tab) => ({
+      id: `tab-${tab.id}`,
+      title: `Switch to ${tab.title || tab.url || 'New tab'}`,
+      subtitle: tab.private ? 'Private tab' : tab.url,
+      group: 'Open tabs',
+      keywords: 'tab switch',
+      run: () => void tabs.activate(tab.id),
+      secondaryLabel: 'Close',
+      secondaryRun: () => void tabs.close(tab.id),
+    })),
+  ];
   const shield = (
     <AdblockShield
       state={adblock.state}
@@ -161,15 +298,27 @@ export function MobileApp() {
       setEnabled={adblock.setEnabled}
       toggleAllowlist={adblock.toggleAllowlist}
       onOpenChange={setShieldOpen}
+      onReload={nav.reloadOrStop}
+      protection={activeProtection}
     />
   );
 
   return (
-    <div className="app app--mobile">
+    <div className={`app app--mobile${activeProtection.privateMode ? ' app--private' : ''}`}>
       {!fullscreen && (
         <MobileTopBar
           url={nav.state.url}
           isLoading={nav.state.isLoading}
+          isPrivate={activeProtection.privateMode}
+          siteInfo={{
+            origin,
+            host,
+            permissions: permissions.permissions,
+            protection: activeProtection,
+            onForgetSitePermissions: forgetSitePermissions,
+            onClearRememberedSiteData: clearRememberedSiteData,
+            onOpenPrivacySettings: () => openSettings('security'),
+          }}
           onNavigate={nav.navigate}
           onReloadOrStop={nav.reloadOrStop}
           favorites={favorites.favorites}
@@ -209,7 +358,7 @@ export function MobileApp() {
           canGoForward={nav.state.canGoForward}
           onHome={nav.home}
           onDownloads={() => setSheet('downloads')}
-          onSettings={() => setSheet('settings')}
+          onSettings={() => openSettings()}
           isCurrentSaved={saved.isCurrentSaved}
           canBookmark={host !== null}
           onToggleBookmark={() => {
@@ -300,6 +449,23 @@ export function MobileApp() {
       {sheet === 'settings' && (
         <SettingsModal
           onClose={() => setSheet(null)}
+          initialTab={settingsInitialTab}
+          quickActions={
+            <>
+              <button type="button" onClick={() => void tabs.create(undefined, false, true)}>
+                New private tab
+              </button>
+              <button type="button" onClick={() => void permissions.clear()}>
+                Clear permissions
+              </button>
+              <button type="button" onClick={() => void subscriptions.updateNow()}>
+                Update filter lists
+              </button>
+              <button type="button" onClick={() => setSheet('downloads')}>
+                Downloads
+              </button>
+            </>
+          }
           appearance={<AppearanceTab settings={settings.settings} update={settings.update} />}
           search={<SearchTab settings={settings.settings} update={settings.update} />}
           home={<HomeTab settings={settings.settings} update={settings.update} />}
@@ -330,18 +496,38 @@ export function MobileApp() {
             />
           }
           security={
-            <SecurityTab
-              settings={settings.settings}
-              update={settings.update}
-              listExceptions={() => aegis.safety.listExceptions()}
-              removeException={(h) => void aegis.safety.removeException(h)}
-              fingerprintState={fingerprint.state}
-              toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
-              removeFingerprintAllowlist={fingerprint.removeAllowlist}
-            />
+            <>
+              <PrivacyDashboard
+                protection={activeProtection}
+                adblock={adblock.state}
+                blockedHere={adblock.page}
+                onHarden={() =>
+                  void settings.update({
+                    httpsOnly: true,
+                    webrtcPolicy: 'disable',
+                    antiFingerprint: 'strict',
+                  })
+                }
+                onOpenProxy={() => openSettings('proxy')}
+              />
+              <SecurityTab
+                settings={settings.settings}
+                update={settings.update}
+                listExceptions={() => aegis.safety.listExceptions()}
+                removeException={(h) => void aegis.safety.removeException(h)}
+                fingerprintState={fingerprint.state}
+                toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
+                removeFingerprintAllowlist={fingerprint.removeAllowlist}
+              />
+            </>
           }
           proxy={
-            <ProxySettingsTab state={proxy.state} setConfig={proxy.setConfig} test={proxy.test} />
+            <ProxySettingsTab
+              state={proxy.state}
+              setConfig={proxy.setConfig}
+              test={proxy.test}
+              onReloadActiveTab={nav.reloadOrStop}
+            />
           }
           vault={<VaultSettingsTab vault={vault} />}
           sync={
@@ -362,6 +548,8 @@ export function MobileApp() {
       {permissions.prompt && (
         <PermissionPromptDialog
           prompt={permissions.prompt}
+          isPrivate={activeProtection.privateMode}
+          onOpenSitePermissions={() => openSettings('sitePermissions')}
           onResolve={(_requestId, decision) => void permissions.resolve(decision)}
         />
       )}
@@ -369,7 +557,20 @@ export function MobileApp() {
         searchEngines={settings.settings.searchEngines}
         defaultSearchTemplate={settings.settings.defaultSearchTemplate}
         onChooseSearch={(template) => void settings.update({ defaultSearchTemplate: template })}
-        onOpenSettings={() => setSheet('settings')}
+        onChoosePrivacyPreset={(preset) =>
+          void settings.update(
+            preset === 'strict'
+              ? { httpsOnly: true, webrtcPolicy: 'disable', antiFingerprint: 'strict' }
+              : { httpsOnly: true, webrtcPolicy: 'public-only', antiFingerprint: 'standard' },
+          )
+        }
+        onOpenSettings={() => openSettings()}
+        onImportData={() => openSettings('data')}
+      />
+      <CommandPalette
+        open={commandOpen}
+        actions={commandActions}
+        onClose={() => setCommandOpen(false)}
       />
       <Toaster />
       <ConfirmDialog />

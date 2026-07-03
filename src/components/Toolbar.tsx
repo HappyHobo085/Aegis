@@ -3,6 +3,8 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import type { AdblockState, NavState } from '../../shared/types';
+import type { ProtectionSummary } from '../lib/protectionSummary';
+import type { SiteInfo } from './AddressBar';
 import { NavControls } from './NavControls';
 import { AddressBar } from './AddressBar';
 import { AdblockShield } from './AdblockShield';
@@ -17,6 +19,7 @@ export interface ToolbarAdblockProps {
   onOpenChange?(open: boolean): void;
   /** Reload the active tab (the ad-block on/off + allowlist toggles apply on reload). */
   onReload?(): void;
+  protection?: ProtectionSummary;
 }
 
 export interface ToolbarProps {
@@ -42,6 +45,8 @@ export interface ToolbarProps {
   /** When true (narrow window), the secondary slots fold into an overflow menu so
    *  the address bar keeps a usable width. */
   isNarrow?: boolean;
+  isPrivate?: boolean;
+  siteInfo?: SiteInfo;
 }
 
 /** The "More" overflow popover that holds the secondary toolbar actions when the
@@ -102,6 +107,8 @@ export function Toolbar({
   zoom,
   menu,
   isNarrow = false,
+  isPrivate = false,
+  siteInfo,
 }: ToolbarProps) {
   const secondary = (
     <>
@@ -123,7 +130,13 @@ export function Toolbar({
         reloadOrStop={reloadOrStop}
         home={home}
       />
-      <AddressBar url={state.url} isLoading={state.isLoading} onSubmit={navigate} />
+      <AddressBar
+        url={state.url}
+        isLoading={state.isLoading}
+        isPrivate={isPrivate}
+        siteInfo={siteInfo}
+        onSubmit={navigate}
+      />
       <AdblockShield
         state={adblock.state}
         page={adblock.page}
@@ -132,6 +145,7 @@ export function Toolbar({
         toggleAllowlist={adblock.toggleAllowlist}
         onOpenChange={adblock.onOpenChange}
         onReload={adblock.onReload}
+        protection={adblock.protection}
       />
       {isNarrow ? <ToolbarOverflow>{secondary}</ToolbarOverflow> : secondary}
       <span className="toolbar__cluster toolbar__cluster--sidebar">{menu}</span>

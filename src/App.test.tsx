@@ -420,7 +420,7 @@ describe('App', () => {
     );
     expect(screen.getByRole('dialog', { name: undefined })).toBeInTheDocument();
     const { default: userEvent } = await import('@testing-library/user-event');
-    await userEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^always allow$/i }));
     expect(aegis.permissions.resolve).toHaveBeenCalledWith(1, 'allow');
   });
 

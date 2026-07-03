@@ -50,9 +50,9 @@ describe('Onboarding', () => {
     expect(container).toBeEmptyDOMElement();
   });
 
-  it('"Start browsing" dismisses the modal and records completion', async () => {
+  it('"Start fresh" dismisses the modal and records completion', async () => {
     setup();
-    await userEvent.click(screen.getByRole('button', { name: /start browsing/i }));
+    await userEvent.click(screen.getByRole('button', { name: /start fresh/i }));
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(localStorage.getItem(ONBOARDING_STORAGE_KEY)).toBe('1');
   });
@@ -68,6 +68,14 @@ describe('Onboarding', () => {
     const { onChooseSearch } = setup();
     await userEvent.click(screen.getByRole('radio', { name: /google/i }));
     expect(onChooseSearch).toHaveBeenCalledWith(ENGINES[1].template);
+  });
+
+  it('applies the selected privacy preset when completing onboarding', async () => {
+    const onChoosePrivacyPreset = vi.fn();
+    setup({ onChoosePrivacyPreset });
+    await userEvent.click(screen.getByRole('radio', { name: /strict/i }));
+    await userEvent.click(screen.getByRole('button', { name: /start fresh/i }));
+    expect(onChoosePrivacyPreset).toHaveBeenCalledWith('strict');
   });
 
   it('Escape dismisses the modal', async () => {

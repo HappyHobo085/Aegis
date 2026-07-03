@@ -257,8 +257,8 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
       };
       // Render the permission dialog by invoking the onPrompt callback usePermissions registered.
       await ctx.emitPermissionPrompt?.(PROMPT);
-      const allowBtn = ctx.byRole('button', /^Allow$/);
-      if (!allowBtn) throw new Error('"Allow" button not found in PermissionPromptDialog');
+      const allowBtn = ctx.byRole('button', /^Always allow$/);
+      if (!allowBtn) throw new Error('"Always allow" button not found in PermissionPromptDialog');
       await ctx.click(allowBtn);
       // Dismiss the prompt so it doesn't linger (usePermissions clears it on resolve).
       await new Promise((r) => setTimeout(r, 50));
@@ -267,7 +267,7 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
       // permissions.resolve is called with (requestId, 'allow') — check the second arg.
       if (!ctx.calls.called('permissions.resolve', (a) => a[1] === 'allow'))
         throw new Error('permissions.resolve not called with "allow"');
-      return 'permissionPrompt Allow → permissions.resolve(requestId, "allow")';
+      return 'permissionPrompt Always allow → permissions.resolve(requestId, "allow")';
     },
   },
 

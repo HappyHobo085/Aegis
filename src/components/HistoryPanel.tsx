@@ -68,7 +68,9 @@ export function HistoryPanel({
         <div className="history-panel__empty">
           <Clock size={32} aria-hidden="true" />
           <span>No history yet.</span>
-          <span className="history-panel__empty-hint">Pages you visit will appear here.</span>
+          <span className="history-panel__empty-hint">
+            Pages you visit in regular tabs appear here. Private tabs stay out of history.
+          </span>
         </div>
       ) : (
         <ul className="history-panel__list">

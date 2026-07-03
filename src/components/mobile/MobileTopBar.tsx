@@ -1,11 +1,14 @@
 import { RotateCw, X, ChevronUp, ChevronDown, Maximize2 } from 'lucide-react';
 import type { Favorite } from '../../../shared/types';
 import { AddressBar } from '../AddressBar';
+import type { SiteInfo } from '../AddressBar';
 import { MobileFavourites } from './MobileFavourites';
 
 interface MobileTopBarProps {
   url: string;
   isLoading: boolean;
+  isPrivate?: boolean;
+  siteInfo?: SiteInfo;
   onNavigate(raw: string): void;
   onReloadOrStop(): void;
   favorites: Favorite[];
@@ -18,6 +21,8 @@ interface MobileTopBarProps {
 export function MobileTopBar({
   url,
   isLoading,
+  isPrivate = false,
+  siteInfo,
   onNavigate,
   onReloadOrStop,
   favorites,
@@ -29,7 +34,13 @@ export function MobileTopBar({
   return (
     <div className="mobile-topbar">
       <div className="mobile-topbar__row">
-        <AddressBar url={url} isLoading={isLoading} onSubmit={onNavigate} />
+        <AddressBar
+          url={url}
+          isLoading={isLoading}
+          isPrivate={isPrivate}
+          siteInfo={siteInfo}
+          onSubmit={onNavigate}
+        />
         <button
           type="button"
           className="mobile-topbar__reload"

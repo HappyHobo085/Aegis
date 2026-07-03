@@ -260,6 +260,10 @@ pub fn dispatch<R: Runtime>(
         "downloads.openFile" => {
             if let Some(p) = path_of(app, id()) {
                 open(&p);
+            } else {
+                return Some(Err(
+                    "Downloaded file is missing or outside the downloads folder.".into(),
+                ));
             }
             Some(Ok(Value::Null))
         }
@@ -269,6 +273,10 @@ pub fn dispatch<R: Runtime>(
                 if let Some(parent) = Path::new(&p).parent() {
                     open(&parent.to_string_lossy());
                 }
+            } else {
+                return Some(Err(
+                    "Downloaded file is missing or outside the downloads folder.".into(),
+                ));
             }
             Some(Ok(Value::Null))
         }
@@ -462,7 +470,10 @@ mod tests {
 
             assert!(trusted_download_path(app, &inside.to_string_lossy()));
             assert!(!trusted_download_path(app, &outside.to_string_lossy()));
-            assert!(!trusted_download_path(app, &dl_dir.join("missing.bin").to_string_lossy()));
+            assert!(!trusted_download_path(
+                app,
+                &dl_dir.join("missing.bin").to_string_lossy()
+            ));
             assert!(!trusted_download_path(app, "relative.bin"));
         });
     }

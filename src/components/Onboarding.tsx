@@ -12,8 +12,12 @@ export interface OnboardingProps {
   defaultSearchTemplate: string;
   /** Persist the chosen default search engine. */
   onChooseSearch(template: string): void;
+  /** Apply a one-click privacy baseline before browsing. */
+  onChoosePrivacyPreset?(preset: 'balanced' | 'strict'): void;
   /** Open the Settings modal (the onboarding closes first). */
   onOpenSettings(): void;
+  /** Jump straight to backup/import controls. */
+  onImportData?(): void;
   /** Test seam: force the modal open regardless of the stored flag. */
   forceOpen?: boolean;
 }
@@ -48,17 +52,21 @@ export function Onboarding({
   searchEngines,
   defaultSearchTemplate,
   onChooseSearch,
+  onChoosePrivacyPreset,
   onOpenSettings,
+  onImportData,
   forceOpen = false,
 }: OnboardingProps) {
   const isAutopilot = Boolean(import.meta.env.VITE_AEGIS_AUTOPILOT);
   const [done, setDone] = useState<boolean>(
     () => !forceOpen && (isAutopilot || localStorage.getItem(ONBOARDING_STORAGE_KEY) === '1'),
   );
+  const [privacyPreset, setPrivacyPreset] = useState<'balanced' | 'strict'>('balanced');
   const titleId = useRef(`onboarding-title`).current;
   const startRef = useRef<HTMLButtonElement | null>(null);
 
   const complete = (): void => {
+    onChoosePrivacyPreset?.(privacyPreset);
     localStorage.setItem(ONBOARDING_STORAGE_KEY, '1');
     setDone(true);
   };
@@ -80,6 +88,11 @@ export function Onboarding({
           Welcome to Aegis
         </h1>
         <p className="onboarding__lead">A private, ad-free browser. Here’s what’s built in:</p>
+        <ol className="onboarding__steps" aria-label="Setup steps">
+          <li>Start fresh or import</li>
+          <li>Choose privacy</li>
+          <li>Pick search</li>
+        </ol>
 
         <ul className="onboarding__features">
           {FEATURES.map(({ Icon, title, body }) => (
@@ -110,7 +123,49 @@ export function Onboarding({
           </fieldset>
         )}
 
+        {onChoosePrivacyPreset && (
+          <fieldset className="onboarding__privacy">
+            <legend className="onboarding__search-legend">Choose a privacy preset</legend>
+            <label className="onboarding__privacy-option">
+              <input
+                type="radio"
+                name="onboarding-privacy"
+                checked={privacyPreset === 'balanced'}
+                onChange={() => setPrivacyPreset('balanced')}
+              />
+              <span>
+                <strong>Balanced</strong>
+                <small>HTTPS upgrades, public-only WebRTC, standard fingerprint protection.</small>
+              </span>
+            </label>
+            <label className="onboarding__privacy-option">
+              <input
+                type="radio"
+                name="onboarding-privacy"
+                checked={privacyPreset === 'strict'}
+                onChange={() => setPrivacyPreset('strict')}
+              />
+              <span>
+                <strong>Strict</strong>
+                <small>Blocks WebRTC construction and uses strict fingerprint protection.</small>
+              </span>
+            </label>
+          </fieldset>
+        )}
+
         <div className="onboarding__actions">
+          {onImportData && (
+            <button
+              type="button"
+              className="onboarding__secondary"
+              onClick={() => {
+                complete();
+                onImportData();
+              }}
+            >
+              Import backup
+            </button>
+          )}
           <button
             type="button"
             className="onboarding__secondary"
@@ -122,7 +177,7 @@ export function Onboarding({
             Open settings
           </button>
           <button ref={startRef} type="button" className="onboarding__primary" onClick={complete}>
-            Start browsing
+            Start fresh
           </button>
         </div>
       </div>

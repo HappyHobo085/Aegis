@@ -39,6 +39,7 @@ function readStoredWidth(): number {
 
 export interface SidebarProps {
   open: boolean;
+  initialTab?: Tab;
   onClose(): void;
   history: ReactNode;
   saved: ReactNode;
@@ -46,8 +47,15 @@ export interface SidebarProps {
   onWidthChange?(width: number): void;
 }
 
-export function Sidebar({ open, onClose, history, saved, onWidthChange }: SidebarProps) {
-  const [tab, setTab] = useState<Tab>('history');
+export function Sidebar({
+  open,
+  initialTab = 'history',
+  onClose,
+  history,
+  saved,
+  onWidthChange,
+}: SidebarProps) {
+  const [tab, setTab] = useState<Tab>(initialTab);
   // Width is read from localStorage on each open (the panel unmounts when closed),
   // so a resized width is remembered across re-opens and app restarts.
   const [width, setWidth] = useState<number>(readStoredWidth);
@@ -57,6 +65,10 @@ export function Sidebar({ open, onClose, history, saved, onWidthChange }: Sideba
   const savedTabId = useId();
   const historyPanelId = useId();
   const savedPanelId = useId();
+
+  useEffect(() => {
+    if (open) setTab(initialTab);
+  }, [open, initialTab]);
 
   // Report the width up so the content webview's right inset tracks the (resizable)
   // panel. A pointer DRAG fires dozens of moves/sec and each onWidthChange drives a

@@ -1,15 +1,22 @@
 // src/components/PermissionPromptDialog.tsx
 import { useId, useRef } from 'react';
-import type { PermissionPrompt } from '../../shared/types';
+import type { PermissionDecision, PermissionPrompt } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
 import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
 export interface PermissionPromptDialogProps {
   prompt: PermissionPrompt;
-  onResolve(requestId: number, decision: 'allow' | 'deny'): void;
+  isPrivate?: boolean;
+  onOpenSitePermissions?(): void;
+  onResolve(requestId: number, decision: PermissionDecision): void;
 }
 
-export function PermissionPromptDialog({ prompt, onResolve }: PermissionPromptDialogProps) {
+export function PermissionPromptDialog({
+  prompt,
+  isPrivate = false,
+  onOpenSitePermissions,
+  onResolve,
+}: PermissionPromptDialogProps) {
   useChromeSurface('permissionPrompt', true);
   const msgId = useId();
   // Closing the dialog (Escape / focus-trap dismiss / scrim click) is treated as a Block.
@@ -29,15 +36,29 @@ export function PermissionPromptDialog({ prompt, onResolve }: PermissionPromptDi
         // Clicks inside the card must not bubble to the scrim (which would deny).
         onClick={(e) => e.stopPropagation()}
       >
-        <p id={msgId} className="permission-prompt__message">
-          {prompt.origin} wants to use {prompt.permission}.
-        </p>
+        <div id={msgId} className="permission-prompt__message">
+          <span className="permission-prompt__origin">{prompt.origin}</span>
+          <span>
+            wants to use <strong>{prompt.permission}</strong>.
+          </span>
+          {isPrivate && (
+            <span className="permission-prompt__private">This request is from a private tab.</span>
+          )}
+        </div>
         <div className="permission-prompt__actions">
-          <button type="button" onClick={() => onResolve(prompt.requestId, 'allow')}>
-            Allow
-          </button>
           <button type="button" ref={blockRef} onClick={deny}>
             Block
+          </button>
+          {onOpenSitePermissions && (
+            <button type="button" onClick={onOpenSitePermissions}>
+              Site settings
+            </button>
+          )}
+          <button type="button" onClick={() => onResolve(prompt.requestId, 'allow-once')}>
+            Allow once
+          </button>
+          <button type="button" onClick={() => onResolve(prompt.requestId, 'allow')}>
+            Always allow
           </button>
         </div>
       </div>

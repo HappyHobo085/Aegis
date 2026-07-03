@@ -1,9 +1,11 @@
 // src/components/AdblockShield.tsx
 import { useEffect, useId, useRef, useState } from 'react';
 import type { RefObject } from 'react';
-import { Shield, ShieldOff } from 'lucide-react';
+import { EyeOff, Fingerprint, Lock, Network, Shield, ShieldOff, Video } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import type { AdblockState } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
+import type { ProtectionSummary } from '../lib/protectionSummary';
 
 export interface AdblockShieldProps {
   state: AdblockState;
@@ -20,6 +22,62 @@ export interface AdblockShieldProps {
    *  "Applies on reload" copy. The coordinator (App) wires this to reload the
    *  active tab so an ad-block change takes effect immediately. Omit to hide it. */
   onReload?(): void;
+  protection?: ProtectionSummary;
+}
+
+function protectionRows(protection: ProtectionSummary): Array<{
+  key: string;
+  label: string;
+  value: string;
+  good: boolean;
+  Icon: LucideIcon;
+}> {
+  return [
+    {
+      key: 'private',
+      label: 'Private tab',
+      value: protection.privateMode ? 'On' : 'Off',
+      good: protection.privateMode,
+      Icon: EyeOff,
+    },
+    {
+      key: 'https',
+      label: 'HTTPS upgrades',
+      value: protection.httpsOnly ? 'On' : 'Off',
+      good: protection.httpsOnly,
+      Icon: Lock,
+    },
+    {
+      key: 'webrtc',
+      label: 'WebRTC IP protection',
+      value:
+        protection.webrtcPolicy === 'disable'
+          ? 'Blocked'
+          : protection.webrtcPolicy === 'public-only'
+            ? 'Public only'
+            : 'Default',
+      good: protection.webrtcPolicy !== 'default',
+      Icon: Video,
+    },
+    {
+      key: 'fingerprint',
+      label: 'Fingerprint protection',
+      value: protection.fingerprintAllowed
+        ? 'Allowed here'
+        : protection.fingerprintLevel === 'off'
+          ? 'Off'
+          : protection.fingerprintLevel,
+      good: protection.fingerprintLevel !== 'off' && !protection.fingerprintAllowed,
+      Icon: Fingerprint,
+    },
+    {
+      key: 'proxy',
+      label: 'Proxy',
+      value: protection.proxyActive ? (protection.proxyUri ?? 'Active') : 'Off',
+      good: protection.proxyActive,
+      Icon: Network,
+    },
+  ];
 }
 
 function Popover({
@@ -29,6 +87,7 @@ function Popover({
   setEnabled,
   toggleAllowlist,
   onReload,
+  protection,
   onClose,
   wrapperRef,
 }: AdblockShieldProps & { onClose: () => void; wrapperRef: RefObject<HTMLElement | null> }) {
@@ -53,6 +112,8 @@ function Popover({
   const allowlisted = host !== null && state.allowlistedHosts.includes(host);
   const allowLabel = host ? `Allow ads on ${host}` : 'Allow ads on this site';
 
+  const rows = protection ? protectionRows(protection) : [];
+
   return (
     <div
       ref={dialogRef}
@@ -63,7 +124,7 @@ function Popover({
     >
       <div className="adblock-shield__row">
         <span id={labelId} className="adblock-shield__title">
-          Ad blocking
+          Protection status
         </span>
         <label className="adblock-shield__switch">
           <input
@@ -76,6 +137,22 @@ function Popover({
         </label>
       </div>
       <hr className="adblock-shield__divider" />
+      <div className="adblock-shield__reload-row">
+        <p className="adblock-shield__hint">Applies on reload.</p>
+        {onReload && (
+          <button type="button" className="adblock-shield__reload" onClick={() => onReload()}>
+            Reload to apply
+          </button>
+        )}
+      </div>
+      {host !== null && (
+        <div className="adblock-shield__site">
+          <span className="adblock-shield__site-host">{host}</span>
+          <span className="adblock-shield__site-meta">
+            {allowlisted ? 'Ad blocking allowlisted here' : 'Ad blocking active here'}
+          </span>
+        </div>
+      )}
       <label className="adblock-shield__row">
         <input
           type="checkbox"
@@ -88,14 +165,27 @@ function Popover({
       </label>
       <p className="adblock-shield__count">Blocked here: {page}</p>
       <p className="adblock-shield__count">Blocked this session: {state.sessionBlocked}</p>
-      <div className="adblock-shield__reload-row">
-        <p className="adblock-shield__hint">Applies on reload.</p>
-        {onReload && (
-          <button type="button" className="adblock-shield__reload" onClick={() => onReload()}>
-            Reload to apply
-          </button>
-        )}
-      </div>
+      {rows.length > 0 && (
+        <>
+          <hr className="adblock-shield__divider" />
+          <div className="adblock-shield__protection-list" aria-label="Protection summary">
+            {rows.map(({ key, label, value, good, Icon }) => (
+              <div key={key} className="adblock-shield__protection-row">
+                <span
+                  className={`adblock-shield__protection-icon${
+                    good ? ' adblock-shield__protection-icon--good' : ''
+                  }`}
+                  aria-hidden="true"
+                >
+                  <Icon size={14} />
+                </span>
+                <span className="adblock-shield__protection-label">{label}</span>
+                <span className="adblock-shield__protection-value">{value}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }

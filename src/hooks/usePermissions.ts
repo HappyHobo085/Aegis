@@ -1,6 +1,6 @@
 // src/hooks/usePermissions.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { SitePermission, PermissionPrompt } from '../../shared/types';
+import type { SitePermission, PermissionPrompt, PermissionDecision } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 
 export function usePermissions(): {
@@ -8,7 +8,7 @@ export function usePermissions(): {
   prompt: PermissionPrompt | null;
   remove(origin: string, permission: string): Promise<void>;
   clear(): Promise<void>;
-  resolve(decision: 'allow' | 'deny'): Promise<void>;
+  resolve(decision: PermissionDecision): Promise<void>;
   /** Autopilot seeding only — directly sets the permissions list without an IPC round-trip. */
   _setPermissions(permissions: SitePermission[]): void;
 } {
@@ -47,7 +47,7 @@ export function usePermissions(): {
   }, []);
 
   const resolve = useCallback(
-    async (decision: 'allow' | 'deny'): Promise<void> => {
+    async (decision: PermissionDecision): Promise<void> => {
       const active = promptRef.current;
       if (active === null) return;
       // Clear optimistically so the dialog dismisses immediately; the resolve

@@ -130,6 +130,16 @@ export function TabStrip({
               <Globe size={13} aria-hidden="true" className="tab__icon" />
             )}
             {!t.pinned && <span className="tab__title">{title}</span>}
+            {!t.pinned && !t.live && (
+              <span className="tab__badge" title="Sleeping tab">
+                Asleep
+              </span>
+            )}
+            {!t.pinned && t.private && (
+              <span className="tab__badge tab__badge--private" title="Private tab">
+                Private
+              </span>
+            )}
             {!t.pinned && (
               <button
                 type="button"

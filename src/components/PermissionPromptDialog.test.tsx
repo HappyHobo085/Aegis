@@ -33,11 +33,18 @@ describe('PermissionPromptDialog', () => {
     expect(dialog).toHaveTextContent(/geolocation/i);
   });
 
-  it('Allow resolves the request with allow', async () => {
+  it('Always allow resolves the request with allow', async () => {
     const p = props({ prompt: prompt({ requestId: 5 }) });
     render(<PermissionPromptDialog {...p} />);
-    await userEvent.click(screen.getByRole('button', { name: /^allow$/i }));
+    await userEvent.click(screen.getByRole('button', { name: /^always allow$/i }));
     expect(p.onResolve).toHaveBeenCalledWith(5, 'allow');
+  });
+
+  it('Allow once resolves the request without remembering', async () => {
+    const p = props({ prompt: prompt({ requestId: 10 }) });
+    render(<PermissionPromptDialog {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /^allow once$/i }));
+    expect(p.onResolve).toHaveBeenCalledWith(10, 'allow-once');
   });
 
   it('Block resolves the request with deny', async () => {

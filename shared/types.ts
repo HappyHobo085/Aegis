@@ -258,6 +258,7 @@ export interface PermissionPrompt {
   origin: string;
   permission: string;
 }
+export type PermissionDecision = 'allow' | 'allow-once' | 'deny';
 export type ImportMode = 'merge' | 'replace';
 export interface ContentInset {
   top: number;
@@ -583,7 +584,7 @@ export interface AegisApi {
     list(): Promise<SitePermission[]>;
     remove(origin: string, permission: string): Promise<SitePermission[]>;
     clear(): Promise<SitePermission[]>;
-    resolve(requestId: number, decision: 'allow' | 'deny'): Promise<void>;
+    resolve(requestId: number, decision: PermissionDecision): Promise<void>;
     onPrompt(cb: (p: PermissionPrompt) => void): () => void;
   };
   data: {
