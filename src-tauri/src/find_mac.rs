@@ -86,9 +86,10 @@ where
 /// Issue `findString:withConfiguration:completionHandler:` on the content
 /// WKWebView for tab `id`.
 fn run(app: &AppHandle, id: u32, query: &str, case_sensitive: bool, backwards: bool) {
-    let app = app.clone();
+    let app_for_webview = app.clone();
+    let app_for_callback = app.clone();
     let query_owned = query.to_string();
-    with_content_webview(&app, id, move |wv| {
+    with_content_webview(&app_for_webview, id, move |wv| {
         unsafe {
             // `with_webview` runs on the main thread; MainThreadMarker::new_unchecked
             // is safe here.
@@ -102,7 +103,7 @@ fn run(app: &AppHandle, id: u32, query: &str, case_sensitive: bool, backwards: b
             let ns_query = NSString::from_str(&query_owned);
 
             // Clone what the completion block needs (app is already Clone).
-            let app_cb = app.clone();
+            let app_cb = app_for_callback.clone();
             let q_cb = query_owned.clone();
 
             // RcBlock<dyn Fn(NonNull<WKFindResult>)> derefs to Block<...> == DynBlock<...>.
