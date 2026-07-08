@@ -22,20 +22,24 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest # Apple Silicon
-            args: '--target aarch64-apple-darwin'
-          - platform: macos-latest # Intel
-            args: '--target x86_64-apple-darwin'
+          - platform: macos-15 # Apple Silicon
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: '--target aarch64-apple-darwin --bundles app,dmg'
+          - platform: macos-15 # Intel
+            rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
+            args: '--target x86_64-apple-darwin --bundles app,dmg'
           - platform: ubuntu-24.04
-            args: ''
+            rust_targets: ''
+            args: '--bundles appimage,deb --config src-tauri/tauri.appimage-mediaframework.conf.json'
           - platform: windows-latest
-            args: ''
+            rust_targets: ''
+            args: '--bundles nsis'
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v7
 
-      # Tauri's Linux build links webkit2gtk; install the apt equivalents of the
-      # Fedora deps used in dev.
+      # Tauri's Linux build links webkit2gtk; the GStreamer packages are needed
+      # so bundleMediaFramework can include codecs/sinks in the AppImage.
       - name: Install Linux dependencies
         if: matrix.platform == 'ubuntu-24.04'
         run: |
@@ -45,7 +49,11 @@ jobs:
             libappindicator3-dev \
             librsvg2-dev \
             libxdo-dev \
-            patchelf
+            patchelf \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly
 
       - uses: actions/setup-node@v6
         with:
@@ -54,7 +62,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ matrix.rust_targets }}
 
       - name: Cache cargo
         uses: actions/cache@v6
