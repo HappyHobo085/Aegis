@@ -50,6 +50,7 @@ fn defaults() -> Value {
         "themeMode": "system",
         "syncServerUrl": "",
         "antiFingerprint": "off",
+        "syncIntervalSec": 300,
         "proxy": { "mode": "off", "scheme": "http", "host": "", "port": 8080, "bypassHosts": [] }
     })
 }
@@ -121,6 +122,14 @@ pub fn sync_server_url<R: Runtime>(app: &AppHandle<R>) -> String {
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string()
+}
+
+/// The sync interval in seconds (default 300 = 5 minutes). 0 disables periodic sync.
+pub fn sync_interval_sec<R: Runtime>(app: &AppHandle<R>) -> u64 {
+    load(app)
+        .get("syncIntervalSec")
+        .and_then(Value::as_u64)
+        .unwrap_or(300)
 }
 
 /// Minutes a background tab may idle before discard (0 disables). Default 30.

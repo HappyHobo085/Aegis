@@ -30,7 +30,7 @@ jobs:
             args: '--target x86_64-apple-darwin --bundles app,dmg'
           - platform: ubuntu-24.04
             rust_targets: ''
-            args: '--bundles appimage,deb --config src-tauri/tauri.appimage-mediaframework.conf.json'
+            args: '--bundles appimage,deb,rpm --config src-tauri/tauri.appimage-mediaframework.conf.json'
           - platform: windows-latest
             rust_targets: ''
             args: '--bundles nsis'
@@ -50,6 +50,7 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             patchelf \
+            rpm \
             gstreamer1.0-libav \
             gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad \

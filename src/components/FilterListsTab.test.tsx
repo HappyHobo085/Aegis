@@ -23,7 +23,10 @@ const props = (over: Partial<React.ComponentProps<typeof FilterListsTab>> = {}) 
   setEnabled: vi.fn(async () => {}),
   add: vi.fn(async () => {}),
   remove: vi.fn(async () => {}),
-  updateNow: vi.fn<[], Promise<ListUpdateResult>>(async () => ({ perSource: [], lastUpdated: 0 })),
+  updateNow: vi.fn<() => Promise<ListUpdateResult>>(async () => ({
+    perSource: [],
+    lastUpdated: 0,
+  })),
   ...over,
 });
 
@@ -145,7 +148,7 @@ describe('FilterListsTab', () => {
   });
 
   it('force-update-all calls updateNow and renders the per-source results', async () => {
-    const updateNow = vi.fn<[], Promise<ListUpdateResult>>(async () => ({
+    const updateNow = vi.fn<() => Promise<ListUpdateResult>>(async () => ({
       perSource: [
         { listId: 'easylist', ok: true },
         { listId: 'easyprivacy', ok: false, error: 'timeout' },

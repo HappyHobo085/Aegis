@@ -25,11 +25,13 @@ function fake(): AutopilotControl {
     setSitePermissions: vi.fn(),
     setAllowlistedHosts: vi.fn(),
     setDownloadEntries: vi.fn(),
+    setVaultRecords: vi.fn(),
+    setFingerprintState: vi.fn(),
   };
 }
 
 afterEach(() => {
-  delete (window as Record<string, unknown>).__aegisAutopilot;
+  delete (window as unknown as Record<string, unknown>).__aegisAutopilot;
 });
 
 describe('autopilot control surface', () => {

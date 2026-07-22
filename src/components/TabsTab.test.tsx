@@ -13,6 +13,9 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   downloadDir: '',
   httpsOnly: true,
   tabIdleTimeout: 30,
+  webrtcPolicy: 'public-only',
+  themeMode: 'dark',
+  antiFingerprint: 'off',
   ...over,
 });
 

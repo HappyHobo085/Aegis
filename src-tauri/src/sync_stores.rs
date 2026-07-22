@@ -1,7 +1,7 @@
 //! The merge seam the sync engine (F2b) consumes. F2a freezes this contract:
 //!   - `SYNCABLE` — the array stores that sync (each a `load_synced` JSON array of records
 //!     carrying `uuid`/`hlc`/`deleted`). `downloads` is intentionally NOT here — its
-//!     `savePath` is device-specific (it gets the envelope for delete-hygiene only; §9.4).
+//!     `savePath` is device-specific (it gets the envelope for delete-hygiene only; §9.4)
 //!     The two special projections sync through their own modules: per-key settings
 //!     (`settings::sync_records` / `apply_synced`) and the single custom-filter record
 //!     (`customfilters`).
@@ -29,13 +29,13 @@ pub fn read_all<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
     crate::jsonstore::load_synced(app, name)
 }
 
-/// Pure HLC-LWW merge: fold `remote` into `local`, returning the merged array + the
-/// uuids that changed. AppHandle-free so the merge rules are deterministically testable.
-/// Advances the global HLC clock by observing each remote stamp (so a later local edit
-/// dominates a record we just received).
+/// HLC-LWW merge: fold `remote` into `local`, returning the merged array + the
+/// uuids that changed. Advances the global HLC clock by observing each remote stamp
+/// (so a later local edit dominates a record we just received).
 fn merge_records(
     mut local: Vec<Value>,
     remote: &[Value],
+    store_name: &str,
     node: &str,
     now_ms: i64,
 ) -> (Vec<Value>, Vec<String>) {
@@ -75,7 +75,7 @@ fn merge_records(
             None => {
                 let mut incoming = r.clone();
                 if incoming.get("id").is_some() {
-                    let fresh = crate::jsonstore::next_id(&local);
+                    let fresh = crate::jsonstore::next_id_optimized(&local, store_name);
                     if let Some(obj) = incoming.as_object_mut() {
                         obj.insert("id".into(), Value::from(fresh)); // avoid id collision
                     }
@@ -93,7 +93,8 @@ fn merge_records(
 pub fn merge_into<R: Runtime>(app: &AppHandle<R>, name: &str, remote: &[Value]) -> Vec<String> {
     let node = crate::sync_identity::node_id(app);
     let local = read_all(app, name);
-    let (mut merged, mut changed) = merge_records(local, remote, &node, crate::jsonstore::now_ms());
+    let (mut merged, mut changed) =
+        merge_records(local, remote, name, &node, crate::jsonstore::now_ms());
     // Collapse cross-device duplicates (same normalized url/host): tombstone the losers so the
     // deletion converges across devices. Idempotent — tombstoned losers are skipped next pass.
     let losers = duplicate_losers(&merged, key_field_for(name));
@@ -208,6 +209,7 @@ fn duplicate_losers(records: &[Value], key_field: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::with_tmp_app;
     use serde_json::json;
 
     fn drec(uuid: &str, key: &str, key_field: &str, wall: i64, deleted: bool) -> Value {
@@ -315,7 +317,7 @@ mod tests {
     fn merge_inserts_new_uuids() {
         let local = vec![rec("a", 1, false, "local-a")];
         let remote = vec![rec("b", 1, false, "remote-b")];
-        let (merged, changed) = merge_records(local, &remote, "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
         assert_eq!(changed, vec!["b".to_string()]);
         assert_eq!(merged.len(), 2);
     }
@@ -325,17 +327,17 @@ mod tests {
         // Remote newer → replace (and the payload updates).
         let local = vec![rec("a", 1, false, "old")];
         let remote = vec![rec("a", 5, false, "new")];
-        let (merged, changed) = merge_records(local, &remote, "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
         assert_eq!(changed, vec!["a".to_string()]);
         assert_eq!(
             merged[0].get("payload").and_then(Value::as_str),
             Some("new")
         );
 
-        // Remote older → ignored (no change).
+        // Older remote → ignored (no change).
         let local = vec![rec("a", 9, false, "keep")];
         let remote = vec![rec("a", 2, false, "stale")];
-        let (merged, changed) = merge_records(local, &remote, "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
         assert!(changed.is_empty());
         assert_eq!(
             merged[0].get("payload").and_then(Value::as_str),
@@ -348,7 +350,7 @@ mod tests {
         // A newer remote tombstone deletes a live local record.
         let local = vec![rec("a", 1, false, "live")];
         let remote = vec![rec("a", 5, true, "live")];
-        let (merged, changed) = merge_records(local, &remote, "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
         assert_eq!(changed, vec!["a".to_string()]);
         assert!(crate::jsonstore::is_deleted(&merged[0]));
         // live() then hides it.
@@ -366,7 +368,7 @@ mod tests {
             "id": 1, "uuid": "remote-uuid",
             "hlc": { "wall_ms": 1, "counter": 0, "node": "b" }, "deleted": false
         })];
-        let (merged, changed) = merge_records(local, &remote, "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
         assert_eq!(changed, vec!["remote-uuid".to_string()]);
         assert_eq!(merged.len(), 2);
         // The two records keep distinct ids so a renderer `remove {id}` can't hit both.
@@ -392,7 +394,7 @@ mod tests {
             "id": 99, "uuid": "u", "payload": "new",
             "hlc": { "wall_ms": 5, "counter": 0, "node": "b" }, "deleted": false
         })];
-        let (merged, _) = merge_records(local, &remote, "n", 100);
+        let (merged, _) = merge_records(local, &remote, "test", "n", 100);
         assert_eq!(
             merged[0].get("payload").and_then(Value::as_str),
             Some("new")
@@ -408,7 +410,7 @@ mod tests {
     fn merge_skips_records_missing_uuid_or_hlc() {
         let local: Vec<Value> = vec![];
         let remote = vec![json!({ "payload": "no-meta" }), rec("ok", 1, false, "x")];
-        let (merged, changed) = merge_records(local, &remote, "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
         assert_eq!(changed, vec!["ok".to_string()]); // only the well-formed one
         assert_eq!(merged.len(), 1);
     }

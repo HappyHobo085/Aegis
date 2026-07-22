@@ -67,7 +67,7 @@ unsafe fn handle(
         redirected.as_bool(),
     ) {
         args.SetCancel(true)?;
-        crate::redirect_guard::on_blocked(app, id, &from, &target);
+        crate::redirect_guard::on_blocked_redirect_to_new_tab(app, id, &from, &target);
     }
     Ok(())
 }

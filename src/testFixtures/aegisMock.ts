@@ -224,6 +224,10 @@ export function aegisMockModule() {
           .fn()
           .mockResolvedValue({ level: 'off', allowlistedHosts: [] } satisfies FingerprintState),
       },
+      form: {
+        detectLoginForm: vi.fn().mockResolvedValue({ hasLoginForm: false, domain: undefined }),
+        onLoginFormDetected: vi.fn().mockReturnValue(() => {}),
+      },
       proxy: (() => {
         const baseProxyState: ProxyState = {
           mode: 'off',

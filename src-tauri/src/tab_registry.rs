@@ -17,6 +17,10 @@ struct Tab {
     /// background and never activated — its creation time. (Unused while the tab
     /// is active.) Drives the time-based idle sweep.
     last_active: u64,
+    /// Time when the tab was created (monotonic ms since app start).
+    created_at: u64,
+    /// True if the tab was created in the background (e.g., via on_new_window).
+    background_creation: bool,
     /// Per-tab navigation history: list of visited URLs.
     history: Vec<String>,
     /// Index into `history` of the currently-displayed page.
@@ -92,6 +96,8 @@ impl Registry {
                 pinned: false,
                 live: true,
                 last_active: 0,
+                created_at: 0,
+                background_creation: false,
                 history: vec![home_url.clone()],
                 hist_index: 0,
                 private: false,
@@ -122,6 +128,15 @@ impl Registry {
                 live: p.id == active_id, // only the active tab is eagerly live
                 last_active: 0,
                 private: false, // restored tabs are never private
+                // For restored tabs, we don't know the original creation time
+                // or whether they were background-created, so we use safe defaults:
+                // - created_at set to 1 (non-zero to differ from last_active=0 below)
+                // - background_creation set to false (assume not from on_new_window)
+                // This prevents the special 30s background timeout from applying
+                // to restored tabs unless/until they are actually background-created
+                // and never activated in the current session.
+                created_at: 1,
+                background_creation: false,
             })
             .collect();
         let mut r = Registry {
@@ -228,8 +243,10 @@ impl Registry {
             url: url.clone(),
             title: String::new(),
             pinned: false,
-            live: true,
+            live: !background,
             last_active: now_ms,
+            created_at: now_ms,
+            background_creation: background,
             history: vec![url.clone()],
             hist_index: 0,
             private,
@@ -252,16 +269,27 @@ impl Registry {
         if id == self.active_id || self.idx(id).is_none() {
             return None;
         }
-        if let Some(i) = self.idx(self.active_id) {
-            self.tabs[i].last_active = now_ms;
+        // Update the previously active tab's last_active
+        if let Some(prev_i) = self.idx(self.active_id) {
+            self.tabs[prev_i].last_active = now_ms;
         }
         self.active_id = id;
         let i = self.idx(id).unwrap();
-        if self.tabs[i].live {
+        let tab = &mut self.tabs[i];
+        // Mark this tab as now active: update its last_active and clear background_creation flag
+        // (if it was a background-created tab, after first activation it becomes a normal tab)
+        let was_background = tab.background_creation;
+        tab.last_active = now_ms;
+        if was_background {
+            // After first activation, it is no longer considered a "never-activated" background tab
+            tab.background_creation = false;
+        }
+        if tab.live {
             None
         } else {
-            self.tabs[i].live = true;
-            Some(self.tabs[i].url.clone())
+            // This tab was asleep (background-created and not yet activated) -> need to spawn its webview
+            tab.live = true;
+            Some(tab.url.clone())
         }
     }
 
@@ -388,29 +416,45 @@ impl Registry {
     }
 
     /// Discard live, non-active, non-pinned, non-private tabs idle for >= timeout_ms.
-    /// `timeout_ms == 0` disables. Returns ids whose webviews the caller must close().
+    /// Additionally, background-created tabs that have never been activated are
+    /// discarded after 30 seconds regardless of the timeout setting.
+    /// `timeout_ms == 0` disables the standard timeout (but not the 30-second background timeout).
+    /// Returns ids whose webviews the caller must close().
     /// Private tabs are never discarded: their ephemeral session data is gone once the
     /// webview closes, and re-creating a new ephemeral partition on reload would leak
     /// that a private tab exists and expose a blank fresh context instead of the
     /// expected page — contrary to user expectations.
+    /// Discard tabs that have timed out.
+    /// Returns IDs of tabs whose webviews should be closed and which should be removed from the registry.
     pub fn sweep_idle(&mut self, now_ms: u64, timeout_ms: u64) -> Vec<ViewId> {
-        if timeout_ms == 0 {
-            return Vec::new();
-        }
+        let mut to_remove = Vec::new();
         let active = self.active_id;
-        let mut victims = Vec::new();
         for t in self.tabs.iter_mut() {
-            if t.live
-                && t.id != active
-                && !t.pinned
-                && !t.private
-                && now_ms.saturating_sub(t.last_active) >= timeout_ms
-            {
-                t.live = false;
-                victims.push(t.id);
+            // Skip active, pinned, private tabs
+            if t.id == active || t.pinned || t.private {
+                continue;
+            }
+            if t.background_creation {
+                const BACKGROUND_TIMEOUT_MS: u64 = 30_000; // 30 seconds
+                if now_ms.saturating_sub(t.created_at) >= BACKGROUND_TIMEOUT_MS {
+                    // Timed out due to being background-created and never activated
+                    to_remove.push(t.id);
+                }
+            } else {
+                // Normal idle timeout (only applies to tabs that are not background-created)
+                if timeout_ms != 0 && now_ms.saturating_sub(t.last_active) >= timeout_ms {
+                    t.live = false;
+                    to_remove.push(t.id);
+                }
             }
         }
-        victims
+        to_remove
+    }
+
+    /// Remove the given tab IDs from the registry.
+    /// This does NOT close their webviews; callers should do that before invoking this method.
+    pub fn remove_tabs(&mut self, ids: &[ViewId]) {
+        self.tabs.retain(|t| !ids.contains(&t.id));
     }
 
     /// Reopen the most-recently-closed tab (Ctrl+Shift+T). Returns its (id, url).
@@ -428,9 +472,12 @@ impl Registry {
                 pinned: c.pinned,
                 live: true,
                 last_active: now_ms,
+                created_at: now_ms,
+                background_creation: false,
                 history: vec![c.url.clone()],
                 hist_index: 0,
-                private: false, // reopened tabs are never private
+                // reopened tabs are never private
+                private: false,
             },
         );
         if let Some(i) = self.idx(self.active_id) {
@@ -786,6 +833,28 @@ mod tests {
         assert_eq!(r.is_private(p), Some(true));
         assert_eq!(r.is_private(1), Some(false));
         assert_eq!(r.is_private(9999), None);
+    }
+
+    #[test]
+    fn sweep_discards_background_never_activated_tabs_after_30_seconds() {
+        let mut r = reg(); // tab 1 (active, created at 0)
+                           // Create a tab in the background at time 0 (should become active_id=2)
+        let (bg_id, _) = r.create(Some("https://background.test/".into()), true, 0);
+        // Now advance time to 31 seconds past creation (31000 ms)
+        // The background tab has never been activated, so last_active == created_at == 0
+        // With the special 30-second timeout, it should be swept
+        let victims = r.sweep_idle(31000, 0); // timeout_ms=0 disables normal timeout
+        assert_eq!(victims, vec![bg_id]);
+        assert!(
+            !r.tabs_state()
+                .tabs
+                .iter()
+                .find(|t| t.id == bg_id)
+                .unwrap()
+                .live
+        );
+        // The original tab should still be live (it's active)
+        assert!(r.tabs_state().tabs.iter().find(|t| t.id == 1).unwrap().live);
     }
 
     #[test]

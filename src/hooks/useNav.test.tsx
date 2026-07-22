@@ -4,11 +4,11 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
 import type { NavState, Settings } from '../../shared/types';
 
-const navigate = vi.fn(async () => {});
-const back = vi.fn(async () => {});
-const forward = vi.fn(async () => {});
-const reloadOrStop = vi.fn(async () => {});
-const home = vi.fn(async () => {});
+const navigate = vi.fn(async (..._args: any[]) => {});
+const back = vi.fn(async (..._args: any[]) => {});
+const forward = vi.fn(async (..._args: any[]) => {});
+const reloadOrStop = vi.fn(async (..._args: any[]) => {});
+const home = vi.fn(async (..._args: any[]) => {});
 const getState = vi.fn();
 const onState = vi.fn();
 const settingsGet = vi.fn();
@@ -51,6 +51,11 @@ const baseSettings: Settings = {
   searchEngines: [],
   hideChromeByDefault: false,
   downloadDir: '',
+  httpsOnly: false,
+  tabIdleTimeout: 0,
+  webrtcPolicy: 'public-only',
+  themeMode: 'dark',
+  antiFingerprint: 'off',
 };
 
 beforeEach(() => {

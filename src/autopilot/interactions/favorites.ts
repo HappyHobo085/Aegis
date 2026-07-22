@@ -2,6 +2,7 @@
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
 import type { Favorite } from '../../../shared/types';
 import { nudgeSync, waitFor, fixtureUrl, activeViewId } from './helpers';
+import { AdaptiveTimeout } from '../timeout';
 
 export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
   // ─── Task 5: favorites bar/manager + sidebar history ────────────────────
@@ -66,7 +67,7 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
         // Live: poll the ACTIVE view (the one the chip's nav.navigate targets) until its url
         // carries the favorite's ?ap=favopen marker; then clean up.
         const vid = await activeViewId(ctx);
-        const deadline = Date.now() + 8000;
+        const deadline = Date.now() + AdaptiveTimeout.ms(8000);
         while (Date.now() < deadline) {
           const { url } = await ctx.aegis.nav.getState(vid);
           if (url.includes('ap=favopen')) {

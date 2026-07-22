@@ -38,7 +38,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   document.documentElement.classList.remove('aegis-mobile');
-  delete (window as Record<string, unknown>).__aegisAutopilot;
+  delete (window as unknown as Record<string, unknown>).__aegisAutopilot;
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.resetModules();

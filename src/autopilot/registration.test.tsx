@@ -10,7 +10,7 @@ beforeEach(() => {
   vi.stubEnv('VITE_AEGIS_AUTOPILOT', '1');
 });
 afterEach(() => {
-  delete (window as Record<string, unknown>).__aegisAutopilot;
+  delete (window as unknown as Record<string, unknown>).__aegisAutopilot;
   vi.unstubAllEnvs();
   vi.resetModules();
 });
@@ -20,6 +20,6 @@ describe('control surface registration', () => {
     const { render } = await import('@testing-library/react');
     const { App } = await import('../App');
     render(<App />);
-    expect((window as Record<string, unknown>).__aegisAutopilot).toBeDefined();
+    expect((window as unknown as Record<string, unknown>).__aegisAutopilot).toBeDefined();
   });
 });

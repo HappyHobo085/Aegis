@@ -13,6 +13,8 @@
 //! took. Legit redirect chains (a user-clicked OAuth/shortener bounce, or an
 //! address-bar nav that the server redirects) stay allowed because their chain
 //! ORIGIN was a user gesture or an app-initiated nav.
+use crate::tabs::dispatch;
+use serde_json;
 use tauri::{AppHandle, Manager, Url};
 
 /// The core cross-origin test, exposed for Android's JNI hook (which has reliable
@@ -226,16 +228,22 @@ pub fn expect(app: &AppHandle, tab: u32, url: &str) {
     }
 }
 
-/// Emit the `redirect.blocked` event so the chrome can raise its notification bar.
-pub fn on_blocked(app: &AppHandle, tab: u32, from: &str, to: &str) {
-    if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
-        eprintln!("[aegis-redirect] BLOCK {to} (from {from})");
-    }
-    crate::emit_event(
+/// When a redirect would be blocked, open it in a new tab instead of showing UI.
+/// This prevents the navigation in the current tab (for security) while providing
+/// the content in a new tab for user convenience.
+pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, _to: &str) {
+    // Open the redirect URL in a new tab
+    let _ = dispatch(
         app,
-        "redirect.blocked",
-        serde_json::json!({ "viewId": tab, "from": from, "to": to }),
+        "tabs.create",
+        &serde_json::json!({
+            "url": _to,
+            "background": true,
+            "private": false
+        }),
     );
+    // Note: We intentionally do NOT emit the redirect.blocked event
+    // to avoid showing the blocking UI, fulfilling the "no blocking" request
 }
 
 /// Linux two-phase correlation: the gesture/redirect type live on `NavigationAction`,

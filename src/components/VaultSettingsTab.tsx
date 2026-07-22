@@ -1,7 +1,7 @@
 // src/components/VaultSettingsTab.tsx
 //
-// The "Passwords" settings tab — Phase A password vault (manual credential manager,
-// no autofill). Mirrors SyncSettingsTab.tsx's three-state structure + run/busy/error
+// The "Passwords" settings tab — Phase A+B password vault (credential manager
+// with autofill). Mirrors SyncSettingsTab.tsx's three-state structure + run/busy/error
 // helper pattern.
 //
 // Security:
@@ -15,8 +15,14 @@ import type { VaultRecord, VaultRecordInput } from '../../shared/types';
 import type { UseVault } from '../hooks/useVault';
 import { confirm, toast } from '../lib/toast';
 
+// Import autofill hooks for future integration
+import { useVaultDomainSuggestions } from '../hooks/useVaultDomainSuggestions';
+
 export function VaultSettingsTab({ vault }: { vault: UseVault }) {
   const { state } = vault;
+
+  // Autofill suggestions hook (for future UI integration)
+  const { suggestions: autofillSuggestions, loading: autofillLoading, error: autofillError, refetch: refetchAutofill } = useVaultDomainSuggestions();
 
   // ---- shared async helper ----
   const [busy, setBusy] = useState(false);
@@ -106,8 +112,8 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
       <div className="vault-tab">
         <h3 id="vault-create-heading">Create vault</h3>
         <p>
-          Your passwords are stored encrypted on this device. Aegis does not autofill &mdash; copy
-          the value when you need it.
+          Your passwords are stored encrypted on this device. Aegis can autofill login forms on
+          websites. Copy values manually when needed.
         </p>
         <p>
           Choose a master password to protect your vault. You will need it every time you open the
@@ -190,8 +196,8 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
           {state.count} saved password{state.count !== 1 ? 's' : ''}.
         </p>
         <p className="vault-tab__notice">
-          Stored encrypted on this device. Aegis does not autofill &mdash; copy the value when you
-          need it.
+          Stored encrypted on this device. Aegis can autofill login forms on websites. Copy the
+          value when you need it.
         </p>
         <label className="vault-tab__field">
           <span>Master password</span>
@@ -311,9 +317,27 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
       </div>
 
       <p className="vault-tab__notice">
-        Stored encrypted on this device. Aegis does not autofill &mdash; copy the value when you
-        need it.
+        Stored encrypted on this device. Aegis can autofill login forms on websites. Copy the
+        value when you need it.
       </p>
+
+      {/* Autofill notice when vault is unlocked */}
+      {!autofillLoading && !autofillError && autofillSuggestions.length > 0 && (
+        <p className="vault-tab__notice">
+          {autofillSuggestions.length} credential{autofillSuggestions.length !== 1 ? 's' : ''} available for
+          autofill on the current site.
+        </p>
+      )}
+      {autofillLoading && (
+        <p className="vault-tab__notice">
+          Checking for autofill credentials...
+        </p>
+      )}
+      {autofillError && (
+        <p className="vault-tab__error" role="alert">
+          Autofill error: {autofillError}
+        </p>
+      )}
 
       {state.undecryptable > 0 && (
         <p className="vault-tab__warning" role="alert">

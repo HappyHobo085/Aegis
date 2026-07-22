@@ -1,5 +1,8 @@
 export type ViewId = number;
+
 export const PRIMARY_VIEW_ID: ViewId = 1;
+// Debounce window for deduplication in milliseconds
+export const DEDUP_WINDOW_MS = 300;
 
 /** https/http are full-navigation schemes; about:blank handled explicitly. */
 export const ALLOWED_NAV_SCHEMES = ['https:', 'http:'] as const;
@@ -115,6 +118,7 @@ export const IPC = {
   syncUnlock: 'sync.unlock',
   syncDisable: 'sync.disable',
   syncNow: 'sync.syncNow',
+  scanNow: 'sync.scanNow',
   syncTestConnection: 'sync.testConnection',
   syncGetRecoveryPhrase: 'sync.getRecoveryPhrase',
   syncListDevices: 'sync.listDevices',
@@ -122,6 +126,9 @@ export const IPC = {
   // events (main -> chrome): engine state + a targeted post-merge change notice
   evtSyncState: 'sync.state',
   evtSyncChanged: 'sync.changed',
+  // form detection (main <- chrome)
+  formDetectLoginForm: 'form.detectLoginForm',
+  evtFormDetectResult: 'form.detected',
   // find-in-page (chrome -> main; Task 9+ wires the Rust/Kotlin back-ends)
   findStart: 'find.start',
   findNext: 'find.next',
@@ -146,6 +153,9 @@ export const IPC = {
   vaultRemove: 'vault.remove',
   vaultSearch: 'vault.search',
   evtVaultState: 'vault.state',
+  // Phase B: Autofill
+  vaultAutofill: 'vault.autofill',
+  vaultAutofillSuggestions: 'vault.autofillSuggestions',
   // fingerprint per-site allowlist (chrome -> main)
   fingerprintGetState: 'fingerprint.getState',
   fingerprintToggleAllowlist: 'fingerprint.toggleAllowlist',
@@ -272,7 +282,6 @@ export interface ZoomState {
   viewId: ViewId;
   factor: number; // clamped to [0.5, 3.0]
 }
-
 export interface FingerprintState {
   level: string; // 'off' | 'standard' | 'strict'
   allowlistedHosts: string[];
@@ -317,6 +326,48 @@ export interface VaultRecordInput {
   username: string;
   password: string;
   notes?: string;
+}
+
+/** Result of login form detection in content webview */
+export interface FormLoginDetectedResult {
+  /** Whether a login form was detected */
+  hasLoginForm: boolean;
+  /** The domain associated with the login form (if any) */
+  domain?: string;
+}
+
+/** Payment method data from Payment Request API */
+export interface PaymentMethod {
+  /** The payment method identifier (e.g., "basic-card") */
+  method: string;
+  /** The payment method details (format depends on the method) */
+  details: Record<string, any>;
+  /** Optional shipping address */
+  shippingAddress?: {
+    country: string;
+    addressLine: string[];
+    region: string;
+    city: string;
+    dependentLocality?: string;
+    postalCode: string;
+    organization?: string;
+    recipient?: string;
+    phone?: string;
+  };
+  /** Optional payer information */
+  payerName?: string;
+  payerEmail?: string;
+  payerPhone?: string;
+}
+
+/** Security interstitial payload shown for security warnings */
+export interface SecurityInterstitialPayload {
+  /** The URL that triggered the security warning */
+  url: string;
+  /** The security issue type */
+  reason: 'malware' | 'unwanted-software' | 'social-engineering' | 'uncommon-download' | 'potentially-harmful-app';
+  /** Optional message to display to the user */
+  message?: string;
 }
 
 // ---- adblock data model ----
@@ -395,6 +446,7 @@ export interface SearchEngine {
   template: string; // contains %s
 }
 
+/* eslint-disable @typescript-eslint/no-unused-vars */
 export interface Settings {
   homeUrl: string;
   primaryColor: string;
@@ -406,16 +458,16 @@ export interface Settings {
   /** Minutes a background tab may sit idle before it is discarded (reloaded on
    * return). 0 disables time-based discard. */
   tabIdleTimeout: number;
-  /** WebRTC IP-leak policy. `'public-only'` (default) filters local/private ICE
+  /** WebRTC IP-leak policy. 'public-only' (default) filters local/private ICE
    * candidates so a page can't read your LAN/loopback IP, while keeping TURN/relay
-   * candidates so calls still work; `'disable'` blocks WebRTC construction entirely
-   * (breaks video calls); `'default'` applies no filtering. */
+   * candidates so calls still work; 'disable' blocks WebRTC construction entirely
+   * (breaks video calls); 'default' applies no filtering. */
   webrtcPolicy: 'default' | 'public-only' | 'disable';
-  /** Chrome theme: `'system'` (default) follows the OS via `prefers-color-scheme`,
-   * `'dark'` / `'light'` force a palette. Renderer-only — the resolved palette is a
+  /** Chrome theme: 'system' (default) follows the OS via `prefers-color-scheme`,
+   * 'dark' / 'light' force a palette. Renderer-only — the resolved palette is a
    * `data-theme` attribute on <html> (see src/lib/theme.ts). */
   themeMode: 'system' | 'dark' | 'light';
-  /** Anti-fingerprinting (farbling) level. Default `'off'` (opt-in) — standard and
+  /** Anti-fingerprinting (farbling) level. Default 'off' (opt-in) — standard and
    * strict add per-session CSPRNG noise to canvas/audio/WebGL read surfaces so a
    * site sees a stable-but-unique fingerprint within a session rather than the real
    * value. Honest limit: a same-world JS shim is detectable; see src-tauri/CLAUDE.md. */
@@ -426,7 +478,8 @@ export interface Settings {
   syncServerUrl?: string;
 }
 
-/** Engine status for the Sync settings UI. The server only stores ciphertext. */
+// Duplicate interface definition removed
+
 export interface SyncState {
   enabled: boolean;
   status: 'disabled' | 'idle' | 'syncing' | 'error';
@@ -618,6 +671,7 @@ export interface AegisApi {
     unlock(opts: { passphrase: string }): Promise<SyncState>;
     disable(opts?: { forget?: boolean }): Promise<SyncState>;
     syncNow(): Promise<SyncState>;
+    scanNow(): Promise<SyncState>;
     testConnection(url: string): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
     /** Highest-sensitivity: gated on an explicit confirm. */
     getRecoveryPhrase(opts: { confirm: boolean }): Promise<{ recoveryPhrase: string }>;
@@ -656,6 +710,8 @@ export interface AegisApi {
     update(uuid: string, partial: Partial<VaultRecordInput>): Promise<VaultRecord[]>;
     remove(uuid: string): Promise<VaultRecord[]>;
     search(q: string): Promise<VaultRecord[]>;
+    autofill(options: { domain: string; username?: string }): Promise<VaultRecord[]>;
+    autofillSuggestions(options: { q: string }): Promise<VaultRecord[]>;
     onState(cb: (s: VaultState) => void): () => void;
   };
   fingerprint: {
@@ -673,10 +729,11 @@ export interface AegisApi {
     ): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
     onState(cb: (s: ProxyState) => void): () => void;
   };
-}
-
-declare global {
-  interface Window {
-    aegis: AegisApi;
-  }
+  /** Form detection for autofill triggering */
+  form: {
+    /** Trigger a login form scan in the current content webview */
+    detectLoginForm(): Promise<{ hasLoginForm: boolean; domain?: string }>;
+    /** Subscribe to login form detection events */
+    onLoginFormDetected(cb: (result: { hasLoginForm: boolean; domain?: string }) => void): () => void;
+  };
 }

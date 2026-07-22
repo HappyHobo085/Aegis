@@ -1,6 +1,6 @@
 // src/autopilot/devEmit.test.ts
 import { describe, it, expect, vi } from 'vitest';
-const invoke = vi.fn(async () => undefined);
+const invoke = vi.fn(async (..._args: unknown[]) => undefined);
 vi.mock('@tauri-apps/api/core', () => ({ invoke: (...a: unknown[]) => invoke(...a) }));
 
 import { screenshot, emitEvent, writeReport, done } from './devEmit';

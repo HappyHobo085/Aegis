@@ -15,6 +15,7 @@ const panels = () => ({
   downloads: <div data-testid="panel-downloads">DOWNLOADS</div>,
   sitePermissions: <div data-testid="panel-sitePermissions">SITE PERMISSIONS</div>,
   security: <div data-testid="panel-security">SECURITY</div>,
+  proxy: <div data-testid="panel-proxy">PROXY</div>,
   vault: <div data-testid="panel-vault">VAULT</div>,
   sync: <div data-testid="panel-sync">SYNC</div>,
   data: <div data-testid="panel-data">DATA</div>,
@@ -98,7 +99,7 @@ describe('SettingsModal', () => {
     render(<SettingsModal {...p} />);
     await userEvent.click(screen.getByRole('button', { name: /^close$/i }));
     expect(p.onClose).toHaveBeenCalledTimes(1);
-    p.onClose.mockClear();
+    (p.onClose as ReturnType<typeof vi.fn>).mockClear();
     await userEvent.keyboard('{Escape}');
     expect(p.onClose).toHaveBeenCalledTimes(1);
   });

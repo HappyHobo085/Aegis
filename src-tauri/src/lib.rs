@@ -3,6 +3,8 @@ mod adblock;
 // every ad-block tier blocks from the identical set across all platforms.
 mod adblock_convert;
 mod adblock_lists;
+// Form detection for autofill triggering
+mod form;
 // Chromium-side network ad-blocking engine (`should_block`). Used by Android (JNI
 // export) and Windows (WebView2 interception, adblock_win) for full request blocking,
 // and by ALL desktop platforms to drop ad/tracker pop-unders in nav::on_new_window.
@@ -129,6 +131,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = nav::dispatch(&app, &channel, &payload) {
         return result;
     }
+    if let Some(result) = form::dispatch(&app, &channel, &payload) {
+        return result;
+    }
     if let Some(result) = find::dispatch(&app, &channel, &payload) {
         return result;
     }
@@ -189,7 +194,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = proxy::dispatch(&app, &channel, &payload) {
         return result;
     }
-
     let v = match channel.as_str() {
         "lists.updateNow" => {
             // Non-blocking: starts a background refresh, result arrives via lists.updateResult.
@@ -561,6 +565,10 @@ pub fn run() {
         history::start_flush(app.handle());
         // Same batching for downloads (per-event full-file fsync → periodic flush).
         downloads::start_flush(app.handle());
+
+        // Form detection: install the event listener that bridges detection
+        // results from the content webview's JS emit back to waiting IPC calls.
+        form::install_listener(app.handle());
 
         // Tauri child-webview auto-resize is incomplete; recompute bounds on
         // window resize so the content view keeps filling the area below the chrome.

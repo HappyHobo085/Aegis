@@ -26,9 +26,9 @@ function makeRecord(over: Partial<VaultRecord> = {}): VaultRecord {
 }
 
 // ---- state presets ----
-const noVault: VaultState = { exists: false, unlocked: false, count: 0 };
-const locked: VaultState = { exists: true, unlocked: false, count: 2 };
-const unlocked: VaultState = { exists: true, unlocked: true, count: 1 };
+const noVault: VaultState = { exists: false, unlocked: false, count: 0, undecryptable: 0 };
+const locked: VaultState = { exists: true, unlocked: false, count: 2, undecryptable: 0 };
+const unlocked: VaultState = { exists: true, unlocked: true, count: 1, undecryptable: 0 };
 
 // ---- fake hook factory ----
 function fakeVault(over: Partial<UseVault> = {}): UseVault {
@@ -154,9 +154,9 @@ describe('VaultSettingsTab — unlocked', () => {
     return render(<VaultSettingsTab vault={fakeVault({ state: unlocked, ...vaultOver })} />);
   }
 
-  it('renders the no-autofill notice', () => {
+  it('renders the autofill notice', () => {
     renderUnlocked();
-    expect(screen.getByText(/does not autofill/i)).toBeInTheDocument();
+    expect(screen.getByText(/can autofill/i)).toBeInTheDocument();
   });
 
   it('warns when some records could not be decrypted (preserved, not lost)', () => {
@@ -219,7 +219,7 @@ describe('VaultSettingsTab — unlocked', () => {
   it('displays loaded records — passwords masked by default', async () => {
     const record = makeRecord();
     const list = vi.fn(async () => [record]);
-    renderUnlocked({ list, state: { exists: true, unlocked: true, count: 1 } });
+    renderUnlocked({ list, state: { exists: true, unlocked: true, count: 1, undecryptable: 0 } });
     // Trigger list load (simulate unlock done)
     await screen.findByText('https://example.com', {}, { timeout: 200 }).catch(() => {});
     // The component calls list() on mount when unlocked

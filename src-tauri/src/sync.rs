@@ -175,33 +175,29 @@ fn http(
     body: Option<Value>,
     timeout_secs: u64,
 ) -> Result<Value, String> {
-    std::thread::spawn(move || -> Result<Value, String> {
-        let client = reqwest::blocking::Client::builder()
-            .timeout(Duration::from_secs(timeout_secs))
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut req = match method {
-            "GET" => client.get(&url),
-            "POST" => client.post(&url),
-            _ => return Err("bad method".into()),
-        };
-        req = req.header("Authorization", auth);
-        if let Some(b) = body {
-            req = req.json(&b);
-        }
-        let resp = req.send().map_err(|e| e.to_string())?;
-        let status = resp.status();
-        let text = resp.text().unwrap_or_default();
-        if !status.is_success() {
-            return Err(format!("HTTP {status}: {text}"));
-        }
-        if text.is_empty() {
-            return Ok(Value::Null);
-        }
-        serde_json::from_str(&text).map_err(|e| e.to_string())
-    })
-    .join()
-    .map_err(|_| "http thread panicked".to_string())?
+    let client = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut req = match method {
+        "GET" => client.get(&url),
+        "POST" => client.post(&url),
+        _ => return Err("bad method".into()),
+    };
+    req = req.header("Authorization", auth);
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    let resp = req.send().map_err(|e| e.to_string())?;
+    let status = resp.status();
+    let text = resp.text().unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("HTTP {status}: {text}"));
+    }
+    if text.is_empty() {
+        return Ok(Value::Null);
+    }
+    serde_json::from_str(&text).map_err(|e| e.to_string())
 }
 
 fn auth_header(account_id: &str, device_seed: &[u8; 32]) -> Result<String, String> {
@@ -240,63 +236,121 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     }
     let base = server.trim_end_matches('/').to_string();
 
-    // Array stores (favorites/saved/allowlist) — per-uuid HLC-LWW via merge_into.
-    for &ns in sync_stores::SYNCABLE {
-        let dk = crypto::data_key(&root, ns);
-        let changed = sync_ns(
-            app,
-            &base,
-            ns,
-            &dk,
-            &account_id,
-            &device_seed,
-            || sync_stores::read_all(app, ns),
-            |remote| sync_stores::merge_into(app, ns, remote),
-        )?;
-        emit_changed(app, ns, &changed);
-    }
+    // Clone app handle for use in threads (we'll clone it further inside each closure)
+    let app_clone = app.clone();
 
-    // Settings — per-KEY HLC-LWW applied to the flat file.
-    {
-        let dk = crypto::data_key(&root, "settings");
-        let changed = sync_ns(
-            app,
-            &base,
-            "settings",
-            &dk,
-            &account_id,
-            &device_seed,
-            || crate::settings::sync_records(app),
-            |remote| crate::settings::merge_remote(app, remote),
-        )?;
-        emit_changed(app, "settings", &changed);
-    }
+    // Define the three sync operations - clone values separately for each closure
+    let array_stores_op = {
+        let root = root.clone();
+        let account_id = account_id.clone();
+        let device_seed = device_seed.clone();
+        let base = base.clone();
+        let app_clone = app_clone.clone();
+        move || -> Result<Vec<(String, Vec<String>)>, String> {
+            let app = app_clone.clone(); // Clone the app handle for this thread
 
-    // Custom filters — a single record (HLC-LWW).
-    {
-        let dk = crypto::data_key(&root, "customFilters");
-        let changed = sync_ns(
-            app,
-            &base,
-            "customFilters",
-            &dk,
-            &account_id,
-            &device_seed,
-            || vec![crate::customfilters::sync_record(app)],
-            |remote| {
-                let mut ch = Vec::new();
-                for r in remote {
-                    if crate::customfilters::merge_remote(app, r) {
-                        if let Some(u) = r.get("uuid").and_then(Value::as_str) {
-                            ch.push(u.to_string());
+            let mut changed_arrays = Vec::new();
+            for &ns in sync_stores::SYNCABLE {
+                let dk = crypto::data_key(&root, ns);
+                let changed = sync_ns(
+                    &app,
+                    &base,
+                    ns,
+                    &dk,
+                    &account_id,
+                    &device_seed,
+                    || sync_stores::read_all(&app, ns),
+                    |remote| sync_stores::merge_into(&app, ns, remote),
+                )?;
+                changed_arrays.push((ns.to_string(), changed));
+            }
+            Ok(changed_arrays)
+        }
+    };
+
+    let settings_op = {
+        let root = root.clone();
+        let account_id = account_id.clone();
+        let device_seed = device_seed.clone();
+        let base = base.clone();
+        let app_clone = app_clone.clone();
+        move || -> Result<(String, Vec<String>), String> {
+            let app = app_clone.clone(); // Clone the app handle for this thread
+
+            let dk = crypto::data_key(&root, "settings");
+            let changed = sync_ns(
+                &app,
+                &base,
+                "settings",
+                &dk,
+                &account_id,
+                &device_seed,
+                || crate::settings::sync_records(&app),
+                |remote| crate::settings::merge_remote(&app, remote),
+            )?;
+            Ok(("settings".to_string(), changed))
+        }
+    };
+
+    let custom_filters_op = {
+        let root = root.clone();
+        let account_id = account_id.clone();
+        let device_seed = device_seed.clone();
+        let base = base.clone();
+        let app_clone = app_clone.clone();
+        move || -> Result<(String, Vec<String>), String> {
+            let app = app_clone.clone(); // Clone the app handle for this thread
+
+            let dk = crypto::data_key(&root, "customFilters");
+            let changed = sync_ns(
+                &app,
+                &base,
+                "customFilters",
+                &dk,
+                &account_id,
+                &device_seed,
+                || vec![crate::customfilters::sync_record(&app)],
+                |remote| {
+                    let mut ch = Vec::new();
+                    for r in remote {
+                        if crate::customfilters::merge_remote(&app, r) {
+                            if let Some(u) = r.get("uuid").and_then(Value::as_str) {
+                                ch.push(u.to_string());
+                            }
                         }
                     }
-                }
-                ch
-            },
-        )?;
-        emit_changed(app, "customFilters", &changed);
+                    ch
+                },
+            )?;
+            Ok(("customFilters".to_string(), changed))
+        }
+    };
+
+    // Execute the three operations in parallel
+    let array_handles = std::thread::spawn(array_stores_op);
+    let settings_handle = std::thread::spawn(settings_op);
+    let custom_filters_handle = std::thread::spawn(custom_filters_op);
+
+    // Collect results
+    let array_results = array_handles
+        .join()
+        .map_err(|_| "Array stores thread panicked".to_string())?;
+    let settings_result = settings_handle
+        .join()
+        .map_err(|_| "Settings thread panicked".to_string())?;
+    let custom_filters_result = custom_filters_handle
+        .join()
+        .map_err(|_| "Custom filters thread panicked".to_string())?;
+
+    // Emit changed events
+    for (ns, changed) in array_results? {
+        emit_changed(app, &ns, &changed);
     }
+    let (settings_ns, settings_changed) = settings_result?;
+    emit_changed(app, &settings_ns, &settings_changed);
+    let (custom_filters_ns, custom_filters_changed) = custom_filters_result?;
+    emit_changed(app, &custom_filters_ns, &custom_filters_changed);
+
     Ok(())
 }
 
@@ -496,7 +550,9 @@ pub fn start(app: &AppHandle) {
     {
         let app = app.clone();
         std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_secs(300));
+            std::thread::sleep(Duration::from_secs(crate::settings::sync_interval_sec(
+                &app,
+            )));
             nudge(&app);
         });
     }

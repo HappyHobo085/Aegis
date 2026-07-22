@@ -38,7 +38,6 @@ pub fn node_id<R: Runtime>(app: &AppHandle<R>) -> String {
                 let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
                 return id;
             }
-            // No app data dir (shouldn't happen) — a random, non-persisted id.
             uuid::Uuid::new_v4().to_string()
         })
         .clone()

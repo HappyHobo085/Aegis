@@ -31,8 +31,12 @@ pub fn now_ms<R: Runtime>(app: &AppHandle<R>) -> u64 {
 }
 
 fn state_value<R: Runtime>(app: &AppHandle<R>) -> Value {
-    let s: TabsState = app.state::<Tabs>().reg.lock().unwrap().tabs_state();
+    let s: TabsState = state_tabs(app);
     serde_json::to_value(s).unwrap_or(Value::Null)
+}
+
+fn state_tabs<R: Runtime>(app: &AppHandle<R>) -> TabsState {
+    app.state::<Tabs>().reg.lock().unwrap().tabs_state()
 }
 
 /// Emit `tabs.state` + persist the session.
@@ -109,9 +113,20 @@ pub fn is_private<R: Runtime>(app: &AppHandle<R>, id: u32) -> bool {
 /// no-op stub there — see `nav::spawn_tab`), so there's no child webview to close.
 #[cfg(desktop)]
 fn close_webview(app: &AppHandle, id: u32) {
-    if let Some(w) = app.get_webview(&crate::nav::content_label(id)) {
-        let _ = w.close();
+    // Get the webview once to ensure we operate on the same instance throughout
+    let label = crate::nav::content_label(id);
+    let Some(webview) = app.get_webview(&label) else {
+        return;
+    };
+
+    // On Linux, remove the webview from the container before closing to avoid dangling pointers.
+    #[cfg(target_os = "linux")]
+    {
+        let _ = crate::linux_layout::remove_webview_label(app, &label);
     }
+
+    // Close the webview (this should not fail even if already closed)
+    let _ = webview.close();
 }
 
 #[cfg(mobile)]
@@ -142,7 +157,9 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .lock()
                 .unwrap()
                 .create_private(url, background, now, private);
-            spawn(app, id, &u, private);
+            if !background {
+                spawn(app, id, &u, private);
+            }
             crate::view::apply_inset(app); // show the active tab (unchanged when background)
             emit_and_persist(app);
             Some(Ok(state_value(app)))
@@ -257,18 +274,19 @@ pub fn close_tab(app: &AppHandle, id: u32) {
     emit_and_persist(app);
 }
 
-/// Open a URL in a new BACKGROUND tab (from on_new_window / Ctrl-click). Spawns
-/// the webview, emits state + persists, but does NOT change the active tab.
+/// Open a URL in a new BACKGROUND tab (from on_new_window / Ctrl-click). Does NOT spawn
+/// the webview until the tab is activated. Emits state + persists, but does NOT change the
+/// active tab.
 /// A popup from a private tab inherits privateness (`private = true`).
 pub fn open_background(app: &AppHandle, url: &str, private: bool) {
     let now = now_ms(app);
-    let (id, u) = app.state::<Tabs>().reg.lock().unwrap().create_private(
+    let (_id, _u) = app.state::<Tabs>().reg.lock().unwrap().create_private(
         Some(url.to_string()),
         true,
         now,
         private,
     );
-    spawn(app, id, &u, private);
+    // Do not spawn the webview here; it will be spawned when the tab is activated.
     emit_and_persist(app);
 }
 
@@ -304,27 +322,38 @@ pub fn load_session<R: Runtime>(
 /// Start the idle-sweep thread: every 30s, discard tabs idle past the timeout.
 pub fn start_idle_sweep(app: &AppHandle) {
     let app = app.clone();
-    std::thread::spawn(move || loop {
-        std::thread::sleep(std::time::Duration::from_secs(30));
-        let timeout_ms = crate::settings::tab_idle_timeout_min(&app).saturating_mul(60_000);
-        if timeout_ms == 0 {
-            continue;
-        }
-        let now = now_ms(&app);
-        let victims = match app.try_state::<Tabs>() {
-            Some(s) => s.reg.lock().unwrap().sweep_idle(now, timeout_ms),
-            None => continue,
-        };
-        if victims.is_empty() {
-            continue;
-        }
-        let app2 = app.clone();
-        let _ = app.run_on_main_thread(move || {
-            for id in &victims {
-                close_webview(&app2, *id);
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(30));
+            let timeout_ms = crate::settings::tab_idle_timeout_min(&app).saturating_mul(60_000);
+            if timeout_ms == 0 {
+                continue;
             }
-            emit_and_persist(&app2); // strip re-renders the discarded tabs as "asleep"
-        });
+            let now = now_ms(&app);
+            let victims = match app.try_state::<Tabs>() {
+                Some(s) => s.reg.lock().unwrap().sweep_idle(now, timeout_ms),
+                None => continue,
+            };
+            if victims.is_empty() {
+                continue;
+            }
+            let app2 = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                // Close the webviews for the victims
+                for id in &victims {
+                    close_webview(&app2, *id);
+                }
+                // Remove the victims from the registry. Scope the lock so it drops
+                // BEFORE emit_and_persist — state_value() re-acquires the same mutex,
+                // and Rust's Mutex is non-reentrant (same-thread re-lock = deadlock).
+                {
+                    let tabs = app2.state::<Tabs>();
+                    let mut reg = tabs.reg.lock().unwrap();
+                    reg.remove_tabs(&victims);
+                }
+                emit_and_persist(&app2); // strip re-renders the discarded tabs as "asleep"
+            });
+        }
     });
 }
 

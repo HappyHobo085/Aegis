@@ -21,6 +21,8 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::jsonstore;
 
+const MAX_DOWNLOAD_ENTRIES: usize = 1000;
+
 /// In-memory downloads cache (managed state) — the source of truth while the app runs.
 #[derive(Default)]
 pub struct DownloadsStore(Mutex<DlInner>);
@@ -176,7 +178,7 @@ pub fn on_requested<R: Runtime>(
     let url = url.to_string();
     let now = jsonstore::now_ms();
     let changed = mutate(app, false, |items| {
-        let id = jsonstore::next_id(items);
+        let id = jsonstore::next_id_optimized(items, "downloads");
         let mut item = json!({
             "id": id,
             "url": url,
@@ -189,6 +191,14 @@ pub fn on_requested<R: Runtime>(
         });
         jsonstore::stamp_new(&mut item, app);
         items.push(item);
+
+        // Enforce maximum number of entries
+        if items.len() > MAX_DOWNLOAD_ENTRIES {
+            // Remove the oldest entries (from the beginning)
+            let excess = items.len() - MAX_DOWNLOAD_ENTRIES;
+            items.drain(0..excess);
+        }
+
         true
     });
     if changed {

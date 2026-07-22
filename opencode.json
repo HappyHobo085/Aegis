@@ -1,0 +1,46 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "instructions": [
+    "CLAUDE.md",
+    "src/CLAUDE.md",
+    "src-tauri/CLAUDE.md",
+    "shared/CLAUDE.md",
+    "scripts/CLAUDE.md",
+    "sync-server/CLAUDE.md",
+    ".github/CLAUDE.md"
+  ],
+
+  "permission": {
+    "read": "allow",
+    "glob": "allow",
+    "grep": "allow",
+    "list": "allow",
+    "edit": "allow",
+    "bash": "allow",
+    "task": "allow",
+    "external_directory": "allow",
+    "todowrite": "allow",
+    "question": "allow",
+    "webfetch": "allow",
+    "websearch": "allow",
+    "skill": "allow"
+  },
+
+  "lsp": {
+    "rust-analyzer": {
+      "command": ["rust-analyzer"],
+      "extensions": ["rs"],
+      "env": {
+        "RUST_SRC_PATH": "/home/happyhobo/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/src/rust/library"
+      }
+    }
+  },
+
+  "formatter": true,
+
+  "compaction": {
+    "auto": true,
+    "tail_turns": 15
+  }
+}

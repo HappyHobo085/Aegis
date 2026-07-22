@@ -204,5 +204,13 @@ parity matrix:
   Deferred to a Mac-developer follow-up (sub-project I). macOS builds and runs; proxy is
   simply absent.
 
+## Cleanup After Implementation
+
+- **Clean up temporary files:** After completing implementation tasks, remove any temporary planning files, notes, or information gathering files created during the process. This includes:
+  - TODO lists, task files, or planning documents created in temporary locations
+  - Information gathering notes or research files
+  - Any draft or prototype files not intended for the final codebase
+  - Keep the repository clean by removing these artifacts before pushing changes
+
 **Remaining roadmap features:** password-vault autofill (Phase B), anti-fingerprinting
 runtime verifies, and content-webview proxy macOS tier — see `docs/FEATURE_ROADMAP.md`.

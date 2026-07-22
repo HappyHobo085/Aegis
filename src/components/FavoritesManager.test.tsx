@@ -132,7 +132,7 @@ describe('FavoritesManager', () => {
     render(<FavoritesManager {...p} />);
     await userEvent.click(screen.getByRole('button', { name: /^close$/i }));
     expect(p.onClose).toHaveBeenCalledTimes(1);
-    p.onClose.mockClear();
+    (p.onClose as ReturnType<typeof vi.fn>).mockClear();
     await userEvent.keyboard('{Escape}');
     expect(p.onClose).toHaveBeenCalledTimes(1);
   });

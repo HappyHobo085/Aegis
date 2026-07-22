@@ -45,7 +45,7 @@ pub fn dispatch<R: Runtime>(
         "favorites.add" => {
             let mut items = jsonstore::load_synced(app, "favorites");
             let input = payload.get("input").cloned().unwrap_or_else(|| json!({}));
-            let id = jsonstore::next_id(&items);
+            let id = jsonstore::next_id_optimized(&items, "favorites");
             // Position = end of the LIVE list (tombstones don't occupy a slot).
             let position = items.iter().filter(|it| !jsonstore::is_deleted(it)).count() as i64;
             let mut item = json!({
@@ -112,20 +112,20 @@ pub fn dispatch<R: Runtime>(
 
         "saved.has" => {
             let items = jsonstore::load_synced(app, "saved");
-            let url = payload.get("url").and_then(Value::as_str).unwrap_or("");
-            Some(Ok(json!(live_has_url(&items, url))))
+            let url_str = payload.get("url").and_then(Value::as_str).unwrap_or("");
+            Some(Ok(json!(live_has_url(&items, url_str))))
         }
 
         "saved.add" => {
             let mut items = jsonstore::load_synced(app, "saved");
             let input = payload.get("input").cloned().unwrap_or_else(|| json!({}));
-            let url = input.get("url").and_then(Value::as_str).unwrap_or("");
             // Dedup against LIVE records only (a previously-removed url can be re-added).
-            if !live_has_url(&items, url) {
-                let id = jsonstore::next_id(&items);
+            let url_str = input.get("url").and_then(Value::as_str).unwrap_or("");
+            if !live_has_url(&items, url_str) {
+                let id = jsonstore::next_id_optimized(&items, "saved");
                 let mut item = json!({
                     "id": id,
-                    "url": url,
+                    "url": url_str,
                     "title": input.get("title").and_then(Value::as_str).unwrap_or(""),
                     "tags": input.get("tags").cloned().unwrap_or_else(|| json!([])),
                     "savedAt": jsonstore::now_ms()

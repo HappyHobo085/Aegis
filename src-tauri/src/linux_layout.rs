@@ -10,6 +10,41 @@ use gtk::prelude::*;
 use tauri::{AppHandle, Manager};
 use webkit2gtk::WebViewExt;
 
+/// Remove a webview from the GTK container by its label.
+/// This is called when a webview is closed to avoid dangling pointers in the layout function.
+pub fn remove_webview_label(app: &AppHandle, label: &str) {
+    let Some(webview) = app.get_webview(label) else {
+        return;
+    };
+    let _ = webview.with_webview(|inner| {
+        let widget = inner.inner().upcast::<gtk::Widget>();
+        // Check if the widget is still valid and has a parent before trying to remove it
+        let Some(parent) = widget.parent() else {
+            return;
+        };
+        // Clone parent for use in downcast_ref and later comparison
+        let parent_clone = parent.clone();
+        let Some(container) = parent_clone.downcast_ref::<gtk::Container>() else {
+            return;
+        };
+        // Only remove if the widget is actually contained in the container
+        // We need to check:
+        // 1. The widget still has a parent (hasn't been destroyed)
+        // 2. That parent is the same one we looked up
+        // 3. The widget is actually a child of that container
+        let widget_still_has_parent = widget.parent().is_some();
+        let parent_unchanged = widget.parent() == Some(parent);
+        let widget_is_in_container = {
+            let cloned_widget = widget.clone();
+            let upcasted_widget = cloned_widget.upcast();
+            container.children().contains(&upcasted_widget)
+        };
+        if widget_still_has_parent && parent_unchanged && widget_is_in_container {
+            container.remove(&widget);
+        }
+    });
+}
+
 /// Record page titles into history as WebKit makes them available. The visit is
 /// recorded URL-only at page-load (nav.rs); the title arrives slightly later via
 /// the WebView's "title" property, so we fill it in on the title-changed signal.
@@ -274,7 +309,7 @@ pub fn install_nav_policy(app: &AppHandle, label: &str) {
                                 .unwrap_or_default();
                             if let Some(from) = crate::redirect_guard::decide_at_response(&app, id, &url) {
                                 decision.ignore();
-                                crate::redirect_guard::on_blocked(&app, id, &from, &url);
+                                crate::redirect_guard::on_blocked_redirect_to_new_tab(&app, id, &from, &url);
                                 return true; // cancel the scripted cross-origin top-frame redirect
                             }
                             // Top-frame load resolved → drop this tab's in-flight chain + stale actions.

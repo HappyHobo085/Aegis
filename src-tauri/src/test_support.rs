@@ -1,10 +1,10 @@
-// src-tauri/src/test_support.rs
+// src-tauri/src/testament.rs
 //! Crate-wide test harness for AppHandle-backed unit tests.
 //!
 //! The data stores resolve their paths from `app.path().app_data_dir()`, which on
-//! Linux comes from `$XDG_DATA_HOME` (and the cache dir from `$XDG_CACHE_HOME`) —
-//! see `dirs`/`dirs-sys`. A `tauri::test::mock_app()` has an EMPTY bundle identifier,
-//! so `app_data_dir()` resolves to `$XDG_DATA_HOME` directly. We point those env
+//! Linux comes from `$XDG_DATA_HOME` (and the cache dir from `$XDG_CACHE_HOME`).
+//! A `tauri::test::mock_app()` has an EMPTY bundle identifier, so `app_data_dir()`
+//! resolves directly to `$XDG_DATA_HOME`. The heaps point those env
 //! vars at a fresh temp dir per test so store IO never touches real user data.
 //!
 //! Env vars are process-global and cargo runs tests on many threads, so EVERY
@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
+pub use tauri::test::{mock_builder, mock_context, noop_assets, MockRuntime};
 use tauri::{AppHandle, Manager};
 
 /// Serializes all AppHandle tests: they share process env vars + process-global
@@ -59,11 +59,14 @@ fn fresh_tmp() -> PathBuf {
 /// - `linux_layout::LayoutInsets` (Linux only, `#[cfg(target_os = "linux")]`)
 ///
 /// Note: `tabs::Tabs` wraps a `tab_registry::Registry` with an "about:blank" home URL.
-/// The mock never spawns real webviews, so dispatchers that call `spawn_tab` or touch
-/// native webview handles will skip or no-op in tests — that is expected and safe.
+// The mock never spawns real webviews, so dispatchers that call `spawn_tab` or touch
+// native webview handles will skip or no-op in tests — that is expected and safe.
 pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
     let _guard = lock();
     let tmp = fresh_tmp();
+    // Clear process-global jsonstore caches so each test starts clean.
+    // (CACHE and NEXT_ID_CACHE are statics that survive across with_tmp_app calls.)
+    crate::jsonstore::clear_caches();
     // Must be set BEFORE the app is built — app_data_dir() reads them on each call,
     // but setting up front keeps every store under `tmp` for the whole test.
     std::env::set_var("XDG_DATA_HOME", &tmp);
@@ -158,7 +161,7 @@ mod tests {
     }
 
     /// jsonstore round-trip: save then load must return the same value, and the file
-    /// must land UNDER the temp dir (not the real user profile).
+    /// must land UNDER the temp dir (not the user profile).
     #[test]
     fn jsonstore_roundtrip_stays_under_tmp() {
         with_tmp_app(|app| {
@@ -168,7 +171,7 @@ mod tests {
             let loaded = crate::jsonstore::load(app, "smoke");
             assert_eq!(loaded, items, "loaded value must match what was saved");
 
-            // The file must be under the temp dir, not the real user profile.
+            // The file must be under the temp dir, not the user profile.
             let data_dir = app.path().app_data_dir().expect("data dir resolves");
             let store_path = data_dir.join("smoke.json");
             assert!(

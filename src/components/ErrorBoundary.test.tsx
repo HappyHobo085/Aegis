@@ -1,9 +1,10 @@
 // src/components/ErrorBoundary.test.tsx
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
+import React from 'react';
 import { ErrorBoundary } from './ErrorBoundary';
 
-function Boom(): JSX.Element {
+function Boom(): React.ReactNode {
   throw new Error('kaboom');
 }
 

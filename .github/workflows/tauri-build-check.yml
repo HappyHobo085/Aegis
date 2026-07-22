@@ -4,6 +4,7 @@ name: Tauri Build Check
 # to confirm it compiles/links on each OS and to produce runnable artifacts you can
 # download from the Actions run page for on-device testing:
 #   - aegis-linux-appimage   : portable .AppImage (any distro, incl. Fedora)
+#   - aegis-linux-rpm         : .rpm package (Fedora / RHEL / openSUSE)
 #   - aegis-windows-portable : portable, self-contained Aegis_x64_portable.exe
 #   - aegis-macos            : .app + .dmg
 #   - aegis-android-apk      : installable debug APK
@@ -38,7 +39,7 @@ jobs:
             artifact: aegis-macos
             bundles: ''
             artifact_path: src-tauri/target/release/bundle/**
-          # Linux: the portable AppImage only; skip the .deb. --bundles overrides the
+          # Linux: the portable AppImage + the .rpm package. --bundles overrides the
           # config's target list. Built on ubuntu-24.04 (NOT 22.04): 22.04's webkit2gtk
           # is built with _GLIBCXX_ASSERTIONS and hits a libstdc++ abort in Skia's COLR-v1
           # color-font path, so the bundled-webkit AppImage crashed (blank/frozen pages)
@@ -53,6 +54,10 @@ jobs:
             artifact: aegis-linux-appimage
             bundles: '--bundles appimage --config src-tauri/tauri.appimage-mediaframework.conf.json'
             artifact_path: src-tauri/target/release/bundle/appimage/*.AppImage
+          - platform: ubuntu-24.04
+            artifact: aegis-linux-rpm
+            bundles: '--bundles rpm'
+            artifact_path: src-tauri/target/release/bundle/rpm/*.rpm
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 45
     steps:
@@ -73,6 +78,7 @@ jobs:
             librsvg2-dev \
             libxdo-dev \
             patchelf \
+            rpm \
             gstreamer1.0-libav \
             gstreamer1.0-plugins-good \
             gstreamer1.0-plugins-bad \
@@ -103,7 +109,8 @@ jobs:
       # Build the renderer + the Tauri app (release). Unsigned, no release published.
       # (APPIMAGE_EXTRACT_AND_RUN handles the Linux AppImage FUSE quirk; both env vars
       # are ignored on Windows/macOS.) matrix.bundles is '--no-bundle' on Windows (we
-      # ship the raw exe), '--bundles appimage' on Linux, and empty on macOS (defaults).
+      # ship the raw exe), '--bundles appimage'/'--bundles rpm' on Linux, and empty on
+      # macOS (defaults).
       - name: Build
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'

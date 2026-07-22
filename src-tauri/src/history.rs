@@ -47,7 +47,7 @@ pub fn should_record_visit(url: &str, is_private: bool) -> bool {
 
 /// Pure: append a visit to `items` (dedup the immediately-previous URL + cap to MAX_ENTRIES).
 /// Returns true if a row was added (false = a consecutive duplicate, a no-op).
-fn apply_visit(items: &mut Vec<Value>, url: &str, title: &str, now: i64) -> bool {
+fn apply_visit<R: Runtime>(items: &mut Vec<Value>, url: &str, title: &str, now: i64) -> bool {
     if items
         .last()
         .and_then(|i| i.get("url").and_then(Value::as_str))
@@ -182,7 +182,7 @@ pub fn record<R: Runtime>(app: &AppHandle<R>, url: &str, title: &str, is_private
         return;
     }
     let now = jsonstore::now_ms();
-    if mutate(app, false, |items| apply_visit(items, url, title, now)) {
+    if mutate(app, false, |items| apply_visit::<R>(items, url, title, now)) {
         crate::emit_event(app, "history.changed", Value::Null);
     }
 }
@@ -309,13 +309,33 @@ mod tests {
     #[test]
     fn apply_visit_dedups_consecutive_and_caps() {
         let mut items = Vec::new();
-        assert!(apply_visit(&mut items, "https://a/", "A", 1));
-        assert!(!apply_visit(&mut items, "https://a/", "A", 2)); // consecutive dup → no-op
-        assert!(apply_visit(&mut items, "https://b/", "B", 3));
+        assert!(apply_visit::<crate::test_support::MockRuntime>(
+            &mut items,
+            "https://a/",
+            "A",
+            1
+        ));
+        assert!(!apply_visit::<crate::test_support::MockRuntime>(
+            &mut items,
+            "https://a/",
+            "A",
+            2
+        )); // consecutive dup → no-op
+        assert!(apply_visit::<crate::test_support::MockRuntime>(
+            &mut items,
+            "https://b/",
+            "B",
+            3
+        ));
         assert_eq!(items.len(), 2);
         // cap: push MAX_ENTRIES+ distinct rows, oldest are dropped, newest kept.
         for n in 0..MAX_ENTRIES + 10 {
-            apply_visit(&mut items, &format!("https://x{n}/"), "x", n as i64);
+            apply_visit::<crate::test_support::MockRuntime>(
+                &mut items,
+                &format!("https://x{n}/"),
+                "x",
+                n as i64,
+            );
         }
         assert_eq!(items.len(), MAX_ENTRIES);
         let last = items.last().unwrap().get("url").and_then(Value::as_str);

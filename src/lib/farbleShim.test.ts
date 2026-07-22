@@ -85,16 +85,20 @@ function installCanvasStubs() {
   // Stub HTMLCanvasElement.prototype.toDataURL / toBlob if not already real.
   if (typeof HTMLCanvasElement !== 'undefined') {
     if (
-      typeof (HTMLCanvasElement.prototype as Record<string, unknown>)['toDataURL'] !== 'function'
+      typeof (HTMLCanvasElement.prototype as unknown as Record<string, unknown>)['toDataURL'] !==
+      'function'
     ) {
-      (HTMLCanvasElement.prototype as Record<string, unknown>)['toDataURL'] = function (
+      (HTMLCanvasElement.prototype as unknown as Record<string, unknown>)['toDataURL'] = function (
         this: HTMLCanvasElement,
       ) {
         return 'data:image/png;base64,STUB';
       };
     }
-    if (typeof (HTMLCanvasElement.prototype as Record<string, unknown>)['toBlob'] !== 'function') {
-      (HTMLCanvasElement.prototype as Record<string, unknown>)['toBlob'] = function (
+    if (
+      typeof (HTMLCanvasElement.prototype as unknown as Record<string, unknown>)['toBlob'] !==
+      'function'
+    ) {
+      (HTMLCanvasElement.prototype as unknown as Record<string, unknown>)['toBlob'] = function (
         this: HTMLCanvasElement,
         cb: (blob: Blob | null) => void,
       ) {
@@ -133,11 +137,11 @@ beforeEach(() => {
   _savedGID = CRC2D?.prototype?.['getImageData'];
   _savedTDU =
     typeof HTMLCanvasElement !== 'undefined'
-      ? (HTMLCanvasElement.prototype as AnyProto)['toDataURL']
+      ? (HTMLCanvasElement.prototype as unknown as AnyProto)['toDataURL']
       : undefined;
   _savedTB =
     typeof HTMLCanvasElement !== 'undefined'
-      ? (HTMLCanvasElement.prototype as AnyProto)['toBlob']
+      ? (HTMLCanvasElement.prototype as unknown as AnyProto)['toBlob']
       : undefined;
   _savedHC =
     typeof Navigator !== 'undefined'
@@ -152,9 +156,10 @@ afterEach(() => {
     CRC2D.prototype['getImageData'] = _savedGID as () => unknown;
   if (typeof HTMLCanvasElement !== 'undefined') {
     if (_savedTDU !== undefined)
-      (HTMLCanvasElement.prototype as AnyProto)['toDataURL'] = _savedTDU as () => unknown;
+      (HTMLCanvasElement.prototype as unknown as AnyProto)['toDataURL'] =
+        _savedTDU as () => unknown;
     if (_savedTB !== undefined)
-      (HTMLCanvasElement.prototype as AnyProto)['toBlob'] = _savedTB as () => unknown;
+      (HTMLCanvasElement.prototype as unknown as AnyProto)['toBlob'] = _savedTB as () => unknown;
   }
   if (typeof Navigator !== 'undefined' && _savedHC !== undefined) {
     try {
@@ -318,7 +323,7 @@ describe('farble shim (standard) — shipped JS, runtime', () => {
     const CRC2D = w['CanvasRenderingContext2D'] as { prototype: { getImageData: () => unknown } };
     const toDataURL =
       typeof HTMLCanvasElement !== 'undefined'
-        ? (HTMLCanvasElement.prototype as AnyProto)['toDataURL']
+        ? (HTMLCanvasElement.prototype as unknown as AnyProto)['toDataURL']
         : undefined;
 
     expect(Function.prototype.toString.call(CRC2D.prototype.getImageData)).toContain(

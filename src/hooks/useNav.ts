@@ -91,3 +91,4 @@ export function useNav(viewId: ViewId): {
 }
 
 export const DEFAULT_VIEW_ID = PRIMARY_VIEW_ID;
+export { PRIMARY_VIEW_ID } from '../../shared/types';

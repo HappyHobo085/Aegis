@@ -2,6 +2,7 @@
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
 import type { HistoryEntry, SavedItem } from '../../../shared/types';
 import { nudgeSync, waitFor, fixtureUrl, liveNavigate, activeViewId } from './helpers';
+import { AdaptiveTimeout } from '../timeout';
 
 /** Live-only: remove every saved item whose url matches `url` — clears leftovers a prior
  *  (possibly failed) spec didn't clean up, so each spec starts from a known state. */
@@ -85,7 +86,7 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         if (_urlBeforeClick === undefined)
           throw new Error('live: _urlBeforeClick was never captured (run() may not have executed)');
         const vid = await activeViewId(ctx);
-        const deadline = Date.now() + 8000;
+        const deadline = Date.now() + AdaptiveTimeout.ms(8000);
         while (Date.now() < deadline) {
           const { url } = await ctx.aegis.nav.getState(vid);
           if (url !== _urlBeforeClick && url.includes('ap=histentry'))
@@ -222,7 +223,7 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         return 'Clear all history + OK → history.clear()';
       }
       // Live: poll until history.list() is empty.
-      const deadline = Date.now() + 8000;
+      const deadline = Date.now() + AdaptiveTimeout.ms(8000);
       while (Date.now() < deadline) {
         const list = await ctx.aegis.history.list();
         if (list.length === 0) return 'Clear all history → history.list() is now empty';
@@ -288,12 +289,12 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         // Live: poll until the url changes away from _urlBeforeClick AND includes the
         // seed url host — proves the click navigated to the saved entry specifically.
         if (_urlBeforeClick === undefined)
-          throw new Error('live: _urlBeforeClick was never captured');
-        const vid = await activeViewId(ctx);
-        const deadline = Date.now() + 8000;
-        while (Date.now() < deadline) {
-          const { url } = await ctx.aegis.nav.getState(vid);
-          if (url !== _urlBeforeClick && url.includes('ap=savedopen')) {
+        throw new Error('live: _urlBeforeClick was never captured');
+      const vid = await activeViewId(ctx);
+      const deadline = Date.now() + AdaptiveTimeout.ms(8000);
+      while (Date.now() < deadline) {
+        const { url } = await ctx.aegis.nav.getState(vid);
+        if (url !== _urlBeforeClick && url.includes('ap=savedopen')) {
             // Clean up the probe saved item.
             await clearSavedProbe(ctx, SEED_ITEM.url);
             await nudgeSync('saved');

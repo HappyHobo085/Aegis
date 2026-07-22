@@ -20,6 +20,7 @@ tauri-build = { version = "2.6.2", features = [] }
 [dependencies]
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+url = "2.0"
 log = "0.4"
 # `unstable` enables Window::add_child — multiple webviews in one window, which
 # is how the browser shell composes a chrome webview + a content webview. The
@@ -42,6 +43,7 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # at startup (see run()), pulling rustls directly for aws-lc-rs::default_provider().
 reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
 rustls = "0.23"
+parking_lot = "0.12"
 
 # Sync engine (F2b) crypto. getrandom 0.2 (NOT the 0.4 uuid pulls) for raw OS randomness;
 # everything else derives from the BIP39 seed via HKDF. ed25519 keys come from HKDF bytes via
@@ -50,6 +52,7 @@ chacha20poly1305 = "0.10"
 hkdf = "0.12"
 sha2 = "0.10"
 ed25519-dalek = { version = "2", features = ["zeroize"] }
+rand = "0.8"
 bip39 = "2"
 argon2 = "0.5"
 getrandom = "0.2"

@@ -18,6 +18,11 @@ const settings = (over: Partial<Settings> = {}): Settings => ({
   searchEngines: [],
   hideChromeByDefault: false,
   downloadDir: '',
+  httpsOnly: false,
+  tabIdleTimeout: 0,
+  webrtcPolicy: 'public-only',
+  themeMode: 'dark',
+  antiFingerprint: 'off',
   ...over,
 });
 

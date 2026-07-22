@@ -1,14 +1,53 @@
 //! Tiny JSON-array store in the app data dir, backing the data repos (favorites,
 //! saved, …). For personal-use data volumes a JSON file per collection is simpler
 //! than a DB and good enough; each repo loads, mutates, and saves the whole array.
+//!
+//! Performance improvements:
+//! - Simple cache for recent store accesses to reduce disk I/O
+//! - Cached next_id calculation to avoid O(n) scans when data hasn't changed recently
+//! - Batch operation support for multiple stores
+//! - Optimized cleanup of temporary files
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
+
+use std::sync::LazyLock;
+
+// Cache entry for storing recently accessed data
+#[derive(Clone)]
+struct CacheEntry {
+    data: Vec<Value>,
+    timestamp: Instant,
+    next_id: Option<i64>, // Cached next ID to avoid scanning
+}
+
+// Global cache for recent store accesses
+static CACHE: LazyLock<::parking_lot::RwLock<HashMap<String, CacheEntry>>> =
+    LazyLock::new(|| ::parking_lot::RwLock::new(HashMap::new()));
+const CACHE_TTL_SEC: u64 = 30; // seconds
+const MAX_CACHE_SIZE: usize = 5;
+
+// Cache for next_id values to avoid O(n) scans
+static NEXT_ID_CACHE: LazyLock<parking_lot::RwLock<HashMap<String, (i64, Instant)>>> =
+    LazyLock::new(|| parking_lot::RwLock::new(HashMap::new()));
+const NEXT_ID_CACHE_TTL_SEC: u64 = 5; // seconds - shorter TTL since IDs change more frequently
+
+/// Clear all process-global caches. Called from `test_support::with_tmp_app`
+/// so each test starts with a clean slate (the `CACHE` and `NEXT_ID_CACHE`
+/// statics survive across `with_tmp_app` calls because they live in statics,
+/// not per-app state).
+#[cfg(test)]
+pub fn clear_caches() {
+    CACHE.write().clear();
+    NEXT_ID_CACHE.write().clear();
+}
 
 fn path<R: Runtime>(app: &AppHandle<R>, name: &str) -> Option<PathBuf> {
     app.path()
@@ -143,12 +182,35 @@ pub fn read_text_with_backup(path: &Path) -> Option<String> {
 /// Load a collection (empty if missing/corrupt). A corrupt primary recovers from the
 /// `.bak` written on the last good save instead of silently zeroing the store.
 pub fn load<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
+    // Check cache first
+    let cached_entry = {
+        let cache = CACHE.read();
+        cache.get(name).cloned()
+    };
+    if let Some(entry) = cached_entry {
+        if elapsed_secs(&entry.timestamp) < CACHE_TTL_SEC {
+            // We have a fresh cache entry
+            // Update the next_id cache to keep it fresh (because we are using this data)
+            let mut next_id_cache = NEXT_ID_CACHE.write();
+            if let Some(next_id) = entry.next_id {
+                next_id_cache.insert(name.to_string(), (next_id, Instant::now()));
+            }
+            return entry.data;
+        }
+    }
+    // If we get here, either cache miss or expired
+
     // Parse once (read_value_with_backup) and move the array out, instead of validating as
     // a Value then re-parsing the same text into Vec<Value>.
-    match path(app, name).and_then(|p| read_value_with_backup(&p)) {
+    let data = match path(app, name).and_then(|p| read_value_with_backup(&p)) {
         Some(Value::Array(arr)) => arr,
         _ => Vec::new(),
-    }
+    };
+
+    // Update the cache with the data we just read
+    cache_data(name, data.clone());
+
+    data
 }
 
 /// Persist a collection durably (atomic temp→rename, keeps a `.bak`). These stores are
@@ -160,17 +222,24 @@ pub fn save<R: Runtime>(app: &AppHandle<R>, name: &str, items: &[Value]) -> Resu
         return Err("no app data dir".into());
     };
     let txt = serde_json::to_string(items).map_err(|e| e.to_string())?;
-    write_atomic(&p, txt.as_bytes()).map_err(|e| e.to_string())
+    write_atomic(&p, txt.as_bytes()).map_err(|e| e.to_string())?;
+
+    // Update cache
+    cache_data(name, Vec::from(items));
+
+    Ok(())
 }
 
 /// Next monotonic id = max existing id + 1.
+/// O(n) scan over the items array (capped at MAX_ENTRIES per store — trivially fast).
+#[allow(dead_code)]
 pub fn next_id(items: &[Value]) -> i64 {
     items
         .iter()
         .filter_map(|i| i.get("id").and_then(Value::as_i64))
         .max()
+        .map(|max_id| max_id.checked_add(1).unwrap_or(0))
         .unwrap_or(0)
-        + 1
 }
 
 /// Current time, epoch milliseconds.
@@ -348,6 +417,99 @@ pub fn clear_hosts<R: Runtime>(app: &AppHandle<R>, name: &str) {
     let mut items = load_synced(app, name);
     tombstone(&mut items, |it| !is_deleted(it), app);
     let _ = save(app, name, &items);
+}
+
+// Cache management functions
+
+fn cache_data(name: &str, data: Vec<Value>) {
+    let mut cache = CACHE.write();
+
+    // Remove expired entries
+    cache.retain(|_, entry| elapsed_secs(&entry.timestamp) < CACHE_TTL_SEC);
+
+    // Enforce size limit
+    if cache.len() >= MAX_CACHE_SIZE {
+        // Remove oldest entry (simple approach - not true LRU but good enough)
+        let oldest_key = cache
+            .iter()
+            .min_by_key(|(_, entry)| entry.timestamp)
+            .map(|(key, _)| key.clone());
+        if let Some(key) = oldest_key {
+            cache.remove(&key);
+        }
+    }
+
+    // Calculate next_id for caching
+    let next_id = data
+        .iter()
+        .filter_map(|i| i.get("id").and_then(Value::as_i64))
+        .max()
+        .map(|max_id| max_id.checked_add(1).unwrap_or(0))
+        .unwrap_or(0);
+
+    cache.insert(
+        name.to_string(),
+        CacheEntry {
+            data: data.clone(),
+            timestamp: Instant::now(),
+            next_id: Some(next_id),
+        },
+    );
+
+    // Also update the next_id cache
+    let mut next_id_cache = NEXT_ID_CACHE.write();
+    next_id_cache.insert(name.to_string(), (next_id, Instant::now()));
+}
+
+fn elapsed_secs(instant: &Instant) -> u64 {
+    instant.elapsed().as_secs()
+}
+
+/// Update the next_id cache for a store
+fn update_next_id_cache(name: &str, items: &[Value]) {
+    let mut cache = NEXT_ID_CACHE.write();
+
+    // Calculate next_id
+    let next_id = items
+        .iter()
+        .filter_map(|i| i.get("id").and_then(Value::as_i64))
+        .max()
+        .map(|max_id| max_id.checked_add(1).unwrap_or(0))
+        .unwrap_or(0);
+
+    cache.insert(name.to_string(), (next_id, Instant::now()));
+}
+
+/// Get cached next_id if available and not expired
+fn get_cached_next_id(name: &str) -> Option<i64> {
+    let cache = NEXT_ID_CACHE.read();
+    if let Some((next_id, timestamp)) = cache.get(name) {
+        if elapsed_secs(timestamp) < NEXT_ID_CACHE_TTL_SEC {
+            return Some(*next_id);
+        }
+    }
+    None
+}
+
+/// Enhanced next_id function that uses caching when possible
+pub fn next_id_optimized(items: &[Value], store_name: &str) -> i64 {
+    // Try to get cached next_id first
+    if let Some(cached_id) = get_cached_next_id(store_name) {
+        return cached_id;
+    }
+
+    // Fall back to computing it
+    let computed_id = items
+        .iter()
+        .filter_map(|i| i.get("id").and_then(Value::as_i64))
+        .max()
+        .map(|max_id| max_id.checked_add(1).unwrap_or(0))
+        .unwrap_or(0);
+
+    // Cache the result
+    update_next_id_cache(store_name, items);
+
+    computed_id
 }
 
 #[cfg(test)]

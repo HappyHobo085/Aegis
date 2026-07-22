@@ -19,6 +19,11 @@ const baseSettings: Settings = {
   searchEngines: [],
   hideChromeByDefault: false,
   downloadDir: '/home/u/Downloads',
+  httpsOnly: false,
+  tabIdleTimeout: 0,
+  webrtcPolicy: 'public-only',
+  themeMode: 'dark',
+  antiFingerprint: 'off',
 };
 
 function props(over: Partial<React.ComponentProps<typeof DownloadsTab>> = {}) {

@@ -3,7 +3,7 @@
 // The renderer's backend seam — the single module the whole React UI uses to
 // reach the backend. Every method is a Tauri `invoke('ipc', {channel,…})` and
 // every `onX` is a Tauri event subscription (typed by AegisApi).
-import type {
+import {
   AegisApi,
   NavState,
   NavFailed,
@@ -35,10 +35,302 @@ import type {
   FingerprintState,
   ProxyConfig,
   ProxyState,
+  FormLoginDetectedResult,
 } from '../../shared/types';
+import { DEDUP_WINDOW_MS } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call, on } from './tauriInvoke';
 import { clampZoom } from './zoom';
+
+type IPCChannel = (typeof IPC)[keyof typeof IPC];
+
+// Enhanced deduplication cache with adaptive windows and telemetry
+interface DedupEntry<T> {
+  timestamp: number;
+  promise: Promise<T>;
+}
+
+// Operations that should NEVER be deduplicated (mutations that must execute)
+const NON_DEDUP_CHANNELS: Set<IPCChannel> = new Set([
+  // Navigation mutations
+  IPC.navNavigate,
+  IPC.navBack,
+  IPC.navForward,
+  IPC.navReloadOrStop,
+  IPC.navHome,
+
+  // View mutations
+  IPC.viewSetContentVisible,
+  IPC.viewSetContentInset,
+  IPC.viewSetChromeOverlay,
+  IPC.viewSetSidebar,
+  IPC.viewSetLayout,
+  IPC.viewSetFullscreen,
+
+  // Favorites mutations
+  IPC.favoritesAdd,
+  IPC.favoritesUpdate,
+  IPC.favoritesRemove,
+  IPC.favoritesReorder,
+
+  // History mutations
+  IPC.historyRemove,
+  IPC.historyClear,
+
+  // Saved items mutations
+  IPC.savedAdd,
+  IPC.savedRemove,
+  IPC.savedUpdate,
+  IPC.savedRenameTag,
+  IPC.savedDeleteTag,
+
+  // Subscriptions mutations
+  IPC.subsSetEnabled,
+  IPC.subsAdd,
+  IPC.subsRemove,
+
+  // Custom filters mutations
+  IPC.customFiltersSet,
+
+  // Adblock mutations
+  IPC.adblockSetEnabled,
+
+  // Allowlist mutations
+  IPC.adblockToggleAllowlist,
+  IPC.adblockRemoveAllowlist,
+  IPC.adblockClearAllowlist,
+
+  // Settings mutations
+  IPC.settingsSet,
+
+  // Vault mutations
+  IPC.vaultCreate,
+  IPC.vaultUnlock,
+  IPC.vaultLock,
+  IPC.vaultAdd,
+  IPC.vaultUpdate,
+  IPC.vaultRemove,
+
+  // Proxy mutations
+  IPC.proxySetConfig,
+  IPC.proxyClear,
+
+  // Sync mutations
+  IPC.syncRemoveDevice,
+
+  // Safety mutations
+  IPC.safetyProceed,
+  IPC.safetyRemoveException,
+
+  // Downloads mutations
+  IPC.downloadsRemove,
+  IPC.downloadsClear,
+
+  // Permissions mutations
+  IPC.permissionsClear,
+
+  // Updates mutations
+  IPC.updateCheckNow,
+
+  // Data mutations
+  IPC.dataExport,
+  IPC.dataImport,
+
+  // Find mutations
+  IPC.findStart,
+  IPC.findNext,
+  IPC.findPrev,
+  IPC.findClose,
+
+  // Zoom mutations
+  IPC.zoomSet,
+  IPC.zoomReset,
+]);
+
+// Different deduplication windows for different operation types (only for queries)
+const DEDUP_WINDOWS: Record<string, number> = {
+  // Navigation queries - shorter window as they're more time-sensitive
+  [IPC.navGetState]: 100,
+
+  // Tab queries
+  [IPC.tabsList]: 150,
+
+  // Favorites queries
+  [IPC.favoritesList]: 300,
+
+  // History queries
+  [IPC.historyList]: 300,
+  [IPC.historySearch]: 500, // Search might benefit from slightly longer dedup
+
+  // Saved items queries
+  [IPC.savedList]: 300,
+  [IPC.savedHas]: 200,
+
+  // Settings queries
+  [IPC.settingsGet]: 300,
+
+  // Adblock queries
+  [IPC.adblockGetState]: 300,
+
+  // Vault queries
+  [IPC.vaultGetState]: 300,
+  [IPC.vaultList]: 400,
+  [IPC.vaultSearch]: 500, // Search might benefit from slightly longer dedup
+
+  // Subscriptions queries
+  [IPC.subsList]: 300,
+
+  // Custom filters queries
+  [IPC.customFiltersGet]: 300,
+
+  // Allowlist queries
+  // Note: adblockGetAllowlist does not exist; using adblockGetState for allowlist queries is not correct.
+  // However, there is no IPC channel for getting the allowlist. The allowlist is modified via toggle/remove/clear.
+  // We might need to add a channel in the future, but for now we skip deduplication for allowlist queries by not having an entry.
+  // We'll leave it out and rely on the default window.
+
+  // Proxy queries
+  [IPC.proxyGetState]: 300,
+
+  // Sync queries
+  [IPC.syncGetState]: 300,
+
+  // Safety queries
+  [IPC.safetyGetState]: 300,
+
+  // Downloads queries
+  [IPC.downloadsList]: 300,
+
+  // Permissions queries
+  [IPC.permissionsList]: 300,
+
+  // Updates queries
+  [IPC.updateGetState]: 300,
+
+  // Default window for unspecified query operations
+  default: 300,
+};
+
+// Telemetry tracking for dedup effectiveness
+const dedupStats = {
+  hits: 0,
+  misses: 0,
+  hitsByChannel: new Map<string, number>(),
+  missesByChannel: new Map<string, number>(),
+};
+
+const dedupeCache = new Map<string, DedupEntry<any>>();
+
+function getDedupWindow(channel: string): number {
+  return DEDUP_WINDOWS[channel] ?? DEDUP_WINDOWS.default;
+}
+
+// Simple hash function for payloads to avoid expensive JSON.stringify
+function hashPayload(payload: any): string {
+  // For simple primitives, use them directly
+  if (payload === null || typeof payload !== 'object') {
+    return String(payload);
+  }
+
+  // For objects, create a stable string representation
+  try {
+    return JSON.stringify(payload);
+  } catch (e) {
+    // Fallback for circular or complex objects
+    return `[Object: ${Object.prototype.toString.call(payload)}]`;
+  }
+}
+
+function dedupedCall<T>(channel: IPCChannel, payload: any): Promise<T> {
+  // Skip deduplication for mutations that must always execute
+  if (NON_DEDUP_CHANNELS.has(channel)) {
+    return call<T>(String(channel), payload);
+  }
+
+  // Create a cache key from the channel and payload hash
+  const payloadHash = hashPayload(payload);
+  const key = `${channel}:${payloadHash}`;
+  const now = Date.now();
+  const window = getDedupWindow(channel);
+
+  // Check if we have a recent call for this key
+  const cached = dedupeCache.get(key);
+  if (cached && now - cached.timestamp < window) {
+    // Record hit and return the cached promise
+    dedupStats.hits++;
+    dedupStats.hitsByChannel.set(channel, (dedupStats.hitsByChannel.get(channel) || 0) + 1);
+    return cached.promise as Promise<T>;
+  }
+
+  // Record miss
+  dedupStats.misses++;
+  dedupStats.missesByChannel.set(channel, (dedupStats.missesByChannel.get(channel) || 0) + 1);
+
+  // Make the actual call and cache the promise
+  const promise = call<T>(channel, payload);
+  dedupeCache.set(key, { timestamp: now, promise });
+
+  // Periodic cleanup - every 10 seconds to reduce overhead
+  if (Date.now() % 10000 < 100) {
+    // Roughly once per 10 seconds
+    cleanupCache(now);
+  }
+
+  return promise;
+}
+
+function cleanupCache(now: number = Date.now()): void {
+  for (const [key, entry] of dedupeCache.entries()) {
+    // Extract channel from key to get appropriate window
+    const channelPart = key.split(':')[0];
+
+    // Check if this channel is in our non-deduplicated set
+    if (NON_DEDUP_CHANNELS.has(channelPart as IPCChannel)) {
+      dedupeCache.delete(key);
+      continue;
+    }
+
+    // Convert to string for the getDedupWindow function
+    const channelStr: string = channelPart;
+    const window = getDedupWindow(channelStr);
+    const cutoff = now - window * 2; // Keep entries for 2x window
+
+    if (entry.timestamp < cutoff) {
+      dedupeCache.delete(key);
+    }
+  }
+}
+
+// Expose stats for debugging (only in development)
+if (import.meta.env.DEV) {
+  (window as any).__ipcDedupStats = () => {
+    const hitRate =
+      dedupStats.hits + dedupStats.misses > 0
+        ? (dedupStats.hits / (dedupStats.hits + dedupStats.misses)) * 100
+        : 0;
+
+    return {
+      hitRate: Number(hitRate.toFixed(2)),
+      total: dedupStats.hits + dedupStats.misses,
+      hits: dedupStats.hits,
+      misses: dedupStats.misses,
+      byChannel: Array.from(dedupStats.hitsByChannel.entries()).reduce(
+        (acc, [channel, count]) => {
+          acc[channel] = {
+            hits: count,
+            misses: dedupStats.missesByChannel.get(channel) || 0,
+            hitRate:
+              count + (dedupStats.missesByChannel.get(channel) || 0) > 0
+                ? (count / (count + (dedupStats.missesByChannel.get(channel) || 0))) * 100
+                : 0,
+          };
+          return acc;
+        },
+        {} as Record<string, { hits: number; misses: number; hitRate: number }>,
+      ),
+    };
+  };
+}
 
 /** The Kotlin content-webview bridge, injected on Android only (window.AegisAndroid).
  * On mobile there's no separate content webview on the Rust side, so nav goes here. */
@@ -112,7 +404,7 @@ export const aegis: AegisApi = {
         a.navigate(url);
         return Promise.resolve();
       }
-      return call(IPC.navNavigate, { viewId, url });
+      return dedupedCall(IPC.navNavigate, { viewId, url });
     },
     back: (viewId) => {
       const a = androidBridge();
@@ -120,7 +412,7 @@ export const aegis: AegisApi = {
         a.back();
         return Promise.resolve();
       }
-      return call(IPC.navBack, { viewId });
+      return dedupedCall(IPC.navBack, { viewId });
     },
     forward: (viewId) => {
       const a = androidBridge();
@@ -128,7 +420,7 @@ export const aegis: AegisApi = {
         a.forward();
         return Promise.resolve();
       }
-      return call(IPC.navForward, { viewId });
+      return dedupedCall(IPC.navForward, { viewId });
     },
     reloadOrStop: (viewId) => {
       const a = androidBridge();
@@ -136,7 +428,7 @@ export const aegis: AegisApi = {
         a.reload();
         return Promise.resolve();
       }
-      return call(IPC.navReloadOrStop, { viewId });
+      return dedupedCall(IPC.navReloadOrStop, { viewId });
     },
     home: (viewId) => {
       const a = androidBridge();
@@ -144,9 +436,9 @@ export const aegis: AegisApi = {
         a.navigate('about:blank');
         return Promise.resolve();
       }
-      return call(IPC.navHome, { viewId });
+      return dedupedCall(IPC.navHome, { viewId });
     },
-    getState: (viewId) => call<NavState>(IPC.navGetState, { viewId }),
+    getState: (viewId) => dedupedCall<NavState>(IPC.navGetState, { viewId }),
     onState: (cb) => {
       // Android has no Tauri event bus on the content side; its WebViewClient pushes
       // NavState by calling window.__aegisNavState (set up here). Support multiple
@@ -169,22 +461,23 @@ export const aegis: AegisApi = {
     onCrashed: (cb) => on<NavCrashed>(IPC.evtNavCrashed, cb),
   },
   tabs: {
-    list: () => call<TabsState>(IPC.tabsList),
+    list: () => dedupedCall<TabsState>(IPC.tabsList, undefined),
     create: (url, background, isPrivate) =>
-      call<TabsState>(IPC.tabsCreate, { url, background, private: isPrivate }),
-    close: (id) => call<TabsState>(IPC.tabsClose, { id }),
-    activate: (id) => call<TabsState>(IPC.tabsActivate, { id }),
-    reorder: (ids) => call<TabsState>(IPC.tabsReorder, { ids }),
-    setPinned: (id, pinned) => call<TabsState>(IPC.tabsSetPinned, { id, pinned }),
-    reopenClosed: () => call<TabsState>(IPC.tabsReopenClosed),
-    setTitle: (id, title) => call<TabsState>(IPC.tabsSetTitle, { id, title }),
-    recordNav: (id, url, title) => call<TabsState>(IPC.tabsRecordNav, { id, url, title }),
+      dedupedCall<TabsState>(IPC.tabsCreate, { url, background, private: isPrivate }),
+    close: (id) => dedupedCall<TabsState>(IPC.tabsClose, { id }),
+    activate: (id) => dedupedCall<TabsState>(IPC.tabsActivate, { id }),
+    reorder: (ids) => dedupedCall<TabsState>(IPC.tabsReorder, { ids }),
+    setPinned: (id, pinned) => dedupedCall<TabsState>(IPC.tabsSetPinned, { id, pinned }),
+    reopenClosed: () => dedupedCall<TabsState>(IPC.tabsReopenClosed, undefined),
+    setTitle: (id, title) => dedupedCall<TabsState>(IPC.tabsSetTitle, { id, title }),
+    recordNav: (id, url, title) => dedupedCall<TabsState>(IPC.tabsRecordNav, { id, url, title }),
     onState: (cb) => on<TabsState>(IPC.evtTabsState, cb),
     onShortcut: (cb) => on<TabShortcut>(IPC.evtTabsShortcut, cb),
   },
   view: {
-    setContentVisible: (viewId, visible) => call(IPC.viewSetContentVisible, { viewId, visible }),
-    setContentInset: (viewId, inset) => call(IPC.viewSetContentInset, { viewId, inset }),
+    setContentVisible: (viewId, visible) =>
+      dedupedCall(IPC.viewSetContentVisible, { viewId, visible }),
+    setContentInset: (viewId, inset) => dedupedCall(IPC.viewSetContentInset, { viewId, inset }),
     setChromeOverlay: (viewId, active) => {
       // On Android the content view is a native WebView (Rust view.rs can't reach it),
       // so hide/show it via the bridge when a chrome overlay opens/closes.
@@ -193,47 +486,48 @@ export const aegis: AegisApi = {
         a.setContentHidden(active);
         return Promise.resolve();
       }
-      return call(IPC.viewSetChromeOverlay, { viewId, active });
+      return dedupedCall(IPC.viewSetChromeOverlay, { viewId, active });
     },
-    setSidebar: (viewId, active, width) => call(IPC.viewSetSidebar, { viewId, active, width }),
-    setLayout: (viewId, opts) => call(IPC.viewSetLayout, { viewId, ...opts }),
-    setFullscreen: (viewId, on) => call(IPC.viewSetFullscreen, { viewId, on }),
+    setSidebar: (viewId, active, width) =>
+      dedupedCall(IPC.viewSetSidebar, { viewId, active, width }),
+    setLayout: (viewId, opts) => dedupedCall(IPC.viewSetLayout, { viewId, ...opts }),
+    setFullscreen: (viewId, on) => dedupedCall(IPC.viewSetFullscreen, { viewId, on }),
     onFullscreen: (cb) => on<{ on: boolean }>(IPC.evtViewFullscreen, cb),
   },
   favorites: {
-    list: () => call<Favorite[]>(IPC.favoritesList),
-    add: (input) => call<Favorite[]>(IPC.favoritesAdd, { input }),
-    update: (id, partial) => call<Favorite[]>(IPC.favoritesUpdate, { id, partial }),
-    remove: (id) => call<Favorite[]>(IPC.favoritesRemove, { id }),
-    reorder: (ids) => call<Favorite[]>(IPC.favoritesReorder, { ids }),
+    list: () => dedupedCall<Favorite[]>(IPC.favoritesList, undefined),
+    add: (input) => dedupedCall<Favorite[]>(IPC.favoritesAdd, { input }),
+    update: (id, partial) => dedupedCall<Favorite[]>(IPC.favoritesUpdate, { id, partial }),
+    remove: (id) => dedupedCall<Favorite[]>(IPC.favoritesRemove, { id }),
+    reorder: (ids) => dedupedCall<Favorite[]>(IPC.favoritesReorder, { ids }),
   },
   history: {
-    list: (opts) => call<HistoryEntry[]>(IPC.historyList, { opts }),
-    search: (q) => call<HistoryEntry[]>(IPC.historySearch, { q }),
-    remove: (id) => call(IPC.historyRemove, { id }),
-    clear: () => call(IPC.historyClear),
+    list: (opts) => dedupedCall<HistoryEntry[]>(IPC.historyList, { opts }),
+    search: (q) => dedupedCall<HistoryEntry[]>(IPC.historySearch, { q }),
+    remove: (id) => dedupedCall(IPC.historyRemove, { id }),
+    clear: () => dedupedCall(IPC.historyClear, undefined),
     onChanged: (cb) => on<void>(IPC.evtHistoryChanged, cb),
   },
   saved: {
-    list: () => call<SavedItem[]>(IPC.savedList),
-    add: (input) => call<SavedItem[]>(IPC.savedAdd, { input }),
-    remove: (id) => call<SavedItem[]>(IPC.savedRemove, { id }),
-    has: (url) => call<boolean>(IPC.savedHas, { url }),
-    update: (id, partial) => call<SavedItem[]>(IPC.savedUpdate, { id, partial }),
-    renameTag: (oldT, newT) => call<SavedItem[]>(IPC.savedRenameTag, { oldT, newT }),
-    deleteTag: (tag) => call<SavedItem[]>(IPC.savedDeleteTag, { tag }),
-    tagUnion: () => call<string[]>(IPC.savedTagUnion),
+    list: () => dedupedCall<SavedItem[]>(IPC.savedList, undefined),
+    add: (input) => dedupedCall<SavedItem[]>(IPC.savedAdd, { input }),
+    remove: (id) => dedupedCall<SavedItem[]>(IPC.savedRemove, { id }),
+    has: (url) => dedupedCall<boolean>(IPC.savedHas, { url }),
+    update: (id, partial) => dedupedCall<SavedItem[]>(IPC.savedUpdate, { id, partial }),
+    renameTag: (oldT, newT) => dedupedCall<SavedItem[]>(IPC.savedRenameTag, { oldT, newT }),
+    deleteTag: (tag) => dedupedCall<SavedItem[]>(IPC.savedDeleteTag, { tag }),
+    tagUnion: () => dedupedCall<string[]>(IPC.savedTagUnion, undefined),
   },
   settings: {
-    get: () => call<Settings>(IPC.settingsGet),
-    set: (partial) => call<Settings>(IPC.settingsSet, { partial }),
+    get: () => dedupedCall<Settings>(IPC.settingsGet, undefined),
+    set: (partial) => dedupedCall<Settings>(IPC.settingsSet, { partial }),
   },
   adblock: {
-    setEnabled: (enabled) => call<AdblockState>(IPC.adblockSetEnabled, { enabled }),
-    toggleAllowlist: (host) => call<AdblockState>(IPC.adblockToggleAllowlist, { host }),
-    removeAllowlist: (host) => call<AdblockState>(IPC.adblockRemoveAllowlist, { host }),
-    clearAllowlist: () => call<AdblockState>(IPC.adblockClearAllowlist),
-    getState: () => call<AdblockState>(IPC.adblockGetState),
+    setEnabled: (enabled) => dedupedCall<AdblockState>(IPC.adblockSetEnabled, { enabled }),
+    toggleAllowlist: (host) => dedupedCall<AdblockState>(IPC.adblockToggleAllowlist, { host }),
+    removeAllowlist: (host) => dedupedCall<AdblockState>(IPC.adblockRemoveAllowlist, { host }),
+    clearAllowlist: () => dedupedCall<AdblockState>(IPC.adblockClearAllowlist, undefined),
+    getState: () => dedupedCall<AdblockState>(IPC.adblockGetState, undefined),
     onBlockedCount: (cb) => {
       // Android has no Tauri event bus on the content side; MainActivity pushes
       // BlockedCount via window.__aegisBlockedCount (set up here), mirroring nav state /
@@ -273,48 +567,49 @@ export const aegis: AegisApi = {
     },
   },
   lists: {
-    updateNow: () => call<void>(IPC.listsUpdateNow),
+    updateNow: () => dedupedCall<void>(IPC.listsUpdateNow, undefined),
     onUpdateResult: (cb) => on<ListUpdateResult>(IPC.evtListsUpdateResult, cb),
   },
   subs: {
-    list: () => call<Subscription[]>(IPC.subsList),
-    setEnabled: (listId, enabled) => call<Subscription[]>(IPC.subsSetEnabled, { listId, enabled }),
-    add: (url) => call<Subscription[]>(IPC.subsAdd, { url }),
-    remove: (listId) => call<Subscription[]>(IPC.subsRemove, { listId }),
+    list: () => dedupedCall<Subscription[]>(IPC.subsList, undefined),
+    setEnabled: (listId, enabled) =>
+      dedupedCall<Subscription[]>(IPC.subsSetEnabled, { listId, enabled }),
+    add: (url) => dedupedCall<Subscription[]>(IPC.subsAdd, { url }),
+    remove: (listId) => dedupedCall<Subscription[]>(IPC.subsRemove, { listId }),
   },
   customFilters: {
-    get: () => call<string>(IPC.customFiltersGet),
-    set: (text) => call<string>(IPC.customFiltersSet, { text }),
+    get: () => dedupedCall<string>(IPC.customFiltersGet, undefined),
+    set: (text) => dedupedCall<string>(IPC.customFiltersSet, { text }),
   },
   downloads: {
-    list: () => call<DownloadEntry[]>(IPC.downloadsList),
-    remove: (id) => call<DownloadEntry[]>(IPC.downloadsRemove, { id }),
-    clear: () => call<DownloadEntry[]>(IPC.downloadsClear),
-    openFile: (id) => call(IPC.downloadsOpenFile, { id }),
-    showInFolder: (id) => call(IPC.downloadsShowInFolder, { id }),
-    cancel: (id) => call(IPC.downloadsCancel, { id }),
+    list: () => dedupedCall<DownloadEntry[]>(IPC.downloadsList, undefined),
+    remove: (id) => dedupedCall<DownloadEntry[]>(IPC.downloadsRemove, { id }),
+    clear: () => dedupedCall<DownloadEntry[]>(IPC.downloadsClear, undefined),
+    openFile: (id) => dedupedCall(IPC.downloadsOpenFile, { id }),
+    showInFolder: (id) => dedupedCall(IPC.downloadsShowInFolder, { id }),
+    cancel: (id) => dedupedCall(IPC.downloadsCancel, { id }),
     onChanged: (cb) => on<void>(IPC.evtDownloadsChanged, cb),
   },
   permissions: {
-    list: () => call<SitePermission[]>(IPC.permissionsList),
+    list: () => dedupedCall<SitePermission[]>(IPC.permissionsList, undefined),
     remove: (origin, permission) =>
-      call<SitePermission[]>(IPC.permissionsRemove, { origin, permission }),
-    clear: () => call<SitePermission[]>(IPC.permissionsClear),
-    resolve: (requestId, decision) => call(IPC.permissionsResolve, { requestId, decision }),
+      dedupedCall<SitePermission[]>(IPC.permissionsRemove, { origin, permission }),
+    clear: () => dedupedCall<SitePermission[]>(IPC.permissionsClear, undefined),
+    resolve: (requestId, decision) => dedupedCall(IPC.permissionsResolve, { requestId, decision }),
     onPrompt: (cb) => on<PermissionPrompt>(IPC.evtPermissionsPrompt, cb),
   },
   data: {
     // No native save dialog (it renders in the OS's light theme, clashing with
     // Aegis's dark UI). The backend writes the backup to the Downloads dir and
     // returns the path, which the Data tab shows in a toast.
-    export: async () => call<{ ok: boolean; path?: string }>(IPC.dataExport, {}),
+    export: async () => dedupedCall<{ ok: boolean; path?: string }>(IPC.dataExport, {}),
     // No native open dialog. Import from JSON pasted into the in-app field when
     // given; otherwise restore the last export from the Downloads dir.
     import: async (mode, source) => {
       const text = source?.text?.trim() ?? '';
       const result = text
-        ? await call<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode, text })
-        : await call<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode });
+        ? await dedupedCall<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode, text })
+        : await dedupedCall<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode });
       // Make the import live immediately — favorites/saved/settings hooks only fetch
       // on mount, so reload the chrome to re-read everything (no app restart). Delay
       // briefly so the success toast is visible first.
@@ -325,11 +620,11 @@ export const aegis: AegisApi = {
     },
   },
   picker: {
-    start: () => call<{ ok: boolean; rule?: string }>(IPC.pickerStart),
+    start: () => dedupedCall<{ ok: boolean; rule?: string }>(IPC.pickerStart, undefined),
   },
   update: {
-    getState: () => call<UpdateState>(IPC.updateGetState),
-    checkNow: () => call(IPC.updateCheckNow),
+    getState: () => dedupedCall<UpdateState>(IPC.updateGetState, undefined),
+    checkNow: () => dedupedCall(IPC.updateCheckNow, undefined),
     // Android can't self-install via the Tauri updater; open the releases page so the
     // user can download the new APK. Desktop restarts into the installed update.
     restartToInstall: () => {
@@ -338,30 +633,34 @@ export const aegis: AegisApi = {
         a.openExternal('https://github.com/HappyHobo085/Aegis/releases/latest');
         return Promise.resolve();
       }
-      return call(IPC.updateRestartToInstall);
+      return dedupedCall(IPC.updateRestartToInstall, undefined);
     },
     onState: (cb) => on<UpdateState>(IPC.evtUpdateState, cb),
   },
   safety: {
-    getState: () => call<SafetyInterstitialPayload | null>(IPC.safetyGetState),
-    proceed: (url) => call(IPC.safetyProceed, { url }),
-    listExceptions: () => call<string[]>(IPC.safetyListExceptions),
-    removeException: (host) => call(IPC.safetyRemoveException, { host }),
+    getState: () => dedupedCall<SafetyInterstitialPayload | null>(IPC.safetyGetState, undefined),
+    proceed: (url) => dedupedCall(IPC.safetyProceed, { url }),
+    listExceptions: () => dedupedCall<string[]>(IPC.safetyListExceptions, undefined),
+    removeException: (host) => dedupedCall(IPC.safetyRemoveException, { host }),
     onInterstitial: (cb) => on<SafetyInterstitialPayload | null>(IPC.evtSafetyInterstitial, cb),
   },
   sync: {
-    getState: () => call<SyncState>(IPC.syncGetState),
-    enableNew: (opts) => call<{ recoveryPhrase: string }>(IPC.syncEnableNew, { ...(opts ?? {}) }),
-    enableFromPhrase: (opts) => call<SyncState>(IPC.syncEnableFromPhrase, { ...opts }),
-    unlock: (opts) => call<SyncState>(IPC.syncUnlock, { ...opts }),
-    disable: (opts) => call<SyncState>(IPC.syncDisable, { ...(opts ?? {}) }),
-    syncNow: () => call<SyncState>(IPC.syncNow),
+    getState: () => dedupedCall<SyncState>(IPC.syncGetState, undefined),
+    enableNew: (opts) =>
+      dedupedCall<{ recoveryPhrase: string }>(IPC.syncEnableNew, { ...(opts ?? {}) }),
+    enableFromPhrase: (opts) => dedupedCall<SyncState>(IPC.syncEnableFromPhrase, { ...opts }),
+    unlock: (opts) => dedupedCall<SyncState>(IPC.syncUnlock, { ...opts }),
+    disable: (opts) => dedupedCall<SyncState>(IPC.syncDisable, { ...(opts ?? {}) }),
+    syncNow: () => dedupedCall<SyncState>(IPC.syncNow, undefined),
+    scanNow: () => dedupedCall<SyncState>(IPC.scanNow, undefined),
     testConnection: (url: string) =>
-      call<{ ok: boolean; latencyMs?: number; error?: string }>(IPC.syncTestConnection, { url }),
+      dedupedCall<{ ok: boolean; latencyMs?: number; error?: string }>(IPC.syncTestConnection, {
+        url,
+      }),
     getRecoveryPhrase: (opts) =>
-      call<{ recoveryPhrase: string }>(IPC.syncGetRecoveryPhrase, { ...opts }),
-    listDevices: () => call<SyncDevice[]>(IPC.syncListDevices),
-    removeDevice: (deviceId) => call<SyncDevice[]>(IPC.syncRemoveDevice, { deviceId }),
+      dedupedCall<{ recoveryPhrase: string }>(IPC.syncGetRecoveryPhrase, { ...opts }),
+    listDevices: () => dedupedCall<SyncDevice[]>(IPC.syncListDevices, undefined),
+    removeDevice: (deviceId) => dedupedCall<SyncDevice[]>(IPC.syncRemoveDevice, { deviceId }),
     onState: (cb) => on<SyncState>(IPC.evtSyncState, cb),
     onChanged: (cb) => on<SyncChanged>(IPC.evtSyncChanged, cb),
   },
@@ -372,7 +671,7 @@ export const aegis: AegisApi = {
         a.find(query, caseSensitive);
         return Promise.resolve();
       }
-      return call(IPC.findStart, { viewId, query, caseSensitive });
+      return dedupedCall(IPC.findStart, { viewId, query, caseSensitive });
     },
     next: (viewId) => {
       const a = androidBridge();
@@ -380,7 +679,7 @@ export const aegis: AegisApi = {
         a.findNext();
         return Promise.resolve();
       }
-      return call(IPC.findNext, { viewId });
+      return dedupedCall(IPC.findNext, { viewId });
     },
     prev: (viewId) => {
       const a = androidBridge();
@@ -388,7 +687,7 @@ export const aegis: AegisApi = {
         a.findPrev();
         return Promise.resolve();
       }
-      return call(IPC.findPrev, { viewId });
+      return dedupedCall(IPC.findPrev, { viewId });
     },
     close: (viewId) => {
       const a = androidBridge();
@@ -396,7 +695,7 @@ export const aegis: AegisApi = {
         a.findClose();
         return Promise.resolve();
       }
-      return call(IPC.findClose, { viewId });
+      return dedupedCall(IPC.findClose, { viewId });
     },
     onState: (cb) => {
       // Android has no Tauri event bus on the content side; the Kotlin client pushes
@@ -421,7 +720,7 @@ export const aegis: AegisApi = {
     get: (viewId) => {
       const a = androidBridge();
       if (a) return Promise.resolve({ viewId, factor: androidZoom.get(viewId) ?? 1.0 });
-      return call<ZoomState>(IPC.zoomGet, { viewId });
+      return dedupedCall<ZoomState>(IPC.zoomGet, { viewId });
     },
     set: (viewId, factor) => {
       const a = androidBridge();
@@ -439,7 +738,7 @@ export const aegis: AegisApi = {
         );
         return Promise.resolve({ viewId, factor: f });
       }
-      return call<ZoomState>(IPC.zoomSet, { viewId, factor });
+      return dedupedCall<ZoomState>(IPC.zoomSet, { viewId, factor });
     },
     reset: (viewId) => aegis.zoom.set(viewId, 1.0),
     onChanged: (cb) => {
@@ -459,13 +758,15 @@ export const aegis: AegisApi = {
     },
   },
   fingerprint: {
-    getState: () => call<FingerprintState>(IPC.fingerprintGetState),
-    toggleAllowlist: (host) => call<FingerprintState>(IPC.fingerprintToggleAllowlist, { host }),
-    removeAllowlist: (host) => call<FingerprintState>(IPC.fingerprintRemoveAllowlist, { host }),
-    clearAllowlist: () => call<FingerprintState>(IPC.fingerprintClearAllowlist),
+    getState: () => dedupedCall<FingerprintState>(IPC.fingerprintGetState, undefined),
+    toggleAllowlist: (host) =>
+      dedupedCall<FingerprintState>(IPC.fingerprintToggleAllowlist, { host }),
+    removeAllowlist: (host) =>
+      dedupedCall<FingerprintState>(IPC.fingerprintRemoveAllowlist, { host }),
+    clearAllowlist: () => dedupedCall<FingerprintState>(IPC.fingerprintClearAllowlist, undefined),
   },
   proxy: {
-    getState: () => call<ProxyState>(IPC.proxyGetState),
+    getState: () => dedupedCall<ProxyState>(IPC.proxyGetState, undefined),
     setConfig: (config: ProxyConfig) => {
       // On Android: drive the process-global ProxyController via the bridge in addition
       // to the normal IPC call (which persists + emits proxy.state).
@@ -486,30 +787,47 @@ export const aegis: AegisApi = {
           a.clearProxy?.();
         }
       }
-      return call<ProxyState>(IPC.proxySetConfig, { config });
+      return dedupedCall<ProxyState>(IPC.proxySetConfig, { config });
     },
     clear: () => {
       androidBridge()?.clearProxy?.();
-      return call<ProxyState>(IPC.proxyClear);
+      return dedupedCall<ProxyState>(IPC.proxyClear, undefined);
     },
     testConnection: (config: ProxyConfig) =>
-      call<{ ok: boolean; latencyMs?: number; error?: string }>(IPC.proxyTestConnection, {
+      dedupedCall<{ ok: boolean; latencyMs?: number; error?: string }>(IPC.proxyTestConnection, {
         config,
       }),
     onState: (cb: (s: ProxyState) => void) => on<ProxyState>(IPC.evtProxyState, cb),
   },
   vault: {
-    getState: () => call<VaultState>(IPC.vaultGetState),
-    create: (masterPassword: string) => call<VaultState>(IPC.vaultCreate, { masterPassword }),
-    unlock: (masterPassword: string) => call<VaultState>(IPC.vaultUnlock, { masterPassword }),
-    lock: () => call<VaultState>(IPC.vaultLock),
-    list: () => call<VaultRecord[]>(IPC.vaultList),
-    add: (input: VaultRecordInput) => call<VaultRecord[]>(IPC.vaultAdd, { input }),
+    getState: () => dedupedCall<VaultState>(IPC.vaultGetState, undefined),
+    create: (masterPassword: string) =>
+      dedupedCall<VaultState>(IPC.vaultCreate, { masterPassword }),
+    unlock: (masterPassword: string) =>
+      dedupedCall<VaultState>(IPC.vaultUnlock, { masterPassword }),
+    lock: () => dedupedCall<VaultState>(IPC.vaultLock, undefined),
+    list: () => dedupedCall<VaultRecord[]>(IPC.vaultList, undefined),
+    add: (input: VaultRecordInput) => dedupedCall<VaultRecord[]>(IPC.vaultAdd, { input }),
     update: (uuid: string, partial: Partial<VaultRecordInput>) =>
-      call<VaultRecord[]>(IPC.vaultUpdate, { uuid, partial }),
-    remove: (uuid: string) => call<VaultRecord[]>(IPC.vaultRemove, { uuid }),
-    search: (q: string) => call<VaultRecord[]>(IPC.vaultSearch, { q }),
+      dedupedCall<VaultRecord[]>(IPC.vaultUpdate, { uuid, partial }),
+    remove: (uuid: string) => dedupedCall<VaultRecord[]>(IPC.vaultRemove, { uuid }),
+    search: (q: string) => dedupedCall<VaultRecord[]>(IPC.vaultSearch, { q }),
+    autofill: (options: { domain: string; username?: string }) =>
+      dedupedCall<VaultRecord[]>(IPC.vaultAutofill, { ...options }),
+    autofillSuggestions: (options: { q: string }) =>
+      dedupedCall<VaultRecord[]>(IPC.vaultAutofillSuggestions, options),
     onState: (cb: (s: VaultState) => void) => on<VaultState>(IPC.evtVaultState, cb),
+  },
+  /** Form detection for autofill triggering */
+  form: {
+    /** Trigger a login form scan in the current content webview */
+    detectLoginForm(): Promise<FormLoginDetectedResult> {
+      return dedupedCall<FormLoginDetectedResult>(IPC.formDetectLoginForm, {});
+    },
+    /** Subscribe to login form detection events */
+    onLoginFormDetected(cb: (result: FormLoginDetectedResult) => void) {
+      return on<FormLoginDetectedResult>(IPC.evtFormDetectResult, cb);
+    },
   },
 };
 

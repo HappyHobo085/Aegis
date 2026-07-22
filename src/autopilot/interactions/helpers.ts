@@ -3,6 +3,7 @@
 import type { NavState, ViewId } from '../../../shared/types';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import type { InteractionCtx } from './types';
+import { AdaptiveTimeout } from '../timeout';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -74,7 +75,7 @@ export async function waitFor<T>(
   label: string,
   timeoutMs = 8000,
 ): Promise<NonNullable<T>> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + AdaptiveTimeout.ms(timeoutMs);
   for (;;) {
     const v = await fn();
     if (v) return v as NonNullable<T>;

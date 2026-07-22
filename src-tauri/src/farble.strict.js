@@ -403,6 +403,52 @@
     } catch (e) {}
 
     // ============================================================
+
+    // ---- Plugins fingerprinting protection ----
+    if (typeof navigator !== 'undefined' && navigator.plugins && typeof navigator.plugins.length === 'number') {
+      try {
+        const pluginsDescriptor = Object.getOwnPropertyDescriptor(navigator, 'plugins');
+        if (pluginsDescriptor && pluginsDescriptor.configurable) {
+          const seedBytes = hexToBytes(SEEDHEX);
+          let seedNum = 0;
+          for (let i = 0; i < Math.min(seedBytes.length, 4); i++) {
+            seedNum = (seedNum << 8) | seedBytes[i];
+          }
+          // Combine with origin for per-origin variation
+          const originStr = typeof location !== 'undefined' && location ? location.href : '';
+          let originHash = 0;
+          for (let i = 0; i < originStr.length; i++) {
+            originHash = (originHash << 5) - originHash + originStr.charCodeAt(i);
+            originHash |= 0; // Convert to 32bit integer
+          }
+          const combinedSeed = seedNum ^ originHash;
+          const fakeLength = ((combinedSeed & 0xFF) % 7) + 1; // Range 1-7
+          
+          Object.defineProperty(navigator, 'plugins', {
+            configurable: true,
+            get: function() {
+              // Return a plugin-like object with the masked length
+              const fakePlugins = {
+                length: fakeLength,
+                item: function(index) {
+                  return null || undefined;
+                },
+                namedItem: function(name) {
+                  return null || undefined;
+                }
+              };
+              // Make it array-like
+              for (let i = 0; i < fakeLength; i++) {
+                this[i] = null;
+              }
+              return fakePlugins;
+            }
+          });
+        }
+      } catch (e) {
+        // Fail-open: if we can't protect plugins, continue without breaking
+      }
+    }
     // STRICT-ONLY: WebGL fingerprint perturbation
     // ============================================================
     // Plausible strings returned for string params (VENDOR/RENDERER/UNMASKED_*).
@@ -493,6 +539,7 @@
     // ---- WebGL: readPixels (LSB noise on RGBA output) ----
     // readPixels writes into a caller-supplied ArrayBufferView. We add ±1 noise on the
     // R channel of each pixel (same approach as canvas getImageData). FAIL-OPEN.
+    // Only modify when format=RGBA and type=UNSIGNED_BYTE to avoid memory corruption.
     function _patchReadPixels(CtorProto) {
       try {
         if (!CtorProto || typeof CtorProto.readPixels !== 'function') return;
@@ -506,8 +553,12 @@
             return;
           }
           try {
-            // Only perturb Uint8Array / Uint8ClampedArray output (RGBA bytes).
-            if (pixels && (pixels instanceof Uint8Array || pixels instanceof Uint8ClampedArray)) {
+            // Only perturb UInt8Array/UInt8ClampedArray output when format=RGBA and type=UNSIGNED_BYTE
+            // Format: 0x1908 = GL_RGBA, Type: 0x1401 = GL_UNSIGNED_BYTE
+            if (pixels &&
+                (pixels instanceof Uint8Array || pixels instanceof Uint8ClampedArray) &&
+                format === 0x1908 &&
+                type === 0x1401) {
               for (var i = 0; i < pixels.length; i += 4) {
                 var nb = _noiseByte();
                 pixels[i] = Math.max(0, Math.min(255, pixels[i] + nb));

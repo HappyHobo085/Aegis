@@ -103,7 +103,6 @@ describe('applyTheme', () => {
 
   it('treats a missing themeMode as system', () => {
     mockMatchMedia(false);
-    // @ts-expect-error — exercise the runtime default for callers passing only primaryColor
     applyTheme({ primaryColor: '#111' });
     expect(document.documentElement.getAttribute('data-theme')).toBe('light');
   });

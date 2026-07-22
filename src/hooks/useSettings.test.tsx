@@ -7,8 +7,8 @@ const get = vi.fn();
 const set = vi.fn();
 const applyTheme = vi.fn();
 let watchSystemThemeCallback: (() => void) | null = null;
-const watchSystemTheme = vi.fn((cb: () => void) => {
-  watchSystemThemeCallback = cb;
+const watchSystemTheme = vi.fn((...args: any[]) => {
+  watchSystemThemeCallback = args[0] as () => void;
   return () => {
     watchSystemThemeCallback = null;
   };

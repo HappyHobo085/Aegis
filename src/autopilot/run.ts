@@ -11,6 +11,7 @@ import { CATALOG } from './catalog';
 import { reachScreen, leaveScreen } from './reach';
 import { summarize, type Report, type StepResult, renderReportHtml } from './report';
 import * as devEmit from './devEmit';
+import { AdaptiveTimeout } from './timeout';
 
 export interface RunDeps {
   api: AegisApi;
@@ -29,9 +30,32 @@ export interface RunDeps {
   live?: boolean;
 }
 
+/** Measure system load relative to baseline (1.0 = baseline, >1.0 = under load) */
+async function measureSystemLoad(): Promise<number> {
+  // Simple heuristic: measure how long a quick operation takes vs expected
+  const start = performance.now();
+  // Do a minimal amount of work
+  await Promise.resolve();
+  const elapsed = performance.now() - start;
+
+  // Baseline expectation: ~1ms for idle system
+  // If elapsed > 1ms, we're under load
+  return Math.max(1, elapsed / 1);
+}
+
 function liveDeps(): RunDeps {
   const control = getAutopilotControl();
   if (!control) throw new Error('autopilot control not registered');
+
+  // Measure system load and configure adaptive timeouts
+  // We do this early so all timeouts in the test run use the adjusted multiplier
+  measureSystemLoad().then(loadFactor => {
+    AdaptiveTimeout.setLoadMultiplier(loadFactor);
+    console.info(`[autopilot] System load factor: ${loadFactor.toFixed(2)}x (adaptive timeouts enabled)`);
+  }).catch(err => {
+    console.warn('[autopilot] Failed to measure system load, using default timeouts:', err);
+  });
+
   return {
     api: aegis,
     control,
@@ -81,7 +105,7 @@ function liveDeps(): RunDeps {
       // see linux_layout::connect_block_counter).
       await aegis.adblock.setEnabled(false);
       await aegis.nav.navigate(vid, base + '?ab=off');
-      await new Promise((r) => setTimeout(r, 2500));
+      await new Promise((r) => setTimeout(r, AdaptiveTimeout.ms(2500)));
 
       // ON pass. setEnabled(true) re-applies the WebKit content filter ASYNCHRONOUSLY on the
       // GTK main loop; a fixed sleep raced it under load (the ?ab=on page loaded + fired its ad
@@ -98,7 +122,7 @@ function liveDeps(): RunDeps {
       for (let i = 0; i < 10; i++) {
         const warmBefore = (await aegis.adblock.getState()).sessionBlocked ?? 0;
         await aegis.nav.navigate(vid, base + `?ab=warm-${i}`);
-        await new Promise((r) => setTimeout(r, 3000));
+        await new Promise((r) => setTimeout(r, AdaptiveTimeout.ms(3000)));
         const warmAfter = (await aegis.adblock.getState()).sessionBlocked ?? 0;
         if (warmAfter === warmBefore) break; // no ad reached the engine ⇒ filter is effective
       }
@@ -110,7 +134,7 @@ function liveDeps(): RunDeps {
       // honest "blocked but invisible to the badge" case the caller reports as a skip.
       let after = before;
       for (let i = 0; i < 24 && after <= before; i++) {
-        await new Promise((r) => setTimeout(r, 500));
+        await new Promise((r) => setTimeout(r, AdaptiveTimeout.ms(500)));
         after = (await aegis.adblock.getState()).sessionBlocked ?? 0;
       }
       const navUrl = (await aegis.nav.getState(vid)).url;

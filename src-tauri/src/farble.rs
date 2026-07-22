@@ -34,11 +34,15 @@ static SESSION_SALT: std::sync::OnceLock<[u8; 32]> = std::sync::OnceLock::new();
 pub fn init_session_salt() {
     SESSION_SALT.get_or_init(|| {
         let mut b = [0u8; 32];
-        // getrandom never fails on a booted OS; the _ suppresses the unused-result warning.
-        // If it somehow did, zero-fill is still one-way through HKDF (farbling degrades to
-        // a fixed noise per origin, still no super-cookie). Fail-open is the right posture:
-        // a CSPRNG failure disables farbling variation but must NOT crash the browser.
-        let _ = getrandom::getrandom(&mut b);
+        match getrandom::getrandom(&mut b) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("[farble] Warning: getrandom failed with {e}, using fallback randomness");
+                use rand::RngCore;
+                let mut rng = rand::thread_rng();
+                rng.fill_bytes(&mut b);
+            }
+        }
         b
     });
 }
@@ -48,7 +52,15 @@ pub fn init_session_salt() {
 fn salt() -> [u8; 32] {
     *SESSION_SALT.get_or_init(|| {
         let mut b = [0u8; 32];
-        let _ = getrandom::getrandom(&mut b);
+        match getrandom::getrandom(&mut b) {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!("[farble] Warning: getrandom failed with {e}, using fallback randomness");
+                use rand::RngCore;
+                let mut rng = rand::thread_rng();
+                rng.fill_bytes(&mut b);
+            }
+        }
         b
     })
 }

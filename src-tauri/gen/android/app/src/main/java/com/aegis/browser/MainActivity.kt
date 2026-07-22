@@ -661,26 +661,18 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
   }
 
-  /** The mobile counterpart of the desktop RedirectBar: when the guard cancels a scripted
-   *  cross-origin top-frame redirect, show a native Snackbar over the content WebView (a
-   *  chrome-layer bar can't paint over the native WebView; a Snackbar floats above it).
-   *  "Open anyway" opens the destination in a new tab via the chrome's __aegisOpenTab. */
+  /**
+   * When a redirect is blocked, open it in a new tab instead of showing blocking UI.
+   * This prevents the navigation in the current tab (for security) while providing
+   * the content in a new tab for user convenience.
+   */
   private fun showRedirectBlocked(to: String) {
-    val host = try {
-      Uri.parse(to).host ?: to
-    } catch (_: Throwable) {
-      to
-    }
+    // Open the redirect URL in a new tab instead of showing blocking UI
     runOnUiThread {
-      val root = findViewById<View>(android.R.id.content) ?: return@runOnUiThread
-      Snackbar.make(root, "Blocked a redirect to $host", 7000)
-        .setAction("Open anyway") {
-          chromeWebView?.evaluateJavascript(
-            "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(to)})",
-            null,
-          )
-        }
-        .show()
+      chromeWebView?.evaluateJavascript(
+        "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(to)})",
+        null,
+      )
     }
   }
 

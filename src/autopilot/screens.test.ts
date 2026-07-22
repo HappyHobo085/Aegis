@@ -23,7 +23,7 @@ describe('SCREENS', () => {
       'redirectBar',
       'confirmDialog',
       'home',
-    ])
+    ] as const)
       expect(ids.has(id)).toBe(true);
   });
   it('has unique ids', () => {

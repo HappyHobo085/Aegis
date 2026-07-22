@@ -2,24 +2,24 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SecurityTab } from './SecurityTab';
-import type { FingerprintState } from '../../shared/types';
+import type { FingerprintState, Settings } from '../../shared/types';
 
 const baseSettings = {
   httpsOnly: true,
   webrtcPolicy: 'public-only',
   antiFingerprint: 'off',
-} as never;
+} as Settings;
 const baseFingerprintState: FingerprintState = { level: 'off', allowlistedHosts: [] };
 
 function renderSecurityTab(
   overrides: {
-    update?: ReturnType<typeof vi.fn>;
+    update?: (partial: Partial<Settings>) => void;
     listExceptions?: () => Promise<string[]>;
-    removeException?: ReturnType<typeof vi.fn>;
+    removeException?: (host: string) => void;
     fingerprintState?: FingerprintState;
-    toggleFingerprintAllowlist?: ReturnType<typeof vi.fn>;
-    removeFingerprintAllowlist?: ReturnType<typeof vi.fn>;
-    settings?: typeof baseSettings;
+    toggleFingerprintAllowlist?: (host: string) => void;
+    removeFingerprintAllowlist?: (host: string) => void;
+    settings?: Settings;
   } = {},
 ) {
   return render(
@@ -79,7 +79,7 @@ describe('SecurityTab', () => {
   // Anti-fingerprinting section
 
   it('renders anti-fingerprinting level select with value from settings', () => {
-    const settings = { ...baseSettings, antiFingerprint: 'standard' } as never;
+    const settings = { ...baseSettings, antiFingerprint: 'standard' } as Settings;
     renderSecurityTab({ settings });
     const select = screen.getByRole('combobox', { name: /anti-fingerprinting level/i });
     expect(select).toHaveValue('standard');

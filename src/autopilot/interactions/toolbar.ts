@@ -10,6 +10,7 @@ import {
   liveNavigate,
   activeViewId,
 } from './helpers';
+import { AdaptiveTimeout } from '../timeout';
 
 export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
   // ─── existing Task-2 seed ───────────────────────────────────────────────
@@ -136,7 +137,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
         const isHome = (u: string): boolean =>
           home === 'about:blank' ? u === '' || u.startsWith('about:blank') : u.startsWith(home);
         const vid = await activeViewId(ctx);
-        const deadline = Date.now() + 8000;
+        const deadline = Date.now() + AdaptiveTimeout.ms(8000);
         while (Date.now() < deadline) {
           const { url } = await ctx.aegis.nav.getState(vid);
           if (url !== _before && isHome(url))
@@ -220,7 +221,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
         return 'Save bookmark → saved.add()';
       }
       const url = fixtureUrl('bookmark');
-      const deadline = Date.now() + 8000;
+      const deadline = Date.now() + AdaptiveTimeout.ms(8000);
       while (Date.now() < deadline) {
         if ((await ctx.aegis.saved.list()).some((i) => i.url === url)) {
           // Restore: unsave so the next run starts clean.
@@ -265,7 +266,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     assert: async (ctx) => {
       // Live: the fixture item must be gone from the saved list.
       const url = fixtureUrl('bookmarkremove');
-      const deadline = Date.now() + 8000;
+      const deadline = Date.now() + AdaptiveTimeout.ms(8000);
       while (Date.now() < deadline) {
         if (!(await ctx.aegis.saved.list()).some((i) => i.url === url))
           return `Remove bookmark → saved.remove() → ${url} gone from list`;

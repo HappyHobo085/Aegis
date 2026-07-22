@@ -400,5 +400,38 @@
         } catch (e) {}
       }
     } catch (e) {}
+    // ---- Plugins fingerprinting protection ----
+    if (typeof navigator !== 'undefined' && navigator.plugins && typeof navigator.plugins.length === 'number') {
+      try {
+        const pluginsDescriptor = Object.getOwnPropertyDescriptor(navigator, 'plugins');
+        if (pluginsDescriptor && pluginsDescriptor.configurable) {
+          const seedBytes = hexToBytes(SEEDHEX);
+          let seedNum = 0;
+          for (let i = 0; i < Math.min(seedBytes.length, 4); i++) {
+            seedNum = (seedNum << 8) | seedBytes[i];
+          }
+          const originStr = typeof location !== 'undefined' && location ? location.href : '';
+          let originHash = 0;
+          for (let i = 0; i < originStr.length; i++) {
+            originHash = (originHash << 5) - originHash + originStr.charCodeAt(i);
+            originHash |= 0;
+          }
+          const combinedSeed = seedNum ^ originHash;
+          const fakeLength = ((combinedSeed & 0xFF) % 7) + 1;
+          Object.defineProperty(navigator, 'plugins', {
+            configurable: true,
+            get: function() {
+              const fakePlugins = {
+                length: fakeLength,
+                item: function(index) { return null; },
+                namedItem: function(name) { return null; }
+              };
+              for (let i = 0; i < fakeLength; i++) fakePlugins[i] = null;
+              return fakePlugins;
+            }
+          });
+        }
+      } catch (e) {}
+    }
   } catch (e) {}
 })('__AEGIS_FARBLE_SEED__');
