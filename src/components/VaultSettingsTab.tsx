@@ -22,7 +22,12 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
   const { state } = vault;
 
   // Autofill suggestions hook (for future UI integration)
-  const { suggestions: autofillSuggestions, loading: autofillLoading, error: autofillError, refetch: refetchAutofill } = useVaultDomainSuggestions();
+  const {
+    suggestions: autofillSuggestions,
+    loading: autofillLoading,
+    error: autofillError,
+    refetch: refetchAutofill,
+  } = useVaultDomainSuggestions();
 
   // ---- shared async helper ----
   const [busy, setBusy] = useState(false);
@@ -290,14 +295,22 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
     })();
   };
 
+  const CLIPBOARD_CLEAR_MS = 60_000;
+
   const handleCopy = (text: string) => {
     void (async () => {
       try {
         await navigator.clipboard.writeText(text);
-        toast.success('Copied');
+        toast.success('Copied — clipboard clears in 60s');
+        // Clear clipboard after delay to avoid leaving passwords exposed
+        setTimeout(() => {
+          void navigator.clipboard.writeText('').catch(() => {
+            // Best-effort: clipboard may have been overwritten by user
+          });
+        }, CLIPBOARD_CLEAR_MS);
       } catch (e) {
         console.error('Clipboard copy failed:', e);
-        toast.error('Couldn’t copy');
+        toast.error('Couldn\u0027t copy');
       }
     })();
   };
@@ -317,22 +330,18 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
       </div>
 
       <p className="vault-tab__notice">
-        Stored encrypted on this device. Aegis can autofill login forms on websites. Copy the
-        value when you need it.
+        Stored encrypted on this device. Aegis can autofill login forms on websites. Copy the value
+        when you need it.
       </p>
 
       {/* Autofill notice when vault is unlocked */}
       {!autofillLoading && !autofillError && autofillSuggestions.length > 0 && (
         <p className="vault-tab__notice">
-          {autofillSuggestions.length} credential{autofillSuggestions.length !== 1 ? 's' : ''} available for
-          autofill on the current site.
+          {autofillSuggestions.length} credential{autofillSuggestions.length !== 1 ? 's' : ''}{' '}
+          available for autofill on the current site.
         </p>
       )}
-      {autofillLoading && (
-        <p className="vault-tab__notice">
-          Checking for autofill credentials...
-        </p>
-      )}
+      {autofillLoading && <p className="vault-tab__notice">Checking for autofill credentials...</p>}
       {autofillError && (
         <p className="vault-tab__error" role="alert">
           Autofill error: {autofillError}

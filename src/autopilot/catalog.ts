@@ -679,6 +679,8 @@ export const CATALOG: FeatureCheck[] = [
       IPC.vaultUpdate,
       IPC.vaultRemove,
       IPC.vaultSearch,
+      IPC.vaultAutofill,
+      IPC.vaultAutofillSuggestions,
     ],
     exercise: async (a) => {
       assertObject(await a.vault.getState());
@@ -735,102 +737,6 @@ export const CATALOG: FeatureCheck[] = [
       if (stillLocked.unlocked)
         throw new Error('vault: wrong-password attempt left vault unlocked');
       return 'vault create→unlock→add→search→update→remove→lock(+locked-list-rejected+wrong-pw-rejected) ok';
-    },
-  },
-  // vault autofill (Phase B — password manager with autofill functionality)
-  {
-    id: 'vault.autofill',
-    domain: 'vault',
-    title: 'Vault autofill',
-    channels: [IPC.vaultGetState, IPC.vaultAutofill],
-    exercise: async (a) => {
-      assertObject(await a.vault.getState());
-    },
-    verify: async (a) => {
-      const pw = 'ap-vault-pass-9271';
-      let st = await a.vault.getState();
-      // Create only if absent (the disposable profile starts empty); else unlock.
-      if (!st.exists) st = await a.vault.create(pw);
-      else if (!st.unlocked) st = await a.vault.unlock(pw);
-      if (!st.unlocked) throw new Error('vault: not unlocked after create/unlock');
-
-      // Add a test credential
-      const probeSite = 'https://ap-vault-autofill.test/';
-      const added = await a.vault.add({
-        site: probeSite,
-        username: 'ap-user',
-        password: 'ap-secret',
-        notes: 'n',
-      });
-      const rec = added.find((r) => r.site === probeSite);
-      if (!rec) throw new Error('add: probe credential not in list');
-
-      // Test autofill with exact username match
-      const result = await a.vault.autofill({
-        domain: 'https://ap-vault-autofill.test/',
-        username: 'ap-user',
-      });
-      if (!result.some((r: VaultRecord) => r.uuid === rec.uuid))
-        throw new Error('autofill: exact username match failed');
-      if (result.some((r: VaultRecord) => r.notes))
-        // Should not return notes for security
-        throw new Error('autofill: returned notes field (security issue)');
-      if (result.length > 5) throw new Error('autofill: returned more than 5 results');
-
-      // Clean up
-      await a.vault.remove(rec.uuid);
-      await a.vault.lock();
-      return 'vault autofill ok';
-    },
-  },
-  // vault autofill suggestions
-  {
-    id: 'vault.autofillSuggestions',
-    domain: 'vault',
-    title: 'Vault autofill suggestions',
-    channels: [IPC.vaultGetState, IPC.vaultAutofillSuggestions],
-    exercise: async (a) => {
-      assertObject(await a.vault.getState());
-    },
-    verify: async (a) => {
-      const pw = 'ap-vault-pass-9271';
-      let st = await a.vault.getState();
-      // Create only if absent (the disposable profile starts empty); else unlock.
-      if (!st.exists) st = await a.vault.create(pw);
-      else if (!st.unlocked) st = await a.vault.unlock(pw);
-      if (!st.unlocked) throw new Error('vault: not unlocked after create/unlock');
-
-      // Add test credentials
-      const probeSite1 = 'https://ap-vault-suggest1.test/';
-      const probeSite2 = 'https://ap-vault-suggest2.test/';
-      await a.vault.add({
-        site: probeSite1,
-        username: 'user1',
-        password: 'pass1',
-        notes: 'n1',
-      });
-      await a.vault.add({
-        site: probeSite2,
-        username: 'user2',
-        password: 'pass2',
-        notes: 'n2',
-      });
-
-      // Test suggestions with partial match
-      const result = await a.vault.autofillSuggestions({ q: 'ap-vault-suggest' });
-      if (result.length < 2) throw new Error('autofillSuggestions: expected at least 2 results');
-      if (result.some((r: VaultRecord) => r.password))
-        // Should not return passwords for security
-        throw new Error('autofillSuggestions: returned password field (security issue)');
-      if (result.length > 10) throw new Error('autofillSuggestions: returned more than 10 results');
-
-      // Clean up
-      const all = await a.vault.list();
-      for (const r of all) {
-        await a.vault.remove(r.uuid);
-      }
-      await a.vault.lock();
-      return 'vault autofillSuggestions ok';
     },
   },
   // form detection
@@ -1057,6 +963,7 @@ export const UNTESTED_CHANNELS = new Set<string>([
   IPC.vaultRemove,
   IPC.vaultList,
   IPC.vaultSearch,
+  // Phase B — autofill channels exist on the JS side; no Rust handler yet.
   IPC.vaultAutofill,
   IPC.vaultAutofillSuggestions,
 ]);

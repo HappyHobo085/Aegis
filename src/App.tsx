@@ -75,12 +75,16 @@ import { FindBar } from './components/FindBar';
 import { MobileApp } from './components/mobile/MobileApp';
 import { installAutopilotControl } from './autopilot/control';
 
-const isMobile =
-  typeof document !== 'undefined' && document.documentElement.classList.contains('aegis-mobile');
+/** Runtime check for mobile shell — safe against import reordering. */
+function getIsMobile(): boolean {
+  return (
+    typeof document !== 'undefined' && document.documentElement.classList.contains('aegis-mobile')
+  );
+}
 
 // Windows hides the native "Tabs" menu bar (redundant with the tab strip), which drops
 // its keyboard accelerators — so the chrome handles the tab shortcuts itself there. macOS
-// keeps the menu (in the system menu bar), so it handles them natively; don't double-fire.
+// keeps the menu (in the system menu bar), so it handles them natively, to avoid double-firing.
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
@@ -227,7 +231,7 @@ function DesktopApp() {
   // strip (content insets below it).
   useContentInset(
     tabs.activeId,
-    !isMobile,
+    !getIsMobile(),
     (blockedRedirect ? REDIRECT_BAR_H : 0) + (find.open ? FIND_BAR_H : 0),
   );
 
@@ -633,7 +637,7 @@ function DesktopApp() {
   return (
     <div className={`app${activeProtection.privateMode ? ' app--private' : ''}`}>
       <SkipLink targetId={CONTENT_ANCHOR_ID} />
-      {!isMobile && (
+      {!getIsMobile() && (
         <TabStrip
           tabs={tabs.tabs}
           activeId={tabs.activeId}
@@ -962,7 +966,7 @@ function DesktopApp() {
 }
 
 export function App() {
-  if (isMobile) return <MobileApp />;
+  if (getIsMobile()) return <MobileApp />;
   return (
     <ChromeSurfaceProvider>
       <DesktopApp />

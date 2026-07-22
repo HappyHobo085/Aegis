@@ -204,7 +204,11 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         // Fire-and-forget actions (history.remove/clear, permissions.resolve,
         // downloads.openFile/showInFolder, update.*, safety.proceed/removeException)
         // resolve to null (Promise<void>).
-        _ => Value::Null,
+        _ => {
+            #[cfg(debug_assertions)]
+            eprintln!("[aegis] unrecognized IPC channel: {channel}");
+            Value::Null
+        }
     };
     Ok(v)
 }

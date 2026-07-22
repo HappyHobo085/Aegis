@@ -151,10 +151,11 @@ export const IPC = {
   vaultUpdate: 'vault.update',
   vaultRemove: 'vault.remove',
   vaultSearch: 'vault.search',
-  evtVaultState: 'vault.state',
-  // Phase B: Autofill
+  // Phase B — autofill hooks exist on the JS side; Rust handler is not yet implemented.
+  // The hooks (useVaultAutofill) call these methods; removing them breaks the build.
   vaultAutofill: 'vault.autofill',
   vaultAutofillSuggestions: 'vault.autofillSuggestions',
+  evtVaultState: 'vault.state',
   // fingerprint per-site allowlist (chrome -> main)
   fingerprintGetState: 'fingerprint.getState',
   fingerprintToggleAllowlist: 'fingerprint.toggleAllowlist',
@@ -707,6 +708,7 @@ export interface AegisApi {
     update(uuid: string, partial: Partial<VaultRecordInput>): Promise<VaultRecord[]>;
     remove(uuid: string): Promise<VaultRecord[]>;
     search(q: string): Promise<VaultRecord[]>;
+    // Phase B — autofill hooks exist on the JS side; Rust handler is not yet implemented.
     autofill(options: { domain: string; username?: string }): Promise<VaultRecord[]>;
     autofillSuggestions(options: { q: string }): Promise<VaultRecord[]>;
     onState(cb: (s: VaultState) => void): () => void;

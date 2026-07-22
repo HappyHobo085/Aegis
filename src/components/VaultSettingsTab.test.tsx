@@ -253,7 +253,9 @@ describe('VaultSettingsTab — unlocked', () => {
     const copyBtn = screen.getByRole('button', { name: /copy password for/i });
     await userEvent.click(copyBtn);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('hunter2');
-    await vi.waitFor(() => expect(toast.success).toHaveBeenCalledWith('Copied'));
+    await vi.waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('Copied — clipboard clears in 60s'),
+    );
   });
 
   it('copy username writes to clipboard and toasts success', async () => {
@@ -264,7 +266,9 @@ describe('VaultSettingsTab — unlocked', () => {
     const copyBtn = screen.getByRole('button', { name: /copy username for/i });
     await userEvent.click(copyBtn);
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('alice');
-    await vi.waitFor(() => expect(toast.success).toHaveBeenCalledWith('Copied'));
+    await vi.waitFor(() =>
+      expect(toast.success).toHaveBeenCalledWith('Copied — clipboard clears in 60s'),
+    );
   });
 
   it('copy toasts an error when the clipboard write fails', async () => {
@@ -280,7 +284,7 @@ describe('VaultSettingsTab — unlocked', () => {
     renderUnlocked({ list });
     await vi.waitFor(() => expect(screen.queryByText('alice')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /copy password for/i }));
-    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledWith('Couldn’t copy'));
+    await vi.waitFor(() => expect(toast.error).toHaveBeenCalledWith("Couldn't copy"));
   });
 
   it('delete confirms, then calls remove() and refreshes list()', async () => {

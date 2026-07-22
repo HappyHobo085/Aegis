@@ -221,6 +221,11 @@ const dedupStats = {
 
 const dedupeCache = new Map<string, DedupEntry<any>>();
 
+// Deterministic cleanup every 10 seconds
+if (typeof setInterval !== 'undefined') {
+  setInterval(() => cleanupCache(), 10_000);
+}
+
 function getDedupWindow(channel: string): number {
   return DEDUP_WINDOWS[channel] ?? DEDUP_WINDOWS.default;
 }
@@ -269,12 +274,6 @@ function dedupedCall<T>(channel: IPCChannel, payload: any): Promise<T> {
   // Make the actual call and cache the promise
   const promise = call<T>(channel, payload);
   dedupeCache.set(key, { timestamp: now, promise });
-
-  // Periodic cleanup - every 10 seconds to reduce overhead
-  if (Date.now() % 10000 < 100) {
-    // Roughly once per 10 seconds
-    cleanupCache(now);
-  }
 
   return promise;
 }
@@ -811,8 +810,10 @@ export const aegis: AegisApi = {
       dedupedCall<VaultRecord[]>(IPC.vaultUpdate, { uuid, partial }),
     remove: (uuid: string) => dedupedCall<VaultRecord[]>(IPC.vaultRemove, { uuid }),
     search: (q: string) => dedupedCall<VaultRecord[]>(IPC.vaultSearch, { q }),
+    // Phase B — autofill hooks exist on the JS side; Rust handler is not yet implemented.
+    // The hooks (useVaultAutofill) call these methods; removing them breaks the build.
     autofill: (options: { domain: string; username?: string }) =>
-      dedupedCall<VaultRecord[]>(IPC.vaultAutofill, { ...options }),
+      dedupedCall<VaultRecord[]>(IPC.vaultAutofill, options),
     autofillSuggestions: (options: { q: string }) =>
       dedupedCall<VaultRecord[]>(IPC.vaultAutofillSuggestions, options),
     onState: (cb: (s: VaultState) => void) => on<VaultState>(IPC.evtVaultState, cb),
