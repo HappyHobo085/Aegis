@@ -64,7 +64,9 @@ pub fn all<R: Runtime>(app: &AppHandle<R>) -> Value {
 pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) {
     if let Some(p) = store_path(app) {
         let txt = serde_json::to_string_pretty(value).unwrap_or_default();
-        let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
+        if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
+            eprintln!("[aegis] failed to persist settings: {e}");
+        }
     }
     // The file changed — drop the cache so getters re-read the new values.
     invalidate_cache(app);
@@ -213,7 +215,9 @@ fn load_sync_records<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
 fn save_sync_records<R: Runtime>(app: &AppHandle<R>, recs: &[Value]) {
     if let Some(p) = sync_path(app) {
         if let Ok(txt) = serde_json::to_string_pretty(recs) {
-            let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
+            if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
+                eprintln!("[aegis] failed to persist sync records: {e}");
+            }
         }
     }
 }

@@ -230,7 +230,7 @@ function getDedupWindow(channel: string): number {
   return DEDUP_WINDOWS[channel] ?? DEDUP_WINDOWS.default;
 }
 
-// Simple hash function for payloads to avoid expensive JSON.stringify
+// Hash function for payloads to create dedup cache keys
 function hashPayload(payload: any): string {
   // For simple primitives, use them directly
   if (payload === null || typeof payload !== 'object') {

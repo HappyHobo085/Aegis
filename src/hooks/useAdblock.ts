@@ -3,22 +3,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { AdblockState, BlockedCount, ViewId } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { onSyncChange } from '../lib/syncBus';
+import { hostOf } from '../lib/url';
 
 const emptyState: AdblockState = {
   enabled: true,
   allowlistedHosts: [],
   sessionBlocked: 0,
 };
-
-/** Returns the parseable hostname of `url`, or null when `url` has no host. */
-function hostOf(url: string): string | null {
-  try {
-    const h = new URL(url).hostname;
-    return h.length > 0 ? h : null;
-  } catch {
-    return null;
-  }
-}
 
 export function useAdblock(
   viewId: ViewId,

@@ -127,7 +127,7 @@ export const IPC = {
   evtSyncChanged: 'sync.changed',
   // form detection (main <- chrome)
   formDetectLoginForm: 'form.detectLoginForm',
-  evtFormDetectResult: 'form.detected',
+  evtFormDetectResult: 'form.detectionResult',
   // find-in-page (chrome -> main; Task 9+ wires the Rust/Kotlin back-ends)
   findStart: 'find.start',
   findNext: 'find.next',
@@ -334,45 +334,6 @@ export interface FormLoginDetectedResult {
   hasLoginForm: boolean;
   /** The domain associated with the login form (if any) */
   domain?: string;
-}
-
-/** Payment method data from Payment Request API */
-export interface PaymentMethod {
-  /** The payment method identifier (e.g., "basic-card") */
-  method: string;
-  /** The payment method details (format depends on the method) */
-  details: Record<string, any>;
-  /** Optional shipping address */
-  shippingAddress?: {
-    country: string;
-    addressLine: string[];
-    region: string;
-    city: string;
-    dependentLocality?: string;
-    postalCode: string;
-    organization?: string;
-    recipient?: string;
-    phone?: string;
-  };
-  /** Optional payer information */
-  payerName?: string;
-  payerEmail?: string;
-  payerPhone?: string;
-}
-
-/** Security interstitial payload shown for security warnings */
-export interface SecurityInterstitialPayload {
-  /** The URL that triggered the security warning */
-  url: string;
-  /** The security issue type */
-  reason:
-    | 'malware'
-    | 'unwanted-software'
-    | 'social-engineering'
-    | 'uncommon-download'
-    | 'potentially-harmful-app';
-  /** Optional message to display to the user */
-  message?: string;
 }
 
 // ---- adblock data model ----

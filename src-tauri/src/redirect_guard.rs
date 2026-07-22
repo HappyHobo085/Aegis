@@ -228,22 +228,34 @@ pub fn expect(app: &AppHandle, tab: u32, url: &str) {
     }
 }
 
-/// When a redirect would be blocked, open it in a new tab instead of showing UI.
-/// This prevents the navigation in the current tab (for security) while providing
-/// the content in a new tab for user convenience.
-pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, _to: &str) {
-    // Open the redirect URL in a new tab
-    let _ = dispatch(
-        app,
-        "tabs.create",
-        &serde_json::json!({
-            "url": _to,
-            "background": true,
-            "private": false
-        }),
-    );
-    // Note: We intentionally do NOT emit the redirect.blocked event
-    // to avoid showing the blocking UI, fulfilling the "no blocking" request
+/// When a redirect would be blocked, open the destination in a new background tab.
+/// If the user hasn't activated (viewed) that tab within 30 seconds, it is
+/// automatically closed — preventing a blocked redirect from silently accumulating
+/// background tabs the user never intended to visit.
+pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, to: &str) {
+    let new_id = crate::tabs::open_redirect_background(app, to, false);
+    let app = app.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+        // Only close if the tab still exists AND hasn't been activated (i.e. the
+        // user never switched to it). Once activated, background_creation is cleared
+        // and the tab becomes a normal tab the user chose to keep.
+        let should_close = {
+            let tabs = app.try_state::<crate::tabs::Tabs>();
+            match tabs {
+                None => false,
+                Some(t) => {
+                    let reg = t.reg.lock().unwrap();
+                    // The tab must still exist and still be marked as background-created
+                    // (never activated by the user).
+                    reg.is_background_tab(new_id) && reg.active_id() != new_id
+                }
+            }
+        };
+        if should_close {
+            crate::tabs::close_tab(&app, new_id);
+        }
+    });
 }
 
 /// Linux two-phase correlation: the gesture/redirect type live on `NavigationAction`,

@@ -40,7 +40,13 @@ impl VaultBacking {
     }
 }
 
-/// Derive a 256-bit key-encryption key from a passphrase + salt (Argon2id, default params).
+/// Derive a 256-bit key-encryption key from a passphrase + salt (Argon2id).
+///
+/// Parameters: argon2id defaults (m_cost=19456/19 MiB, t_cost=2, p_cost=1) —
+/// the OWASP 2024 minimum floor. For stronger offline-attack resistance on
+/// desktop-class hardware, consider upgrading to m_cost=65536, t_cost=3, p_cost=4
+/// (OWASP recommended). Changing params requires a migration path for existing
+/// vaults (KDF version field in the wrapped blob).
 fn derive_kek(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
     let mut kek = [0u8; 32];
     argon2::Argon2::default()
@@ -125,7 +131,9 @@ pub fn device_local_salt(app: &AppHandle) -> Vec<u8> {
         let _ = getrandom::getrandom(&mut salt);
         let txt =
             serde_json::to_string(&serde_json::json!({ "salt": hex(&salt) })).unwrap_or_default();
-        let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
+        if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
+            eprintln!("[aegis] failed to persist device salt: {e}");
+        }
         return salt.to_vec();
     }
     let mut salt = [0u8; 16];

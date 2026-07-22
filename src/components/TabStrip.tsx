@@ -1,6 +1,7 @@
 import { useRef } from 'react';
 import { Plus, X, Globe, EyeOff } from 'lucide-react';
 import type { TabMeta, ViewId } from '../../shared/types';
+import { hostOf } from '../lib/url';
 
 interface TabStripProps {
   tabs: TabMeta[];
@@ -13,19 +14,11 @@ interface TabStripProps {
   onSetPinned(id: ViewId, pinned: boolean): void;
 }
 
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return '';
-  }
-}
-
 function labelFor(tab: TabMeta): string {
   const t = tab.title?.trim();
   if (t && t.length > 0) return t;
   const h = hostOf(tab.url);
-  return h.length > 0 ? h : 'New tab';
+  return h || 'New tab';
 }
 
 export function TabStrip({

@@ -6,6 +6,7 @@ import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
 import { confirm, toast } from './lib/toast';
 import { REDIRECT_BAR_H, FIND_BAR_H } from './lib/layout';
+import { hostOf, originOf } from './lib/url';
 import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChromeSurfaces';
 import { computeContentLayout } from './lib/contentLayout';
 import { protectionSummary } from './lib/protectionSummary';
@@ -91,26 +92,14 @@ const CONTENT_ANCHOR_ID = 'content-anchor';
 const CHROME_NAV_REDIRECT_GRACE_MS = 1500;
 const CHROME_NAV_REASSERT_MS = 250;
 
-/** Returns the hostname of `url`, or null when `url` has no parseable host. */
-function hostOf(url: string): string | null {
-  try {
-    const h = new URL(url).hostname;
-    return h.length > 0 ? h : null;
-  } catch {
-    return null;
-  }
-}
-
-function originOf(url: string): string | null {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return null;
-  }
-}
-
 function DesktopApp() {
   const tabs = useTabs();
+  // Stable refs for keyboard shortcut effects — tabs.tabs is a new array on every
+  // state update; using refs avoids re-registering listeners each render.
+  const tabsRef = useRef(tabs.tabs);
+  tabsRef.current = tabs.tabs;
+  const activeIdRef = useRef(tabs.activeId);
+  activeIdRef.current = tabs.activeId;
   const nav = useNav(tabs.activeId);
   const isNarrow = useNarrowViewport();
   const adblock = useAdblock(tabs.activeId, nav.state.url);
@@ -288,23 +277,23 @@ function DesktopApp() {
   useEffect(() => {
     return aegis.tabs.onShortcut((s) => {
       if (s === 'new') void tabs.create();
-      else if (s === 'close') void tabs.close(tabs.activeId);
+      else if (s === 'close') void tabs.close(activeIdRef.current);
       else if (s === 'reopen') void tabs.reopenClosed();
       else if (s === 'next' || s === 'prev') {
-        const ids = tabs.tabs.map((t) => t.id);
-        const i = ids.indexOf(tabs.activeId);
+        const ids = tabsRef.current.map((t) => t.id);
+        const i = ids.indexOf(activeIdRef.current);
         if (ids.length > 0) {
           const ni = s === 'next' ? (i + 1) % ids.length : (i - 1 + ids.length) % ids.length;
           void tabs.activate(ids[ni]);
         }
       } else if (s.startsWith('jump')) {
-        const ids = tabs.tabs.map((t) => t.id);
+        const ids = tabsRef.current.map((t) => t.id);
         if (ids.length === 0) return;
         const target = s === 'jumpLast' ? ids[ids.length - 1] : ids[Number(s.slice(4)) - 1];
         if (target !== undefined) void tabs.activate(target);
       }
     });
-  }, [tabs.tabs, tabs.activeId]);
+  }, []);
 
   // Ctrl+Shift+N — open a new private tab (incognito).
   // Collision check: the Ctrl+digit handler below guards !e.shiftKey; the Windows handler
@@ -328,7 +317,7 @@ function DesktopApp() {
       if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
       if (e.key >= '1' && e.key <= '9') {
         e.preventDefault();
-        const ids = tabs.tabs.map((t) => t.id);
+        const ids = tabsRef.current.map((t) => t.id);
         if (ids.length === 0) return;
         const target = e.key === '9' ? ids[ids.length - 1] : ids[Number(e.key) - 1];
         if (target !== undefined) void tabs.activate(target);
@@ -336,7 +325,7 @@ function DesktopApp() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tabs.tabs]);
+  }, []);
 
   // Windows: the native "Tabs" menu (which carried Ctrl+T/W/Shift+T/Ctrl+Tab) is hidden,
   // so handle those tab shortcuts here when the chrome has focus. No-op on macOS, where the
@@ -347,9 +336,9 @@ function DesktopApp() {
       if (!e.ctrlKey || e.altKey || e.metaKey) return;
       if (e.key === 'Tab') {
         e.preventDefault();
-        const ids = tabs.tabs.map((t) => t.id);
+        const ids = tabsRef.current.map((t) => t.id);
         if (ids.length === 0) return;
-        const i = ids.indexOf(tabs.activeId);
+        const i = ids.indexOf(activeIdRef.current);
         const ni = e.shiftKey ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
         void tabs.activate(ids[ni]);
         return;
@@ -363,12 +352,12 @@ function DesktopApp() {
         void tabs.create();
       } else if (k === 'w') {
         e.preventDefault();
-        void tabs.close(tabs.activeId);
+        void tabs.close(activeIdRef.current);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tabs.tabs, tabs.activeId]);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

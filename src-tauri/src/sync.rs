@@ -784,13 +784,16 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 Ok(a) => a,
                 Err(e) => return Some(Err(e)),
             };
-            let _ = http(
+            let result = http(
                 "POST",
                 format!("{base}/v1/devices/remove"),
                 auth,
                 Some(json!({ "deviceId": device_id })),
                 INTERACTIVE_TIMEOUT_SECS,
             );
+            if let Err(e) = result {
+                return Some(Err(format!("failed to remove device: {e}")));
+            }
             // Return the refreshed list.
             dispatch(app, "sync.listDevices", &Value::Null)
         }

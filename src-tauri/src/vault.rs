@@ -28,9 +28,17 @@ pub struct Cred {
     pub notes: String,
 }
 
-/// Argon2id(master_password, salt) -> 256-bit vault key. Reuses the exact derivation the
-/// sync passphrase path uses (sync_keystore::derive_kek); kept as its own fn so the params
-/// stay single-sourced if they ever change.
+/// Argon2id(master_password, salt) -> 256-bit vault key.
+///
+/// Parameters: argon2id defaults (m_cost=19456/19 MiB, t_cost=2, p_cost=1) —
+/// the OWASP 2024 minimum floor. For stronger offline-attack resistance on
+/// desktop-class hardware, consider upgrading to m_cost=65536, t_cost=3, p_cost=4
+/// (OWASP recommended). Changing params requires a KDF version migration for
+/// existing vaults.
+///
+/// Reuses the exact derivation the sync passphrase path uses
+/// (sync_keystore::derive_kek); kept as its own fn so the params stay
+/// single-sourced if they ever change.
 fn derive_vault_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
     let mut vk = Zeroizing::new([0u8; 32]);
     argon2::Argon2::default()

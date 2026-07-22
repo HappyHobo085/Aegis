@@ -49,7 +49,7 @@ export function FindBar({
   }
 
   const noMatches = state.matchCount === 0;
-  const countText = `${state.activeMatchIndex}/${state.matchCount}`;
+  const countText = noMatches ? 'No matches' : `${state.activeMatchIndex}/${state.matchCount}`;
 
   return (
     <div className="find-bar">

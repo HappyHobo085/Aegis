@@ -59,8 +59,8 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
+        .expect("system clock is before UNIX epoch")
+        .as_millis() as i64
 }
 
 /// Verify the `Authorization: AegisSig {accountId}.{tokenHex}.{sigHex}` header. Returns the

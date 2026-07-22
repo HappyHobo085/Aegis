@@ -264,6 +264,13 @@ impl Registry {
         self.idx(id).map(|i| self.tabs[i].private)
     }
 
+    /// Returns true if the tab exists and was created in the background (never activated).
+    pub fn is_background_tab(&self, id: ViewId) -> bool {
+        self.idx(id)
+            .map(|i| self.tabs[i].background_creation)
+            .unwrap_or(false)
+    }
+
     /// Make `id` active. Returns Some(url) if its webview must be (re)spawned.
     pub fn activate(&mut self, id: ViewId, now_ms: u64) -> Option<String> {
         if id == self.active_id || self.idx(id).is_none() {

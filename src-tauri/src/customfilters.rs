@@ -50,7 +50,9 @@ fn stamp_sync_record<R: Runtime>(app: &AppHandle<R>, text: &str) {
         "deleted": false,
     });
     let txt = serde_json::to_string_pretty(&rec).unwrap_or_default();
-    let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
+    if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
+        eprintln!("[aegis] failed to persist custom filter sync record: {e}");
+    }
 }
 
 /// The single custom-filter sync record (synthesized from the current text with a FLOOR
@@ -98,11 +100,15 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &Value) -> bool {
         remote.get("text").and_then(Value::as_str).unwrap_or("")
     };
     if let Some(p) = path(app) {
-        let _ = crate::jsonstore::write_atomic(&p, text.as_bytes());
+        if let Err(e) = crate::jsonstore::write_atomic(&p, text.as_bytes()) {
+            eprintln!("[aegis] failed to persist custom filters: {e}");
+        }
     }
     if let Some(sp) = sync_path(app) {
         if let Ok(t) = serde_json::to_string_pretty(remote) {
-            let _ = crate::jsonstore::write_atomic(&sp, t.as_bytes());
+            if let Err(e) = crate::jsonstore::write_atomic(&sp, t.as_bytes()) {
+                eprintln!("[aegis] failed to persist custom filter sync record: {e}");
+            }
         }
     }
     crate::adblock_refresh::refresh(app);
@@ -115,7 +121,9 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &Value) -> bool {
 /// record.
 pub fn write<R: Runtime>(app: &AppHandle<R>, text: &str) {
     if let Some(p) = path(app) {
-        let _ = crate::jsonstore::write_atomic(&p, text.as_bytes());
+        if let Err(e) = crate::jsonstore::write_atomic(&p, text.as_bytes()) {
+            eprintln!("[aegis] failed to persist custom filters: {e}");
+        }
     }
     stamp_sync_record(app, text);
 }

@@ -18,6 +18,7 @@ import { useHistory } from '../../hooks/useHistory';
 import { useSaved } from '../../hooks/useSaved';
 import { useSettings } from '../../hooks/useSettings';
 import { useSync } from '../../hooks/useSync';
+import { hostOf, originOf } from '../../lib/url';
 import { useVault } from '../../hooks/useVault';
 import { useProxy } from '../../hooks/useProxy';
 import { useSubscriptions } from '../../hooks/useSubscriptions';
@@ -70,23 +71,6 @@ declare global {
 }
 
 type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | 'tabs' | null;
-
-function hostOf(url: string): string | null {
-  try {
-    const h = new URL(url).hostname;
-    return h.length > 0 ? h : null;
-  } catch {
-    return null;
-  }
-}
-
-function originOf(url: string): string | null {
-  try {
-    return new URL(url).origin;
-  } catch {
-    return null;
-  }
-}
 
 export function MobileApp() {
   const tabs = useTabs();

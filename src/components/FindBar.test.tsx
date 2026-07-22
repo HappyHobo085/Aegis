@@ -74,7 +74,7 @@ describe('FindBar', () => {
     expect(status.textContent).toContain('2/3');
   });
 
-  it('shows 0/0 when matchCount is 0', () => {
+  it('shows "No matches" when matchCount is 0', () => {
     render(
       <FindBar
         state={BASE_STATE}
@@ -85,7 +85,7 @@ describe('FindBar', () => {
       />,
     );
     const status = screen.getByRole('status');
-    expect(status.textContent).toContain('0/0');
+    expect(status.textContent).toContain('No matches');
   });
 
   it('clicking "Find next" fires onNext', async () => {

@@ -279,15 +279,21 @@ pub fn close_tab(app: &AppHandle, id: u32) {
 /// active tab.
 /// A popup from a private tab inherits privateness (`private = true`).
 pub fn open_background(app: &AppHandle, url: &str, private: bool) {
+    open_redirect_background(app, url, private);
+}
+
+/// Open a URL in a new background tab and return its id. Used by the redirect blocker
+/// which needs the id for the auto-close timer.
+pub fn open_redirect_background(app: &AppHandle, url: &str, private: bool) -> u32 {
     let now = now_ms(app);
-    let (_id, _u) = app.state::<Tabs>().reg.lock().unwrap().create_private(
+    let (id, _u) = app.state::<Tabs>().reg.lock().unwrap().create_private(
         Some(url.to_string()),
         true,
         now,
         private,
     );
-    // Do not spawn the webview here; it will be spawned when the tab is activated.
     emit_and_persist(app);
+    id
 }
 
 fn session_path<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
@@ -306,7 +312,9 @@ pub fn persist<R: Runtime>(app: &AppHandle<R>) {
     if let Ok(txt) = serde_json::to_string_pretty(&session) {
         // Durable write (atomic temp→rename + .bak) — tabs.json is rewritten on every
         // tab/nav change, so a crash mid-write must not truncate it and lose the session.
-        let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
+        if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
+            eprintln!("[aegis] failed to persist tab session: {e}");
+        }
     }
 }
 

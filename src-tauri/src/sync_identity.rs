@@ -36,6 +36,7 @@ pub fn node_id<R: Runtime>(app: &AppHandle<R>) -> String {
                 let txt =
                     serde_json::to_string_pretty(&json!({ "nodeId": id })).unwrap_or_default();
                 let _ = crate::jsonstore::write_atomic(&p, txt.as_bytes());
+                // Best-effort: identity is regenerated on next read if missing
                 return id;
             }
             uuid::Uuid::new_v4().to_string()

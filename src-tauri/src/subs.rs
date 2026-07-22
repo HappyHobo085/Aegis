@@ -174,7 +174,11 @@ fn fetch_in_background<R: Runtime>(app: AppHandle<R>, list_id: String, url: Stri
         Ok(text) => {
             // No .bak: the cache is regenerable from the network, so a recovery copy
             // would just clutter the cache dir (and orphan on subs.remove).
-            let _ = jsonstore::write_atomic_no_backup(&cache_path(&app, &list_id), text.as_bytes());
+            if let Err(e) =
+                jsonstore::write_atomic_no_backup(&cache_path(&app, &list_id), text.as_bytes())
+            {
+                eprintln!("[aegis] failed to cache subscription list {list_id}: {e}");
+            }
             let hash = hash_text(&text);
             let mut items = jsonstore::load_synced(&app, "subs");
             for it in items.iter_mut() {
