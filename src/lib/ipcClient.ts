@@ -652,7 +652,6 @@ export const aegis: AegisApi = {
     unlock: (opts) => dedupedCall<SyncState>(IPC.syncUnlock, { ...opts }),
     disable: (opts) => dedupedCall<SyncState>(IPC.syncDisable, { ...(opts ?? {}) }),
     syncNow: () => dedupedCall<SyncState>(IPC.syncNow, undefined),
-    scanNow: () => dedupedCall<SyncState>(IPC.scanNow, undefined),
     testConnection: (url: string) =>
       dedupedCall<{ ok: boolean; latencyMs?: number; error?: string }>(IPC.syncTestConnection, {
         url,

@@ -553,7 +553,6 @@ export const CATALOG: FeatureCheck[] = [
       IPC.syncUnlock,
       IPC.syncDisable,
       IPC.syncNow,
-      IPC.scanNow,
       IPC.syncTestConnection,
       IPC.syncGetRecoveryPhrase,
       IPC.syncListDevices,
@@ -571,7 +570,9 @@ export const CATALOG: FeatureCheck[] = [
     },
     verify: async (a) => {
       // Enable sync with a dummy phrase to test removal
-      await a.sync.enableFromPhrase({ phrase: 'test test test test test test test test test test test junk' });
+      await a.sync.enableFromPhrase({
+        phrase: 'test test test test test test test test test test test junk',
+      });
       const devicesBefore = await a.sync.listDevices();
       // Remove the first device if any exist
       if (devicesBefore.length > 0) {
@@ -741,10 +742,7 @@ export const CATALOG: FeatureCheck[] = [
     id: 'vault.autofill',
     domain: 'vault',
     title: 'Vault autofill',
-    channels: [
-      IPC.vaultGetState,
-      IPC.vaultAutofill,
-    ],
+    channels: [IPC.vaultGetState, IPC.vaultAutofill],
     exercise: async (a) => {
       assertObject(await a.vault.getState());
     },
@@ -768,13 +766,16 @@ export const CATALOG: FeatureCheck[] = [
       if (!rec) throw new Error('add: probe credential not in list');
 
       // Test autofill with exact username match
-      const result = await a.vault.autofill({ domain: 'https://ap-vault-autofill.test/', username: 'ap-user' });
+      const result = await a.vault.autofill({
+        domain: 'https://ap-vault-autofill.test/',
+        username: 'ap-user',
+      });
       if (!result.some((r: VaultRecord) => r.uuid === rec.uuid))
         throw new Error('autofill: exact username match failed');
-      if (result.some((r: VaultRecord) => r.notes)) // Should not return notes for security
+      if (result.some((r: VaultRecord) => r.notes))
+        // Should not return notes for security
         throw new Error('autofill: returned notes field (security issue)');
-      if (result.length > 5)
-        throw new Error('autofill: returned more than 5 results');
+      if (result.length > 5) throw new Error('autofill: returned more than 5 results');
 
       // Clean up
       await a.vault.remove(rec.uuid);
@@ -787,10 +788,7 @@ export const CATALOG: FeatureCheck[] = [
     id: 'vault.autofillSuggestions',
     domain: 'vault',
     title: 'Vault autofill suggestions',
-    channels: [
-      IPC.vaultGetState,
-      IPC.vaultAutofillSuggestions,
-    ],
+    channels: [IPC.vaultGetState, IPC.vaultAutofillSuggestions],
     exercise: async (a) => {
       assertObject(await a.vault.getState());
     },
@@ -820,12 +818,11 @@ export const CATALOG: FeatureCheck[] = [
 
       // Test suggestions with partial match
       const result = await a.vault.autofillSuggestions({ q: 'ap-vault-suggest' });
-      if (result.length < 2)
-        throw new Error('autofillSuggestions: expected at least 2 results');
-      if (result.some((r: VaultRecord) => r.password)) // Should not return passwords for security
+      if (result.length < 2) throw new Error('autofillSuggestions: expected at least 2 results');
+      if (result.some((r: VaultRecord) => r.password))
+        // Should not return passwords for security
         throw new Error('autofillSuggestions: returned password field (security issue)');
-      if (result.length > 10)
-        throw new Error('autofillSuggestions: returned more than 10 results');
+      if (result.length > 10) throw new Error('autofillSuggestions: returned more than 10 results');
 
       // Clean up
       const all = await a.vault.list();
@@ -841,10 +838,7 @@ export const CATALOG: FeatureCheck[] = [
     id: 'form.detectLoginForm',
     domain: 'form',
     title: 'Form detection for login forms',
-    channels: [
-      IPC.formDetectLoginForm,
-      IPC.evtFormDetectResult,
-    ],
+    channels: [IPC.formDetectLoginForm, IPC.evtFormDetectResult],
     exercise: async (a) => {
       // Just test that the IPC calls don't throw
       await a.form.detectLoginForm();

@@ -118,7 +118,6 @@ export const IPC = {
   syncUnlock: 'sync.unlock',
   syncDisable: 'sync.disable',
   syncNow: 'sync.syncNow',
-  scanNow: 'sync.scanNow',
   syncTestConnection: 'sync.testConnection',
   syncGetRecoveryPhrase: 'sync.getRecoveryPhrase',
   syncListDevices: 'sync.listDevices',
@@ -365,7 +364,12 @@ export interface SecurityInterstitialPayload {
   /** The URL that triggered the security warning */
   url: string;
   /** The security issue type */
-  reason: 'malware' | 'unwanted-software' | 'social-engineering' | 'uncommon-download' | 'potentially-harmful-app';
+  reason:
+    | 'malware'
+    | 'unwanted-software'
+    | 'social-engineering'
+    | 'uncommon-download'
+    | 'potentially-harmful-app';
   /** Optional message to display to the user */
   message?: string;
 }
@@ -401,13 +405,7 @@ export interface ListUpdateResult {
 
 export interface UpdateState {
   status:
-    | 'idle'
-    | 'checking'
-    | 'available'
-    | 'not-available'
-    | 'downloading'
-    | 'downloaded'
-    | 'error';
+    'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
   version: string | null; // available/downloaded version, else null
   percent: number; // download progress 0..100
   error: string | null; // last error message, else null
@@ -671,7 +669,6 @@ export interface AegisApi {
     unlock(opts: { passphrase: string }): Promise<SyncState>;
     disable(opts?: { forget?: boolean }): Promise<SyncState>;
     syncNow(): Promise<SyncState>;
-    scanNow(): Promise<SyncState>;
     testConnection(url: string): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
     /** Highest-sensitivity: gated on an explicit confirm. */
     getRecoveryPhrase(opts: { confirm: boolean }): Promise<{ recoveryPhrase: string }>;
@@ -734,6 +731,8 @@ export interface AegisApi {
     /** Trigger a login form scan in the current content webview */
     detectLoginForm(): Promise<{ hasLoginForm: boolean; domain?: string }>;
     /** Subscribe to login form detection events */
-    onLoginFormDetected(cb: (result: { hasLoginForm: boolean; domain?: string }) => void): () => void;
+    onLoginFormDetected(
+      cb: (result: { hasLoginForm: boolean; domain?: string }) => void,
+    ): () => void;
   };
 }
