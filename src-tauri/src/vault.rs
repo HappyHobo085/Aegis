@@ -306,7 +306,11 @@ impl VaultState {
 
     /// Returns true if the vault is currently unlocked.
     pub fn is_unlocked(&self) -> bool {
-        self.0.lock().unwrap_or_else(|e| e.into_inner()).key.is_some()
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .key
+            .is_some()
     }
 
     /// List all credentials. Returns `Locked` if not unlocked.

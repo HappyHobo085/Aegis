@@ -447,7 +447,13 @@ export interface ListUpdateResult {
 
 export interface UpdateState {
   status:
-    'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
+    | 'idle'
+    | 'checking'
+    | 'available'
+    | 'not-available'
+    | 'downloading'
+    | 'downloaded'
+    | 'error';
   version: string | null; // available/downloaded version, else null
   percent: number; // download progress 0..100
   error: string | null; // last error message, else null

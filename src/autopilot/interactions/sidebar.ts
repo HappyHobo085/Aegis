@@ -289,12 +289,12 @@ export const SIDEBAR_INTERACTIONS: InteractionSpec[] = [
         // Live: poll until the url changes away from _urlBeforeClick AND includes the
         // seed url host — proves the click navigated to the saved entry specifically.
         if (_urlBeforeClick === undefined)
-        throw new Error('live: _urlBeforeClick was never captured');
-      const vid = await activeViewId(ctx);
-      const deadline = Date.now() + AdaptiveTimeout.ms(8000);
-      while (Date.now() < deadline) {
-        const { url } = await ctx.aegis.nav.getState(vid);
-        if (url !== _urlBeforeClick && url.includes('ap=savedopen')) {
+          throw new Error('live: _urlBeforeClick was never captured');
+        const vid = await activeViewId(ctx);
+        const deadline = Date.now() + AdaptiveTimeout.ms(8000);
+        while (Date.now() < deadline) {
+          const { url } = await ctx.aegis.nav.getState(vid);
+          if (url !== _urlBeforeClick && url.includes('ap=savedopen')) {
             // Clean up the probe saved item.
             await clearSavedProbe(ctx, SEED_ITEM.url);
             await nudgeSync('saved');

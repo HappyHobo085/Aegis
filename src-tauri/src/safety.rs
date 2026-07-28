@@ -44,7 +44,11 @@ pub fn is_blocked<R: Runtime>(app: &AppHandle<R>, url: &Url) -> bool {
     };
     let host = host.to_lowercase();
     if let Some(s) = app.try_state::<SafetyState>() {
-        if s.exceptions.lock().unwrap_or_else(|e| e.into_inner()).contains(&host) {
+        if s.exceptions
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&host)
+        {
             return false;
         }
     }
@@ -106,7 +110,12 @@ pub fn dispatch<R: Runtime>(
         "safety.getState" => {
             let v = app
                 .try_state::<SafetyState>()
-                .map(|s| s.interstitial.lock().unwrap_or_else(|e| e.into_inner()).clone())
+                .map(|s| {
+                    s.interstitial
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .clone()
+                })
                 .unwrap_or(Value::Null);
             Some(Ok(v))
         }
@@ -115,7 +124,10 @@ pub fn dispatch<R: Runtime>(
             let url = payload.get("url").and_then(Value::as_str).unwrap_or("");
             if let Ok(u) = Url::parse(url) {
                 if let (Some(host), Some(s)) = (u.host_str(), app.try_state::<SafetyState>()) {
-                    s.exceptions.lock().unwrap_or_else(|e| e.into_inner()).insert(host.to_lowercase());
+                    s.exceptions
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .insert(host.to_lowercase());
                     *s.interstitial.lock().unwrap_or_else(|e| e.into_inner()) = Value::Null;
                 }
                 crate::emit_event(app, "safety.interstitial", Value::Null);
@@ -130,7 +142,14 @@ pub fn dispatch<R: Runtime>(
         "safety.listExceptions" => {
             let list: Vec<String> = app
                 .try_state::<SafetyState>()
-                .map(|s| s.exceptions.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect())
+                .map(|s| {
+                    s.exceptions
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .iter()
+                        .cloned()
+                        .collect()
+                })
                 .unwrap_or_default();
             Some(Ok(json!(list)))
         }
@@ -142,7 +161,10 @@ pub fn dispatch<R: Runtime>(
                 .unwrap_or("")
                 .to_lowercase();
             if let Some(s) = app.try_state::<SafetyState>() {
-                s.exceptions.lock().unwrap_or_else(|e| e.into_inner()).remove(&host);
+                s.exceptions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .remove(&host);
             }
             Some(Ok(Value::Null))
         }

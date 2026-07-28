@@ -35,7 +35,12 @@ fn active_page_blocked<R: Runtime>(app: &AppHandle<R>) -> u32 {
         .try_state::<crate::tabs::Tabs>()
         .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
         .unwrap_or(1);
-    page_map().lock().unwrap_or_else(|e| e.into_inner()).get(&id).copied().unwrap_or(0)
+    page_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Pure counter update for one blocked subresource on tab `id`: bumps the monotonic
@@ -58,7 +63,10 @@ fn bump_blocked(id: u32) -> (u32, u32) {
 /// session total. Split out from `reset_page` for the same testability reason.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 fn zero_page(id: u32) -> u32 {
-    page_map().lock().unwrap_or_else(|e| e.into_inner()).insert(id, 0);
+    page_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id, 0);
     session_blocked()
 }
 

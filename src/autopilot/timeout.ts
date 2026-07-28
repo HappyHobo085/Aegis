@@ -34,14 +34,12 @@ export class AdaptiveTimeout {
   static async withTimeout<T>(
     promise: Promise<T>,
     baseMs: number = this.DEFAULT_BASE,
-    message: string = 'Operation timed out'
+    message: string = 'Operation timed out',
   ): Promise<T> {
     const timeoutMs = this.ms(baseMs);
     return Promise.race([
       promise,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(message)), timeoutMs)
-      )
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error(message)), timeoutMs)),
     ]);
   }
 }
