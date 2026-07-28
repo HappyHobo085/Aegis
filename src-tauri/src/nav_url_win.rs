@@ -24,6 +24,8 @@ use windows::core::PWSTR;
 /// unaffected (full loads are still reported by `on_page_load`).
 pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
     let controller = pw.controller();
+    // SAFETY: COM objects are single-threaded apartment; this runs inside a
+    // `with_webview` closure on the UI thread.
     unsafe {
         let core = match controller.CoreWebView2() {
             Ok(c) => c,
@@ -75,6 +77,9 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
 }
 
 /// Read `ICoreWebView2::Source` — the current top-frame URL.
+///
+/// # Safety
+/// `core` must be a valid COM pointer; caller must be on the UI thread.
 unsafe fn source_url(core: &ICoreWebView2) -> windows::core::Result<String> {
     let mut uri = PWSTR::null();
     core.Source(&mut uri)?;
@@ -85,6 +90,9 @@ unsafe fn source_url(core: &ICoreWebView2) -> windows::core::Result<String> {
 }
 
 /// Read `ICoreWebView2::DocumentTitle` — the current page title.
+///
+/// # Safety
+/// `core` must be a valid COM pointer; caller must be on the UI thread.
 unsafe fn document_title(core: &ICoreWebView2) -> windows::core::Result<String> {
     let mut title = PWSTR::null();
     core.DocumentTitle(&mut title)?;

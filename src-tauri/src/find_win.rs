@@ -43,6 +43,8 @@ unsafe fn get_find(pw: &tauri::webview::PlatformWebview) -> Option<ICoreWebView2
 /// Call inside `content.with_webview(|pw| find_win::install(&pw, app, id))`.
 /// Fails silently when the runtime is too old — browsing is unaffected.
 pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
+    // SAFETY: COM objects are single-threaded apartment; this runs inside a
+    // `with_webview` closure on the UI thread.
     unsafe {
         let Some(find) = get_find(pw) else { return };
 
@@ -90,6 +92,7 @@ pub fn start(app: &AppHandle, id: u32, query: &str, case_sensitive: bool) {
     let cs = case_sensitive;
     let app_clone = app.clone();
     let _ = content.with_webview(move |pw| unsafe {
+        // SAFETY: inside with_webview closure — COM single-threaded apartment.
         let Some(find) = get_find(&pw) else { return };
 
         if q.is_empty() {
@@ -154,6 +157,7 @@ where
         return;
     };
     let _ = content.with_webview(move |pw| unsafe {
+        // SAFETY: inside with_webview closure — COM single-threaded apartment.
         if let Some(find) = get_find(&pw) {
             g(&find);
         }

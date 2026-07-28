@@ -16,6 +16,8 @@ use webview2_com::NavigationStartingEventHandler;
 /// (and fails OPEN) if the WebView2 isn't ready — browsing is unaffected.
 pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
     let controller = pw.controller();
+    // SAFETY: COM objects are single-threaded apartment; this runs inside a
+    // `with_webview` closure on the UI thread.
     unsafe {
         let Ok(core) = controller.CoreWebView2() else {
             return;
@@ -32,6 +34,8 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
     }
 }
 
+/// # Safety
+/// `core` and `args` must be valid COM pointers; caller must be on the UI thread.
 unsafe fn handle(
     app: &AppHandle,
     id: u32,

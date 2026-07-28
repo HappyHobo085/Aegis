@@ -75,7 +75,10 @@ export function SavedPanel({
   const startEdit = (item: SavedItem): void => {
     setEditingId(item.id);
     setDraftTitle(item.title);
-    setDraftTags(item.tags);
+    // Defensive copy: avoid sharing the array reference with the items state so
+    // TagInput's onChange (which creates new arrays via spread/filter) never
+    // inadvertently mutates an item still in the list.
+    setDraftTags([...item.tags]);
   };
 
   const cancelEdit = (): void => {

@@ -1,10 +1,12 @@
 //! Split-view state machine. Manages a multi-pane layout (2-4 content webviews
 //! side-by-side) with equal-width initial sizing, resize, and focus tracking.
 //!
-//! The actual webview positioning is platform-specific (Linux: `linux_layout`,
-//! Windows: `view`, macOS: `view`, Android: not supported) and is driven by
-//! the layout emitted via `split.state`. This module owns only the data model
-//! and the IPC dispatch.
+//! The actual webview positioning is platform-specific and currently only
+//! implemented on Windows (`view.rs`). Linux and macOS have no split layout
+//! code — entering a split on those platforms updates the state but leaves
+//! webviews overlapping. Android does not support split-view.
+//! The layout is driven by the `split.state` event. This module owns only the
+//! data model and the IPC dispatch.
 
 use std::sync::Mutex;
 

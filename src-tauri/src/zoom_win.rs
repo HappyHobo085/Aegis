@@ -9,6 +9,8 @@
 /// WebView2 isn't ready — browsing is unaffected, zoom just won't apply.
 pub fn set(pw: &tauri::webview::PlatformWebview, factor: f64) {
     let controller = pw.controller();
+    // SAFETY: COM objects are single-threaded apartment; this runs inside a
+    // `with_webview` closure on the UI thread.
     unsafe {
         let _ = controller.SetZoomFactor(factor);
     }

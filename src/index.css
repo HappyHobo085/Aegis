@@ -5032,7 +5032,7 @@ a:focus-visible {
   right: 0;
   bottom: 0;
   z-index: 10;
-  height: 64px;
+  height: 56px; /* must match MOBILE_BOTTOMBAR_H in layout.ts and MainActivity.kt bottomMargin */
   box-sizing: content-box; /* the nav-inset padding extends the bar UP, not inward (global reset is border-box) */
   display: flex;
   align-items: center;
@@ -5081,8 +5081,11 @@ a:focus-visible {
   position: fixed;
   left: 0;
   right: 0;
-  top: 9vh;
-  bottom: 0;
+  /* Start below the chrome: address bar (48px) + favourites (36px) + top safe area.
+     Matches MOBILE_ADDRESS_H + MOBILE_FAV_H in layout.ts. */
+  top: calc(48px + 36px + var(--aegis-inset-top, env(safe-area-inset-top)));
+  /* Stop above the bottom bar so its buttons stay tappable. */
+  bottom: calc(56px + var(--aegis-inset-bottom, env(safe-area-inset-bottom)));
   z-index: 50;
   display: flex;
   flex-direction: column;

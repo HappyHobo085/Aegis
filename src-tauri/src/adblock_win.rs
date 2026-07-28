@@ -24,6 +24,8 @@ use windows::core::{Result, HSTRING, PWSTR};
 pub fn install(pw: &tauri::webview::PlatformWebview, app: tauri::AppHandle, id: u32) {
     let controller = pw.controller();
     let environment = pw.environment();
+    // SAFETY: COM objects are single-threaded apartment; this runs inside a
+    // `with_webview` closure on the UI thread — the only safe calling context.
     unsafe {
         let core = match controller.CoreWebView2() {
             Ok(c) => c,
@@ -58,6 +60,9 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: tauri::AppHandle, id: 
 /// Block a single request if the adblock engine matches it. Returns `Ok(true)` when the
 /// request was blocked (so the caller can count it on the shield badge), `Ok(false)`
 /// when it was allowed.
+///
+/// # Safety
+/// Caller must ensure COM pointers are valid and this runs on the UI thread.
 unsafe fn handle(
     env: &ICoreWebView2Environment,
     args: &ICoreWebView2WebResourceRequestedEventArgs,

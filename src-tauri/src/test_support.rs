@@ -155,6 +155,10 @@ mod tests {
             assert!(app.try_state::<crate::proxy::ProxyState>().is_some());
             assert!(app.try_state::<crate::split::SplitState>().is_some());
             assert!(app.try_state::<crate::settings::SettingsCache>().is_some());
+            assert!(app.try_state::<crate::vault::VaultState>().is_some());
+            assert!(app
+                .try_state::<crate::downloads::DownloadsStore>()
+                .is_some());
             assert!(app.try_state::<crate::history::HistoryStore>().is_some());
             #[cfg(target_os = "linux")]
             assert!(app
