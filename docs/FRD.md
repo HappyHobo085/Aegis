@@ -499,7 +499,7 @@ FR-{DOMAIN}-{NNN}: {Title}
 - **Description:** The system MUST support three farbling levels with distinct coverage:
   - `off`: no shim.
   - `standard`: canvas (`getImageData`/`toDataURL`/`toBlob`), audio (`getFloatFrequencyData`/`getChannelData`), navigator/UA-CH (`hardwareConcurrency`/`deviceMemory`/`userAgentData.brands` kept consistent with Chrome-148 UA).
-  - `strict`: adds WebGL (`getParameter` UNMASKED_*/`readPixels`/`getSupportedExtensions`/`getShaderPrecisionFormat`).
+  - `strict`: adds WebGL (`getParameter` UNMASKED\_\*/`readPixels`/`getSupportedExtensions`/`getShaderPrecisionFormat`).
 - **Input:** `settings.set({ antiFingerprint: 'off' | 'standard' | 'strict' })`
 - **Output:** Level persisted; `fingerprint.getState` reflects new level.
 - **Acceptance:** Changing from `off` to `standard` on a reloaded page shows perturbed canvas output. Changing to `strict` additionally perturbs WebGL parameters.
