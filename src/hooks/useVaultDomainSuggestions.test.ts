@@ -121,12 +121,11 @@ describe('useVaultDomainSuggestions', () => {
     autofillMock.mockRejectedValue(new Error(errorMessage));
 
     const { result } = renderHook(() => useVaultDomainSuggestions());
-    // Wait for loading to be false, then verify error is set
-    await waitFor(() => result.current.loading === false);
-    // Wait for any pending microtasks (to account for StrictMode double-run)
-    await Promise.resolve();
-    expect(result.current.error).not.toBeNull();
-    expect(result.current.error).toBe(errorMessage);
+    // Wait for the error state directly — more robust than waiting for
+    // loading=false then checking error, which is timing-sensitive under
+    // React StrictMode (the double-effect-run can interleave setError(null)
+    // from the second mount with the first mount's rejection).
+    await waitFor(() => expect(result.current.error).toBe(errorMessage));
 
     expect(autofillMock).toHaveBeenCalledWith({ domain: 'https://example.com', username: '' });
     expect(result.current.suggestions).toEqual([]);
