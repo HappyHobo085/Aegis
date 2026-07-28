@@ -1,5 +1,6 @@
 // src/autopilot/interactions/toolbar.ts
 import { act } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
 import {
   emitNavState,
@@ -586,6 +587,162 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     assert: async (ctx) => {
       if (!ctx.calls.called('zoom.reset')) throw new Error('zoom.reset not called');
       return 'Reset zoom → zoom.reset()';
+    },
+  },
+
+  // ─── Task 4 (command palette): Ctrl+K command palette ────────────────────
+
+  {
+    id: 'toolbar.commandPalette.open',
+    domain: 'toolbar',
+    description: 'Open command palette via Ctrl+K',
+    screen: 'home',
+    // live excluded: the Ctrl+K keyboard event fires natively; the vitest path
+    // exercises the full open→render→input-focus pipeline through the mock.
+    layers: ['vitest'],
+    run: async (_ctx) => {
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'k',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+    },
+    assert: async (ctx) => {
+      const palette = ctx.bySelector('.command-palette');
+      if (!palette) return 'Command palette did not open';
+      const input = palette.querySelector('input[type="search"]');
+      if (!input) return 'Command palette input not found';
+      return 'Command palette opened';
+    },
+  },
+
+  {
+    id: 'toolbar.commandPalette.search',
+    domain: 'toolbar',
+    description: 'Type a query in command palette and verify results appear',
+    screen: 'home',
+    // live excluded: the search results depend on the disposable-profile state
+    // (no tabs/bookmarks/history seeded); the vitest mock exercises the query→filter
+    // →render pipeline.
+    layers: ['vitest'],
+    run: async (ctx) => {
+      // Open the palette first.
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'k',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      // Type a query into the search input (userEvent.type fires onChange).
+      const input = ctx.bySelector('.command-palette input[type="search"]');
+      if (!input) throw new Error('Command palette input not found');
+      await userEvent.type(input, 'settings');
+    },
+    assert: async (ctx) => {
+      // getSettingsResults filters against static settings entries — "settings"
+      // should match items in the Settings category.
+      const items = document.querySelectorAll('.command-palette__item');
+      if (items.length === 0) return 'No results found for "settings"';
+      return 'Search results appear';
+    },
+  },
+
+  {
+    id: 'toolbar.commandPalette.close',
+    domain: 'toolbar',
+    description: 'Close command palette with Escape',
+    screen: 'home',
+    // live excluded: Escape dismisses the palette via onClose; the vitest path
+    // exercises the key-down → onClose → unmount pipeline.
+    layers: ['vitest'],
+    run: async (ctx) => {
+      // Open the palette first.
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'k',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      // Press Escape on the input to close the palette.
+      const input = ctx.bySelector('.command-palette input[type="search"]');
+      if (!input) throw new Error('Command palette input not found');
+      await act(async () => {
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Escape',
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+    },
+    assert: async (ctx) => {
+      const palette = ctx.bySelector('.command-palette');
+      if (palette) return 'Command palette still open after Escape';
+      return 'Command palette closed';
+    },
+  },
+
+  {
+    id: 'toolbar.commandPalette.keyboard',
+    domain: 'toolbar',
+    description: 'Navigate command palette results with ArrowDown and select with Enter',
+    screen: 'home',
+    // live excluded: the keyboard navigation and selection require the mock data
+    // pipeline to populate results; live has no seeded tabs/bookmarks/history.
+    layers: ['vitest'],
+    run: async (ctx) => {
+      // Open the palette first.
+      await act(async () => {
+        window.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'k',
+            ctrlKey: true,
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+      // Type a query to populate results.
+      const input = ctx.bySelector('.command-palette input[type="search"]');
+      if (!input) throw new Error('Command palette input not found');
+      await userEvent.type(input, 'settings');
+      // Navigate down to the first result and select it with Enter.
+      await act(async () => {
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'ArrowDown',
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+        input.dispatchEvent(
+          new KeyboardEvent('keydown', {
+            key: 'Enter',
+            bubbles: true,
+            cancelable: true,
+          }),
+        );
+      });
+    },
+    assert: async (ctx) => {
+      // After Enter the selected action executes and onClose is called → palette unmounts.
+      const palette = ctx.bySelector('.command-palette');
+      if (palette) return 'Command palette still open after Enter';
+      return 'Action executed and palette closed';
     },
   },
 ];

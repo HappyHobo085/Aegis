@@ -1,5 +1,5 @@
 // src/lib/toast.ts
-export type ToastKind = 'success' | 'error' | 'info';
+type ToastKind = 'success' | 'error' | 'info';
 
 export interface ToastAction {
   label: string;

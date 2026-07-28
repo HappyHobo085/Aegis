@@ -209,7 +209,6 @@ fn duplicate_losers(records: &[Value], key_field: &str) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::with_tmp_app;
     use serde_json::json;
 
     fn drec(uuid: &str, key: &str, key_field: &str, wall: i64, deleted: bool) -> Value {

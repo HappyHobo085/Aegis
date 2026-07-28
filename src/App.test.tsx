@@ -231,11 +231,11 @@ describe('App', () => {
     expect(aegis.nav.navigate).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, savedItem.url);
   });
 
-  it('reports the constant top inset on mount (tab strip + toolbar + favbar, no left inset)', async () => {
+  it('reports the constant top inset on mount (workspace bar + tab strip + toolbar + favbar, no left inset)', async () => {
     render(<App />);
     await waitFor(() => expect(setContentInset).toHaveBeenCalled());
-    // 56 (toolbar) + 40 (favbar) + 36 (tab strip, desktop) = 132
-    expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 132, left: 0 });
+    // 32 (workspace bar) + 40 (tab strip) + 56 (toolbar) + 36 (favbar) = 164
+    expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 164, left: 0 });
   });
 
   it('drives view.setChromeOverlay false on mount (no overlay active)', async () => {
@@ -293,7 +293,7 @@ describe('App', () => {
       ),
     );
     const { default: userEvent } = await import('@testing-library/user-event');
-    await userEvent.click(await screen.findByRole('button', { name: /manage favorites/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /new bookmark/i }));
     await waitFor(() =>
       expect(setLayout).toHaveBeenLastCalledWith(
         PRIMARY_VIEW_ID,

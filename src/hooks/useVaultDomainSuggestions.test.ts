@@ -118,7 +118,7 @@ describe('useVaultDomainSuggestions', () => {
 
   it('should handle errors during fetch', async () => {
     const errorMessage = 'vault is locked';
-    autofillMock.mockRejectedValueOnce(new Error(errorMessage));
+    autofillMock.mockRejectedValue(new Error(errorMessage));
 
     const { result } = renderHook(() => useVaultDomainSuggestions());
     // Wait for loading to be false, then verify error is set

@@ -302,12 +302,10 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
   },
 
   {
-    id: 'redirectBar.openAnyway',
-    domain: 'redirectBar',
-    description: 'Emit redirect.blocked → click "Open anyway" → tabs.create(to) called',
+    id: 'redirect.autoOpenBgTab',
+    domain: 'redirect',
+    description: 'Emit redirect.blocked → blocked URL auto-opens in a background tab',
     screen: 'home',
-    // vitest-only: the redirect guard fires only when the native nav policy blocks a
-    // real scripted redirect; not reproducible on demand in the live autopilot.
     layers: ['vitest'],
     run: async (ctx) => {
       const REDIRECT: RedirectBlocked = {
@@ -315,97 +313,19 @@ export const OVERLAY_INTERACTIONS: InteractionSpec[] = [
         from: 'https://publisher.test/',
         to: 'https://malvertising.test/landing',
       };
-      // Render the RedirectBar by invoking the onBlocked callback App registered.
       await ctx.emitRedirectBlocked?.(REDIRECT);
-      const openBtn = ctx.byRole('button', /^Open anyway$/);
-      if (!openBtn) throw new Error('"Open anyway" button not found in RedirectBar');
-      await ctx.click(openBtn);
-      // The bar dismisses itself after "Open anyway" (setBlockedRedirect(null) in App).
     },
     assert: async (ctx) => {
-      // App calls tabs.create(to, false) when "Open anyway" is clicked.
-      if (!ctx.calls.called('tabs.create', (a) => String(a[0]).includes('malvertising.test')))
-        throw new Error('tabs.create not called with the blocked redirect destination URL');
-      return 'redirectBar "Open anyway" → tabs.create(malvertising.test/landing)';
-    },
-  },
-
-  {
-    id: 'redirectBar.dismiss',
-    domain: 'redirectBar',
-    description: 'Emit redirect.blocked → click Dismiss (X) → bar removed from DOM',
-    screen: 'home',
-    // vitest-only: same reasoning as redirectBar.openAnyway.
-    layers: ['vitest'],
-    run: async (ctx) => {
-      const REDIRECT: RedirectBlocked = {
-        viewId: 1,
-        from: 'https://publisher.test/',
-        to: 'https://malvertising.test/landing',
-      };
-      // Render the RedirectBar by invoking the onBlocked callback App registered.
-      await ctx.emitRedirectBlocked?.(REDIRECT);
-      // The dismiss button has aria-label="Dismiss" (set in RedirectBar).
-      const dismissBtn = ctx.byLabel(/^Dismiss$/);
-      if (!dismissBtn) throw new Error('"Dismiss" button not found in RedirectBar');
-      await ctx.click(dismissBtn);
-      // Give React a tick to remove the bar from the DOM.
-      await new Promise((r) => setTimeout(r, 50));
-    },
-    assert: async (ctx) => {
-      // After clicking Dismiss the bar should no longer be in the DOM.
-      const bar = ctx.bySelector('.redirect-bar');
-      if (bar) throw new Error('RedirectBar still in DOM after clicking Dismiss');
-      return 'redirectBar Dismiss → bar removed from DOM';
-    },
-  },
-
-  {
-    id: 'redirectBar.dismissSticky',
-    domain: 'redirectBar',
-    description:
-      'After dismiss, the SAME destination stays suppressed (a malicious page re-fires it on a ' +
-      'timer + on the bar-resize → the bar must be closable); a DIFFERENT destination still shows',
-    screen: 'home',
-    // vitest-only: same reasoning as redirectBar.dismiss.
-    layers: ['vitest'],
-    run: async (ctx) => {
-      const A: RedirectBlocked = {
-        viewId: 1,
-        from: 'https://streamex.test/',
-        to: 'https://malvertising.test/landing',
-      };
-      await ctx.emitRedirectBlocked?.(A);
-      const dismissBtn = ctx.byLabel(/^Dismiss$/);
-      if (!dismissBtn) throw new Error('"Dismiss" button not found in RedirectBar');
-      await ctx.click(dismissBtn);
-      await new Promise((r) => setTimeout(r, 30));
-      // The page re-fires the SAME blocked redirect (timer / the bar's own resize) — the bar
-      // must NOT reappear, or it would be impossible to close.
-      await ctx.emitRedirectBlocked?.(A);
-      await new Promise((r) => setTimeout(r, 30));
-      if (ctx.bySelector('.redirect-bar'))
+      if (
+        !ctx.calls.called(
+          'tabs.create',
+          (a) => String(a[0]).includes('malvertising.test') && a[1] === true,
+        )
+      )
         throw new Error(
-          'RedirectBar reappeared after dismissing the SAME destination (unclosable loop)',
+          'tabs.create not called with the blocked redirect destination URL as background',
         );
-      // A genuinely different destination SHOULD still surface a fresh bar.
-      const B: RedirectBlocked = {
-        viewId: 1,
-        from: 'https://streamex.test/',
-        to: 'https://other-threat.test/x',
-      };
-      await ctx.emitRedirectBlocked?.(B);
-      await new Promise((r) => setTimeout(r, 30));
-    },
-    assert: async (ctx) => {
-      const bar = ctx.bySelector('.redirect-bar');
-      if (!bar)
-        throw new Error(
-          'RedirectBar did not surface for a NEW destination after a prior dismissal',
-        );
-      if (!bar.textContent?.includes('other-threat.test'))
-        throw new Error('RedirectBar shows the wrong destination after a new block');
-      return 'redirectBar dismiss is sticky per-destination (same suppressed, new shown)';
+      return 'redirect.blocked → tabs.create(malvertising.test/landing, true)';
     },
   },
 ];

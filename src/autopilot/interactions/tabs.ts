@@ -56,6 +56,7 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
                 title: 'Tab 1',
                 url: 'https://example.com/',
                 private: false,
+                workspaceId: '',
               },
               {
                 id: 2,
@@ -64,6 +65,7 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
                 title: 'Tab 2',
                 url: 'https://example.org/',
                 private: false,
+                workspaceId: '',
               },
             ],
             activeId: 1,
@@ -138,6 +140,7 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
                 title: 'Tab 1',
                 url: 'https://example.com/',
                 private: false,
+                workspaceId: '',
               },
               {
                 id: 2,
@@ -146,6 +149,7 @@ export const TABS_INTERACTIONS: InteractionSpec[] = [
                 title: 'Tab 2',
                 url: 'https://example.org/',
                 private: false,
+                workspaceId: '',
               },
             ],
             activeId: 1,

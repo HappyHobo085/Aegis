@@ -44,6 +44,18 @@ jobs:
       - name: Unit tests (node + jsdom)
         if: ${{ !cancelled() }}
         run: npm test
+      - name: Build renderer (Vite)
+        if: ${{ !cancelled() }}
+        run: npm run build:renderer
+      - name: Check bundle size
+        if: ${{ !cancelled() }}
+        run: |
+          SIZE=$(gzip -c dist/assets/*.js | wc -c)
+          THRESHOLD=512000  # 500 KB
+          echo "Bundle size: $(($SIZE / 1024)) KB (threshold: $((THRESHOLD / 1024)) KB)"
+          if [ "$SIZE" -gt "$THRESHOLD" ]; then
+            echo "::warning::Bundle size $(($SIZE / 1024)) KB exceeds $((THRESHOLD / 1024)) KB threshold"
+          fi
       - name: Dependency audit gate (high/critical)
         if: ${{ !cancelled() }}
         run: node scripts/check-npm-audit.mjs

@@ -21,6 +21,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::jsonstore;
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 const MAX_DOWNLOAD_ENTRIES: usize = 1000;
 
 /// In-memory downloads cache (managed state) — the source of truth while the app runs.
@@ -145,6 +146,7 @@ fn dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
 /// Private tabs skip the record so the download leaves no persistent trace —
 /// but the file itself is always saved (the user explicitly asked for it),
 /// matching Chrome/Firefox incognito behaviour.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn should_record_download(is_private: bool) -> bool {
     !is_private
 }
@@ -152,6 +154,7 @@ pub fn should_record_download(is_private: bool) -> bool {
 /// On DownloadEvent::Requested: pick the save path and (unless private) record a
 /// progressing entry. Private tabs still save the file the user asked for but leave
 /// no trace in the downloads store.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn on_requested<R: Runtime>(
     app: &AppHandle<R>,
     url: &str,
@@ -207,6 +210,7 @@ pub fn on_requested<R: Runtime>(
 }
 
 /// On DownloadEvent::Finished: mark the newest progressing entry completed/interrupted.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn on_finished<R: Runtime>(app: &AppHandle<R>, success: bool) {
     let changed = mutate(app, false, |items| {
         for it in items.iter_mut().rev() {

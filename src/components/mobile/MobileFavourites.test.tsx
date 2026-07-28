@@ -15,8 +15,19 @@ describe('MobileFavourites', () => {
     fireEvent.click(screen.getByRole('button', { name: 'News' }));
     expect(onOpen).toHaveBeenCalledWith('https://news.test/');
   });
-  it('renders nothing when there are no favourites', () => {
+  it('renders an empty container when there are no favourites', () => {
     const { container } = render(<MobileFavourites favorites={[]} onOpen={vi.fn()} />);
-    expect(container.firstChild).toBeNull();
+    expect(container.querySelector('.mobile-favourites')).toBeInTheDocument();
+  });
+  it('shows a + button when onAdd is provided', () => {
+    const onAdd = vi.fn();
+    render(<MobileFavourites favorites={favs} onOpen={vi.fn()} onAdd={onAdd} />);
+    const addBtn = screen.getByRole('button', { name: /add bookmark/i });
+    fireEvent.click(addBtn);
+    expect(onAdd).toHaveBeenCalled();
+  });
+  it('does not show a + button when onAdd is omitted', () => {
+    render(<MobileFavourites favorites={favs} onOpen={vi.fn()} />);
+    expect(screen.queryByRole('button', { name: /add bookmark/i })).toBeNull();
   });
 });

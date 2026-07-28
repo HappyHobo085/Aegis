@@ -7,12 +7,13 @@ import type {
 } from 'react';
 import { Bookmark, History, X } from 'lucide-react';
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
+import { SIDEBAR_W } from '../lib/layout';
 
 type Tab = 'history' | 'saved';
 
 const WIDTH_KEY = 'aegis.sidebarWidth';
 const MIN_WIDTH = 240;
-const DEFAULT_WIDTH = 280;
+const DEFAULT_WIDTH = SIDEBAR_W;
 const KEY_STEP = 24; // px per arrow-key press
 
 /** Largest allowed width: leave a sliver of the page visible, never swallow it whole. */
@@ -49,7 +50,7 @@ export interface SidebarProps {
 
 export function Sidebar({
   open,
-  initialTab = 'history',
+  initialTab = 'saved',
   onClose,
   history,
   saved,
@@ -189,7 +190,7 @@ export function Sidebar({
     history,
     saved,
   };
-  const order: Tab[] = ['history', 'saved'];
+  const order: Tab[] = ['saved', 'history'];
 
   if (!open) return null;
 

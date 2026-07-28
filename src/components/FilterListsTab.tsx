@@ -115,3 +115,5 @@ export function FilterListsTab({ subs, setEnabled, add, remove, updateNow }: Fil
     </div>
   );
 }
+
+export default FilterListsTab;

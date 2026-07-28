@@ -2,9 +2,9 @@
 //! the content webview; the user hovers to highlight and clicks an element. The
 //! overlay computes a CSS selector + the page host and signals them back by briefly
 //! setting `document.title` to an `AEGISPICK:{json}` sentinel — caught by the
-//! existing title-change handler (linux_layout::connect_title_label), which routes it
-//! here. (A WebKit script-message handler would collide with wry's own catch-all
-//! IPC handler, so the title channel keeps the picker off the native IPC surface.)
+//! title-change handler on each platform (Linux: `linux_layout::connect_title_label`
+//! via WebKit's `notify::title`; Windows: `nav_url_win` via WebView2's
+//! `DocumentTitleChanged` event; macOS: `nav_url_mac` via WKWebView KVO on `title`).
 //! We persist `host##selector` as a custom cosmetic filter — the content-blocker
 //! converter turns it into a css-display-none action, so it hides on future
 //! visits — and re-install the engine. The element is hidden immediately
@@ -13,13 +13,12 @@ use serde_json::{json, Value};
 use tauri::AppHandle;
 
 /// Sentinel prefix a picked selector's JSON is wrapped in (via document.title).
-#[allow(dead_code)] // parsed only by the Linux WebKit title-changed signal (linux_layout)
 pub const SENTINEL: &str = "AEGISPICK:";
 
 /// Picking overlay: highlight on hover, pick on click, Esc to cancel. On pick it
 /// hides the element (instant feedback) and signals {selector, host} via a short
 /// title sentinel, restored after a moment. Idempotent while active.
-#[cfg(target_os = "linux")]
+/// Engine-agnostic — works in WebKitGTK, WebView2, and WKWebView.
 const PICKER_JS: &str = r#"
 (function () {
   if (window.__aegisPicking) return;
@@ -82,8 +81,10 @@ const PICKER_JS: &str = r#"
 
 /// Persist a picked element as a custom cosmetic filter and re-install the engine.
 /// `payload` is the JSON `{selector, host}` from the title sentinel (prefix
-/// already stripped). Called by linux_layout::connect_title_label.
-#[cfg(target_os = "linux")]
+/// already stripped). Called by the platform title-sentinel handlers:
+/// - Linux: `linux_layout::connect_title_label`
+/// - Windows: `nav_url_win` DocumentTitleChanged event
+/// - macOS: `nav_url_mac` KVO title observer
 pub fn on_picked(app: &AppHandle, payload: &str) {
     let parsed: Value = serde_json::from_str(payload).unwrap_or(Value::Null);
     let selector = parsed
@@ -121,10 +122,13 @@ pub fn on_picked(app: &AppHandle, payload: &str) {
 }
 
 /// Handle `picker.start`: inject the picking overlay into the content webview.
+/// The JS is engine-agnostic; only the injection mechanism differs per platform.
+#[allow(clippy::needless_return)] // return is needed inside #[cfg] blocks to prevent fallthrough
 pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Result<Value, String>> {
     if channel != "picker.start" {
         return None;
     }
+    // Linux: WebKitGTK evaluate_javascript (native, no async callback needed).
     #[cfg(target_os = "linux")]
     {
         use webkit2gtk::WebViewExt;
@@ -140,9 +144,57 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
                 |_| {},
             );
         });
-        Some(Ok(json!({ "ok": true })))
+        return Some(Ok(json!({ "ok": true })));
     }
-    #[cfg(not(target_os = "linux"))]
+    // Windows: WebView2 ExecuteScript (async, fire-and-forget — the sentinel
+    // is caught by DocumentTitleChanged in nav_url_win.rs).
+    #[cfg(target_os = "windows")]
+    {
+        use webview2_com::ExecuteScriptCompletedHandler;
+        let Some(content) = crate::nav::active_webview(app) else {
+            return Some(Ok(json!({ "ok": false })));
+        };
+        let _ = content.with_webview(|pw| unsafe {
+            let core = match pw.controller().CoreWebView2() {
+                Ok(c) => c,
+                Err(_) => return,
+            };
+            // HSTRING implements Param<PCWSTR>, so we can pass it directly.
+            let js = windows::core::HSTRING::from(PICKER_JS);
+            let handler = ExecuteScriptCompletedHandler::create(Box::new(|_hr, _result| Ok(())));
+            let _ = core.ExecuteScript(&js, &handler);
+        });
+        return Some(Ok(json!({ "ok": true })));
+    }
+    // macOS: WKWebView evaluateJavaScript (async, fire-and-forget — the sentinel
+    // is caught by KVO on title in nav_url_mac.rs).
+    #[cfg(target_os = "macos")]
+    {
+        use objc2::rc::Retained;
+        use objc2_foundation::NSString;
+        use objc2_web_kit::WKWebView;
+        let Some(content) = crate::nav::active_webview(app) else {
+            return Some(Ok(json!({ "ok": false })));
+        };
+        let _ = content.with_webview(|pw| {
+            let ptr = pw.inner() as *mut WKWebView;
+            if ptr.is_null() {
+                return;
+            }
+            // SAFETY: ptr is non-null and is a valid WKWebView owned by wry.
+            if let Some(webview) = unsafe { Retained::retain(ptr) } {
+                unsafe {
+                    let js = NSString::from_str(PICKER_JS);
+                    // No completion handler needed — the picker signals via
+                    // document.title, caught by the title KVO observer.
+                    webview.evaluateJavaScript_completionHandler(&js, None);
+                }
+            }
+        });
+        return Some(Ok(json!({ "ok": true })));
+    }
+    // Fallback for unsupported platforms (e.g. Android).
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         let _ = app;
         Some(Ok(json!({ "ok": false })))

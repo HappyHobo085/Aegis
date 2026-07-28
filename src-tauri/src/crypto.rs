@@ -86,10 +86,10 @@ pub fn unhex(s: &str) -> Option<Vec<u8>> {
 /// (proof-of-root) without ever seeing the root — closing the rogue-registration hole where
 /// anyone who learned the public account id could self-register a device.
 pub fn account_signing_key(root: &RootSecret) -> SigningKey {
-    let mut seed = [0u8; 32];
-    expand(&root.0, b"account-sign", &mut seed);
+    let mut seed = Zeroizing::new([0u8; 32]);
+    expand(&root.0, b"account-sign", &mut *seed);
     let key = SigningKey::from_bytes(&seed);
-    seed.zeroize();
+    // seed is automatically zeroized on drop via Zeroizing wrapper
     key
 }
 

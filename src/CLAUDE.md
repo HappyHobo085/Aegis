@@ -80,7 +80,9 @@ width)` so the page insets from the right and stays visible. Width is remembered
   Consumed exclusively by `SecuritySettingsTab` (the "Security" tab in Settings).
   The hook never holds raw credentials or sensitive data — only the string level and
   the host allowlist. Re-reads state after every mutation so the UI reflects the Rust
-  source of truth.
+  source of truth. Android fp-allowlist gap is being addressed — the fix path
+  (an `ANDROID_FP_ALLOWLIST` process-global mirroring the existing `ANDROID_LEVEL`
+  pattern) is specified in `docs/roadmap/phase-2-parity-gaps-spec.md` Gap 2 / Task 1.
 - **`hooks/useFind`** — owns find-in-page UI state for the active view. Subscribes to
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.

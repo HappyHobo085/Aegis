@@ -1,6 +1,6 @@
 // src/components/AddressBar.tsx
 import { EyeOff, Lock, Search, ShieldAlert, Trash2 } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import type { SitePermission } from '../../shared/types';
 import type { ProtectionSummary } from '../lib/protectionSummary';
 import { useDialog } from '../hooks/useDialog';
@@ -10,6 +10,9 @@ export interface AddressBarProps {
   isLoading?: boolean;
   isPrivate?: boolean;
   siteInfo?: SiteInfo;
+  /** Optional element rendered inside the address bar pill, right-aligned
+   *  (e.g. the ad-block shield icon on mobile). */
+  inlineRight?: ReactNode;
   onSubmit(raw: string): void;
 }
 
@@ -117,6 +120,7 @@ export function AddressBar({
   isLoading = false,
   isPrivate = false,
   siteInfo,
+  inlineRight,
   onSubmit,
 }: AddressBarProps) {
   const [value, setValue] = useState(display(url));
@@ -195,6 +199,7 @@ export function AddressBar({
           }}
           onChange={(e) => setValue(e.target.value)}
         />
+        {inlineRight && <span className="address-bar__inline-right">{inlineRight}</span>}
         <span className="address-bar__hint" aria-hidden="true">
           Enter
         </span>

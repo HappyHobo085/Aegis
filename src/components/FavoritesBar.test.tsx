@@ -24,28 +24,28 @@ const props = (over: Partial<React.ComponentProps<typeof FavoritesBar>> = {}) =>
 });
 
 describe('FavoritesBar', () => {
-  it('renders a chip per favorite labelled by name', () => {
+  it('renders a chip per bookmark labelled by name', () => {
     render(<FavoritesBar {...props()} />);
     expect(screen.getByRole('button', { name: 'Open Alpha' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Open Beta' })).toBeInTheDocument();
   });
 
-  it('clicking a favorite chip calls onOpenFavorite with its url', async () => {
+  it('clicking a bookmark chip calls onOpenFavorite with its url', async () => {
     const p = props();
     render(<FavoritesBar {...p} />);
     await userEvent.click(screen.getByRole('button', { name: 'Open Beta' }));
     expect(p.onOpenFavorite).toHaveBeenCalledWith('https://beta.example/');
   });
 
-  it('exposes a Manage favorites button that calls onOpenManager', async () => {
+  it('exposes a New bookmark button that calls onOpenManager', async () => {
     const p = props();
     render(<FavoritesBar {...p} />);
-    await userEvent.click(screen.getByRole('button', { name: /manage favorites/i }));
+    await userEvent.click(screen.getByRole('button', { name: /new bookmark/i }));
     expect(p.onOpenManager).toHaveBeenCalledTimes(1);
   });
 
   it('uses a labelled toolbar/navigation landmark for the bar', () => {
     render(<FavoritesBar {...props()} />);
-    expect(screen.getByRole('navigation', { name: /favorites/i })).toBeInTheDocument();
+    expect(screen.getByRole('navigation', { name: /bookmarks/i })).toBeInTheDocument();
   });
 });

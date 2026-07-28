@@ -39,10 +39,29 @@ fn state_tabs<R: Runtime>(app: &AppHandle<R>) -> TabsState {
     app.state::<Tabs>().reg.lock().unwrap().tabs_state()
 }
 
-/// Emit `tabs.state` + persist the session.
+fn workspace_state_value<R: Runtime>(app: &AppHandle<R>) -> Value {
+    let tabs = app.state::<Tabs>();
+    let reg = tabs.reg.lock().unwrap();
+    let workspaces = reg.workspace_list();
+    let active_id = reg.active_workspace_id().to_string();
+    serde_json::json!({
+        "workspaces": workspaces,
+        "activeWorkspaceId": active_id,
+    })
+}
+
+/// Emit `tabs.state` + persist the session. Also emits `workspace.state` so the
+/// chrome's workspace tab counts stay in sync after tab mutations.
 fn emit_and_persist<R: Runtime>(app: &AppHandle<R>) {
     crate::emit_event(app, "tabs.state", state_value(app));
     persist(app);
+    emit_workspace_and_persist(app);
+}
+
+/// Emit `workspace.state` so the chrome's workspace tab counts stay in sync.
+fn emit_workspace_and_persist<R: Runtime>(app: &AppHandle<R>) {
+    let value = workspace_state_value(app);
+    crate::emit_event(app, "workspace.state", &value);
 }
 
 fn record_nav<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str, title: &str) {
@@ -60,6 +79,7 @@ fn record_nav<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str, title: &str) {
 }
 
 /// Record a tab's current URL (called from nav.rs on_page_load) for restore.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn on_tab_url<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
         s.reg.lock().unwrap().record_nav(id, url);
@@ -122,7 +142,7 @@ fn close_webview(app: &AppHandle, id: u32) {
     // On Linux, remove the webview from the container before closing to avoid dangling pointers.
     #[cfg(target_os = "linux")]
     {
-        let _ = crate::linux_layout::remove_webview_label(app, &label);
+        crate::linux_layout::remove_webview_label(app, &label);
     }
 
     // Close the webview (this should not fail even if already closed)
@@ -249,6 +269,108 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             record_nav(app, id, url, title);
             Some(Ok(state_value(app)))
         }
+        // ── workspace dispatch ────────────────────────────────────────────────
+        "workspace.list" => Some(Ok(workspace_state_value(app))),
+        "workspace.create" => {
+            let name = payload
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled");
+            let color = payload
+                .get("color")
+                .and_then(Value::as_str)
+                .unwrap_or("slate");
+            let ws = {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.create_workspace(name, color)
+            };
+            emit_workspace_and_persist(app);
+            Some(Ok(serde_json::to_value(ws).unwrap()))
+        }
+        "workspace.switch" => {
+            let id = payload.get("id").and_then(Value::as_str).unwrap_or("");
+            let success = {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.switch_workspace(id)
+            };
+            if success {
+                crate::view::apply_inset(app);
+            }
+            emit_and_persist(app);
+            emit_workspace_and_persist(app);
+            Some(Ok(workspace_state_value(app)))
+        }
+        "workspace.rename" => {
+            let id = payload.get("id").and_then(Value::as_str).unwrap_or("");
+            let name = payload
+                .get("name")
+                .and_then(Value::as_str)
+                .unwrap_or("Untitled");
+            let result = {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.rename_workspace(id, name)
+            };
+            emit_workspace_and_persist(app);
+            match result {
+                Some(ws) => Some(Ok(serde_json::to_value(ws).unwrap())),
+                None => Some(Err("workspace not found".into())),
+            }
+        }
+        "workspace.setColor" => {
+            let id = payload.get("id").and_then(Value::as_str).unwrap_or("");
+            let color = payload
+                .get("color")
+                .and_then(Value::as_str)
+                .unwrap_or("slate");
+            let result = {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.set_workspace_color(id, color)
+            };
+            emit_workspace_and_persist(app);
+            match result {
+                Some(ws) => Some(Ok(serde_json::to_value(ws).unwrap())),
+                None => Some(Err("workspace not found".into())),
+            }
+        }
+        "workspace.remove" => {
+            let id = payload.get("id").and_then(Value::as_str).unwrap_or("");
+            let success = {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.remove_workspace(id)
+            };
+            if success {
+                emit_and_persist(app);
+            }
+            emit_workspace_and_persist(app);
+            if success {
+                Some(Ok(workspace_state_value(app)))
+            } else {
+                Some(Err("cannot remove workspace".into()))
+            }
+        }
+        "workspace.reorder" => {
+            let ids: Vec<String> = payload
+                .get("ids")
+                .and_then(Value::as_array)
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect()
+                })
+                .unwrap_or_default();
+            {
+                let tabs = app.state::<Tabs>();
+                let mut reg = tabs.reg.lock().unwrap();
+                reg.reorder_workspaces(&ids);
+            }
+            emit_workspace_and_persist(app);
+            Some(Ok(workspace_state_value(app)))
+        }
         _ => None,
     }
 }
@@ -278,12 +400,14 @@ pub fn close_tab(app: &AppHandle, id: u32) {
 /// the webview until the tab is activated. Emits state + persists, but does NOT change the
 /// active tab.
 /// A popup from a private tab inherits privateness (`private = true`).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn open_background(app: &AppHandle, url: &str, private: bool) {
     open_redirect_background(app, url, private);
 }
 
 /// Open a URL in a new background tab and return its id. Used by the redirect blocker
 /// which needs the id for the auto-close timer.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn open_redirect_background(app: &AppHandle, url: &str, private: bool) -> u32 {
     let now = now_ms(app);
     let (id, _u) = app.state::<Tabs>().reg.lock().unwrap().create_private(
@@ -337,9 +461,16 @@ pub fn start_idle_sweep(app: &AppHandle) {
             if timeout_ms == 0 {
                 continue;
             }
+            let bg_timeout_ms = crate::settings::background_tab_timeout_ms(&app);
+            let aggressive_threshold = crate::settings::aggressive_sweep_threshold(&app);
             let now = now_ms(&app);
             let victims = match app.try_state::<Tabs>() {
-                Some(s) => s.reg.lock().unwrap().sweep_idle(now, timeout_ms),
+                Some(s) => s.reg.lock().unwrap().sweep_idle(
+                    now,
+                    timeout_ms,
+                    bg_timeout_ms,
+                    aggressive_threshold,
+                ),
                 None => continue,
             };
             if victims.is_empty() {

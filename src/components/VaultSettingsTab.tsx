@@ -10,24 +10,13 @@
 // - Decrypted record passwords are masked by default; revealed only on demand per row.
 // - Nothing is written to localStorage / sessionStorage / IndexedDB / the URL.
 // - No credential values are logged.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { VaultRecord, VaultRecordInput } from '../../shared/types';
 import type { UseVault } from '../hooks/useVault';
 import { confirm, toast } from '../lib/toast';
 
-// Import autofill hooks for future integration
-import { useVaultDomainSuggestions } from '../hooks/useVaultDomainSuggestions';
-
 export function VaultSettingsTab({ vault }: { vault: UseVault }) {
   const { state } = vault;
-
-  // Autofill suggestions hook (for future UI integration)
-  const {
-    suggestions: autofillSuggestions,
-    loading: autofillLoading,
-    error: autofillError,
-    refetch: refetchAutofill,
-  } = useVaultDomainSuggestions();
 
   // ---- shared async helper ----
   const [busy, setBusy] = useState(false);
@@ -78,6 +67,10 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
   // ---- search state ----
   const [searchQuery, setSearchQuery] = useState('');
 
+  // Use a ref for vault to avoid stale closures while keeping stable deps
+  const vaultRef = useRef(vault);
+  vaultRef.current = vault;
+
   // Load records on mount (or when state transitions to unlocked).
   useEffect(() => {
     if (!state.unlocked) {
@@ -86,8 +79,7 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
       setSearchQuery('');
       return;
     }
-    void vault.list().then(setRecords);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    void vaultRef.current.list().then(setRecords);
   }, [state.unlocked]);
 
   const refreshList = async () => {
@@ -334,19 +326,16 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
         when you need it.
       </p>
 
-      {/* Autofill notice when vault is unlocked */}
-      {!autofillLoading && !autofillError && autofillSuggestions.length > 0 && (
-        <p className="vault-tab__notice">
-          {autofillSuggestions.length} credential{autofillSuggestions.length !== 1 ? 's' : ''}{' '}
-          available for autofill on the current site.
-        </p>
-      )}
-      {autofillLoading && <p className="vault-tab__notice">Checking for autofill credentials...</p>}
-      {autofillError && (
-        <p className="vault-tab__error" role="alert">
-          Autofill error: {autofillError}
-        </p>
-      )}
+      {/* Sync status indicator */}
+      <div className="vault-tab__sync" aria-label="Vault sync status">
+        <span
+          className={`vault-tab__sync-dot ${state.syncEnabled ? 'vault-tab__sync-dot--on' : 'vault-tab__sync-dot--off'}`}
+          aria-hidden="true"
+        />
+        {state.syncEnabled
+          ? 'Synced across your devices via E2E encryption'
+          : 'Sync is not enabled — passwords stay on this device'}
+      </div>
 
       {state.undecryptable > 0 && (
         <p className="vault-tab__warning" role="alert">
@@ -483,3 +472,5 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
     </div>
   );
 }
+
+export default VaultSettingsTab;

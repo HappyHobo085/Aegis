@@ -26,9 +26,27 @@ function makeRecord(over: Partial<VaultRecord> = {}): VaultRecord {
 }
 
 // ---- state presets ----
-const noVault: VaultState = { exists: false, unlocked: false, count: 0, undecryptable: 0 };
-const locked: VaultState = { exists: true, unlocked: false, count: 2, undecryptable: 0 };
-const unlocked: VaultState = { exists: true, unlocked: true, count: 1, undecryptable: 0 };
+const noVault: VaultState = {
+  exists: false,
+  unlocked: false,
+  count: 0,
+  undecryptable: 0,
+  syncEnabled: false,
+};
+const locked: VaultState = {
+  exists: true,
+  unlocked: false,
+  count: 2,
+  undecryptable: 0,
+  syncEnabled: false,
+};
+const unlocked: VaultState = {
+  exists: true,
+  unlocked: true,
+  count: 1,
+  undecryptable: 0,
+  syncEnabled: false,
+};
 
 // ---- fake hook factory ----
 function fakeVault(over: Partial<UseVault> = {}): UseVault {
@@ -160,12 +178,16 @@ describe('VaultSettingsTab — unlocked', () => {
   });
 
   it('warns when some records could not be decrypted (preserved, not lost)', () => {
-    renderUnlocked({ state: { exists: true, unlocked: true, count: 1, undecryptable: 2 } });
+    renderUnlocked({
+      state: { exists: true, unlocked: true, count: 1, undecryptable: 2, syncEnabled: false },
+    });
     expect(screen.getByText(/could not be decrypted/i)).toBeInTheDocument();
   });
 
   it('shows no undecryptable warning when all records decrypt', () => {
-    renderUnlocked({ state: { exists: true, unlocked: true, count: 1, undecryptable: 0 } });
+    renderUnlocked({
+      state: { exists: true, unlocked: true, count: 1, undecryptable: 0, syncEnabled: false },
+    });
     expect(screen.queryByText(/could not be decrypted/i)).not.toBeInTheDocument();
   });
 
@@ -219,7 +241,10 @@ describe('VaultSettingsTab — unlocked', () => {
   it('displays loaded records — passwords masked by default', async () => {
     const record = makeRecord();
     const list = vi.fn(async () => [record]);
-    renderUnlocked({ list, state: { exists: true, unlocked: true, count: 1, undecryptable: 0 } });
+    renderUnlocked({
+      list,
+      state: { exists: true, unlocked: true, count: 1, undecryptable: 0, syncEnabled: false },
+    });
     // Trigger list load (simulate unlock done)
     await screen.findByText('https://example.com', {}, { timeout: 200 }).catch(() => {});
     // The component calls list() on mount when unlocked

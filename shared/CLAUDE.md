@@ -25,10 +25,9 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
     event (Ctrl+T/W/Shift+T from native accelerator/GTK hook).
   - `redirect.blocked` event (`evtRedirectBlocked`, payload `RedirectBlocked { viewId,
 from, to }`) — the native redirect guard cancelled a scripted cross-origin top-frame
-    redirect. The chrome surfaces it (desktop `RedirectBar` infobar / Android Material
-    Snackbar) with "Open anyway" → opens `to` in a new tab (`tabs.create` desktop /
-    `__aegisOpenTab` Android). Emitted per-platform from the native nav-policy hook; see
-    `src-tauri/CLAUDE.md` gotcha 14.
+    redirect. The chrome automatically opens the blocked destination in a new background tab
+    via `tabs.create(url, true)` (Android `__aegisOpenTab` equivalent). Emitted per-platform
+    from the native nav-policy hook; see `src-tauri/CLAUDE.md` gotcha 14.
   - `find.*` channels + `find.state` event:
     - `find.start` (payload `{ query, caseSensitive?, viewId? }`) — begin/update a
       find-in-page session on the active (or specified) tab.

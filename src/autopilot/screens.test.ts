@@ -20,7 +20,6 @@ describe('SCREENS', () => {
       'crashOverlay',
       'safetyInterstitial',
       'permissionPrompt',
-      'redirectBar',
       'confirmDialog',
       'home',
     ] as const)

@@ -5,6 +5,22 @@ use serde::{Deserialize, Serialize};
 
 pub type ViewId = u32;
 
+#[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
+pub struct Workspace {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub tab_index: u32,
+}
+
+#[derive(Clone, Serialize, Deserialize, Default)]
+pub struct PersistedWorkspace {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub tab_index: u32,
+}
+
 #[derive(Clone)]
 struct Tab {
     id: ViewId,
@@ -28,6 +44,8 @@ struct Tab {
     /// Private (incognito) tab: its content webview uses an ephemeral data partition
     /// and its browsing is excluded from history/sync/downloads + the persisted session.
     private: bool,
+    /// Which workspace this tab belongs to (default: "default" = the "General" workspace).
+    workspace_id: String,
 }
 
 #[derive(Clone)]
@@ -47,6 +65,8 @@ pub struct TabMeta {
     pub title: String,
     pub url: String,
     pub private: bool,
+    #[serde(rename = "workspaceId")]
+    pub workspace_id: String,
 }
 #[derive(Clone, Serialize, PartialEq, Debug)]
 pub struct TabsState {
@@ -62,7 +82,14 @@ pub struct PersistedTab {
     pub url: String,
     pub title: String,
     pub pinned: bool,
+    #[serde(default)]
+    pub workspace_id: String,
 }
+
+fn default_workspace_id() -> String {
+    "default".into()
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct PersistedSession {
     pub tabs: Vec<PersistedTab>,
@@ -70,6 +97,10 @@ pub struct PersistedSession {
     pub active_id: ViewId,
     #[serde(rename = "nextId")]
     pub next_id: ViewId,
+    #[serde(default)]
+    pub workspaces: Vec<PersistedWorkspace>,
+    #[serde(default = "default_workspace_id")]
+    pub active_workspace_id: String,
 }
 
 /// The result of closing a tab: which webview to destroy + which tab now needs one.
@@ -84,6 +115,8 @@ pub struct Registry {
     closed_stack: Vec<ClosedTab>,
     next_id: ViewId,
     home_url: String,
+    workspaces: Vec<Workspace>,
+    active_workspace_id: String,
 }
 
 impl Registry {
@@ -101,11 +134,19 @@ impl Registry {
                 history: vec![home_url.clone()],
                 hist_index: 0,
                 private: false,
+                workspace_id: "default".into(),
             }],
             active_id: 1,
             closed_stack: Vec::new(),
             next_id: 2,
             home_url,
+            workspaces: vec![Workspace {
+                id: "default".into(),
+                name: "General".into(),
+                color: "slate".into(),
+                tab_index: 0,
+            }],
+            active_workspace_id: "default".into(),
         }
     }
 
@@ -132,19 +173,55 @@ impl Registry {
                 // or whether they were background-created, so we use safe defaults:
                 // - created_at set to 1 (non-zero to differ from last_active=0 below)
                 // - background_creation set to false (assume not from on_new_window)
-                // This prevents the special 30s background timeout from applying
-                // to restored tabs unless/until they are actually background-created
-                // and never activated in the current session.
+                // This prevents the background timeout from applying to restored tabs
+                // unless/until they are actually background-created and never activated
+                // in the current session.
                 created_at: 1,
                 background_creation: false,
+                workspace_id: if p.workspace_id.is_empty() {
+                    "default".into()
+                } else {
+                    p.workspace_id
+                },
             })
             .collect();
+
+        // Restore workspaces from session, or create the default "General" workspace
+        // for old-format sessions that have no workspace data.
+        let (workspaces, active_workspace_id) = if session.workspaces.is_empty() {
+            (
+                vec![Workspace {
+                    id: "default".into(),
+                    name: "General".into(),
+                    color: "slate".into(),
+                    tab_index: 0,
+                }],
+                "default".into(),
+            )
+        } else {
+            (
+                session
+                    .workspaces
+                    .into_iter()
+                    .map(|pw| Workspace {
+                        id: pw.id,
+                        name: pw.name,
+                        color: pw.color,
+                        tab_index: pw.tab_index,
+                    })
+                    .collect(),
+                session.active_workspace_id,
+            )
+        };
+
         let mut r = Registry {
             tabs,
             active_id,
             closed_stack: Vec::new(),
             next_id: session.next_id.max(max_id + 1),
             home_url,
+            workspaces,
+            active_workspace_id,
         };
         // Guard against a saved active_id that isn't present.
         if r.idx(active_id).is_none() {
@@ -182,6 +259,7 @@ impl Registry {
             tabs: self
                 .tabs
                 .iter()
+                .filter(|t| t.workspace_id == self.active_workspace_id)
                 .map(|t| TabMeta {
                     id: t.id,
                     pinned: t.pinned,
@@ -189,6 +267,7 @@ impl Registry {
                     title: t.title.clone(),
                     url: t.url.clone(),
                     private: t.private,
+                    workspace_id: t.workspace_id.clone(),
                 })
                 .collect(),
             active_id: self.active_id,
@@ -212,10 +291,22 @@ impl Registry {
                     url: t.url.clone(),
                     title: t.title.clone(),
                     pinned: t.pinned,
+                    workspace_id: self.tab_workspace_id(t.id).unwrap_or_default(),
                 })
                 .collect(),
             active_id: self.active_id,
             next_id: self.next_id,
+            workspaces: self
+                .workspaces
+                .iter()
+                .map(|ws| PersistedWorkspace {
+                    id: ws.id.clone(),
+                    name: ws.name.clone(),
+                    color: ws.color.clone(),
+                    tab_index: ws.tab_index,
+                })
+                .collect(),
+            active_workspace_id: self.active_workspace_id.clone(),
         }
     }
 
@@ -250,7 +341,9 @@ impl Registry {
             history: vec![url.clone()],
             hist_index: 0,
             private,
+            workspace_id: String::new(),
         });
+        self.assign_tab_to_active(id);
         if !background {
             if let Some(i) = self.idx(self.active_id) {
                 self.tabs[i].last_active = now_ms;
@@ -265,6 +358,7 @@ impl Registry {
     }
 
     /// Returns true if the tab exists and was created in the background (never activated).
+    #[cfg_attr(target_os = "android", allow(dead_code))]
     pub fn is_background_tab(&self, id: ViewId) -> bool {
         self.idx(id)
             .map(|i| self.tabs[i].background_creation)
@@ -424,8 +518,10 @@ impl Registry {
 
     /// Discard live, non-active, non-pinned, non-private tabs idle for >= timeout_ms.
     /// Additionally, background-created tabs that have never been activated are
-    /// discarded after 30 seconds regardless of the timeout setting.
-    /// `timeout_ms == 0` disables the standard timeout (but not the 30-second background timeout).
+    /// discarded after `background_timeout_ms` regardless of the timeout setting.
+    /// When the total tab count exceeds `aggressive_threshold`, both timeouts are
+    /// halved to reclaim memory faster under pressure.
+    /// `timeout_ms == 0` disables the standard timeout (but not the background timeout).
     /// Returns ids whose webviews the caller must close().
     /// Private tabs are never discarded: their ephemeral session data is gone once the
     /// webview closes, and re-creating a new ephemeral partition on reload would leak
@@ -433,23 +529,38 @@ impl Registry {
     /// expected page — contrary to user expectations.
     /// Discard tabs that have timed out.
     /// Returns IDs of tabs whose webviews should be closed and which should be removed from the registry.
-    pub fn sweep_idle(&mut self, now_ms: u64, timeout_ms: u64) -> Vec<ViewId> {
+    pub fn sweep_idle(
+        &mut self,
+        now_ms: u64,
+        timeout_ms: u64,
+        background_timeout_ms: u64,
+        aggressive_threshold: usize,
+    ) -> Vec<ViewId> {
         let mut to_remove = Vec::new();
         let active = self.active_id;
+        // When tabs exceed the threshold, halve both timeouts for aggressive memory
+        // reclaim.  saturating_sub ensures 0 stays 0 (disabled).
+        let (eff_timeout, eff_bg_timeout) = if self.tabs.len() > aggressive_threshold {
+            (
+                timeout_ms.saturating_div(2),
+                background_timeout_ms.saturating_div(2),
+            )
+        } else {
+            (timeout_ms, background_timeout_ms)
+        };
         for t in self.tabs.iter_mut() {
             // Skip active, pinned, private tabs
             if t.id == active || t.pinned || t.private {
                 continue;
             }
             if t.background_creation {
-                const BACKGROUND_TIMEOUT_MS: u64 = 30_000; // 30 seconds
-                if now_ms.saturating_sub(t.created_at) >= BACKGROUND_TIMEOUT_MS {
+                if now_ms.saturating_sub(t.created_at) >= eff_bg_timeout {
                     // Timed out due to being background-created and never activated
                     to_remove.push(t.id);
                 }
             } else {
                 // Normal idle timeout (only applies to tabs that are not background-created)
-                if timeout_ms != 0 && now_ms.saturating_sub(t.last_active) >= timeout_ms {
+                if eff_timeout != 0 && now_ms.saturating_sub(t.last_active) >= eff_timeout {
                     t.live = false;
                     to_remove.push(t.id);
                 }
@@ -485,14 +596,124 @@ impl Registry {
                 hist_index: 0,
                 // reopened tabs are never private
                 private: false,
+                workspace_id: String::new(),
             },
         );
+        self.assign_tab_to_active(id);
         if let Some(i) = self.idx(self.active_id) {
             self.tabs[i].last_active = now_ms;
         }
         self.active_id = id;
         self.resort_pinned();
         Some((id, c.url))
+    }
+
+    // ── workspace methods ──────────────────────────────────────────────────────
+
+    /// Returns the list of workspaces.
+    pub fn workspace_list(&self) -> Vec<Workspace> {
+        self.workspaces.clone()
+    }
+
+    /// Returns the active workspace id.
+    pub fn active_workspace_id(&self) -> &str {
+        &self.active_workspace_id
+    }
+
+    /// Create a new workspace. Returns the newly created workspace.
+    pub fn create_workspace(&mut self, name: &str, color: &str) -> Workspace {
+        // Generate a unique ID by finding the max numeric suffix across existing workspace IDs.
+        let max_num = self
+            .workspaces
+            .iter()
+            .filter_map(|ws| ws.id.strip_prefix("ws-"))
+            .filter_map(|s| s.parse::<u32>().ok())
+            .max()
+            .unwrap_or(0);
+        let id = format!("ws-{}", max_num + 1);
+        let ws = Workspace {
+            id: id.clone(),
+            name: name.to_string(),
+            color: color.to_string(),
+            tab_index: self.workspaces.len() as u32,
+        };
+        self.workspaces.push(ws.clone());
+        ws
+    }
+
+    /// Switch to the given workspace. Returns false if the id is not found.
+    pub fn switch_workspace(&mut self, id: &str) -> bool {
+        if self.workspaces.iter().any(|ws| ws.id == id) {
+            self.active_workspace_id = id.to_string();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Rename a workspace. Returns the updated workspace, or None if not found.
+    pub fn rename_workspace(&mut self, id: &str, name: &str) -> Option<Workspace> {
+        self.workspaces.iter_mut().find(|ws| ws.id == id).map(|ws| {
+            ws.name = name.to_string();
+            ws.clone()
+        })
+    }
+
+    /// Set the color of a workspace. Returns the updated workspace, or None if not found.
+    pub fn set_workspace_color(&mut self, id: &str, color: &str) -> Option<Workspace> {
+        self.workspaces.iter_mut().find(|ws| ws.id == id).map(|ws| {
+            ws.color = color.to_string();
+            ws.clone()
+        })
+    }
+
+    /// Remove a workspace. Tabs in the removed workspace are reassigned to "default".
+    /// Returns false if the workspace is "default" or if it's the last workspace.
+    pub fn remove_workspace(&mut self, id: &str) -> bool {
+        if id == "default" {
+            return false;
+        }
+        if self.workspaces.len() <= 1 {
+            return false;
+        }
+        // Move tabs from the removed workspace to "default"
+        for tab in self.tabs.iter_mut() {
+            if tab.workspace_id == id {
+                tab.workspace_id = "default".into();
+            }
+        }
+        self.workspaces.retain(|ws| ws.id != id);
+        // If the removed workspace was active, fall back to "default"
+        if self.active_workspace_id == id {
+            self.active_workspace_id = "default".into();
+        }
+        true
+    }
+
+    /// Reorder workspaces by the given id list. Any workspaces not in the list
+    /// are appended at the end in their original relative order.
+    pub fn reorder_workspaces(&mut self, ids: &[String]) {
+        let mut reordered: Vec<Workspace> = Vec::new();
+        for id in ids {
+            if let Some(pos) = self.workspaces.iter().position(|ws| &ws.id == id) {
+                reordered.push(self.workspaces.remove(pos));
+            }
+        }
+        // Append any remaining workspaces not in the ids list
+        reordered.append(&mut self.workspaces);
+        self.workspaces = reordered;
+    }
+
+    /// Assign a tab to the currently active workspace.
+    pub fn assign_tab_to_active(&mut self, tab_id: ViewId) {
+        if let Some(i) = self.idx(tab_id) {
+            self.tabs[i].workspace_id = self.active_workspace_id.clone();
+        }
+    }
+
+    /// Read a tab's workspace id.
+    pub fn tab_workspace_id(&self, tab_id: ViewId) -> Option<String> {
+        self.idx(tab_id).map(|i| self.tabs[i].workspace_id.clone())
     }
 }
 
@@ -570,16 +791,20 @@ mod tests {
                     url: "https://a.test/".into(),
                     title: String::new(),
                     pinned: false,
+                    workspace_id: String::new(),
                 },
                 PersistedTab {
                     id: 6,
                     url: "https://b.test/".into(),
                     title: String::new(),
                     pinned: false,
+                    workspace_id: String::new(),
                 },
             ],
             active_id: 999, // not present
             next_id: 7,
+            workspaces: Vec::new(),
+            active_workspace_id: "default".into(),
         };
         let r = Registry::restore(session, "https://home.test/".into());
         let s = r.tabs_state();
@@ -705,7 +930,7 @@ mod tests {
         let mut r = reg(); // tab 1
         let (b, _) = r.create(None, false, 0); // tab 2 active, 1 backgrounded@0
                                                // now = 60_000 ms, timeout = 30_000 ms -> tab 1 (idle 60s) is discarded.
-        let victims = r.sweep_idle(60_000, 30_000);
+        let victims = r.sweep_idle(60_000, 30_000, 30_000, 20);
         assert_eq!(victims, vec![1]);
         assert!(!r.tabs_state().tabs.iter().find(|t| t.id == 1).unwrap().live);
         assert!(r.tabs_state().tabs.iter().find(|t| t.id == b).unwrap().live); // active exempt
@@ -716,7 +941,7 @@ mod tests {
         let mut r = reg(); // tab 1 active
         let (_b, _) = r.create(None, false, 0); // tab 2 active, 1 backgrounded@0
         r.set_pinned(1, true); // 1 pinned -> exempt
-        let victims = r.sweep_idle(999_999, 1);
+        let victims = r.sweep_idle(999_999, 1, 30_000, 20);
         assert!(victims.is_empty()); // active(b) + pinned(1) both exempt
     }
 
@@ -724,7 +949,7 @@ mod tests {
     fn sweep_timeout_zero_disables() {
         let mut r = reg();
         let _ = r.create(None, false, 0);
-        assert!(r.sweep_idle(u64::MAX, 0).is_empty());
+        assert!(r.sweep_idle(u64::MAX, 0, 30_000, 20).is_empty());
     }
 
     #[test]
@@ -733,7 +958,7 @@ mod tests {
         let (p, _) = r.create_private(None, true, 0, true); // tab 2 private, backgrounded@0
         let (_n, _) = r.create_private(None, false, 0, false); // tab 3 normal, now active
                                                                // long-idle sweep: the normal background tab 1 is a victim; the private tab p is NOT.
-        let victims = r.sweep_idle(999_999, 1);
+        let victims = r.sweep_idle(999_999, 1, 30_000, 20);
         assert!(victims.contains(&1));
         assert!(
             !victims.contains(&p),
@@ -745,7 +970,7 @@ mod tests {
     fn sweep_keeps_recently_active_tabs() {
         let mut r = reg(); // tab 1
         let (_b, _) = r.create(None, false, 50_000); // tab 1 backgrounded@50s
-        let victims = r.sweep_idle(60_000, 30_000); // idle only 10s < 30s
+        let victims = r.sweep_idle(60_000, 30_000, 30_000, 20); // idle only 10s < 30s
         assert!(victims.is_empty());
     }
 
@@ -850,7 +1075,7 @@ mod tests {
         // Now advance time to 31 seconds past creation (31000 ms)
         // The background tab has never been activated, so last_active == created_at == 0
         // With the special 30-second timeout, it should be swept
-        let victims = r.sweep_idle(31000, 0); // timeout_ms=0 disables normal timeout
+        let victims = r.sweep_idle(31000, 0, 30_000, 20); // timeout_ms=0 disables normal timeout
         assert_eq!(victims, vec![bg_id]);
         assert!(
             !r.tabs_state()
@@ -865,6 +1090,43 @@ mod tests {
     }
 
     #[test]
+    fn sweep_aggressive_threshold_halves_timeouts() {
+        // Create 3 background tabs (ids 2..=4), threshold = 3.
+        // With 3 tabs the threshold is NOT exceeded (len must be > threshold).
+        let mut r = reg(); // tab 1 active
+        let (b1, _) = r.create(Some("https://b1.test/".into()), true, 1000);
+        let (b2, _) = r.create(Some("https://b2.test/".into()), true, 1000);
+        let (_b3, _) = r.create(Some("https://b3.test/".into()), true, 1000);
+        // tab 1 active, tabs 2–4 created in bg at t=1000
+        // aggressive_threshold = 3; len = 4 > 3, so timeouts are halved.
+        // bg_timeout = 10000 → effective 5000.
+        // At t=6000, age = 5000 >= effective 5000 → sweep.
+        let victims = r.sweep_idle(6000, 20000, 10000, 3);
+        assert!(
+            victims.contains(&b1),
+            "b1 (bg, age 5000) must be swept when effective bg timeout is 5000"
+        );
+        assert!(
+            victims.contains(&b2),
+            "b2 (bg, age 5000) must be swept when effective bg timeout is 5000"
+        );
+    }
+
+    #[test]
+    fn sweep_below_threshold_uses_full_timeouts() {
+        // Same setup but threshold = 5. len = 4, which is NOT > 5.
+        let mut r = reg(); // tab 1 active
+        let (b1, _) = r.create(Some("https://b1.test/".into()), true, 1000);
+        let (_b2, _) = r.create(Some("https://b2.test/".into()), true, 1000);
+        // bg_timeout = 10000 (full), age = 5000 < 10000 → not swept.
+        let victims = r.sweep_idle(6000, 20000, 10000, 5);
+        assert!(
+            !victims.contains(&b1),
+            "b1 must NOT be swept when below the threshold (full timeout applies)"
+        );
+    }
+
+    #[test]
     fn restored_tabs_are_never_private() {
         // Defense in depth: even a (hypothetically) malformed session can't resurrect a private tab.
         let session = PersistedSession {
@@ -873,9 +1135,12 @@ mod tests {
                 url: "https://a.test/".into(),
                 title: String::new(),
                 pinned: false,
+                workspace_id: String::new(),
             }],
             active_id: 5,
             next_id: 6,
+            workspaces: Vec::new(),
+            active_workspace_id: "default".into(),
         };
         let r = Registry::restore(session, "https://home.test/".into());
         assert!(r.tabs_state().tabs.iter().all(|t| !t.private));
@@ -937,5 +1202,216 @@ mod tests {
             s2.tabs.iter().any(|t| t.id == s2.active_id),
             "the fallback active_id must exist in the restored tab list"
         );
+    }
+
+    // ── workspace tests ────────────────────────────────────────────────────────
+
+    mod workspace_tests {
+        use super::*;
+
+        #[test]
+        fn default_workspace_exists_on_new() {
+            let r = Registry::new("https://home.test/".into());
+            let ws = r.workspace_list();
+            assert_eq!(ws.len(), 1);
+            assert_eq!(ws[0].id, "default");
+            assert_eq!(ws[0].name, "General");
+            assert_eq!(ws[0].color, "slate");
+            assert_eq!(r.active_workspace_id(), "default");
+        }
+
+        #[test]
+        fn create_workspace_adds_to_list() {
+            let mut r = Registry::new("https://home.test/".into());
+            let ws = r.create_workspace("Work", "blue");
+            let list = r.workspace_list();
+            assert_eq!(list.len(), 2);
+            assert!(list.iter().any(|w| w.id == ws.id && w.name == "Work"));
+            assert_eq!(ws.color, "blue");
+        }
+
+        #[test]
+        fn switch_workspace_filters_tabs() {
+            let mut r = Registry::new("https://home.test/".into());
+            // Tab 1 is in "default" workspace.
+            let ws1 = r.create_workspace("Work", "blue");
+            let ws1_id = ws1.id.clone();
+            r.switch_workspace(&ws1_id);
+            // Tab 2 is in "ws-1" workspace.
+            r.create(Some("https://work.test/".into()), false, 0);
+
+            // Switch back to "default" — only the home tab should be visible.
+            r.switch_workspace("default");
+            let state = r.tabs_state();
+            assert_eq!(state.tabs.len(), 1, "only default workspace tabs shown");
+            assert_eq!(state.tabs[0].url, "https://home.test/");
+
+            // Switch to "ws-1" — only the work tab should be visible.
+            r.switch_workspace(&ws1_id);
+            let state = r.tabs_state();
+            assert_eq!(state.tabs.len(), 1, "only work workspace tabs shown");
+            assert_eq!(state.tabs[0].url, "https://work.test/");
+        }
+
+        #[test]
+        fn rename_workspace() {
+            let mut r = Registry::new("https://home.test/".into());
+            let ws = r.rename_workspace("default", "Home");
+            assert!(ws.is_some());
+            assert_eq!(ws.unwrap().name, "Home");
+            let list = r.workspace_list();
+            assert_eq!(list[0].name, "Home");
+            // Non-existent id returns None.
+            assert!(r.rename_workspace("nonexistent", "Nope").is_none());
+        }
+
+        #[test]
+        fn set_workspace_color() {
+            let mut r = Registry::new("https://home.test/".into());
+            let ws = r.set_workspace_color("default", "green");
+            assert!(ws.is_some());
+            assert_eq!(ws.unwrap().color, "green");
+            // Non-existent id returns None.
+            assert!(r.set_workspace_color("nonexistent", "red").is_none());
+        }
+
+        #[test]
+        fn remove_workspace_moves_tabs_to_default() {
+            let mut r = Registry::new("https://home.test/".into());
+            // Tab 1: in "default".
+            let ws1 = r.create_workspace("Work", "blue");
+            let ws1_id = ws1.id.clone();
+            r.switch_workspace(&ws1_id);
+            // Tab 2: in "ws-1".
+            r.create(Some("https://work.test/".into()), false, 0);
+            // Switch back to default before removing ws1.
+            r.switch_workspace("default");
+
+            assert!(r.remove_workspace(&ws1_id));
+            // Tab 2's workspace_id should now be "default".
+            let state = r.tabs_state();
+            assert_eq!(state.tabs.len(), 2, "both tabs now in default workspace");
+        }
+
+        #[test]
+        fn cannot_remove_last_workspace() {
+            let mut r = Registry::new("https://home.test/".into());
+            assert!(!r.remove_workspace("default"));
+            assert_eq!(r.workspace_list().len(), 1);
+        }
+
+        #[test]
+        fn cannot_remove_default_workspace() {
+            let mut r = Registry::new("https://home.test/".into());
+            let _ws1 = r.create_workspace("Work", "blue");
+            assert!(!r.remove_workspace("default"));
+            assert_eq!(r.workspace_list().len(), 2);
+        }
+
+        #[test]
+        fn reorder_workspaces() {
+            let mut r = Registry::new("https://home.test/".into());
+            let ws1 = r.create_workspace("Work", "blue");
+            let ws2 = r.create_workspace("Personal", "green");
+            let ids = vec![ws2.id.clone(), "default".into(), ws1.id.clone()];
+            r.reorder_workspaces(&ids);
+            let list = r.workspace_list();
+            assert_eq!(list.len(), 3);
+            assert_eq!(list[0].id, ws2.id);
+            assert_eq!(list[1].id, "default");
+            assert_eq!(list[2].id, ws1.id);
+        }
+
+        #[test]
+        fn persist_round_trips_workspaces() {
+            let mut r = Registry::new("https://home.test/".into());
+            let ws1 = r.create_workspace("Work", "blue");
+            let ws1_id = ws1.id.clone();
+            r.switch_workspace(&ws1_id);
+            r.create(Some("https://work.test/".into()), false, 0);
+
+            let session = r.to_persisted();
+            assert_eq!(session.workspaces.len(), 2);
+            assert_eq!(session.active_workspace_id, ws1_id);
+            // Tab 2's workspace_id should be ws1.
+            let work_tab = session.tabs.iter().find(|t| t.url == "https://work.test/");
+            assert!(work_tab.is_some());
+            assert_eq!(work_tab.unwrap().workspace_id, ws1_id);
+
+            let mut r2 = Registry::restore(session, "https://home.test/".into());
+            assert_eq!(r2.workspace_list().len(), 2);
+            assert_eq!(r2.active_workspace_id(), &ws1_id);
+
+            // Verify tab-to-workspace assignments survived the round-trip.
+            r2.switch_workspace("default");
+            let state = r2.tabs_state();
+            assert_eq!(state.tabs.len(), 1, "one tab in default");
+            assert_eq!(state.tabs[0].url, "https://home.test/");
+
+            r2.switch_workspace(&ws1_id);
+            let state = r2.tabs_state();
+            assert_eq!(state.tabs.len(), 1, "one tab in ws-1");
+            assert_eq!(state.tabs[0].url, "https://work.test/");
+        }
+
+        #[test]
+        fn new_tab_assigned_to_active_workspace() {
+            let mut r = Registry::new("https://home.test/".into());
+            let ws1 = r.create_workspace("Work", "blue");
+            let ws1_id = ws1.id.clone();
+            r.switch_workspace(&ws1_id);
+            let (id, _) = r.create(Some("https://work.test/".into()), false, 0);
+            let ws_id = r.tab_workspace_id(id).unwrap();
+            assert_eq!(ws_id, ws1_id);
+            // Tab in default workspace gets the default id.
+            r.switch_workspace("default");
+            let (id2, _) = r.create(Some("https://other.test/".into()), false, 0);
+            assert_eq!(r.tab_workspace_id(id2).unwrap(), "default");
+        }
+
+        #[test]
+        fn restore_without_workspaces_creates_default() {
+            // Simulate an old-format session with no workspace fields.
+            let session = PersistedSession {
+                tabs: vec![PersistedTab {
+                    id: 5,
+                    url: "https://a.test/".into(),
+                    title: String::new(),
+                    pinned: false,
+                    workspace_id: String::new(), // empty — old format
+                }],
+                active_id: 5,
+                next_id: 6,
+                workspaces: Vec::new(), // empty — old format
+                active_workspace_id: String::new(),
+            };
+            let r = Registry::restore(session, "https://home.test/".into());
+            let ws = r.workspace_list();
+            assert_eq!(ws.len(), 1);
+            assert_eq!(ws[0].id, "default");
+            assert_eq!(ws[0].name, "General");
+            assert_eq!(r.active_workspace_id(), "default");
+            // The restored tab should be in the default workspace.
+            assert_eq!(r.tab_workspace_id(5).unwrap(), "default");
+        }
+
+        #[test]
+        fn switch_workspace_returns_false_for_unknown_id() {
+            let mut r = Registry::new("https://home.test/".into());
+            assert!(!r.switch_workspace("nonexistent"));
+            assert_eq!(r.active_workspace_id(), "default");
+        }
+
+        #[test]
+        fn assign_tab_to_active_reassigns_workspace() {
+            let mut r = Registry::new("https://home.test/".into());
+            let ws1 = r.create_workspace("Work", "blue");
+            let ws1_id = ws1.id.clone();
+            // Tab 1 is in "default" workspace.
+            assert_eq!(r.tab_workspace_id(1).unwrap(), "default");
+            r.switch_workspace(&ws1_id);
+            r.assign_tab_to_active(1);
+            assert_eq!(r.tab_workspace_id(1).unwrap(), ws1_id);
+        }
     }
 }

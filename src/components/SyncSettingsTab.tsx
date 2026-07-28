@@ -1,5 +1,5 @@
 // src/components/SyncSettingsTab.tsx
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { SyncDevice, SyncState } from '../../shared/types';
 import type { UseSync } from '../hooks/useSync';
 import { confirm, toast } from '../lib/toast';
@@ -65,19 +65,20 @@ export function SyncSettingsTab({
     setPhrase(null);
   }, [state.enabled]);
 
-  // Refresh the device list while enabled (and after each sync). `sync` is intentionally
-  // NOT a dep — useSync returns a fresh object each render, and listDevices is stable, so
-  // depending on it would refetch on every parent re-render.
+  // Refresh the device list while enabled (and after each sync). Use a ref for sync
+  // to avoid stale closures while keeping stable deps.
+  const syncRef = useRef(sync);
+  syncRef.current = sync;
+
   useEffect(() => {
     if (!state.enabled) return;
     let active = true;
-    void sync.listDevices().then((d) => {
+    void syncRef.current.listDevices().then((d) => {
       if (active) setDevices(d);
     });
     return () => {
       active = false;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state.enabled, state.lastSyncMs]);
 
   const run = async (
@@ -393,3 +394,5 @@ export function SyncSettingsTab({
     </div>
   );
 }
+
+export default SyncSettingsTab;

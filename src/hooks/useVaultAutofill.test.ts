@@ -53,9 +53,9 @@ describe('useVaultAutofill', () => {
     autofillSuggestions.mockResolvedValueOnce(mockResult);
 
     const { result } = renderHook(() => useVaultAutofill());
-    const returnPromise = result.current.autofillSuggestions({ q: 'use' });
+    const returnPromise = result.current.autofillSuggestions('use');
 
-    await waitFor(() => expect(autofillSuggestions).toHaveBeenCalledWith({ q: 'use' }));
+    await waitFor(() => expect(autofillSuggestions).toHaveBeenCalledWith('use'));
     const resultValue = await Promise.resolve(returnPromise);
     expect(resultValue).toEqual(mockResult);
   });
@@ -75,7 +75,7 @@ describe('useVaultAutofill', () => {
     autofillSuggestions.mockRejectedValueOnce(new Error(errorMessage));
 
     const { result } = renderHook(() => useVaultAutofill());
-    const returnPromise = result.current.autofillSuggestions({ q: 'test' });
+    const returnPromise = result.current.autofillSuggestions('test');
 
     await expect(Promise.resolve(returnPromise)).rejects.toThrow(errorMessage);
   });

@@ -217,7 +217,7 @@ describe('FindBar', () => {
         onClose={vi.fn()}
       />,
     );
-    const input = screen.getByRole('textbox', { name: 'Find in page' });
+    screen.getByRole('textbox', { name: 'Find in page' });
     await userEvent.keyboard('{Shift>}{Enter}{/Shift}');
     expect(onPrev).toHaveBeenCalledOnce();
   });

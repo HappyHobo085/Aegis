@@ -37,13 +37,14 @@ pub struct SafetyState {
 }
 
 /// True if navigating to `url` should be blocked as malware (and it isn't excepted).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn is_blocked<R: Runtime>(app: &AppHandle<R>, url: &Url) -> bool {
     let Some(host) = url.host_str() else {
         return false;
     };
     let host = host.to_lowercase();
     if let Some(s) = app.try_state::<SafetyState>() {
-        if s.exceptions.lock().unwrap().contains(&host) {
+        if s.exceptions.lock().unwrap_or_else(|e| e.into_inner()).contains(&host) {
             return false;
         }
     }
@@ -76,10 +77,11 @@ pub extern "system" fn Java_com_aegis_browser_NativeSafety_isMalwareHost(
 
 /// Record + surface the interstitial, and show a visible warning in the content
 /// area (deferred to avoid nav-callback re-entrancy).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn raise<R: Runtime>(app: &AppHandle<R>, url: &str) {
     let payload = json!({ "url": url, "reason": "malware" });
     if let Some(s) = app.try_state::<SafetyState>() {
-        *s.interstitial.lock().unwrap() = payload.clone();
+        *s.interstitial.lock().unwrap_or_else(|e| e.into_inner()) = payload.clone();
     }
     crate::emit_event(app, "safety.interstitial", payload);
 
@@ -104,7 +106,7 @@ pub fn dispatch<R: Runtime>(
         "safety.getState" => {
             let v = app
                 .try_state::<SafetyState>()
-                .map(|s| s.interstitial.lock().unwrap().clone())
+                .map(|s| s.interstitial.lock().unwrap_or_else(|e| e.into_inner()).clone())
                 .unwrap_or(Value::Null);
             Some(Ok(v))
         }
@@ -113,8 +115,8 @@ pub fn dispatch<R: Runtime>(
             let url = payload.get("url").and_then(Value::as_str).unwrap_or("");
             if let Ok(u) = Url::parse(url) {
                 if let (Some(host), Some(s)) = (u.host_str(), app.try_state::<SafetyState>()) {
-                    s.exceptions.lock().unwrap().insert(host.to_lowercase());
-                    *s.interstitial.lock().unwrap() = Value::Null;
+                    s.exceptions.lock().unwrap_or_else(|e| e.into_inner()).insert(host.to_lowercase());
+                    *s.interstitial.lock().unwrap_or_else(|e| e.into_inner()) = Value::Null;
                 }
                 crate::emit_event(app, "safety.interstitial", Value::Null);
                 let label = crate::nav::active_content_label(app);
@@ -128,7 +130,7 @@ pub fn dispatch<R: Runtime>(
         "safety.listExceptions" => {
             let list: Vec<String> = app
                 .try_state::<SafetyState>()
-                .map(|s| s.exceptions.lock().unwrap().iter().cloned().collect())
+                .map(|s| s.exceptions.lock().unwrap_or_else(|e| e.into_inner()).iter().cloned().collect())
                 .unwrap_or_default();
             Some(Ok(json!(list)))
         }
@@ -140,7 +142,7 @@ pub fn dispatch<R: Runtime>(
                 .unwrap_or("")
                 .to_lowercase();
             if let Some(s) = app.try_state::<SafetyState>() {
-                s.exceptions.lock().unwrap().remove(&host);
+                s.exceptions.lock().unwrap_or_else(|e| e.into_inner()).remove(&host);
             }
             Some(Ok(Value::Null))
         }

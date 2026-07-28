@@ -33,19 +33,20 @@ pub fn session_blocked() -> u32 {
 fn active_page_blocked<R: Runtime>(app: &AppHandle<R>) -> u32 {
     let id = app
         .try_state::<crate::tabs::Tabs>()
-        .map(|s| s.reg.lock().unwrap().active_id())
+        .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
         .unwrap_or(1);
-    page_map().lock().unwrap().get(&id).copied().unwrap_or(0)
+    page_map().lock().unwrap_or_else(|e| e.into_inner()).get(&id).copied().unwrap_or(0)
 }
 
 /// Pure counter update for one blocked subresource on tab `id`: bumps the monotonic
 /// session total and the tab's per-page count, returning `(session, page)`. Split out
 /// from `note_blocked` so the accumulation logic is unit-testable without a Tauri
 /// `AppHandle` (the emit half needs the app; this half does not).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn bump_blocked(id: u32) -> (u32, u32) {
     let session = SESSION_BLOCKED.fetch_add(1, Ordering::Relaxed) + 1;
     let page = {
-        let mut m = page_map().lock().unwrap();
+        let mut m = page_map().lock().unwrap_or_else(|e| e.into_inner());
         let c = m.entry(id).or_insert(0);
         *c += 1;
         *c
@@ -55,8 +56,9 @@ fn bump_blocked(id: u32) -> (u32, u32) {
 
 /// Pure per-page reset for tab `id` (zero its page count), returning the unchanged
 /// session total. Split out from `reset_page` for the same testability reason.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn zero_page(id: u32) -> u32 {
-    page_map().lock().unwrap().insert(id, 0);
+    page_map().lock().unwrap_or_else(|e| e.into_inner()).insert(id, 0);
     session_blocked()
 }
 
@@ -66,6 +68,7 @@ fn zero_page(id: u32) -> u32 {
 /// WebView2 `WebResourceRequested` handler (`adblock_win`). (Android keeps an equivalent
 /// counter in Kotlin — it has no `AppHandle` and no Tauri event bus on the content side —
 /// and pushes `window.__aegisBlockedCount` directly; see `MainActivity.kt`.)
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn note_blocked<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let (session, page) = bump_blocked(id);
     crate::emit_event(
@@ -77,6 +80,7 @@ pub fn note_blocked<R: Runtime>(app: &AppHandle<R>, id: u32) {
 
 /// Reset a tab's per-page blocked count on a new top-frame navigation, and refresh the
 /// badge (page → 0, session unchanged). Called from the desktop nav path (`nav.rs`).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn reset_page<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let session = zero_page(id);
     crate::emit_event(
@@ -113,7 +117,7 @@ pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
     }
     match app.try_state::<AdblockState>() {
         Some(s) => {
-            let g = s.0.lock().unwrap();
+            let g = s.0.lock().unwrap_or_else(|e| e.into_inner());
             g.allowlist
                 .iter()
                 .any(|h| host == h || host.ends_with(&format!(".{h}")))
@@ -151,7 +155,7 @@ fn clear_hosts<R: Runtime>(app: &AppHandle<R>) {
 fn reseed_inner<R: Runtime>(app: &AppHandle<R>) {
     let hosts = load_allowlist_hosts(app);
     if let Some(s) = app.try_state::<AdblockState>() {
-        s.0.lock().unwrap().allowlist = hosts;
+        s.0.lock().unwrap_or_else(|e| e.into_inner()).allowlist = hosts;
     }
 }
 
@@ -166,7 +170,7 @@ pub fn seed_from_disk<R: Runtime>(app: &AppHandle<R>) {
 fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     match app.try_state::<AdblockState>() {
         Some(s) => {
-            let g = s.0.lock().unwrap();
+            let g = s.0.lock().unwrap_or_else(|e| e.into_inner());
             json!({ "enabled": g.enabled, "allowlistedHosts": g.allowlist, "sessionBlocked": session_blocked(), "pageBlocked": active_page_blocked(app) })
         }
         None => {
@@ -183,7 +187,7 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
 fn sync_engine<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(any(desktop, target_os = "android", test))]
     if let Some(s) = app.try_state::<AdblockState>() {
-        let g = s.0.lock().unwrap();
+        let g = s.0.lock().unwrap_or_else(|e| e.into_inner());
         crate::adblock_engine::set_policy(g.enabled, &g.allowlist);
     }
     #[cfg(not(any(desktop, target_os = "android", test)))]
@@ -205,7 +209,7 @@ pub fn dispatch<R: Runtime>(
                 .and_then(Value::as_bool)
                 .unwrap_or(true);
             if let Some(s) = app.try_state::<AdblockState>() {
-                s.0.lock().unwrap().enabled = enabled;
+                s.0.lock().unwrap_or_else(|e| e.into_inner()).enabled = enabled;
             }
             #[cfg(target_os = "linux")]
             {

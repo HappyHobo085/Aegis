@@ -59,7 +59,9 @@ fn ready_marker_cell() -> &'static Mutex<Option<PathBuf>> {
 /// Arm the deferred ready-marker: once `expected` chunk compiles have completed,
 /// `marker` is written so the next launch can safely load the now-complete filters.
 pub fn arm_ready_marker(expected: usize, marker: PathBuf) {
-    *ready_marker_cell().lock().unwrap() = Some(marker);
+    *ready_marker_cell()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(marker);
     SAVES_PENDING.store(expected, Ordering::SeqCst);
 }
 
@@ -70,7 +72,11 @@ fn note_save_complete() {
         return; // not armed (load path, or already written)
     }
     if SAVES_PENDING.fetch_sub(1, Ordering::SeqCst) == 1 {
-        if let Some(marker) = ready_marker_cell().lock().unwrap().take() {
+        if let Some(marker) = ready_marker_cell()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
             if let Some(dir) = marker.parent() {
                 let _ = std::fs::create_dir_all(dir);
             }
@@ -97,7 +103,7 @@ pub fn apply_filters<R: Runtime>(
     if chunks.is_empty() {
         return;
     }
-    *filters_cell().lock().unwrap() = Some(CachedFilters {
+    *filters_cell().lock().unwrap_or_else(|e| e.into_inner()) = Some(CachedFilters {
         chunks: chunks.clone(),
         store_dir: store_dir.clone(),
         cached,
@@ -115,12 +121,12 @@ pub fn apply_filters<R: Runtime>(
 pub fn apply_to_new_tab<R: Runtime>(app: &AppHandle<R>, label: &str) {
     let enabled = app
         .try_state::<crate::adblock::AdblockState>()
-        .map(|s| s.0.lock().unwrap().enabled)
+        .map(|s| s.0.lock().unwrap_or_else(|e| e.into_inner()).enabled)
         .unwrap_or(true);
     if !enabled {
         return;
     }
-    let guard = filters_cell().lock().unwrap();
+    let guard = filters_cell().lock().unwrap_or_else(|e| e.into_inner());
     if let (Some(f), Some(content)) = (guard.as_ref(), app.get_webview(label)) {
         eprintln!("[aegis-cf] applying filters to new tab {label}");
         install_on(content, &f.chunks, &f.store_dir, f.cached);

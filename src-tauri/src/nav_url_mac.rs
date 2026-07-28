@@ -7,6 +7,9 @@
 //! `DocumentTitleChangedObserver` (objc2 0.6 `define_class!` + KVO registration),
 //! changed from the `title` key path to `URL`.
 //!
+//! Also installs a KVO observer for the `title` key path that catches the element
+//! picker's `AEGISPICK:{json}` title sentinel and routes it to `picker::on_picked`.
+//!
 //! Reached via Tauri's `with_webview` -> `PlatformWebview::inner()` (the WKWebView).
 //! Compiles on macOS CI (macos-latest); runtime behavior needs a macOS desktop.
 
@@ -22,6 +25,8 @@ use objc2_foundation::{
 };
 use objc2_web_kit::WKWebView;
 use tauri::AppHandle;
+
+// ── URL observer (existing: tracks same-document navigations for the address bar) ──
 
 pub struct UrlObserverIvars {
     object: Retained<WKWebView>,
@@ -94,6 +99,78 @@ impl Drop for UrlObserver {
     }
 }
 
+// ── Title observer (new: catches the element picker's AEGISPICK: sentinel) ──
+
+pub struct TitleObserverIvars {
+    object: Retained<WKWebView>,
+    handler: Box<dyn Fn(String)>,
+}
+
+define_class!(
+    #[unsafe(super(NSObject))]
+    #[ivars = TitleObserverIvars]
+    pub struct TitleObserver;
+
+    /// NSKeyValueObserving.
+    impl TitleObserver {
+        #[unsafe(method(observeValueForKeyPath:ofObject:change:context:))]
+        fn observe_value_for_key_path(
+            &self,
+            key_path: Option<&NSString>,
+            of_object: Option<&AnyObject>,
+            _change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
+            _context: *mut c_void,
+        ) {
+            if let (Some(key_path), Some(_object)) = (key_path, of_object) {
+                unsafe {
+                    if key_path.isEqualToString(ns_string!("title")) {
+                        let title: *const NSString = msg_send![_object, title];
+                        if !title.is_null() {
+                            (self.ivars().handler)((*title).to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    unsafe impl NSObjectProtocol for TitleObserver {}
+);
+
+impl TitleObserver {
+    fn new(webview: Retained<WKWebView>, handler: Box<dyn Fn(String)>) -> Retained<Self> {
+        let observer = Self::alloc().set_ivars(TitleObserverIvars {
+            object: webview,
+            handler,
+        });
+        let observer: Retained<Self> = unsafe { msg_send![super(observer), init] };
+        unsafe {
+            observer
+                .ivars()
+                .object
+                .addObserver_forKeyPath_options_context(
+                    &observer,
+                    ns_string!("title"),
+                    NSKeyValueObservingOptions::New,
+                    null_mut(),
+                );
+        }
+        observer
+    }
+}
+
+impl Drop for TitleObserver {
+    fn drop(&mut self) {
+        unsafe {
+            self.ivars()
+                .object
+                .removeObserver_forKeyPath(self, ns_string!("title"));
+        }
+    }
+}
+
+// ── Installation ──
+
 /// Install a KVO observer on the content WKWebView that pushes top-frame URL changes
 /// to the chrome address bar (`nav.state`). Call inside
 /// `content.with_webview(|pw| nav_url_mac::install(&pw, app, id))`. The observer is
@@ -108,8 +185,10 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
         Some(w) => w,
         None => return,
     };
-    let observer = UrlObserver::new(
-        webview,
+
+    // ── URL observer: same-document navigations for the address bar ──
+    let url_observer = UrlObserver::new(
+        webview.clone(),
         Box::new(move |url: String| {
             if !url.is_empty() {
                 // Same-document URL change (History API/hash) → not a fresh load.
@@ -119,5 +198,16 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
     );
     // KVO needs the observer alive for as long as it's registered; keep it for the
     // tab/app lifetime (the WKWebView outlives this call).
-    std::mem::forget(observer);
+    std::mem::forget(url_observer);
+
+    // ── Title observer: catch the element picker's AEGISPICK: sentinel ──
+    let title_observer = TitleObserver::new(
+        webview,
+        Box::new(move |title: String| {
+            if let Some(payload) = title.strip_prefix(crate::picker::SENTINEL) {
+                crate::picker::on_picked(&app, payload);
+            }
+        }),
+    );
+    std::mem::forget(title_observer);
 }

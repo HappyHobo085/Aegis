@@ -7,9 +7,12 @@
 use crate::crypto::{hex, unhex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, Runtime};
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
+
+static FAILED_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 
 const NS: &str = "pwvault";
 const VERIFIER_UUID: &str = "verifier";
@@ -119,6 +122,11 @@ fn check_verifier(vk: &[u8; 32], v: &Value) -> Result<(), String> {
 }
 
 /// Build the on-disk JSON object from the verifier + sealed records (the at-rest file).
+// NOTE: When upgrading KDF params (e.g. Argon2 memory cost), add a new
+// version number here and implement migrate_vault() that reads the old
+// params from the file, re-derives the key with new params, re-seals all
+// records, and writes back. Trigger migration on successful unlock when
+// the file's "v" field is behind the current version.
 fn file_json(salt: &[u8], verifier: Value, records: &[Value]) -> Value {
     json!({ "v": 1, "kdf": "argon2id", "salt": hex(salt), "verifier": verifier, "records": records })
 }
@@ -179,7 +187,6 @@ impl From<String> for VaultError {
 /// Initialize a brand-new vault: derive the key from `password`, seal the verifier,
 /// return the on-disk JSON (no records yet) and the derived key so the caller can
 /// transition to "unlocked" without a second KDF call.
-#[allow(dead_code)]
 pub fn init_vault(password: &str) -> Result<(Value, Zeroizing<[u8; 32]>), VaultError> {
     // Generate a fresh random 32-byte Argon2id salt.
     let mut salt = vec![0u8; 32];
@@ -241,7 +248,6 @@ pub fn unlock_vault(file: &Value, password: &str) -> Result<UnlockedVault, Vault
 
 /// Re-seal all records (and the verifier) under `vk`, returning an updated on-disk JSON.
 /// Called when adding/updating/removing a record while the vault is unlocked.
-#[allow(dead_code)]
 pub fn seal_vault(salt: &[u8], vk: &[u8; 32], records: &[Cred]) -> Result<Value, VaultError> {
     let verifier = seal_verifier(vk)?;
     let mut wire: Vec<Value> = Vec::with_capacity(records.len());
@@ -253,14 +259,14 @@ pub fn seal_vault(salt: &[u8], vk: &[u8; 32], records: &[Cred]) -> Result<Value,
 
 // ─── VaultState methods (pure, AppHandle-free) ──────────────────────────────
 
-#[allow(dead_code)]
+#[allow(dead_code)] // pub methods called via ipc dispatcher — lib-crate analysis can't trace the dispatch
 impl VaultState {
     /// Load an existing vault file into memory and derive the key.
     /// Returns `WrongPassword` if the password is wrong; `NotCreated` if `file` is None.
     pub fn unlock(&self, file: Option<&Value>, password: &str) -> Result<(), VaultError> {
         let file = file.ok_or(VaultError::NotCreated)?;
         let unlocked = unlock_vault(file, password)?;
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         inner.key = Some(unlocked.key);
         inner.records = unlocked.records;
         inner.orphans = unlocked.orphans; // preserve undecryptable records (surfaced as `undecryptable`)
@@ -276,7 +282,7 @@ impl VaultState {
     /// Returns the on-disk JSON the caller must persist.
     pub fn create(&self, password: &str) -> Result<Value, VaultError> {
         let (file, vk) = init_vault(password)?;
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         let salt = file
             .get("salt")
             .and_then(Value::as_str)
@@ -291,7 +297,7 @@ impl VaultState {
 
     /// Lock the vault: zeroize the derived key and drop all decrypted records.
     pub fn lock(&self) {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         inner.key = None; // Zeroizing<[u8;32]> zeroizes on drop
         inner.records.clear(); // Cred implements ZeroizeOnDrop
         inner.records.shrink_to_fit();
@@ -300,12 +306,12 @@ impl VaultState {
 
     /// Returns true if the vault is currently unlocked.
     pub fn is_unlocked(&self) -> bool {
-        self.0.lock().unwrap().key.is_some()
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).key.is_some()
     }
 
     /// List all credentials. Returns `Locked` if not unlocked.
     pub fn list(&self) -> Result<Vec<Cred>, VaultError> {
-        let inner = self.0.lock().unwrap();
+        let inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if inner.key.is_none() {
             return Err(VaultError::Locked);
         }
@@ -314,7 +320,7 @@ impl VaultState {
 
     /// Add or replace a credential (matched by uuid). Returns the updated on-disk JSON.
     pub fn upsert(&self, cred: Cred) -> Result<Value, VaultError> {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         // Copy the key bytes into a Zeroizing wrapper so the copy is zeroized on return,
         // leaving no key residue on the stack after the function exits.
         let vk = Zeroizing::new(*inner.key.as_deref().ok_or(VaultError::Locked)?);
@@ -330,13 +336,36 @@ impl VaultState {
 
     /// Remove a credential by uuid. Returns the updated on-disk JSON.
     pub fn remove(&self, uuid: &str) -> Result<Value, VaultError> {
-        let mut inner = self.0.lock().unwrap();
+        let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
         // Copy the key bytes into a Zeroizing wrapper so the copy is zeroized on return,
         // leaving no key residue on the stack after the function exits.
         let vk = Zeroizing::new(*inner.key.as_deref().ok_or(VaultError::Locked)?);
         inner.records.retain(|r| r.uuid != uuid);
         let file = seal_vault(&inner.salt, &vk, &inner.records)?;
         Ok(file)
+    }
+
+    /// Return credentials matching a browsing domain for autofill suggestions.
+    /// The vault MUST be unlocked (the master password was already entered to reach this).
+    /// Matching is a case-insensitive suffix check: `example.com` matches `login.example.com`.
+    pub fn autofill_suggestions(&self, domain: &str) -> Result<Vec<Cred>, VaultError> {
+        let inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
+        if inner.key.is_none() {
+            return Err(VaultError::Locked);
+        }
+        let needle = domain.trim().to_lowercase();
+        if needle.is_empty() {
+            return Ok(Vec::new());
+        }
+        Ok(inner
+            .records
+            .iter()
+            .filter(|c| {
+                let site = c.site.to_lowercase();
+                site == needle || site.ends_with(&format!(".{needle}"))
+            })
+            .cloned()
+            .collect())
     }
 }
 
@@ -455,19 +484,25 @@ fn now_ms() -> i64 {
 
 fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     let g = app.state::<VaultState>();
-    let g = g.0.lock().unwrap();
+    let g = g.0.lock().unwrap_or_else(|e| e.into_inner());
     json!({
         "exists": g.created || vault_exists(app),
         "unlocked": g.key.is_some(),
         "count": g.records.len(),
         // Records present on disk that couldn't be decrypted (corrupt/truncated). Preserved,
         // not dropped — the UI warns the user instead of silently losing credentials.
-        "undecryptable": g.orphans.len()
+        "undecryptable": g.orphans.len(),
+        "syncEnabled": false, // will be wired to sync settings in Task 6
     })
 }
 
 fn emit_state<R: Runtime>(app: &AppHandle<R>) {
     crate::emit_event(app, "vault.state", state_json(app));
+}
+
+/// Emit the `vault.changed` event so sync and other listeners know the vault data mutated.
+fn emit_changed<R: Runtime>(app: &AppHandle<R>) {
+    crate::emit_event(app, "vault.changed", json!(null));
 }
 
 fn live_records(g: &Inner) -> Result<Value, String> {
@@ -510,6 +545,9 @@ pub fn dispatch<R: Runtime>(
             if password.is_empty() {
                 return Some(Err("master password required".into()));
             }
+            if password.len() < 8 {
+                return Some(Err("master password must be at least 8 characters".into()));
+            }
             let mut salt = [0u8; 32];
             if getrandom::getrandom(&mut salt).is_err() {
                 return Some(Err("rng failed".into()));
@@ -520,7 +558,7 @@ pub fn dispatch<R: Runtime>(
             };
             {
                 let st = app.state::<VaultState>();
-                let mut g = st.0.lock().unwrap();
+                let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
                 g.salt = salt.to_vec();
                 g.key = Some(vk);
                 g.records = Vec::new();
@@ -531,6 +569,7 @@ pub fn dispatch<R: Runtime>(
                 }
             }
             emit_state(app);
+            emit_changed(app);
             Some(Ok(state_json(app)))
         }
 
@@ -543,27 +582,36 @@ pub fn dispatch<R: Runtime>(
             // `undecryptable` in state) instead of erroring and losing the readable records.
             let st = app.state::<VaultState>();
             if let Err(e) = st.unlock(Some(&file), &pw()) {
+                FAILED_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                let attempts = FAILED_ATTEMPTS.load(Ordering::Relaxed);
+                if attempts >= 3 {
+                    let delay = std::cmp::min(1000 * 2u64.pow(attempts.saturating_sub(3)), 300_000);
+                    std::thread::sleep(std::time::Duration::from_millis(delay));
+                }
                 return Some(Err(e.to_string()));
             }
+            FAILED_ATTEMPTS.store(0, Ordering::Relaxed);
             emit_state(app);
+            emit_changed(app);
             Some(Ok(state_json(app)))
         }
 
         "vault.lock" => {
             {
                 let st = app.state::<VaultState>();
-                let mut g = st.0.lock().unwrap();
+                let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
                 g.key = None;
                 g.records.clear();
                 g.orphans.clear();
             }
             emit_state(app);
+            emit_changed(app);
             Some(Ok(state_json(app)))
         }
 
         "vault.list" => {
             let st = app.state::<VaultState>();
-            let g = st.0.lock().unwrap();
+            let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
             Some(live_records(&g))
         }
 
@@ -590,7 +638,7 @@ pub fn dispatch<R: Runtime>(
                 .unwrap_or("")
                 .to_string();
             let st = app.state::<VaultState>();
-            let mut g = st.0.lock().unwrap();
+            let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
             if g.key.is_none() {
                 return Some(Err("vault is locked".into()));
             }
@@ -608,6 +656,7 @@ pub fn dispatch<R: Runtime>(
             let out = live_records(&g);
             drop(g);
             emit_state(app);
+            emit_changed(app);
             Some(out)
         }
 
@@ -630,7 +679,7 @@ pub fn dispatch<R: Runtime>(
                 .map(str::to_string);
             let opt_notes_s = p.get("notes").and_then(Value::as_str).map(str::to_string);
             let st = app.state::<VaultState>();
-            let mut g = st.0.lock().unwrap();
+            let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
             if g.key.is_none() {
                 return Some(Err("vault is locked".into()));
             }
@@ -649,6 +698,7 @@ pub fn dispatch<R: Runtime>(
             let out = live_records(&g);
             drop(g);
             emit_state(app);
+            emit_changed(app);
             Some(out)
         }
 
@@ -659,7 +709,7 @@ pub fn dispatch<R: Runtime>(
                 .unwrap_or("")
                 .to_string();
             let st = app.state::<VaultState>();
-            let mut g = st.0.lock().unwrap();
+            let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
             if g.key.is_none() {
                 return Some(Err("vault is locked".into()));
             }
@@ -670,6 +720,7 @@ pub fn dispatch<R: Runtime>(
             let out = live_records(&g);
             drop(g);
             emit_state(app);
+            emit_changed(app);
             Some(out)
         }
 
@@ -680,7 +731,7 @@ pub fn dispatch<R: Runtime>(
                 .unwrap_or("")
                 .to_string();
             let st = app.state::<VaultState>();
-            let g = st.0.lock().unwrap();
+            let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
             if g.key.is_none() {
                 return Some(Err("vault is locked".into()));
             }
@@ -694,6 +745,30 @@ pub fn dispatch<R: Runtime>(
                 })
                 .collect();
             Some(Ok(json!(arr)))
+        }
+
+        "vault.autofillSuggestions" => {
+            let domain = payload
+                .get("domain")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let st = app.state::<VaultState>();
+            match st.autofill_suggestions(&domain) {
+                Ok(creds) => {
+                    let arr: Vec<Value> = creds
+                        .into_iter()
+                        .map(|c| {
+                            json!({
+                                "uuid": c.uuid, "updatedAt": c.updated_at, "site": c.site,
+                                "username": c.username, "password": c.password, "notes": c.notes,
+                            })
+                        })
+                        .collect();
+                    Some(Ok(json!(arr)))
+                }
+                Err(e) => Some(Err(e.to_string())),
+            }
         }
 
         _ => None,
@@ -1240,7 +1315,7 @@ mod tests {
     #[test]
     fn unlock_preserves_undecryptable_records_across_a_later_mutation() {
         crate::test_support::with_tmp_app(|app| {
-            super::dispatch(app, "vault.create", &json!({"masterPassword": "pw"}))
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "long-pw!"}))
                 .unwrap()
                 .unwrap();
             super::dispatch(
@@ -1266,7 +1341,7 @@ mod tests {
 
             // Unlock: the corrupted record is undecryptable — it must NOT appear as a live record,
             // and the count MUST be surfaced (not silently swallowed).
-            let st = super::dispatch(app, "vault.unlock", &json!({"masterPassword": "pw"}))
+            let st = super::dispatch(app, "vault.unlock", &json!({"masterPassword": "long-pw!"}))
                 .unwrap()
                 .unwrap();
             assert_eq!(
@@ -1310,7 +1385,7 @@ mod tests {
             assert_eq!(s["unlocked"], json!(false));
 
             // create
-            let s = super::dispatch(app, "vault.create", &json!({"masterPassword": "hunter2"}))
+            let s = super::dispatch(app, "vault.create", &json!({"masterPassword": "hunter2!"}))
                 .unwrap()
                 .unwrap();
             assert_eq!(s["exists"], json!(true));
@@ -1403,13 +1478,13 @@ mod tests {
     #[test]
     fn dispatch_wrong_password_fails_unlock() {
         crate::test_support::with_tmp_app(|app| {
-            super::dispatch(app, "vault.create", &json!({"masterPassword": "correct"}))
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "correct!"}))
                 .unwrap()
                 .unwrap();
             super::dispatch(app, "vault.lock", &json!({}))
                 .unwrap()
                 .unwrap();
-            let err = super::dispatch(app, "vault.unlock", &json!({"masterPassword": "wrong"}))
+            let err = super::dispatch(app, "vault.unlock", &json!({"masterPassword": "wrong!"}))
                 .unwrap()
                 .unwrap_err();
             assert!(
@@ -1422,7 +1497,7 @@ mod tests {
     #[test]
     fn dispatch_ops_while_locked_return_error() {
         crate::test_support::with_tmp_app(|app| {
-            super::dispatch(app, "vault.create", &json!({"masterPassword": "pw"}))
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "long-pw!"}))
                 .unwrap()
                 .unwrap();
             super::dispatch(app, "vault.lock", &json!({}))
@@ -1540,6 +1615,203 @@ mod tests {
                 "plaintext password must survive lock→file→unlock"
             );
             assert_eq!(creds[0]["notes"], json!("dispatch round-trip note"));
+        });
+    }
+
+    // ── Task-4 autofill_suggestions tests ───────────────────────────────────
+
+    /// autofill_suggestions matches records by exact domain (case-insensitive).
+    #[test]
+    fn autofill_suggestions_matches_domain() {
+        let vs = VaultState::default();
+        vs.create("pw").expect("create");
+        let t = now_ms();
+        {
+            let mut g = vs.0.lock().unwrap();
+            add_record(&mut g.records, "github.com", "alice", "pass1", "", t);
+            add_record(&mut g.records, "github.com", "bob", "pass2", "", t);
+            add_record(&mut g.records, "google.com", "charlie", "pass3", "", t);
+        }
+        let results = vs.autofill_suggestions("github.com").unwrap();
+        assert_eq!(results.len(), 2, "must match both github.com records");
+        assert!(results
+            .iter()
+            .all(|c| c.site.to_lowercase() == "github.com"));
+    }
+
+    /// autofill_suggestions is case-insensitive.
+    #[test]
+    fn autofill_suggestions_case_insensitive() {
+        let vs = VaultState::default();
+        vs.create("pw").expect("create");
+        {
+            let mut g = vs.0.lock().unwrap();
+            add_record(&mut g.records, "GitHub.com", "alice", "pass1", "", now_ms());
+        }
+        let results = vs.autofill_suggestions("github.com").unwrap();
+        assert_eq!(results.len(), 1, "must match case-insensitively");
+        assert_eq!(results[0].username, "alice");
+    }
+
+    /// autofill_suggestions matches subdomains: stored "github.com" matches query
+    /// "github.com" (exact), and stored "api.example.com" matches query "example.com"
+    /// (stored is a subdomain of the queried domain). Querying for a broader domain does
+    /// NOT surface credentials for an unrelated subdomain (e.g. "api.github.com" does NOT
+    /// match stored "github.com" — only exact match).
+    #[test]
+    fn autofill_suggestions_subdomain_match() {
+        let vs = VaultState::default();
+        vs.create("long-pw!").expect("create");
+        let t = now_ms();
+        {
+            let mut g = vs.0.lock().unwrap();
+            add_record(&mut g.records, "github.com", "alice", "pass1", "", t);
+            add_record(&mut g.records, "api.example.com", "bob", "pass2", "", t);
+        }
+        // Query for a broader domain than a stored site — should NOT match
+        // (stored subdomain credentials don't bleed to parent-domain queries).
+        let results = vs.autofill_suggestions("api.github.com").unwrap();
+        assert_eq!(
+            results.len(),
+            0,
+            "stored parent must not match a subdomain query"
+        );
+
+        // Query for a parent domain of a stored subdomain — SHOULD match
+        // (credentials for api.example.com are relevant when visiting example.com).
+        let results2 = vs.autofill_suggestions("example.com").unwrap();
+        assert_eq!(
+            results2.len(),
+            1,
+            "stored subdomain must match parent domain query"
+        );
+        assert_eq!(results2[0].site, "api.example.com");
+    }
+
+    /// autofill_suggestions returns empty for a vault that doesn't exist / is locked.
+    #[test]
+    fn autofill_suggestions_empty_when_no_vault() {
+        let vs = VaultState::default();
+        let result = vs.autofill_suggestions("example.com");
+        assert!(matches!(result, Err(VaultError::Locked)));
+    }
+
+    /// autofill_suggestions returns empty when vault is explicitly locked.
+    #[test]
+    fn autofill_suggestions_empty_when_locked() {
+        let vs = VaultState::default();
+        vs.create("pw").expect("create");
+        {
+            let mut g = vs.0.lock().unwrap();
+            add_record(&mut g.records, "example.com", "u", "p", "", now_ms());
+        }
+        vs.lock();
+        let result = vs.autofill_suggestions("example.com");
+        assert!(matches!(result, Err(VaultError::Locked)));
+    }
+
+    /// autofill_suggestions returns empty vec for empty/whitespace domain.
+    #[test]
+    fn autofill_suggestions_empty_domain_returns_empty() {
+        let vs = VaultState::default();
+        vs.create("pw").expect("create");
+        {
+            let mut g = vs.0.lock().unwrap();
+            add_record(&mut g.records, "example.com", "u", "p", "", now_ms());
+        }
+        let results = vs.autofill_suggestions("").unwrap();
+        assert!(
+            results.is_empty(),
+            "empty domain must return no suggestions"
+        );
+        let results2 = vs.autofill_suggestions("   ").unwrap();
+        assert!(
+            results2.is_empty(),
+            "whitespace domain must return no suggestions"
+        );
+    }
+
+    /// autofill_suggestions returns no matches when nothing matches the query.
+    #[test]
+    fn autofill_suggestions_no_match() {
+        let vs = VaultState::default();
+        vs.create("pw").expect("create");
+        {
+            let mut g = vs.0.lock().unwrap();
+            add_record(&mut g.records, "github.com", "alice", "pass1", "", now_ms());
+        }
+        let results = vs.autofill_suggestions("unrelated.com").unwrap();
+        assert!(results.is_empty());
+    }
+
+    // ── dispatch-level autofill_suggestions tests ───────────────────────────
+
+    /// Dispatch: vault.autofillSuggestions returns matching records.
+    #[test]
+    fn dispatch_autofill_suggestions_matches_domain() {
+        crate::test_support::with_tmp_app(|app| {
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "long-pw!"}))
+                .unwrap()
+                .unwrap();
+            super::dispatch(
+                app,
+                "vault.add",
+                &json!({"input": {"site": "github.com", "username": "alice", "password": "p1", "notes": ""}}),
+            )
+            .unwrap()
+            .unwrap();
+            super::dispatch(
+                app,
+                "vault.add",
+                &json!({"input": {"site": "google.com", "username": "bob", "password": "p2", "notes": ""}}),
+            )
+            .unwrap()
+            .unwrap();
+
+            // The TS client sends the domain as a bare string, but the Rust dispatch
+            // reads payload.get("domain"), so the IPC payload must be {"domain": "..."}.
+            let result = super::dispatch(
+                app,
+                "vault.autofillSuggestions",
+                &json!({"domain": "github.com"}),
+            )
+            .unwrap()
+            .unwrap();
+            let list = result.as_array().unwrap();
+            assert_eq!(list.len(), 1, "must match only github.com");
+            assert_eq!(list[0]["username"], json!("alice"));
+        });
+    }
+
+    /// Dispatch: vault.autofillSuggestions returns empty when locked.
+    #[test]
+    fn dispatch_autofill_suggestions_empty_when_locked() {
+        crate::test_support::with_tmp_app(|app| {
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "long-pw!"}))
+                .unwrap()
+                .unwrap();
+            super::dispatch(
+                app,
+                "vault.add",
+                &json!({"input": {"site": "github.com", "username": "u", "password": "p", "notes": ""}}),
+            )
+            .unwrap()
+            .unwrap();
+            super::dispatch(app, "vault.lock", &json!({}))
+                .unwrap()
+                .unwrap();
+
+            let result = super::dispatch(
+                app,
+                "vault.autofillSuggestions",
+                &json!({"domain": "github.com"}),
+            )
+            .unwrap()
+            .unwrap_err();
+            assert!(
+                result.contains("locked"),
+                "expected locked error, got: {result}"
+            );
         });
     }
 }

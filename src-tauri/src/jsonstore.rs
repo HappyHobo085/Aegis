@@ -232,7 +232,6 @@ pub fn save<R: Runtime>(app: &AppHandle<R>, name: &str, items: &[Value]) -> Resu
 
 /// Next monotonic id = max existing id + 1.
 /// O(n) scan over the items array (capped at MAX_ENTRIES per store — trivially fast).
-#[allow(dead_code)]
 pub fn next_id(items: &[Value]) -> i64 {
     items
         .iter()

@@ -7,9 +7,9 @@ function setup(over = {}) {
     onSaved: vi.fn(),
     onHistory: vi.fn(),
     onTabs: vi.fn(),
+    onFullscreen: vi.fn(),
     onMenu: vi.fn(),
     tabCount: 3,
-    shield: <div data-testid="shield" />,
     ...over,
   };
   render(<MobileBottomBar {...props} />);
@@ -17,13 +17,13 @@ function setup(over = {}) {
 }
 
 describe('MobileBottomBar', () => {
-  it('renders Saved, History, Tabs, Menu + the shield slot', () => {
+  it('renders Saved, History, Tabs, Fullscreen, Menu', () => {
     setup();
     expect(screen.getByRole('button', { name: /saved/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /history/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /tabs/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /enter fullscreen/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /menu/i })).toBeInTheDocument();
-    expect(screen.getByTestId('shield')).toBeInTheDocument();
   });
   it('shows the open-tab count on the Tabs button', () => {
     setup({ tabCount: 5 });
@@ -38,6 +38,8 @@ describe('MobileBottomBar', () => {
     expect(p.onHistory).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /tabs/i }));
     expect(p.onTabs).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: /enter fullscreen/i }));
+    expect(p.onFullscreen).toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /menu/i }));
     expect(p.onMenu).toHaveBeenCalled();
   });

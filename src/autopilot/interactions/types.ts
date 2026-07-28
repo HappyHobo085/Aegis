@@ -128,7 +128,7 @@ export interface InteractionCtx {
   emitPermissionPrompt?(p: PermissionPrompt | null): Promise<void>;
   /**
    * Vitest-only: emit a RedirectBlocked event by invoking the callback that App registered
-   * via aegis.redirect.onBlocked so the RedirectBar renders.  No-op on live.
+   * via aegis.redirect.onBlocked so the redirect auto-opens in a background tab.  No-op on live.
    */
   emitRedirectBlocked?(r: RedirectBlocked): Promise<void>;
   /**

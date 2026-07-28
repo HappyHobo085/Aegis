@@ -55,6 +55,7 @@ fn fresh_tmp() -> PathBuf {
 /// - `redirect_guard::NavActions`
 /// - `redirect_guard::Chains`
 /// - `zoom::ZoomStore`
+/// - `split::SplitState`
 /// - `tabs::Tabs` (from a fresh single-tab Registry with `"about:blank"` as home)
 /// - `linux_layout::LayoutInsets` (Linux only, `#[cfg(target_os = "linux")]`)
 ///
@@ -90,6 +91,7 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
         .manage(crate::vault::VaultState::default())
         .manage(crate::farble::FarbleState::default())
         .manage(crate::proxy::ProxyState::default())
+        .manage(crate::split::SplitState::default())
         .manage(crate::settings::SettingsCache::default())
         .manage(crate::history::HistoryStore::default())
         .manage(crate::downloads::DownloadsStore::default())
@@ -151,6 +153,7 @@ mod tests {
             assert!(app.try_state::<crate::tabs::Tabs>().is_some());
             assert!(app.try_state::<crate::farble::FarbleState>().is_some());
             assert!(app.try_state::<crate::proxy::ProxyState>().is_some());
+            assert!(app.try_state::<crate::split::SplitState>().is_some());
             assert!(app.try_state::<crate::settings::SettingsCache>().is_some());
             assert!(app.try_state::<crate::history::HistoryStore>().is_some());
             #[cfg(target_os = "linux")]

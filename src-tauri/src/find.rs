@@ -7,8 +7,7 @@ use tauri::{AppHandle, Manager};
 
 /// Returns true iff `channel` is one of the four find channels.
 /// AppHandle-free so it can be unit-tested directly.
-// Will be called by Tasks 6-8 platform modules; allow dead_code until then.
-#[allow(dead_code)]
+#[allow(dead_code)] // pub fn called from platform find modules — lib-crate analysis can't trace cross-platform dispatch
 pub fn is_find_channel(channel: &str) -> bool {
     matches!(
         channel,

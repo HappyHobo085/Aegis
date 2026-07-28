@@ -5,11 +5,10 @@ import { vi } from 'vitest';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
 import type {
   NavState,
-  NavFailed,
-  NavCrashed,
   Settings,
   FingerprintState,
   ProxyState,
+  WorkspaceState,
 } from '../../shared/types';
 
 const baseState: NavState = {
@@ -247,77 +246,224 @@ export function aegisMockModule() {
         };
       })(),
       vault: {
-        getState: vi
-          .fn()
-          .mockResolvedValue({ exists: false, unlocked: false, count: 0, undecryptable: 0 }),
-        create: vi
-          .fn()
-          .mockResolvedValue({ exists: true, unlocked: true, count: 0, undecryptable: 0 }),
-        unlock: vi
-          .fn()
-          .mockResolvedValue({ exists: true, unlocked: true, count: 0, undecryptable: 0 }),
-        lock: vi
-          .fn()
-          .mockResolvedValue({ exists: true, unlocked: false, count: 0, undecryptable: 0 }),
+        getState: vi.fn().mockResolvedValue({
+          exists: false,
+          unlocked: false,
+          count: 0,
+          undecryptable: 0,
+          syncEnabled: false,
+        }),
+        create: vi.fn().mockResolvedValue({
+          exists: true,
+          unlocked: true,
+          count: 0,
+          undecryptable: 0,
+          syncEnabled: false,
+        }),
+        unlock: vi.fn().mockResolvedValue({
+          exists: true,
+          unlocked: true,
+          count: 0,
+          undecryptable: 0,
+          syncEnabled: false,
+        }),
+        lock: vi.fn().mockResolvedValue({
+          exists: true,
+          unlocked: false,
+          count: 0,
+          undecryptable: 0,
+          syncEnabled: false,
+        }),
         list: vi.fn().mockResolvedValue([]),
         add: vi.fn().mockResolvedValue([]),
         update: vi.fn().mockResolvedValue([]),
         remove: vi.fn().mockResolvedValue([]),
         search: vi.fn().mockResolvedValue([]),
+        autofillSuggestions: vi.fn().mockResolvedValue([]),
+        onState: vi.fn().mockReturnValue(() => {}),
+      },
+      workspace: (() => {
+        const baseWorkspaceState: WorkspaceState = {
+          workspaces: [
+            { id: 'default', name: 'General', color: '#64748b', tabIndex: 0 },
+            { id: 'work', name: 'Work', color: '#3b82f6', tabIndex: 1 },
+          ],
+          activeWorkspaceId: 'default',
+        };
+        return {
+          list: vi.fn().mockResolvedValue(baseWorkspaceState),
+          create: vi
+            .fn()
+            .mockResolvedValue({ id: 'default', name: 'General', color: '#64748b', tabIndex: 0 }),
+          switch: vi.fn().mockResolvedValue({
+            tabs: [
+              {
+                id: 1,
+                pinned: false,
+                live: true,
+                title: '',
+                url: 'about:blank',
+                private: false,
+                workspaceId: 'default',
+              },
+            ],
+            activeId: 1,
+          }),
+          rename: vi
+            .fn()
+            .mockResolvedValue({ id: 'default', name: 'General', color: '#64748b', tabIndex: 0 }),
+          setColor: vi
+            .fn()
+            .mockResolvedValue({ id: 'default', name: 'General', color: '#64748b', tabIndex: 0 }),
+          remove: vi.fn().mockResolvedValue({
+            tabs: [
+              {
+                id: 1,
+                pinned: false,
+                live: true,
+                title: '',
+                url: 'about:blank',
+                private: false,
+                workspaceId: 'default',
+              },
+            ],
+            activeId: 1,
+          }),
+          reorder: vi.fn().mockResolvedValue([]),
+          onState: vi.fn().mockReturnValue(() => {}),
+        };
+      })(),
+      split: {
+        enter: vi.fn().mockResolvedValue(undefined),
+        exit: vi.fn().mockResolvedValue(undefined),
+        resize: vi.fn().mockResolvedValue(undefined),
+        focus: vi.fn().mockResolvedValue(undefined),
         onState: vi.fn().mockReturnValue(() => {}),
       },
       tabs: {
         list: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            {
+              id: 1,
+              pinned: false,
+              live: true,
+              title: '',
+              url: 'about:blank',
+              private: false,
+              workspaceId: 'default',
+            },
           ],
           activeId: 1,
         }),
         create: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            {
+              id: 1,
+              pinned: false,
+              live: true,
+              title: '',
+              url: 'about:blank',
+              private: false,
+              workspaceId: 'default',
+            },
           ],
           activeId: 1,
         }),
         close: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            {
+              id: 1,
+              pinned: false,
+              live: true,
+              title: '',
+              url: 'about:blank',
+              private: false,
+              workspaceId: 'default',
+            },
           ],
           activeId: 1,
         }),
         activate: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            {
+              id: 1,
+              pinned: false,
+              live: true,
+              title: '',
+              url: 'about:blank',
+              private: false,
+              workspaceId: 'default',
+            },
           ],
           activeId: 1,
         }),
         reorder: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            {
+              id: 1,
+              pinned: false,
+              live: true,
+              title: '',
+              url: 'about:blank',
+              private: false,
+              workspaceId: 'default',
+            },
           ],
           activeId: 1,
         }),
         setPinned: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            {
+              id: 1,
+              pinned: false,
+              live: true,
+              title: '',
+              url: 'about:blank',
+              private: false,
+              workspaceId: 'default',
+            },
           ],
           activeId: 1,
         }),
         reopenClosed: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            {
+              id: 1,
+              pinned: false,
+              live: true,
+              title: '',
+              url: 'about:blank',
+              private: false,
+              workspaceId: 'default',
+            },
           ],
           activeId: 1,
         }),
         setTitle: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            {
+              id: 1,
+              pinned: false,
+              live: true,
+              title: '',
+              url: 'about:blank',
+              private: false,
+              workspaceId: 'default',
+            },
           ],
           activeId: 1,
         }),
         recordNav: vi.fn().mockResolvedValue({
           tabs: [
-            { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+            {
+              id: 1,
+              pinned: false,
+              live: true,
+              title: '',
+              url: 'about:blank',
+              private: false,
+              workspaceId: 'default',
+            },
           ],
           activeId: 1,
         }),

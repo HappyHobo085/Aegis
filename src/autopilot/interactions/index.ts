@@ -15,6 +15,8 @@ import { COMBO_INTERACTIONS } from './combo';
 import { MOBILE_INTERACTIONS } from './mobile';
 import { FIND_INTERACTIONS } from './find';
 import { VAULT_INTERACTIONS } from './vault';
+import { WORKSPACE_INTERACTIONS } from './workspace';
+import { SPLIT_INTERACTIONS } from './split';
 
 export type { InteractionLayer, CallLog, InteractionCtx, InteractionSpec } from './types';
 export { INTERACTIVE_CONTROLS } from './controls';
@@ -31,4 +33,6 @@ export const INTERACTIONS: InteractionSpec[] = [
   ...MOBILE_INTERACTIONS,
   ...FIND_INTERACTIONS,
   ...VAULT_INTERACTIONS,
+  ...WORKSPACE_INTERACTIONS,
+  ...SPLIT_INTERACTIONS,
 ];

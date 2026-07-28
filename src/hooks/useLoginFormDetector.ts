@@ -12,13 +12,15 @@ interface UseLoginFormDetector {
 
 export function useLoginFormDetector(): UseLoginFormDetector {
   const [isChecking, setIsChecking] = useState<boolean>(false);
+  const isCheckingRef = useRef(false);
   const [hasLoginForm, setHasLoginForm] = useState<boolean>(false);
   const [loginFormDomain, setLoginFormDomain] = useState<string | null>(null);
   const checkTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   const checkForLoginForm = useCallback(async () => {
-    if (isChecking) return;
+    if (isCheckingRef.current) return;
 
+    isCheckingRef.current = true;
     setIsChecking(true);
     try {
       const result: FormLoginDetectedResult = await aegis.form.detectLoginForm();
@@ -29,9 +31,10 @@ export function useLoginFormDetector(): UseLoginFormDetector {
       setHasLoginForm(false);
       setLoginFormDomain(null);
     } finally {
+      isCheckingRef.current = false;
       setIsChecking(false);
     }
-  }, [isChecking]);
+  }, []);
 
   // Set up periodic checking (every 2 seconds when potentially on a login page)
   useEffect(() => {

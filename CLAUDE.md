@@ -159,7 +159,8 @@ desktop via `adblock_inject::script` document-start (same injection path as the 
 shim), Android via `NativeFarble` JNI getter + `MainActivity.createTabWebView`
 registration. Per-site fp-allowlist (`fp-allowlist` syncable store, `fingerprint.*` IPC
 channels, `useFingerprint` hook + SecurityTab UI) — desktop only in v1 (Android farbles
-all hosts; parity gap documented). Session salt = CSPRNG `OnceLock<[u8;32]>`, NEVER
+all hosts; parity gap documented, fix path specified in `docs/roadmap/phase-2-parity-gaps-spec.md`
+Gap 2 / Task 1 — `ANDROID_FP_ALLOWLIST` pattern). Session salt = CSPRNG `OnceLock<[u8;32]>`, NEVER
 persisted; page sees only `public_seed = HKDF-SHA256(salt)` (one-way — not a
 super-cookie). Seed is baked INSIDE the IIFE closure, not a top-level `var`/`window.*`
 (a top-level var leaks to `window` = cross-site super-cookie; shim runtime tests run
@@ -201,8 +202,8 @@ parity matrix:
 - **macOS** — NOT implemented. Direct connection. `WKWebsiteDataStore.proxyConfigurations`
   (macOS 14+) requires raw `msg_send!` / hand-rolled `nw_proxy_config_*` Network.framework
   bindings that cannot be compiled or verified from Linux (objc2 needs a macOS toolchain).
-  Deferred to a Mac-developer follow-up (sub-project I). macOS builds and runs; proxy is
-  simply absent.
+  Implementation guide at `docs/roadmap/macOS-proxy-bindings.md`. macOS builds and runs;
+  proxy is simply absent.
 
 ## Cleanup After Implementation
 

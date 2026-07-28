@@ -23,9 +23,10 @@ export function useVaultDomainSuggestions(): UseVaultDomainSuggestions {
 
   // Use useMemo to stabilize the autofill reference across renders
   const vaultAutofill = useVaultAutofill();
+  const vaultAutofillRef = useRef(vaultAutofill);
+  vaultAutofillRef.current = vaultAutofill;
 
-  // We don't put autofill in the dependency array to avoid stale closures
-  // Instead, we get the current autofill reference inside the callbacks
+  // We use a ref for vaultAutofill to avoid stale closures while keeping stable deps
   const fetchSuggestions = useCallback(async (domain: string) => {
     if (!domain) {
       setSuggestions([]);
@@ -37,7 +38,7 @@ export function useVaultDomainSuggestions(): UseVaultDomainSuggestions {
     setError(null);
     try {
       // We use autofill with empty username to get credentials for the domain
-      const result = await vaultAutofill.autofill({ domain, username: '' });
+      const result = await vaultAutofillRef.current.autofill({ domain, username: '' });
       setSuggestions(result);
     } catch (err) {
       setSuggestions([]);
@@ -46,7 +47,7 @@ export function useVaultDomainSuggestions(): UseVaultDomainSuggestions {
     } finally {
       setLoading(false);
     }
-  }, []); // Empty deps - we get autofill inside the function
+  }, []);
 
   // Run the fetch when we detect a login form or when URL changes significantly
   useEffect(() => {
@@ -95,7 +96,12 @@ export function useVaultDomainSuggestions(): UseVaultDomainSuggestions {
       }
     }
     return undefined;
-  }, [navState.url, loginFormDetector.hasLoginForm, loginFormDetector.loginFormDomain, fetchSuggestions]);
+  }, [
+    navState.url,
+    loginFormDetector.hasLoginForm,
+    loginFormDetector.loginFormDomain,
+    fetchSuggestions,
+  ]);
 
   const refetch = useCallback(async () => {
     const url = navState.url;
@@ -109,8 +115,8 @@ export function useVaultDomainSuggestions(): UseVaultDomainSuggestions {
       origin = null;
     }
     if (origin) {
-      // Get current autofill reference
-      const { autofill } = vaultAutofill;
+      // Get current autofill reference via ref
+      const { autofill } = vaultAutofillRef.current;
       return autofill({ domain: origin, username: '' }).then(
         (result) => {
           setSuggestions(result);
@@ -121,7 +127,7 @@ export function useVaultDomainSuggestions(): UseVaultDomainSuggestions {
           setSuggestions([]);
           setError(error instanceof Error ? error.message : String(error));
           setLoading(false);
-        }
+        },
       );
     }
     // If no origin, just reset

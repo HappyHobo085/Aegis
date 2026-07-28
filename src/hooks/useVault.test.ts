@@ -41,6 +41,7 @@ const vs = (over: Partial<VaultState> = {}): VaultState => ({
   unlocked: false,
   count: 0,
   undecryptable: 0,
+  syncEnabled: false,
   ...over,
 });
 

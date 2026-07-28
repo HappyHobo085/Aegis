@@ -63,6 +63,7 @@ pub fn apply_to_tab(app: &AppHandle, id: u32) {
 
 /// Per-platform fan-out to the live webview. Each engine's setter is gated; the
 /// non-matching arms are no-ops so the lib compiles for every target.
+#[allow(unused_variables)]
 fn apply_native(app: &AppHandle, id: u32, factor: f64) {
     let _ = (app, id, factor); // silence unused on platforms with no setter (none today)
     let label = crate::nav::content_label(id);

@@ -29,7 +29,7 @@ fn allowlist() -> &'static Mutex<HashSet<String>> {
 /// from `adblock::dispatch` after every state change.
 pub fn set_policy(enabled: bool, allowlisted_hosts: &[String]) {
     ENABLED.store(enabled, Ordering::Relaxed);
-    let mut a = allowlist().lock().unwrap();
+    let mut a = allowlist().lock().unwrap_or_else(|e| e.into_inner());
     a.clear();
     a.extend(allowlisted_hosts.iter().map(|h| h.to_ascii_lowercase()));
 }
@@ -125,7 +125,11 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
         return false;
     }
     if let Some(host) = host_of(source_url) {
-        if allowlist().lock().unwrap().contains(&host) {
+        if allowlist()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&host)
+        {
             return false;
         }
     }
@@ -164,6 +168,7 @@ thread_local! {
 /// 2. An **ad/tracker destination** (honors the on/off toggle + allowlist).
 ///
 /// A normal `target=_blank` link (a real http(s) page) is NOT dropped.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn is_unwanted_popup(url: &str, opener_url: &str) -> bool {
     let u = url.trim();
     let lower = u.to_ascii_lowercase();

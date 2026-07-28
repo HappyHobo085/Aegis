@@ -157,31 +157,66 @@ pub fn android_level() -> String {
     }
 }
 
-/// JNI bridge for Android's `NativeFarble.farbleScript()`. Returns the farble shim JS for
-/// the current level. The raw `android_level()` value is clamped here (standard/strict →
+/// Android-only: the fp-allowlist the document-start shim getter reads. Mirrors
+/// `FarbleState.allowlist` so the JNI getter (which has no `AppHandle`) can check whether
+/// a host is allowlisted without a Tauri runtime call. Seeded at boot from
+/// `seed_from_disk` and updated on every `fingerprint.toggleAllowlist` /
+/// `fingerprint.removeAllowlist` / `fingerprint.clearAllowlist` mutation.
+#[cfg(target_os = "android")]
+static ANDROID_FP_ALLOWLIST: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
+
+/// Push the current fp-allowlist hosts into the Android JNI global. Called after every
+/// reseed of `FarbleState` (boot + toggle/remove/clear) so new tabs pick up the
+/// change. Desktop reads `FarbleState` directly; the JNI getter reads this global.
+#[cfg(target_os = "android")]
+pub fn note_fp_allowlist(hosts: &[String]) {
+    if let Ok(mut g) = ANDROID_FP_ALLOWLIST.write() {
+        *g = hosts.to_vec();
+    }
+}
+
+/// Whether `host` is on the Android fp-allowlist — exact match or subdomain match.
+/// Allowlisting `example.com` also covers `www.example.com`. Mirrors the logic in
+/// `host_allowlisted` (the Tauri-path version) but reads from the process-global
+/// `ANDROID_FP_ALLOWLIST` instead of Tauri managed state.
+#[cfg(target_os = "android")]
+pub fn android_host_allowlisted(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    ANDROID_FP_ALLOWLIST
+        .read()
+        .map(|g| {
+            g.iter()
+                .any(|h| host == h || host.ends_with(&format!(".{h}")))
+        })
+        .unwrap_or(false)
+}
+
+/// JNI bridge for Android's `NativeFarble.farbleScript(host)`. Returns the farble shim JS
+/// for the current level. The raw `android_level()` value is clamped here (standard/strict →
 /// pass through; anything else → "off") before calling `shim_for`, so a bogus stored value
 /// always produces a fail-open empty string rather than unexpected output.
 ///
-/// **Per-site allowlist:** the fp-allowlist is desktop-only in v1 — the JNI getter has no
-/// `AppHandle` (no Tauri runtime on the JNI thread), so `host_allowlisted` is always
-/// `false`. Farbling therefore applies to all hosts on Android regardless of the
-/// fp-allowlist. Parity gap: toggling a host on the fp-allowlist exempts it on desktop but
-/// NOT on Android. This is a documented v1 limitation; closing it requires routing the
-/// allowlist to a global (like `ANDROID_LEVEL`) or calling `NativeFarble.farbleScript(host)`
-/// from the Kotlin side — tracked as a future improvement.
+/// **Per-site fp-allowlist:** the Kotlin caller passes the content host for the tab being
+/// created. `android_host_allowlisted` checks the `ANDROID_FP_ALLOWLIST` global (mirrored
+/// from `FarbleState` via `note_fp_allowlist`) for an exact or subdomain match. An
+/// allowlisted host receives no farble shim, matching desktop behavior.
 ///
 /// Registered as a per-tab document-start script in `MainActivity.createTabWebView`.
 /// Returns null jstring on failure (Kotlin skips registration).
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub extern "system" fn Java_com_aegis_browser_NativeFarble_farbleScript<'a>(
-    env: jni::JNIEnv<'a>,
+    mut env: jni::JNIEnv<'a>,
     _this: jni::objects::JObject<'a>,
+    host: jni::objects::JString<'a>,
 ) -> jni::sys::jstring {
     // Defensive catch_unwind: any panic (including the HKDF expand expect in
     // public_seed(), however unreachable at 16-byte output) must not unwind
     // across the FFI boundary into Java — that is UB. `env` is kept OUTSIDE the
     // closure because JNIEnv is !UnwindSafe; only UnwindSafe types (String) cross.
+    let host_str: String = env.get_string(&host).map(|s| s.into()).unwrap_or_default();
     let result = std::panic::catch_unwind(|| {
         // Clamp the stored level: only "standard" and "strict" are valid; anything else → off.
         let raw = android_level();
@@ -189,7 +224,8 @@ pub extern "system" fn Java_com_aegis_browser_NativeFarble_farbleScript<'a>(
             "standard" | "strict" => raw.as_str(),
             _ => "off",
         };
-        shim_for(clamped, false)
+        // Check the per-site fp-allowlist: an allowlisted host gets no shim (fail-open).
+        shim_for(clamped, android_host_allowlisted(&host_str))
     });
     match result {
         Ok(s) => match env.new_string(s) {
@@ -220,7 +256,8 @@ impl Default for FarbleState {
 /// Whether `host` is on the farble allowlist — exact match or subdomain match.
 /// Allowlisting `example.com` also covers `www.example.com`.
 /// `#[cfg_attr]` suppresses the dead-code lint on Android, where the JNI path
-/// hardcodes `host_allowlisted = false` and never calls this fn.
+/// reads `android_host_allowlisted` (a process-global) instead of this
+/// Tauri-state-backed function.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
     if host.is_empty() {
@@ -258,11 +295,17 @@ fn clear_fp_hosts<R: Runtime>(app: &AppHandle<R>) {
 }
 
 /// Refresh the in-memory FarbleState.allowlist cache from the persisted store.
+/// On Android, also pushes the hosts into the `ANDROID_FP_ALLOWLIST` global so
+/// the JNI getter can check per-site allowlisting without a Tauri runtime call.
 fn reseed_fp_inner<R: Runtime>(app: &AppHandle<R>) {
     let hosts = load_fp_allowlist_hosts(app);
     if let Some(s) = app.try_state::<FarbleState>() {
-        s.0.lock().unwrap().allowlist = hosts;
+        s.0.lock().unwrap().allowlist = hosts.clone();
     }
+    // Android: mirror into the JNI-global so the per-tab farble getter can
+    // check whether a host is allowlisted (no AppHandle on the JNI thread).
+    #[cfg(target_os = "android")]
+    note_fp_allowlist(&hosts);
 }
 
 /// Seed the (already `.manage()`'d) FarbleState from disk at boot. Mirrors
@@ -570,6 +613,42 @@ mod tests {
         // After note_level("off") → "off".
         super::note_level("off");
         assert_eq!(super::android_level(), "off");
+    }
+
+    // ── T10: note_fp_allowlist / android_host_allowlisted round-trip (Android-only) ────────
+    #[cfg(target_os = "android")]
+    #[test]
+    fn note_fp_allowlist_and_android_host_allowlisted_round_trip() {
+        // Default (empty global) → nothing is allowlisted.
+        super::note_fp_allowlist(&[]);
+        assert!(!super::android_host_allowlisted("example.com"));
+        assert!(!super::android_host_allowlisted(""));
+
+        // After note_fp_allowlist with ["example.com"]:
+        super::note_fp_allowlist(&["example.com".to_string()]);
+        assert!(
+            super::android_host_allowlisted("example.com"),
+            "exact host match"
+        );
+        assert!(
+            super::android_host_allowlisted("www.example.com"),
+            "subdomain match"
+        );
+        assert!(
+            !super::android_host_allowlisted("notexample.com"),
+            "unrelated host"
+        );
+        assert!(
+            !super::android_host_allowlisted("example.com.evil.com"),
+            "superdomain must not match"
+        );
+
+        // Multiple entries:
+        super::note_fp_allowlist(&["a.test".to_string(), "b.test".to_string()]);
+        assert!(super::android_host_allowlisted("a.test"));
+        assert!(super::android_host_allowlisted("b.test"));
+        assert!(!super::android_host_allowlisted("c.test"));
+        assert!(super::android_host_allowlisted("sub.a.test"));
     }
 
     // ── Fingerprint allowlist tests ───────────────────────────────────────────────────────

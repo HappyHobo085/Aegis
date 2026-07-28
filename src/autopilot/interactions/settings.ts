@@ -1,7 +1,6 @@
 // src/autopilot/interactions/settings.ts
 import type { InteractionSpec, InteractionCtx, InteractionLayer } from './types';
 import { fireInputChange, nudgeSync, waitFor } from './helpers';
-import { PRIMARY_VIEW_ID } from '../../../shared/types';
 import type { Settings as AegisSettings } from '../../../shared/types';
 
 export const SETTINGS_INTERACTIONS: InteractionSpec[] = [

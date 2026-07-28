@@ -1,10 +1,27 @@
 // src/components/SettingsModal.tsx
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import { useChromeSurface } from '../hooks/useChromeSurfaces';
+import { PrivacyDashboard } from './PrivacyDashboard';
+import type { FilterListsTabProps } from './FilterListsTab';
+import type { MyFiltersTabProps } from './MyFiltersTab';
+import type { ProxySettingsTabProps } from './ProxySettingsTab';
+import type { UseVault } from '../hooks/useVault';
+import type { UseSync } from '../hooks/useSync';
+import type { FingerprintState, Settings } from '../../shared/types';
+import type { ProtectionSummary } from '../lib/protectionSummary';
+import type { AdblockState } from '../../shared/types';
+
+// Lazy-loaded heavy tabs — each becomes its own chunk, loaded only when selected.
+const FilterListsTab = lazy(() => import('./FilterListsTab'));
+const VaultSettingsTab = lazy(() => import('./VaultSettingsTab'));
+const MyFiltersTab = lazy(() => import('./MyFiltersTab'));
+const SyncSettingsTab = lazy(() => import('./SyncSettingsTab'));
+const ProxySettingsTab = lazy(() => import('./ProxySettingsTab'));
+const SecurityTab = lazy(() => import('./SecurityTab'));
 
 export type SettingsTab =
   | 'appearance'
@@ -73,24 +90,62 @@ export const TAB_GROUPS: SettingsGroup[] = [
 
 export const TAB_ORDER: SettingsTab[] = TAB_GROUPS.flatMap((g) => g.tabs);
 
+/** Tabs that are lazy-loaded (code-split) — rendered only when selected, inside Suspense. */
+const LAZY_TABS: ReadonlySet<SettingsTab> = new Set([
+  'filterLists',
+  'myFilters',
+  'security',
+  'proxy',
+  'vault',
+  'sync',
+]);
+
+/** Combined data props for the security panel (PrivacyDashboard + SecurityTab). */
+export interface SecurityPanelProps {
+  // PrivacyDashboard
+  protection: ProtectionSummary;
+  adblockState: AdblockState;
+  blockedHere: number;
+  onHarden(): void;
+  onOpenProxy(): void;
+  // SecurityTab
+  settings: Settings;
+  update: (patch: Partial<Settings>) => void;
+  listExceptions: () => Promise<string[]>;
+  removeException: (host: string) => void;
+  fingerprintState: FingerprintState;
+  toggleFingerprintAllowlist: (host: string) => void;
+  removeFingerprintAllowlist: (host: string) => void;
+}
+
+/** Data props for the sync panel. */
+export interface SyncPanelProps {
+  sync: UseSync;
+  onSetServerUrl: (url: string) => void | Promise<void>;
+}
+
 export interface SettingsModalProps {
   onClose(): void;
   initialTab?: SettingsTab;
   quickActions?: ReactNode;
+
+  // Light tabs — eagerly rendered, passed as ReactNode
   appearance: ReactNode;
   search: ReactNode;
   home: ReactNode;
   tabs: ReactNode;
-  filterLists: ReactNode;
-  myFilters: ReactNode;
   allowlist: ReactNode;
   downloads: ReactNode;
   sitePermissions: ReactNode;
-  security: ReactNode;
-  proxy: ReactNode;
-  vault: ReactNode;
-  sync: ReactNode;
   data: ReactNode;
+
+  // Heavy tabs — data props, lazily rendered inside Suspense when selected
+  filterLists: FilterListsTabProps;
+  myFilters: MyFiltersTabProps;
+  security: SecurityPanelProps;
+  proxy: ProxySettingsTabProps;
+  vault: UseVault;
+  sync: SyncPanelProps;
 }
 
 export function SettingsModal({
@@ -101,16 +156,16 @@ export function SettingsModal({
   search,
   home,
   tabs,
-  filterLists,
-  myFilters,
   allowlist,
   downloads,
   sitePermissions,
+  data,
+  filterLists,
+  myFilters,
   security,
   proxy,
   vault,
   sync,
-  data,
 }: SettingsModalProps) {
   useChromeSurface('settings', true);
   const titleId = useId();
@@ -215,21 +270,61 @@ export function SettingsModal({
     data: dataTabId,
   };
 
-  const panels: Record<SettingsTab, ReactNode> = {
+  /** Eagerly-rendered panels (light tabs only). */
+  const panels: Record<string, ReactNode> = {
     appearance,
     search,
     home,
     tabs,
-    filterLists,
-    myFilters,
     allowlist,
     downloads,
     sitePermissions,
-    security,
-    proxy,
-    vault,
-    sync,
     data,
+  };
+
+  /** Render the active panel — lazy tabs inside Suspense, light tabs directly. */
+  const renderPanel = (): ReactNode => {
+    if (visibleGroups.length === 0) {
+      return (
+        <div className="settings-modal__empty-panel">
+          Try searching for privacy, downloads, proxy, sync, or tabs.
+        </div>
+      );
+    }
+
+    if (!LAZY_TABS.has(tab)) {
+      return panels[tab] ?? null;
+    }
+
+    return (
+      <Suspense fallback={<div className="settings-modal__loading">Loading…</div>}>
+        {tab === 'filterLists' && <FilterListsTab {...filterLists} />}
+        {tab === 'myFilters' && <MyFiltersTab {...myFilters} />}
+        {tab === 'security' && (
+          <>
+            <PrivacyDashboard
+              protection={security.protection}
+              adblock={security.adblockState}
+              blockedHere={security.blockedHere}
+              onHarden={security.onHarden}
+              onOpenProxy={security.onOpenProxy}
+            />
+            <SecurityTab
+              settings={security.settings}
+              update={security.update}
+              listExceptions={security.listExceptions}
+              removeException={security.removeException}
+              fingerprintState={security.fingerprintState}
+              toggleFingerprintAllowlist={security.toggleFingerprintAllowlist}
+              removeFingerprintAllowlist={security.removeFingerprintAllowlist}
+            />
+          </>
+        )}
+        {tab === 'proxy' && <ProxySettingsTab {...proxy} />}
+        {tab === 'vault' && <VaultSettingsTab vault={vault} />}
+        {tab === 'sync' && <SyncSettingsTab {...sync} />}
+      </Suspense>
+    );
   };
 
   return (
@@ -307,7 +402,7 @@ export function SettingsModal({
               </div>
             ))}
             {visibleGroups.length === 0 && (
-              <p className="settings-modal__no-results">No settings match “{tabQuery.trim()}”.</p>
+              <p className="settings-modal__no-results">No settings match "{tabQuery.trim()}".</p>
             )}
           </div>
           <div
@@ -316,13 +411,7 @@ export function SettingsModal({
             aria-labelledby={tabIds[tab]}
             className="settings-modal__panel"
           >
-            {visibleGroups.length === 0 ? (
-              <div className="settings-modal__empty-panel">
-                Try searching for privacy, downloads, proxy, sync, or tabs.
-              </div>
-            ) : (
-              panels[tab]
-            )}
+            {renderPanel()}
           </div>
         </div>
       </div>

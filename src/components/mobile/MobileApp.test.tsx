@@ -309,7 +309,7 @@ describe('MobileApp', () => {
     fireEvent.click(screen.getByRole('button', { name: /hide toolbar/i }));
     expect(screen.queryByRole('navigation', { name: /browser actions/i })).toBeNull();
   });
-  it('enters fullscreen from the top bar, hiding all chrome', async () => {
+  it('enters fullscreen from the bottom bar, hiding all chrome', async () => {
     render(<MobileApp />);
     fireEvent.click(await screen.findByRole('button', { name: /enter fullscreen/i }));
     expect(screen.queryByRole('navigation', { name: /browser actions/i })).toBeNull();

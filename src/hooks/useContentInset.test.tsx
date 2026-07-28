@@ -2,7 +2,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
-import { TOOLBAR_H, FAVBAR_H } from '../lib/layout';
 
 const setContentInset = vi.fn();
 
@@ -22,34 +21,38 @@ beforeEach(() => {
 });
 
 describe('useContentInset', () => {
-  it('exports the shared layout constants', () => {
-    expect(TOOLBAR_H).toBe(56);
-    expect(FAVBAR_H).toBe(40);
-  });
-
-  it('reports a constant top inset (toolbar + favbar) with left 0 on mount', () => {
-    renderHook(() => useContentInset(PRIMARY_VIEW_ID, true));
+  it('reports the given topInset with left 0 on mount', () => {
+    renderHook(() => useContentInset(PRIMARY_VIEW_ID, 132));
     expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, {
       top: 132,
       left: 0,
     });
   });
 
-  it('reports the inset exactly once on mount and does not re-fire on rerender', () => {
-    const { rerender } = renderHook(() => useContentInset(PRIMARY_VIEW_ID, true));
+  it('does not re-fire the IPC on rerender when topInset is unchanged', () => {
+    const { rerender } = renderHook(({ topInset }) => useContentInset(PRIMARY_VIEW_ID, topInset), {
+      initialProps: { topInset: 132 },
+    });
     expect(setContentInset).toHaveBeenCalledTimes(1);
-    rerender();
-    // The inset effect is keyed on viewId + showTabStrip — it must NOT re-fire on a rerender.
+    rerender({ topInset: 132 });
+    // Same topInset → effect must NOT re-fire.
     expect(setContentInset).toHaveBeenCalledTimes(1);
   });
 
-  it('adds the tab-strip height to the top inset when shown', () => {
-    renderHook(() => useContentInset(1, true));
-    expect(setContentInset).toHaveBeenCalledWith(1, { top: 56 + 40 + 36, left: 0 });
+  it('re-fires the IPC when topInset changes', () => {
+    const { rerender } = renderHook(({ topInset }) => useContentInset(PRIMARY_VIEW_ID, topInset), {
+      initialProps: { topInset: 132 },
+    });
+    expect(setContentInset).toHaveBeenCalledTimes(1);
+    expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 132, left: 0 });
+
+    rerender({ topInset: 172 });
+    expect(setContentInset).toHaveBeenCalledTimes(2);
+    expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 172, left: 0 });
   });
 
-  it('omits the strip height when not shown (mobile)', () => {
-    renderHook(() => useContentInset(1, false));
-    expect(setContentInset).toHaveBeenCalledWith(1, { top: 56 + 40, left: 0 });
+  it('reports a zero topInset correctly', () => {
+    renderHook(() => useContentInset(PRIMARY_VIEW_ID, 0));
+    expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 0, left: 0 });
   });
 });

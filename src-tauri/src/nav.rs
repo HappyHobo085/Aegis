@@ -18,19 +18,27 @@ fn tabs_with_content() -> &'static Mutex<HashSet<u32>> {
 }
 
 /// Mark tab `id` as having shown a real page (called on a non-blank top-frame load).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn mark_tab_has_content(id: u32) {
-    tabs_with_content().lock().unwrap().insert(id);
+    tabs_with_content()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(id);
 }
 
 /// Forget a closed tab's content flag (ids are monotonic, so this is just tidiness).
 pub fn forget_tab_content(id: u32) {
-    tabs_with_content().lock().unwrap().remove(&id);
+    tabs_with_content()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
 }
 
 /// Whether a tab whose ad navigation was just cancelled should be auto-closed as a
 /// pop-under shell. ONLY a non-active tab that has never shown a real page: the active
 /// tab is never closed (the user is looking at it), and a tab that already loaded real
 /// content is kept (the ad navigation is still blocked, just not fatal to the tab).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn should_autoclose_popunder(tab_id: u32, active_id: u32, has_content: bool) -> bool {
     tab_id != active_id && !has_content
 }
@@ -63,7 +71,7 @@ pub fn navigate_tab(app: &AppHandle, id: u32, url: Url) {
 pub fn active_content_label<R: Runtime>(app: &AppHandle<R>) -> String {
     let id = app
         .try_state::<crate::tabs::Tabs>()
-        .map(|s| s.reg.lock().unwrap().active_id())
+        .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
         .unwrap_or(1);
     content_label(id)
 }
@@ -72,8 +80,9 @@ pub fn active_webview<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::Webview<R
     app.get_webview(&active_content_label(app))
 }
 
-/// Default top inset = TOOLBAR_H(56) + FAVBAR_H(40) + TABSTRIP_H(36); refined by view.setContentInset.
-pub const DEFAULT_INSET_TOP: f64 = 132.0;
+/// Default top inset = WORKSPACE_BAR_H(32) + TABSTRIP_H(40) + TOOLBAR_H(56) + FAVBAR_H(36);
+/// Refined by view.setContentInset (renderer reports actual DOM measurement).
+pub const DEFAULT_INSET_TOP: f64 = 164.0;
 
 /// Present a mainstream Chrome user-agent to browsed sites (anti-fingerprint /
 /// fewer "unsupported browser" walls) instead of the default WebKitGTK string,
@@ -83,8 +92,10 @@ const CONTENT_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleW
 #[cfg(target_os = "windows")]
 const CONTENT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 const CONTENT_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn is_local_host(url: &Url) -> bool {
     matches!(
         url.host_str(),
@@ -93,6 +104,7 @@ fn is_local_host(url: &Url) -> bool {
 }
 
 /// Emit a `nav.state` carrying the real tab id and page state.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub(crate) fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loading: bool) {
     if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
         eprintln!("[aegis-nav] emit_state id={id} loading={loading} url={url}");
@@ -100,7 +112,7 @@ pub(crate) fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loadi
     let (back, fwd) = app
         .try_state::<crate::tabs::Tabs>()
         .map(|s| {
-            let r = s.reg.lock().unwrap();
+            let r = s.reg.lock().unwrap_or_else(|e| e.into_inner());
             (r.can_go_back(id), r.can_go_forward(id))
         })
         .unwrap_or((false, false));
@@ -119,6 +131,66 @@ pub(crate) fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loadi
     );
 }
 
+/// Emit a `nav.failed` event when a page load fails (network error, certificate
+/// error, DNS failure, etc.). The `kind` discriminates load errors (`"load"`) from
+/// certificate errors (`"cert"`).
+#[allow(dead_code)] // TODO(M12): wired when platform load-failure signals are connected
+pub(crate) fn emit_nav_failed(
+    app: &AppHandle,
+    id: u32,
+    error_code: i32,
+    error_description: &str,
+    validated_url: &str,
+    kind: &str,
+) {
+    crate::emit_event(
+        app,
+        "nav.failed",
+        json!({
+            "viewId": id,
+            "errorCode": error_code,
+            "errorDescription": error_description,
+            "validatedURL": validated_url,
+            "kind": kind,
+        }),
+    );
+}
+
+/// Emit a `nav.crashed` event when the webview/renderer process crashes.
+#[allow(dead_code)] // TODO(M12): wired when platform crash signals are connected
+pub(crate) fn emit_nav_crashed(app: &AppHandle, id: u32, reason: &str) {
+    crate::emit_event(
+        app,
+        "nav.crashed",
+        json!({
+            "viewId": id,
+            "reason": reason,
+        }),
+    );
+}
+
+// TODO(M12): Wire platform-specific load-failure and crash signals to the helpers above.
+//
+// **Linux (WebKitGTK):** After `crate::linux_layout::install_nav_policy(app, &label)` in
+// `spawn_tab`, connect:
+//   - `WebViewExt::connect_load_failed(move |_, _, _, _| emit_nav_failed(...))` — fires on
+//     network errors, certificate errors, DNS failures. The error domain string distinguishes
+//     "load" vs "cert".
+//   - `WebViewExt::connect_web_process_crashed(move |_| emit_nav_crashed(...))` — fires when
+//     the WebKit web process crashes.
+//
+// **Windows (WebView2):** After `crate::adblock_win::install(...)` in `spawn_tab`, use
+// `content.with_webview(move |pw| { ... })` to access the `ICoreWebView2` COM interface and
+// subscribe to `NavigationFailed` (→ `emit_nav_failed`) and `ProcessFailed`
+// (→ `emit_nav_crashed`).
+//
+// **macOS (WKWebView):** Use `WKNavigationDelegate`'s `didFailProvisionalNavigation:withError:`
+// (→ `emit_nav_failed`) and `webProcessDidCrash` KVO observation (→ `emit_nav_crashed`).
+//
+// **Android:** Kotlin's `WebViewClient.onReceivedError` (→ `__aegisNavFailed`) and
+// `WebViewClient.onRenderProcessGone` (→ `__aegisNavCrashed`) — mirror the existing
+// `__aegisNavState` bridge pattern.
+
 /// The navigation-policy decision shared by every desktop platform: returns `true` to
 /// ALLOW the navigation, `false` to CANCEL it. Runs the overlay-cancel, malware, ad-block
 /// (document-level + pop-under autoclose), and HTTPS-Only checks. Fires for subframes too
@@ -134,7 +206,7 @@ pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
     // causes). Cancel them. NOT gated on the sidebar alone: the page stays interactive beside
     // the sidebar panel, so real navigation must still work there.
     if let Some(st) = app.try_state::<crate::view::ContentInset>() {
-        let lay = *st.0.lock().unwrap();
+        let lay = *st.0.lock().unwrap_or_else(|e| e.into_inner());
         if lay.overlay && !lay.sidebar {
             return false;
         }
@@ -165,10 +237,13 @@ pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
             // Auto-close a pop-under shell: a NON-active tab that never showed real content
             // whose navigation is an ad. The active tab + any tab that loaded a real page are
             // never closed (just blocked).
-            let has_content = tabs_with_content().lock().unwrap().contains(&nav_id);
+            let has_content = tabs_with_content()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&nav_id);
             let active = app
                 .try_state::<crate::tabs::Tabs>()
-                .map(|s| s.reg.lock().unwrap().active_id())
+                .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
                 .unwrap_or(0);
             if should_autoclose_popunder(nav_id, active, has_content) {
                 let app_close = app.clone();
@@ -530,12 +605,16 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
 
     // macOS: observe the WKWebView's `URL` (KVO) so the address bar follows
     // same-document (History-API/hash) navigations that wry's nav callbacks miss —
-    // the WKWebView analog of Linux's notify::uri.
+    // the WKWebView analog of Linux's notify::uri.  Also install the find-in-page
+    // JS shim so Ctrl+F works with real match count + highlights (replacing the
+    // degraded native findString: that only returns a bool).
     #[cfg(target_os = "macos")]
     if let Some(content) = app.get_webview(&label) {
         let app_url = app.clone();
+        let app_find = app.clone();
         let _ = content.with_webview(move |pw| {
             crate::nav_url_mac::install(&pw, app_url, id);
+            crate::find_mac::install(&pw, app_find, id);
         });
     }
 
@@ -587,12 +666,15 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "nav.back" => {
             let target_id = id.unwrap_or_else(|| {
                 app.try_state::<crate::tabs::Tabs>()
-                    .map(|s| s.reg.lock().unwrap().active_id())
+                    .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
                     .unwrap_or(1)
             });
-            let url = app
-                .try_state::<crate::tabs::Tabs>()
-                .and_then(|s| s.reg.lock().unwrap().go_back(target_id));
+            let url = app.try_state::<crate::tabs::Tabs>().and_then(|s| {
+                s.reg
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .go_back(target_id)
+            });
             if let (Some(url), Some(w)) = (url, content) {
                 if let Ok(u) = Url::parse(&url) {
                     crate::redirect_guard::expect(app, label_id(&label), u.as_str());
@@ -604,12 +686,15 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "nav.forward" => {
             let target_id = id.unwrap_or_else(|| {
                 app.try_state::<crate::tabs::Tabs>()
-                    .map(|s| s.reg.lock().unwrap().active_id())
+                    .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
                     .unwrap_or(1)
             });
-            let url = app
-                .try_state::<crate::tabs::Tabs>()
-                .and_then(|s| s.reg.lock().unwrap().go_forward(target_id));
+            let url = app.try_state::<crate::tabs::Tabs>().and_then(|s| {
+                s.reg
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .go_forward(target_id)
+            });
             if let (Some(url), Some(w)) = (url, content) {
                 if let Ok(u) = Url::parse(&url) {
                     crate::redirect_guard::expect(app, label_id(&label), u.as_str());
@@ -640,13 +725,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .unwrap_or_else(|| "about:blank".to_string());
             let vid = id.unwrap_or_else(|| {
                 app.try_state::<crate::tabs::Tabs>()
-                    .map(|s| s.reg.lock().unwrap().active_id())
+                    .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
                     .unwrap_or(1)
             });
             let (back, fwd) = app
                 .try_state::<crate::tabs::Tabs>()
                 .map(|s| {
-                    let r = s.reg.lock().unwrap();
+                    let r = s.reg.lock().unwrap_or_else(|e| e.into_inner());
                     (r.can_go_back(vid), r.can_go_forward(vid))
                 })
                 .unwrap_or((false, false));

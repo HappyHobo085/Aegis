@@ -416,15 +416,28 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
     // Anti-fingerprinting (farbling) shim, document-start, per the user's antiFingerprint
     // level. Read fresh per tab so a level change applies to new tabs; "" when no farbling
-    // applies (level "off" or clamped bogus value). fp-allowlist is desktop-only in v1 —
-    // the Rust getter always passes host_allowlisted=false on Android (see NativeFarble.kt).
+    // applies (level "off" or clamped bogus value). The content host is passed so the Rust
+    // JNI getter can check the per-site fp-allowlist (mirrored from FarbleState).
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-      val farble = try { NativeFarble.farbleScript() } catch (_: Throwable) { "" }
+      val contentHost = try { Uri.parse(url).host ?: "" } catch (_: Throwable) { "" }
+      val farble = try { NativeFarble.farbleScript(contentHost) } catch (_: Throwable) { "" }
       if (farble.isNotEmpty()) {
         try {
           WebViewCompat.addDocumentStartJavaScript(wv, farble, setOf("*"))
         } catch (t: Throwable) {
           Log.w("AegisFarble", "farble shim inject failed", t)
+        }
+      }
+    }
+    // Vault autofill badge + form detection, document-start. Handles password-field
+    // detection, autofill-badge rendering, badge clicks, and form-submission listening.
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+      val vaultScript = try { NativeFormDetect.formDetectionScript() } catch (_: Throwable) { "" }
+      if (vaultScript.isNotEmpty()) {
+        try {
+          WebViewCompat.addDocumentStartJavaScript(wv, vaultScript, setOf("*"))
+        } catch (t: Throwable) {
+          Log.w("AegisVaultInject", "vault inject failed", t)
         }
       }
     }

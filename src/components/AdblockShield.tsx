@@ -153,7 +153,7 @@ function Popover({
           </span>
         </div>
       )}
-      <label className="adblock-shield__row">
+      <label className="adblock-shield__row adblock-shield__allowlist">
         <input
           type="checkbox"
           aria-label={allowLabel}

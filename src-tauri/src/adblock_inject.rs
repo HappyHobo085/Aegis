@@ -84,8 +84,15 @@ const POPUP_GUARD: &str = r#"(function(){
 /// Android builds its equivalent via the NativeInject + NativeWebrtc JNI getters.
 #[cfg_attr(target_os = "android", allow(dead_code))] // Android uses the JNI getters instead
 pub fn script(app: &tauri::AppHandle, host_allowlisted: bool, host: &str) -> String {
-    let webrtc =
-        crate::webrtc_shim::shim_for(&crate::settings::webrtc_policy(app), host_allowlisted);
+    let webrtc_policy = crate::settings::webrtc_policy(app);
+    // Fast path: use the pre-computed shim if prewarm() has run; fall back to shim_for.
+    let webrtc = if host_allowlisted {
+        String::new()
+    } else {
+        crate::webrtc_shim::get_precomputed(&webrtc_policy)
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| crate::webrtc_shim::shim_for(&webrtc_policy, host_allowlisted))
+    };
     // Farble shim: uses the SEPARATE fp-allowlist (not the ad-block allowlist). Fail-open:
     // a farble computation error (e.g. missing state) yields "" → no-op injection.
     let farble = {
@@ -93,7 +100,13 @@ pub fn script(app: &tauri::AppHandle, host_allowlisted: bool, host: &str) -> Str
         let fp_allowlisted = crate::farble::host_allowlisted(app, host);
         crate::farble::shim_for(&level, fp_allowlisted)
     };
-    compose(&webrtc, &farble)
+    let vault = crate::vault_inject::script();
+    let mut result = compose(&webrtc, &farble);
+    if !vault.is_empty() {
+        result.push('\n');
+        result.push_str(&vault);
+    }
+    result
 }
 
 /// Compose the document-start script from the (already-built) WebRTC shim prefix + the

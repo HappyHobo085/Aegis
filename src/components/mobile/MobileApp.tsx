@@ -36,32 +36,25 @@ import { DownloadsModal } from '../DownloadsModal';
 import { SettingsModal } from '../SettingsModal';
 import type { SettingsTab } from '../SettingsModal';
 import { CommandPalette } from '../CommandPalette';
-import type { CommandAction } from '../CommandPalette';
 import { AppearanceTab } from '../AppearanceTab';
 import { SearchTab } from '../SearchTab';
 import { HomeTab } from '../HomeTab';
 import { TabsTab } from '../TabsTab';
-import { FilterListsTab } from '../FilterListsTab';
-import { MyFiltersTab } from '../MyFiltersTab';
 import { AllowlistTab } from '../AllowlistTab';
 import { DownloadsTab } from '../DownloadsTab';
 import { SitePermissionsTab } from '../SitePermissionsTab';
-import { SecurityTab } from '../SecurityTab';
-import { SyncSettingsTab } from '../SyncSettingsTab';
-import { VaultSettingsTab } from '../VaultSettingsTab';
-import { ProxySettingsTab } from '../ProxySettingsTab';
 import { DataTab } from '../DataTab';
 import { PermissionPromptDialog } from '../PermissionPromptDialog';
 import { Toaster } from '../Toaster';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { Onboarding } from '../Onboarding';
-import { PrivacyDashboard } from '../PrivacyDashboard';
 import { toast } from '../../lib/toast';
 import { MobileTopBar } from './MobileTopBar';
 import { MobileBottomBar } from './MobileBottomBar';
 import { MobileMenuSheet } from './MobileMenuSheet';
 import { MobileSheet } from './MobileSheet';
 import { MobileTabSwitcher } from './MobileTabSwitcher';
+import { MobileFavourites } from './MobileFavourites';
 
 declare global {
   interface Window {
@@ -113,7 +106,7 @@ export function MobileApp() {
     setNativeBottomBarHidden(bottomBarHidden);
   }, [bottomBarHidden]);
 
-  // Chrome-hiding fullscreen (the top-bar Maximize button; desktop parity): native drops
+  // Chrome-hiding fullscreen (bottom-bar Maximize button; desktop parity): native drops
   // the top + bottom content margins so the page fills the safe area; React hides the bars.
   useEffect(() => {
     setNativeFullscreen(fullscreen);
@@ -198,82 +191,6 @@ export function MobileApp() {
     toast.info('Cleared Aegis history and remembered permissions for this site.');
   };
 
-  const commandActions: CommandAction[] = [
-    {
-      id: 'new-tab',
-      title: 'New tab',
-      subtitle: 'Open a blank tab',
-      group: 'Tabs',
-      keywords: 'tabs',
-      run: () => void tabs.create('about:blank'),
-    },
-    {
-      id: 'new-private-tab',
-      title: 'New private tab',
-      subtitle: 'Browse without saving history',
-      group: 'Tabs',
-      keywords: 'incognito privacy',
-      run: () => void tabs.create(undefined, false, true),
-    },
-    {
-      id: 'downloads',
-      title: 'Open downloads',
-      subtitle: `${downloads.downloads.length} recent downloads`,
-      group: 'Browser',
-      keywords: 'files',
-      run: () => setSheet('downloads'),
-    },
-    {
-      id: 'history',
-      title: 'Open history',
-      subtitle: 'Show visited pages',
-      group: 'Browser',
-      keywords: 'sidebar',
-      run: () => setSheet('history'),
-    },
-    {
-      id: 'saved',
-      title: 'Open saved pages',
-      subtitle: 'Bookmarks and reading list',
-      group: 'Browser',
-      keywords: 'bookmarks',
-      run: () => setSheet('saved'),
-    },
-    {
-      id: 'settings-privacy',
-      title: 'Privacy settings',
-      subtitle: 'Security, permissions, and fingerprint protection',
-      group: 'Settings',
-      keywords: 'settings security permissions',
-      run: () => openSettings('security'),
-    },
-    {
-      id: 'settings-proxy',
-      title: 'Proxy settings',
-      subtitle: proxy.state.active ? 'Proxy is active' : 'Proxy is off',
-      group: 'Settings',
-      keywords: 'network vpn',
-      run: () => openSettings('proxy'),
-    },
-    {
-      id: 'settings-data',
-      title: 'Import or export data',
-      subtitle: 'Backups and local data controls',
-      group: 'Settings',
-      keywords: 'backup restore',
-      run: () => openSettings('data'),
-    },
-    ...tabs.tabs.map((tab) => ({
-      id: `tab-${tab.id}`,
-      title: `Switch to ${tab.title || tab.url || 'New tab'}`,
-      subtitle: tab.private ? 'Private tab' : tab.url,
-      group: 'Open tabs',
-      keywords: 'tab switch',
-      run: () => void tabs.activate(tab.id),
-      secondaryLabel: 'Close',
-      secondaryRun: () => void tabs.close(tab.id),
-    })),
-  ];
   const shield = (
     <AdblockShield
       state={adblock.state}
@@ -303,13 +220,11 @@ export function MobileApp() {
             onClearRememberedSiteData: clearRememberedSiteData,
             onOpenPrivacySettings: () => openSettings('security'),
           }}
+          inlineShield={shield}
           onNavigate={nav.navigate}
           onReloadOrStop={nav.reloadOrStop}
-          favorites={favorites.favorites}
-          onOpenFavourite={(url) => void nav.navigate(url)}
           bottomBarHidden={bottomBarHidden}
           onToggleBottomBar={() => setBottomBarHidden((v) => !v)}
-          onEnterFullscreen={() => setFullscreen(true)}
         />
       )}
       {find.open && (
@@ -321,6 +236,17 @@ export function MobileApp() {
           onClose={find.close}
         />
       )}
+      {!fullscreen && (favorites.favorites.length > 0 || host !== null) && (
+        <MobileFavourites
+          favorites={favorites.favorites}
+          onOpen={(url: string) => void nav.navigate(url)}
+          onAdd={
+            host !== null
+              ? () => void favorites.add({ name: nav.state.title || host, url: nav.state.url })
+              : undefined
+          }
+        />
+      )}
       <div className="content-anchor" />
       {!bottomBarHidden && !fullscreen && (
         <MobileBottomBar
@@ -328,7 +254,7 @@ export function MobileApp() {
           onHistory={() => setSheet('history')}
           onTabs={() => setSheet('tabs')}
           tabCount={tabs.tabs.length}
-          shield={shield}
+          onFullscreen={() => setFullscreen(true)}
           onMenu={() => setSheet('menu')}
         />
       )}
@@ -454,16 +380,14 @@ export function MobileApp() {
           search={<SearchTab settings={settings.settings} update={settings.update} />}
           home={<HomeTab settings={settings.settings} update={settings.update} />}
           tabs={<TabsTab settings={settings.settings} update={settings.update} />}
-          filterLists={
-            <FilterListsTab
-              subs={subscriptions.subs}
-              setEnabled={subscriptions.setEnabled}
-              add={subscriptions.add}
-              remove={subscriptions.remove}
-              updateNow={subscriptions.updateNow}
-            />
-          }
-          myFilters={<MyFiltersTab text={customFilters.text} save={customFilters.save} />}
+          filterLists={{
+            subs: subscriptions.subs,
+            setEnabled: subscriptions.setEnabled,
+            add: subscriptions.add,
+            remove: subscriptions.remove,
+            updateNow: subscriptions.updateNow,
+          }}
+          myFilters={{ text: customFilters.text, save: customFilters.save }}
           allowlist={
             <AllowlistTab
               hosts={adblock.state.allowlistedHosts}
@@ -479,47 +403,36 @@ export function MobileApp() {
               clear={permissions.clear}
             />
           }
-          security={
-            <>
-              <PrivacyDashboard
-                protection={activeProtection}
-                adblock={adblock.state}
-                blockedHere={adblock.page}
-                onHarden={() =>
-                  void settings.update({
-                    httpsOnly: true,
-                    webrtcPolicy: 'disable',
-                    antiFingerprint: 'strict',
-                  })
-                }
-                onOpenProxy={() => openSettings('proxy')}
-              />
-              <SecurityTab
-                settings={settings.settings}
-                update={settings.update}
-                listExceptions={() => aegis.safety.listExceptions()}
-                removeException={(h) => void aegis.safety.removeException(h)}
-                fingerprintState={fingerprint.state}
-                toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
-                removeFingerprintAllowlist={fingerprint.removeAllowlist}
-              />
-            </>
-          }
-          proxy={
-            <ProxySettingsTab
-              state={proxy.state}
-              setConfig={proxy.setConfig}
-              test={proxy.test}
-              onReloadActiveTab={nav.reloadOrStop}
-            />
-          }
-          vault={<VaultSettingsTab vault={vault} />}
-          sync={
-            <SyncSettingsTab
-              sync={sync}
-              onSetServerUrl={(url) => settings.update({ syncServerUrl: url })}
-            />
-          }
+          security={{
+            protection: activeProtection,
+            adblockState: adblock.state,
+            blockedHere: adblock.page,
+            onHarden: () =>
+              void settings.update({
+                httpsOnly: true,
+                webrtcPolicy: 'disable',
+                antiFingerprint: 'strict',
+              }),
+            onOpenProxy: () => openSettings('proxy'),
+            settings: settings.settings,
+            update: settings.update,
+            listExceptions: () => aegis.safety.listExceptions(),
+            removeException: (h: string) => void aegis.safety.removeException(h),
+            fingerprintState: fingerprint.state,
+            toggleFingerprintAllowlist: fingerprint.toggleAllowlist,
+            removeFingerprintAllowlist: fingerprint.removeAllowlist,
+          }}
+          proxy={{
+            state: proxy.state,
+            setConfig: proxy.setConfig,
+            test: proxy.test,
+            onReloadActiveTab: nav.reloadOrStop,
+          }}
+          vault={vault}
+          sync={{
+            sync,
+            onSetServerUrl: (url: string) => settings.update({ syncServerUrl: url }),
+          }}
           data={
             <DataTab
               onExport={() => aegis.data.export()}
@@ -551,11 +464,7 @@ export function MobileApp() {
         onOpenSettings={() => openSettings()}
         onImportData={() => openSettings('data')}
       />
-      <CommandPalette
-        open={commandOpen}
-        actions={commandActions}
-        onClose={() => setCommandOpen(false)}
-      />
+      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} />
       <Toaster />
       <ConfirmDialog />
     </div>

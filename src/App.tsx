@@ -1,14 +1,15 @@
 // src/App.tsx
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { Settings, PanelRight, Maximize2, Minimize2 } from 'lucide-react';
-import type { NavCrashed, NavFailed, RedirectBlocked } from '../shared/types';
+import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
 import { confirm, toast } from './lib/toast';
-import { REDIRECT_BAR_H, FIND_BAR_H } from './lib/layout';
+import { useChromeHeights } from './hooks/useChromeHeights';
 import { hostOf, originOf } from './lib/url';
 import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChromeSurfaces';
-import { computeContentLayout } from './lib/contentLayout';
+import { computeContentLayout, computeSplitLayout, clampResizeDelta } from './lib/contentLayout';
+import type { PaneRect } from './lib/contentLayout';
 import { protectionSummary } from './lib/protectionSummary';
 import { useDownloadToasts } from './hooks/useDownloadToasts';
 import { useNav } from './hooks/useNav';
@@ -28,16 +29,21 @@ import { useCustomFilters } from './hooks/useCustomFilters';
 import { useDownloads } from './hooks/useDownloads';
 import { usePermissions } from './hooks/usePermissions';
 import { useContentInset } from './hooks/useContentInset';
+import { FIND_BAR_H } from './lib/layout';
 import { useNarrowViewport } from './hooks/useNarrowViewport';
 import { useUpdate } from './hooks/useUpdate';
 import { useSafety } from './hooks/useSafety';
 import { useTabs } from './hooks/useTabs';
+import { useWorkspaces } from './hooks/useWorkspaces';
+import { useSplit } from './hooks/useSplit';
 import { Toolbar } from './components/Toolbar';
 import { BookmarkButton } from './components/BookmarkButton';
 import { DownloadsIndicator } from './components/DownloadsIndicator';
 import { PickerButton } from './components/PickerButton';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { ZoomIndicator } from './components/ZoomIndicator';
+import { SplitIndicator } from './components/SplitIndicator';
+import { SplitResizeHandle } from './components/SplitResizeHandle';
 import { SafetyInterstitial } from './components/SafetyInterstitial';
 import { FavoritesBar } from './components/FavoritesBar';
 import { FavoritesManager } from './components/FavoritesManager';
@@ -54,24 +60,16 @@ import { Onboarding } from './components/Onboarding';
 import { SettingsModal } from './components/SettingsModal';
 import type { SettingsTab } from './components/SettingsModal';
 import { CommandPalette } from './components/CommandPalette';
-import type { CommandAction } from './components/CommandPalette';
-import { PrivacyDashboard } from './components/PrivacyDashboard';
 import { AppearanceTab } from './components/AppearanceTab';
 import { SearchTab } from './components/SearchTab';
 import { HomeTab } from './components/HomeTab';
-import { FilterListsTab } from './components/FilterListsTab';
-import { MyFiltersTab } from './components/MyFiltersTab';
 import { AllowlistTab } from './components/AllowlistTab';
 import { DownloadsTab } from './components/DownloadsTab';
 import { SitePermissionsTab } from './components/SitePermissionsTab';
-import { SecurityTab } from './components/SecurityTab';
-import { SyncSettingsTab } from './components/SyncSettingsTab';
-import { VaultSettingsTab } from './components/VaultSettingsTab';
-import { ProxySettingsTab } from './components/ProxySettingsTab';
 import { DataTab } from './components/DataTab';
 import { TabsTab } from './components/TabsTab';
 import { TabStrip } from './components/TabStrip';
-import { RedirectBar } from './components/RedirectBar';
+import { WorkspaceSwitcher } from './components/WorkspaceSwitcher';
 import { FindBar } from './components/FindBar';
 import { MobileApp } from './components/mobile/MobileApp';
 import { installAutopilotControl } from './autopilot/control';
@@ -93,7 +91,22 @@ const CHROME_NAV_REDIRECT_GRACE_MS = 1500;
 const CHROME_NAV_REASSERT_MS = 250;
 
 function DesktopApp() {
+  // One-time performance measurement: marks when React mount completes.
+  useEffect(() => {
+    try {
+      performance.mark('aegis-react-end');
+      performance.measure('aegis-mount', 'aegis-react-start', 'aegis-react-end');
+      const entries = performance.getEntriesByName('aegis-mount');
+      if (entries.length > 0) {
+        console.log(`[aegis-perf] React mount: ${Math.round(entries[0].duration)}ms`);
+      }
+    } catch {
+      // In test environments or when the start mark wasn't set, silently ignore.
+    }
+  }, []);
+
   const tabs = useTabs();
+  const workspaces = useWorkspaces();
   // Stable refs for keyboard shortcut effects — tabs.tabs is a new array on every
   // state update; using refs avoids re-registering listeners each render.
   const tabsRef = useRef(tabs.tabs);
@@ -127,21 +140,12 @@ function DesktopApp() {
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('appearance');
   const [commandOpen, setCommandOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [sidebarInitialTab, setSidebarInitialTab] = useState<'history' | 'saved'>('history');
+  const [sidebarInitialTab, setSidebarInitialTab] = useState<'history' | 'saved'>('saved');
   // The sidebar panel is user-resizable; track its width so the content webview's right
   // inset matches it exactly (reported up from the Sidebar via onWidthChange).
-  const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [sidebarWidth, setSidebarWidth] = useState(320);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  // A scripted cross-origin top-frame redirect the native guard cancelled; surfaced as a
-  // notification bar (a floating toast can't paint over the opaque content webview).
-  const [blockedRedirect, setBlockedRedirect] = useState<RedirectBlocked | null>(null);
-  // Destinations the user has dismissed for the active tab. A malicious page (e.g. streamex)
-  // re-fires the same blocked redirect on a timer AND on the resize the bar itself causes (it
-  // insets the content), so without remembering dismissals the bar is unclosable. Reset on tab
-  // switch (see the onBlocked effect). Ref, not state — the onBlocked callback reads the latest
-  // set without re-subscribing.
-  const dismissedRedirectsRef = useRef<Set<string>>(new Set());
   // When the user explicitly navigates from chrome (address bar, saved/history/favorites),
   // the page being left can still fire a resize/timer redirect before the new navigation
   // commits. Streamex-style pages do this during sidebar/sheet changes. Suppress only those
@@ -151,9 +155,14 @@ function DesktopApp() {
   const safety = useSafety();
   const fingerprint = useFingerprint();
   const proxy = useProxy();
+  const split = useSplit();
   const find = useFind(tabs.activeId);
   const navUrlRef = useRef(nav.state.url);
   navUrlRef.current = nav.state.url;
+
+  // Ref to the `.app` container so useChromeHeights can query chrome elements by CSS class.
+  const appRef = useRef<HTMLDivElement>(null);
+  const chrome = useChromeHeights(appRef);
 
   const navigateFromChrome = (raw: string): void => {
     const fromOrigin = originOf(nav.state.url);
@@ -161,7 +170,6 @@ function DesktopApp() {
       fromOrigin,
       startedAt: Date.now(),
     };
-    setBlockedRedirect(null);
     nav.navigate(raw);
     window.setTimeout(() => {
       if (fromOrigin !== null && originOf(navUrlRef.current) === fromOrigin) {
@@ -215,14 +223,17 @@ function DesktopApp() {
     });
   }, []);
 
-  // Favorites bar is always-on (constant top inset); tab strip adds to the inset on desktop.
-  // The redirect-blocked bar, when shown, adds its height so it sits in the visible chrome
-  // strip (content insets below it).
-  useContentInset(
-    tabs.activeId,
-    !getIsMobile(),
-    (blockedRedirect ? REDIRECT_BAR_H : 0) + (find.open ? FIND_BAR_H : 0),
-  );
+  // Report measured chrome inset to Rust so the content webview sits below it.
+  // The find bar is the only dynamic chrome element — it appears/disappears after
+  // mount, so useChromeHeights (one-shot) can't measure it. Add FIND_BAR_H when open.
+  const contentTop = chrome.topInset + (find.open ? FIND_BAR_H : 0);
+  useContentInset(tabs.activeId, contentTop);
+
+  // Sync the content-top CSS variable so fixed-position chrome surfaces (sidebar, scrim)
+  // track the dynamic inset without a hardcoded pixel constant.
+  useEffect(() => {
+    document.documentElement.style.setProperty('--aegis-content-top', `${contentTop}px`);
+  }, [contentTop]);
 
   // Derived, never hand-maintained: any registered full-window surface means a full
   // overlay is up. New overlays self-register (see useChromeSurface) — there is no
@@ -309,6 +320,31 @@ function DesktopApp() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [tabs.create]);
+
+  // Ctrl+Shift+S — toggle split view. If not in split, split the active tab with
+  // the next tab in the list. If already in split, exit split.
+  // Collision check: Ctrl+Shift+N is handled above; Ctrl+Shift+Tab/T are Windows-only
+  // and use key === 'Tab'/'t'. 's' is not handled by any other effect.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.ctrlKey || e.altKey || e.metaKey || !e.shiftKey) return;
+      if (e.key.toLowerCase() === 's') {
+        e.preventDefault();
+        if (split.layout) {
+          void split.exitSplit();
+        } else {
+          const ids = tabsRef.current.map((t) => t.id);
+          const i = ids.indexOf(activeIdRef.current);
+          if (ids.length >= 2) {
+            const nextIdx = (i + 1) % ids.length;
+            void split.enterSplit([activeIdRef.current, ids[nextIdx]]);
+          }
+        }
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [split.layout, split.enterSplit, split.exitSplit]);
 
   // Ctrl+1-9 when the chrome/address bar is focused (and as the Win/macOS path,
   // where content-webview digit keys aren't captured by a menu accelerator).
@@ -444,12 +480,11 @@ function DesktopApp() {
     };
   }, [tabs.activeId]);
 
-  // A scripted cross-origin top-frame redirect was cancelled by the native guard; surface a
-  // notification bar (RedirectBar) whose "Open anyway" reuses tabs.create. Only for the active
-  // tab; switching tabs clears any stale bar.
+  // A scripted cross-origin top-frame redirect was cancelled by the native guard;
+  // automatically open the destination in a new background tab. The grace period
+  // suppresses spurious bg tabs from old-page timer redirects during chrome-initiated
+  // navigations.
   useEffect(() => {
-    setBlockedRedirect(null);
-    dismissedRedirectsRef.current = new Set();
     return aegis.redirect.onBlocked((r) => {
       if (r.viewId !== tabs.activeId) return;
       const pending = pendingChromeNavRef.current;
@@ -459,11 +494,7 @@ function DesktopApp() {
         if (fresh && fromOldPage) return;
         if (!fresh) pendingChromeNavRef.current = null;
       }
-      // Stay quiet about a destination the user already dismissed — the page keeps re-firing the
-      // same blocked redirect (timer + the bar's own resize), so re-showing it makes the bar
-      // impossible to close. A different destination still surfaces a fresh bar.
-      if (dismissedRedirectsRef.current.has(r.to)) return;
-      setBlockedRedirect(r);
+      void tabs.create(r.to, true);
     });
   }, [tabs.activeId]);
 
@@ -515,96 +546,82 @@ function DesktopApp() {
     toast.info('Cleared Aegis history and remembered permissions for this site.');
   };
 
-  const commandActions: CommandAction[] = [
-    {
-      id: 'new-tab',
-      title: 'New tab',
-      subtitle: 'Open a blank tab',
-      group: 'Tabs',
-      keywords: 'tabs',
-      run: () => void tabs.create(),
+  // Split-view resize handles: compute pixel rects from the fractional layout
+  // and expose drag handlers that convert pixel deltas into fractional IPC calls.
+  const splitPaneRects = useMemo<PaneRect[]>(() => {
+    if (!split.layout) return [];
+    // Content area starts below the chrome and fills the remaining width.
+    // Use measured chrome heights (from useChromeHeights) instead of constants.
+    const contentArea = {
+      x: 0,
+      y: chrome.topInset,
+      width: window.innerWidth || 1200,
+      height: Math.max(1, (window.innerHeight || 800) - chrome.topInset),
+    };
+    return computeSplitLayout(split.layout, contentArea).panes;
+  }, [split.layout, chrome.topInset]);
+
+  const splitHandles = useMemo(() => {
+    if (!split.layout) return [];
+    const contentArea = {
+      x: 0,
+      y: chrome.topInset,
+      width: window.innerWidth || 1200,
+      height: Math.max(1, (window.innerHeight || 800) - chrome.topInset),
+    };
+    return computeSplitLayout(split.layout, contentArea).handles;
+  }, [split.layout, chrome.topInset]);
+
+  const handleSplitDrag = useCallback(
+    (
+      handleOrientation: 'vertical' | 'horizontal',
+      leftPaneId: number,
+      rightPaneId: number,
+      delta: number,
+    ) => {
+      if (!split.layout) return;
+      const contentSize = handleOrientation === 'vertical' ? window.innerWidth : window.innerHeight;
+      const leftPane = split.layout.panes.find((p) => p.tabId === leftPaneId);
+      const rightPane = split.layout.panes.find((p) => p.tabId === rightPaneId);
+      if (!leftPane || !rightPane) return;
+
+      const fractionDelta = delta / contentSize;
+      const clamped = clampResizeDelta(
+        fractionDelta,
+        handleOrientation,
+        splitPaneRects,
+        leftPaneId,
+        rightPaneId,
+        contentSize,
+      );
+      if (clamped === 0) return;
+
+      const newLeftWidth =
+        handleOrientation === 'vertical'
+          ? Math.max(0.05, Math.min(0.95, leftPane.width + clamped))
+          : leftPane.width;
+      const newRightWidth =
+        handleOrientation === 'vertical'
+          ? Math.max(0.05, Math.min(0.95, rightPane.width - clamped))
+          : rightPane.width;
+      const newLeftHeight =
+        handleOrientation === 'horizontal'
+          ? Math.max(0.05, Math.min(1.0, leftPane.height + clamped))
+          : leftPane.height;
+      const newRightHeight =
+        handleOrientation === 'horizontal'
+          ? Math.max(0.05, Math.min(1.0, rightPane.height - clamped))
+          : rightPane.height;
+
+      void split.resizePane(leftPaneId, newLeftWidth, newLeftHeight);
+      void split.resizePane(rightPaneId, newRightWidth, newRightHeight);
     },
-    {
-      id: 'new-private-tab',
-      title: 'New private tab',
-      subtitle: 'Browse without saving history',
-      group: 'Tabs',
-      keywords: 'incognito privacy',
-      run: () => void tabs.create(undefined, false, true),
-    },
-    {
-      id: 'downloads',
-      title: 'Open downloads',
-      subtitle: `${downloads.downloads.length} recent downloads`,
-      group: 'Browser',
-      keywords: 'files',
-      run: () => setDownloadsOpen(true),
-    },
-    {
-      id: 'history',
-      title: 'Open history',
-      subtitle: 'Show visited pages',
-      group: 'Browser',
-      keywords: 'sidebar',
-      run: () => {
-        setSidebarInitialTab('history');
-        setSidebarOpen(true);
-      },
-    },
-    {
-      id: 'saved',
-      title: 'Open saved pages',
-      subtitle: 'Bookmarks and reading list',
-      group: 'Browser',
-      keywords: 'bookmarks sidebar',
-      run: () => {
-        setSidebarInitialTab('saved');
-        setSidebarOpen(true);
-      },
-    },
-    {
-      id: 'settings-privacy',
-      title: 'Privacy settings',
-      subtitle: 'Security, permissions, and fingerprint protection',
-      group: 'Settings',
-      keywords: 'settings security permissions',
-      run: () => openSettings('security'),
-    },
-    {
-      id: 'settings-proxy',
-      title: 'Proxy settings',
-      subtitle: proxy.state.active ? 'Proxy is active' : 'Proxy is off',
-      group: 'Settings',
-      keywords: 'network vpn',
-      run: () => openSettings('proxy'),
-    },
-    {
-      id: 'settings-data',
-      title: 'Import or export data',
-      subtitle: 'Backups and local data controls',
-      group: 'Settings',
-      keywords: 'backup restore',
-      run: () => openSettings('data'),
-    },
-    {
-      id: 'update-lists',
-      title: 'Update filter lists',
-      subtitle: 'Refresh ad-block subscriptions',
-      group: 'Blocking',
-      keywords: 'adblock blocking filters',
-      run: () => void subscriptions.updateNow(),
-    },
-    ...tabs.tabs.map((tab) => ({
-      id: `tab-${tab.id}`,
-      title: `Switch to ${tab.title || tab.url || 'New tab'}`,
-      subtitle: tab.private ? 'Private tab' : tab.url,
-      group: 'Open tabs',
-      keywords: 'tab switch',
-      run: () => void tabs.activate(tab.id),
-      secondaryLabel: 'Close',
-      secondaryRun: () => void tabs.close(tab.id),
-    })),
-  ];
+    [split.layout, split.resizePane, splitPaneRects],
+  );
+
+  const handleSplitDragEnd = useCallback(() => {
+    // No-op for now; layout is already applied via resizePane calls.
+  }, []);
 
   // Fullscreen render: ALL hooks above must run on every render (rule of hooks).
   // In fullscreen the chrome is shrunk to a top-right corner by main; render only
@@ -624,20 +641,30 @@ function DesktopApp() {
   }
 
   return (
-    <div className={`app${activeProtection.privateMode ? ' app--private' : ''}`}>
+    <div ref={appRef} className={`app${activeProtection.privateMode ? ' app--private' : ''}`}>
       <SkipLink targetId={CONTENT_ANCHOR_ID} />
-      {!getIsMobile() && (
-        <TabStrip
-          tabs={tabs.tabs}
-          activeId={tabs.activeId}
-          onActivate={(id) => void tabs.activate(id)}
-          onClose={(id) => void tabs.close(id)}
-          onCreate={() => void tabs.create()}
-          onCreatePrivate={() => void tabs.create(undefined, false, true)}
-          onReorder={(ids) => void tabs.reorder(ids)}
-          onSetPinned={(id, pinned) => void tabs.setPinned(id, pinned)}
-        />
-      )}
+      <WorkspaceSwitcher
+        workspaces={workspaces.workspaces}
+        activeWorkspaceId={workspaces.activeWorkspaceId}
+        onSwitch={(id) => void workspaces.switch(id)}
+        onCreate={(name, color) => void workspaces.create(name, color)}
+        onRename={(id, name) => void workspaces.rename(id, name)}
+        onSetColor={(id, color) => void workspaces.setColor(id, color)}
+        onRemove={(id) => void workspaces.remove(id)}
+        onReorder={(ids) => void workspaces.reorder(ids)}
+      />
+      <TabStrip
+        tabs={tabs.tabs}
+        activeId={tabs.activeId}
+        onActivate={(id) => void tabs.activate(id)}
+        onClose={(id) => void tabs.close(id)}
+        onCreate={() => void tabs.create()}
+        onCreatePrivate={() => void tabs.create(undefined, false, true)}
+        onReorder={(ids) => void tabs.reorder(ids)}
+        onSetPinned={(id, pinned) => void tabs.setPinned(id, pinned)}
+        splitLayout={split.layout}
+        onEnterSplit={(ids) => void split.enterSplit(ids)}
+      />
       <Toolbar
         state={nav.state}
         navigate={navigateFromChrome}
@@ -707,6 +734,11 @@ function DesktopApp() {
             onOpenChange={setZoomOpen}
           />
         }
+        splitIndicator={
+          split.layout ? (
+            <SplitIndicator layout={split.layout} onExit={() => void split.exitSplit()} />
+          ) : undefined
+        }
         fullscreen={
           <button
             type="button"
@@ -736,20 +768,6 @@ function DesktopApp() {
         onOpenFavorite={(url) => navigateFromChrome(url)}
         onOpenManager={() => setManagerOpen(true)}
       />
-      {blockedRedirect && (
-        <RedirectBar
-          redirect={blockedRedirect}
-          onOpenAnyway={() => {
-            dismissedRedirectsRef.current.add(blockedRedirect.to);
-            void tabs.create(blockedRedirect.to, false);
-            setBlockedRedirect(null);
-          }}
-          onDismiss={() => {
-            dismissedRedirectsRef.current.add(blockedRedirect.to);
-            setBlockedRedirect(null);
-          }}
-        />
-      )}
       {find.open && (
         <FindBar
           state={find.state}
@@ -847,16 +865,14 @@ function DesktopApp() {
           search={<SearchTab settings={settings.settings} update={settings.update} />}
           home={<HomeTab settings={settings.settings} update={settings.update} />}
           tabs={<TabsTab settings={settings.settings} update={settings.update} />}
-          filterLists={
-            <FilterListsTab
-              subs={subscriptions.subs}
-              setEnabled={subscriptions.setEnabled}
-              add={subscriptions.add}
-              remove={subscriptions.remove}
-              updateNow={subscriptions.updateNow}
-            />
-          }
-          myFilters={<MyFiltersTab text={customFilters.text} save={customFilters.save} />}
+          filterLists={{
+            subs: subscriptions.subs,
+            setEnabled: subscriptions.setEnabled,
+            add: subscriptions.add,
+            remove: subscriptions.remove,
+            updateNow: subscriptions.updateNow,
+          }}
+          myFilters={{ text: customFilters.text, save: customFilters.save }}
           allowlist={
             <AllowlistTab
               hosts={adblock.state.allowlistedHosts}
@@ -872,47 +888,36 @@ function DesktopApp() {
               clear={permissions.clear}
             />
           }
-          security={
-            <>
-              <PrivacyDashboard
-                protection={activeProtection}
-                adblock={adblock.state}
-                blockedHere={adblock.page}
-                onHarden={() =>
-                  void settings.update({
-                    httpsOnly: true,
-                    webrtcPolicy: 'disable',
-                    antiFingerprint: 'strict',
-                  })
-                }
-                onOpenProxy={() => openSettings('proxy')}
-              />
-              <SecurityTab
-                settings={settings.settings}
-                update={settings.update}
-                listExceptions={aegis.safety.listExceptions}
-                removeException={(h) => void aegis.safety.removeException(h)}
-                fingerprintState={fingerprint.state}
-                toggleFingerprintAllowlist={fingerprint.toggleAllowlist}
-                removeFingerprintAllowlist={fingerprint.removeAllowlist}
-              />
-            </>
-          }
-          proxy={
-            <ProxySettingsTab
-              state={proxy.state}
-              setConfig={proxy.setConfig}
-              test={proxy.test}
-              onReloadActiveTab={nav.reloadOrStop}
-            />
-          }
-          vault={<VaultSettingsTab vault={vault} />}
-          sync={
-            <SyncSettingsTab
-              sync={sync}
-              onSetServerUrl={(url) => settings.update({ syncServerUrl: url })}
-            />
-          }
+          security={{
+            protection: activeProtection,
+            adblockState: adblock.state,
+            blockedHere: adblock.page,
+            onHarden: () =>
+              void settings.update({
+                httpsOnly: true,
+                webrtcPolicy: 'disable',
+                antiFingerprint: 'strict',
+              }),
+            onOpenProxy: () => openSettings('proxy'),
+            settings: settings.settings,
+            update: settings.update,
+            listExceptions: aegis.safety.listExceptions,
+            removeException: (h: string) => void aegis.safety.removeException(h),
+            fingerprintState: fingerprint.state,
+            toggleFingerprintAllowlist: fingerprint.toggleAllowlist,
+            removeFingerprintAllowlist: fingerprint.removeAllowlist,
+          }}
+          proxy={{
+            state: proxy.state,
+            setConfig: proxy.setConfig,
+            test: proxy.test,
+            onReloadActiveTab: nav.reloadOrStop,
+          }}
+          vault={vault}
+          sync={{
+            sync,
+            onSetServerUrl: (url: string) => settings.update({ syncServerUrl: url }),
+          }}
           data={
             <DataTab
               onExport={() => aegis.data.export()}
@@ -943,13 +948,25 @@ function DesktopApp() {
         onOpenSettings={() => openSettings()}
         onImportData={() => openSettings('data')}
       />
-      <CommandPalette
-        open={commandOpen}
-        actions={commandActions}
-        onClose={() => setCommandOpen(false)}
-      />
+      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} />
       <Toaster />
       <ConfirmDialog />
+      {splitHandles.length > 0 && (
+        <div className="split-handles-overlay">
+          {splitHandles.map((h) => (
+            <SplitResizeHandle
+              key={`${h.leftPaneId}-${h.rightPaneId}`}
+              orientation={h.orientation}
+              x={h.x}
+              y={h.y}
+              width={h.width}
+              height={h.height}
+              onDrag={(delta) => handleSplitDrag(h.orientation, h.leftPaneId, h.rightPaneId, delta)}
+              onDragEnd={handleSplitDragEnd}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

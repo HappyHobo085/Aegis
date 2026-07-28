@@ -63,3 +63,5 @@ export function MyFiltersTab({ text, save }: MyFiltersTabProps) {
     </form>
   );
 }
+
+export default MyFiltersTab;

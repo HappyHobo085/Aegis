@@ -64,12 +64,12 @@ function FavoriteRow({
           if (error) setError(null);
         }}
       />
-      <button type="button" aria-label={`Save favorite ${favorite.name}`} onClick={handleSave}>
+      <button type="button" aria-label={`Save bookmark ${favorite.name}`} onClick={handleSave}>
         Save
       </button>
       <button
         type="button"
-        aria-label={`Remove favorite ${favorite.name}`}
+        aria-label={`Remove bookmark ${favorite.name}`}
         onClick={() => void remove(favorite.id)}
       >
         <Trash2 size={14} aria-hidden="true" />
@@ -125,7 +125,7 @@ export function FavoritesManager({
       >
         <div className="favorites-manager__header">
           <h2 id={titleId} className="favorites-manager__title">
-            Manage favorites
+            Manage bookmarks
           </h2>
           <button type="button" aria-label="Close" onClick={onClose}>
             <X size={18} aria-hidden="true" />
@@ -138,10 +138,10 @@ export function FavoritesManager({
           ))}
         </ul>
 
-        <div className="favorites-manager__add" role="group" aria-label="Add favorite">
+        <div className="favorites-manager__add" role="group" aria-label="Add bookmark">
           <input
             type="text"
-            aria-label="New favorite name"
+            aria-label="New bookmark name"
             placeholder="Hacker News"
             value={newName}
             onChange={(e) => {
@@ -151,7 +151,7 @@ export function FavoritesManager({
           />
           <input
             type="text"
-            aria-label="New favorite URL"
+            aria-label="New bookmark URL"
             placeholder="https://news.ycombinator.com"
             value={newUrl}
             onChange={(e) => {
@@ -160,7 +160,7 @@ export function FavoritesManager({
             }}
           />
           <button type="button" onClick={handleAdd}>
-            Add favorite
+            Add bookmark
           </button>
           {addError && (
             <div className="favorites-manager__add-error" role="alert">

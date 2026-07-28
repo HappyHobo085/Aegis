@@ -76,8 +76,7 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'safety.back',
   'permission.allow',
   'permission.deny',
-  'redirectBar.openAnyway',
-  'redirectBar.dismiss',
+  'redirect.autoOpenBgTab',
   // Task 9: edge/error inputs + state combinations
   'edge.addressBar.empty',
   'edge.addressBar.malformed',
@@ -131,6 +130,9 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'vault.row.copyPassword',
   'vault.row.delete',
   'vault.lock',
+  // Task 7 (vault autofill): Phase B autofill controls
+  'vault.autofill.badge',
+  'vault.autofill.savePrompt',
   // Task 9 (farbling): SecurityTab anti-fingerprint controls
   'settings.security.farbleLevel',
   'settings.security.fpAllowlistAdd',
@@ -142,4 +144,17 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'settings.proxy.apply',
   'settings.proxy.turnOff',
   'settings.proxy.testConnection',
+  // Task 4 (command palette): global Ctrl+K command palette
+  'toolbar.commandPalette',
+  // Phase 3 (workspace switcher)
+  'workspace.switcher.switch',
+  'workspace.switcher.create',
+  'workspace.switcher.rename',
+  'workspace.switcher.setColor',
+  'workspace.switcher.delete',
+  // Phase 6 (split view)
+  'split.enter',
+  'split.exit',
+  'split.resize',
+  'split.focus',
 ]);

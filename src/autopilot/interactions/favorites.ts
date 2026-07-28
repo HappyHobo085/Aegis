@@ -5,7 +5,7 @@ import { nudgeSync, waitFor, fixtureUrl, activeViewId } from './helpers';
 import { AdaptiveTimeout } from '../timeout';
 
 export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
-  // ─── Task 5: favorites bar/manager + sidebar history ────────────────────
+  // ─── Task 5: bookmarks bar/manager + sidebar history ─────────────────
 
   (() => {
     // Vitest seeding: open the manager, mock favorites.add to return a seeded list,
@@ -19,27 +19,27 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'favbar.openFavorite',
       domain: 'favbar',
-      description: 'Click a favorite chip in the favorites bar → nav.navigate called with its url',
+      description: 'Click a bookmark chip in the bookmarks bar → nav.navigate called with its url',
       screen: 'home',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
           // 1. Configure add to return the seeded list so useFavorites sets state.
           (ctx.aegis.favorites.add as unknown as MockFn).mockResolvedValue([SEED]);
-          // 2. Open the FavoritesManager via the "Manage favorites" button in the FavBar.
-          const manageBtn = ctx.byLabel(/^Manage favorites$/);
-          if (!manageBtn) throw new Error('Manage favorites button not found in FavBar');
+          // 2. Open the FavoritesManager via the "New bookmark" button in the FavBar.
+          const manageBtn = ctx.byLabel(/^New bookmark$/);
+          if (!manageBtn) throw new Error('New bookmark button not found in FavBar');
           await ctx.click(manageBtn);
           // 3. Fill in the Add form and click Add — this triggers the hook's add(),
           //    which calls setFavorites([SEED]) so the FavBar re-renders.
-          const nameInput = ctx.byLabel(/^New favorite name$/i);
-          if (!nameInput) throw new Error('New favorite name input not found during favbar seed');
+          const nameInput = ctx.byLabel(/^New bookmark name$/i);
+          if (!nameInput) throw new Error('New bookmark name input not found during favbar seed');
           await ctx.type(nameInput, SEED.name);
-          const urlInput = ctx.byLabel(/^New favorite URL$/i);
-          if (!urlInput) throw new Error('New favorite URL input not found during favbar seed');
+          const urlInput = ctx.byLabel(/^New bookmark URL$/i);
+          if (!urlInput) throw new Error('New bookmark URL input not found during favbar seed');
           await ctx.type(urlInput, SEED.url);
-          const addBtn = ctx.byRole('button', /^Add favorite$/);
-          if (!addBtn) throw new Error('Add favorite button not found during favbar seed');
+          const addBtn = ctx.byRole('button', /^Add bookmark$/);
+          if (!addBtn) throw new Error('Add bookmark button not found during favbar seed');
           await ctx.click(addBtn);
           // 4. Close the manager so the FavBar is visible again.
           const closeBtn = ctx.byRole('button', /^Close$/);
@@ -51,18 +51,18 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           await nudgeSync('favorites');
           await waitFor(
             () => ctx.byLabel(/^Open Autopilot Test$/),
-            'favorite chip "Autopilot Test"',
+            'bookmark chip "Autopilot Test"',
           );
         }
         const chip = ctx.byLabel(/^Open Autopilot Test$/);
-        if (!chip) throw new Error('Favorite chip "Autopilot Test" not found in favorites bar');
+        if (!chip) throw new Error('Bookmark chip "Autopilot Test" not found in bookmarks bar');
         await ctx.click(chip);
       },
       assert: async (ctx: InteractionCtx) => {
         if (ctx.layer === 'vitest') {
           if (!ctx.calls.called('nav.navigate', (a) => String(a[1]).includes('ap=favopen')))
-            throw new Error('nav.navigate not called with the favorite url');
-          return 'favbar chip → nav.navigate(favorite url)';
+            throw new Error('nav.navigate not called with the bookmark url');
+          return 'favbar chip → nav.navigate(bookmark url)';
         }
         // Live: poll the ACTIVE view (the one the chip's nav.navigate targets) until its url
         // carries the favorite's ?ap=favopen marker; then clean up.
@@ -82,7 +82,7 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
         }
         const now = (await ctx.aegis.nav.getState(vid)).url;
         throw new Error(
-          `live: url never carried ?ap=favopen after clicking favorite chip (now ${now})`,
+          `live: url never carried ?ap=favopen after clicking bookmark chip (now ${now})`,
         );
       },
     } satisfies InteractionSpec;
@@ -94,7 +94,7 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'favManager.add',
       domain: 'favManager',
-      description: 'Open favorites manager → fill name + URL → click Add → favorites.add called',
+      description: 'Open bookmarks manager → fill name + URL → click Add → favorites.add called',
       screen: 'favoritesManager',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -102,14 +102,14 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           const list = await ctx.aegis.favorites.list();
           _baseLength = list.length;
         }
-        const nameInput = ctx.byLabel(/^New favorite name$/i);
-        if (!nameInput) throw new Error('New favorite name input not found');
-        const urlInput = ctx.byLabel(/^New favorite URL$/i);
-        if (!urlInput) throw new Error('New favorite URL input not found');
+        const nameInput = ctx.byLabel(/^New bookmark name$/i);
+        if (!nameInput) throw new Error('New bookmark name input not found');
+        const urlInput = ctx.byLabel(/^New bookmark URL$/i);
+        if (!urlInput) throw new Error('New bookmark URL input not found');
         await ctx.type(nameInput, 'Test Site');
         await ctx.type(urlInput, 'https://testsite.test/');
-        const addBtn = ctx.byRole('button', /^Add favorite$/);
-        if (!addBtn) throw new Error('Add favorite button not found');
+        const addBtn = ctx.byRole('button', /^Add bookmark$/);
+        if (!addBtn) throw new Error('Add bookmark button not found');
         await ctx.click(addBtn);
       },
       assert: async (ctx: InteractionCtx) => {
@@ -147,7 +147,7 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'favManager.rename',
       domain: 'favManager',
-      description: 'Edit a favorite name in the manager → click Save → favorites.update called',
+      description: 'Edit a bookmark name in the manager → click Save → favorites.update called',
       screen: 'favoritesManager',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -156,14 +156,14 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           // 1. Mock favorites.add to return the seeded item so the hook updates state.
           (ctx.aegis.favorites.add as unknown as MockFn).mockResolvedValue([SEED]);
           // 2. Fill in the Add form and submit → useFavorites.add → setFavorites([SEED]).
-          const newNameInput = ctx.byLabel(/^New favorite name$/i);
-          if (!newNameInput) throw new Error('New favorite name input not found during seed');
+          const newNameInput = ctx.byLabel(/^New bookmark name$/i);
+          if (!newNameInput) throw new Error('New bookmark name input not found during seed');
           await ctx.type(newNameInput, SEED.name);
-          const newUrlInput = ctx.byLabel(/^New favorite URL$/i);
-          if (!newUrlInput) throw new Error('New favorite URL input not found during seed');
+          const newUrlInput = ctx.byLabel(/^New bookmark URL$/i);
+          if (!newUrlInput) throw new Error('New bookmark URL input not found during seed');
           await ctx.type(newUrlInput, SEED.url);
-          const addBtn = ctx.byRole('button', /^Add favorite$/);
-          if (!addBtn) throw new Error('Add favorite button not found during seed');
+          const addBtn = ctx.byRole('button', /^Add bookmark$/);
+          if (!addBtn) throw new Error('Add bookmark button not found during seed');
           await ctx.click(addBtn);
           _originalName = SEED.name;
           _favoriteId = SEED.id;
@@ -185,7 +185,7 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
         const nameInput = ctx.byLabel(new RegExp(`^Name for ${_originalName}$`));
         if (!nameInput) throw new Error(`Name input for "${_originalName}" not found in manager`);
         await ctx.type(nameInput, 'Renamed Favorite');
-        const saveBtn = ctx.byRole('button', new RegExp(`^Save favorite ${_originalName}$`));
+        const saveBtn = ctx.byRole('button', new RegExp(`^Save bookmark ${_originalName}$`));
         if (!saveBtn) throw new Error(`Save button for "${_originalName}" not found`);
         await ctx.click(saveBtn);
       },
@@ -225,7 +225,7 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
     return {
       id: 'favManager.delete',
       domain: 'favManager',
-      description: 'Click delete on a favorite row in the manager → favorites.remove called',
+      description: 'Click delete on a bookmark row in the manager → favorites.remove called',
       screen: 'favoritesManager',
       layers: ['vitest', 'live'] as InteractionLayer[],
       run: async (ctx: InteractionCtx) => {
@@ -233,14 +233,14 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           // Seed the manager with one row via the Add form:
           // Mock favorites.add to return the seeded item so the hook updates state.
           (ctx.aegis.favorites.add as unknown as MockFn).mockResolvedValue([SEED]);
-          const newNameInput = ctx.byLabel(/^New favorite name$/i);
-          if (!newNameInput) throw new Error('New favorite name input not found during seed');
+          const newNameInput = ctx.byLabel(/^New bookmark name$/i);
+          if (!newNameInput) throw new Error('New bookmark name input not found during seed');
           await ctx.type(newNameInput, SEED.name);
-          const newUrlInput = ctx.byLabel(/^New favorite URL$/i);
-          if (!newUrlInput) throw new Error('New favorite URL input not found during seed');
+          const newUrlInput = ctx.byLabel(/^New bookmark URL$/i);
+          if (!newUrlInput) throw new Error('New bookmark URL input not found during seed');
           await ctx.type(newUrlInput, SEED.url);
-          const addBtn = ctx.byRole('button', /^Add favorite$/);
-          if (!addBtn) throw new Error('Add favorite button not found during seed');
+          const addBtn = ctx.byRole('button', /^Add bookmark$/);
+          if (!addBtn) throw new Error('Add bookmark button not found during seed');
           await ctx.click(addBtn);
         } else {
           // Live: add a dedicated favorite to delete, nudge the manager to render it,
@@ -248,13 +248,13 @@ export const FAVORITES_INTERACTIONS: InteractionSpec[] = [
           await ctx.aegis.favorites.add({ name: SEED.name, url: SEED.url });
           await nudgeSync('favorites');
           await waitFor(
-            () => ctx.byRole('button', /^Remove favorite To Delete$/),
-            'manager "Remove favorite To Delete" button',
+            () => ctx.byRole('button', /^Remove bookmark To Delete$/),
+            'manager "Remove bookmark To Delete" button',
           );
           _baseLength = (await ctx.aegis.favorites.list()).length;
         }
-        const removeBtn = ctx.byRole('button', /^Remove favorite To Delete$/);
-        if (!removeBtn) throw new Error('Remove favorite "To Delete" button not found');
+        const removeBtn = ctx.byRole('button', /^Remove bookmark To Delete$/);
+        if (!removeBtn) throw new Error('Remove bookmark "To Delete" button not found');
         await ctx.click(removeBtn);
       },
       assert: async (ctx: InteractionCtx) => {

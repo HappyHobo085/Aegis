@@ -18,6 +18,7 @@ const t = (id: number, over: Partial<TabMeta> = {}): TabMeta => ({
   title: '',
   url: `https://t${id}.test/`,
   private: false,
+  workspaceId: '',
   ...over,
 });
 

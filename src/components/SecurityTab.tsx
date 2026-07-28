@@ -169,3 +169,5 @@ export function SecurityTab({
     </div>
   );
 }
+
+export default SecurityTab;

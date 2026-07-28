@@ -8,21 +8,16 @@
  *   SIDEBAR_W  — the inset sidebar width when open.
  */
 export const TOOLBAR_H = 56;
-export const FAVBAR_H = 40;
+export const FAVBAR_H = 36;
 /** TABSTRIP_H — the top tab strip height (desktop only). */
-export const TABSTRIP_H = 36;
-export const SIDEBAR_W = 280;
-/**
- * REDIRECT_BAR_H — the redirect-blocked notification bar height. When a scripted
- * cross-origin top-frame redirect is cancelled, this bar shows below the favbar and is
- * ADDED to the content inset so it sits in the chrome's always-visible strip (a floating
- * toast can't paint over the opaque content webview). Desktop for now.
- */
-export const REDIRECT_BAR_H = 40;
+export const TABSTRIP_H = 40;
+/** WORKSPACE_BAR_H — the workspace switcher bar height (desktop only, above tab strip). */
+export const WORKSPACE_BAR_H = 32;
+export const SIDEBAR_W = 320;
 /**
  * FIND_BAR_H — the find-in-page infobar height. While a find session is active this bar
- * shows below the favbar (or redirect bar) and is ADDED to the content inset so it sits
- * in the chrome's always-visible strip. Desktop only; same stripe as REDIRECT_BAR_H.
+ * shows below the favbar and is ADDED to the content inset so it sits
+ * in the chrome's always-visible strip. Desktop only.
  */
 export const FIND_BAR_H = 40;
 

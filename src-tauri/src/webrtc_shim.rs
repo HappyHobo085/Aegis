@@ -37,6 +37,8 @@
 //! non-standard engine ever expose it in a worker; macOS and Android are shim-only (so they'd
 //! rely solely on the Window-only exposure holding). See the matrix in src-tauri/CLAUDE.md.
 
+use std::sync::OnceLock;
+
 /// True if `addr` is a local/private/loopback/link-local/mDNS address that must be
 /// dropped so it can't leak. FAIL-OPEN: anything we can't classify (unexpected form,
 /// non-dotted-quad, unknown IPv6) returns false → the candidate is kept. Mirrors the JS
@@ -170,17 +172,52 @@ fn rewrite_connection_address(line: &str) -> String {
     line.to_string()
 }
 
+// Pre-computed shim variants: built once at boot, served as `&'static str` on every
+// tab spawn. Avoids cloning the JS string on the hot path.
+static SHIM_DEFAULT: OnceLock<String> = OnceLock::new();
+static SHIM_PUBLIC_ONLY: OnceLock<String> = OnceLock::new();
+static SHIM_DISABLE: OnceLock<String> = OnceLock::new();
+
+/// Pre-warm all three policy variants at boot (cheap — three string builds). Must be
+/// called before the first tab spawns so the hot path can use `get_precomputed`.
+pub fn prewarm() {
+    let _ = SHIM_DEFAULT.set(shim_for_inner("default"));
+    let _ = SHIM_PUBLIC_ONLY.set(shim_for_inner("public-only"));
+    let _ = SHIM_DISABLE.set(shim_for_inner("disable"));
+}
+
+/// Return a pre-computed shim `&'static str` for `policy`, or `None` if `prewarm()`
+/// hasn't been called yet (or the policy is unknown). Caller falls back to `shim_for`.
+pub fn get_precomputed(policy: &str) -> Option<&'static str> {
+    match policy {
+        "default" => SHIM_DEFAULT.get().map(|s| s.as_str()),
+        "public-only" => SHIM_PUBLIC_ONLY.get().map(|s| s.as_str()),
+        "disable" => SHIM_DISABLE.get().map(|s| s.as_str()),
+        _ => None,
+    }
+}
+
+/// Inner shim builder (the actual string construction). Separated from the public
+/// `shim_for` so `prewarm` can call it without the host-allowlist check.
+fn shim_for_inner(policy: &str) -> String {
+    match policy {
+        "disable" => DISABLE_JS.to_string(),
+        "public-only" => PUBLIC_ONLY_JS.to_string(),
+        _ => String::new(),
+    }
+}
+
 /// The document-start JS shim for `policy`. Returns `""` (no interference) for
 /// `"default"`, an allowlisted host, or any unrecognized policy.
 pub fn shim_for(policy: &str, host_allowlisted: bool) -> String {
     if host_allowlisted {
         return String::new();
     }
-    match policy {
-        "disable" => DISABLE_JS.to_string(),
-        "public-only" => PUBLIC_ONLY_JS.to_string(),
-        _ => String::new(),
+    // Fast path: use pre-computed variant when available.
+    if let Some(precomputed) = get_precomputed(policy) {
+        return precomputed.to_string();
     }
+    shim_for_inner(policy)
 }
 
 // The shipped shim JS, single-sourced from sibling .js files so the vitest runtime test

@@ -8,9 +8,10 @@ package com.aegis.browser
  * `WebViewCompat.addDocumentStartJavaScript` — read fresh per tab so a level change applies
  * to new tabs. Native symbol lives in libapp_lib.so (see [NativeAdblock]).
  *
- * Per-site allowlist note: the fp-allowlist is desktop-only in v1. `farbleScript()` always
- * passes `host_allowlisted = false` on Android, so farbling applies to all hosts regardless
- * of the fp-allowlist. Parity gap documented in farble.rs.
+ * Per-site fp-allowlist: the caller passes the tab's content host; the Rust JNI getter checks
+ * the `ANDROID_FP_ALLOWLIST` global (mirrored from `FarbleState` via `note_fp_allowlist`) for
+ * an exact or subdomain match. Allowlisted hosts receive no farble shim, matching desktop
+ * behavior. See farble.rs for the implementation.
  */
 object NativeFarble {
   init {
@@ -21,6 +22,10 @@ object NativeFarble {
     }
   }
 
-  /** The farble shim JS for the current level ("" if no farbling applies). */
-  external fun farbleScript(): String
+  /**
+   * The farble shim JS for the current level ("" if no farbling applies).
+   * @param host the content host for the tab being created — checked against the per-site
+   *   fp-allowlist so allowlisted hosts receive no shim.
+   */
+  external fun farbleScript(host: String): String
 }

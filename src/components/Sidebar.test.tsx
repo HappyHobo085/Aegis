@@ -68,16 +68,16 @@ describe('Sidebar', () => {
     expect(screen.queryByRole('button', { name: /toggle sidebar/i })).not.toBeInTheDocument();
   });
 
-  it('shows the History tab panel by default when open', () => {
+  it('shows the Saved tab panel by default when open', () => {
     render(<Sidebar {...props()} />);
-    expect(screen.getByTestId('history-slot')).toBeInTheDocument();
-    expect(screen.queryByTestId('saved-slot')).not.toBeInTheDocument();
+    expect(screen.getByTestId('saved-slot')).toBeInTheDocument();
+    expect(screen.queryByTestId('history-slot')).not.toBeInTheDocument();
   });
 
-  it('exposes History/Saved as tabs with correct aria-selected', () => {
+  it('exposes Saved/History as tabs with correct aria-selected', () => {
     render(<Sidebar {...props()} />);
-    expect(screen.getByRole('tab', { name: /history/i })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('tab', { name: /saved/i })).toHaveAttribute('aria-selected', 'false');
+    expect(screen.getByRole('tab', { name: /saved/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: /history/i })).toHaveAttribute('aria-selected', 'false');
   });
 
   it('clicking the Saved tab switches to the saved panel', async () => {
@@ -109,17 +109,17 @@ describe('Sidebar', () => {
     it('renders a vertical resize separator and opens at the default width', () => {
       render(<Sidebar {...props()} />);
       expect(handle()).toHaveAttribute('aria-orientation', 'vertical');
-      expect(panel()).toHaveStyle({ width: '280px' });
-      expect(handle()).toHaveAttribute('aria-valuenow', '280');
+      expect(panel()).toHaveStyle({ width: '320px' });
+      expect(handle()).toHaveAttribute('aria-valuenow', '320');
     });
 
     it('ArrowLeft widens and ArrowRight narrows the sidebar', async () => {
       render(<Sidebar {...props()} />);
       handle().focus();
       await userEvent.keyboard('{ArrowLeft}');
-      expect(panel()).toHaveStyle({ width: '304px' });
+      expect(panel()).toHaveStyle({ width: '344px' });
       await userEvent.keyboard('{ArrowRight}{ArrowRight}');
-      expect(panel()).toHaveStyle({ width: '256px' });
+      expect(panel()).toHaveStyle({ width: '296px' });
     });
 
     it('clamps to the minimum width when narrowed past it', async () => {
@@ -139,7 +139,7 @@ describe('Sidebar', () => {
       render(<Sidebar {...props()} />);
       handle().focus();
       await userEvent.keyboard('{ArrowLeft}');
-      expect(localStorage.getItem('aegis.sidebarWidth')).toBe('304');
+      expect(localStorage.getItem('aegis.sidebarWidth')).toBe('344');
     });
   });
 });

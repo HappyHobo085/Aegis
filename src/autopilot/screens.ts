@@ -15,7 +15,6 @@ export type OverlayScreenId =
   | 'crashOverlay'
   | 'safetyInterstitial'
   | 'permissionPrompt'
-  | 'redirectBar'
   | 'theme:dark'
   | 'theme:light'
   | 'confirmDialog'
@@ -48,7 +47,6 @@ export const SCREENS: ScreenSpec[] = [
   { id: 'crashOverlay', label: 'Crash overlay', via: 'event' },
   { id: 'safetyInterstitial', label: 'Safety interstitial', via: 'event' },
   { id: 'permissionPrompt', label: 'Permission prompt', via: 'event' },
-  { id: 'redirectBar', label: 'Redirect-blocked bar', via: 'event' },
   { id: 'theme:dark', label: 'Theme · Dark palette', via: 'state' },
   { id: 'theme:light', label: 'Theme · Light palette', via: 'state' },
   { id: 'confirmDialog', label: 'Confirm dialog', via: 'overlay' },

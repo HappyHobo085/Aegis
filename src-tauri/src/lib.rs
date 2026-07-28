@@ -78,8 +78,7 @@ mod sync_keystore;
 // The merge seam F2b consumes: SYNCABLE stores + read_all/merge_into (HLC last-writer-wins).
 mod sync_stores;
 // The sync ENGINE (F2b): enable/disable, device pairing, the encrypted pull/merge/push loop.
-#[cfg(debug_assertions)]
-mod autopilot;
+mod split;
 mod sync;
 mod tab_registry;
 mod tabs;
@@ -103,6 +102,11 @@ mod zoom_mac;
 mod zoom_win;
 // Local encrypted-at-rest password vault (Phase A — manage only, NO autofill, NO page bridge).
 mod vault;
+// In-page autofill badge + form detection JS injection (Phase B).
+mod vault_inject;
+// Vault namespace bridge for the sync engine — reads/writes sealed
+// ciphertext records so the sync server never sees plaintext.
+mod sync_vault;
 // Content-webview-scoped proxy: pure parse/validate/URI core (Tasks 1-6).
 mod proxy;
 
@@ -192,6 +196,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         return result;
     }
     if let Some(result) = proxy::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = split::dispatch(&app, &channel, &payload) {
         return result;
     }
     let v = match channel.as_str() {
@@ -470,6 +477,7 @@ pub fn run() {
         .manage(vault::VaultState::default())
         .manage(farble::FarbleState::default())
         .manage(proxy::ProxyState::default())
+        .manage(split::SplitState::default())
         .manage(settings::SettingsCache::default())
         .manage(history::HistoryStore::default())
         .manage(downloads::DownloadsStore::default());
@@ -491,6 +499,9 @@ pub fn run() {
     });
 
     let builder = builder.setup(|app| {
+        #[cfg(debug_assertions)]
+        let t_setup = std::time::Instant::now();
+
         if cfg!(debug_assertions) {
             app.handle().plugin(
                 tauri_plugin_log::Builder::default()
@@ -544,6 +555,8 @@ pub fn run() {
         // Initialize the tab registry: restore from tabs.json if it exists,
         // otherwise start fresh with the configured home page.  Only the active
         // tab gets an eager webview; the rest lazy-spawn on activation.
+        #[cfg(debug_assertions)]
+        let t_session = std::time::Instant::now();
         let home = crate::settings::home_url(app.handle()).to_string();
         let reg = match tabs::load_session(app.handle()) {
             Some(session) => crate::tab_registry::Registry::restore(session, home.clone()),
@@ -563,6 +576,11 @@ pub fn run() {
                 nav::spawn_tab(app.handle(), active, u, false)?;
             }
         }
+        #[cfg(debug_assertions)]
+        log::info!(
+            "[aegis-perf] setup: session restore + first tab took {}ms",
+            t_session.elapsed().as_millis()
+        );
         tabs::start_idle_sweep(app.handle());
         // Coalesce per-navigation history writes into a periodic background flush (the
         // live history lives in an in-memory cache; see history.rs "Write batching").
@@ -649,28 +667,43 @@ pub fn run() {
         // Ad-blocking (Linux/WebKit): install EasyList content filters.
         #[cfg(target_os = "linux")]
         install_adblock(app.handle().clone());
+        // Pre-warm the WebRTC + farble shim variants so the first tab spawn doesn't
+        // pay string-building cost on the UI thread. Cheap (three OnceLock sets).
+        #[cfg(debug_assertions)]
+        let t_prewarm = std::time::Instant::now();
+        webrtc_shim::prewarm();
+        #[cfg(debug_assertions)]
+        log::info!(
+            "[aegis-perf] setup: shim prewarm took {}ms",
+            t_prewarm.elapsed().as_millis()
+        );
         // Warm the pop-under matching engine off-thread so the first window.open
         // check (nav::on_new_window) doesn't pay the EasyList parse on the UI thread.
         // (Android already warms it on the first intercepted request.)
         #[cfg(desktop)]
-        std::thread::spawn(|| {
-            let _ = adblock_engine::should_block(
-                "https://aegis.invalid/",
-                "https://aegis.invalid/",
-                "document",
+        {
+            #[cfg(debug_assertions)]
+            let t_engine = std::time::Instant::now();
+            std::thread::spawn(|| {
+                let _ = adblock_engine::should_block(
+                    "https://aegis.invalid/",
+                    "https://aegis.invalid/",
+                    "document",
+                );
+            });
+            #[cfg(debug_assertions)]
+            log::info!(
+                "[aegis-perf] setup: ad-block engine warm-up dispatched in {}ms",
+                t_engine.elapsed().as_millis()
             );
-        });
+        }
+        #[cfg(debug_assertions)]
+        log::info!(
+            "[aegis-perf] setup: total setup took {}ms",
+            t_setup.elapsed().as_millis()
+        );
         Ok(())
     });
-    #[cfg(debug_assertions)]
-    let builder = builder.invoke_handler(tauri::generate_handler![
-        ipc,
-        autopilot::autopilot_screenshot,
-        autopilot::autopilot_write_report,
-        autopilot::autopilot_done,
-        autopilot::autopilot_emit_event
-    ]);
-    #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![ipc]);
 
     builder

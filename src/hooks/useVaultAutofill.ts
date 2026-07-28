@@ -5,23 +5,17 @@ import { aegis } from '../lib/ipcClient';
 
 export interface UseVaultAutofill {
   autofill: (options: { domain: string; username?: string }) => Promise<VaultRecord[]>;
-  autofillSuggestions: (options: { q: string }) => Promise<VaultRecord[]>;
+  autofillSuggestions: (domain: string) => Promise<VaultRecord[]>;
 }
 
 export function useVaultAutofill(): UseVaultAutofill {
-  const autofill = useCallback(
-    async (options: { domain: string; username?: string }) => {
-      return await aegis.vault.autofill(options);
-    },
-    []
-  );
+  const autofill = useCallback(async (options: { domain: string; username?: string }) => {
+    return await aegis.vault.autofill(options);
+  }, []);
 
-  const autofillSuggestions = useCallback(
-    async (options: { q: string }) => {
-      return await aegis.vault.autofillSuggestions(options);
-    },
-    []
-  );
+  const autofillSuggestions = useCallback(async (domain: string) => {
+    return await aegis.vault.autofillSuggestions(domain);
+  }, []);
 
   return { autofill, autofillSuggestions };
 }

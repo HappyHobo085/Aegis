@@ -128,7 +128,7 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
       : undefined;
 
   // Capture the redirect.onBlocked callback (registered by App's useEffect) so
-  // the redirectBar interaction can render the redirect bar.
+  // interaction specs can emit redirect.blocked events.
   type RedirectBlockedMockFn = { mock?: { calls: ((r: RedirectBlocked) => void)[][] } };
   const redirectBlockedCallback: ((r: RedirectBlocked) => void) | undefined = aegis.redirect
     ? (aegis.redirect.onBlocked as unknown as RedirectBlockedMockFn).mock?.calls?.[0]?.[0]
@@ -296,7 +296,7 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
     },
     emitRedirectBlocked: (r: RedirectBlocked) => {
       // Invoke the onBlocked callback that App's useEffect registered so the
-      // RedirectBar renders synchronously.
+      // redirect auto-opens in a background tab.
       if (redirectBlockedCallback) flushSync(() => redirectBlockedCallback(r));
       return Promise.resolve();
     },

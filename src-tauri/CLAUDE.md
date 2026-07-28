@@ -188,8 +188,9 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     (objc2-web-kit, features `WKFindConfiguration` + `WKFindResult`). **Degraded:**
     `WKFindResult` exposes only `matchFound` (bool) — no match count, no highlight-all,
     no active index. The FindBar shows "1 match" when something is found and "0 matches"
-    otherwise; real count + highlight-all would require a JS-shim tier (recorded
-    follow-up). `next`/`prev` re-issue `findString:` with `backwards` toggled; the last
+    otherwise; real count + highlight-all would require a JS-shim tier (spec at
+    `docs/roadmap/phase-2-parity-gaps-spec.md` Gap 3). `next`/`prev` re-issue `findString:`
+    with `backwards` toggled; the last
     query is stored per tab in `LAST_QUERY` (`OnceLock<Mutex<HashMap<u32, String>>>`).
     macOS objc2 code cannot be compiled from Linux — **CI-only verify** (macos-latest).
   - **Android** — `find` is handled entirely in Kotlin (`MainActivity.kt`). The
@@ -282,7 +283,8 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     allowlist). Managed by `FarbleState` + `host_allowlisted`; dispatched via `fingerprint.*`
     IPC channels (`getState`/`toggleAllowlist`/`removeAllowlist`/`clearAllowlist`);
     `seed_from_disk` pre-warms it at boot. Desktop only in v1 — the Android JNI getter has
-    no `AppHandle`, so `host_allowlisted` is always `false` on Android (parity gap, documented).
+    no `AppHandle`, so `host_allowlisted` is always `false` on Android (parity gap, documented,
+    fix path specified in `docs/roadmap/phase-2-parity-gaps-spec.md` Gap 2 / Task 1).
   - **Per-spawn limitation** — like the WebRTC shim, the farble shim is evaluated once at
     content-webview creation. Toggling level or fp-allowlist applies only to newly
     spawned/reloaded tabs; in-tab SPA navigations to a different host are not re-evaluated.
@@ -398,7 +400,8 @@ undecryptable}` — no credential data (`undecryptable` = on-disk records that f
   - Unit-tested in `proxy::tests`: `from_value` parse/validate, `default_uri` schemes,
     `is_active` guard, `test_connection` socket probe, serde `bypassHosts` round-trip
     (the canonical key lesson — see gotcha 21 below).
-- **Misc** — `picker.rs` (element picker), `update.rs` (tauri-plugin-updater state).
+- **Misc** — `picker.rs` (element picker, Linux-only; cross-platform path specified in
+  `docs/roadmap/phase-2-parity-gaps-spec.md` Gap 4), `update.rs` (tauri-plugin-updater state).
 
 ## Dev-only autopilot commands (`src-tauri/src/autopilot.rs`)
 
@@ -697,15 +700,13 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     (top-frame only, fires once per hop → resolves app-initiated at the hop and stores it for redirect
     hops to inherit). Allowed navs call `use_()`; non-Response / non-blocked fall through (`false`) so
     downloads/new-windows keep WebKit's default handling. A block emits `redirect.blocked` →
-    the chrome's `RedirectBar` (a notification bar that adds `REDIRECT_BAR_H` to the content
-    inset; a floating toast can't paint over the opaque content webview). **That inset RESIZES the
-    content, and a malicious page re-fires the blocked redirect on a TIMER + on that very resize —
-    so `App.tsx` makes dismissal STICKY per destination (`dismissedRedirectsRef`, reset on tab
-    switch); without it the bar is unclosable (re-blocked → re-shown forever).** Other platforms keep
+    the chrome automatically opens the destination in a new background tab via
+    `tabs.create(url, true)` (with a grace period for chrome-initiated navigations to
+    suppress spurious bg tabs from old-page timer redirects). Other platforms keep
     Tauri's `on_navigation` + their own native top-frame hooks (Windows `NavigationStarting`,
     macOS `WKNavigationDelegate`, Android `shouldOverrideUrlLoading`). The block notification is
-    platform-native: desktop shows the `RedirectBar` infobar; **Android shows a Material
-    `Snackbar`** (a chrome-layer bar can't paint over the native content WebView either) with
+    platform-native: desktop auto-opens a background tab; **Android shows a Material
+    `Snackbar`** (a chrome-layer bar can't paint over the native content WebView) with
     the same "Open anyway" → new-tab action (`MainActivity.showRedirectBlocked`).
 
 15. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
@@ -825,12 +826,14 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     keep the shim (or absence of one) they were born with. This is the same model as the
     WebRTC shim; document it in any UI that toggles these settings.
 
-    d. **Android has no fp-allowlist in v1 (documented parity gap).** The Android JNI
-    getter (`NativeFarble.farbleScript`) has no `AppHandle` and therefore no access to the
-    `FarbleState` managed-state; it hardcodes `host_allowlisted = false`. Closing the gap
-    requires routing the allowlist to a global (mirroring `ANDROID_LEVEL`) or passing the
-    host into `farbleScript(host)` from Kotlin. Tracked as a future improvement; not a
-    blocker.
+    d. **Android has no fp-allowlist in v1 (documented parity gap, fix path specified).**
+    The Android JNI getter (`NativeFarble.farbleScript`) has no `AppHandle` and
+    therefore no access to the `FarbleState` managed-state; it hardcodes
+    `host_allowlisted = false`. The fix is specified in `docs/roadmap/phase-2-parity-gaps-spec.md`
+    Gap 2 / Task 1 — add an `ANDROID_FP_ALLOWLIST` process-global (mirroring the
+    existing `ANDROID_LEVEL` pattern) and update the JNI getter to accept a `host`
+    parameter from Kotlin. See `docs/roadmap/phase-2-parity-gaps-plan.md` Task 1
+    for the full implementation plan.
 
 ### Multi-webview Linux layout (hard-won facts)
 
@@ -889,7 +892,7 @@ widget above native WebKit windows.
       Rust cannot up-call into Kotlin; the bridge is read-only from Kotlin's side
       (Kotlin pulls the config from `proxy_config_json`, Rust never pushes).
     - **macOS**: no-op — proxy is not implemented; macOS builds and browses
-      without it. Any macOS proxy work requires a Mac + CI verify only.
+      without it. Implementation guide at `docs/roadmap/macOS-proxy-bindings.md`.
 
 23. **Windows: content webviews need their OWN user-data-folder, keyed on their
     browser args (the `additional_browser_args` blank-page regression).** WebView2

@@ -85,6 +85,7 @@ export const IPC = {
   // element picker (Phase 5, chrome -> main)
   pickerStart: 'picker.start',
   // events (Phase 5, main -> chrome renderer)
+  evtPickerPicked: 'picker.picked',
   evtDownloadsChanged: 'downloads.changed',
   evtPermissionsPrompt: 'permissions.prompt',
   // auto-update (Phase S1, chrome <-> main)
@@ -151,11 +152,17 @@ export const IPC = {
   vaultUpdate: 'vault.update',
   vaultRemove: 'vault.remove',
   vaultSearch: 'vault.search',
-  // Phase B — autofill hooks exist on the JS side; Rust handler is not yet implemented.
-  // The hooks (useVaultAutofill) call these methods; removing them breaks the build.
+  // Phase B — autofill + sync
   vaultAutofill: 'vault.autofill',
   vaultAutofillSuggestions: 'vault.autofillSuggestions',
   evtVaultState: 'vault.state',
+  evtVaultChanged: 'vault.changed',
+  // form detection events (Phase B)
+  evtFormState: 'form.state',
+  evtFormWillSubmit: 'form.willSubmit',
+  // autofill events (content webview ↔ chrome)
+  evtVaultAutofillData: 'vault.autofillData',
+  evtVaultAutofillResult: 'vault.autofillResult',
   // fingerprint per-site allowlist (chrome -> main)
   fingerprintGetState: 'fingerprint.getState',
   fingerprintToggleAllowlist: 'fingerprint.toggleAllowlist',
@@ -167,6 +174,23 @@ export const IPC = {
   proxyClear: 'proxy.clear',
   proxyTestConnection: 'proxy.testConnection',
   evtProxyState: 'proxy.state',
+  // split view (chrome -> main)
+  splitEnter: 'split.enter',
+  splitExit: 'split.exit',
+  splitResize: 'split.resize',
+  splitFocus: 'split.focus',
+  // event (main -> chrome): current split layout (null = no split)
+  evtSplitState: 'split.state',
+  // workspaces (chrome -> main)
+  workspaceList: 'workspace.list',
+  workspaceCreate: 'workspace.create',
+  workspaceSwitch: 'workspace.switch',
+  workspaceRename: 'workspace.rename',
+  workspaceSetColor: 'workspace.setColor',
+  workspaceRemove: 'workspace.remove',
+  workspaceReorder: 'workspace.reorder',
+  // event (main -> chrome): workspace list + active workspace
+  evtWorkspaceState: 'workspace.state',
 } as const;
 
 export interface NavState {
@@ -204,11 +228,25 @@ export interface TabMeta {
   url: string;
   /** A private (incognito) tab: ephemeral data partition, excluded from history/sync/downloads. */
   private: boolean;
+  /** Which workspace this tab belongs to. */
+  workspaceId: string;
 }
 /** The whole tab list + which tab is active. Order === strip order. */
 export interface TabsState {
   tabs: TabMeta[];
   activeId: ViewId;
+}
+
+// ---- workspace data model ----
+export interface Workspace {
+  id: string;
+  name: string;
+  color: string;
+  tabIndex: number;
+}
+export interface WorkspaceState {
+  workspaces: Workspace[];
+  activeWorkspaceId: string;
 }
 
 export type TabShortcut =
@@ -287,6 +325,20 @@ export interface FingerprintState {
   allowlistedHosts: string[];
 }
 
+/** A single pane in a split-view layout. */
+export interface SplitPane {
+  tabId: number;
+  width: number;
+  height: number;
+  x: number;
+  y: number;
+}
+/** The full split-view layout. `null` means split mode is not active. */
+export interface SplitLayout {
+  panes: SplitPane[];
+  focusedPaneId: number;
+}
+
 /** Proxy configuration sent to `proxy.setConfig`. */
 export interface ProxyConfig {
   mode: 'off' | 'proxy';
@@ -312,6 +364,8 @@ export interface VaultState {
    * credentials. 0 in the normal case.
    */
   undecryptable: number;
+  /** Whether vault records are synced via the E2E sync engine. */
+  syncEnabled: boolean;
 }
 export interface VaultRecord {
   uuid: string;
@@ -336,6 +390,32 @@ export interface FormLoginDetectedResult {
   domain?: string;
 }
 
+/** Real-time form state event payload */
+export interface FormState {
+  hasLoginForm: boolean;
+  domain: string | null;
+  tabId: number;
+}
+
+/** Captured before form submission for save prompt */
+export interface FormWillSubmit {
+  domain: string;
+  username: string;
+  password: string;
+}
+
+/** Data sent to content webview for badge rendering (no passwords) */
+export interface AutofillData {
+  count: number;
+  labels: Array<{ site: string; username: string }>;
+}
+
+/** One-time fill data sent to content webview on badge click */
+export interface AutofillResult {
+  username: string;
+  password: string;
+}
+
 // ---- adblock data model ----
 export interface AdblockState {
   enabled: boolean; // global on/off
@@ -349,7 +429,7 @@ export interface BlockedCount {
   session: number; // monotonic
 }
 /** A scripted (non-user-gesture) cross-origin top-frame navigation that the
- * redirect guard cancelled. Drives the "Open anyway" toast. */
+ * redirect guard cancelled. Auto-opens the destination in a new background tab. */
 export interface RedirectBlocked {
   viewId: ViewId;
   from: string;
@@ -436,9 +516,15 @@ export interface Settings {
    * local). Self-hosted: paste your reference-server URL. The server only ever sees
    * opaque ciphertext. */
   syncServerUrl?: string;
+  /** Milliseconds a background-created tab (opened via target=_blank / window.open)
+   * may sit idle before it is discarded. Default 30000 (30 s). 0 disables the
+   * background-tab timeout (but not the standard idle timeout). */
+  backgroundTabTimeout?: number;
+  /** When the total tab count exceeds this threshold the idle sweep doubles its
+   * aggression — both the standard and background timeouts are halved to reclaim
+   * memory faster. Default 20. */
+  aggressiveSweepThreshold?: number;
 }
-
-// Duplicate interface definition removed
 
 export interface SyncState {
   enabled: boolean;
@@ -669,10 +755,10 @@ export interface AegisApi {
     update(uuid: string, partial: Partial<VaultRecordInput>): Promise<VaultRecord[]>;
     remove(uuid: string): Promise<VaultRecord[]>;
     search(q: string): Promise<VaultRecord[]>;
-    // Phase B — autofill hooks exist on the JS side; Rust handler is not yet implemented.
     autofill(options: { domain: string; username?: string }): Promise<VaultRecord[]>;
-    autofillSuggestions(options: { q: string }): Promise<VaultRecord[]>;
+    autofillSuggestions(domain: string): Promise<VaultRecord[]>;
     onState(cb: (s: VaultState) => void): () => void;
+    onChanged(cb: () => void): () => void;
   };
   fingerprint: {
     getState(): Promise<FingerprintState>;
@@ -689,6 +775,28 @@ export interface AegisApi {
     ): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
     onState(cb: (s: ProxyState) => void): () => void;
   };
+  workspace: {
+    list(): Promise<Workspace[]>;
+    create(name: string, color?: string): Promise<Workspace>;
+    switch(id: string): Promise<WorkspaceState>;
+    rename(id: string, name: string): Promise<Workspace>;
+    setColor(id: string, color: string): Promise<Workspace>;
+    remove(id: string): Promise<TabsState>;
+    reorder(ids: string[]): Promise<WorkspaceState>;
+    onState(cb: (workspaces: WorkspaceState) => void): () => void;
+  };
+  split: {
+    /** Enter split-view mode with the given tab ids (2-4 panes). */
+    enter(tabIds: number[]): Promise<void>;
+    /** Exit split-view mode, returning to single-pane. */
+    exit(): Promise<void>;
+    /** Resize a specific pane. */
+    resize(paneId: number, width: number, height: number): Promise<void>;
+    /** Focus a specific pane. */
+    focus(paneId: number): Promise<void>;
+    /** Subscribe to split-layout state changes. null = no split active. */
+    onState(cb: (layout: SplitLayout | null) => void): () => void;
+  };
   /** Form detection for autofill triggering */
   form: {
     /** Trigger a login form scan in the current content webview */
@@ -697,5 +805,9 @@ export interface AegisApi {
     onLoginFormDetected(
       cb: (result: { hasLoginForm: boolean; domain?: string }) => void,
     ): () => void;
+    /** Real-time form state changes from injected MutationObserver */
+    onState(cb: (s: FormState) => void): () => void;
+    /** Captured before form submission for save prompt */
+    onWillSubmit(cb: (s: FormWillSubmit) => void): () => void;
   };
 }

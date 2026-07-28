@@ -98,7 +98,7 @@ fn is_disabled_flag(app: &AppHandle) -> bool {
 
 fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     let st = app.state::<SyncState>();
-    let g = st.0.lock().unwrap();
+    let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
     json!({
         "enabled": g.enabled,
         "status": g.status.as_str(),
@@ -221,7 +221,7 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     // Snapshot what we need under the lock (clone the root; the clone zeroizes on drop).
     let (root, account_id, device_seed) = {
         let st = app.state::<SyncState>();
-        let g = st.0.lock().unwrap();
+        let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
         if !g.enabled {
             return Err("sync is not enabled".into());
         }
@@ -326,10 +326,28 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         }
     };
 
-    // Execute the three operations in parallel
+    let vault_op = {
+        let root = root.clone();
+        let account_id = account_id.clone();
+        let device_seed = device_seed.clone();
+        let base = base.clone();
+        let app_clone = app_clone.clone();
+        move || -> Result<(String, Vec<String>), String> {
+            let app = app_clone.clone();
+            if !crate::sync_vault::is_sync_enabled(&app) {
+                return Ok(("vault".to_string(), Vec::new()));
+            }
+            let dk = crypto::data_key(&root, "pwvault");
+            let changed = sync_vault_once(&app, &base, &account_id, &device_seed, &dk)?;
+            Ok(("vault".to_string(), changed))
+        }
+    };
+
+    // Execute the four operations in parallel
     let array_handles = std::thread::spawn(array_stores_op);
     let settings_handle = std::thread::spawn(settings_op);
     let custom_filters_handle = std::thread::spawn(custom_filters_op);
+    let vault_handle = std::thread::spawn(vault_op);
 
     // Collect results
     let array_results = array_handles
@@ -341,6 +359,9 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     let custom_filters_result = custom_filters_handle
         .join()
         .map_err(|_| "Custom filters thread panicked".to_string())?;
+    let vault_result = vault_handle
+        .join()
+        .map_err(|_| "Vault thread panicked".to_string())?;
 
     // Emit changed events
     for (ns, changed) in array_results? {
@@ -350,6 +371,8 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
     emit_changed(app, &settings_ns, &settings_changed);
     let (custom_filters_ns, custom_filters_changed) = custom_filters_result?;
     emit_changed(app, &custom_filters_ns, &custom_filters_changed);
+    let (vault_ns, vault_changed) = vault_result?;
+    emit_changed(app, &vault_ns, &vault_changed);
 
     Ok(())
 }
@@ -362,6 +385,77 @@ fn emit_changed<R: Runtime>(app: &AppHandle<R>, ns: &str, changed: &[String]) {
             json!({ "namespace": ns, "changedUuids": changed }),
         );
     }
+}
+
+/// Vault sync: pull→merge→push for the `pwvault` namespace. Unlike the array stores,
+/// vault records are already sealed ciphertext (XChaCha20-Poly1305 under the vault key).
+/// We wrap them in the sync transport layer (sealed with the sync data key) for encrypted
+/// transit, then unwrap on the receiving device. The vault's own seal stays intact —
+/// the server never sees plaintext credentials.
+fn sync_vault_once<R: Runtime>(
+    _app: &AppHandle<R>,
+    base: &str,
+    account_id: &str,
+    device_seed: &[u8; 32],
+    data_key: &[u8; 32],
+) -> Result<Vec<String>, String> {
+    let ns = "pwvault";
+
+    // --- Pull remote vault sealed records ---
+    let pulled = http(
+        "GET",
+        format!("{base}/v1/records?ns={ns}"),
+        auth_header(account_id, device_seed)?,
+        None,
+        SYNC_TIMEOUT_SECS,
+    )?;
+    let mut remote_sealed = Vec::new();
+    if let Some(arr) = pulled.get("records").and_then(Value::as_array) {
+        for w in arr {
+            match open_wire(data_key, ns, w) {
+                // open_wire decrypts the sync transport layer, returning the inner
+                // vault-sealed record {uuid, updatedAt, nonce, ct} (plus any synthetic
+                // hlc we added on the sending side — harmless extra field).
+                Ok(rec) => remote_sealed.push(rec),
+                Err(e) => eprintln!("[aegis-sync] skip undecryptable {ns} record: {e}"),
+            }
+        }
+    }
+
+    // --- Merge remote sealed records into local vault ---
+    let changed = crate::sync_vault::apply_synced(_app, &remote_sealed);
+
+    // --- Push local vault sealed records ---
+    let local = crate::sync_vault::read_for_sync(_app);
+    let mut wire = Vec::with_capacity(local.len());
+    for r in &local {
+        // Vault records use `updatedAt` (i64 ms timestamp) instead of the sync HLC
+        // triple. Fabricate a deterministic synthetic HLC from `updatedAt` so
+        // `seal_wire` can bind it as AAD — the receiving side sees the same HLC
+        // after decryption, and the server orders by it consistently.
+        let ts = r.get("updatedAt").and_then(Value::as_i64).unwrap_or(0);
+        let mut record = r.clone();
+        if let Some(obj) = record.as_object_mut() {
+            obj.entry(String::from("hlc")).or_insert(json!({
+                "wall_ms": ts,
+                "counter": 0,
+                "node": "vault",
+            }));
+        }
+        match seal_wire(data_key, ns, &record) {
+            Ok(w) => wire.push(w),
+            Err(e) => eprintln!("[aegis-sync] skip unsealable {ns} record: {e}"),
+        }
+    }
+    http(
+        "POST",
+        format!("{base}/v1/records"),
+        auth_header(account_id, device_seed)?,
+        Some(json!({ "ns": ns, "records": wire })),
+        SYNC_TIMEOUT_SECS,
+    )?;
+
+    Ok(changed)
 }
 
 /// Pull → decrypt → merge → push for ONE namespace. `read_local` is read AFTER the merge so
@@ -464,7 +558,7 @@ fn enable_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<&str>)
 
     {
         let st = app.state::<SyncState>();
-        let mut g = st.0.lock().unwrap();
+        let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
         g.root = Some(root.clone());
         g.device_seed = Some(device_seed.clone()); // already Zeroizing (crypto::device_signing_seed)
         g.enabled = true;
@@ -497,7 +591,7 @@ fn enable_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<&str>)
 fn unlock_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<String>) {
     {
         let st = app.state::<SyncState>();
-        let mut g = st.0.lock().unwrap();
+        let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
         g.status = Status::Syncing;
         g.last_error.clear();
     }
@@ -509,7 +603,7 @@ fn unlock_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<String
 pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
     {
         let st = app.state::<SyncState>();
-        let mut g = st.0.lock().unwrap();
+        let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
         if !g.enabled || g.status == Status::Syncing {
             return;
         }
@@ -525,7 +619,7 @@ pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
                 Err(_) => Err("sync task panicked".to_string()),
             };
         let st = app.state::<SyncState>();
-        let mut g = st.0.lock().unwrap();
+        let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
         match result {
             Ok(()) => {
                 g.status = Status::Idle;
@@ -669,7 +763,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             set_disabled_flag(app, true); // durable: don't auto-re-enable on next boot
             {
                 let st = app.state::<SyncState>();
-                let mut g = st.0.lock().unwrap();
+                let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
                 g.root = None; // dropped → zeroized
                 g.device_seed = None;
                 g.enabled = false;
@@ -680,7 +774,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             if forget {
                 sync_keystore::clear_root(app);
                 let st = app.state::<SyncState>();
-                st.0.lock().unwrap().backing = "none".into();
+                st.0.lock().unwrap_or_else(|e| e.into_inner()).backing = "none".into();
             }
             emit_state(app);
             Some(Ok(state_json(app)))
@@ -706,7 +800,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 return Some(Err("confirmation required".into()));
             }
             let st = app.state::<SyncState>();
-            let g = st.0.lock().unwrap();
+            let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
             match &g.root {
                 Some(root) => match crypto::root_to_phrase(root) {
                     Ok(phrase) => Some(Ok(json!({ "recoveryPhrase": phrase }))),
@@ -719,7 +813,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "sync.listDevices" => {
             let (account_id, device_seed) = {
                 let st = app.state::<SyncState>();
-                let g = st.0.lock().unwrap();
+                let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
                 match &g.device_seed {
                     Some(s) => (g.account_id.clone(), Zeroizing::new(**s)),
                     None => return Some(Ok(json!([]))),
@@ -742,7 +836,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 INTERACTIVE_TIMEOUT_SECS,
             ) {
                 Ok(v) => {
-                    let this = app.state::<SyncState>().0.lock().unwrap().device_id.clone();
+                    let this = app
+                        .state::<SyncState>()
+                        .0
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .device_id
+                        .clone();
                     let devices: Vec<Value> = v
                         .get("devices")
                         .and_then(Value::as_array)
@@ -772,7 +872,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .to_string();
             let (account_id, device_seed) = {
                 let st = app.state::<SyncState>();
-                let g = st.0.lock().unwrap();
+                let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
                 match &g.device_seed {
                     Some(s) => (g.account_id.clone(), Zeroizing::new(**s)),
                     None => return Some(Err("sync is locked".into())),

@@ -49,6 +49,8 @@ fn defaults() -> Value {
         "webrtcPolicy": "public-only",
         "themeMode": "system",
         "syncServerUrl": "",
+        "backgroundTabTimeout": 30000,
+        "aggressiveSweepThreshold": 20,
         "antiFingerprint": "off",
         "syncIntervalSec": 300,
         "proxy": { "mode": "off", "scheme": "http", "host": "", "port": 8080, "bypassHosts": [] }
@@ -82,6 +84,7 @@ pub fn download_dir<R: Runtime>(app: &AppHandle<R>) -> String {
 }
 
 /// Whether HTTPS-Only upgrading is on (default true).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn https_only(app: &AppHandle) -> bool {
     load(app)
         .get("httpsOnly")
@@ -140,6 +143,24 @@ pub fn tab_idle_timeout_min(app: &AppHandle) -> u64 {
         .get("tabIdleTimeout")
         .and_then(Value::as_u64)
         .unwrap_or(30)
+}
+
+/// Milliseconds a background-created, never-activated tab may sit idle before discard.
+/// Default 30000 (30 s). 0 disables the background-tab timeout.
+pub fn background_tab_timeout_ms(app: &AppHandle) -> u64 {
+    load(app)
+        .get("backgroundTabTimeout")
+        .and_then(Value::as_u64)
+        .unwrap_or(30_000)
+}
+
+/// When the total tab count exceeds this threshold the idle sweep uses shorter
+/// timeouts (halved) to reclaim memory faster. Default 20.
+pub fn aggressive_sweep_threshold(app: &AppHandle) -> usize {
+    load(app)
+        .get("aggressiveSweepThreshold")
+        .and_then(Value::as_u64)
+        .unwrap_or(20) as usize
 }
 
 /// The configured home page as a URL (default about:blank). Blank or unparseable

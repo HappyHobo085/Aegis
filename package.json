@@ -23,11 +23,12 @@
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
-    "format:check": "prettier --check ."
+    "format:check": "prettier --check .",
+    "analyze": "ANALYZE=true npm run build:renderer",
+    "sizecheck": "gzip -c dist/assets/*.js | wc -c"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.1",
-    "@tauri-apps/plugin-dialog": "^2.7.1",
     "lucide-react": "^1.21.0"
   },
   "devDependencies": {
@@ -50,6 +51,7 @@
     "prettier": "^3.8.4",
     "react": "^19",
     "react-dom": "^19",
+    "rollup-plugin-visualizer": "^7.0.1",
     "typescript": "^5.7.0",
     "typescript-eslint": "^8.62.0",
     "vitest": "^4.1.9"

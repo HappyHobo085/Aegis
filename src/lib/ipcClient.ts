@@ -35,9 +35,13 @@ import {
   FingerprintState,
   ProxyConfig,
   ProxyState,
+  SplitLayout,
   FormLoginDetectedResult,
+  FormState,
+  FormWillSubmit,
+  Workspace,
+  WorkspaceState,
 } from '../../shared/types';
-import { DEDUP_WINDOW_MS } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call, on } from './tauriInvoke';
 import { clampZoom } from './zoom';
@@ -145,6 +149,12 @@ const NON_DEDUP_CHANNELS: Set<IPCChannel> = new Set([
   // Zoom mutations
   IPC.zoomSet,
   IPC.zoomReset,
+
+  // Split view mutations
+  IPC.splitEnter,
+  IPC.splitExit,
+  IPC.splitResize,
+  IPC.splitFocus,
 ]);
 
 // Different deduplication windows for different operation types (only for queries)
@@ -298,37 +308,6 @@ function cleanupCache(now: number = Date.now()): void {
       dedupeCache.delete(key);
     }
   }
-}
-
-// Expose stats for debugging (only in development)
-if (import.meta.env.DEV) {
-  (window as any).__ipcDedupStats = () => {
-    const hitRate =
-      dedupStats.hits + dedupStats.misses > 0
-        ? (dedupStats.hits / (dedupStats.hits + dedupStats.misses)) * 100
-        : 0;
-
-    return {
-      hitRate: Number(hitRate.toFixed(2)),
-      total: dedupStats.hits + dedupStats.misses,
-      hits: dedupStats.hits,
-      misses: dedupStats.misses,
-      byChannel: Array.from(dedupStats.hitsByChannel.entries()).reduce(
-        (acc, [channel, count]) => {
-          acc[channel] = {
-            hits: count,
-            misses: dedupStats.missesByChannel.get(channel) || 0,
-            hitRate:
-              count + (dedupStats.missesByChannel.get(channel) || 0) > 0
-                ? (count / (count + (dedupStats.missesByChannel.get(channel) || 0))) * 100
-                : 0,
-          };
-          return acc;
-        },
-        {} as Record<string, { hits: number; misses: number; hitRate: number }>,
-      ),
-    };
-  };
 }
 
 /** The Kotlin content-webview bridge, injected on Android only (window.AegisAndroid).
@@ -814,9 +793,10 @@ export const aegis: AegisApi = {
     // The hooks (useVaultAutofill) call these methods; removing them breaks the build.
     autofill: (options: { domain: string; username?: string }) =>
       dedupedCall<VaultRecord[]>(IPC.vaultAutofill, options),
-    autofillSuggestions: (options: { q: string }) =>
-      dedupedCall<VaultRecord[]>(IPC.vaultAutofillSuggestions, options),
+    autofillSuggestions: (domain: string) =>
+      dedupedCall<VaultRecord[]>(IPC.vaultAutofillSuggestions, { domain }),
     onState: (cb: (s: VaultState) => void) => on<VaultState>(IPC.evtVaultState, cb),
+    onChanged: (cb: () => void) => on<void>(IPC.evtVaultChanged, cb),
   },
   /** Form detection for autofill triggering */
   form: {
@@ -828,6 +808,31 @@ export const aegis: AegisApi = {
     onLoginFormDetected(cb: (result: FormLoginDetectedResult) => void) {
       return on<FormLoginDetectedResult>(IPC.evtFormDetectResult, cb);
     },
+    onState: (cb: (s: FormState) => void) => on<FormState>(IPC.evtFormState, cb),
+    onWillSubmit: (cb: (s: FormWillSubmit) => void) =>
+      on<FormWillSubmit>(IPC.evtFormWillSubmit, cb),
+  },
+  workspace: {
+    list: () => dedupedCall<Workspace[]>(IPC.workspaceList, {}),
+    create: (name: string, color?: string) =>
+      dedupedCall<Workspace>(IPC.workspaceCreate, { name, color }),
+    switch: (id: string) => dedupedCall<WorkspaceState>(IPC.workspaceSwitch, { id }),
+    rename: (id: string, name: string) => dedupedCall<Workspace>(IPC.workspaceRename, { id, name }),
+    setColor: (id: string, color: string) =>
+      dedupedCall<Workspace>(IPC.workspaceSetColor, { id, color }),
+    remove: (id: string) => dedupedCall<TabsState>(IPC.workspaceRemove, { id }),
+    reorder: (ids: string[]) => dedupedCall<WorkspaceState>(IPC.workspaceReorder, { ids }),
+    onState: (cb: (workspaces: WorkspaceState) => void) =>
+      on<WorkspaceState>(IPC.evtWorkspaceState, cb),
+  },
+  split: {
+    enter: (tabIds: number[]) => dedupedCall<void>(IPC.splitEnter, tabIds),
+    exit: () => dedupedCall<void>(IPC.splitExit, undefined),
+    resize: (paneId: number, width: number, height: number) =>
+      dedupedCall<void>(IPC.splitResize, { paneId, width, height }),
+    focus: (paneId: number) => dedupedCall<void>(IPC.splitFocus, { paneId }),
+    onState: (cb: (layout: SplitLayout | null) => void) =>
+      on<SplitLayout | null>(IPC.evtSplitState, cb),
   },
 };
 

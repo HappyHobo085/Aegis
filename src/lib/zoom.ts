@@ -3,7 +3,7 @@ export const ZOOM_MAX = 3.0;
 export const ZOOM_DEFAULT = 1.0;
 
 /** Chrome-style discrete zoom ladder. */
-export const ZOOM_STEPS = [0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
+const ZOOM_STEPS = [0.5, 0.67, 0.8, 0.9, 1.0, 1.1, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0];
 
 export function clampZoom(f: number): number {
   if (!Number.isFinite(f)) return ZOOM_DEFAULT;

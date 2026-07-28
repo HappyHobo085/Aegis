@@ -24,6 +24,7 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::jsonstore;
 
+#[cfg_attr(target_os = "android", allow(dead_code))]
 const MAX_ENTRIES: usize = 5000;
 
 /// In-memory history cache (managed state) — the source of truth while the app runs.
@@ -38,6 +39,7 @@ struct HistInner {
 }
 
 /// Pure predicate: should this (url, owning-tab-privateness) pair be written to history?
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn should_record_visit(url: &str, is_private: bool) -> bool {
     if is_private {
         return false;
@@ -47,7 +49,8 @@ pub fn should_record_visit(url: &str, is_private: bool) -> bool {
 
 /// Pure: append a visit to `items` (dedup the immediately-previous URL + cap to MAX_ENTRIES).
 /// Returns true if a row was added (false = a consecutive duplicate, a no-op).
-fn apply_visit<R: Runtime>(items: &mut Vec<Value>, url: &str, title: &str, now: i64) -> bool {
+#[cfg_attr(target_os = "android", allow(dead_code))]
+fn apply_visit(items: &mut Vec<Value>, url: &str, title: &str, now: i64) -> bool {
     if items
         .last()
         .and_then(|i| i.get("url").and_then(Value::as_str))
@@ -93,7 +96,7 @@ fn ensure_loaded<R: Runtime>(app: &AppHandle<R>, inner: &mut HistInner) {
 /// in-memory cache when present; falls back to disk if the state isn't managed.
 fn snapshot<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
     if let Some(store) = app.try_state::<HistoryStore>() {
-        let mut inner = store.0.lock().unwrap();
+        let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());
         ensure_loaded(app, &mut inner);
         inner.items.clone()
     } else {
@@ -110,7 +113,7 @@ fn mutate<R: Runtime>(
 ) -> bool {
     if let Some(store) = app.try_state::<HistoryStore>() {
         let changed = {
-            let mut inner = store.0.lock().unwrap();
+            let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());
             ensure_loaded(app, &mut inner);
             let changed = f(&mut inner.items);
             if changed {
@@ -140,7 +143,7 @@ pub fn flush<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     let pending = {
-        let mut inner = store.0.lock().unwrap();
+        let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());
         if !inner.loaded || !inner.dirty {
             return;
         }
@@ -148,7 +151,7 @@ pub fn flush<R: Runtime>(app: &AppHandle<R>) {
         inner.items.clone()
     };
     if jsonstore::save(app, "history", &pending).is_err() {
-        store.0.lock().unwrap().dirty = true;
+        store.0.lock().unwrap_or_else(|e| e.into_inner()).dirty = true;
     }
 }
 
@@ -156,7 +159,7 @@ pub fn flush<R: Runtime>(app: &AppHandle<R>) {
 /// overwrites the history file.
 pub fn invalidate<R: Runtime>(app: &AppHandle<R>) {
     if let Some(store) = app.try_state::<HistoryStore>() {
-        let mut inner = store.0.lock().unwrap();
+        let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());
         inner.items.clear();
         inner.loaded = false;
         inner.dirty = false;
@@ -177,12 +180,13 @@ pub fn start_flush(app: &AppHandle) {
 /// Record a visit (called on top-frame page load). Skips non-web schemes and
 /// de-dups consecutive visits to the same URL. No-ops for private tabs. Batched in
 /// memory — see the module-level "Write batching" note.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn record<R: Runtime>(app: &AppHandle<R>, url: &str, title: &str, is_private: bool) {
     if !should_record_visit(url, is_private) {
         return;
     }
     let now = jsonstore::now_ms();
-    if mutate(app, false, |items| apply_visit::<R>(items, url, title, now)) {
+    if mutate(app, false, |items| apply_visit(items, url, title, now)) {
         crate::emit_event(app, "history.changed", Value::Null);
     }
 }
@@ -274,7 +278,7 @@ pub fn dispatch<R: Runtime>(
             // Truly remove (history isn't synced) — clear actually clears, and flushes now.
             if let Some(store) = app.try_state::<HistoryStore>() {
                 {
-                    let mut inner = store.0.lock().unwrap();
+                    let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());
                     inner.items.clear();
                     inner.loaded = true; // cleared state is authoritative; don't reload disk
                     inner.dirty = true;
@@ -309,33 +313,13 @@ mod tests {
     #[test]
     fn apply_visit_dedups_consecutive_and_caps() {
         let mut items = Vec::new();
-        assert!(apply_visit::<crate::test_support::MockRuntime>(
-            &mut items,
-            "https://a/",
-            "A",
-            1
-        ));
-        assert!(!apply_visit::<crate::test_support::MockRuntime>(
-            &mut items,
-            "https://a/",
-            "A",
-            2
-        )); // consecutive dup → no-op
-        assert!(apply_visit::<crate::test_support::MockRuntime>(
-            &mut items,
-            "https://b/",
-            "B",
-            3
-        ));
+        assert!(apply_visit(&mut items, "https://a/", "A", 1));
+        assert!(!apply_visit(&mut items, "https://a/", "A", 2)); // consecutive dup → no-op
+        assert!(apply_visit(&mut items, "https://b/", "B", 3));
         assert_eq!(items.len(), 2);
         // cap: push MAX_ENTRIES+ distinct rows, oldest are dropped, newest kept.
         for n in 0..MAX_ENTRIES + 10 {
-            apply_visit::<crate::test_support::MockRuntime>(
-                &mut items,
-                &format!("https://x{n}/"),
-                "x",
-                n as i64,
-            );
+            apply_visit(&mut items, &format!("https://x{n}/"), "x", n as i64);
         }
         assert_eq!(items.len(), MAX_ENTRIES);
         let last = items.last().unwrap().get("url").and_then(Value::as_str);

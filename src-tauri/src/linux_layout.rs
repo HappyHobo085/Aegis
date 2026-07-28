@@ -752,6 +752,15 @@ pub fn layout(
                 chrome_window = child.window();
             }
         }
+        // Resize children to match the current insets. Normally driven by the GtkFixed's
+        // "size-allocate" signal (window resize), but when the inset changes without a
+        // window resize (e.g. FindBar opening/closing adds FIND_BAR_H to the top inset),
+        // the signal doesn't fire and the content widget retains its stale height.
+        // Re-allocate here so the content's native window geometry matches its GTK
+        // position before we raise it — without this, raise() stacks a stale-sized
+        // native window that can paint over the chrome gap above the content.
+        size_fixed_children(&app2, &fixed);
+
         // Z-order: when the active content is shown, raise it on top; when it's hidden (a full
         // overlay is up, or the tab is at home), raise the CHROME instead. Crucially we must
         // NOT raise the content while it's hidden — raise() re-stacks the WebKit native window

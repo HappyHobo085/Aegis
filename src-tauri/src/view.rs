@@ -12,8 +12,8 @@ use tauri::{AppHandle, Manager};
 
 use crate::nav::DEFAULT_INSET_TOP;
 
-/// Default sidebar panel width (matches `.sidebar__panel` in index.css).
-const SIDEBAR_WIDTH: f64 = 280.0;
+/// Default sidebar panel width (matches `.sidebar__panel` in index.css and `SIDEBAR_W` in layout.ts).
+const SIDEBAR_WIDTH: f64 = 320.0;
 
 /// Top strip kept clear in fullscreen (non-Linux) so the chrome's exit button stays
 /// visible above the content. Linux fills the window edge-to-edge instead, with a
@@ -54,7 +54,7 @@ impl Default for ContentInset {
 
 fn layout_of(app: &AppHandle) -> Layout {
     app.try_state::<ContentInset>()
-        .map(|s| *s.0.lock().unwrap())
+        .map(|s| *s.0.lock().unwrap_or_else(|e| e.into_inner()))
         .unwrap_or(Layout {
             left: 0.0,
             top: DEFAULT_INSET_TOP,
@@ -90,6 +90,7 @@ fn apply_visibility(app: &AppHandle, lay: Layout) {
 
 /// Resize/reposition the content webview to fill the window below the top inset and
 /// left of the right inset (or the whole window in fullscreen).
+#[allow(unused_variables)]
 pub fn apply_inset(app: &AppHandle) {
     let lay = layout_of(app);
     // Fullscreen content geometry differs by platform: Linux fills the window
@@ -128,6 +129,60 @@ pub fn apply_inset(app: &AppHandle) {
             lay.fullscreen,
             visible,
         );
+    }
+
+    // Windows: split mode — position each pane's content webview side-by-side,
+    // then return early (the single-content path below does not apply).
+    #[cfg(target_os = "windows")]
+    {
+        let split_state = app.state::<crate::split::SplitState>();
+        let split = split_state.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if !split.panes.is_empty() {
+            let content_w = (logical.width - left - right).max(0.0);
+            let content_h = (logical.height - top).max(0.0);
+            let focused_id = split.focused_pane_id;
+
+            // Collect the set of pane tab ids so we can hide non-split webviews.
+            let split_ids: std::collections::HashSet<u32> =
+                split.panes.iter().map(|p| p.tab_id).collect();
+
+            for pane in &split.panes {
+                let label = crate::nav::content_label(pane.tab_id);
+                if let Some(wv) = app.get_webview(&label) {
+                    // Physical bounds (gotcha 16): logical × scale_factor for
+                    // correct positioning at fractional DPI.
+                    let px = (left + pane.x * content_w) * scale;
+                    let py = (top + pane.y * content_h) * scale;
+                    let pw = pane.width * content_w * scale;
+                    let ph = pane.height * content_h * scale;
+                    let _ = wv.set_bounds(tauri::Rect {
+                        position: tauri::PhysicalPosition::new(
+                            px.round() as i32,
+                            py.round() as i32,
+                        )
+                        .into(),
+                        size: tauri::PhysicalSize::new(pw.round() as u32, ph.round() as u32).into(),
+                    });
+                    let _ = wv.show();
+                    if pane.tab_id == focused_id {
+                        let _ = wv.set_focus();
+                    }
+                }
+            }
+
+            // Hide every content webview NOT in the split.
+            for (lbl, wv) in app.webviews() {
+                if lbl.starts_with("content:") {
+                    if let Ok(id) = lbl.strip_prefix("content:").unwrap_or("").parse::<u32>() {
+                        if !split_ids.contains(&id) {
+                            let _ = wv.hide();
+                        }
+                    }
+                }
+            }
+
+            return; // Split path complete — do not run single-content logic.
+        }
     }
 
     // Windows: at fractional DPI (e.g. 125%) wry's Logical set_bounds mispositions the
@@ -181,7 +236,7 @@ pub fn apply_inset(app: &AppHandle) {
 /// Mutate the layout state, then re-apply visibility + geometry.
 fn update<F: FnOnce(&mut Layout)>(app: &AppHandle, f: F) {
     if let Some(state) = app.try_state::<ContentInset>() {
-        f(&mut state.0.lock().unwrap());
+        f(&mut state.0.lock().unwrap_or_else(|e| e.into_inner()));
     }
     apply_visibility(app, layout_of(app));
     apply_inset(app);
@@ -295,12 +350,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 let saved = SAVED.get_or_init(|| Mutex::new(None));
                 if on {
                     if let Ok(sz) = window.inner_size() {
-                        *saved.lock().unwrap() = Some(sz);
+                        *saved.lock().unwrap_or_else(|e| e.into_inner()) = Some(sz);
                     }
                 }
                 let _ = window.set_fullscreen(on);
                 if !on {
-                    if let Some(sz) = saved.lock().unwrap().take() {
+                    if let Some(sz) = saved.lock().unwrap_or_else(|e| e.into_inner()).take() {
                         let _ = window.set_size(sz);
                     }
                 }

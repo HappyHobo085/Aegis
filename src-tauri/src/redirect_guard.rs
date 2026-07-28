@@ -13,8 +13,6 @@
 //! took. Legit redirect chains (a user-clicked OAuth/shortener bounce, or an
 //! address-bar nav that the server redirects) stay allowed because their chain
 //! ORIGIN was a user gesture or an app-initiated nav.
-use crate::tabs::dispatch;
-use serde_json;
 use tauri::{AppHandle, Manager, Url};
 
 /// The core cross-origin test, exposed for Android's JNI hook (which has reliable
@@ -52,11 +50,14 @@ pub struct PendingNavs(pub Mutex<HashMap<u32, String>>);
 impl PendingNavs {
     /// Record (overwrite) the tab's one-shot expected target.
     pub fn expect(&self, tab: u32, url: &str) {
-        self.0.lock().unwrap().insert(tab, url.to_string());
+        self.0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(tab, url.to_string());
     }
     /// Consume the tab's expected target if `target` matches it. Returns true on match.
     pub fn take_if_match(&self, tab: u32, target: &str) -> bool {
-        let mut m = self.0.lock().unwrap();
+        let mut m = self.0.lock().unwrap_or_else(|e| e.into_inner());
         if m.get(&tab).is_some_and(|exp| same_target(exp, target)) {
             m.remove(&tab);
             return true;
@@ -89,6 +90,7 @@ fn same_target(a: &str, b: &str) -> bool {
 /// here and resolves app-initiated in `decide_at_response` (the one-shot PendingNavs match must
 /// happen once, at the committed Response — WebKit fires NavigationAction repeatedly).
 #[derive(Clone)]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub struct ChainStart {
     pub from: String,
     pub origin_target: String,
@@ -115,6 +117,7 @@ pub fn should_block_pred(scripted: bool, from: &str, target: &str, app_initiated
 /// origin. The `app_initiated` field is left unresolved here (false) — it is resolved ONCE, at the
 /// decision point, because WebKit fires `NavigationAction` repeatedly (and for subframes) and the
 /// PendingNavs match is one-shot. Used by Linux's two-phase hook (`decide_at_response` decides).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn note_nav(
     app: &AppHandle,
     tab: u32,
@@ -138,7 +141,9 @@ pub fn note_nav(
             app_initiated: false,
         };
         if let Some(s) = app.try_state::<Chains>() {
-            s.0.lock().unwrap().insert(tab, c.clone());
+            s.0.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(tab, c.clone());
         }
         c
     };
@@ -150,6 +155,7 @@ pub fn note_nav(
 /// ORIGIN target (the URL the app asked for, which differs from `final_url` when the server
 /// redirected). Doing it at the single committed Response (not per NavigationAction) makes it
 /// robust to WebKit firing NavigationAction several times for one navigation.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn decide_at_response(app: &AppHandle, tab: u32, final_url: &str) -> Option<String> {
     let chain = take_action(app, tab, final_url)?;
     let app_initiated = app
@@ -194,7 +200,9 @@ pub fn block_at_start(
             app_initiated,
         };
         if let Some(s) = app.try_state::<Chains>() {
-            s.0.lock().unwrap().insert(tab, c.clone());
+            s.0.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(tab, c.clone());
         }
         c
     };
@@ -215,9 +223,10 @@ pub fn chain_origin(app: &AppHandle, tab: u32) -> Option<ChainStart> {
 }
 
 /// Drop a tab's in-flight chain once its top-frame load resolves.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn clear_chain(app: &AppHandle, tab: u32) {
     if let Some(s) = app.try_state::<Chains>() {
-        s.0.lock().unwrap().remove(&tab);
+        s.0.lock().unwrap_or_else(|e| e.into_inner()).remove(&tab);
     }
 }
 
@@ -232,6 +241,7 @@ pub fn expect(app: &AppHandle, tab: u32, url: &str) {
 /// If the user hasn't activated (viewed) that tab within 30 seconds, it is
 /// automatically closed — preventing a blocked redirect from silently accumulating
 /// background tabs the user never intended to visit.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, to: &str) {
     let new_id = crate::tabs::open_redirect_background(app, to, false);
     let app = app.clone();
@@ -245,7 +255,7 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, t
             match tabs {
                 None => false,
                 Some(t) => {
-                    let reg = t.reg.lock().unwrap();
+                    let reg = t.reg.lock().unwrap_or_else(|e| e.into_inner());
                     // The tab must still exist and still be marked as background-created
                     // (never activated by the user).
                     reg.is_background_tab(new_id) && reg.active_id() != new_id
@@ -264,10 +274,12 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, t
 /// it up at the (main-frame) Response. Linux-only — the other platforms get gesture +
 /// main-frame in one place.
 #[derive(Default)]
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub struct NavActions(pub Mutex<HashMap<(u32, String), ChainStart>>);
 
 /// Normalize a URL into a stable correlation key (ignore fragment / trailing slash, since the
 /// NavigationAction target and the Response URL can differ in those).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 fn norm_key(url: &str) -> String {
     match Url::parse(url) {
         Ok(u) => format!(
@@ -285,24 +297,34 @@ fn norm_key(url: &str) -> String {
 }
 
 /// Record the `ChainStart` to apply at the Response for `target` (Linux two-phase).
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn record_action(app: &AppHandle, tab: u32, target: &str, chain: ChainStart) {
     if let Some(s) = app.try_state::<NavActions>() {
-        s.0.lock().unwrap().insert((tab, norm_key(target)), chain);
+        s.0.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert((tab, norm_key(target)), chain);
     }
 }
 
 /// Take the recorded `ChainStart` matching `target` for `tab`, if any.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn take_action(app: &AppHandle, tab: u32, target: &str) -> Option<ChainStart> {
     let s = app.try_state::<NavActions>()?;
-    let info = s.0.lock().unwrap().remove(&(tab, norm_key(target)));
+    let info =
+        s.0.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .remove(&(tab, norm_key(target)));
     info
 }
 
 /// Drop a tab's recorded NavigationActions once its top-frame load resolves, so subframe
 /// entries that never matched a main-frame Response don't accumulate.
+#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn clear_tab_actions(app: &AppHandle, tab: u32) {
     if let Some(s) = app.try_state::<NavActions>() {
-        s.0.lock().unwrap().retain(|(t, _), _| *t != tab);
+        s.0.lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .retain(|(t, _), _| *t != tab);
     }
 }
 

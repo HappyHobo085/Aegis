@@ -2,7 +2,7 @@
 // Single source of truth for "every feature". Each entry exercises real IPC
 // (live: real core; vitest: mock) and declares the channels it covers so the
 // drift guard fails when a feature is added without coverage.
-import type { AegisApi, VaultRecord } from '../../shared/types';
+import type { AegisApi } from '../../shared/types';
 import { IPC, PRIMARY_VIEW_ID } from '../../shared/types';
 import { AdaptiveTimeout } from './timeout';
 
@@ -739,6 +739,38 @@ export const CATALOG: FeatureCheck[] = [
       return 'vault create→unlock→add→search→update→remove→lock(+locked-list-rejected+wrong-pw-rejected) ok';
     },
   },
+  // vault autofill suggestions (Phase B)
+  {
+    id: 'vault.autofillSuggestions',
+    domain: 'vault',
+    title: 'Vault autofill suggestions by domain',
+    channels: [IPC.vaultAutofillSuggestions],
+    exercise: async (a) => {
+      assertArray(await a.vault.autofillSuggestions('example.com'));
+    },
+    verify: async (a) => {
+      // Create+unlock vault, add a credential, query suggestions, clean up.
+      const pw = 'ap-autofill-8312';
+      let st = await a.vault.getState();
+      if (!st.exists) st = await a.vault.create(pw);
+      else if (!st.unlocked) st = await a.vault.unlock(pw);
+      if (!st.unlocked) throw new Error('vault.autofillSuggestions: not unlocked');
+      const added = await a.vault.add({
+        site: 'https://autofill-probe.test/',
+        username: 'af-user',
+        password: 'af-pass',
+      });
+      const probe = added.find((r) => r.site === 'https://autofill-probe.test/');
+      if (!probe) throw new Error('add: probe credential not in list');
+      const suggestions = await a.vault.autofillSuggestions('autofill-probe.test');
+      if (suggestions.length !== 1)
+        throw new Error(`expected 1 suggestion, got ${suggestions.length}`);
+      if (suggestions[0].username !== 'af-user') throw new Error('suggestion username mismatch');
+      // Cleanup
+      await a.vault.remove(probe.uuid);
+      return `autofillSuggestions('autofill-probe.test') -> 1 match ok`;
+    },
+  },
   // form detection
   {
     id: 'form.detectLoginForm',
@@ -906,6 +938,67 @@ export const CATALOG: FeatureCheck[] = [
         );
 
       return `proxy getState→setConfig(probe)→assert→testConnection(port:9 ok:${testResult.ok})→clear→restore ok`;
+    },
+  },
+  // workspaces
+  {
+    id: 'workspace.crud',
+    domain: 'workspace',
+    title: 'Workspace CRUD',
+    channels: [
+      IPC.workspaceList,
+      IPC.workspaceCreate,
+      IPC.workspaceSwitch,
+      IPC.workspaceRename,
+      IPC.workspaceSetColor,
+      IPC.workspaceRemove,
+      IPC.workspaceReorder,
+    ],
+    exercise: async (a) => {
+      const listResult = await a.workspace.list();
+      // workspace.list may return WorkspaceState or Workspace[] depending on the platform
+      if (!Array.isArray(listResult)) assertObject(listResult);
+      else assertArray(listResult);
+      const ws = await a.workspace.create('Test Workspace', '#3b82f6');
+      assertObject(ws);
+      await a.workspace.rename(ws.id, 'Renamed');
+      await a.workspace.setColor(ws.id, '#10b981');
+      await a.workspace.switch(ws.id);
+      await a.workspace.reorder([ws.id, 'default']);
+      await a.workspace.remove(ws.id);
+    },
+    verify: async (a) => {
+      const before = await a.workspace.list();
+      const beforeLen = Array.isArray(before)
+        ? before.length
+        : ((before as any).workspaces?.length ?? 0);
+      const created = await a.workspace.create('Verify WS', '#f43f5e');
+      await a.workspace.switch(created.id);
+      await a.tabs.list(); // tab list should reflect the new workspace
+      await a.workspace.switch('default');
+      await a.workspace.remove(created.id);
+      const after = await a.workspace.list();
+      const afterLen = Array.isArray(after)
+        ? after.length
+        : ((after as any).workspaces?.length ?? 0);
+      if (afterLen !== beforeLen)
+        throw new Error(`workspace remove: expected ${beforeLen} workspaces, got ${afterLen}`);
+      return 'workspace CRUD round-trip ok';
+    },
+  },
+  // split view
+  {
+    id: 'split.crud',
+    domain: 'split',
+    title: 'Split view enter/exit/resize/focus',
+    channels: [IPC.splitEnter, IPC.splitExit, IPC.splitResize, IPC.splitFocus],
+    exercise: async (a) => {
+      // exercise exercises the channels but does not assert success — the Rust
+      // side may reject the call if fewer than 2 tabs exist (vitest mock).
+      await a.split.enter([1, 2]).catch(() => {});
+      await a.split.resize(1, 600, 800).catch(() => {});
+      await a.split.focus(1).catch(() => {});
+      await a.split.exit().catch(() => {});
     },
   },
 ];

@@ -96,7 +96,7 @@ fn next_observe(local: (i64, u32), now_ms: i64, remote: (i64, u32)) -> (i64, u32
 
 /// Advance the global clock for a LOCAL event and return a strictly-monotonic timestamp.
 pub fn tick(node: &str, now_ms: i64) -> Hlc {
-    let mut g = clock().lock().unwrap();
+    let mut g = clock().lock().unwrap_or_else(|e| e.into_inner());
     *g = next_tick(*g, now_ms);
     Hlc {
         wall_ms: g.0,
@@ -109,7 +109,7 @@ pub fn tick(node: &str, now_ms: i64) -> Hlc {
 /// global clock and `remote`, advancing the clock accordingly.
 #[allow(dead_code)] // called by the merge (sync_stores) — dead on the Android cdylib until F2b
 pub fn observe(node: &str, now_ms: i64, remote: &Hlc) -> Hlc {
-    let mut g = clock().lock().unwrap();
+    let mut g = clock().lock().unwrap_or_else(|e| e.into_inner());
     *g = next_observe(*g, now_ms, (remote.wall_ms, remote.counter));
     Hlc {
         wall_ms: g.0,

@@ -1,21 +1,19 @@
-import { RotateCw, X, ChevronUp, ChevronDown, Maximize2 } from 'lucide-react';
-import type { Favorite } from '../../../shared/types';
+import type { ReactNode } from 'react';
+import { RotateCw, X, ChevronUp, ChevronDown } from 'lucide-react';
 import { AddressBar } from '../AddressBar';
 import type { SiteInfo } from '../AddressBar';
-import { MobileFavourites } from './MobileFavourites';
 
 interface MobileTopBarProps {
   url: string;
   isLoading: boolean;
   isPrivate?: boolean;
   siteInfo?: SiteInfo;
+  /** Shield icon rendered inline inside the address bar pill (right edge). */
+  inlineShield?: ReactNode;
   onNavigate(raw: string): void;
   onReloadOrStop(): void;
-  favorites: Favorite[];
-  onOpenFavourite(url: string): void;
   bottomBarHidden: boolean;
   onToggleBottomBar(): void;
-  onEnterFullscreen(): void;
 }
 
 export function MobileTopBar({
@@ -23,13 +21,11 @@ export function MobileTopBar({
   isLoading,
   isPrivate = false,
   siteInfo,
+  inlineShield,
   onNavigate,
   onReloadOrStop,
-  favorites,
-  onOpenFavourite,
   bottomBarHidden,
   onToggleBottomBar,
-  onEnterFullscreen,
 }: MobileTopBarProps) {
   return (
     <div className="mobile-topbar">
@@ -39,6 +35,7 @@ export function MobileTopBar({
           isLoading={isLoading}
           isPrivate={isPrivate}
           siteInfo={siteInfo}
+          inlineRight={inlineShield}
           onSubmit={onNavigate}
         />
         <button
@@ -48,9 +45,9 @@ export function MobileTopBar({
           onClick={onReloadOrStop}
         >
           {isLoading ? (
-            <X size={18} aria-hidden="true" />
+            <X size={20} aria-hidden="true" />
           ) : (
-            <RotateCw size={18} aria-hidden="true" />
+            <RotateCw size={20} aria-hidden="true" />
           )}
         </button>
         <button
@@ -61,21 +58,12 @@ export function MobileTopBar({
           onClick={onToggleBottomBar}
         >
           {bottomBarHidden ? (
-            <ChevronUp size={18} aria-hidden="true" />
+            <ChevronUp size={20} aria-hidden="true" />
           ) : (
-            <ChevronDown size={18} aria-hidden="true" />
+            <ChevronDown size={20} aria-hidden="true" />
           )}
         </button>
-        <button
-          type="button"
-          className="mobile-topbar__toggle"
-          aria-label="Enter fullscreen"
-          onClick={onEnterFullscreen}
-        >
-          <Maximize2 size={18} aria-hidden="true" />
-        </button>
       </div>
-      <MobileFavourites favorites={favorites} onOpen={onOpenFavourite} />
     </div>
   );
 }

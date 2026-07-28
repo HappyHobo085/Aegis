@@ -6,12 +6,15 @@
 //! WebKitGTK `notify::uri` (`linux_layout::connect_url_tracker`). Reached via Tauri's
 //! `with_webview` -> `PlatformWebview::controller()`, mirroring `adblock_win.rs`.
 //!
+//! Also installs a `DocumentTitleChanged` handler that catches the element picker's
+//! `AEGISPICK:{json}` title sentinel and routes it to `picker::on_picked`.
+//!
 //! Compile-verified (`cargo check --target x86_64-pc-windows-gnu` + CI msvc); the
 //! runtime behavior needs a Windows desktop to confirm.
 
 use tauri::AppHandle;
 use webview2_com::Microsoft::Web::WebView2::Win32::ICoreWebView2;
-use webview2_com::SourceChangedEventHandler;
+use webview2_com::{DocumentTitleChangedEventHandler, SourceChangedEventHandler};
 use windows::core::PWSTR;
 
 /// Install a `SourceChanged` handler on the content webview that pushes the current
@@ -26,6 +29,13 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
             Ok(c) => c,
             Err(_) => return,
         };
+
+        // Clone `app` once for each handler that needs it (both closures consume
+        // their clone via `move`).
+        let app_url = app.clone();
+        let app_title = app;
+
+        // ── SourceChanged: track same-document URL changes for the address bar ──
         let core_for_handler = core.clone();
         let handler = SourceChangedEventHandler::create(Box::new(move |_sender, args| {
             // `IsNewDocument` distinguishes a full navigation from a same-document
@@ -38,13 +48,29 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
                 .unwrap_or(false);
             if let Ok(url) = source_url(&core_for_handler) {
                 if !url.is_empty() {
-                    crate::nav::emit_state(&app, id, &url, "", loading);
+                    crate::nav::emit_state(&app_url, id, &url, "", loading);
                 }
             }
             Ok(())
         }));
         let mut token: i64 = 0;
         let _ = core.add_SourceChanged(&handler, &mut token);
+
+        // ── DocumentTitleChanged: catch the element picker's AEGISPICK sentinel ──
+        // The picker JS sets document.title to "AEGISPICK:{json}" briefly; this
+        // handler strips the prefix and routes the payload to `picker::on_picked`.
+        let core_for_title = core.clone();
+        let title_handler =
+            DocumentTitleChangedEventHandler::create(Box::new(move |_sender, _args| {
+                if let Ok(title) = document_title(&core_for_title) {
+                    if let Some(payload) = title.strip_prefix(crate::picker::SENTINEL) {
+                        crate::picker::on_picked(&app_title, payload);
+                    }
+                }
+                Ok(())
+            }));
+        let mut token_title: i64 = 0;
+        let _ = core.add_DocumentTitleChanged(&title_handler, &mut token_title);
     }
 }
 
@@ -56,4 +82,14 @@ unsafe fn source_url(core: &ICoreWebView2) -> windows::core::Result<String> {
         return Ok(String::new());
     }
     Ok(uri.to_string().unwrap_or_default())
+}
+
+/// Read `ICoreWebView2::DocumentTitle` — the current page title.
+unsafe fn document_title(core: &ICoreWebView2) -> windows::core::Result<String> {
+    let mut title = PWSTR::null();
+    core.DocumentTitle(&mut title)?;
+    if title.is_null() {
+        return Ok(String::new());
+    }
+    Ok(title.to_string().unwrap_or_default())
 }

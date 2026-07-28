@@ -1,5 +1,4 @@
 // src/components/FavoritesBar.tsx
-import { SlidersHorizontal } from 'lucide-react';
 import type { Favorite } from '../../shared/types';
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 
@@ -12,7 +11,7 @@ export interface FavoritesBarProps {
 export function FavoritesBar({ favorites, onOpenFavorite, onOpenManager }: FavoritesBarProps) {
   const barRef = useHorizontalWheel<HTMLElement>();
   return (
-    <nav ref={barRef} className="favorites-bar" aria-label="Favorites">
+    <nav ref={barRef} className="favorites-bar" aria-label="Bookmarks">
       <div className="favorites-bar__chips">
         {favorites.map((f) => (
           <button
@@ -29,11 +28,12 @@ export function FavoritesBar({ favorites, onOpenFavorite, onOpenManager }: Favor
       </div>
       <button
         type="button"
-        className="favorites-bar__manage"
-        aria-label="Manage favorites"
+        className="favorites-bar__add"
+        aria-label="New bookmark"
+        title="New bookmark"
         onClick={onOpenManager}
       >
-        <SlidersHorizontal size={16} aria-hidden="true" />
+        +
       </button>
     </nav>
   );

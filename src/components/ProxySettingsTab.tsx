@@ -266,3 +266,5 @@ export function ProxySettingsTab({
     </div>
   );
 }
+
+export default ProxySettingsTab;

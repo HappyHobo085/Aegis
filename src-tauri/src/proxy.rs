@@ -174,17 +174,18 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
 /// macOS: NOT implemented — direct connection (no proxy applied).
 ///   The proper fix is a hand-rolled Network.framework / objc2 binding that sets
 ///   `WKWebsiteDataStore.proxyConfigurations` (macOS 14+). That binding requires
-///   unconfirmed `nw_proxy_config_*` / `NWEndpoint` FFI signatures that cannot be
-///   verified without a macOS toolchain (objc2 cannot be compiled from Linux —
-///   see `aegis-macos-crosscompile` in project memory). Deferred to a Mac-developer
-///   follow-up (sub-project I). macOS builds and runs, just with no proxy support.
-///   See docs/superpowers/plans/2026-06-23-proxy.md Task 6 for the deferred binding spec.
+///   `nw_proxy_config_*` / `nw_endpoint_create_host` FFI signatures that cannot be
+///   verified without a macOS toolchain (objc2 cannot be compiled from Linux).
+///   Deferred to a Mac-developer follow-up (sub-project I). macOS builds and runs,
+///   just with no proxy support.
+///   See `docs/roadmap/macOS-proxy-bindings.md` for the full implementation guide.
 pub fn apply_to_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let cfg = current(app);
     #[cfg(target_os = "linux")]
     crate::linux_layout::apply_proxy_label(app, &crate::nav::content_label(id), &cfg);
     // macOS: documented no-op — direct connection. Network.framework binding deferred
-    // to a Mac-developer follow-up; see doc-comment above.
+    // to a Mac-developer follow-up; see doc-comment above and
+    // docs/roadmap/macOS-proxy-bindings.md.
     #[cfg(target_os = "macos")]
     let _ = (id, cfg);
     // Windows: spawn-time only (see doc-comment above).
