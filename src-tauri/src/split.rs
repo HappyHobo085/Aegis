@@ -225,6 +225,13 @@ pub fn dispatch<R: Runtime>(
             let pane_id = payload.get("paneId").and_then(Value::as_u64).unwrap_or(0) as u32;
             Some(focus(app, pane_id))
         }
+        // A FETCH seam, deliberately. `split.state` is only emitted from the four mutation
+        // handlers above, and `SplitState` is process-global in-memory state that is never
+        // persisted — so a renderer that remounts (a data-import reload, hot reload, any
+        // conditional-render branch flip) used to subscribe, wait for an event that would never
+        // come, and render single-pane while Rust still held N live split webviews. Mirrors the
+        // existing `nav.getState` pattern. `Value::Null` means "no split is active".
+        "split.getState" => Some(Ok(state_value(&app.state::<SplitState>()))),
         _ => None,
     }
 }
@@ -419,6 +426,29 @@ mod tests {
         with_tmp_app(|app| {
             let result = dispatch(app, "split.unknown", &Value::Null);
             assert!(result.is_none());
+        });
+    }
+
+    /// F15 regression: a renderer that remounts fetches the layout it missed, instead of
+    /// waiting for a `split.state` event that is only ever emitted from a mutation.
+    #[test]
+    fn get_state_returns_the_layout_a_fresh_subscriber_would_otherwise_never_see() {
+        with_tmp_app(|app| {
+            // Before any split: null, so the caller can tell "inactive" from "unknown".
+            let empty = dispatch(app, "split.getState", &Value::Null);
+            assert_eq!(empty.map(|r| r.unwrap()), Some(Value::Null));
+
+            enter(app, &[1, 2]).unwrap();
+
+            // The whole point: a remounted renderer reads the live layout back, and it
+            // matches exactly what the event channel would have delivered.
+            let fetched = dispatch(app, "split.getState", &Value::Null)
+                .expect("split.getState is a known channel")
+                .expect("get_state must not error");
+            let emitted = state_value(&app.state::<SplitState>());
+            assert!(fetched.is_object(), "an active split must not read as null");
+            assert_eq!(fetched, emitted);
+            assert_eq!(fetched["panes"].as_array().unwrap().len(), 2);
         });
     }
 

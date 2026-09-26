@@ -43,6 +43,57 @@ fn should_autoclose_popunder(tab_id: u32, active_id: u32, has_content: bool) -> 
     tab_id != active_id && !has_content
 }
 
+/// Whether a URL is a scheme the content webview may be asked to load.
+///
+/// This mirrors two helpers that already exist and are NOT a substitute for it:
+/// the renderer's `isAllowedNavigationUrl` (`src/lib/schemes.ts`) and the Android
+/// `isLoadableUrl` (`MainActivity.kt`). The renderer's guard sits *inside* the trust
+/// boundary Tauri assumes is trusted — it is a UI affordance, not a policy. Anything
+/// that reaches a URL without going through the chrome (a synced setting, an imported
+/// bundle, a `tabs.json` written before this check existed, or a page's own
+/// `window.open`) bypasses it entirely, so the core needs its own copy.
+///
+/// http/https are the two browsable schemes. `about:blank` is allowed because that is
+/// what a new tab starts on and what the ad-block/pop-under shell logic keys off.
+/// Everything else is refused:
+///
+/// * `file:` — makes the content webview read a local file. This is the one that
+///   mattered: `tabs.recordNav` persists the URL, so a single `file:` nav became a
+///   local-file read on *every subsequent launch*, not just the current one.
+/// * `javascript:` — script injection into a webview that can reach the IPC chokepoint.
+/// * `data:`/`blob:`/custom schemes — a page-controlled origin we have no policy for.
+pub fn is_navigable(u: &Url) -> bool {
+    match u.scheme() {
+        "http" | "https" => true,
+        // `about:blank` and nothing else. Matched on the path (not `as_str()`) so a
+        // benign fragment like `about:blank#x` still passes while `about:config` does not.
+        "about" => u.path() == "blank",
+        _ => false,
+    }
+}
+
+/// [`is_navigable`] as a fallible check, naming the refused scheme so the renderer (and
+/// the user, via its error toast) can see *why* a navigation was rejected.
+pub fn require_navigable(u: &Url) -> Result<(), String> {
+    if is_navigable(u) {
+        Ok(())
+    } else {
+        Err(format!(
+            "refusing to navigate content webview to scheme {:?} ({}) — only http, https and about:blank are allowed",
+            u.scheme(),
+            u.as_str()
+        ))
+    }
+}
+
+/// Parse `raw` and require it to be navigable, in one step. Returns the parse error or
+/// the scheme error so callers can just `?` it.
+pub fn parse_navigable(raw: &str) -> Result<Url, String> {
+    let u = Url::parse(raw).map_err(|e| format!("invalid url '{raw}': {e}"))?;
+    require_navigable(&u)?;
+    Ok(u)
+}
+
 /// Webview label for a tab. Tab ids start at 1; the first tab is `content:1`.
 pub fn content_label(id: u32) -> String {
     format!("content:{id}")
@@ -290,9 +341,12 @@ pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
 /// Mobile (single-webview) is a no-op so the chrome still loads.
 #[cfg(desktop)]
 pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Result<()> {
-    let window = app
-        .get_window("main")
-        .expect("main window must exist (declared in tauri.conf.json)");
+    // A missing window is reachable (a late IPC or a sweep closure racing teardown), and a panic
+    // here would take down the app rather than fail one request — so return the error instead.
+    // Every other `get_window("main")` in this crate already uses this let-else shape.
+    let Some(window) = app.get_window("main") else {
+        return Err(tauri::Error::WindowNotFound);
+    };
     let scale = window.scale_factor().unwrap_or(1.0);
     let size = window.inner_size()?.to_logical::<f64>(scale);
     let label = content_label(id);
@@ -396,8 +450,8 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
                         crate::tabs::is_private(&app_dl, dl_id),
                     );
                 }
-                tauri::webview::DownloadEvent::Finished { success, .. } => {
-                    crate::downloads::on_finished(&app_dl, success);
+                tauri::webview::DownloadEvent::Finished { success, url, .. } => {
+                    crate::downloads::on_finished(&app_dl, success, Some(url.as_str()));
                 }
                 _ => {}
             }
@@ -419,6 +473,18 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
                     .map(|u| u.to_string())
                     .unwrap_or_default();
                 if crate::adblock_engine::is_unwanted_popup(&u, &opener) {
+                    return tauri::webview::NewWindowResponse::Deny;
+                }
+                // PAGE-CONTROLLED URL. The popup target comes from the page, not from
+                // the user or the chrome, so `window.open('file:///…')` reached
+                // `open_background` unfiltered and spawned a tab that loaded it. Deny
+                // the same way as an ad popup — the response is Deny either way, since
+                // Aegis opens the tab itself rather than letting the webview do it.
+                if !is_navigable(&url) {
+                    log::warn!(
+                        "[aegis] blocked window.open to non-navigable scheme {:?}",
+                        url.scheme()
+                    );
                     return tauri::webview::NewWindowResponse::Deny;
                 }
                 // PRIVATE: a tab opened FROM a private tab inherits privateness.
@@ -652,7 +718,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
     let res: Result<Value, String> = match channel {
         "nav.navigate" => {
             let url_s = payload.get("url").and_then(|v| v.as_str()).unwrap_or("");
-            match Url::parse(url_s) {
+            match parse_navigable(url_s) {
                 Ok(u) => match content {
                     Some(w) => {
                         crate::redirect_guard::expect(app, label_id(&label), u.as_str());
@@ -662,7 +728,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                     }
                     None => Ok(Value::Null),
                 },
-                Err(e) => Err(format!("invalid url '{url_s}': {e}")),
+                Err(e) => Err(e),
             }
         }
         "nav.back" => {
@@ -714,8 +780,16 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         "nav.home" => {
             if let Some(w) = content {
                 let home = crate::settings::home_url(app);
-                crate::redirect_guard::expect(app, label_id(&label), home.as_str());
-                let _ = w.navigate(home);
+                // `home_url()` is validated on every write path now (settings.set,
+                // apply_synced, apply_imported), but a settings.json written before
+                // that allowlist existed can still hold a `file:` target, and this is
+                // the code that would load it on every launch. Check at the point of use.
+                let u = home;
+                if let Err(e) = require_navigable(&u) {
+                    return Some(Err(e));
+                }
+                crate::redirect_guard::expect(app, label_id(&label), u.as_str());
+                let _ = w.navigate(u);
             }
             Ok(Value::Null)
         }
@@ -750,8 +824,10 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        forget_tab_content, mark_tab_has_content, should_autoclose_popunder, tabs_with_content,
+        forget_tab_content, is_navigable, mark_tab_has_content, parse_navigable, require_navigable,
+        should_autoclose_popunder, tabs_with_content,
     };
+    use tauri::Url;
 
     #[test]
     fn autoclose_only_nonactive_blank_tabs() {
@@ -780,5 +856,83 @@ mod tests {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .contains(&id));
+    }
+
+    // ── scheme allowlist ───────────────────────────────────────────────────
+    //
+    // These pin the predicate the six call sites depend on. The call sites themselves
+    // (`tabs::dispatch`) take a concrete wry `&AppHandle` and so cannot be driven from
+    // a MockRuntime test — that is a pre-existing limitation of those signatures, not
+    // of this check, and it is why the predicate is pure and tested here.
+
+    #[test]
+    fn http_and_https_are_navigable() {
+        for raw in [
+            "http://example.com/",
+            "https://example.com/",
+            "https://example.com:8443/a?b=c#d",
+            // The url crate lowercases the scheme, so mixed case needs no special case.
+            "HTTPS://EXAMPLE.COM/",
+            "HtTp://example.com/",
+        ] {
+            let u = Url::parse(raw).expect(raw);
+            assert!(is_navigable(&u), "{raw} should be navigable");
+        }
+    }
+
+    #[test]
+    fn about_blank_is_navigable_but_other_about_pages_are_not() {
+        // A new tab starts here and the pop-under shell logic keys off it.
+        assert!(is_navigable(&Url::parse("about:blank").unwrap()));
+        // A benign fragment must not break a legitimate blank tab.
+        assert!(is_navigable(&Url::parse("about:blank#x").unwrap()));
+        // about:config & friends are privileged pages we have no policy for.
+        for raw in ["about:config", "about:blankx", "about:"] {
+            let Ok(u) = Url::parse(raw) else { continue };
+            assert!(!is_navigable(&u), "{raw} must not be navigable");
+        }
+    }
+
+    #[test]
+    fn dangerous_and_unknown_schemes_are_refused() {
+        for raw in [
+            "file:///etc/passwd",
+            "file:///home/u/.ssh/id_rsa",
+            "javascript:alert(1)",
+            "JavaScript:alert(1)", // scheme is case-insensitive; must still be refused
+            "data:text/html,<script>alert(1)</script>",
+            "blob:https://example.com/abc",
+            "ftp://example.com/",
+            "chrome://settings",
+            "intent://scan/#Intent;scheme=zxing;end",
+            "aegis-internal://thing",
+        ] {
+            let u = Url::parse(raw).expect(raw);
+            assert!(!is_navigable(&u), "{raw} must NOT be navigable");
+        }
+    }
+
+    #[test]
+    fn require_navigable_names_the_scheme_it_refused() {
+        let u = Url::parse("file:///etc/passwd").unwrap();
+        let err = require_navigable(&u).expect_err("file: must be refused");
+        // The message has to name the scheme, or the renderer's error toast is useless.
+        assert!(err.contains("file"), "error should name the scheme: {err}");
+        assert!(require_navigable(&Url::parse("https://ok.test/").unwrap()).is_ok());
+    }
+
+    #[test]
+    fn parse_navigable_reports_a_parse_error_before_a_scheme_error() {
+        // Not a URL at all → the parse error, not a confusing "empty scheme" refusal.
+        let e = parse_navigable("not a url").expect_err("garbage must be refused");
+        assert!(e.contains("invalid url"), "got: {e}");
+        // Parses fine but the wrong scheme → the scheme refusal.
+        let e = parse_navigable("file:///etc/passwd").expect_err("file: must be refused");
+        assert!(e.contains("file"), "got: {e}");
+        // The happy path returns the parsed Url for the caller to navigate to.
+        assert_eq!(
+            parse_navigable("https://example.com/x").unwrap().as_str(),
+            "https://example.com/x"
+        );
     }
 }

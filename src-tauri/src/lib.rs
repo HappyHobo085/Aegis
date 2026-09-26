@@ -1,3 +1,12 @@
+// `unsafe` is denied crate-wide. Every site we have is FFI glue to a platform
+// API (WebKitGTK, WebView2, WKWebView, the OS keychain, JNI), and each such
+// module opts back in with a bare `#[allow(unsafe_code)]` on its `mod`
+// declaration above — so the unsafe surface is an explicit, reviewable list of
+// 12 modules rather than something you have to grep for. Adding a new `unsafe`
+// now requires deliberately saying so, and CI's `clippy -D warnings` enforces
+// it. Keep the allow list as small as the platform demands.
+#![deny(unsafe_code)]
+
 mod adblock;
 // The bundled filter lists (EasyList + EasyPrivacy + Peter Lowe's), single-sourced so
 // every ad-block tier blocks from the identical set across all platforms.
@@ -12,8 +21,9 @@ mod form;
 mod adblock_engine;
 // Scripted cross-origin top-frame redirect blocker (anti-malvertising). Pure
 // policy (should_block) + per-tab app-initiated nav registry; each platform's
-// native nav-policy hook derives the inputs and cancels. See
-// docs/superpowers/specs/2026-06-18-scripted-redirect-blocker-design.md.
+// native nav-policy hook derives the inputs and cancels. The design is recorded in
+// `redirect_guard`'s own module header and in `src-tauri/AGENTS.md` (gotcha 14) —
+// the spec this used to cite was deleted in commit 58d2c4b and is not recoverable.
 #[cfg(any(desktop, target_os = "android", test))]
 mod redirect_guard;
 // Cross-platform post-change ad-block re-apply (WebKit reinstall on Linux + engine policy
@@ -22,16 +32,20 @@ mod redirect_guard;
 mod adblock_refresh;
 // Windows full network ad-block: our own WebView2 WebResourceRequested interceptor.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod adblock_win;
 // Address-bar URL tracking for same-document (History-API/hash) navigations — the
 // per-platform analog of Linux's WebKitGTK notify::uri (linux_layout::connect_url_tracker):
 // WebView2 SourceChanged on Windows, WKWebView `URL` KVO on macOS.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod nav_url_win;
 // Windows scripted cross-origin top-frame redirect guard: WebView2 NavigationStarting.
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod nav_policy_win;
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod nav_url_mac;
 // Injected (document-start) ad/tracker blocker for the content webview — the ad-block
 // layer on Windows/macOS (wry can't intercept their requests), verifiable on Linux where
@@ -43,8 +57,10 @@ mod adblock_inject;
 // WebRTC IP-leak defense: the document-start shim builder + reference filter rules.
 // Gated like adblock_engine so the NativeWebrtc JNI export links on Android.
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod adblock_webkit;
 #[cfg(target_os = "linux")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod linux_layout;
 #[cfg(any(desktop, target_os = "android", test))]
 mod webrtc_shim;
@@ -62,6 +78,7 @@ mod history;
 mod jsonstore;
 mod nav;
 mod permissions;
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod picker;
 mod places;
 mod safety;
@@ -74,12 +91,17 @@ mod sync_envelope;
 mod sync_identity;
 // Sync seed at rest (F2b): OS keychain (desktop) / passphrase-wrapped fallback + the
 // per-install device salt. Android hardware-Keystore path wired in the Android-parity step.
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod sync_keystore;
 // The merge seam F2b consumes: SYNCABLE stores + read_all/merge_into (HLC last-writer-wins).
 mod sync_stores;
 // The sync ENGINE (F2b): enable/disable, device pairing, the encrypted pull/merge/push loop.
 mod split;
 mod sync;
+// The vault's half of sync: publishes/adopts the account's shared Argon2 salt (so records are
+// portable between paired devices at all) and merges records that authenticate under the local
+// vault key. Gated on the separate `syncVault` opt-in; see the module docs for the two halves.
+mod sync_vault;
 mod tab_registry;
 mod tabs;
 #[cfg(test)]
@@ -91,22 +113,23 @@ mod find;
 #[cfg(target_os = "linux")]
 mod find_linux;
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod find_mac;
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod find_win;
 // Page zoom (zoom.* IPC): session-only per-tab factor, per-platform native setter.
 mod zoom;
 #[cfg(target_os = "macos")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod zoom_mac;
 #[cfg(target_os = "windows")]
+#[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod zoom_win;
 // Local encrypted-at-rest password vault (Phase A — manage only, NO autofill, NO page bridge).
 mod vault;
 // In-page autofill badge + form detection JS injection (Phase B).
 mod vault_inject;
-// Vault namespace bridge for the sync engine — reads/writes sealed
-// ciphertext records so the sync server never sees plaintext.
-mod sync_vault;
 // Content-webview-scoped proxy: pure parse/validate/URI core (Tasks 1-6).
 mod proxy;
 
@@ -123,6 +146,29 @@ pub fn emit_event<R: tauri::Runtime, S: serde::Serialize + Clone>(
     payload: S,
 ) {
     let _ = app.emit(&name.replace('.', ":"), payload);
+}
+
+/// Run `f` under a panic guard, for code reachable from a JNI `extern "system"` frame.
+///
+/// A panic that unwinds out of an `extern "C"`/`extern "system"` function is undefined
+/// behaviour — on Android it tears down the process (a SIGABRT the user sees as the app
+/// vanishing), not a catchable exception. Every JNI export must therefore treat a panic
+/// as a normal, recoverable outcome. Returns `None` if `f` panicked.
+///
+/// Callers must keep the `JNIEnv` **outside** the closure: it is `!UnwindSafe`, and the
+/// whole point of `AssertUnwindSafe` here is to assert that the *captured* state is plain
+/// data. Read the `jstring` arguments into owned `String`s first, guard only the pure
+/// computation, then build the return value (e.g. `env.new_string`) outside — the same
+/// shape `farble.rs` and `proxy.rs` already use.
+///
+/// Also serves as the grep-able inventory of guarded exports: every `extern "system" fn
+/// Java_*` body should route its fallible work through here.
+// Only CALLED from the `#[cfg(target_os = "android")]` JNI exports, so every other
+// target would see it as dead code. The `tests` module below exercises it on every
+// platform, so this is scoped to non-Android rather than a blanket allow.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub(crate) fn ffi_guard<T>(f: impl FnOnce() -> T) -> Option<T> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
 }
 
 /// Single IPC entry point. The renderer calls `invoke('ipc', {channel, payload})`
@@ -201,23 +247,34 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     if let Some(result) = split::dispatch(&app, &channel, &payload) {
         return result;
     }
-    let v = match channel.as_str() {
+    match channel.as_str() {
         "lists.updateNow" => {
             // Non-blocking: starts a background refresh, result arrives via lists.updateResult.
             subs::update_now(&app);
-            Value::Null
+            Ok(Value::Null)
         }
 
-        // Fire-and-forget actions (history.remove/clear, permissions.resolve,
-        // downloads.openFile/showInFolder, update.*, safety.proceed/removeException)
-        // resolve to null (Promise<void>).
+        // Nothing handled this channel. Every real channel — including the fire-and-forget
+        // actions (history.remove/clear, permissions.resolve, downloads.openFile/showInFolder,
+        // update.*, safety.proceed/removeException), which resolve to `null` (Promise<void>) —
+        // is claimed by one of the `dispatch` calls above, so reaching here means the channel
+        // does not exist: a typo, a stale build, or a channel declared in `shared/types.ts`
+        // with no Rust arm behind it.
+        //
+        // This used to return `Ok(Value::Null)`, which was the worst of the possible answers:
+        // a rejected promise is visible, but a promise that RESOLVES to `null` is
+        // indistinguishable from a channel that legitimately has no result, so the caller
+        // renders `null` as data and the mismatch is invisible in both release and dev. The
+        // real instance was `vault.autofill` — declared and typed in `shared/types.ts` and
+        // tested against the IPC mock, but never implemented in Rust, so it silently
+        // resolved to `null` in a release build and the declared `Promise<VaultRecord[]>`
+        // was a lie. A misspelled channel arm has the same failure mode. So: say so.
         _ => {
             #[cfg(debug_assertions)]
             eprintln!("[aegis] unrecognized IPC channel: {channel}");
-            Value::Null
+            Err(format!("unknown IPC channel: {channel}"))
         }
-    };
-    Ok(v)
+    }
 }
 
 /// Convert EasyList to content-blocker JSON on a background thread and load it as
@@ -570,12 +627,23 @@ pub fn run() {
             .state::<tabs::Tabs>()
             .reg
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .url_of(active)
             .map(str::to_string);
         if let Some(url) = active_url {
-            if let Ok(u) = tauri::Url::parse(&url) {
-                nav::spawn_tab(app.handle(), active, u, false)?;
+            // `tabs.json` is attacker-influenced input: it is written from URLs the
+            // content webview reported loading, and it persists across upgrades. A
+            // `file:` entry written before `nav::is_navigable` existed would otherwise
+            // be re-loaded as a tab on every single launch. Refuse and start on a blank
+            // tab — a poisoned session file must not be able to abort `setup`, which
+            // would take the whole app down.
+            match nav::parse_navigable(&url) {
+                Ok(u) => {
+                    nav::spawn_tab(app.handle(), active, u, false)?;
+                }
+                Err(e) => {
+                    log::warn!("[aegis] session restore refused persisted tab url: {e}");
+                }
             }
         }
         #[cfg(debug_assertions)]
@@ -734,4 +802,49 @@ pub fn run() {
     builder
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ffi_guard;
+
+    /// `ffi_guard` is only CALLED from `#[cfg(target_os = "android")]` JNI exports, so
+    /// without a test that exercises it on every platform it would be dead code on
+    /// Linux/Windows/macOS and trip `clippy -D warnings`. Testing it here also means the
+    /// one piece of panic-safety machinery every Android export depends on is covered by
+    /// the ordinary `cargo test` run instead of only on a device.
+    #[test]
+    fn ffi_guard_passes_a_normal_result_through() {
+        assert_eq!(ffi_guard(|| 42u32), Some(42));
+        assert_eq!(ffi_guard(|| "ok"), Some("ok"));
+        assert_eq!(ffi_guard(Vec::<u8>::new), Some(Vec::new()));
+    }
+
+    /// The whole point: a panic must come back as `None`, not unwind past the caller.
+    /// `catch_unwind` still PRINTS the panic (it does not abort the process), so the
+    /// test output carries one expected panic message per case.
+    #[test]
+    fn ffi_guard_turns_a_panic_into_none() {
+        assert_eq!(ffi_guard(|| panic!("boom")), None);
+        assert_eq!(
+            ffi_guard(|| -> u32 { panic!("boom") }),
+            None,
+            "a panicking closure with a non-() return type must still yield None"
+        );
+    }
+
+    /// It must also catch a panic that happens *while unwinding is already propagating
+    /// through a nested frame*, i.e. from a closure that calls another panicking
+    /// closure. This is the shape of the real risk: a JNI export's body calls a helper
+    /// that calls into a third-party crate (the `adblock` engine, a KDF) which panics.
+    #[test]
+    fn ffi_guard_catches_a_panic_from_a_nested_call() {
+        fn inner() -> u8 {
+            panic!("nested boom")
+        }
+        fn outer() -> u8 {
+            inner()
+        }
+        assert_eq!(ffi_guard(outer), None);
+    }
 }

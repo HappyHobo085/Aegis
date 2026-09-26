@@ -522,13 +522,18 @@ impl Registry {
     /// When the total tab count exceeds `aggressive_threshold`, both timeouts are
     /// halved to reclaim memory faster under pressure.
     /// `timeout_ms == 0` disables the standard timeout (but not the background timeout).
-    /// Returns ids whose webviews the caller must close().
     /// Private tabs are never discarded: their ephemeral session data is gone once the
     /// webview closes, and re-creating a new ephemeral partition on reload would leak
     /// that a private tab exists and expose a blank fresh context instead of the
     /// expected page — contrary to user expectations.
-    /// Discard tabs that have timed out.
-    /// Returns IDs of tabs whose webviews should be closed and which should be removed from the registry.
+    ///
+    /// Returns the ids whose webviews the caller must close. It does NOT return ids to delete:
+    /// a discarded tab keeps its row with `live = false` and stays visible and clickable in the
+    /// strip. `activate` hands back a spawn instruction for a non-live tab, so it is
+    /// transparently reloaded on next activation. Deleting the row instead made background tabs
+    /// vanish from the strip entirely after `tabIdleTimeout` minutes (30 by default) with no
+    /// visual indication, left them un-reopenable because they never reached `closed_stack`, and
+    /// made the whole discard/respawn lifecycle unreachable in production.
     pub fn sweep_idle(
         &mut self,
         now_ms: u64,
@@ -536,7 +541,7 @@ impl Registry {
         background_timeout_ms: u64,
         aggressive_threshold: usize,
     ) -> Vec<ViewId> {
-        let mut to_remove = Vec::new();
+        let mut to_close = Vec::new();
         let active = self.active_id;
         // When tabs exceed the threshold, halve both timeouts for aggressive memory
         // reclaim.  saturating_sub ensures 0 stays 0 (disabled).
@@ -553,26 +558,31 @@ impl Registry {
             if t.id == active || t.pinned || t.private {
                 continue;
             }
-            if t.background_creation {
-                if now_ms.saturating_sub(t.created_at) >= eff_bg_timeout {
-                    // Timed out due to being background-created and never activated
-                    to_remove.push(t.id);
-                }
+            let expired = if t.background_creation {
+                // Timed out due to being background-created and never activated.
+                now_ms.saturating_sub(t.created_at) >= eff_bg_timeout
             } else {
-                // Normal idle timeout (only applies to tabs that are not background-created)
-                if eff_timeout != 0 && now_ms.saturating_sub(t.last_active) >= eff_timeout {
-                    t.live = false;
-                    to_remove.push(t.id);
-                }
+                // Normal idle timeout (only applies to tabs that are not background-created).
+                eff_timeout != 0 && now_ms.saturating_sub(t.last_active) >= eff_timeout
+            };
+            if expired {
+                // Both arms mark the tab non-live. The background-created arm used to only push
+                // the id, which was *mostly* invisible rather than an active bug: `create` sets
+                // `live: !background` and `activate` clears `background_creation`, so a tab that
+                // is `live` and `background_creation` at the same time is barely reachable. It
+                // still left `sweep_idle` returning an id whose row claimed to be live, so a
+                // caller could close a webview under a live row. Setting it in both arms keeps
+                // the postcondition "everything I return is non-live" true by construction
+                // instead of by argument about which combinations can occur.
+                //
+                // Note: `sweep_discards_background_never_activated_tabs_after_30_seconds`
+                // asserted `!live` here and passed *before* this fix, because the tab was born
+                // non-live — it was verifying the birth value, not the sweep.
+                t.live = false;
+                to_close.push(t.id);
             }
         }
-        to_remove
-    }
-
-    /// Remove the given tab IDs from the registry.
-    /// This does NOT close their webviews; callers should do that before invoking this method.
-    pub fn remove_tabs(&mut self, ids: &[ViewId]) {
-        self.tabs.retain(|t| !ids.contains(&t.id));
+        to_close
     }
 
     /// Reopen the most-recently-closed tab (Ctrl+Shift+T). Returns its (id, url).
@@ -972,6 +982,45 @@ mod tests {
         let (_b, _) = r.create(None, false, 50_000); // tab 1 backgrounded@50s
         let victims = r.sweep_idle(60_000, 30_000, 30_000, 20); // idle only 10s < 30s
         assert!(victims.is_empty());
+    }
+
+    /// The discard/respawn lifecycle, end to end, driven by the REAL sweep rather than by the
+    /// `#[cfg(test)] discard_for_test` helper that `activating_discarded_tab_returns_its_url_to_spawn`
+    /// uses. This is the contract that `tabs.rs::start_idle_sweep` broke: it used to call
+    /// `remove_tabs(&victims)` after closing the webviews, which deleted the rows, so a swept tab
+    /// could never respawn — the sweep was reachable but its whole purpose was not.
+    #[test]
+    fn a_swept_tab_keeps_its_row_and_respawns_on_activation() {
+        let mut r = reg(); // tab 1
+        let (b, b_url) = r.create(Some("https://b.test/".into()), false, 0); // b active
+        r.activate(1, 0); // back to tab 1, so b is an idle background tab
+
+        // Sweep with a 30s idle timeout at t=60s: b has been idle since t=0, so it expires.
+        let victims = r.sweep_idle(60_000, 30_000, 30_000, 20);
+        assert_eq!(victims, vec![b]);
+
+        // The row must SURVIVE the sweep, non-live but still listed — a discarded tab is a real
+        // tab the user can see and click, not a deleted one.
+        let state = r.tabs_state();
+        let row = state
+            .tabs
+            .iter()
+            .find(|t| t.id == b)
+            .expect("a swept tab must keep its registry row");
+        assert!(!row.live, "a swept tab must be marked non-live");
+        assert_eq!(row.url, b_url, "the row must keep its url for the respawn");
+
+        // And activating it must hand back a spawn instruction. This is the step that was
+        // unreachable while the sweep deleted rows: `activate` returns None for a missing id.
+        assert_eq!(
+            r.activate(b, 60_000),
+            Some(b_url),
+            "activating a swept tab must ask the caller to respawn its webview"
+        );
+        assert!(
+            r.tabs_state().tabs.iter().find(|t| t.id == b).unwrap().live,
+            "the respawned tab is live again"
+        );
     }
 
     #[test]

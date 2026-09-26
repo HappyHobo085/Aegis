@@ -14,6 +14,12 @@ pub struct Tabs {
     pub start: Instant,
 }
 
+/// The inert URL a tab falls back to when its real target is refused. Deliberately NOT
+/// `create_private(None, …)`: that substitutes the user's *home page*, so refusing a
+/// `window.open('file:///…')` would have silently navigated them to their homepage
+/// because a page asked. `about:blank` is inert, and `nav::is_navigable` allows it.
+const INERT_TAB_URL: &str = "about:blank";
+
 impl Tabs {
     pub fn from_registry(reg: Registry) -> Self {
         Tabs {
@@ -172,10 +178,20 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
     match channel {
         "tabs.list" => Some(Ok(state_value(app))),
         "tabs.create" => {
-            let url = payload
-                .get("url")
-                .and_then(Value::as_str)
-                .map(str::to_string);
+            let url = match payload.get("url").and_then(Value::as_str) {
+                // No url = a fresh tab; the registry seeds it with about:blank.
+                None => None,
+                Some(raw) => {
+                    // Checked HERE, not at the webview, because `create_private`
+                    // persists the url into tabs.json. A `file:` target accepted once
+                    // would be re-spawned as a tab on every later launch, turning a
+                    // single bad navigation into a durable local-file read.
+                    if let Err(e) = crate::nav::parse_navigable(raw) {
+                        return Some(Err(e));
+                    }
+                    Some(raw.to_string())
+                }
+            };
             // background = true opens the tab without switching the active tab (target=_blank
             // / window.open on mobile; matches on_new_window's open_background on desktop).
             let background = payload
@@ -190,7 +206,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .state::<Tabs>()
                 .reg
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .create_private(url, background, now, private);
             if !background {
                 spawn(app, id, &u, private);
@@ -262,7 +278,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             app.state::<Tabs>()
                 .reg
                 .lock()
-                .unwrap()
+                .unwrap_or_else(|e| e.into_inner())
                 .set_pinned(id, pinned);
             emit_and_persist(app);
             Some(Ok(state_value(app)))
@@ -304,6 +320,15 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
             let url = payload.get("url").and_then(Value::as_str).unwrap_or("");
             let title = payload.get("title").and_then(Value::as_str).unwrap_or("");
+            // The renderer reports what the content webview actually loaded, so this
+            // is the last point at which a non-navigable scheme can be caught before it
+            // is written to tabs.json — and tabs.json is what session restore re-spawns
+            // from on the next launch. Refuse loudly rather than persisting it.
+            if !url.is_empty() {
+                if let Err(e) = crate::nav::parse_navigable(url) {
+                    return Some(Err(e));
+                }
+            }
             record_nav(app, id, url, title);
             Some(Ok(state_value(app)))
         }
@@ -453,12 +478,24 @@ pub fn open_background(app: &AppHandle, url: &str, private: bool) {
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn open_redirect_background(app: &AppHandle, url: &str, private: bool) -> u32 {
     let now = now_ms(app);
+    // Last gate before a background tab's url is PERSISTED. `on_new_window` already
+    // refuses a page-supplied non-navigable scheme, but this function is also the
+    // redirect-blocker's spawn point, and it cannot return an error — so substitute
+    // about:blank (an inert tab) rather than creating one that would load the URL on
+    // every future launch.
+    let safe = match tauri::Url::parse(url) {
+        Ok(u) if crate::nav::is_navigable(&u) => url.to_string(),
+        _ => {
+            log::warn!("[aegis] refusing to open background tab at non-navigable url {url:?}");
+            INERT_TAB_URL.to_string()
+        }
+    };
     let (id, _u) = app
         .state::<Tabs>()
         .reg
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .create_private(Some(url.to_string()), true, now, private);
+        .create_private(Some(safe), true, now, private);
     emit_and_persist(app);
     id
 }
@@ -525,19 +562,18 @@ pub fn start_idle_sweep(app: &AppHandle) {
             }
             let app2 = app.clone();
             let _ = app.run_on_main_thread(move || {
-                // Close the webviews for the victims
+                // Close the victims' webviews. The registry ROWS STAY: a swept tab is still a
+                // tab the user can see and click, and `activate` respawns its webview on the
+                // next activation. Deleting the rows here made background tabs disappear from
+                // the strip entirely after `tabIdleTimeout` minutes (30 by default) with no
+                // visual indication, and — since they never reached `closed_stack` — left them
+                // un-reopenable with Ctrl+Shift+T.
                 for id in &victims {
                     close_webview(&app2, *id);
                 }
-                // Remove the victims from the registry. Scope the lock so it drops
-                // BEFORE emit_and_persist — state_value() re-acquires the same mutex,
-                // and Rust's Mutex is non-reentrant (same-thread re-lock = deadlock).
-                {
-                    let tabs = app2.state::<Tabs>();
-                    let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
-                    reg.remove_tabs(&victims);
-                }
-                emit_and_persist(&app2); // strip re-renders the discarded tabs as "asleep"
+                // `sweep_idle` already flipped each victim to `live: false`, so the strip
+                // re-renders them as "asleep".
+                emit_and_persist(&app2);
             });
         }
     });
