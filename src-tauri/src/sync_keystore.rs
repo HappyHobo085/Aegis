@@ -408,6 +408,43 @@ fn keyring_clear(user: &str) {
     .join();
 }
 
+/// Is the OS secure store actually usable in THIS environment? (`test-only`)
+///
+/// The keychain tests and `sync::tests::restart_restores_an_enabled_sync_state` exercise
+/// the REAL Secret Service / Credential Manager / Keychain, so they need a running
+/// secure-storage daemon. A headless Linux CI runner has none — the
+/// `org.freedesktop.secrets` bus name is unowned and every call fails with
+/// `ServiceUnknown`. That is an environment gap, not a code defect, and the dependent
+/// tests are meaningless without a keychain to talk to.
+///
+/// Rust has no runtime "skip", so those tests return early instead. The skip is LOUD
+/// (`eprintln!`, visible in `cargo test` output) precisely because the alternative — a
+/// silent pass — would let the keychain regressions these tests exist to catch ship
+/// unnoticed. A local dev machine with a keyring daemon runs them for real.
+///
+/// Probes with a WRITE, not a read: an unowned/absent service fails on the first call
+/// either way, and a write is the only way to catch a keychain that accepts reads of
+/// nothing but rejects stores (the exact failure `store_root` fell through on).
+#[cfg(test)]
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+pub(crate) fn keyring_available() -> bool {
+    const PROBE: &str = "test-keyring-availability-probe";
+    let Ok(e) = keyring::Entry::new(KEYRING_SERVICE, PROBE) else {
+        eprintln!("SKIP keychain tests: no keyring service for {KEYRING_SERVICE}/{PROBE}");
+        return false;
+    };
+    match e.set_password("probe") {
+        Ok(()) => {
+            let _ = e.delete_credential();
+            true
+        }
+        Err(err) => {
+            eprintln!("SKIP keychain tests: OS secure storage unavailable ({err})");
+            false
+        }
+    }
+}
+
 /// Persist the root: OS keychain first (desktop), else a passphrase-wrapped file if a
 /// passphrase is supplied, else not at all (in-memory only). Returns where it landed.
 pub fn store_root<R: Runtime>(
@@ -603,6 +640,9 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     fn keychain_round_trips_a_non_utf8_root() {
         use keyring_slots as k;
+        if !keyring_available() {
+            return;
+        }
         const U: &str = "test-roundtrip";
         // 0x80 is a UTF-8 continuation byte — guaranteed invalid on its own.
         let root = RootSecret([0x80u8; 32]);
@@ -621,6 +661,9 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     fn keychain_overwrites_a_previous_root() {
         use keyring_slots as k;
+        if !keyring_available() {
+            return;
+        }
         const U: &str = "test-overwrite";
         let a = RootSecret([0x80u8; 32]);
         let b = RootSecret([0xFEu8; 32]);
@@ -636,6 +679,9 @@ mod tests {
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     fn keychain_reads_a_legacy_raw_byte_entry() {
         use keyring_slots as k;
+        if !keyring_available() {
+            return;
+        }
         const U: &str = "test-legacy";
         // 0x41 is valid ASCII AND valid hex, so it decodes as hex to 16 bytes — the
         // length filter must reject that and fall back to the raw 32 bytes.

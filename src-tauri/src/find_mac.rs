@@ -141,8 +141,10 @@ where
             let block = RcBlock::new(move |result: *mut AnyObject, _error: *mut NSError| {
                 let (count, idx) = if !result.is_null() {
                     // SAFETY: result is a non-null NSString returned by the JS expression
-                    // `__aegisFind(...)` which always returns a string.
-                    let s = unsafe { &*(result as *const NSString) }.to_string();
+                    // `__aegisFind(...)` which always returns a string. The deref is
+                    // covered by the enclosing `unsafe` block, so it must not open a
+                    // nested one (that is `-D unused_unsafe`).
+                    let s = (&*(result as *const NSString)).to_string();
                     parse_sentinel(&s)
                 } else {
                     (0, 0)

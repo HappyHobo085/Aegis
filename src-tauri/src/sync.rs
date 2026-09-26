@@ -1234,6 +1234,17 @@ mod tests {
 
     #[test]
     fn restart_restores_an_enabled_sync_state() {
+        // The whole point of this test is that `store_root` lands in the OS keychain, so
+        // it is meaningless where there is no keychain to land in. On a headless CI
+        // runner (no `org.freedesktop.secrets` owner) `store_root` correctly falls back
+        // to `VaultBacking::None`, the root is in-memory only, the simulated restart
+        // wipes it, and `boot_restore` has nothing to restore — a real environment gap,
+        // not the regression. Rust has no runtime skip, so return early; `keyring_available`
+        // eprintln's the reason so the skip is visible in CI output rather than silent.
+        #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+        if !crate::sync_keystore::keyring_available() {
+            return;
+        }
         crate::test_support::with_tmp_app(|app| {
             // 1. First run: the user enables sync from Settings → Sync.
             let enabled = dispatch(app, "sync.enableNew", &Value::Null)

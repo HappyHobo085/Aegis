@@ -47,7 +47,8 @@ fn active_page_blocked<R: Runtime>(app: &AppHandle<R>) -> u32 {
 /// session total and the tab's per-page count, returning `(session, page)`. Split out
 /// from `note_blocked` so the accumulation logic is unit-testable without a Tauri
 /// `AppHandle` (the emit half needs the app; this half does not).
-#[cfg_attr(target_os = "android", allow(dead_code))]
+// Dead on Android and macOS, which wire no request-level block hook — see `note_blocked`.
+#[cfg_attr(any(target_os = "android", target_os = "macos"), allow(dead_code))]
 fn bump_blocked(id: u32) -> (u32, u32) {
     let session = SESSION_BLOCKED.fetch_add(1, Ordering::Relaxed) + 1;
     let page = {
@@ -76,7 +77,11 @@ fn zero_page(id: u32) -> u32 {
 /// WebView2 `WebResourceRequested` handler (`adblock_win`). (Android keeps an equivalent
 /// counter in Kotlin — it has no `AppHandle` and no Tauri event bus on the content side —
 /// and pushes `window.__aegisBlockedCount` directly; see `MainActivity.kt`.)
-#[cfg_attr(target_os = "android", allow(dead_code))]
+///
+/// macOS wires no hook either: WKWebView exposes no per-subresource-request callback, so
+/// there is nothing to count from and the shield badge stays at 0 there. Dead on Android
+/// and macOS; live (via the two call sites above) on Linux and Windows.
+#[cfg_attr(any(target_os = "android", target_os = "macos"), allow(dead_code))]
 pub fn note_blocked<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let (session, page) = bump_blocked(id);
     crate::emit_event(

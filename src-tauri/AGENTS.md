@@ -120,6 +120,10 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     tiers**: Linux (`linux_layout::connect_block_counter` / `resource-load-started`),
     Windows (the `adblock_win.rs` `WebResourceRequested` network tier → `note_blocked`),
     and Android (Kotlin `shouldInterceptRequest` ad-block branch → `__aegisBlockedCount`).
+    **macOS has no counter** — WKWebView exposes no per-subresource-request callback, so
+    `note_blocked`/`bump_blocked` are dead there (hence their
+    `#[cfg_attr(any(target_os = "android", target_os = "macos"), allow(dead_code))]`) and
+    the badge stays at 0; `reset_page` still runs on all desktop.
     Each tier's count reflects only what its own ad-block layer sees — Linux under-counts
     content-filter-blocked ads (cancelled before the signal fires); see gotcha 6.
     **Unit-tested via `test_support::with_tmp_app`:** default state, `set_enabled`,
@@ -264,7 +268,18 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   (record sealing + identity), and `sync_keystore.rs` (root-secret-at-rest: desktop
   `keyring`, Android hardware-Keystore JNI path **wired + device-verified** (commit
   `03f0012`; `AegisKeystore.kt` performs a real `KeyGenParameterSpec` AES-GCM wrap;
-  passphrase-wrapped file is the fallback; remaining work = StrongBox preference, sub-project J). All record crypto is `crypto.rs`:
+  passphrase-wrapped file is the fallback; remaining work = StrongBox preference, sub-project J).
+  **Four tests need a real OS keychain and are skipped (loudly) where there is none** —
+  the three `sync_keystore::tests::keychain_*` round-trips plus
+  `sync::tests::restart_restores_an_enabled_sync_state`, which asserts `store_root` lands
+  in the keychain and is therefore meaningless without one. Rust has no runtime skip, so
+  they early-return behind `sync_keystore::keyring_available()`, which probes with a
+  **write** and `eprintln!`s the reason. This is a real, frequent skip: the `keyring`
+  `linux-native-sync-persistent` backend prefers kernel keyctl and only falls back to
+  D-Bus `org.freedesktop.secrets`, and a headless CI runner (or any `unshare -Ur`
+  namespace) has neither. The skip is deliberately **not** silent — a silent pass would
+  let the exact keychain regressions these tests exist to catch ship unnoticed.
+  All record crypto is `crypto.rs`:
   **XChaCha20-Poly1305** seal/open (24-byte nonce), **HKDF-SHA256** per-namespace keys,
   **Argon2id** passphrase KDF, `zeroize`-on-drop. A self-hosted reference server is the
   standalone `sync-server/` crate. `sync.*` data channels flow on Android for free
