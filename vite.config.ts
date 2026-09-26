@@ -1,6 +1,6 @@
 import { defineConfig } from 'vite';
-import react from '@vitejs/plugin-react';
 import { resolve } from 'node:path';
+import { reactPlugins } from './vite.shared';
 
 /**
  * Standalone Vite dev server + production build of the React renderer, which is
@@ -27,15 +27,15 @@ export default defineConfig(async () => {
   return {
     root: resolve(__dirname, 'src'),
     plugins: [
-      react({
-        // React 19 Compiler: auto-memoizes components/hooks at build time, so the renderer
-        // doesn't depend on hand-written React.memo/useCallback to avoid re-renders. It bails
-        // out safely (leaving a component un-optimized) on any code it can't prove safe, so
-        // enabling it never changes behavior — it only removes unnecessary re-renders. Runs in
-        // dev, prod, AND the vitest transform pipeline, so the test suite exercises the
-        // compiled output.
-        babel: { plugins: [['babel-plugin-react-compiler', {}]] },
-      }),
+      // React 19 Compiler: auto-memoizes components/hooks at build time, so the renderer
+      // doesn't depend on hand-written React.memo/useCallback to avoid re-renders. It bails
+      // out safely (leaving a component un-optimized) on any code it can't prove safe, so
+      // enabling it never changes behavior — it only removes unnecessary re-renders.
+      //
+      // Shared with vitest.config.ts via vite.shared.ts so the test suite exercises the
+      // compiled output too. This comment previously claimed the compiler ran in the
+      // vitest pipeline as well; it did not.
+      ...reactPlugins(),
       ...analyzePlugins,
     ],
     clearScreen: false,
