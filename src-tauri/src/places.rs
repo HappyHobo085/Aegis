@@ -9,8 +9,44 @@ use tauri::{AppHandle, Runtime};
 
 use crate::jsonstore;
 
+/// `load_id_keyed` in the shape `dispatch` needs.
+///
+/// `dispatch` returns `Option<Result<Value, String>>`, so the `?` operator only propagates the
+/// `Option` half — a `Result` has to be unwrapped by hand. Doing that at sixteen call sites
+/// would be noise, hence this one-liner. Defined at module scope (with
+/// `#[macro_use]`-free late binding via `macro_rules!` hoisting) so tests can use it too.
+macro_rules! id_keyed {
+    ($app:expr, $name:expr) => {
+        match load_id_keyed($app, $name) {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e)),
+        }
+    };
+}
+
 fn id_of(item: &Value) -> Option<i64> {
     item.get("id").and_then(Value::as_i64)
+}
+
+/// Load an id-keyed store for mutation, healing duplicate ids on the way.
+///
+/// Self-healing rather than a one-shot migration: a store written by the old cached
+/// `next_id_optimized` can hold any number of rows sharing one `id`, and as long as it does,
+/// a single `remove`/`update` aimed at one row hits all of them. Every mutation goes through
+/// here, so the first one after the upgrade repairs the file and the hazard is gone for good.
+///
+/// Returns the loaded array. The repair is persisted immediately, and a write failure is
+/// surfaced rather than swallowed — silently failing here would leave the duplicates in place
+/// while reporting success, which is the same class of bug as the one being fixed.
+fn load_id_keyed<R: Runtime>(
+    app: &AppHandle<R>,
+    name: &str,
+) -> std::result::Result<Vec<Value>, String> {
+    let mut items = jsonstore::load_synced(app, name);
+    if jsonstore::rekey_duplicate_ids(&mut items) > 0 {
+        jsonstore::save(app, name, &items)?;
+    }
+    Ok(items)
 }
 
 fn merge_into(item: &mut Value, partial: Option<&Value>) {
@@ -52,9 +88,9 @@ pub fn dispatch<R: Runtime>(
         ))))),
 
         "favorites.add" => {
-            let mut items = jsonstore::load_synced(app, "favorites");
+            let mut items = id_keyed!(app, "favorites");
             let input = payload.get("input").cloned().unwrap_or_else(|| json!({}));
-            let id = jsonstore::next_id_optimized(&items, "favorites");
+            let id = jsonstore::next_id(&items);
             // Position = end of the LIVE list (tombstones don't occupy a slot).
             let position = items.iter().filter(|it| !jsonstore::is_deleted(it)).count() as i64;
             let mut item = json!({
@@ -69,10 +105,12 @@ pub fn dispatch<R: Runtime>(
         }
 
         "favorites.update" => {
-            let mut items = jsonstore::load_synced(app, "favorites");
-            let id = payload.get("id").and_then(Value::as_i64);
+            let Some(id) = payload.get("id").and_then(Value::as_i64) else {
+                return Some(Err("favorites.update requires an integer id".into()));
+            };
+            let mut items = id_keyed!(app, "favorites");
             for it in items.iter_mut() {
-                if id_of(it) == id {
+                if id_of(it) == Some(id) {
                     merge_into(it, payload.get("partial"));
                     jsonstore::touch(it, app);
                 }
@@ -81,14 +119,16 @@ pub fn dispatch<R: Runtime>(
         }
 
         "favorites.remove" => {
-            let mut items = jsonstore::load_synced(app, "favorites");
-            let id = payload.get("id").and_then(Value::as_i64);
-            jsonstore::tombstone(&mut items, |it| id_of(it) == id, app);
+            let Some(id) = payload.get("id").and_then(Value::as_i64) else {
+                return Some(Err("favorites.remove requires an integer id".into()));
+            };
+            let mut items = id_keyed!(app, "favorites");
+            jsonstore::tombstone(&mut items, |it| id_of(it) == Some(id), app);
             Some(persist(app, "favorites", items))
         }
 
         "favorites.reorder" => {
-            let mut items = jsonstore::load_synced(app, "favorites");
+            let mut items = id_keyed!(app, "favorites");
             let order: Vec<i64> = payload
                 .get("ids")
                 .and_then(Value::as_array)
@@ -120,18 +160,18 @@ pub fn dispatch<R: Runtime>(
         ))))),
 
         "saved.has" => {
-            let items = jsonstore::load_synced(app, "saved");
+            let items = id_keyed!(app, "saved");
             let url_str = payload.get("url").and_then(Value::as_str).unwrap_or("");
             Some(Ok(json!(live_has_url(&items, url_str))))
         }
 
         "saved.add" => {
-            let mut items = jsonstore::load_synced(app, "saved");
+            let mut items = id_keyed!(app, "saved");
             let input = payload.get("input").cloned().unwrap_or_else(|| json!({}));
             // Dedup against LIVE records only (a previously-removed url can be re-added).
             let url_str = input.get("url").and_then(Value::as_str).unwrap_or("");
             if !live_has_url(&items, url_str) {
-                let id = jsonstore::next_id_optimized(&items, "saved");
+                let id = jsonstore::next_id(&items);
                 let mut item = json!({
                     "id": id,
                     "url": url_str,
@@ -146,17 +186,21 @@ pub fn dispatch<R: Runtime>(
         }
 
         "saved.remove" => {
-            let mut items = jsonstore::load_synced(app, "saved");
-            let id = payload.get("id").and_then(Value::as_i64);
-            jsonstore::tombstone(&mut items, |it| id_of(it) == id, app);
+            let Some(id) = payload.get("id").and_then(Value::as_i64) else {
+                return Some(Err("saved.remove requires an integer id".into()));
+            };
+            let mut items = id_keyed!(app, "saved");
+            jsonstore::tombstone(&mut items, |it| id_of(it) == Some(id), app);
             Some(persist(app, "saved", items))
         }
 
         "saved.update" => {
-            let mut items = jsonstore::load_synced(app, "saved");
-            let id = payload.get("id").and_then(Value::as_i64);
+            let Some(id) = payload.get("id").and_then(Value::as_i64) else {
+                return Some(Err("saved.update requires an integer id".into()));
+            };
+            let mut items = id_keyed!(app, "saved");
             for it in items.iter_mut() {
-                if id_of(it) == id {
+                if id_of(it) == Some(id) {
                     merge_into(it, payload.get("partial"));
                     jsonstore::touch(it, app);
                 }
@@ -165,7 +209,7 @@ pub fn dispatch<R: Runtime>(
         }
 
         "saved.renameTag" => {
-            let mut items = jsonstore::load_synced(app, "saved");
+            let mut items = id_keyed!(app, "saved");
             let old = payload.get("oldT").and_then(Value::as_str).unwrap_or("");
             let new = payload.get("newT").and_then(Value::as_str).unwrap_or("");
             for it in items.iter_mut() {
@@ -186,7 +230,7 @@ pub fn dispatch<R: Runtime>(
         }
 
         "saved.deleteTag" => {
-            let mut items = jsonstore::load_synced(app, "saved");
+            let mut items = id_keyed!(app, "saved");
             let tag = payload.get("tag").and_then(Value::as_str).unwrap_or("");
             for it in items.iter_mut() {
                 let had = it
@@ -205,7 +249,7 @@ pub fn dispatch<R: Runtime>(
         }
 
         "saved.tagUnion" => {
-            let items = jsonstore::live(jsonstore::load_synced(app, "saved"));
+            let items = jsonstore::live(id_keyed!(app, "saved"));
             let mut tags: Vec<String> = items
                 .iter()
                 .filter_map(|it| it.get("tags").and_then(Value::as_array))
@@ -245,6 +289,179 @@ mod tests {
         v.unwrap().as_array().cloned().unwrap()
     }
 
+    // ---- duplicate-id healing ----------------------------------------------
+    //
+    // The broken store this guards against really existed: 104 `saved` rows all carrying
+    // `id: 0`, written by the deleted `next_id_optimized` cache. Every one of them was
+    // individually deletable only at the price of all the others.
+
+    #[test]
+    fn loading_for_mutation_heals_a_store_where_every_row_shares_one_id() {
+        with_tmp_app(|app| {
+            let rows: Vec<Value> = (0..5)
+                .map(|i| json!({ "id": 0, "url": format!("https://x{i}.test/"), "uuid": format!("u{i}") }))
+                .collect();
+            jsonstore::save(app, "saved", &rows).expect("seed the broken store");
+
+            let loaded = load_id_keyed(app, "saved").expect("load must succeed");
+            let ids: Vec<i64> = loaded
+                .iter()
+                .filter_map(|v| v.get("id").and_then(Value::as_i64))
+                .collect();
+            assert_eq!(ids.len(), 5, "every row must still be present");
+            let unique: std::collections::HashSet<i64> = ids.iter().copied().collect();
+            assert_eq!(
+                unique.len(),
+                5,
+                "every id must now be distinct, got {ids:?}"
+            );
+
+            // The repair must be ON DISK, not just in the returned array — otherwise the next
+            // process start reloads the duplicates and the hazard returns.
+            let disk_ids: std::collections::HashSet<i64> = jsonstore::load(app, "saved")
+                .iter()
+                .filter_map(|v| v.get("id").and_then(Value::as_i64))
+                .collect();
+            assert_eq!(disk_ids.len(), 5, "the repair must be persisted");
+        });
+    }
+
+    #[test]
+    fn healing_keeps_the_first_holder_of_an_id_so_live_references_stay_valid() {
+        // Re-keying the LATER duplicate is the least destructive choice: anything holding a
+        // reference to the first row (an open menu, a pending action) still points at it.
+        let mut items = vec![
+            json!({ "id": 7, "url": "https://first.test/" }),
+            json!({ "id": 7, "url": "https://second.test/" }),
+        ];
+        assert_eq!(jsonstore::rekey_duplicate_ids(&mut items), 1);
+        assert_eq!(items[0]["id"], json!(7), "the first holder keeps its id");
+        assert_ne!(items[1]["id"], json!(7), "the duplicate is re-keyed");
+        assert_eq!(
+            items[1]["url"],
+            json!("https://second.test/"),
+            "payload is untouched"
+        );
+    }
+
+    #[test]
+    fn healing_leaves_id_less_and_already_unique_stores_alone() {
+        // `allowlist`/`fp-allowlist` are host-keyed and have no id at all; inventing one would
+        // be noise. A clean store must not be rewritten either.
+        let mut host_keyed = vec![json!({ "host": "a.test" }), json!({ "host": "b.test" })];
+        assert_eq!(jsonstore::rekey_duplicate_ids(&mut host_keyed), 0);
+
+        let mut unique = vec![json!({ "id": 0 }), json!({ "id": 1 }), json!({ "id": 2 })];
+        assert_eq!(jsonstore::rekey_duplicate_ids(&mut unique), 0);
+        assert_eq!(unique[1]["id"], json!(1), "ids must not shift");
+    }
+
+    #[test]
+    fn removing_one_row_from_a_healed_store_leaves_the_others_live() {
+        // End to end: the exact user action that wiped 104 rows, against a healed store.
+        with_tmp_app(|app| {
+            let rows: Vec<Value> = (0..4)
+                .map(|i| json!({ "id": 0, "url": format!("https://y{i}.test/"), "uuid": format!("v{i}") }))
+                .collect();
+            jsonstore::save(app, "saved", &rows).expect("seed the broken store");
+
+            let loaded = load_id_keyed(app, "saved").expect("load must succeed");
+            let victim = loaded[1]["id"].as_i64().expect("healed rows carry ids");
+            dispatch(app, "saved.remove", &json!({ "id": victim }))
+                .expect("saved.remove is owned by places")
+                .expect("remove must succeed");
+
+            let live = jsonstore::load(app, "saved")
+                .iter()
+                .filter(|v| !jsonstore::is_deleted(v))
+                .count();
+            assert_eq!(live, 3, "exactly one row may be tombstoned, got {live}");
+        });
+    }
+
+    /// The regression guard for the 2026-09-26 data-loss incident, client half: a remove with
+    /// a MISSING or non-integer `id` must be refused, and must tombstone nothing.
+    ///
+    /// The old predicate was `id_of(it) == id` with `id: Option<i64>`, so `None == None` was
+    /// true for every row without an integer `id` — a single call tombstoned the whole store
+    /// (104 `saved` pages, all sharing one `wall_ms`). A store-wide delete must never be the
+    /// consequence of a malformed id, so this refuses instead.
+    #[test]
+    fn a_remove_without_an_integer_id_tombstones_nothing() {
+        with_tmp_app(|app| {
+            for n in 0..3 {
+                dispatch(
+                    app,
+                    "saved.add",
+                    &json!({ "input": { "url": format!("https://keep-{n}.test/") } }),
+                )
+                .expect("saved.add is owned by places")
+                .expect("saved.add must succeed");
+            }
+            let before = load_id_keyed(app, "saved")
+                .expect("load must succeed")
+                .len();
+            assert_eq!(before, 3, "three pages seeded");
+
+            // Missing id, and an id of the wrong type — both must be refused.
+            for bad in [json!({}), json!({ "id": null }), json!({ "id": "3" })] {
+                let r = dispatch(app, "saved.remove", &bad).unwrap();
+                assert!(
+                    r.is_err(),
+                    "saved.remove with {bad} must error, got ok: {r:?}"
+                );
+            }
+
+            let after = load_id_keyed(app, "saved").expect("load must succeed");
+            assert_eq!(
+                after.len(),
+                3,
+                "the rows must survive verbatim, not be tombstoned: {after:?}"
+            );
+            assert!(
+                after.iter().all(|r| !crate::jsonstore::is_deleted(r)),
+                "nothing may be tombstoned by a malformed id: {after:?}"
+            );
+        });
+    }
+
+    /// Deleting ONE page must leave the others alone — the end-to-end shape of the incident,
+    /// driven through the real store rather than by narrating around it.
+    #[test]
+    fn removing_one_saved_page_leaves_the_others_live() {
+        with_tmp_app(|app| {
+            let mut ids = Vec::new();
+            for n in 0..4 {
+                dispatch(
+                    app,
+                    "saved.add",
+                    &json!({ "input": { "url": format!("https://row-{n}.test/") } }),
+                )
+                .expect("saved.add is owned by places")
+                .expect("saved.add must succeed");
+                ids.push(
+                    load_id_keyed(app, "saved").expect("load must succeed")[n as usize]
+                        .get("id")
+                        .and_then(Value::as_i64)
+                        .expect("saved.add must mint an id"),
+                );
+            }
+
+            dispatch(app, "saved.remove", &json!({ "id": ids[1] }))
+                .expect("saved.remove is owned by places")
+                .expect("removing a real id must succeed");
+
+            let live = arr(dispatch(app, "saved.list", &json!({})).unwrap());
+            assert_eq!(live.len(), 3, "exactly one page should be gone: {live:?}");
+            assert!(
+                !live
+                    .iter()
+                    .any(|r| r.get("url").and_then(Value::as_str) == Some("https://row-1.test/")),
+                "the named page must be the one removed: {live:?}"
+            );
+        });
+    }
+
     #[test]
     fn favorites_add_list_returns_live_records_with_positions() {
         with_tmp_app(|app| {
@@ -282,7 +499,7 @@ mod tests {
                 "removed favorite is gone from the live list"
             );
             // The tombstone is still on disk (full array via load_synced).
-            let full = jsonstore::load_synced(app, "favorites");
+            let full = load_id_keyed(app, "favorites").expect("load must succeed");
             assert_eq!(full.len(), 1);
             assert!(jsonstore::is_deleted(&full[0]));
         });
@@ -332,7 +549,7 @@ mod tests {
             )
             .unwrap()
             .unwrap();
-            let live = jsonstore::live(jsonstore::load_synced(app, "favorites"));
+            let live = jsonstore::live(load_id_keyed(app, "favorites").expect("load must succeed"));
             let id_a = live
                 .iter()
                 .find(|i| i.get("name").and_then(Value::as_str) == Some("A"))

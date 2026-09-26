@@ -181,7 +181,7 @@ pub fn on_requested<R: Runtime>(
     let url = url.to_string();
     let now = jsonstore::now_ms();
     let changed = mutate(app, false, |items| {
-        let id = jsonstore::next_id_optimized(items, "downloads");
+        let id = jsonstore::next_id(items);
         let mut item = json!({
             "id": id,
             "url": url,

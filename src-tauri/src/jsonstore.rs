@@ -7,7 +7,7 @@
 //! - Cached next_id calculation to avoid O(n) scans when data hasn't changed recently
 //! - Batch operation support for multiple stores
 //! - Optimized cleanup of temporary files
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -26,7 +26,9 @@ use std::sync::LazyLock;
 struct CacheEntry {
     data: Vec<Value>,
     timestamp: Instant,
-    next_id: Option<i64>, // Cached next ID to avoid scanning
+    // Used to hold a cached next-id. That field is gone with `next_id_optimized` (see
+    // `next_id`): the cache answered from here while ignoring the items it was given, which
+    // handed out the same id repeatedly and wiped the user's saved pages.
 }
 
 // Global cache for recent store accesses
@@ -35,19 +37,12 @@ static CACHE: LazyLock<::parking_lot::RwLock<HashMap<String, CacheEntry>>> =
 const CACHE_TTL_SEC: u64 = 30; // seconds
 const MAX_CACHE_SIZE: usize = 5;
 
-// Cache for next_id values to avoid O(n) scans
-static NEXT_ID_CACHE: LazyLock<parking_lot::RwLock<HashMap<String, (i64, Instant)>>> =
-    LazyLock::new(|| parking_lot::RwLock::new(HashMap::new()));
-const NEXT_ID_CACHE_TTL_SEC: u64 = 5; // seconds - shorter TTL since IDs change more frequently
-
 /// Clear all process-global caches. Called from `test_support::with_tmp_app`
-/// so each test starts with a clean slate (the `CACHE` and `NEXT_ID_CACHE`
-/// statics survive across `with_tmp_app` calls because they live in statics,
-/// not per-app state).
+/// so each test starts with a clean slate (the `CACHE` static survives across
+/// `with_tmp_app` calls because it lives in a static, not per-app state).
 #[cfg(test)]
 pub fn clear_caches() {
     CACHE.write().clear();
-    NEXT_ID_CACHE.write().clear();
 }
 
 fn path<R: Runtime>(app: &AppHandle<R>, name: &str) -> Option<PathBuf> {
@@ -205,11 +200,6 @@ pub fn load<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
     if let Some(entry) = cached_entry {
         if elapsed_secs(&entry.timestamp) < CACHE_TTL_SEC {
             // We have a fresh cache entry
-            // Update the next_id cache to keep it fresh (because we are using this data)
-            let mut next_id_cache = NEXT_ID_CACHE.write();
-            if let Some(next_id) = entry.next_id {
-                next_id_cache.insert(name.to_string(), (next_id, Instant::now()));
-            }
             return entry.data;
         }
     }
@@ -279,7 +269,17 @@ pub fn save<R: Runtime>(app: &AppHandle<R>, name: &str, items: &[Value]) -> Resu
 }
 
 /// Next monotonic id = max existing id + 1.
+///
 /// O(n) scan over the items array (capped at MAX_ENTRIES per store — trivially fast).
+///
+/// **This used to have a cached twin, `next_id_optimized`, and that cost the user their saved
+/// pages.** It returned a process-global cached answer on a cache HIT and ignored its `items`
+/// argument entirely, so: the first `saved.add` on an empty store computed `max([]) = None`
+/// ⇒ `0` and cached it; every subsequent add inside the 5 s TTL got `0` again. A user saving a
+/// page per second ended up with 104 rows ALL carrying `id: 0` — and since every mutation in
+/// `places.rs` addresses rows by id, one `saved.remove { id: 0 }` tombstoned the entire store.
+/// The cache bought one array scan (irrelevant at MAX_ENTRIES) in exchange for silent
+/// data loss, so it and its two helpers are deleted rather than left as a trap. Use this.
 pub fn next_id(items: &[Value]) -> i64 {
     items
         .iter()
@@ -287,6 +287,42 @@ pub fn next_id(items: &[Value]) -> i64 {
         .max()
         .map(|max_id| max_id.checked_add(1).unwrap_or(0))
         .unwrap_or(0)
+}
+
+/// Re-assign a fresh unique `id` to every record that duplicates an earlier one, in place.
+/// Returns how many rows were re-keyed.
+///
+/// The first holder of each id KEEPS it — re-keying a later duplicate is the least destructive
+/// choice, because a client holding a reference to the first row stays valid. Re-keyed rows get
+/// ids above the current maximum, so they cannot collide with each other or with anything
+/// `next_id` hands out next.
+///
+/// Records with no integer `id` are left alone. `allowlist` and `fp-allowlist` are host-keyed
+/// by design and have no `id` at all; inventing one for them would be noise, and skipping them
+/// keeps this safe to run over any store.
+///
+/// Why this exists: the deleted `next_id_optimized` cache could leave a store with 104 rows all
+/// carrying `id: 0`, and because every `places.rs` mutation addresses rows by id, a single
+/// `remove { id: 0 }` then tombstoned all of them. Stopping new duplicates is the fix; this is
+/// how a store that already has them heals.
+pub fn rekey_duplicate_ids(items: &mut [Value]) -> usize {
+    let mut seen: HashSet<i64> = HashSet::new();
+    let mut next = next_id(items);
+    let mut rekeyed = 0usize;
+    for it in items.iter_mut() {
+        let Some(id) = it.get("id").and_then(Value::as_i64) else {
+            continue;
+        };
+        if seen.insert(id) {
+            continue;
+        }
+        if let Some(o) = it.as_object_mut() {
+            o.insert("id".into(), Value::from(next));
+        }
+        next += 1;
+        rekeyed += 1;
+    }
+    rekeyed
 }
 
 /// Current time, epoch milliseconds.
@@ -500,77 +536,17 @@ fn cache_data(name: &str, data: Vec<Value>) {
         }
     }
 
-    // Calculate next_id for caching
-    let next_id = data
-        .iter()
-        .filter_map(|i| i.get("id").and_then(Value::as_i64))
-        .max()
-        .map(|max_id| max_id.checked_add(1).unwrap_or(0))
-        .unwrap_or(0);
-
     cache.insert(
         name.to_string(),
         CacheEntry {
             data: data.clone(),
             timestamp: Instant::now(),
-            next_id: Some(next_id),
         },
     );
-
-    // Also update the next_id cache
-    let mut next_id_cache = NEXT_ID_CACHE.write();
-    next_id_cache.insert(name.to_string(), (next_id, Instant::now()));
 }
 
 fn elapsed_secs(instant: &Instant) -> u64 {
     instant.elapsed().as_secs()
-}
-
-/// Update the next_id cache for a store
-fn update_next_id_cache(name: &str, items: &[Value]) {
-    let mut cache = NEXT_ID_CACHE.write();
-
-    // Calculate next_id
-    let next_id = items
-        .iter()
-        .filter_map(|i| i.get("id").and_then(Value::as_i64))
-        .max()
-        .map(|max_id| max_id.checked_add(1).unwrap_or(0))
-        .unwrap_or(0);
-
-    cache.insert(name.to_string(), (next_id, Instant::now()));
-}
-
-/// Get cached next_id if available and not expired
-fn get_cached_next_id(name: &str) -> Option<i64> {
-    let cache = NEXT_ID_CACHE.read();
-    if let Some((next_id, timestamp)) = cache.get(name) {
-        if elapsed_secs(timestamp) < NEXT_ID_CACHE_TTL_SEC {
-            return Some(*next_id);
-        }
-    }
-    None
-}
-
-/// Enhanced next_id function that uses caching when possible
-pub fn next_id_optimized(items: &[Value], store_name: &str) -> i64 {
-    // Try to get cached next_id first
-    if let Some(cached_id) = get_cached_next_id(store_name) {
-        return cached_id;
-    }
-
-    // Fall back to computing it
-    let computed_id = items
-        .iter()
-        .filter_map(|i| i.get("id").and_then(Value::as_i64))
-        .max()
-        .map(|max_id| max_id.checked_add(1).unwrap_or(0))
-        .unwrap_or(0);
-
-    // Cache the result
-    update_next_id_cache(store_name, items);
-
-    computed_id
 }
 
 #[cfg(test)]
