@@ -70,6 +70,8 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
   const keyMap: Record<string, string> = {
     Enter: '{Enter}',
     Escape: '{Escape}',
+    ArrowDown: '{ArrowDown}',
+    ArrowUp: '{ArrowUp}',
     'ctrl+t': '{Control>}t{/Control}',
     'ctrl+w': '{Control>}w{/Control}',
     'ctrl+shift+t': '{Control>}{Shift>}t{/Shift}{/Control}',
@@ -371,6 +373,8 @@ export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
       const target = (document.activeElement ?? root) as Element;
       if (key === 'Enter') fire(target, 'Enter');
       else if (key === 'Escape') fire(target, 'Escape');
+      else if (key === 'ArrowDown') fire(target, 'ArrowDown');
+      else if (key === 'ArrowUp') fire(target, 'ArrowUp');
       else if (key === 'ctrl+t') fire(target, 't', { ctrlKey: true });
       else if (key === 'ctrl+w') fire(target, 'w', { ctrlKey: true });
       else if (key === 'ctrl+shift+t') fire(target, 'T', { ctrlKey: true, shiftKey: true });

@@ -36,7 +36,9 @@ export interface InteractionCtx {
   layer: InteractionLayer;
   click(el: Element): Promise<void>;
   type(el: Element, text: string): Promise<void>;
-  press(key: 'Enter' | 'Escape' | 'ctrl+t' | 'ctrl+w' | 'ctrl+shift+t'): Promise<void>;
+  press(
+    key: 'Enter' | 'Escape' | 'ArrowDown' | 'ArrowUp' | 'ctrl+t' | 'ctrl+w' | 'ctrl+shift+t',
+  ): Promise<void>;
   /** Fire a contextmenu event on the element (used for tab pin via right-click). */
   contextMenu(el: Element): Promise<void>;
   byRole(role: string, name?: string | RegExp): HTMLElement | null;

@@ -60,7 +60,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: node scripts/check-npm-audit.mjs
 
-  # Rust gate for the src-tauri crate: format, lint, the 119 unit tests, supply-chain audit.
+  # Rust gate for the src-tauri crate: format, lint, the unit tests, supply-chain audit.
   rust:
     runs-on: ubuntu-latest
     timeout-minutes: 30

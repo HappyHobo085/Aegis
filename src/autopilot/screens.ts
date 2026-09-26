@@ -10,6 +10,7 @@ export type OverlayScreenId =
   | 'downloads'
   | 'favoritesManager'
   | 'shieldPopover'
+  | 'addressBarSuggestions'
   | 'fullscreen'
   | 'errorOverlay'
   | 'crashOverlay'
@@ -42,6 +43,7 @@ export const SCREENS: ScreenSpec[] = [
   { id: 'favoritesManager', label: 'Favorites manager', via: 'overlay' },
   ...SETTINGS_SCREENS,
   { id: 'shieldPopover', label: 'Ad-block shield popover', via: 'overlay' },
+  { id: 'addressBarSuggestions', label: 'Address-bar suggestions', via: 'overlay' },
   { id: 'fullscreen', label: 'Fullscreen', via: 'overlay' },
   { id: 'errorOverlay', label: 'Nav error overlay', via: 'event' },
   { id: 'crashOverlay', label: 'Crash overlay', via: 'event' },

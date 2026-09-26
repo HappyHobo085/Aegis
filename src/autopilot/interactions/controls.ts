@@ -12,6 +12,9 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'shieldPopover.toggleAdblock',
   'shieldPopover.allowlistSite',
   'shieldPopover.badgeReflectsBlockedCount',
+  'omnibox.suggestsSearch',
+  'omnibox.keyboardPick',
+  'omnibox.escapeDismisses',
   // Task 4: tabs + keyboard shortcuts
   'tabs.newButton',
   'tabs.activate',

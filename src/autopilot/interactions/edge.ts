@@ -9,19 +9,17 @@ export const EDGE_INTERACTIONS: InteractionSpec[] = [
   {
     id: 'edge.addressBar.empty',
     domain: 'edge',
-    description: 'Clear the address bar and press Enter → navigates to empty search (no crash)',
+    description: 'Clear the address bar and press Enter → no navigation at all (no crash)',
     screen: 'home',
-    // vitest-only (intentional): empty-Enter produces no observable real-state change
-    // beyond "no crash" and "nav.navigate was called with an empty-query search URL".
-    // The live CallLog is inert (cannot count calls), and the live nav state change
-    // (empty search URL) would be transient and race-prone to poll.  The negative
-    // assertion (App is still mounted + nav.navigate fired) is fully covered by the
-    // vitest mock where CallLog IS observable.  A live branch would only redundantly
-    // confirm the address bar accepts Enter without a URL, which toolbar.home and
+    // vitest-only (intentional): empty-Enter must now be a NO-OP — a real browser does nothing
+    // when you press Enter in an empty omnibox, and `addressParse` returns `{kind:'noop'}`.
+    // The live CallLog is inert (cannot count calls), and the negative assertion (nav.navigate
+    // was NOT called) is only observable in the vitest mock.  A live branch would only
+    // redundantly confirm the address bar accepts Enter without a URL, which toolbar.home and
     // toolbar.addressBar.navigate already cover end-to-end in the live layer.
     layers: ['vitest'],
     run: async (ctx) => {
-      const bar = ctx.byRole('textbox', /address/i) ?? ctx.bySelector('input[type="text"]');
+      const bar = ctx.byRole('combobox', /address/i) ?? ctx.bySelector('input[type="text"]');
       if (!bar) throw new Error('Address bar input not found');
       // Cannot use ctx.type(bar, '') because userEvent.type rejects empty string.
       // Click to focus (so AddressBar selects all text), then use fireInputChange to set
@@ -41,19 +39,16 @@ export const EDGE_INTERACTIONS: InteractionSpec[] = [
       }
     },
     assert: async (ctx) => {
-      // Verified via addressParse: empty trimmed input → no scheme, no dot →
-      // falls through to the search template path →
-      // nav.navigate(viewId, searchTemplate.replace('%s', encodeURIComponent('')))
-      // = 'https://duckduckgo.com/?q='.
-      // So nav.navigate IS called (with an empty-query search URL), NOT blocked.
-      // We assert: (1) App is still mounted (no crash), (2) nav.navigate was called.
-      if (!ctx.calls.called('nav.navigate'))
+      // `addressParse` short-circuits empty input to `{kind:'noop'}` and `useNav` does nothing
+      // for that kind, so NO ipc may be issued. Regression: it used to fall through to the
+      // search template and navigate to 'https://duckduckgo.com/?q='.
+      if (ctx.calls.called('nav.navigate'))
         throw new Error(
-          'nav.navigate was not called after empty Enter — expected empty search navigation',
+          'nav.navigate was called after empty Enter — empty input must be a no-op, not a search',
         );
       if (!document.querySelector('.app'))
         throw new Error('App is no longer mounted after empty address bar Enter (crash?)');
-      return 'empty address bar Enter → nav.navigate (empty search) + App still mounted';
+      return 'empty address bar Enter → no navigation + App still mounted';
     },
   },
 
@@ -71,7 +66,7 @@ export const EDGE_INTERACTIONS: InteractionSpec[] = [
       // (the malformed text encoded as a query parameter).  This is NOT a rejection
       // (kind='rejected' would leave nav.navigate uncalled) — it's gracefully treated
       // as a search query, which is the browser's documented behaviour for non-URL input.
-      const bar = ctx.byRole('textbox', /address/i) ?? ctx.bySelector('input[type="text"]');
+      const bar = ctx.byRole('combobox', /address/i) ?? ctx.bySelector('input[type="text"]');
       if (!bar) throw new Error('Address bar input not found');
       await ctx.type(bar, 'ht!tp://x');
       await ctx.press('Enter');

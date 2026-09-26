@@ -98,6 +98,7 @@ export async function reachScreen(
       if (screen.id === 'downloads') control.openDownloads();
       else if (screen.id === 'favoritesManager') control.openManager();
       else if (screen.id === 'shieldPopover') control.setShield(true);
+      else if (screen.id === 'addressBarSuggestions') control.setOmnibox(true);
       else if (screen.id === 'fullscreen') control.enterFullscreen();
       else if (screen.id === 'confirmDialog') control.openConfirm('Autopilot confirm?');
       else if (screen.id === 'findBar') control.openFind();
@@ -138,6 +139,7 @@ export async function leaveScreen(
   else if (screen.id === 'downloads') control.closeDownloads();
   else if (screen.id === 'favoritesManager') control.closeManager();
   else if (screen.id === 'shieldPopover') control.setShield(false);
+  else if (screen.id === 'addressBarSuggestions') control.setOmnibox(false);
   else if (screen.id === 'fullscreen') control.exitFullscreen();
   else if (screen.id === 'sidebar:history' || screen.id === 'sidebar:saved')
     control.setSidebar(false);

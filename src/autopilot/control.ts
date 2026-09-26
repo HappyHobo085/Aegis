@@ -18,6 +18,8 @@ export interface AutopilotControl {
   closeManager(): void;
   setSidebar(open: boolean): void;
   setShield(open: boolean): void;
+  /** Focus the address bar and open the suggestion list (as a click would). */
+  setOmnibox(open: boolean): void;
   enterFullscreen(): void;
   exitFullscreen(): void;
   showError(f: unknown): void;

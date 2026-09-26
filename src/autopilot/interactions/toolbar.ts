@@ -30,7 +30,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     mobile: true, // MobileTopBar includes the same AddressBar component
     run: async (ctx) => {
       const bar =
-        ctx.byRole('textbox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
+        ctx.byRole('combobox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
       if (!bar) throw new Error('address bar input not found');
       await ctx.type(bar, 'example.com');
       await ctx.press('Enter');
@@ -170,7 +170,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     mobile: true, // MobileTopBar includes the same AddressBar component
     run: async (ctx) => {
       const bar =
-        ctx.byRole('textbox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
+        ctx.byRole('combobox', /address|url|search/i) ?? ctx.bySelector('input[type="text"]');
       if (!bar) throw new Error('address bar input not found');
       await ctx.type(bar, 'hello world');
       await ctx.press('Enter');
@@ -315,16 +315,9 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
           // Snapshot the pre-click state so assert can detect the actual flip.
           _preEnabled = (await ctx.aegis.adblock.getState()).enabled;
         }
-        // reachScreen sets the App-level shieldOpen flag (for z-order/layout) but does NOT
-        // open the AdblockShield's own internal popover state. Click the shield button to
-        // actually render the popover, then click the toggle inside it.
-        // Prefix match (not /^Ad blocking$/): once ads are blocked on the active page the
-        // button's accessible name gains a count suffix ("Ad blocking, N blocked on this page"),
-        // which an anchored exact match missed → intermittent "button not found".
-        const shieldBtn = ctx.byRole('button', /^Ad blocking\b/);
-        if (!shieldBtn) throw new Error('Ad blocking shield button not found');
-        await ctx.click(shieldBtn);
-        // Now the popover is rendered; find the toggle switch (role="switch" aria-label="Ad blocking").
+        // reachScreen('shieldPopover') now opens the popover for real (the control
+        // drives the shield button), so the spec must NOT click it again — that
+        // would toggle the popover shut. Interact with what is already on screen.
         const toggle = ctx.byRole('switch', /^Ad blocking$/);
         if (!toggle) throw new Error('Ad blocking switch not found in shield popover');
         await ctx.click(toggle);
@@ -362,10 +355,8 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     run: async (ctx) => {
       // Ensure the nav URL has a parseable host so the allowlist checkbox is enabled.
       await emitNavState(ctx, { ...BASE_NAV, url: 'https://example.com/', title: 'Example' });
-      // Open the shield popover (same as above — reachScreen only sets z-order, not UI state).
-      const shieldBtn = ctx.byRole('button', /^Ad blocking\b/);
-      if (!shieldBtn) throw new Error('Ad blocking shield button not found');
-      await ctx.click(shieldBtn);
+      // reachScreen already opened the shield popover — clicking the shield button
+      // again would close it (see shieldPopover.toggleAdblock).
       // The allowlist label is "Allow ads on <host>" (host = example.com from nav state).
       const allowToggle = ctx.byLabel(/allow ads on/i);
       if (!allowToggle) throw new Error('Allow-ads checkbox not found in shield popover');
@@ -375,6 +366,91 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       if (!ctx.calls.called('adblock.toggleAllowlist'))
         throw new Error('adblock.toggleAllowlist not called');
       return 'allowlist checkbox → adblock.toggleAllowlist()';
+    },
+  },
+
+  // ─── address-bar suggestion list (the omnibox) ─────────────────────────
+
+  {
+    id: 'omnibox.suggestsSearch',
+    domain: 'omnibox',
+    description: 'Focus the address bar and type a phrase → a "Search for …" row appears',
+    screen: 'addressBarSuggestions',
+    // live excluded: the live CallLog is inert, so the assertion below (a DOM row
+    // seeded from the mocked history) can't be reproduced against the real core.
+    layers: ['vitest'],
+    mobile: true, // MobileTopBar renders the same AddressBar
+    run: async (ctx) => {
+      const bar = ctx.byRole('combobox', /address|url|search/i);
+      if (!bar) throw new Error('address bar input not found');
+      // reach('addressBarSuggestions') already focused the field; the list itself
+      // is seeded by the query, so type the phrase that produces the search row.
+      await ctx.type(bar, 'kittens');
+    },
+    assert: async (ctx) => {
+      const bar = ctx.byRole('combobox', /address|url|search/i);
+      if (bar?.getAttribute('aria-expanded') !== 'true')
+        throw new Error('aria-expanded is not true — the list never opened');
+      const list = ctx.bySelector('[role="listbox"]');
+      if (!list) throw new Error('no listbox rendered');
+      const row = ctx.bySelector('[role="option"]');
+      if (!row?.textContent?.includes('Search for'))
+        throw new Error(`expected a "Search for" row, got: ${row?.textContent ?? 'none'}`);
+      return 'typed phrase → omnibox opened with a "Search for …" row';
+    },
+  },
+
+  {
+    id: 'omnibox.keyboardPick',
+    domain: 'omnibox',
+    description: 'ArrowDown + Enter in the address bar → navigates to the resolved search URL',
+    screen: 'addressBarSuggestions',
+    layers: ['vitest'],
+    mobile: true,
+    run: async (ctx) => {
+      const bar = ctx.byRole('combobox', /address|url|search/i);
+      if (!bar) throw new Error('address bar input not found');
+      await ctx.type(bar, 'kittens');
+      const row = await waitFor(
+        () => ctx.bySelector('[role="option"]'),
+        'an omnibox row (the 90ms history debounce has to elapse first)',
+      );
+      if (!row) throw new Error('omnibox never opened');
+      // Enter with nothing highlighted must stay a plain form submit; the arrow
+      // key is what makes the highlighted row win.
+      await ctx.press('ArrowDown');
+      await ctx.press('Enter');
+    },
+    assert: async (ctx) => {
+      // aegis.nav.navigate is (viewId, url) — the URL is the second argument.
+      // Matched loosely on `q=kittens` so the assertion survives a change of the
+      // default search engine.
+      if (!ctx.calls.called('nav.navigate', (a) => String(a[1]).includes('q=kittens')))
+        throw new Error('nav.navigate was not called with the resolved search URL');
+      return 'ArrowDown + Enter → nav.navigate(<search url>)';
+    },
+  },
+
+  {
+    id: 'omnibox.escapeDismisses',
+    domain: 'omnibox',
+    description: 'Escape closes the suggestion list but keeps the typed text and focus',
+    screen: 'addressBarSuggestions',
+    layers: ['vitest'],
+    mobile: true,
+    run: async (ctx) => {
+      const bar = ctx.byRole('combobox', /address|url|search/i);
+      if (!bar) throw new Error('address bar input not found');
+      await ctx.type(bar, 'kittens');
+      await waitFor(() => ctx.bySelector('[role="listbox"]'), 'the omnibox to open');
+      await ctx.press('Escape');
+    },
+    assert: async (ctx) => {
+      if (ctx.bySelector('[role="listbox"]')) throw new Error('the list stayed open after Escape');
+      const bar = ctx.byRole('combobox', /address|url|search/i) as HTMLInputElement | null;
+      if (bar?.value !== 'kittens') throw new Error(`Escape discarded the text (${bar?.value})`);
+      if (document.activeElement !== bar) throw new Error('Escape moved focus out of the field');
+      return 'Escape → list closed, text and focus kept';
     },
   },
 
@@ -388,7 +464,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
     // adblock.blockedCount events, which the live CallLog can't observe and the live
     // autopilot doesn't assert (the Linux counter under-counts content-filter-blocked
     // requests; blocking is proven via the A/B trace, not the badge count — see gotcha 6
-    // in src-tauri/CLAUDE.md).  The event→badge path is fully testable via the mock.
+    // in src-tauri/AGENTS.md).  The event→badge path is fully testable via the mock.
     layers: ['vitest'],
     mobile: true, // the badge + onBlockedCount path is shared with the mobile shield
     run: async (ctx) => {
@@ -396,7 +472,7 @@ export const TOOLBAR_INTERACTIONS: InteractionSpec[] = [
       // to pageBlocked=undefined → 0) BEFORE emitBlockedCount sets page=3.  Without
       // this drain the getState() then() runs inside act() AFTER flushSync and resets
       // the badge back to 0 — the same React 18 Strict Mode + async-mock ordering
-      // gotcha documented in src/CLAUDE.md.  A single Promise.resolve() tick is enough
+      // gotcha documented in src/AGENTS.md.  A single Promise.resolve() tick is enough
       // to drain the already-resolved mock promise.
       await Promise.resolve();
       // Emit a BlockedCount for the active view through the mocked onBlockedCount callback,

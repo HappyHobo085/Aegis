@@ -956,9 +956,8 @@ export const CATALOG: FeatureCheck[] = [
     ],
     exercise: async (a) => {
       const listResult = await a.workspace.list();
-      // workspace.list may return WorkspaceState or Workspace[] depending on the platform
-      if (!Array.isArray(listResult)) assertObject(listResult);
-      else assertArray(listResult);
+      // workspace.list always replies with the full WorkspaceState
+      assertObject(listResult);
       const ws = await a.workspace.create('Test Workspace', '#3b82f6');
       assertObject(ws);
       await a.workspace.rename(ws.id, 'Renamed');
