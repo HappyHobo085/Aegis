@@ -183,7 +183,8 @@ to newly created/reloaded tabs only. Honest limits: a same-world JS shim is dete
 (default-off for this reason); on WebKit the Chrome-148 UA already lies about the engine;
 per-frame-origin seeding (not Brave's per-top-eTLD+1); Android has no fp-allowlist (v1).
 `vitest src/lib/farbleShim.test.ts` is authoritative for shim runtime behavior and passes
-(22 tests; the tree has ~1022 TS tests in total — run `npm test` for the full count). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
+(22 tests; the tree has 1205 TS tests in 112 files in total, verified on vitest
+4.1.9 and 4.1.11 — run `npm test` for the full count). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
 are **PENDING** user. **Content-webview Proxy** (`proxy.rs`; sub-project M): routes
 browsed pages through a user-configured HTTP or SOCKS5 proxy. **This is a Proxy, not a
 VPN** — it covers the content webview only (not the OS, not other apps, not the chrome's

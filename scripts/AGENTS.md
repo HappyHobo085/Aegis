@@ -84,9 +84,37 @@ justification in the commit** — that's the documented escape hatch.
 
 `package.json` also carries an `overrides` block, which is the **preferred** way to
 clear a high/critical advisory: it forces a fixed transitive version repo-wide,
-rather than silencing the check. `npm audit fix` cannot be relied on here — on this
-tree it aborts with an internal npm error (`Cannot read properties of null (reading
-'edgesOut')`), so the overrides are written by hand.
+rather than silencing the check.
+
+### The system npm on this machine cannot resolve this tree
+
+`npm audit fix`, `npm update` and plain `npm install <pkg>` all abort with an
+internal npm error — `Cannot read properties of null (reading 'edgesOut')`, thrown
+from `#loadPeerSet` in arborist's `build-ideal-tree.js`. It is **not** caused by
+this repo: removing the `overrides` block entirely still reproduces it, and the
+stack is peer-dependency resolution, which `npm ci` never does (that is why CI,
+which only ever runs `npm ci`, is unaffected). The bundled npm is 10.9.7
+(`/usr/lib/node_modules_22/npm`, i.e. Node 22.22.2's).
+
+**Workaround — use npm 11 for any command that builds an ideal tree:**
+
+```bash
+npx --yes npm@11 install --no-bin-links            # incremental install
+npx --yes npm@11 install --package-lock-only <pkg> # regenerate the lock only
+```
+
+Both work and produce a correct lock. `npx npm@11 install --package-lock-only
+vitest@4.1.11` bumped the lock across `vitest` + the `@vitest/*` siblings in one
+133-line diff and reported `found 0 vulnerabilities`. Note it also records the
+root `engines` (`node >=22.12.0`) into the lock's root entry, which npm 10 had
+been omitting — that field is already in `package.json`, so it is a correction,
+not a new constraint.
+
+`--no-bin-links` is still required: this workspace mount rejects the symlinks
+npm would create under `node_modules/.bin` (EPERM), so run tools by explicit path
+(`node node_modules/vitest/vitest.mjs run`, `node node_modules/typescript/bin/tsc`,
+…). Keeping the `overrides` entries hand-written below is still the right call for
+_advisories_ — but a version **bump** no longer needs hand-editing.
 
 Current entries, and why each exists:
 
