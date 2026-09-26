@@ -1,9 +1,48 @@
 //! Local, encrypted-at-rest password vault (Phase A — manage only, NO autofill).
 //!
 //! Credential records are sealed with the SAME XChaCha20-Poly1305 AEAD as the sync engine
-//! (crypto::seal/open) under the dedicated "vault" namespace, gated by a master-password
-//! Argon2id KDF (mirroring sync_keystore::derive_kek). The vault is NOT synced and NEVER
-//! reachable from the content webview — there is no page->core bridge (locked decision).
+//! (crypto::seal/open) under the dedicated "pwvault" namespace, gated by a master-password
+//! Argon2id KDF (mirroring sync_keystore::derive_kek).
+//!
+//! # The vault DOES sync, and how that is made to work
+//!
+//! The vault is part of E2E sync under the `pwvault` namespace, but only when the separate
+//! `syncVault` opt-in is on. Sync moves the *sealed* records — the server and the transport
+//! layer never see a credential — and the two halves of the problem are handled separately.
+//!
+//! **Portability (why records are readable on a paired device at all).** The key is
+//! `Argon2id(master_password, salt)`, and the salt is a *plaintext* field of `vault.json`.
+//! A salt is public by design, so nothing about it needs to be secret — the bug was never
+//! that. The bug was that every device minted its OWN random salt, so `Argon2id` produced a
+//! different key per device and no record could ever cross. So the account publishes ONE salt
+//! (`sync_vault`'s `pwvault-meta` namespace) and a joining device **adopts** it by re-sealing
+//! its own records under it — see [`KDF_V_SYNCED`], [`reseal_with_salt`] and
+//! `sync_vault::try_adopt`. Because the KDF itself is unchanged, adoption is pure
+//! re-encryption, and the adopted salt is cached locally, so removing the account later can
+//! never brick the vault.
+//!
+//! **Integrity (why a remote record can no longer destroy a local one).** A record arriving
+//! from a peer is only ever accepted after `open_record` authenticates it under the local
+//! key; anything that fails is counted as quarantined and never written. The previous bridge
+//! merged by `updatedAt` WITHOUT decrypting and rewrote the file preserving only
+//! salt/verifier/kdf, so a peer — or a corrupted blob — could overwrite a real credential
+//! with permanently unreadable ciphertext. That path no longer exists.
+//!
+//! The security posture this yields: a peer that holds the recovery phrase but NOT the master
+//! password cannot read the vault (it lacks the Argon2id output) and cannot forge a record
+//! that authenticates, so its writes are quarantined. A peer holding both is equivalent to
+//! legitimate access, which is the point of pairing.
+//!
+//! # The content webview CAN reach autofill plumbing
+//!
+//! An older header also claimed the vault was "NEVER reachable from the content webview —
+//! there is no page->core bridge". That was false: `adblock_inject` injects `vault_inject.js`
+//! at document start, which emits `form:willSubmit` and listens on the app-wide Tauri event
+//! bus for `vault:autofillResult`. Autofill stays inert only because `withGlobalTauri` is
+//! not enabled (so pages have no `invoke`) and because no component subscribes to
+//! `vault:requestFill` / `vault:autofillResult`. Do not read the inert state as a guarantee:
+//! enabling `withGlobalTauri` would broadcast any credential to every open webview, since
+//! Tauri's `app.emit` has no per-webview targeting.
 use crate::crypto::{hex, unhex};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -14,10 +53,106 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 static FAILED_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 
-const NS: &str = "pwvault";
+/// When the most recent failed unlock was recorded (ms since epoch; 0 = never). Paired with
+/// [`FAILED_ATTEMPTS`] to implement a *non-blocking* unlock rate limit — see
+/// [`remaining_backoff_ms`].
+static LAST_FAILURE_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The longest an unlock is refused for, regardless of how many attempts have failed.
+const BACKOFF_MAX_MS: u64 = 300_000;
+
+/// The backoff window for a given number of consecutive failures: 0 for the first two, then
+/// 1s, 2s, 4s … doubling, clamped to [`BACKOFF_MAX_MS`].
+///
+/// Uses `saturating_pow` and a clamped exponent rather than `2u64.pow(n)`: the old
+/// expression overflow-panicked in debug builds once `n` reached 64, and `n` is derived from a
+/// counter that only ever grows.
+fn backoff_ms(attempts: u32) -> u64 {
+    if attempts < 3 {
+        return 0;
+    }
+    let exp = (attempts - 3).min(20);
+    1_000u64
+        .saturating_mul(2u64.saturating_pow(exp))
+        .min(BACKOFF_MAX_MS)
+}
+
+/// How long the caller must still wait before another unlock attempt is accepted (0 = now).
+///
+/// Also decays the counter: once a full window has elapsed with no further attempt, the streak
+/// is forgotten, so a user who mistypes a few times, walks away, and comes back is not punished
+/// for the earlier attempts. This is what the old code never did — `FAILED_ATTEMPTS` was
+/// process-global, reset *only* by a successful unlock, so it ratcheted up over a session and
+/// never came back down.
+fn remaining_backoff_ms() -> u64 {
+    let attempts = FAILED_ATTEMPTS.load(Ordering::Relaxed);
+    let window = backoff_ms(attempts);
+    if window == 0 {
+        return 0;
+    }
+    let last = LAST_FAILURE_MS.load(Ordering::Relaxed);
+    if last == 0 {
+        return 0;
+    }
+    let elapsed = (now_ms().max(0) as u64).saturating_sub(last);
+    if elapsed >= window {
+        // The window elapsed unused — decay the streak and let the attempt through.
+        FAILED_ATTEMPTS.store(0, Ordering::Relaxed);
+        LAST_FAILURE_MS.store(0, Ordering::Relaxed);
+        return 0;
+    }
+    window - elapsed
+}
+
+/// The user-facing throttle message. `after_failure` distinguishes "your attempt was just
+/// refused because the password was wrong" from "the previous backoff is still running".
+fn backoff_message(wait_ms: u64, after_failure: bool) -> String {
+    if wait_ms == 0 {
+        return if after_failure {
+            "incorrect master password".to_string()
+        } else {
+            String::new()
+        };
+    }
+    let secs = (wait_ms as f64 / 1000.0).ceil() as u64;
+    if after_failure {
+        format!("too many failed attempts — try again in {secs}s")
+    } else {
+        format!("too many failed attempts — wait {secs}s before trying again")
+    }
+}
+
+pub(crate) const NS: &str = "pwvault";
 const VERIFIER_UUID: &str = "verifier";
 const VERIFIER_PLAINTEXT: &[u8] = b"aegis-vault-verifier-v1";
 const VERIFIER_HLC: &[u8] = b"aegis-vault-verifier-v1"; // fixed AAD version tag for the verifier
+
+/// The vault file's KDF version, stored in its `"v"` field.
+///
+/// **1 — local.** The Argon2id salt is 32 random bytes minted by whichever device created the
+/// vault. Because every device mints its *own*, records sealed here are undecryptable on any
+/// other device even with the right master password, so such a vault cannot sync.
+///
+/// **2 — adopted.** The salt is the one the sync account published for this vault (see
+/// [`sync_vault`]), so every paired device derives the *same* `Argon2id(password, salt)` and
+/// can read every other device's records. The derivation is deliberately UNCHANGED between v1
+/// and v2 — only the salt's origin differs. That is what lets a device join an existing vault
+/// by simply re-sealing its own records under the shared salt, with no new KDF, no
+/// re-derivation of the password, and no risk of bricking a vault whose account is later
+/// removed (the adopted salt stays cached locally in `vault-sync.json`).
+pub(crate) const KDF_V_LOCAL: u64 = 1;
+pub(crate) const KDF_V_SYNCED: u64 = 2;
+
+/// The file's KDF version, defaulting to [`KDF_V_LOCAL`] for a file written before `"v"`
+/// existed or that was tampered with into a non-numeric value.
+pub fn file_version(file: &Value) -> u64 {
+    file.get("v").and_then(Value::as_u64).unwrap_or(KDF_V_LOCAL)
+}
+
+/// The Argon2id salt this vault's records are sealed under.
+pub fn file_salt(file: &Value) -> Option<Vec<u8>> {
+    file.get("salt").and_then(Value::as_str).and_then(unhex)
+}
 
 /// One decrypted credential. Zeroized on drop so a dropped vault leaves no plaintext.
 #[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop, PartialEq, Debug)]
@@ -57,14 +192,80 @@ fn hlc_bytes(updated_at: i64) -> [u8; 8] {
 
 /// Seal one credential into a wire record `{uuid, updatedAt, nonce, ct}` (cleartext routing
 /// fields + the sealed JSON body). NO plaintext credential field leaves this function.
-fn seal_record(vk: &[u8; 32], c: &Cred) -> Result<Value, String> {
+///
+/// `pub(crate)` for the same reason as [`open_record`]: the sync bridge's tests must be able to
+/// forge a record the way a malicious or buggy peer would, in order to prove such a record is
+/// quarantined rather than merged.
+pub(crate) fn seal_record(vk: &[u8; 32], c: &Cred) -> Result<Value, String> {
     let plaintext = Zeroizing::new(serde_json::to_vec(c).map_err(|e| e.to_string())?);
     let (nonce, ct) = crate::crypto::seal(vk, NS, &c.uuid, &hlc_bytes(c.updated_at), &plaintext)?;
     Ok(json!({ "uuid": c.uuid, "updatedAt": c.updated_at, "nonce": hex(&nonce), "ct": hex(&ct) }))
 }
 
 /// Open a wire record back into a Cred, authenticating against its cleartext uuid/updatedAt.
-fn open_record(vk: &[u8; 32], w: &Value) -> Result<Cred, String> {
+///
+/// Thin wrapper over [`open_kind`] that rejects tombstones, for callers that want "a
+/// credential or an error".
+///
+/// `#[cfg(test)]` because it no longer has a production caller: once tombstones existed, the
+/// merge and unlock paths both need to tell a tombstone from a credential, so they call
+/// `open_kind` directly, and only the tests want the narrower shape. Without the attribute the
+/// release build sees dead code and `clippy -- -D warnings` fails.
+#[cfg(test)]
+pub(crate) fn open_record(vk: &[u8; 32], w: &Value) -> Result<Cred, String> {
+    match open_kind(vk, w)? {
+        Opened::Cred(c) => Ok(c),
+        Opened::Tombstone => Err("record is a tombstone".into()),
+    }
+}
+
+/// The sealed plaintext of a tombstone. Short, fixed, and — critically — DISTINCT from any
+/// serialized [`Cred`]: a `Cred` always has a `uuid` string, so a body carrying `"t"` can never
+/// be confused with a live credential in either direction.
+const TOMBSTONE_BODY: &[u8] = br#"{"t":1}"#;
+
+/// What an authenticated wire record turned out to be.
+pub(crate) enum Opened {
+    Cred(Cred),
+    Tombstone,
+}
+
+/// Seal a *tombstone* for `uuid` — an authenticated "this record is deleted at `updated_at`"
+/// marker, carrying no credential material whatsoever.
+///
+/// ## Why a tombstone exists
+/// Every other synced namespace in this app (favorites, history, downloads, allowlist, …) carries
+/// a `deleted` flag through the same HLC-LWW merge. The vault did not, and that turned a *local*
+/// delete into a **resurrection**: `vault.remove` dropped the record from memory and disk, but
+/// nothing told any peer, so the next pull of a still-provisioned device re-added it — and the
+/// ciphertext, which for a password the user deleted *because it leaked*, sat on the server
+/// forever. `merge_remote` had no branch that could drop a record at all.
+///
+/// ## Why it is a sealed record and not a cleartext flag
+/// A cleartext `deleted: true` would let any peer delete any credential it can name, with no key.
+/// Here the tombstone is sealed under the vault key with the SAME AAD as a live record —
+/// `(NS, uuid, hlc_bytes(updated_at))` — so forging one still requires the vault key, and the
+/// AAD already binds both the identity and the timestamp the merge orders by. The cleartext
+/// `deleted` field on the wire is an **advisory hint for the server's pruning only**; the
+/// authoritative signal is the sealed body, which is what `open_kind` decides on. A peer that
+/// flips the hint to `false` still gets a tombstone, because the body is what decrypts.
+pub(crate) fn seal_tombstone(vk: &[u8; 32], uuid: &str, updated_at: i64) -> Result<Value, String> {
+    let (nonce, ct) = crate::crypto::seal(vk, NS, uuid, &hlc_bytes(updated_at), TOMBSTONE_BODY)?;
+    Ok(json!({
+        "uuid": uuid,
+        "updatedAt": updated_at,
+        "deleted": true,
+        "nonce": hex(&nonce),
+        "ct": hex(&ct),
+    }))
+}
+
+/// Authenticate a wire record and report what it is — a live credential or a tombstone.
+///
+/// Shared by [`open_record`] (which only accepts the former) and the unlock/merge paths (which
+/// must handle both). Authenticates first and decides from the *decrypted body*, never from the
+/// cleartext hint.
+pub(crate) fn open_kind(vk: &[u8; 32], w: &Value) -> Result<Opened, String> {
     let uuid = w
         .get("uuid")
         .and_then(Value::as_str)
@@ -91,7 +292,30 @@ fn open_record(vk: &[u8; 32], w: &Value) -> Result<Cred, String> {
         uuid,
         &hlc_bytes(updated_at),
     )?);
-    serde_json::from_slice(&pt).map_err(|e| e.to_string())
+    if pt.as_slice() == TOMBSTONE_BODY {
+        return Ok(Opened::Tombstone);
+    }
+    serde_json::from_slice(&pt)
+        .map(Opened::Cred)
+        .map_err(|e| e.to_string())
+}
+
+/// Record a deletion marker, keeping the NEWEST one per uuid.
+///
+/// Last-writer-wins on the timestamp. A delete is a synced record like any other, so it has to
+/// interleave correctly with the edits around it: a stale tombstone must not erase a credential
+/// that was re-saved afterwards, and a newer one must win.
+fn upsert_tombstone(list: &mut Vec<(String, i64)>, uuid: String, at: i64) {
+    match list.iter_mut().find(|(u, _)| *u == uuid) {
+        Some(slot) => slot.1 = slot.1.max(at),
+        None => list.push((uuid, at)),
+    }
+}
+
+/// True when a deletion marker for `uuid` is at least as new as `updated_at`, i.e. the record
+/// has been deleted and must not come back.
+fn is_tombstoned(list: &[(String, i64)], uuid: &str, updated_at: i64) -> bool {
+    list.iter().any(|(u, at)| u == uuid && *at >= updated_at)
 }
 
 /// Seal the fixed verifier constant so unlock can detect a wrong password via AEAD auth alone.
@@ -122,13 +346,12 @@ fn check_verifier(vk: &[u8; 32], v: &Value) -> Result<(), String> {
 }
 
 /// Build the on-disk JSON object from the verifier + sealed records (the at-rest file).
-// NOTE: When upgrading KDF params (e.g. Argon2 memory cost), add a new
-// version number here and implement migrate_vault() that reads the old
-// params from the file, re-derives the key with new params, re-seals all
-// records, and writes back. Trigger migration on successful unlock when
-// the file's "v" field is behind the current version.
-fn file_json(salt: &[u8], verifier: Value, records: &[Value]) -> Value {
-    json!({ "v": 1, "kdf": "argon2id", "salt": hex(salt), "verifier": verifier, "records": records })
+///
+/// `v` is the KDF version — see [`KDF_V_LOCAL`] / [`KDF_V_SYNCED`]. Raising it requires a
+/// migration that re-seals under the new parameters, which for the v1→v2 bump is exactly
+/// [`reseal_with_salt`] (triggered at unlock, see `sync_vault`).
+fn file_json(salt: &[u8], verifier: Value, records: &[Value], v: u64) -> Value {
+    json!({ "v": v, "kdf": "argon2id", "salt": hex(salt), "verifier": verifier, "records": records })
 }
 
 /// The in-memory vault state: locked (key = None, records empty) or unlocked.
@@ -142,7 +365,12 @@ pub struct Inner {
     // `undecryptable` count in `vault.state` so the user is warned. These are sealed
     // ciphertext, never plaintext.
     orphans: Vec<Value>,
+    // Deletion markers (uuid, deleted-at) — see `seal_tombstone`. A credential the user deleted
+    // must STAY deleted when a peer that still has it pushes again, so the delete has to be a
+    // first-class, synced, ordered record rather than a local removal.
+    tombstones: Vec<(String, i64)>,
     salt: Vec<u8>, // the Argon2 salt for THIS vault (loaded from the file)
+    version: u64,  // the file's KDF version — see `KDF_V_LOCAL` / `KDF_V_SYNCED`
     created: bool, // a vault file exists
 }
 
@@ -187,14 +415,28 @@ impl From<String> for VaultError {
 /// Initialize a brand-new vault: derive the key from `password`, seal the verifier,
 /// return the on-disk JSON (no records yet) and the derived key so the caller can
 /// transition to "unlocked" without a second KDF call.
+///
+/// `salt` is the Argon2id salt to use. A **local** vault passes a fresh random one; a vault
+/// created while a shared salt is already cached passes that instead, so the new vault is
+/// born [`KDF_V_SYNCED`] and its records are readable by the account's other devices from the
+/// very first write. The derivation is the same either way — only the salt's origin differs.
+pub fn init_vault_with_salt(
+    password: &str,
+    salt: &[u8],
+    version: u64,
+) -> Result<(Value, Zeroizing<[u8; 32]>), VaultError> {
+    let vk = derive_vault_key(password, salt)?;
+    let verifier = seal_verifier(&vk)?;
+    let file = file_json(salt, verifier, &[], version);
+    Ok((file, vk))
+}
+
+/// [`init_vault_with_salt`] with a fresh random 32-byte salt from the OS CSPRNG — the
+/// local-only (v1) case.
 pub fn init_vault(password: &str) -> Result<(Value, Zeroizing<[u8; 32]>), VaultError> {
-    // Generate a fresh random 32-byte Argon2id salt.
     let mut salt = vec![0u8; 32];
     getrandom::getrandom(&mut salt).map_err(|e| VaultError::Crypto(e.to_string()))?;
-    let vk = derive_vault_key(password, &salt)?;
-    let verifier = seal_verifier(&vk)?;
-    let file = file_json(&salt, verifier, &[]);
-    Ok((file, vk))
+    init_vault_with_salt(password, &salt, KDF_V_LOCAL)
 }
 
 /// The decrypted contents of an unlocked vault.
@@ -203,6 +445,9 @@ pub struct UnlockedVault {
     pub key: Zeroizing<[u8; 32]>,
     pub records: Vec<Cred>,
     pub orphans: Vec<Value>,
+    /// Deletion markers, newest-wins per uuid. See [`seal_tombstone`] for why these exist and
+    /// why they are sealed rather than a cleartext flag.
+    pub tombstones: Vec<(String, i64)>,
 }
 
 /// Unlock an existing vault from its on-disk JSON. Derives the key, verifies it against the
@@ -230,10 +475,22 @@ pub fn unlock_vault(file: &Value, password: &str) -> Result<UnlockedVault, Vault
     // rather than erroring out the whole unlock and losing the readable records with them.
     let mut records = Vec::new();
     let mut orphans = Vec::new();
+    let mut tombstones: Vec<(String, i64)> = Vec::new();
     if let Some(arr) = file.get("records").and_then(Value::as_array) {
         for w in arr {
-            match open_record(&vk, w) {
-                Ok(c) => records.push(c),
+            // A tombstone and a credential are both just sealed records in this same array, so
+            // classify on the AUTHENTICATED body (`open_kind`) — never on the cleartext
+            // `deleted` hint. Only a genuine decrypt failure is an orphan.
+            match open_kind(&vk, w) {
+                Ok(Opened::Cred(c)) => records.push(c),
+                Ok(Opened::Tombstone) => {
+                    if let (Some(uuid), Some(at)) = (
+                        w.get("uuid").and_then(Value::as_str),
+                        w.get("updatedAt").and_then(Value::as_i64),
+                    ) {
+                        upsert_tombstone(&mut tombstones, uuid.to_string(), at);
+                    }
+                }
                 Err(_) => orphans.push(w.clone()),
             }
         }
@@ -242,19 +499,233 @@ pub fn unlock_vault(file: &Value, password: &str) -> Result<UnlockedVault, Vault
     Ok(UnlockedVault {
         key: vk,
         records,
+        tombstones,
         orphans,
     })
+}
+
+/// Re-seal all records under `new_salt`, returning a [`KDF_V_SYNCED`] vault file.
+///
+/// This is how a device **adopts** a shared vault: the account publishes one salt, and every
+/// paired device re-seals its own records under it so they all derive the same key. Because
+/// the KDF is unchanged, adoption is a pure re-encryption — no new password derivation and
+/// nothing to migrate but the ciphertext.
+///
+/// Fails (without touching anything) when the password is wrong, or when the vault holds
+/// records it cannot decrypt: re-sealing rewrites the record array, so carrying orphans
+/// across is impossible and dropping them would be silent credential loss. The caller is
+/// expected to surface that and leave the vault local-only.
+pub fn reseal_with_salt(
+    file: &Value,
+    password: &str,
+    new_salt: &[u8],
+) -> Result<Value, VaultError> {
+    let cur_salt = file_salt(file).ok_or_else(|| VaultError::Crypto("missing salt".into()))?;
+    // Authenticate the password against the CURRENT key first. Without this a wrong password
+    // would "succeed", producing an empty vault under the new salt and destroying the records.
+    let unlocked = unlock_vault(file, password)?;
+    if !unlocked.orphans.is_empty() {
+        return Err(VaultError::Crypto(format!(
+            "cannot adopt a shared vault: {} record(s) here are undecryptable and a re-seal \
+             would drop them",
+            unlocked.orphans.len()
+        )));
+    }
+    if cur_salt == new_salt {
+        // Already on the shared salt — just stamp the version so `state_json` can report it.
+        let mut out = file.clone();
+        if let Some(o) = out.as_object_mut() {
+            o.insert("v".into(), json!(KDF_V_SYNCED));
+        }
+        return Ok(out);
+    }
+    let vk = derive_vault_key(password, new_salt)?;
+    let mut wire = Vec::with_capacity(unlocked.records.len());
+    for c in &unlocked.records {
+        wire.push(seal_record(&vk, c)?);
+    }
+    let verifier = seal_verifier(&vk)?;
+    Ok(file_json(new_salt, verifier, &wire, KDF_V_SYNCED))
+}
+
+/// Adopt a re-sealed vault file into the live state.
+///
+/// `new_file` must already be on disk (written by the caller). This re-derives the key for the
+/// NEW salt, repoints the in-memory state at it, and re-flushes the records — which are
+/// unchanged by a re-seal, only re-encrypted — so the in-memory vault and the file agree.
+///
+/// The password is required because the key is salted: without it we could not produce the key
+/// that `new_file` was sealed under, and persisting the old key's ciphertext under the new
+/// salt would make every record permanently unreadable.
+pub(crate) fn adopt_resealed<R: Runtime>(
+    app: &AppHandle<R>,
+    new_file: &Value,
+    password: &str,
+) -> Result<(), String> {
+    let salt = file_salt(new_file).ok_or("re-sealed vault is missing its salt")?;
+    let version = file_version(new_file);
+    // Re-derive under the new salt. `reseal_with_salt` already authenticated the password
+    // against the old file, so a wrong password cannot reach here.
+    let vk = derive_vault_key(password, &salt)?;
+    let st = app
+        .try_state::<VaultState>()
+        .ok_or("vault state unavailable")?;
+    let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+    g.salt = salt;
+    g.version = version;
+    g.key = Some(vk);
+    // `g.records` / `g.orphans` are deliberately untouched: a re-seal moves bytes, not data.
+    // If a re-seal ever did change the record set, that would be a bug worth failing on.
+    persist(app, &g)
+}
+
+/// What [`merge_remote`] did, so the sync pass can report it.
+#[derive(Debug, Default, PartialEq)]
+pub struct MergeOutcome {
+    /// uuids added or replaced.
+    pub changed: Vec<String>,
+    /// Records that arrived but did not authenticate under the local key. Never written.
+    pub quarantined: Vec<String>,
+}
+
+/// Merge sealed records from a peer into the UNLOCKED in-memory vault, then persist once.
+///
+/// Every incoming record is authenticated with [`open_record`] **before** it is allowed to
+/// influence the vault, and only a record that decrypts is eligible for the
+/// `updatedAt`-newer replacement. This is the fix for the original bridge, which merged on
+/// `updatedAt` alone and rewrote the file preserving only salt/verifier/kdf — so a peer could
+/// overwrite a real credential with permanently unreadable ciphertext.
+///
+/// Merging happens in memory and is flushed by a single [`persist`], so the on-disk file can
+/// never be left holding a partial merge. Returns `Err` only if the vault is locked or the
+/// final write fails; a `quarantined` entry is never fatal, by design.
+pub(crate) fn merge_remote<R: Runtime>(
+    app: &AppHandle<R>,
+    remote: &[Value],
+) -> Result<MergeOutcome, String> {
+    let st = app
+        .try_state::<VaultState>()
+        .ok_or("vault state unavailable")?;
+    let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+    let vk = g.key.clone().ok_or("vault is locked")?;
+    let mut out = MergeOutcome::default();
+
+    for r in remote {
+        let Some(uuid) = r.get("uuid").and_then(Value::as_str) else {
+            out.quarantined.push("<no-uuid>".into());
+            continue;
+        };
+        // Authenticate FIRST. An unauthenticated record must not be able to displace a good one,
+        // and only an authenticated tombstone is allowed to delete anything.
+        let cred = match open_kind(&vk, r) {
+            Ok(Opened::Cred(c)) => c,
+            Ok(Opened::Tombstone) => {
+                let Some(at) = r.get("updatedAt").and_then(Value::as_i64) else {
+                    out.quarantined.push(uuid.to_string());
+                    continue;
+                };
+                upsert_tombstone(&mut g.tombstones, uuid.to_string(), at);
+                // The delete is authoritative: drop the local copy outright.
+                let before = g.records.len();
+                g.records.retain(|c| c.uuid != uuid);
+                if g.records.len() != before {
+                    out.changed.push(uuid.to_string());
+                }
+                continue;
+            }
+            Err(e) => {
+                eprintln!("[aegis-vault] quarantined {uuid} from sync: {e}");
+                out.quarantined.push(uuid.to_string());
+                continue;
+            }
+        };
+        // The cleartext uuid the record claims must match the one the ciphertext authenticated
+        // under — `open_kind` binds uuid into the AAD, so a mismatch cannot have decrypted.
+        debug_assert_eq!(cred.uuid, uuid);
+        // A delete at least as new as this edit wins. THIS is what makes a delete stick: the peer
+        // is pushing a version the user already removed, and accepting it would resurrect the
+        // credential — permanently, since that peer would re-push it on every pass.
+        if is_tombstoned(&g.tombstones, &cred.uuid, cred.updated_at) {
+            eprintln!(
+                "[aegis-vault] dropped {} — deleted at/after this edit",
+                cred.uuid
+            );
+            // Only report a change if there WAS a local copy to remove. A peer re-pushing an
+            // already-deleted credential is a no-op, and listing it in `changed` would claim
+            // local state moved when it did not (and drive a pointless re-seal/push).
+            let before = g.records.len();
+            g.records.retain(|c| c.uuid != cred.uuid);
+            if g.records.len() != before {
+                out.changed.push(cred.uuid.clone());
+            }
+            continue;
+        }
+        // Genuinely newer than the delete ⇒ the credential was re-added after the delete, so the
+        // delete no longer applies to it.
+        g.tombstones.retain(|(u, _)| *u != cred.uuid);
+        match g.records.iter_mut().find(|c| c.uuid == cred.uuid) {
+            Some(local) => {
+                if cred.updated_at > local.updated_at {
+                    *local = cred;
+                    out.changed.push(uuid.to_string());
+                }
+            }
+            None => {
+                g.records.push(cred);
+                out.changed.push(uuid.to_string());
+            }
+        }
+    }
+
+    if !out.changed.is_empty() {
+        persist(app, &g)?;
+    }
+    Ok(out)
+}
+
+/// The vault key, but only while the vault is unlocked.
+///
+/// Vault sync needs this to authenticate an incoming record before it is allowed anywhere
+/// near the file, so a **locked vault does not sync at all**: it is neither uploaded nor
+/// merged. That is deliberate — you cannot merge records you cannot decrypt, and writing
+/// unverified ciphertext to disk is precisely the bug that made the old bridge destructive.
+pub fn unlocked_key<R: Runtime>(app: &AppHandle<R>) -> Option<Zeroizing<[u8; 32]>> {
+    app.try_state::<VaultState>()?
+        .0
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .key
+        .clone()
+}
+
+/// True when this device's vault has adopted the account's shared salt, i.e. it can actually
+/// read records sealed on a paired device.
+pub fn is_synced<R: Runtime>(app: &AppHandle<R>) -> bool {
+    match read_file(app) {
+        Some(f) => file_version(&f) >= KDF_V_SYNCED,
+        None => false,
+    }
 }
 
 /// Re-seal all records (and the verifier) under `vk`, returning an updated on-disk JSON.
 /// Called when adding/updating/removing a record while the vault is unlocked.
 pub fn seal_vault(salt: &[u8], vk: &[u8; 32], records: &[Cred]) -> Result<Value, VaultError> {
+    seal_vault_versioned(salt, vk, records, KDF_V_LOCAL)
+}
+
+/// [`seal_vault`] with an explicit KDF version stamp.
+pub fn seal_vault_versioned(
+    salt: &[u8],
+    vk: &[u8; 32],
+    records: &[Cred],
+    v: u64,
+) -> Result<Value, VaultError> {
     let verifier = seal_verifier(vk)?;
     let mut wire: Vec<Value> = Vec::with_capacity(records.len());
     for c in records {
         wire.push(seal_record(vk, c)?);
     }
-    Ok(file_json(salt, verifier, &wire))
+    Ok(file_json(salt, verifier, &wire, v))
 }
 
 // ─── VaultState methods (pure, AppHandle-free) ──────────────────────────────
@@ -270,11 +741,13 @@ impl VaultState {
         inner.key = Some(unlocked.key);
         inner.records = unlocked.records;
         inner.orphans = unlocked.orphans; // preserve undecryptable records (surfaced as `undecryptable`)
+        inner.tombstones = unlocked.tombstones;
         inner.created = true;
-        // Extract salt for re-sealing later.
-        if let Some(s) = file.get("salt").and_then(Value::as_str).and_then(unhex) {
+        // Extract salt for re-sealing later, and the KDF version so `persist` keeps stamping it.
+        if let Some(s) = file_salt(file) {
             inner.salt = s;
         }
+        inner.version = file_version(file);
         Ok(())
     }
 
@@ -283,14 +756,11 @@ impl VaultState {
     pub fn create(&self, password: &str) -> Result<Value, VaultError> {
         let (file, vk) = init_vault(password)?;
         let mut inner = self.0.lock().unwrap_or_else(|e| e.into_inner());
-        let salt = file
-            .get("salt")
-            .and_then(Value::as_str)
-            .and_then(unhex)
-            .unwrap_or_default();
+        let salt = file_salt(&file).unwrap_or_default();
         inner.key = Some(vk);
         inner.records = Vec::new();
         inner.salt = salt;
+        inner.version = file_version(&file);
         inner.created = true;
         Ok(file)
     }
@@ -302,6 +772,7 @@ impl VaultState {
         inner.records.clear(); // Cred implements ZeroizeOnDrop
         inner.records.shrink_to_fit();
         inner.orphans.clear(); // re-read from disk on next unlock
+        inner.tombstones.clear();
     }
 
     /// Returns true if the vault is currently unlocked.
@@ -467,14 +938,21 @@ pub fn read_file<R: Runtime>(app: &AppHandle<R>) -> Option<Value> {
 pub fn persist<R: Runtime>(app: &AppHandle<R>, g: &Inner) -> Result<(), String> {
     let vk = g.key.as_ref().ok_or("vault is locked")?;
     let verifier = seal_verifier(vk)?;
-    let mut records = Vec::with_capacity(g.records.len() + g.orphans.len());
+    let mut records = Vec::with_capacity(g.records.len() + g.tombstones.len() + g.orphans.len());
     for c in &g.records {
         records.push(seal_record(vk, c)?);
+    }
+    // Deletion markers are sealed alongside the credentials so a delete survives a restart and,
+    // once synced, is what stops a peer re-adding the record. They must round-trip through the
+    // file exactly like a credential does — dropping them here would silently un-delete
+    // everything on the next launch.
+    for (uuid, at) in &g.tombstones {
+        records.push(seal_tombstone(vk, uuid, *at)?);
     }
     // Pass through records that couldn't be decrypted on unlock verbatim — re-sealing only the
     // decrypted set would permanently drop them (silent credential loss). They stay sealed as-is.
     records.extend(g.orphans.iter().cloned());
-    let file = file_json(&g.salt, verifier, &records);
+    let file = file_json(&g.salt, verifier, &records, g.version);
     let p = vault_path(app).ok_or("no app data dir")?;
     let txt = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
     crate::jsonstore::write_atomic(&p, txt.as_bytes()).map_err(|e| e.to_string())
@@ -496,9 +974,10 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
         // Records present on disk that couldn't be decrypted (corrupt/truncated). Preserved,
         // not dropped — the UI warns the user instead of silently losing credentials.
         "undecryptable": g.orphans.len(),
-        // Must mirror `sync_vault::is_sync_enabled` — the UI shows this as the authoritative
-        // "your vault is being uploaded" state, so it can no longer be a hardcoded `false`
-        // while the sync path unconditionally uploads.
+        // The vault is part of E2E sync, but only when BOTH the separate `syncVault` opt-in is
+        // on AND this device has adopted the account's shared salt. Until adoption happens the
+        // honest answer is false: records sealed here are unreadable on the account's other
+        // devices, so syncing them would only push blobs nobody can open.
         "syncEnabled": crate::sync_vault::is_sync_enabled(app),
     })
 }
@@ -555,10 +1034,20 @@ pub fn dispatch<R: Runtime>(
             if password.len() < 8 {
                 return Some(Err("master password must be at least 8 characters".into()));
             }
-            let mut salt = [0u8; 32];
-            if getrandom::getrandom(&mut salt).is_err() {
-                return Some(Err("rng failed".into()));
-            }
+            // A vault created while the account already has a published shared salt is born
+            // sync-capable, so its very first record is readable by the other devices. This
+            // is the common "new phone joins an existing account" path.
+            let shared = crate::sync_vault::cached_salt(app);
+            let (salt, version) = match shared {
+                Some(s) => (s, KDF_V_SYNCED),
+                None => {
+                    let mut s = [0u8; 32];
+                    if getrandom::getrandom(&mut s).is_err() {
+                        return Some(Err("rng failed".into()));
+                    }
+                    (s.to_vec(), KDF_V_LOCAL)
+                }
+            };
             let vk = match derive_vault_key(&password, &salt) {
                 Ok(k) => k,
                 Err(e) => return Some(Err(e)),
@@ -566,10 +1055,12 @@ pub fn dispatch<R: Runtime>(
             {
                 let st = app.state::<VaultState>();
                 let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
-                g.salt = salt.to_vec();
+                g.salt = salt;
+                g.version = version;
                 g.key = Some(vk);
                 g.records = Vec::new();
                 g.orphans = Vec::new();
+                g.tombstones = Vec::new();
                 g.created = true;
                 if let Err(e) = persist(app, &g) {
                     return Some(Err(e));
@@ -587,20 +1078,43 @@ pub fn dispatch<R: Runtime>(
             // Single source of truth: route through the same `VaultState::unlock` the unit
             // tests exercise. It preserves undecryptable records as orphans (surfaced as
             // `undecryptable` in state) instead of erroring and losing the readable records.
+            // Rate limit, checked BEFORE deriving the key.
+            //
+            // This used to `thread::sleep` the backoff after a wrong password. That is a hard
+            // freeze: `ipc` is a *synchronous* Tauri command, so it runs on the GUI thread
+            // (see src-tauri/AGENTS.md), and after 8 typos the sleep was 5 minutes *per
+            // attempt*, forever, with no way for the user to recover short of restarting.
+            // Refusing the attempt for the length of the window instead keeps the throttle
+            // while never blocking the UI, and skipping the Argon2id makes a rejected attempt
+            // cheap instead of merely slow.
+            let wait = remaining_backoff_ms();
+            if wait > 0 {
+                return Some(Err(backoff_message(wait, false)));
+            }
             let st = app.state::<VaultState>();
             if let Err(e) = st.unlock(Some(&file), &pw()) {
                 FAILED_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
-                let attempts = FAILED_ATTEMPTS.load(Ordering::Relaxed);
-                if attempts >= 3 {
-                    let delay = std::cmp::min(1000 * 2u64.pow(attempts.saturating_sub(3)), 300_000);
-                    std::thread::sleep(std::time::Duration::from_millis(delay));
-                }
-                return Some(Err(e.to_string()));
+                LAST_FAILURE_MS.store(now_ms() as u64, Ordering::Relaxed);
+                let msg = backoff_message(remaining_backoff_ms(), true);
+                return Some(Err(format!("{e} — {msg}")));
             }
             FAILED_ATTEMPTS.store(0, Ordering::Relaxed);
+            LAST_FAILURE_MS.store(0, Ordering::Relaxed);
+            // The password is only available here (not in the background sync pass), so this is
+            // where a local vault ADOPTS the account's shared salt and re-seals its records.
+            // Best-effort: a refusal leaves the vault local-only and is reported in state, never
+            // a failed unlock — the user's own records stay readable either way.
+            let mut adopt_note: Option<String> = None;
+            if let Err(e) = crate::sync_vault::try_adopt(app, &pw()) {
+                adopt_note = Some(e);
+            }
             emit_state(app);
             emit_changed(app);
-            Some(Ok(state_json(app)))
+            let mut st = state_json(app);
+            if let Some(note) = adopt_note {
+                st["adoptionNote"] = json!(note);
+            }
+            Some(Ok(st))
         }
 
         "vault.lock" => {
@@ -610,6 +1124,7 @@ pub fn dispatch<R: Runtime>(
                 g.key = None;
                 g.records.clear();
                 g.orphans.clear();
+                g.tombstones.clear();
             }
             emit_state(app);
             emit_changed(app);
@@ -720,7 +1235,20 @@ pub fn dispatch<R: Runtime>(
             if g.key.is_none() {
                 return Some(Err("vault is locked".into()));
             }
+            let removed_at = g
+                .records
+                .iter()
+                .find(|c| c.uuid == uuid)
+                .map(|c| c.updated_at);
             g.records.retain(|c| c.uuid != uuid);
+            // A delete that only vanished locally gets undone by the next pull from any peer that
+            // still has the record. Write a tombstone instead: sealed under the vault key (see
+            // `seal_tombstone`) and carried by the normal sync path, so the record stops coming
+            // back AND the server can finally reap its ciphertext. Strictly newer than the
+            // version being removed, so it wins the LWW comparison even when the delete lands in
+            // the same millisecond as the edit it removes.
+            let at = now_ms().max(removed_at.map_or(i64::MIN, |a| a.saturating_add(1)));
+            upsert_tombstone(&mut g.tombstones, uuid, at);
             if let Err(e) = persist(app, &g) {
                 return Some(Err(e));
             }
@@ -752,6 +1280,36 @@ pub fn dispatch<R: Runtime>(
                 })
                 .collect();
             Some(Ok(json!(arr)))
+        }
+
+        // `vault.autofill` was declared in `shared/types.ts` and typed as
+        // `Promise<VaultRecord[]>`, consumed by `useVaultAutofill`, and covered by tests —
+        // but every one of those tests runs against the IPC MOCK, so nothing ever proved a
+        // Rust arm existed. There was none, and the `ipc` chokepoint resolved unknown channels
+        // to `Ok(Value::Null)`, so in a release build it silently returned `null` and the
+        // declared return type was a lie. Now implemented: same lookup as
+        // `autofillSuggestions`, plus the optional `username` narrowing that is the only
+        // difference between the two channels.
+        "vault.autofill" => {
+            let domain = payload.get("domain").and_then(Value::as_str).unwrap_or("");
+            let want_user = payload.get("username").and_then(Value::as_str);
+            let st = app.state::<VaultState>();
+            match st.autofill_suggestions(domain) {
+                Ok(creds) => {
+                    let arr: Vec<Value> = creds
+                        .into_iter()
+                        .filter(|c| want_user.is_none_or(|u| c.username == u))
+                        .map(|c| {
+                            json!({
+                                "uuid": c.uuid, "updatedAt": c.updated_at, "site": c.site,
+                                "username": c.username, "password": c.password, "notes": c.notes,
+                            })
+                        })
+                        .collect();
+                    Some(Ok(json!(arr)))
+                }
+                Err(e) => Some(Err(e.to_string())),
+            }
         }
 
         "vault.autofillSuggestions" => {
@@ -788,6 +1346,83 @@ pub fn dispatch<R: Runtime>(
 mod tests {
     use super::*;
 
+    // ── Unlock rate limiter (the anti-guessing backoff) ───────────────────────
+    //
+    // These exercise the pure helpers, plus one test of the process-global decay
+    // path. That one mutates `FAILED_ATTEMPTS` / `LAST_FAILURE_MS`, which are shared
+    // across the whole process, so it takes `test_support::lock()` (public for exactly
+    // this reason) and restores both statics — otherwise it would race the AppHandle
+    // tests that unlock for real under `cargo test`'s parallel execution.
+
+    #[test]
+    fn backoff_is_free_for_the_first_three_attempts() {
+        assert_eq!(backoff_ms(0), 0);
+        assert_eq!(backoff_ms(1), 0);
+        assert_eq!(backoff_ms(2), 0);
+        assert_eq!(backoff_ms(3), 1_000, "the 3rd failure opens the window");
+    }
+
+    #[test]
+    fn backoff_doubles_and_then_clamps() {
+        assert_eq!(backoff_ms(4), 2_000);
+        assert_eq!(backoff_ms(5), 4_000);
+        assert_eq!(backoff_ms(6), 8_000);
+        // Saturates rather than growing without bound...
+        assert_eq!(backoff_ms(40), BACKOFF_MAX_MS);
+        // ...and must not overflow at absurd attempt counts. The old code computed
+        // `1000 * 2u64.pow(attempts - 3)`, which debug-overflow-panicked at 67.
+        assert_eq!(
+            backoff_ms(67),
+            BACKOFF_MAX_MS,
+            "67 was the old overflow point"
+        );
+        assert_eq!(backoff_ms(u32::MAX), BACKOFF_MAX_MS);
+    }
+
+    #[test]
+    fn a_throttled_attempt_is_told_how_long_to_wait() {
+        // Reported BEFORE the attempt (the password was never checked).
+        let before = backoff_message(4_500, false);
+        assert!(before.contains("wait"), "{before}");
+        assert!(before.contains("5s"), "4500ms ceils to 5s: {before}");
+        // Reported AFTER a failure (the real reason is shown too).
+        let after = backoff_message(0, true);
+        assert!(after.contains("incorrect master password"), "{after}");
+        let after_wait = backoff_message(4_500, true);
+        assert!(
+            after_wait.contains("too many failed attempts"),
+            "{after_wait}"
+        );
+        assert!(after_wait.contains("5s"), "{after_wait}");
+    }
+
+    #[test]
+    fn an_idle_streak_decays_so_the_vault_cannot_be_locked_out_forever() {
+        let _guard = crate::test_support::lock();
+        let saved_attempts = FAILED_ATTEMPTS.load(Ordering::Relaxed);
+        let saved_at = LAST_FAILURE_MS.load(Ordering::Relaxed);
+        // A failure inside the current window is still throttled...
+        FAILED_ATTEMPTS.store(9, Ordering::Relaxed);
+        LAST_FAILURE_MS.store(now_ms() as u64, Ordering::Relaxed);
+        let wait = remaining_backoff_ms();
+        assert!(wait > 0, "a fresh failure must still be throttled");
+        assert_eq!(
+            FAILED_ATTEMPTS.load(Ordering::Relaxed),
+            9,
+            "not yet decayed"
+        );
+        // ...but once a full window has passed with no attempt, the streak resets so
+        // the user is never permanently locked out by their own typos.
+        LAST_FAILURE_MS.store(
+            (now_ms() as u64).saturating_sub(backoff_ms(9) + 1_000),
+            Ordering::Relaxed,
+        );
+        assert_eq!(remaining_backoff_ms(), 0, "an elapsed window must decay");
+        assert_eq!(FAILED_ATTEMPTS.load(Ordering::Relaxed), 0);
+        FAILED_ATTEMPTS.store(saved_attempts, Ordering::Relaxed);
+        LAST_FAILURE_MS.store(saved_at, Ordering::Relaxed);
+    }
+
     fn make_cred(uuid: &str, site: &str, username: &str, password: &str) -> Cred {
         Cred {
             uuid: uuid.to_string(),
@@ -812,7 +1447,7 @@ mod tests {
         let wire_record = seal_record(&vk, &cred).expect("seal_record failed");
         let records_sealed = vec![wire_record];
         let verifier = seal_verifier(&vk).expect("seal_verifier failed");
-        let on_disk = file_json(&salt, verifier, &records_sealed);
+        let on_disk = file_json(&salt, verifier, &records_sealed, KDF_V_LOCAL);
 
         // --- Simulate a process restart: serialize to JSON string and parse back ---
         let json_str = serde_json::to_string(&on_disk).expect("serialize failed");
@@ -846,7 +1481,7 @@ mod tests {
         chars[0] = if chars[0] == 'a' { 'b' } else { 'a' };
         wire["ct"] = json!(chars.into_iter().collect::<String>());
         let verifier = seal_verifier(&vk).expect("verifier");
-        let on_disk = file_json(&salt, verifier, std::slice::from_ref(&wire));
+        let on_disk = file_json(&salt, verifier, std::slice::from_ref(&wire), KDF_V_LOCAL);
 
         let unlocked = unlock_vault(&on_disk, "pw").expect("unlock must succeed");
         let records = unlocked.records;
@@ -871,7 +1506,7 @@ mod tests {
         let salt = unhex(salt_hex).unwrap();
         let wire = seal_record(&vk, &cred).expect("seal failed");
         let verifier = seal_verifier(&vk).expect("verifier failed");
-        let on_disk = file_json(&salt, verifier, &[wire]);
+        let on_disk = file_json(&salt, verifier, &[wire], KDF_V_LOCAL);
 
         let result = unlock_vault(&on_disk, "wrong-password");
         assert!(
@@ -912,7 +1547,7 @@ mod tests {
         let salt = unhex(salt_hex).unwrap();
         let wire = seal_record(&vk, &cred).expect("seal failed");
         let verifier = seal_verifier(&vk).expect("verifier failed");
-        let on_disk = file_json(&salt, verifier, &[wire]);
+        let on_disk = file_json(&salt, verifier, &[wire], KDF_V_LOCAL);
 
         let json_str = serde_json::to_string(&on_disk).expect("serialize failed");
 
@@ -954,7 +1589,7 @@ mod tests {
         let salt = unhex(salt_hex).unwrap();
         let wire = seal_record(&vk, &cred).expect("seal failed");
         let verifier = seal_verifier(&vk).expect("verifier failed");
-        let on_disk = file_json(&salt, verifier, std::slice::from_ref(&wire));
+        let on_disk = file_json(&salt, verifier, std::slice::from_ref(&wire), KDF_V_LOCAL);
 
         // Serialize then parse so we have a clean Value to tamper with.
         let json_str = serde_json::to_string(&on_disk).unwrap();
@@ -1787,6 +2422,75 @@ mod tests {
             let list = result.as_array().unwrap();
             assert_eq!(list.len(), 1, "must match only github.com");
             assert_eq!(list[0]["username"], json!("alice"));
+        });
+    }
+
+    /// `vault.autofill` exists in `shared/types.ts` with a declared `Promise<VaultRecord[]>`
+    /// return type and a test in `useVaultAutofill.test.ts` — but that test runs against the
+    /// IPC mock, so it would have kept passing if the channel had no Rust arm at all (which
+    /// it did not). This drives the real dispatcher. The optional `username` is the only
+    /// difference from `autofillSuggestions`, so both behaviours are pinned here.
+    #[test]
+    fn autofill_narrows_by_username_and_matches_the_suggestions_channel() {
+        crate::test_support::with_tmp_app(|app| {
+            let _ = super::dispatch(app, "vault.create", &json!({"masterPassword": "long-pw!"}))
+                .unwrap()
+                .unwrap();
+            for (site, user) in [
+                ("github.com", "alice"),
+                ("github.com", "bob"),
+                ("example.com", "carol"),
+            ] {
+                super::dispatch(
+                    app,
+                    "vault.add",
+                    &json!({"input": {"site": site, "username": user, "password": "p", "notes": ""}}),
+                )
+                .unwrap()
+                .unwrap();
+            }
+
+            let all = super::dispatch(app, "vault.autofill", &json!({"domain": "github.com"}))
+                .unwrap()
+                .unwrap();
+            let all = all.as_array().unwrap();
+            assert_eq!(
+                all.len(),
+                2,
+                "no username given => every match for the domain"
+            );
+
+            // The narrowing is the whole difference from autofillSuggestions.
+            let one = super::dispatch(
+                app,
+                "vault.autofill",
+                &json!({"domain": "github.com", "username": "bob"}),
+            )
+            .unwrap()
+            .unwrap();
+            let one = one.as_array().unwrap();
+            assert_eq!(one.len(), 1, "username narrows to the one match");
+            assert_eq!(one[0]["username"], json!("bob"));
+
+            // An unknown username is an empty result, not an error and not "everything".
+            let miss = super::dispatch(
+                app,
+                "vault.autofill",
+                &json!({"domain": "github.com", "username": "nobody"}),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                miss.as_array().unwrap().len(),
+                0,
+                "no such username => empty, never all"
+            );
+
+            // A domain with no creds is likewise empty, not a passthrough of everything.
+            let none = super::dispatch(app, "vault.autofill", &json!({"domain": "absent.test"}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(none.as_array().unwrap().len(), 0);
         });
     }
 
