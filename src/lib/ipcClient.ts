@@ -54,109 +54,6 @@ interface DedupEntry<T> {
   promise: Promise<T>;
 }
 
-// Operations that should NEVER be deduplicated (mutations that must execute)
-const NON_DEDUP_CHANNELS: Set<IPCChannel> = new Set([
-  // Navigation mutations
-  IPC.navNavigate,
-  IPC.navBack,
-  IPC.navForward,
-  IPC.navReloadOrStop,
-  IPC.navHome,
-
-  // View mutations
-  IPC.viewSetContentVisible,
-  IPC.viewSetContentInset,
-  IPC.viewSetChromeOverlay,
-  IPC.viewSetSidebar,
-  IPC.viewSetLayout,
-  IPC.viewSetFullscreen,
-
-  // Favorites mutations
-  IPC.favoritesAdd,
-  IPC.favoritesUpdate,
-  IPC.favoritesRemove,
-  IPC.favoritesReorder,
-
-  // History mutations
-  IPC.historyRemove,
-  IPC.historyClear,
-
-  // Saved items mutations
-  IPC.savedAdd,
-  IPC.savedRemove,
-  IPC.savedUpdate,
-  IPC.savedRenameTag,
-  IPC.savedDeleteTag,
-
-  // Subscriptions mutations
-  IPC.subsSetEnabled,
-  IPC.subsAdd,
-  IPC.subsRemove,
-
-  // Custom filters mutations
-  IPC.customFiltersSet,
-
-  // Adblock mutations
-  IPC.adblockSetEnabled,
-
-  // Allowlist mutations
-  IPC.adblockToggleAllowlist,
-  IPC.adblockRemoveAllowlist,
-  IPC.adblockClearAllowlist,
-
-  // Settings mutations
-  IPC.settingsSet,
-
-  // Vault mutations
-  IPC.vaultCreate,
-  IPC.vaultUnlock,
-  IPC.vaultLock,
-  IPC.vaultAdd,
-  IPC.vaultUpdate,
-  IPC.vaultRemove,
-
-  // Proxy mutations
-  IPC.proxySetConfig,
-  IPC.proxyClear,
-
-  // Sync mutations
-  IPC.syncRemoveDevice,
-
-  // Safety mutations
-  IPC.safetyProceed,
-  IPC.safetyRemoveException,
-
-  // Downloads mutations
-  IPC.downloadsRemove,
-  IPC.downloadsClear,
-
-  // Permissions mutations
-  IPC.permissionsClear,
-
-  // Updates mutations
-  IPC.updateCheckNow,
-
-  // Data mutations
-  IPC.dataExport,
-  IPC.dataImport,
-
-  // Find mutations
-  IPC.findStart,
-  IPC.findNext,
-  IPC.findPrev,
-  IPC.findClose,
-
-  // Zoom mutations
-  IPC.zoomSet,
-  IPC.zoomReset,
-
-  // Split view mutations
-  IPC.splitEnter,
-  IPC.splitExit,
-  IPC.splitResize,
-  IPC.splitFocus,
-]);
-
 // Different deduplication windows for different operation types (only for queries)
 const DEDUP_WINDOWS: Record<string, number> = {
   // Navigation queries - shorter window as they're more time-sensitive
@@ -221,6 +118,22 @@ const DEDUP_WINDOWS: Record<string, number> = {
   default: 300,
 };
 
+// The set of channels that MAY be collapsed, derived from DEDUP_WINDOWS' own keys (minus the
+// `default` sentinel) so the two can never drift apart.
+//
+// This is deliberately an ALLOWLIST. The previous design denylisted mutations in
+// `NON_DEDUP_CHANNELS`, which fails open: any mutating channel nobody remembered to add — or
+// any added later — silently fell into the 300ms default window and had its second identical
+// call answered from cache instead of reaching the backend. Because the payload hash ignores
+// absent keys, `tabs.create()` with no args hashed to `{}`, so holding Ctrl+T (the webview
+// emits `tabs.shortcut="new"` on every key-repeat) opened one tab per ~300ms, and
+// `fingerprintToggleAllowlist` — a *toggle* — lost off-then-on within the window while the UI
+// showed the wrong state. With an allowlist, a new mutation is safe by construction: it simply
+// is not in this set. Adding a read-only channel here is the explicit, reviewed act.
+const DEDUPABLE_CHANNELS: ReadonlySet<string> = new Set(
+  Object.keys(DEDUP_WINDOWS).filter((ch) => ch !== 'default'),
+);
+
 // Telemetry tracking for dedup effectiveness
 const dedupStats = {
   hits: 0,
@@ -231,9 +144,22 @@ const dedupStats = {
 
 const dedupeCache = new Map<string, DedupEntry<any>>();
 
-// Deterministic cleanup every 10 seconds
-if (typeof setInterval !== 'undefined') {
-  setInterval(() => cleanupCache(), 10_000);
+// Deterministic cleanup every 10 seconds, started LAZILY on the first deduped call rather than
+// at module load: a module-load `setInterval` wakes the renderer forever (and in every vitest
+// worker that imports this file) even when no deduplicated call is ever made, and it can never
+// be torn down. Once the cache drains there is nothing left to sweep, so the timer self-cancels
+// and is re-armed by the next call that actually adds an entry.
+let cleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureCleanupTimer(): void {
+  if (cleanupTimer !== null || typeof setInterval === 'undefined') return;
+  cleanupTimer = setInterval(() => {
+    cleanupCache();
+    if (dedupeCache.size === 0 && cleanupTimer !== null) {
+      clearInterval(cleanupTimer);
+      cleanupTimer = null;
+    }
+  }, 10_000);
 }
 
 function getDedupWindow(channel: string): number {
@@ -257,8 +183,9 @@ function hashPayload(payload: any): string {
 }
 
 function dedupedCall<T>(channel: IPCChannel, payload: any): Promise<T> {
-  // Skip deduplication for mutations that must always execute
-  if (NON_DEDUP_CHANNELS.has(channel)) {
+  // Only explicitly-allowlisted read-only queries may be collapsed. Everything else — every
+  // mutation, and any channel added without updating DEDUP_WINDOWS — is issued unconditionally.
+  if (!DEDUPABLE_CHANNELS.has(channel)) {
     return call<T>(String(channel), payload);
   }
 
@@ -284,6 +211,7 @@ function dedupedCall<T>(channel: IPCChannel, payload: any): Promise<T> {
   // Make the actual call and cache the promise
   const promise = call<T>(channel, payload);
   dedupeCache.set(key, { timestamp: now, promise });
+  ensureCleanupTimer();
 
   return promise;
 }
@@ -293,8 +221,10 @@ function cleanupCache(now: number = Date.now()): void {
     // Extract channel from key to get appropriate window
     const channelPart = key.split(':')[0];
 
-    // Check if this channel is in our non-deduplicated set
-    if (NON_DEDUP_CHANNELS.has(channelPart as IPCChannel)) {
+    // Only allowlisted channels are ever inserted (see `dedupedCall`), so this is normally
+    // unreachable — kept as a cheap invariant guard so a future write path can't let a
+    // non-dedupable channel pin an entry forever.
+    if (!DEDUPABLE_CHANNELS.has(channelPart)) {
       dedupeCache.delete(key);
       continue;
     }
@@ -813,14 +743,14 @@ export const aegis: AegisApi = {
       on<FormWillSubmit>(IPC.evtFormWillSubmit, cb),
   },
   workspace: {
-    list: () => dedupedCall<Workspace[]>(IPC.workspaceList, {}),
+    list: () => dedupedCall<WorkspaceState>(IPC.workspaceList, {}),
     create: (name: string, color?: string) =>
       dedupedCall<Workspace>(IPC.workspaceCreate, { name, color }),
     switch: (id: string) => dedupedCall<WorkspaceState>(IPC.workspaceSwitch, { id }),
     rename: (id: string, name: string) => dedupedCall<Workspace>(IPC.workspaceRename, { id, name }),
     setColor: (id: string, color: string) =>
       dedupedCall<Workspace>(IPC.workspaceSetColor, { id, color }),
-    remove: (id: string) => dedupedCall<TabsState>(IPC.workspaceRemove, { id }),
+    remove: (id: string) => dedupedCall<WorkspaceState>(IPC.workspaceRemove, { id }),
     reorder: (ids: string[]) => dedupedCall<WorkspaceState>(IPC.workspaceReorder, { ids }),
     onState: (cb: (workspaces: WorkspaceState) => void) =>
       on<WorkspaceState>(IPC.evtWorkspaceState, cb),

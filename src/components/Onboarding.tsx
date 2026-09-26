@@ -70,7 +70,7 @@ export function Onboarding({
     localStorage.setItem(ONBOARDING_STORAGE_KEY, '1');
     setDone(true);
   };
-  const dialogRef = useDialog<HTMLDivElement>(complete, { initialFocus: startRef });
+  const dialogRef = useDialog<HTMLDivElement>(complete, { initialFocus: startRef }, !done);
   useChromeSurface('onboarding', !done);
 
   if (done) return null;

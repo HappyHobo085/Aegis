@@ -39,22 +39,14 @@ export function useWorkspaces(): UseWorkspaces {
     let active = true;
     void aegis.workspace
       .list()
-      .then((res: unknown) => {
+      .then((ws: WorkspaceState) => {
         if (!active) return;
-        if (res && typeof res === 'object' && 'workspaces' in res && 'activeWorkspaceId' in res) {
-          // Correct shape: full WorkspaceState
-          const ws = res as WorkspaceState;
-          setState({
-            workspaces: ws.workspaces ?? [],
-            activeWorkspaceId: ws.activeWorkspaceId ?? 'default',
-          });
-        } else if (Array.isArray(res)) {
-          // Fallback: just the array — keep current activeWorkspaceId
-          setState((prev) => ({
-            ...prev,
-            workspaces: res as Workspace[],
-          }));
-        }
+        // `workspace.list` always replies with the full WorkspaceState (the Rust arm returns
+        // `workspace_state_value`), so no shape-sniffing is needed.
+        setState({
+          workspaces: ws.workspaces ?? [],
+          activeWorkspaceId: ws.activeWorkspaceId ?? 'default',
+        });
       })
       .catch(() => {});
     return () => {

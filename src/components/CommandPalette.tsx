@@ -112,7 +112,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const titleId = useId();
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
-  const dialogRef = useDialog<HTMLDivElement>(onClose, { initialFocus: inputRef });
+  const dialogRef = useDialog<HTMLDivElement>(onClose, { initialFocus: inputRef }, open);
 
   // ── Fetch all result sets on each keystroke ───────────────────────────────
 

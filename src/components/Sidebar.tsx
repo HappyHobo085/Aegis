@@ -57,8 +57,10 @@ export function Sidebar({
   onWidthChange,
 }: SidebarProps) {
   const [tab, setTab] = useState<Tab>(initialTab);
-  // Width is read from localStorage on each open (the panel unmounts when closed),
-  // so a resized width is remembered across re-opens and app restarts.
+  // Width is read from localStorage once on mount. NOTE: this component does NOT unmount when
+  // closed — App renders it unconditionally and only nulls its subtree — so this initializer
+  // runs at app start, not on each open. That's fine: `width` state persists across closes, so a
+  // resized width is still remembered across re-opens and app restarts.
   const [width, setWidth] = useState<number>(readStoredWidth);
   const [dragging, setDragging] = useState(false);
   const tabsRef = useHorizontalWheel<HTMLDivElement>();
@@ -98,7 +100,9 @@ export function Sidebar({
     });
   }, []);
 
-  // Cancel any queued frame on unmount (the panel unmounts when closed).
+  // Cancel any queued frame on unmount. This only runs when the App itself tears down — the
+  // panel does NOT unmount when it is closed, so a drag in flight is still honoured if the user
+  // closes the sidebar mid-drag.
   useEffect(
     () => () => {
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);

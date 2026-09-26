@@ -173,10 +173,16 @@ describe('getBookmarkResults', () => {
     expect(results).toEqual([]);
   });
 
-  it('action navigates to bookmark URL', async () => {
+  it('action navigates the ACTIVE tab, not a hardcoded view id', async () => {
+    // Regression: these actions used to hardcode PRIMARY_VIEW_ID (1), so on a multi-tab
+    // session "Go back"/"Reload"/bookmarks drove tab 1 while the visible tab appeared to ignore
+    // the command. The active id is resolved at invoke time — so force a non-1 activeId here,
+    // otherwise the assertion would pass even with the old hardcoded 1.
     const results = await getBookmarkResults('GitHub');
-    results[0].action();
-    expect(mockNav.navigate).toHaveBeenCalledWith(1, 'https://github.com');
+    mockTabs.list.mockResolvedValueOnce({ activeId: 7, tabs: [] });
+    await results[0].action();
+    expect(mockTabs.list).toHaveBeenCalled();
+    expect(mockNav.navigate).toHaveBeenCalledWith(7, 'https://github.com');
   });
 });
 

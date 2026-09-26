@@ -4,7 +4,9 @@ import { isAllowedNavigationUrl } from './schemes';
 export type AddressParseResult =
   | { kind: 'navigate'; url: string }
   | { kind: 'reload' }
-  | { kind: 'rejected'; reason: string };
+  | { kind: 'rejected'; reason: string }
+  /** Nothing to do — e.g. Enter on an empty field. Must NOT become a search. */
+  | { kind: 'noop' };
 
 function hasScheme(raw: string): boolean {
   // A scheme per RFC 3986: ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"
@@ -13,6 +15,17 @@ function hasScheme(raw: string): boolean {
 
 function looksLikeHost(raw: string): boolean {
   return raw.includes('.') && !/\s/.test(raw);
+}
+
+/**
+ * True when the typed text is an address rather than a search phrase — i.e. it
+ * carries a scheme or is a bare host (`example.com`, `localhost:8080`). Used by
+ * the omnibox to decide whether to offer a "Go to …" row above a search row.
+ */
+export function isUrlLikeInput(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return false;
+  return hasScheme(trimmed) || looksLikeHost(trimmed);
 }
 
 export function addressParse(
@@ -38,6 +51,13 @@ export function addressParse(
       return { kind: 'navigate', url: candidate };
     }
     return { kind: 'rejected', reason: 'That doesn’t look like a valid address.' };
+  }
+
+  // An empty field must be a no-op, like every real browser — NOT a search for the empty
+  // string. Previously this fell through to the search template, so pressing Enter on a
+  // blank address bar navigated to `https://duckduckgo.com/?q=`.
+  if (trimmed.length === 0) {
+    return { kind: 'noop' };
   }
 
   return {

@@ -140,11 +140,28 @@ export function TabStrip({
 
   // Roving-tabindex keyboard nav: arrows move focus between tabs, Enter/Space
   // activates, Delete/Backspace closes. (The strip was pointer-only before.)
+  //
+  // `index` is ABSOLUTE (into `tabs`), but the DOM only holds the virtualized window
+  // `tabs.slice(start, end + 1)` once `tabs.length > VIRTUALIZATION_THRESHOLD`. Wrapping over
+  // the DOM length therefore jumped to a wrong tab (e.g. ArrowRight on the first rendered tab
+  // computed `n+1 % windowLength`, which can land back on the same tab, and End jumped into the
+  // middle of the window instead of the last tab). Wrap over the FULL list, then resolve the
+  // absolute index to a rendered node by its `data-tab-index`.
   const focusTabAt = (index: number): void => {
-    const els = stripRef.current?.querySelectorAll<HTMLElement>('[role="tab"]');
-    if (!els || els.length === 0) return;
-    const clamped = (index + els.length) % els.length;
-    els[clamped]?.focus();
+    const strip = stripRef.current;
+    if (!strip || tabs.length === 0) return;
+    const clamped = (index + tabs.length) % tabs.length;
+    const el = strip.querySelector<HTMLElement>(`[data-tab-index="${clamped}"]`);
+    if (el) {
+      el.focus();
+      return;
+    }
+    // The target is outside the rendered window — scroll it into view. The window is derived
+    // from scrollLeft, so scrolling re-renders and then the node exists.
+    const px = positions[clamped];
+    if (px !== undefined) {
+      strip.scrollTo({ left: Math.max(0, px - strip.clientWidth / 2), behavior: 'auto' });
+    }
   };
   const onTabKeyDown = (e: React.KeyboardEvent, t: TabMeta, index: number): void => {
     switch (e.key) {
@@ -188,6 +205,9 @@ export function TabStrip({
     return (
       <div
         key={t.id}
+        // Absolute index into `tabs` — `focusTabAt` uses it to map keyboard nav onto the
+        // virtualized window (the DOM only holds tabs.slice(start, end + 1)).
+        data-tab-index={index}
         role="tab"
         aria-selected={isActive}
         tabIndex={isActive ? 0 : -1}

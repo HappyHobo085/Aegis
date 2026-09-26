@@ -76,10 +76,20 @@ describe('addressParse', () => {
     });
   });
 
-  it('treats empty input as a search of the empty string', () => {
-    expect(addressParse('   ', ctx())).toEqual({
+  it('treats empty input as a no-op, not a search of the empty string', () => {
+    // A real browser does nothing on Enter in an empty omnibox. This used to fall through to
+    // the search template and navigate to `https://duckduckgo.com/?q=`.
+    expect(addressParse('   ', ctx())).toEqual({ kind: 'noop' });
+  });
+
+  it('treats a fully empty input as a no-op', () => {
+    expect(addressParse('', ctx())).toEqual({ kind: 'noop' });
+  });
+
+  it('still searches a real query', () => {
+    expect(addressParse('kittens', ctx())).toEqual({
       kind: 'navigate',
-      url: 'https://duckduckgo.com/?q=',
+      url: 'https://duckduckgo.com/?q=kittens',
     });
   });
 });

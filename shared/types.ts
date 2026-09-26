@@ -516,7 +516,7 @@ export interface Settings {
   /** Anti-fingerprinting (farbling) level. Default 'off' (opt-in) — standard and
    * strict add per-session CSPRNG noise to canvas/audio/WebGL read surfaces so a
    * site sees a stable-but-unique fingerprint within a session rather than the real
-   * value. Honest limit: a same-world JS shim is detectable; see src-tauri/CLAUDE.md. */
+   * value. Honest limit: a same-world JS shim is detectable; see src-tauri/AGENTS.md. */
   antiFingerprint: 'off' | 'standard' | 'strict';
   /** The E2E-encrypted sync server endpoint. Empty = sync not configured (data stays
    * local). Self-hosted: paste your reference-server URL. The server only ever sees
@@ -782,12 +782,16 @@ export interface AegisApi {
     onState(cb: (s: ProxyState) => void): () => void;
   };
   workspace: {
-    list(): Promise<Workspace[]>;
+    /** The full workspace state, not a bare array — `list` returns `WorkspaceState` because the
+     *  caller needs `activeWorkspaceId` alongside the list. */
+    list(): Promise<WorkspaceState>;
     create(name: string, color?: string): Promise<Workspace>;
     switch(id: string): Promise<WorkspaceState>;
     rename(id: string, name: string): Promise<Workspace>;
     setColor(id: string, color: string): Promise<Workspace>;
-    remove(id: string): Promise<TabsState>;
+    /** Returns the post-removal `WorkspaceState` (the Rust arm replies with
+     *  `workspace_state_value`, not a `TabsState`). */
+    remove(id: string): Promise<WorkspaceState>;
     reorder(ids: string[]): Promise<WorkspaceState>;
     onState(cb: (workspaces: WorkspaceState) => void): () => void;
   };

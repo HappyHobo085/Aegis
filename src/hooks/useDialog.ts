@@ -21,6 +21,11 @@ interface DialogOpts {
 export function useDialog<T extends HTMLElement>(
   onClose: () => void,
   opts: DialogOpts = {},
+  /** Whether the dialog is currently rendered. Pass this for a dialog that stays MOUNTED but
+      renders `null` while closed — otherwise the effect below runs once against a missing node
+      and never re-runs, silently leaving the dialog with no focus trap, no Escape and no focus
+      restore. Omit it for a dialog that unmounts entirely when closed. */
+  open: boolean = true,
 ): RefObject<T | null> {
   const ref = useRef<T | null>(null);
   const onCloseRef = useRef(onClose);
@@ -37,6 +42,7 @@ export function useDialog<T extends HTMLElement>(
   );
 
   useEffect(() => {
+    if (!open) return;
     const node = ref.current;
     if (!node) return;
 
@@ -89,7 +95,7 @@ export function useDialog<T extends HTMLElement>(
         prev.focus();
       }
     };
-  }, []);
+  }, [open]);
 
   return ref;
 }

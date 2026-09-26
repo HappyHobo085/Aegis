@@ -42,6 +42,14 @@ export function useFind(activeViewId: ViewId): {
     const prev = prevViewIdRef.current;
     if (prev !== activeViewId) {
       prevViewIdRef.current = activeViewId;
+      // Cancel any pending debounced find.start for the OUTGOING view first. Without this a
+      // `find.start(prev, q)` queued <120ms before the switch would fire AFTER `find.close(prev)`
+      // and silently re-open a find session (with live highlights) on the background tab —
+      // invisible in the UI because the onState filter at :54 drops events for other views.
+      if (debounceRef.current !== null) {
+        clearTimeout(debounceRef.current);
+        debounceRef.current = null;
+      }
       setState(emptyFindState(activeViewId));
       setOpen(false);
       void aegis.find.close(prev);

@@ -28,7 +28,11 @@ export function SafetyInterstitial({
   // Land focus on the SAFE action (Go back). Esc closes to the safe action too;
   // when onBack is undefined there is no safe action, so Esc/close is a no-op.
   const backRef = useRef<HTMLButtonElement | null>(null);
-  const dialogRef = useDialog<HTMLDivElement>(onBack ?? noop, { initialFocus: backRef });
+  const dialogRef = useDialog<HTMLDivElement>(
+    onBack ?? noop,
+    { initialFocus: backRef },
+    interstitial !== null,
+  );
 
   if (interstitial === null) return null;
   const host = safeHost(interstitial.url);

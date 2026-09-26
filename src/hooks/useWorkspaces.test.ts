@@ -76,11 +76,21 @@ describe('useWorkspaces', () => {
     expect(result.current.activeWorkspaceId).toBe('default');
   });
 
-  it('handles list returning plain Workspace[] shape (fallback)', async () => {
-    list.mockResolvedValue([defaultWorkspace, work2]);
+  it('reads the WorkspaceState shape the Rust arm actually returns', async () => {
+    // The `workspace.list` arm in tabs.rs returns `workspace_state_value` =
+    // `{ workspaces, activeWorkspaceId }`. The hook used to sniff for a bare `Workspace[]`
+    // fallback, which was dead code masking the fact that the declared client type
+    // (`Promise<Workspace[]>`) did not match the implementation.
+    list.mockResolvedValue({ workspaces: [defaultWorkspace, work2], activeWorkspaceId: 'ws-2' });
     const { result } = renderHook(() => useWorkspaces());
     await waitFor(() => expect(result.current.workspaces).toHaveLength(2));
-    // activeWorkspaceId stays default when list returns array shape
+    expect(result.current.activeWorkspaceId).toBe('ws-2');
+  });
+
+  it('falls back to an empty list / default id on a malformed response', async () => {
+    list.mockResolvedValue({});
+    const { result } = renderHook(() => useWorkspaces());
+    await waitFor(() => expect(result.current.workspaces).toEqual([]));
     expect(result.current.activeWorkspaceId).toBe('default');
   });
 

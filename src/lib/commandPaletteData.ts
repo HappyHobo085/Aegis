@@ -17,6 +17,19 @@ export interface PaletteResult {
   icon?: string;
 }
 
+/**
+ * The view the palette should act on: the currently active tab.
+ *
+ * Every navigation command used to hardcode `PRIMARY_VIEW_ID` (1), which meant on a multi-tab
+ * session "Go back" / "Reload" / "Home" / a bookmark silently drove tab 1 while the tab the user
+ * was looking at appeared to ignore the command. Resolve the real active id at invoke time —
+ * NOT at palette-build time — so the command always targets whatever is focused when it runs.
+ */
+async function activeViewId(): Promise<number> {
+  const tabs = await aegis.tabs.list();
+  return tabs.activeId;
+}
+
 // ---------------------------------------------------------------------------
 // Tab results
 // ---------------------------------------------------------------------------
@@ -58,7 +71,9 @@ export async function getBookmarkResults(query: string): Promise<PaletteResult[]
         title: fav.name,
         subtitle: fav.url,
         category: 'bookmarks',
-        action: () => aegis.nav.navigate(1, fav.url),
+        action: async () => {
+          await aegis.nav.navigate(await activeViewId(), fav.url);
+        },
         icon: '⭐',
       });
     }
@@ -82,7 +97,9 @@ export async function getHistoryResults(query: string): Promise<PaletteResult[]>
         title: label,
         subtitle: entry.url,
         category: 'history',
-        action: () => aegis.nav.navigate(1, entry.url),
+        action: async () => {
+          await aegis.nav.navigate(await activeViewId(), entry.url);
+        },
         icon: '🕐',
       });
     }
@@ -120,7 +137,9 @@ export function getActionResults(query: string): PaletteResult[] {
       title: 'Go back',
       subtitle: 'Navigate to the previous page',
       category: 'actions',
-      action: () => aegis.nav.back(1),
+      action: async () => {
+        await aegis.nav.back(await activeViewId());
+      },
       icon: '◀',
     },
     {
@@ -128,7 +147,9 @@ export function getActionResults(query: string): PaletteResult[] {
       title: 'Go forward',
       subtitle: 'Navigate to the next page',
       category: 'actions',
-      action: () => aegis.nav.forward(1),
+      action: async () => {
+        await aegis.nav.forward(await activeViewId());
+      },
       icon: '▶',
     },
     {
@@ -136,7 +157,9 @@ export function getActionResults(query: string): PaletteResult[] {
       title: 'Reload',
       subtitle: 'Refresh the current page',
       category: 'actions',
-      action: () => aegis.nav.reloadOrStop(1),
+      action: async () => {
+        await aegis.nav.reloadOrStop(await activeViewId());
+      },
       icon: '🔄',
     },
     {
@@ -144,7 +167,9 @@ export function getActionResults(query: string): PaletteResult[] {
       title: 'Home',
       subtitle: 'Navigate to the home page',
       category: 'actions',
-      action: () => aegis.nav.home(1),
+      action: async () => {
+        await aegis.nav.home(await activeViewId());
+      },
       icon: '🏠',
     },
 

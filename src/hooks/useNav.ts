@@ -24,6 +24,8 @@ export function useNav(viewId: ViewId): {
   forward(): void;
   reloadOrStop(): void;
   home(): void;
+  /** The active search template, exposed for the omnibox's "Search for …" row. */
+  searchTemplate: string;
 } {
   const [state, setState] = useState<NavState>(() => emptyState(viewId));
   const [searchTemplate, setSearchTemplate] = useState<string>('https://duckduckgo.com/?q=%s');
@@ -63,6 +65,8 @@ export function useNav(viewId: ViewId): {
         void aegis.nav.reloadOrStop(viewId);
       } else if (result.kind === 'navigate') {
         void aegis.nav.navigate(viewId, result.url);
+      } else if (result.kind === 'noop') {
+        // Empty field: a real browser does nothing, and neither do we.
       } else {
         // result.kind === 'rejected': do not navigate (main also rejects the scheme
         // defensively in nav.navigate). Surface the reason to the user so the address
@@ -87,7 +91,9 @@ export function useNav(viewId: ViewId): {
     void aegis.nav.home(viewId);
   }, [viewId]);
 
-  return { state, navigate, back, forward, reloadOrStop, home };
+  // `searchTemplate` is exposed so the omnibox can build its "Search for …" row
+  // with the SAME engine/settings the address bar itself would use.
+  return { state, navigate, back, forward, reloadOrStop, home, searchTemplate };
 }
 
 export const DEFAULT_VIEW_ID = PRIMARY_VIEW_ID;
