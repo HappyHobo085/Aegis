@@ -252,6 +252,28 @@ describe('getActionResults', () => {
     expect(ids).toContain('action.toggleAdblock');
     expect(ids).toContain('action.toggleSidebar');
     expect(ids).toContain('action.toggleFavoritesBar');
+    expect(ids).toContain('action.openSidebarHistory');
+    expect(ids).toContain('action.openSidebarSaved');
+  });
+
+  // BUG(F27): the palette is the only keyboard-reachable seam for "open the sidebar on
+  // History" — `aegis:toggleSidebar` cannot pick a tab, and App's default is 'saved'.
+  it('the open-sidebar actions name a REAL tab, so the shell cannot open the wrong one', async () => {
+    const details: unknown[] = [];
+    const h = (e: Event): void => {
+      details.push((e as CustomEvent<{ tab?: string }>).detail?.tab);
+    };
+    window.addEventListener('aegis:openSidebar', h);
+    try {
+      const results = getActionResults('');
+      await results.find((r) => r.id === 'action.openSidebarHistory')!.action();
+      await results.find((r) => r.id === 'action.openSidebarSaved')!.action();
+    } finally {
+      window.removeEventListener('aegis:openSidebar', h);
+    }
+    // The shell compares against `'history' | 'saved'` and IGNORES anything else, so a typo
+    // here would be a silently dead action.
+    expect(details).toEqual(['history', 'saved']);
   });
 
   it('toggleAdblock action calls setEnabled with toggled state', async () => {
@@ -309,5 +331,67 @@ describe('getSettingsResults', () => {
       }),
     );
     dispatchSpy.mockRestore();
+  });
+
+  // The assertion above only proves the event was DISPATCHED. It stayed green for the
+  // whole life of this feature while nothing listened, so all fifteen "open settings…"
+  // palette entries were silent no-ops. These tests register a real listener and assert
+  // it actually receives the event, so a future rename that breaks the seam fails here.
+  it('every chrome-agnostic palette action reaches a real listener', () => {
+    const seen: string[] = [];
+    const listen = (type: string) => {
+      const h = (): void => {
+        seen.push(type);
+      };
+      window.addEventListener(type, h);
+      return () => window.removeEventListener(type, h);
+    };
+    const cleanups = [
+      listen('aegis:openSettings'),
+      listen('aegis:toggleSidebar'),
+      listen('aegis:toggleFavoritesBar'),
+    ];
+    try {
+      getSettingsResults('appearance')[0].action();
+      window.dispatchEvent(new CustomEvent('aegis:toggleSidebar'));
+      window.dispatchEvent(new CustomEvent('aegis:toggleFavoritesBar'));
+      expect(seen).toEqual([
+        'aegis:openSettings',
+        'aegis:toggleSidebar',
+        'aegis:toggleFavoritesBar',
+      ]);
+    } finally {
+      cleanups.forEach((c) => c());
+    }
+  });
+
+  it('the openSettings detail carries a real SettingsTab, not an arbitrary string', () => {
+    // The listener calls openSettings(detail.tab), and `openSettings` falls back to
+    // 'appearance' for anything it does not recognise — so a mismatched tab id would
+    // silently open the WRONG settings tab rather than failing. Assert the emitted
+    // detail is a real tab id for every tab the palette can offer.
+    //
+    // NOTE: this file mocks SettingsModal, so TAB_ORDER is the 4-entry mock above
+    // (not the app's real 15). `getSettingsResults` takes a fuzzy LABEL query, not a
+    // tab id — querying by id returns nothing.
+    const detail: string[] = [];
+    const h = (e: Event): void => {
+      detail.push((e as CustomEvent<{ tab?: string }>).detail?.tab ?? '');
+    };
+    window.addEventListener('aegis:openSettings', h);
+    try {
+      // An empty query yields every settings tab, so this covers all of them at once.
+      const all = getSettingsResults('');
+      expect(all.length).toBe(4);
+      for (const r of all) {
+        r.action();
+      }
+      expect(new Set(detail).size).toBe(all.length);
+      for (const id of detail) {
+        expect(['appearance', 'search', 'security', 'vault']).toContain(id);
+      }
+    } finally {
+      window.removeEventListener('aegis:openSettings', h);
+    }
   });
 });

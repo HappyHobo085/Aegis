@@ -11,8 +11,17 @@ const tabs: TabMeta[] = [
     title: 'Example',
     url: 'https://example.com/',
     private: false,
+    workspaceId: 'default',
   },
-  { id: 2, pinned: false, live: false, title: '', url: 'https://news.test/', private: false },
+  {
+    id: 2,
+    pinned: false,
+    live: false,
+    title: '',
+    url: 'https://news.test/',
+    private: false,
+    workspaceId: 'default',
+  },
 ];
 
 function setup(over = {}) {
@@ -67,8 +76,17 @@ describe('MobileTabSwitcher', () => {
         title: 'Incognito',
         url: 'https://incognito.test/',
         private: true,
+        workspaceId: 'default',
       },
-      { id: 2, pinned: false, live: false, title: '', url: 'https://news.test/', private: false },
+      {
+        id: 2,
+        pinned: false,
+        live: false,
+        title: '',
+        url: 'https://news.test/',
+        private: false,
+        workspaceId: 'default',
+      },
     ];
     setup({ tabs: privateTabs });
     // The private row has the --private class

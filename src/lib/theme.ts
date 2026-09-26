@@ -45,6 +45,92 @@ export function onAccentTextColor(accentHex: string): '#000000' | '#ffffff' {
   return contrastBlack >= contrastWhite ? '#000000' : '#ffffff';
 }
 
+/** Parse `#rgb` / `#rgba` / `#rrggbb` / `#rrggbbaa` into channels, or `null` if the string
+ *  is not one of those shapes. `Settings.primaryColor` is validated to exactly these forms
+ *  on the Rust side (`settings::validate_setting`), but this stays defensive because the
+ *  value can also arrive from an imported `data.export` bundle. Pure. */
+export function parseHexColor(hex: string): { r: number; g: number; b: number; a: number } | null {
+  const m = /^#?([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(hex.trim());
+  if (!m) return null;
+  let h = m[1];
+  if (h.length === 3 || h.length === 4) {
+    // `#abc` → `aabbcc`, `#abcd` → `aabbccdd`
+    h = h
+      .split('')
+      .map((c) => c + c)
+      .join('');
+  }
+  return {
+    r: parseInt(h.slice(0, 2), 16),
+    g: parseInt(h.slice(2, 4), 16),
+    b: parseInt(h.slice(4, 6), 16),
+    a: h.length === 8 ? parseInt(h.slice(6, 8), 16) / 255 : 1,
+  };
+}
+
+/** Blend `hex` toward `toward` by `t` (0 = unchanged, 1 = fully `toward`). Pure. */
+function mixToward(hex: string, toward: string, t: number): string {
+  const from = parseHexColor(hex);
+  const to = parseHexColor(toward);
+  if (!from || !to) return hex;
+  const ch = (a: number, b: number): number => Math.round(a + (b - a) * t);
+  return `#${[ch(from.r, to.r), ch(from.g, to.g), ch(from.b, to.b)]
+    .map((v) => v.toString(16).padStart(2, '0'))
+    .join('')}`;
+}
+
+/** Every CSS custom property the user's accent choice has to drive, derived from it.
+ *
+ *  `index.css` defines `--accent` / `--on-accent` as the CANONICAL tokens and
+ *  `--accent-color` / `--text-on-accent` as legacy aliases pointing at them. `applyTheme`
+ *  used to write only the two aliases, so the ~44 rules reading `var(--accent)` /
+ *  `var(--on-accent)` kept the default indigo — the picker appeared to do nothing for a
+ *  third of the UI — and `onAccentTextColor()`'s contrast decision was written to a token
+ *  nothing read, leaving `color: var(--on-accent)` hard-pinned to `#ffffff`, i.e. a light
+ *  accent rendered white-on-near-white. `--accent-hover` / `--accent-gradient` /
+ *  `--accent-glow` were never written at all, so hover states and gradients also stayed
+ *  indigo whatever the user picked. Both spellings are now set; the canonical ones are
+ *  what matter. */
+export interface AccentTokens {
+  accent: string;
+  onAccent: string;
+  hover: string;
+  gradient: string;
+  glow: string;
+  /** Legacy alias values, kept in sync for the rules still using the old names. */
+  accentColor: string;
+  textOnAccent: string;
+}
+
+/** Derive the full accent token set. Pure. */
+export function accentTokens(accentHex: string): AccentTokens {
+  const rgb = parseHexColor(accentHex);
+  const onAccent = onAccentTextColor(accentHex);
+  // Unparseable accent: keep the caller's string for the accent itself and degrade the
+  // derived tokens, rather than writing invalid custom properties. (The Rust validator
+  // rejects these upstream; this only guards an imported bundle or a hand-set DOM style.)
+  if (!rgb) {
+    return {
+      accent: accentHex,
+      onAccent,
+      hover: accentHex,
+      gradient: `linear-gradient(135deg, ${accentHex}, ${accentHex})`,
+      glow: '0 0 20px rgba(0, 0, 0, 0.3)',
+      accentColor: accentHex,
+      textOnAccent: onAccent,
+    };
+  }
+  return {
+    accent: accentHex,
+    onAccent,
+    hover: mixToward(accentHex, '#ffffff', 0.22),
+    gradient: `linear-gradient(135deg, ${accentHex}, ${mixToward(accentHex, '#ffffff', 0.38)})`,
+    glow: `0 0 20px rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.3)`,
+    accentColor: accentHex,
+    textOnAccent: onAccent,
+  };
+}
+
 /** Apply the chrome theme to <html>: accent color (always) + the resolved palette
  * (`data-theme` attribute, read by the [data-theme="…"] token blocks in index.css)
  * + the matching `color-scheme` (so native form controls / scrollbars match). A caller
@@ -53,9 +139,18 @@ export function applyTheme(
   s: Pick<Settings, 'primaryColor'> & Partial<Pick<Settings, 'themeMode'>>,
 ): void {
   const root = document.documentElement;
-  root.style.setProperty('--accent-color', s.primaryColor);
-  // Contrast guard: pick legible on-accent text for whatever accent the user chose.
-  root.style.setProperty('--text-on-accent', onAccentTextColor(s.primaryColor));
+  const t = accentTokens(s.primaryColor);
+  // Canonical tokens FIRST — these are the ones index.css's ~44 `var(--accent)` /
+  // `var(--on-accent)` rules actually read, and the contrast guard only takes effect
+  // because `--on-accent` is one of them.
+  root.style.setProperty('--accent', t.accent);
+  root.style.setProperty('--on-accent', t.onAccent);
+  root.style.setProperty('--accent-hover', t.hover);
+  root.style.setProperty('--accent-gradient', t.gradient);
+  root.style.setProperty('--accent-glow', t.glow);
+  // Legacy aliases, kept in sync for the rules still referencing the old names.
+  root.style.setProperty('--accent-color', t.accentColor);
+  root.style.setProperty('--text-on-accent', t.textOnAccent);
   const resolved = resolveTheme(s.themeMode ?? 'system', prefersDarkScheme());
   root.setAttribute('data-theme', resolved);
   root.style.setProperty('color-scheme', resolved);

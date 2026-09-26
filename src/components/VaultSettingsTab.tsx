@@ -22,6 +22,29 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
 
+  const CLIPBOARD_CLEAR_MS = 60_000;
+  // BUG(F6): the clear-timer handle was never stored, so a second Copy could not cancel the
+  // first. Copying two secrets in quick succession meant the FIRST timer wiped the SECOND
+  // secret off the clipboard right after the UI had promised it would survive for 60s; and
+  // closing Settings left the timer running, so it blanked whatever the user had copied
+  // since. One handle, always the newest timer, cleared on unmount.
+  const clipboardClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // `handleCopy` awaits the clipboard write before arming the timer, so a copy whose write
+  // resolves after the tab closed would leave a timer with no owner. Track liveness so the
+  // timer is disarmed instead of stranding a stray 60s wipe.
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      if (clipboardClearRef.current !== null) {
+        clearTimeout(clipboardClearRef.current);
+        clipboardClearRef.current = null;
+      }
+    };
+  }, []);
+
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
     setError('');
@@ -193,8 +216,8 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
           {state.count} saved password{state.count !== 1 ? 's' : ''}.
         </p>
         <p className="vault-tab__notice">
-          Stored encrypted on this device. Aegis can autofill login forms on websites. Copy the
-          value when you need it.
+          Stored encrypted on this device. Aegis does not fill login forms for you yet &mdash;
+          copying is the only way to use a saved password.
         </p>
         <label className="vault-tab__field">
           <span>Master password</span>
@@ -287,19 +310,23 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
     })();
   };
 
-  const CLIPBOARD_CLEAR_MS = 60_000;
-
   const handleCopy = (text: string) => {
     void (async () => {
       try {
         await navigator.clipboard.writeText(text);
         toast.success('Copied — clipboard clears in 60s');
+        if (clipboardClearRef.current !== null) clearTimeout(clipboardClearRef.current);
         // Clear clipboard after delay to avoid leaving passwords exposed
-        setTimeout(() => {
+        clipboardClearRef.current = setTimeout(() => {
+          clipboardClearRef.current = null;
           void navigator.clipboard.writeText('').catch(() => {
             // Best-effort: clipboard may have been overwritten by user
           });
         }, CLIPBOARD_CLEAR_MS);
+        if (!mountedRef.current) {
+          clearTimeout(clipboardClearRef.current);
+          clipboardClearRef.current = null;
+        }
       } catch (e) {
         console.error('Clipboard copy failed:', e);
         toast.error('Couldn\u0027t copy');
@@ -322,8 +349,8 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
       </div>
 
       <p className="vault-tab__notice">
-        Stored encrypted on this device. Aegis can autofill login forms on websites. Copy the value
-        when you need it.
+        Stored encrypted on this device. Copy the value when you need it. Aegis does not fill login
+        forms for you yet &mdash; copying is the only way to use a saved password.
       </p>
 
       {/* Sync status indicator */}

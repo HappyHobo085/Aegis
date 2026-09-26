@@ -1,5 +1,49 @@
 /* src/index.css */
 :root {
+  /* ─── Z-INDEX SCALE (the full-window overlay stack) ──────────────────────
+     Every value here is the value that rule ALREADY had, EXCEPT the command
+     palette (see the ordering decision below), so adopting the scale changes no
+     rendering. What it buys is that the bands are named, that no two rules have to
+     SHARE a number, and that the one intended relationship — confirm above
+     palette — is expressed instead of being left to DOM order.
+
+     BUG(F21): `.confirm-dialog__scrim` and `.command-palette__scrim` were both
+     `11200`. Equal z-index means paint order falls back to DOM order, and
+     `CommandPalette.execute` calls `onClose()` before running the action, so the
+     resulting stacking was decided by where the two components sit in App.tsx
+     rather than by anything a reader could see.
+
+     ORDERING DECISION: the confirm dialog paints ABOVE the command palette. That is
+     today's effective behaviour — `<ConfirmDialog/>` comes after `<CommandPalette/>` in
+     App.tsx and, with the two tied, the later element wins — and it is the right call: a
+     blocking decision modal must never be occluded by the transient launcher that raised
+     it. So `--z-confirm` (11200) sits above `--z-palette` (11150) sits above `--z-prompt`
+     (11100). Only the PALETTE's number moved (11200 -> 11150): nothing else in this file
+     occupies the values between, and the confirm dialog keeps the value it always had.
+
+     The list is ascending EXCEPT `--z-interstitial` (10100) sitting above `--z-toast`
+     (10020). That inversion is pre-existing and deliberate — the safety interstitial is a
+     hard block that must not be buried under a toast — so it is preserved rather than
+     "tidied". Do not renumber these to sort: every value is another rule's z-index.
+
+     NOT in this scale: anchored popovers (5000 / 5100), the toolbar's own stacking
+     (100 / `--z-toolbar-menu`), the mobile shell (10 / 50) and the in-container locals
+     (1, 2). Those stack inside their own containers and never compete with a full-window
+     overlay. If you add a full-window surface, add it to this scale. */
+  --z-sidebar: 9000;
+  --z-sidebar-panel: 9001;
+  --z-workspace-menu: 9999;
+  --z-toolbar-menu: 10010;
+  --z-onboarding: 10050;
+  --z-interstitial: 10100;
+  --z-toast: 10020;
+  --z-favorites-manager: 10900;
+  --z-overlay: 11000;
+  --z-prompt: 11100;
+  --z-palette: 11150;
+  --z-confirm: 11200;
+  --z-error: 11500;
+  --z-skip-link: 12000;
   /* Theme-independent tokens (shape/elevation/typography). Color tokens live in the
      [data-theme="…"] blocks below and are selected by the data-theme attribute
      that src/lib/theme.ts writes on <html>. */
@@ -161,12 +205,12 @@ button:disabled {
   cursor: default;
 }
 
-button:focus-visible,
-input:focus-visible,
-a:focus-visible {
-  outline: 2px solid var(--accent-color);
-  outline-offset: 1px;
-}
+/* BUG(F21): this bare `button/input/a :focus-visible` block was DEAD — the
+   "Focus: refined outline + soft glow ring" block further down re-declares
+   `outline` on the same three selectors with a different `outline-offset`
+   (2px) plus a `box-shadow` ring, and being later in the sheet it wins on every
+   declaration that matters. Deleting the earlier copy so there is exactly one
+   place that defines the global focus treatment. */
 
 input {
   font-family: inherit;
@@ -285,7 +329,7 @@ select {
   position: absolute;
   left: -9999px;
   top: 0;
-  z-index: 12000;
+  z-index: var(--z-skip-link);
 }
 
 .skip-link:focus {
@@ -399,7 +443,7 @@ select {
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 10010;
+  z-index: var(--z-toolbar-menu);
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
@@ -1403,7 +1447,7 @@ body.aegis-fullscreen {
   right: 0;
   bottom: 0;
   background: rgba(0, 0, 0, 0.5);
-  z-index: 9000;
+  z-index: var(--z-sidebar);
   animation: scrim-fade-in 0.2s ease;
 }
 
@@ -1418,7 +1462,7 @@ body.aegis-fullscreen {
   -webkit-backdrop-filter: var(--blur-3);
   border-left: 1px solid var(--glass-border);
   box-shadow: var(--shadow-modal);
-  z-index: 9001;
+  z-index: var(--z-sidebar-panel);
   display: flex;
   flex-direction: column;
   animation: sidebar-in 0.25s ease;
@@ -2464,7 +2508,7 @@ body.aegis-fullscreen {
   background: rgba(0, 0, 0, 0.4);
   backdrop-filter: var(--blur-bg);
   -webkit-backdrop-filter: var(--blur-bg);
-  z-index: 11000;
+  z-index: var(--z-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2810,7 +2854,7 @@ body.aegis-fullscreen {
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.85);
-  z-index: 11000;
+  z-index: var(--z-overlay);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3829,7 +3873,7 @@ body.aegis-fullscreen {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 10900;
+  z-index: var(--z-favorites-manager);
   animation: scrim-fade-in 0.2s ease;
 }
 
@@ -4010,7 +4054,7 @@ body.aegis-fullscreen {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 11100;
+  z-index: var(--z-prompt);
   animation: scrim-fade-in 0.2s ease;
 }
 
@@ -4091,7 +4135,7 @@ body.aegis-fullscreen {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 11200;
+  z-index: var(--z-confirm);
   animation: scrim-fade-in 0.2s ease;
 }
 
@@ -4261,7 +4305,7 @@ body.aegis-fullscreen {
 .onboarding {
   position: fixed;
   inset: 0;
-  z-index: 10050;
+  z-index: var(--z-onboarding);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -4377,7 +4421,7 @@ body.aegis-fullscreen {
 .command-palette__scrim {
   position: fixed;
   inset: 0;
-  z-index: 11200;
+  z-index: var(--z-palette);
   display: flex;
   align-items: flex-start;
   justify-content: center;
@@ -4505,7 +4549,7 @@ body.aegis-fullscreen {
 .error-overlay {
   position: fixed;
   inset: 0;
-  z-index: 11500;
+  z-index: var(--z-error);
   background: rgba(0, 0, 0, 0.85);
   display: flex;
   align-items: center;
@@ -4632,7 +4676,7 @@ body.aegis-fullscreen {
   position: fixed;
   bottom: 16px;
   right: 16px;
-  z-index: 10020;
+  z-index: var(--z-toast);
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -5048,7 +5092,7 @@ a:focus-visible {
   inset: 0;
   /* Above the toast/notification layer (10020) so nothing routine paints over a
      security warning. */
-  z-index: 10100;
+  z-index: var(--z-interstitial);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -5837,45 +5881,6 @@ a:focus-visible {
   pointer-events: auto;
 }
 
-/* ── Autofill badge (vault) ─────────────────────────────────────────────── */
-.autofill-badge {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border: 0;
-  border-radius: var(--r-xs);
-  background: transparent;
-  color: var(--accent-color);
-  cursor: pointer;
-  transition:
-    background var(--duration) var(--ease),
-    color var(--duration) var(--ease);
-}
-.autofill-badge:hover {
-  background: var(--glass-1);
-}
-.autofill-badge:focus-visible {
-  outline: 2px solid var(--accent-color);
-  outline-offset: -2px;
-}
-.autofill-badge__count {
-  position: absolute;
-  top: 0;
-  right: 0;
-  min-width: 14px;
-  height: 14px;
-  padding: 0 3px;
-  border-radius: var(--radius-pill);
-  background: var(--accent-color);
-  color: #fff;
-  font-size: var(--font-size-1);
-  line-height: 14px;
-  text-align: center;
-}
-
 /* ── Vault save prompt (autofill-save toast) ────────────────────────────── */
 .autofill-save-prompt {
   position: fixed;
@@ -6070,7 +6075,7 @@ a:focus-visible {
 /* ── Context menu ── */
 .ws-ctx-menu {
   position: fixed;
-  z-index: 9999;
+  z-index: var(--z-workspace-menu);
   min-width: 140px;
   background: var(--bg-elevated);
   border: 1px solid var(--border-2);

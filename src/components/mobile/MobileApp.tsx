@@ -449,6 +449,8 @@ export function MobileApp() {
           sync={{
             sync,
             onSetServerUrl: (url: string) => settings.update({ syncServerUrl: url }),
+            settings: settings.settings,
+            update: settings.update,
           }}
           data={
             <DataTab

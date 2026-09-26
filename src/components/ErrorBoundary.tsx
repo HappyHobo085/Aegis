@@ -20,8 +20,13 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     console.error('Aegis chrome error boundary caught:', error, info.componentStack);
   }
 
+  // BUG(F28): this used to be `this.setState({ error: null })`, which only re-renders the
+  // SAME children from the same props — the identical error therefore re-throws immediately
+  // and the user is stuck on the same message. The button says "Reload interface", so it has
+  // to actually reload the document. `location.reload()` cannot be stubbed on `window`
+  // itself in jsdom (non-configurable), hence the indirection.
   private handleReset = (): void => {
-    this.setState({ error: null });
+    location.reload();
   };
 
   render(): ReactNode {

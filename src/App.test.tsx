@@ -1,6 +1,6 @@
 // src/App.test.tsx
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, act, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { fireEvent, render, screen, act, waitFor } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavState, NavFailed, NavCrashed, RedirectBlocked, SavedItem } from '../shared/types';
 
@@ -236,6 +236,26 @@ describe('App', () => {
     await waitFor(() => expect(setContentInset).toHaveBeenCalled());
     // 32 (workspace bar) + 40 (tab strip) + 56 (toolbar) + 36 (favbar) = 164
     expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 164, left: 0 });
+    // The FindBar is NOT in that number, so the pre-measure fallback cannot be quietly
+    // reserving for a bar that isn't there.
+    expect(setContentInset).not.toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 204, left: 0 });
+  });
+
+  it('re-reserves the FindBar height when it opens, exactly ONCE (no double count)', async () => {
+    // `useChromeHeights` now re-measures on a presence change, so `.find-bar` is part of
+    // `chrome.topInset`. `App` must therefore NOT also add FIND_BAR_H on top — that would
+    // reserve 80px for a 40px bar and push the page 40px too low.
+    render(<App />);
+    await waitFor(() =>
+      expect(setContentInset).toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 164, left: 0 }),
+    );
+    fireEvent.keyDown(window, { key: 'f', ctrlKey: true });
+
+    // 164 + FIND_BAR_H (40) = 204. 244 would be the double count.
+    await waitFor(() =>
+      expect(setContentInset).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, { top: 204, left: 0 }),
+    );
+    expect(setContentInset).not.toHaveBeenCalledWith(PRIMARY_VIEW_ID, { top: 244, left: 0 });
   });
 
   it('drives view.setChromeOverlay false on mount (no overlay active)', async () => {
@@ -462,5 +482,126 @@ describe('App', () => {
     await waitFor(() => expect(applyThemeSpy).toHaveBeenCalled());
     const [called] = applyThemeSpy.mock.calls[0] as [Record<string, unknown>];
     expect(called).toMatchObject({ primaryColor: '#4f8cff', themeMode: 'system' });
+  });
+
+  // BUG(F27): `setSidebarInitialTab` had no call site, so the sidebar could only ever open on
+  // "Saved" — History was unreachable. The palette's "Open history" action dispatches
+  // `aegis:openSidebar`; this asserts the shell honours it.
+  describe('opening the sidebar on a specific tab', () => {
+    it('opens on History when asked, and on Saved when asked', async () => {
+      render(<App />);
+      const sidebar = await screen
+        .findByRole('complementary', { name: /sidebar/i })
+        .catch(() => null);
+      expect(sidebar).toBeNull();
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('aegis:openSidebar', { detail: { tab: 'history' } }));
+      });
+      expect(screen.getByRole('complementary', { name: /sidebar/i })).toBeInTheDocument();
+      // The History tab is the selected one, not Saved.
+      expect(screen.getByRole('tab', { name: /history/i })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('aegis:openSidebar', { detail: { tab: 'saved' } }));
+      });
+      expect(screen.getByRole('tab', { name: /saved/i })).toHaveAttribute('aria-selected', 'true');
+    });
+
+    it('ignores an unrecognised tab rather than opening a bogus one', async () => {
+      render(<App />);
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('aegis:openSidebar', { detail: { tab: 'nope' } }));
+      });
+      expect(screen.queryByRole('complementary', { name: /sidebar/i })).not.toBeInTheDocument();
+    });
+  });
+
+  // BUG(F7): the 250 ms re-assert timer only checked that the ORIGIN was unchanged, never
+  // that it was still the newest pending navigation. Two chrome navigations inside that
+  // window (here: two same-origin saved pages, the second click landing within 250 ms) meant
+  // the FIRST timer saw an unchanged origin and re-navigated to the first URL, undoing the
+  // newer navigation.
+  //
+  // Fake timers, because the window is 250 ms and a real `userEvent.click` on a full-App
+  // re-render can take longer than that on its own — which would silently stop exercising the
+  // race. `fireEvent` is synchronous, so both clicks provably land inside the window.
+  describe('the 250 ms chrome-nav re-assert', () => {
+    const CHROME_NAV_REASSERT_MS = 250;
+    let nav: ReturnType<typeof vi.fn>;
+
+    async function openSavedList(items: SavedItem[]) {
+      const { aegis } = await import('./lib/ipcClient');
+      (aegis.saved.list as ReturnType<typeof vi.fn>).mockResolvedValue(items);
+      render(<App />);
+      const { default: userEvent } = await import('@testing-library/user-event');
+      await userEvent.click(await screen.findByRole('button', { name: /toggle sidebar/i }));
+      await userEvent.click(screen.getByRole('tab', { name: /saved/i }));
+      nav = aegis.nav.navigate as ReturnType<typeof vi.fn>;
+      nav.mockClear();
+    }
+
+    /**
+     * Seed the FAVORITES BAR, because a saved-page row closes the sidebar when opened, so two
+     * of them cannot be clicked back-to-back. A favourite chip leaves the chrome in place,
+     * which is exactly what lets two navigations land inside one 250 ms window.
+     */
+    async function openFavoritesBar(items: { id: number; name: string; url: string }[]) {
+      const { aegis } = await import('./lib/ipcClient');
+      (aegis.favorites.list as ReturnType<typeof vi.fn>).mockResolvedValue(items);
+      render(<App />);
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: `Open ${items[0].name}` })).toBeInTheDocument(),
+      );
+      nav = aegis.nav.navigate as ReturnType<typeof vi.fn>;
+      nav.mockClear();
+    }
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('a superseded chrome navigation is never re-asserted', async () => {
+      const first = { id: 1, name: 'A', url: 'https://saved.example/a' };
+      const second = { id: 2, name: 'B', url: 'https://saved.example/b' };
+      await openFavoritesBar([first, second]);
+
+      vi.useFakeTimers();
+      fireEvent.click(screen.getByRole('button', { name: `Open ${first.name}` }));
+      fireEvent.click(screen.getByRole('button', { name: `Open ${second.name}` }));
+      expect(nav).toHaveBeenCalledTimes(2);
+
+      act(() => {
+        vi.advanceTimersByTime(CHROME_NAV_REASSERT_MS + 10);
+      });
+
+      // The newest navigation re-asserts itself once; the superseded one does not.
+      expect(nav).toHaveBeenCalledTimes(3);
+      expect(nav).toHaveBeenNthCalledWith(1, PRIMARY_VIEW_ID, first.url);
+      expect(nav).toHaveBeenNthCalledWith(2, PRIMARY_VIEW_ID, second.url);
+      expect(nav).toHaveBeenNthCalledWith(3, PRIMARY_VIEW_ID, second.url);
+      // The precise regression: the first URL was navigated exactly once, not re-asserted.
+      expect(nav.mock.calls.filter((c) => c[1] === first.url)).toHaveLength(1);
+    });
+
+    it('re-asserts a lone chrome navigation when the origin has not moved', async () => {
+      // The behaviour the re-assert exists for: a page still on the old origin 250 ms later
+      // gets the navigation pushed again, because its own late redirect can cancel the first.
+      const only = { id: 1, name: 'Only', url: 'https://saved.example/only' };
+      await openFavoritesBar([only]);
+
+      vi.useFakeTimers();
+      fireEvent.click(screen.getByRole('button', { name: `Open ${only.name}` }));
+      expect(nav).toHaveBeenCalledTimes(1);
+
+      act(() => {
+        vi.advanceTimersByTime(CHROME_NAV_REASSERT_MS + 10);
+      });
+      expect(nav).toHaveBeenCalledTimes(2);
+      expect(nav).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, only.url);
+    });
   });
 });

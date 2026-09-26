@@ -7,6 +7,8 @@ import {
   watchSystemTheme,
   onAccentTextColor,
   luminanceOf,
+  parseHexColor,
+  accentTokens,
 } from './theme';
 
 /** Install a matchMedia mock that reports `dark` and returns the listener controls. */
@@ -144,5 +146,90 @@ describe('onAccentTextColor / luminanceOf', () => {
     expect(luminanceOf('#000000')).toBeCloseTo(0, 5);
     expect(luminanceOf('#ffffff')).toBeCloseTo(1, 5);
     expect(luminanceOf('not-a-color')).toBe(0);
+  });
+});
+
+describe('parseHexColor', () => {
+  it('parses the four shapes the Rust validator allows', () => {
+    expect(parseHexColor('#6366f1')).toEqual({ r: 0x63, g: 0x66, b: 0xf1, a: 1 });
+    // 3-digit shorthand expands each nibble
+    expect(parseHexColor('#abc')).toEqual({ r: 0xaa, g: 0xbb, b: 0xcc, a: 1 });
+    // 4- and 8-digit forms carry alpha
+    expect(parseHexColor('#abcd')?.a).toBeCloseTo(0xdd / 255, 5);
+    expect(parseHexColor('#6366f180')?.a).toBeCloseTo(0x80 / 255, 5);
+  });
+
+  it('tolerates a missing # and surrounding whitespace, and rejects junk', () => {
+    expect(parseHexColor('  6366f1 ')?.r).toBe(0x63);
+    expect(parseHexColor('rebeccapurple')).toBeNull();
+    expect(parseHexColor('#12345')).toBeNull(); // 5 digits is not a valid shape
+    expect(parseHexColor('#ff')).toBeNull();
+  });
+});
+
+describe('accentTokens', () => {
+  it('keeps the legacy aliases in sync with the canonical tokens', () => {
+    const t = accentTokens('#ff8800');
+    expect(t.accent).toBe('#ff8800');
+    expect(t.accentColor).toBe(t.accent);
+    expect(t.textOnAccent).toBe(t.onAccent);
+  });
+
+  it('derives hover/gradient/glow from the pick instead of leaving the default indigo', () => {
+    // These three were never written by applyTheme at all, so hover states and gradients
+    // stayed #6366f1 whatever the user chose.
+    const t = accentTokens('#ff0000');
+    expect(t.hover).not.toBe('#818cf8');
+    expect(t.hover).not.toBe(t.accent); // lightened toward white
+    expect(t.gradient).toContain('#ff0000');
+    expect(t.gradient).toContain('linear-gradient');
+    expect(t.glow).toBe('0 0 20px rgba(255, 0, 0, 0.3)');
+  });
+
+  it('carries the contrast guard so a light accent gets dark text', () => {
+    // The bug this fixes: `color: var(--on-accent)` stayed #ffffff because the guard's
+    // decision was written to `--text-on-accent`, which nothing read.
+    expect(accentTokens('#ffe066').onAccent).toBe('#000000');
+    expect(accentTokens('#1a237e').onAccent).toBe('#ffffff');
+  });
+
+  it('degrades gracefully for an unparseable accent instead of writing invalid values', () => {
+    const t = accentTokens('not-a-color');
+    expect(t.accent).toBe('not-a-color');
+    expect(t.hover).toBe('not-a-color');
+    expect(t.glow).toContain('rgba(');
+  });
+});
+
+describe('applyTheme writes the CANONICAL accent tokens', () => {
+  afterEach(() => {
+    document.documentElement.removeAttribute('style');
+  });
+
+  it('sets --accent and --on-accent, not only the legacy aliases', () => {
+    // index.css defines --accent/--on-accent as the canonical tokens (~44 rules read
+    // them) and --accent-color/--text-on-accent as aliases pointing at them. Writing
+    // only the aliases made the picker a no-op for those rules and defeated the guard.
+    // A dark accent so the contrast guard's answer is the legible white.
+    applyTheme({ primaryColor: '#1a237e' });
+    const style = document.documentElement.style;
+    expect(style.getPropertyValue('--accent')).toBe('#1a237e');
+    expect(style.getPropertyValue('--on-accent')).toBe('#ffffff');
+    // aliases still written, for the rules that haven't migrated
+    expect(style.getPropertyValue('--accent-color')).toBe('#1a237e');
+    expect(style.getPropertyValue('--text-on-accent')).toBe('#ffffff');
+  });
+
+  it('makes a light accent actually render dark text through --on-accent', () => {
+    applyTheme({ primaryColor: '#ffe066' });
+    expect(document.documentElement.style.getPropertyValue('--on-accent')).toBe('#000000');
+  });
+
+  it('drives the hover/gradient/glow tokens from the pick', () => {
+    applyTheme({ primaryColor: '#00aa55' });
+    const style = document.documentElement.style;
+    expect(style.getPropertyValue('--accent-hover')).not.toBe('');
+    expect(style.getPropertyValue('--accent-gradient')).toContain('#00aa55');
+    expect(style.getPropertyValue('--accent-glow')).toContain('rgba(0, 170, 85');
   });
 });

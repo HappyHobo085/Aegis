@@ -4,8 +4,24 @@ import { TabStrip } from './TabStrip';
 import type { TabMeta } from '../../shared/types';
 
 const tabs: TabMeta[] = [
-  { id: 1, pinned: false, live: true, title: 'Alpha', url: 'https://alpha.test/', private: false },
-  { id: 2, pinned: false, live: false, title: 'Beta', url: 'https://beta.test/', private: false },
+  {
+    id: 1,
+    pinned: false,
+    live: true,
+    title: 'Alpha',
+    url: 'https://alpha.test/',
+    private: false,
+    workspaceId: 'default',
+  },
+  {
+    id: 2,
+    pinned: false,
+    live: false,
+    title: 'Beta',
+    url: 'https://beta.test/',
+    private: false,
+    workspaceId: 'default',
+  },
 ];
 
 function setup(over: Partial<React.ComponentProps<typeof TabStrip>> = {}) {
@@ -66,6 +82,7 @@ describe('TabStrip', () => {
         title: 'Secret',
         url: 'https://secret.test/',
         private: true,
+        workspaceId: 'default',
       },
     ];
     setup({ tabs: privateTabs });
@@ -100,7 +117,15 @@ describe('TabStrip', () => {
 
   it('does not close a pinned tab via Delete', () => {
     const pinned: TabMeta[] = [
-      { id: 1, pinned: true, live: true, title: 'Pin', url: 'https://pin.test/', private: false },
+      {
+        id: 1,
+        pinned: true,
+        live: true,
+        title: 'Pin',
+        url: 'https://pin.test/',
+        private: false,
+        workspaceId: 'default',
+      },
     ];
     const p = setup({ tabs: pinned, activeId: 1 });
     fireEvent.keyDown(screen.getByRole('tab', { name: /Pin/ }), { key: 'Delete' });

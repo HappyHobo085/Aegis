@@ -264,6 +264,31 @@ export function getActionResults(query: string): PaletteResult[] {
       },
       icon: '⭐',
     },
+
+    // Open the sidebar on a SPECIFIC tab. `aegis:toggleSidebar` alone can only ever land on
+    // whatever tab the sidebar was last showing, and the shell's own default is 'saved' —
+    // so "I want History" was unreachable from the keyboard, and App's
+    // `setSidebarInitialTab` had no call site at all. This is the seam that reaches it.
+    {
+      id: 'action.openSidebarHistory',
+      title: 'Open history',
+      subtitle: 'Open the sidebar on History',
+      category: 'actions',
+      action: () => {
+        window.dispatchEvent(new CustomEvent('aegis:openSidebar', { detail: { tab: 'history' } }));
+      },
+      icon: '🕘',
+    },
+    {
+      id: 'action.openSidebarSaved',
+      title: 'Open saved pages',
+      subtitle: 'Open the sidebar on Saved',
+      category: 'actions',
+      action: () => {
+        window.dispatchEvent(new CustomEvent('aegis:openSidebar', { detail: { tab: 'saved' } }));
+      },
+      icon: '🔖',
+    },
   ];
 
   return actions.filter(

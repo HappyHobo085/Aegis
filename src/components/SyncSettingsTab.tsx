@@ -1,6 +1,7 @@
 // src/components/SyncSettingsTab.tsx
-import { useEffect, useRef, useState } from 'react';
-import type { SyncDevice, SyncState } from '../../shared/types';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import type { Settings, SyncDevice, SyncState, VaultState } from '../../shared/types';
+import { aegis } from '../lib/ipcClient';
 import type { UseSync } from '../hooks/useSync';
 import { confirm, toast } from '../lib/toast';
 
@@ -34,12 +35,101 @@ function vaultBackingLabel(backing: SyncState['vaultBacking']): string {
   }
 }
 
+/** True for a host that is genuinely loopback. Mirrors the Rust check in
+ * `sync::validated_base` — used only to decide what to warn about, never to gate a
+ * request (the core is the single enforcement point). */
+function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase().replace(/^\[|\]$/g, '');
+  if (h === 'localhost' || h === '::1') return true;
+  // 127.0.0.0/8 is all loopback.
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (!m) return false;
+  const octets = [m[1], m[2], m[3], m[4]].map(Number);
+  return octets.every((o) => o <= 255) && octets[0] === 127;
+}
+
+/** True when the URL is a plaintext `http://` server that is NOT loopback — i.e. exactly
+ * the case the core refuses unless the user waives it. Drives the warning copy; the
+ * `URL` parser (not string splitting) means `http://localhost.evil.com` is correctly
+ * classified as remote, matching the Rust side. */
+export function isInsecureRemoteUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return false; // unparseable / not yet typed — nothing to warn about
+  }
+  return u.protocol === 'http:' && !isLoopbackHost(u.hostname);
+}
+
+/** The sync transport's TLS posture for the configured server, in one place so the setup
+ * view and the running view never disagree. */
+function transportLabel(url: string): string {
+  if (!url.trim()) return 'No server configured yet';
+  let u: URL;
+  try {
+    u = new URL(url.trim());
+  } catch {
+    return 'Not a valid URL yet';
+  }
+  if (u.protocol === 'https:') return 'Encrypted (https)';
+  if (isLoopbackHost(u.hostname)) return 'Unencrypted, but local to this machine';
+  return 'Unencrypted over the internet';
+}
+
+/** The transport-security section: the current posture, the risk spelled out, and the
+ * opt-in waiver. Rendered in BOTH the setup view and the running view — the setup view is
+ * where a user is about to enter an `http://` URL, and the running view is the only place
+ * they can turn the waiver back off once it is in force. */
+function TransportSection({
+  url,
+  allowInsecure,
+  onToggle,
+}: {
+  url: string;
+  allowInsecure: boolean;
+  onToggle: (on: boolean) => void;
+}) {
+  const insecure = isInsecureRemoteUrl(url);
+  return (
+    <div className="sync-tab__transport">
+      <h3>Transport security</h3>
+      <p className="sync-tab__status">This connection is {transportLabel(url)}.</p>
+      {insecure && (
+        <p className="sync-tab__error" role="alert">
+          {allowInsecure
+            ? 'Sync traffic is unencrypted on the way to this server. Anyone on the network path can see which server you sync with and when, and can delay, drop or replay traffic. Your synced data itself stays end-to-end encrypted.'
+            : 'This server is unencrypted and not on this machine, so nothing has been sent to it. Tick the box below to allow it anyway.'}
+        </p>
+      )}
+      <label className="sync-tab__check">
+        <input
+          type="checkbox"
+          checked={allowInsecure}
+          onChange={(e) => onToggle(e.target.checked)}
+        />
+        Allow an unencrypted HTTP sync server (insecure)
+      </label>
+      <p className="sync-tab__hint">
+        Off by default. Your bookmarks, history and settings stay end-to-end encrypted either way
+        &mdash; this only waives encryption of the connection to the server, so its address, timing
+        and traffic volume are visible, and it can be blocked or replayed. This choice applies to
+        this device only; it is never synced to your other devices.
+      </p>
+    </div>
+  );
+}
+
 export function SyncSettingsTab({
   sync,
   onSetServerUrl,
+  settings,
+  update,
 }: {
   sync: UseSync;
   onSetServerUrl: (url: string) => void | Promise<void>;
+  settings: Settings;
+  update: (patch: Partial<Settings>) => void;
 }) {
   const { state } = sync;
   const [serverUrl, setServerUrl] = useState(state.serverUrl);
@@ -53,6 +143,30 @@ export function SyncSettingsTab({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [testStatus, setTestStatus] = useState('');
+  // The vault's own view of whether it is actually syncing — the opt-in flag alone is not
+  // enough (the vault must also have adopted the account's shared salt), so the UI reports
+  // what the core thinks rather than echoing the checkbox back at the user.
+  const [vaultState, setVaultState] = useState<VaultState | null>(null);
+
+  // The core's `state_json` is the source of truth for the waiver (it is what the sync
+  // requests are actually validated against); the settings value is the fallback for a
+  // stale/mocked state so the checkbox still reflects the last write immediately.
+  const allowInsecure = state.allowInsecure ?? settings.syncAllowInsecure === true;
+  const setAllowInsecure = (on: boolean) => {
+    update({ syncAllowInsecure: on });
+    if (on) toast.info('Sync traffic to this server will not be encrypted.');
+  };
+
+  const refreshVaultState = useCallback(() => {
+    void aegis.vault
+      .getState()
+      .then(setVaultState)
+      .catch(() => setVaultState(null));
+  }, []);
+
+  useEffect(() => {
+    refreshVaultState();
+  }, [refreshVaultState]);
 
   // Keep the URL field in step with the backend value (e.g. after enable/import).
   useEffect(() => {
@@ -182,6 +296,12 @@ export function SyncSettingsTab({
           </p>
         )}
 
+        <TransportSection
+          url={serverUrl}
+          allowInsecure={allowInsecure}
+          onToggle={setAllowInsecure}
+        />
+
         {phrase ? (
           <div className="sync-tab__phrase" role="alert">
             <h3>Your recovery phrase</h3>
@@ -302,6 +422,40 @@ export function SyncSettingsTab({
         Sync now
       </button>
 
+      <TransportSection
+        url={state.serverUrl}
+        allowInsecure={allowInsecure}
+        onToggle={setAllowInsecure}
+      />
+
+      <h3>Password vault</h3>
+      <p>
+        Off by default. When on, your password vault syncs too &mdash; still end&#8209;to&#8209;end
+        encrypted, and readable on your other devices only with the same master password. A device
+        holding just the recovery phrase can neither read these records nor write new ones.
+      </p>
+      <label className="sync-tab__check">
+        <input
+          type="checkbox"
+          checked={settings.syncVault === true}
+          onChange={(e) => {
+            const on = e.target.checked;
+            update({ syncVault: on });
+            if (on) toast.info('Unlocking the vault will join it to this account.');
+            refreshVaultState();
+          }}
+        />
+        Sync my password vault
+      </label>
+      {settings.syncVault === true && vaultState && !vaultState.syncEnabled && (
+        <p className="sync-tab__hint">
+          Not syncing yet. The vault joins this account the next time you unlock it &mdash; its
+          records are re-encrypted under a key every paired device can derive.
+          {vaultState.undecryptable > 0 &&
+            ` This vault has ${vaultState.undecryptable} undecryptable record(s), so joining is held back rather than dropping them.`}
+        </p>
+      )}
+
       <h3>Recovery phrase</h3>
       {phrase ? (
         <div className="sync-tab__phrase" role="alert">
@@ -321,7 +475,21 @@ export function SyncSettingsTab({
         <button
           type="button"
           disabled={busy}
-          onClick={() => void run(async () => setPhrase(await sync.getRecoveryPhrase()))}
+          onClick={() =>
+            // The core refuses `sync.getRecoveryPhrase` unless `confirm: true`, and the hook
+            // no longer hardcodes that flag — so the user has to actually say yes. This is
+            // the highest-sensitivity value in the app; a single click that silently reveals
+            // 24 words is not a confirmation.
+            void (async () => {
+              if (
+                await confirm(
+                  'Show your recovery phrase? Anyone who sees it can restore — and read — every item synced to this account. Make sure nobody can see your screen.',
+                )
+              ) {
+                void run(async () => setPhrase(await syncRef.current.getRecoveryPhrase(true)));
+              }
+            })()
+          }
         >
           Show recovery phrase
         </button>
@@ -330,7 +498,8 @@ export function SyncSettingsTab({
       <h3>Devices</h3>
       <p>
         Restoring from your phrase adds a new device entry each time &mdash; remove any you no
-        longer use.
+        longer use. Removing one is permanent: it is revoked on the server and cannot sync again,
+        even with your recovery phrase.
       </p>
       <ul className="sync-tab__devices">
         {devices.map((d) => (
@@ -347,7 +516,8 @@ export function SyncSettingsTab({
                   void (async () => {
                     if (
                       await confirm(
-                        `Remove “${d.label}” from your synced devices? It will need your recovery phrase to sync again.`,
+                        `Remove “${d.label}” from your synced devices? This revokes it permanently — ` +
+                          `it cannot sync again, even with your recovery phrase.`,
                         { destructive: true },
                       )
                     ) {

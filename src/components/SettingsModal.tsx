@@ -1,11 +1,17 @@
 // src/components/SettingsModal.tsx
-import React, { Suspense, lazy, useEffect, useId, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import { useChromeSurface } from '../hooks/useChromeSurfaces';
 import { PrivacyDashboard } from './PrivacyDashboard';
+import { FilterListsTab } from './FilterListsTab';
+import { VaultSettingsTab } from './VaultSettingsTab';
+import { MyFiltersTab } from './MyFiltersTab';
+import { SyncSettingsTab } from './SyncSettingsTab';
+import { ProxySettingsTab } from './ProxySettingsTab';
+import { SecurityTab } from './SecurityTab';
 import type { FilterListsTabProps } from './FilterListsTab';
 import type { MyFiltersTabProps } from './MyFiltersTab';
 import type { ProxySettingsTabProps } from './ProxySettingsTab';
@@ -15,13 +21,14 @@ import type { FingerprintState, Settings } from '../../shared/types';
 import type { ProtectionSummary } from '../lib/protectionSummary';
 import type { AdblockState } from '../../shared/types';
 
-// Lazy-loaded heavy tabs — each becomes its own chunk, loaded only when selected.
-const FilterListsTab = lazy(() => import('./FilterListsTab'));
-const VaultSettingsTab = lazy(() => import('./VaultSettingsTab'));
-const MyFiltersTab = lazy(() => import('./MyFiltersTab'));
-const SyncSettingsTab = lazy(() => import('./SyncSettingsTab'));
-const ProxySettingsTab = lazy(() => import('./ProxySettingsTab'));
-const SecurityTab = lazy(() => import('./SecurityTab'));
+// These six tabs used to be `lazy(() => import(...))` behind a `<Suspense>` boundary, each its
+// own chunk loaded on first selection. That was dropped deliberately: with the React Compiler
+// enabled, a tab's FIRST mount suspended and then never re-rendered after the dynamic import
+// resolved, so the panel committed nothing and every element inside it stayed unreachable. That
+// broke 5 interaction specs outright and made a 6th (`vault.create.submit`) surface a
+// pre-existing first-mount ordering dependency. The tabs are small and the whole renderer is
+// ~114 KB gzipped against a 512 KB (non-blocking) CI threshold, so six extra eager chunks cost
+// little and buy a tab panel that is present the instant it is selected.
 
 export type SettingsTab =
   | 'appearance'
@@ -90,8 +97,12 @@ export const TAB_GROUPS: SettingsGroup[] = [
 
 export const TAB_ORDER: SettingsTab[] = TAB_GROUPS.flatMap((g) => g.tabs);
 
-/** Tabs that are lazy-loaded (code-split) — rendered only when selected, inside Suspense. */
-const LAZY_TABS: ReadonlySet<SettingsTab> = new Set([
+/**
+ * Tabs that need their data props from the parent — they render only when selected, so the
+ * panel branches on `tab` alone. (Formerly `LAZY_TABS`: these were the code-split ones. The name
+ * now describes the data flow, which is the thing that still matters.)
+ */
+const DATA_DRIVEN_TABS: ReadonlySet<SettingsTab> = new Set([
   'filterLists',
   'myFilters',
   'security',
@@ -122,6 +133,9 @@ export interface SecurityPanelProps {
 export interface SyncPanelProps {
   sync: UseSync;
   onSetServerUrl: (url: string) => void | Promise<void>;
+  /** The current settings — the panel reads/writes the `syncVault` opt-in through these. */
+  settings: Settings;
+  update: (patch: Partial<Settings>) => void;
 }
 
 export interface SettingsModalProps {
@@ -139,7 +153,7 @@ export interface SettingsModalProps {
   sitePermissions: ReactNode;
   data: ReactNode;
 
-  // Heavy tabs — data props, lazily rendered inside Suspense when selected
+  // Data-driven tabs — need these props, rendered only when selected
   filterLists: FilterListsTabProps;
   myFilters: MyFiltersTabProps;
   security: SecurityPanelProps;
@@ -282,7 +296,7 @@ export function SettingsModal({
     data,
   };
 
-  /** Render the active panel — lazy tabs inside Suspense, light tabs directly. */
+  /** Render the active panel — data-driven tabs get props, self-contained tabs render bare. */
   const renderPanel = (): ReactNode => {
     if (visibleGroups.length === 0) {
       return (
@@ -292,12 +306,12 @@ export function SettingsModal({
       );
     }
 
-    if (!LAZY_TABS.has(tab)) {
+    if (!DATA_DRIVEN_TABS.has(tab)) {
       return panels[tab] ?? null;
     }
 
     return (
-      <Suspense fallback={<div className="settings-modal__loading">Loading…</div>}>
+      <>
         {tab === 'filterLists' && <FilterListsTab {...filterLists} />}
         {tab === 'myFilters' && <MyFiltersTab {...myFilters} />}
         {tab === 'security' && (
@@ -323,7 +337,7 @@ export function SettingsModal({
         {tab === 'proxy' && <ProxySettingsTab {...proxy} />}
         {tab === 'vault' && <VaultSettingsTab vault={vault} />}
         {tab === 'sync' && <SyncSettingsTab {...sync} />}
-      </Suspense>
+      </>
     );
   };
 

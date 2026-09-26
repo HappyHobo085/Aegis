@@ -1,6 +1,6 @@
 // src/components/VaultSettingsTab.test.tsx
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { VaultSettingsTab } from './VaultSettingsTab';
 import type { UseVault } from '../hooks/useVault';
@@ -131,6 +131,12 @@ describe('VaultSettingsTab — locked (exists:true, unlocked:false)', () => {
     expect(screen.getByLabelText(/master password/i)).toHaveAttribute('type', 'password');
   });
 
+  it('does NOT claim autofill it cannot do, in the locked view either', () => {
+    render(<VaultSettingsTab vault={fakeVault({ state: locked })} />);
+    expect(screen.queryByText(/can autofill/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/does not fill login forms for you yet/i)).toBeInTheDocument();
+  });
+
   it('calls unlock(pw) then list() on submit', async () => {
     const unlock = vi.fn(async () => {});
     const list = vi.fn(async () => []);
@@ -172,9 +178,13 @@ describe('VaultSettingsTab — unlocked', () => {
     return render(<VaultSettingsTab vault={fakeVault({ state: unlocked, ...vaultOver })} />);
   }
 
-  it('renders the autofill notice', () => {
+  it('does NOT claim autofill it cannot do (honest UI copy)', () => {
     renderUnlocked();
-    expect(screen.getByText(/can autofill/i)).toBeInTheDocument();
+    // The notice used to say "Aegis can autofill login forms on websites", but the autofill
+    // badge is not rendered anywhere in the chrome — the repo's convention is that the copy
+    // never promises a capability the user cannot reach.
+    expect(screen.queryByText(/can autofill/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/does not fill login forms for you yet/i)).toBeInTheDocument();
   });
 
   it('warns when some records could not be decrypted (preserved, not lost)', () => {
@@ -310,6 +320,81 @@ describe('VaultSettingsTab — unlocked', () => {
     await vi.waitFor(() => expect(screen.queryByText('alice')).toBeInTheDocument());
     await userEvent.click(screen.getByRole('button', { name: /copy password for/i }));
     await vi.waitFor(() => expect(toast.error).toHaveBeenCalledWith("Couldn't copy"));
+  });
+
+  // BUG(F6): the 60s clipboard-clear timer handle was never stored, so a second Copy could
+  // not cancel the first and the FIRST timer wiped whatever was copied most recently.
+  describe('the 60s clipboard-clear timer', () => {
+    /**
+     * Render the unlocked list with REAL timers (the `list()` round-trip is awaited by a
+     * `waitFor` that would deadlock against fakes), THEN switch to fake timers so the 60s
+     * window is instant and deterministic.
+     */
+    async function renderTwoRecords() {
+      const first = makeRecord({ site: 'https://a.test', password: 'secret-a' });
+      const second = makeRecord({ site: 'https://b.test', password: 'secret-b' });
+      const list = vi.fn(async () => [first, second]);
+      const view = renderUnlocked({ list });
+      await vi.waitFor(() => expect(screen.getAllByText('alice').length).toBe(2));
+      vi.useFakeTimers();
+      return view;
+    }
+
+    const advance = (ms: number) =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(ms);
+      });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('clears the clipboard 60s after a copy', async () => {
+      await renderTwoRecords();
+      const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
+      writeText.mockClear();
+      fireEvent.click(screen.getAllByRole('button', { name: /copy password for/i })[0]);
+      expect(writeText).toHaveBeenLastCalledWith('secret-a');
+
+      await advance(60_000);
+      expect(writeText).toHaveBeenLastCalledWith('');
+    });
+
+    it('a second copy RESETS the clock — the first timer must not wipe the new secret', async () => {
+      await renderTwoRecords();
+      const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
+      writeText.mockClear();
+
+      const buttons = screen.getAllByRole('button', { name: /copy password for/i });
+      fireEvent.click(buttons[0]);
+      // 59s elapse — then the user copies a DIFFERENT secret.
+      await advance(59_000);
+      fireEvent.click(buttons[1]);
+      expect(writeText).toHaveBeenLastCalledWith('secret-b');
+
+      // One second later the FIRST timer would have fired. It must not.
+      await advance(1_000);
+      expect(writeText).not.toHaveBeenCalledWith('');
+
+      // The second secret is still on the clipboard until ITS own 60s elapse.
+      await advance(58_999);
+      expect(writeText).not.toHaveBeenCalledWith('');
+      await advance(1);
+      expect(writeText).toHaveBeenLastCalledWith('');
+    });
+
+    it('is cancelled on unmount, so closing Settings cannot blank later text', async () => {
+      const { unmount } = await renderTwoRecords();
+      const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
+      writeText.mockClear();
+      fireEvent.click(screen.getAllByRole('button', { name: /copy password for/i })[0]);
+
+      unmount();
+      await advance(120_000);
+      // The user copied something unrelated after closing Settings; the stray timer must
+      // not have wiped it.
+      expect(writeText).not.toHaveBeenCalledWith('');
+    });
   });
 
   it('delete confirms, then calls remove() and refreshes list()', async () => {

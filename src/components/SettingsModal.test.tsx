@@ -2,25 +2,50 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import type { Settings } from '../../shared/types';
 import { SettingsModal } from './SettingsModal';
 
 // Mock the heavy lazy-loaded tab components so tests don't trigger code-split chunks.
+// `SettingsModal` imports each tab as a NAMED export (it stopped `lazy()`-importing
+// them), so the mock has to provide that binding. `default` is kept because the
+// dynamic-import shape is the one these mocks were originally written for.
 vi.mock('./FilterListsTab', () => ({
+  FilterListsTab: () => <div data-testid="panel-filterLists">FILTER LISTS</div>,
   default: () => <div data-testid="panel-filterLists">FILTER LISTS</div>,
 }));
+// `SettingsModal` imports each tab as a NAMED export (it stopped `lazy()`-importing
+// them), so the mock has to provide that binding. `default` is kept because the
+// dynamic-import shape is the one these mocks were originally written for.
 vi.mock('./VaultSettingsTab', () => ({
+  VaultSettingsTab: () => <div data-testid="panel-vault">VAULT</div>,
   default: () => <div data-testid="panel-vault">VAULT</div>,
 }));
+// `SettingsModal` imports each tab as a NAMED export (it stopped `lazy()`-importing
+// them), so the mock has to provide that binding. `default` is kept because the
+// dynamic-import shape is the one these mocks were originally written for.
 vi.mock('./MyFiltersTab', () => ({
+  MyFiltersTab: () => <div data-testid="panel-myFilters">MY FILTERS</div>,
   default: () => <div data-testid="panel-myFilters">MY FILTERS</div>,
 }));
+// `SettingsModal` imports each tab as a NAMED export (it stopped `lazy()`-importing
+// them), so the mock has to provide that binding. `default` is kept because the
+// dynamic-import shape is the one these mocks were originally written for.
 vi.mock('./SyncSettingsTab', () => ({
+  SyncSettingsTab: () => <div data-testid="panel-sync">SYNC</div>,
   default: () => <div data-testid="panel-sync">SYNC</div>,
 }));
+// `SettingsModal` imports each tab as a NAMED export (it stopped `lazy()`-importing
+// them), so the mock has to provide that binding. `default` is kept because the
+// dynamic-import shape is the one these mocks were originally written for.
 vi.mock('./ProxySettingsTab', () => ({
+  ProxySettingsTab: () => <div data-testid="panel-proxy">PROXY</div>,
   default: () => <div data-testid="panel-proxy">PROXY</div>,
 }));
+// `SettingsModal` imports each tab as a NAMED export (it stopped `lazy()`-importing
+// them), so the mock has to provide that binding. `default` is kept because the
+// dynamic-import shape is the one these mocks were originally written for.
 vi.mock('./SecurityTab', () => ({
+  SecurityTab: () => <div data-testid="panel-security">SECURITY</div>,
   default: () => <div data-testid="panel-security">SECURITY</div>,
 }));
 
@@ -110,6 +135,8 @@ const heavyData = {
       removeDevice: vi.fn(),
     },
     onSetServerUrl: vi.fn(),
+    settings: {} as Settings,
+    update: vi.fn(),
   },
 };
 

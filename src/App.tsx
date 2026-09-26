@@ -30,7 +30,6 @@ import { useCustomFilters } from './hooks/useCustomFilters';
 import { useDownloads } from './hooks/useDownloads';
 import { usePermissions } from './hooks/usePermissions';
 import { useContentInset } from './hooks/useContentInset';
-import { FIND_BAR_H } from './lib/layout';
 import { useNarrowViewport } from './hooks/useNarrowViewport';
 import { useUpdate } from './hooks/useUpdate';
 import { useSafety } from './hooks/useSafety';
@@ -135,6 +134,10 @@ function DesktopApp() {
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('appearance');
   const [commandOpen, setCommandOpen] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  // The favorites bar is always-on chrome today; this state exists so the command
+  // palette's "Toggle favorites bar" has something to flip. `useChromeHeights`
+  // re-measures when the bar's presence changes, so `topInset` stays correct either way.
+  const [favBarOpen, setFavBarOpen] = useState(true);
   const [sidebarInitialTab, setSidebarInitialTab] = useState<'history' | 'saved'>('saved');
   // The sidebar panel is user-resizable; track its width so the content webview's right
   // inset matches it exactly (reported up from the Sidebar via onWidthChange).
@@ -146,6 +149,9 @@ function DesktopApp() {
   // commits. Streamex-style pages do this during sidebar/sheet changes. Suppress only those
   // old-page redirect events briefly; redirects from the destination page still surface.
   const pendingChromeNavRef = useRef<{ fromOrigin: string | null; startedAt: number } | null>(null);
+  // Monotonic counter for chrome-initiated navigations, so a re-assert timer can tell whether
+  // it is still the newest one. See `navigateFromChrome`.
+  const chromeNavSeqRef = useRef(0);
   const update = useUpdate();
   const safety = useSafety();
   const fingerprint = useFingerprint();
@@ -161,12 +167,19 @@ function DesktopApp() {
 
   const navigateFromChrome = (raw: string): void => {
     const fromOrigin = originOf(nav.state.url);
+    // BUG(F7): the guard below only checked that the ORIGIN was unchanged, never that this
+    // was still the newest pending navigation. Click favourite example.com/a and then navigate
+    // to example.com/b within 250 ms and the first timer saw an unchanged origin and
+    // re-navigated to /a, undoing the newer navigation. Each nav takes a ticket; a timer whose
+    // ticket has been superseded does nothing.
+    const ticket = ++chromeNavSeqRef.current;
     pendingChromeNavRef.current = {
       fromOrigin,
       startedAt: Date.now(),
     };
     nav.navigate(raw);
     window.setTimeout(() => {
+      if (ticket !== chromeNavSeqRef.current) return;
       if (fromOrigin !== null && originOf(navUrlRef.current) === fromOrigin) {
         nav.navigate(raw);
       }
@@ -177,6 +190,46 @@ function DesktopApp() {
     setSettingsInitialTab(tab);
     setSettingsOpen(true);
   };
+
+  // Command-palette actions that have no direct React owner.
+  //
+  // `commandPaletteData.ts` is deliberately PURE (it builds a static list of results
+  // and cannot import App), so a window CustomEvent is the honest seam between it and
+  // the shell. The bug this fixes is that nothing ever LISTENED: `aegis:toggleSidebar`,
+  // `aegis:toggleFavoritesBar` and `aegis:openSettings` were dispatched and dropped on
+  // the floor, which silently no-op'd both toggles and ALL FIFTEEN "open settings…"
+  // palette entries. Registering the listeners here is what makes them work.
+  useEffect(() => {
+    const onToggleSidebar = () => setSidebarOpen((v) => !v);
+    const onToggleFavoritesBar = () => setFavBarOpen((v) => !v);
+    // BUG(F27): `setSidebarInitialTab` had ZERO call sites, so the sidebar could only ever
+    // open on "Saved" — there was no way to reach History from it at all, and the state was
+    // invisible to `no-unused-vars`. The palette's "Open history" / "Open saved pages"
+    // actions dispatch this, which is what makes the state reachable.
+    const onOpenSidebar = (e: Event) => {
+      const tab = (e as CustomEvent<{ tab?: 'history' | 'saved' }>).detail?.tab;
+      if (tab !== 'history' && tab !== 'saved') return;
+      setSidebarInitialTab(tab);
+      setSidebarOpen(true);
+    };
+    const onOpenSettings = (e: Event) => {
+      const tab = (e as CustomEvent<{ tab?: SettingsTab }>).detail?.tab;
+      // `openSettings` is the one place that sets both the initial tab and the open
+      // flag, so routing through it keeps "open settings" from every other surface
+      // (gear icon, settings rows, sidebar) behaving identically.
+      openSettings(tab ?? 'appearance');
+    };
+    window.addEventListener('aegis:toggleSidebar', onToggleSidebar);
+    window.addEventListener('aegis:toggleFavoritesBar', onToggleFavoritesBar);
+    window.addEventListener('aegis:openSidebar', onOpenSidebar);
+    window.addEventListener('aegis:openSettings', onOpenSettings);
+    return () => {
+      window.removeEventListener('aegis:toggleSidebar', onToggleSidebar);
+      window.removeEventListener('aegis:toggleFavoritesBar', onToggleFavoritesBar);
+      window.removeEventListener('aegis:openSidebar', onOpenSidebar);
+      window.removeEventListener('aegis:openSettings', onOpenSettings);
+    };
+  }, [openSettings]);
 
   // Dev-only: expose an imperative control surface so the autopilot can reach every
   // overlay/state deterministically. Gated so it can NEVER run in a production build.
@@ -246,14 +299,17 @@ function DesktopApp() {
   const { inset: popoverInset } = useChromePopoverRegistry();
 
   // Report measured chrome inset to Rust so the content webview sits below it.
-  // The find bar is the only dynamic chrome ELEMENT — it appears/disappears after
-  // mount, so useChromeHeights (one-shot) can't measure it. Add FIND_BAR_H when open.
+  // The FindBar is the one dynamic chrome ELEMENT — it appears/disappears after
+  // mount — but `useChromeHeights` now re-measures whenever a chrome element's
+  // PRESENCE changes, so `.find-bar` is already in `chrome.topInset`. Adding
+  // FIND_BAR_H here as well used to be the only way to make it work (the hook
+  // measured exactly once), and would now double-count it to 80px.
   // Chrome popovers (omnibox, site info, shield, zoom) are different: they hang
   // BELOW the chrome and are taller than nothing, so each registers its own
   // measured height and the tallest one is added here. That insets the opaque
   // content webview just far enough to reveal the popover while the page stays
   // visible behind it — see useChromePopover.
-  const contentTop = chrome.topInset + (find.open ? FIND_BAR_H : 0) + popoverInset;
+  const contentTop = chrome.topInset + popoverInset;
   useContentInset(tabs.activeId, contentTop);
 
   // Sync the content-top CSS variable so fixed-position chrome surfaces (sidebar, scrim)
@@ -791,11 +847,13 @@ function DesktopApp() {
           </button>
         }
       />
-      <FavoritesBar
-        favorites={favorites.favorites}
-        onOpenFavorite={(url) => navigateFromChrome(url)}
-        onOpenManager={() => setManagerOpen(true)}
-      />
+      {favBarOpen && (
+        <FavoritesBar
+          favorites={favorites.favorites}
+          onOpenFavorite={(url) => navigateFromChrome(url)}
+          onOpenManager={() => setManagerOpen(true)}
+        />
+      )}
       {find.open && (
         <FindBar
           state={find.state}
@@ -945,6 +1003,8 @@ function DesktopApp() {
           sync={{
             sync,
             onSetServerUrl: (url: string) => settings.update({ syncServerUrl: url }),
+            settings: settings.settings,
+            update: settings.update,
           }}
           data={
             <DataTab
