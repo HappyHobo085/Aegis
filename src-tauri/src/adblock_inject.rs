@@ -228,13 +228,21 @@ fn is_procedural(sel: &str) -> bool {
 /// `WebViewCompat.addDocumentStartJavaScript`. Returns a null jstring on failure (Kotlin
 /// then skips injection rather than crashing). Lives in `libapp_lib.so`, loaded at startup.
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+// `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+// name means two libraries could export the same symbol, which the linker leaves
+// undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+// by name), so it is allowed here explicitly rather than by the module scope —
+// `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
 #[no_mangle]
 pub extern "system" fn Java_com_aegis_browser_NativeInject_documentStartScript<'a>(
     env: jni::JNIEnv<'a>,
     _this: jni::objects::JObject<'a>,
 ) -> jni::sys::jstring {
     // Phase 1 folds the WebRTC shim in via the same InjectConfig seam used by script().
-    let s = format!("{POPUP_GUARD}\n{}", build());
+    // An empty script is the same effective outcome as the null-jstring failure below
+    // (Kotlin registers nothing either way), so a panic degrades to "no injection".
+    let s = crate::ffi_guard(|| format!("{POPUP_GUARD}\n{}", build())).unwrap_or_default();
     match env.new_string(s) {
         Ok(js) => js.into_raw(),
         Err(_) => std::ptr::null_mut(),

@@ -1,7 +1,10 @@
 //! Blocks scripted (non-user-gesture) cross-origin top-frame redirects — the
 //! anti-malvertising guard. The POLICY lives here once; each platform's native
 //! nav-policy hook derives the inputs and calls in. See
-//! docs/superpowers/specs/2026-06-18-scripted-redirect-blocker-design.md.
+//! The design spec that used to live at
+//! `docs/superpowers/specs/2026-06-18-scripted-redirect-blocker-design.md` was deleted in
+//! commit 58d2c4b and is not recoverable from this repo; everything it said about the
+//! policy now lives in this header plus `src-tauri/AGENTS.md` (gotcha 14).
 //!
 //! A navigation is judged by WHO STARTED ITS CHAIN, not by the individual hop.
 //! Malvertising commonly bounces the top frame through a redirect (e.g. streamex's
@@ -217,7 +220,7 @@ pub fn chain_origin(app: &AppHandle, tab: u32) -> Option<ChainStart> {
         app.try_state::<Chains>()?
             .0
             .lock()
-            .unwrap()
+            .unwrap_or_else(|e| e.into_inner())
             .get(&tab)?
             .clone(),
     )
@@ -350,6 +353,12 @@ pub fn clear_tab_actions(app: &AppHandle, tab: u32) {
 /// Android derives scripted (=!hasGesture) + main_frame (=isForMainFrame) and the
 /// URLs; this applies the shared cross-origin predicate. Lives in libapp_lib.so.
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+// `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+// name means two libraries could export the same symbol, which the linker leaves
+// undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+// by name), so it is allowed here explicitly rather than by the module scope —
+// `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
 #[no_mangle]
 pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_shouldBlock(
     mut env: jni::JNIEnv,
@@ -367,7 +376,14 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_shouldBlock(
         .get_string(&target)
         .map(|s| s.into())
         .unwrap_or_default();
-    should_block(&current, &target, scripted != 0, main_frame != 0) as jni::sys::jboolean
+    // Fails OPEN on a panic, matching `should_block`'s own contract.
+    match crate::ffi_guard(|| should_block(&current, &target, scripted != 0, main_frame != 0)) {
+        Some(blocked) => blocked as jni::sys::jboolean,
+        None => {
+            eprintln!("[aegis-redirect] should_block panicked; failing open for this navigation");
+            0
+        }
+    }
 }
 
 #[cfg(test)]

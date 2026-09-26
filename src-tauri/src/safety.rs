@@ -69,6 +69,12 @@ pub fn is_malware_host(host: &str) -> bool {
 /// WebView's guards (shouldOverrideUrlLoading / shouldInterceptRequest / the nav
 /// bridge). Same pattern as `adblock_engine.rs`; lives in libapp_lib.so.
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+// `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+// name means two libraries could export the same symbol, which the linker leaves
+// undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+// by name), so it is allowed here explicitly rather than by the module scope —
+// `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
 #[no_mangle]
 pub extern "system" fn Java_com_aegis_browser_NativeSafety_isMalwareHost(
     mut env: jni::JNIEnv,
@@ -76,7 +82,15 @@ pub extern "system" fn Java_com_aegis_browser_NativeSafety_isMalwareHost(
     host: jni::objects::JString,
 ) -> jni::sys::jboolean {
     let host: String = env.get_string(&host).map(|s| s.into()).unwrap_or_default();
-    is_malware_host(&host) as jni::sys::jboolean
+    // Fails OPEN on a panic, matching `is_malware_host`'s own contract: malware blocking
+    // must never be the reason a page fails to load.
+    match crate::ffi_guard(|| is_malware_host(&host)) {
+        Some(bad) => bad as jni::sys::jboolean,
+        None => {
+            eprintln!("[aegis-safety] is_malware_host panicked; failing open for this host");
+            0
+        }
+    }
 }
 
 /// Record + surface the interstitial, and show a visible warning in the content

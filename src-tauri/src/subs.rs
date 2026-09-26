@@ -180,15 +180,21 @@ fn fetch_in_background<R: Runtime>(app: AppHandle<R>, list_id: String, url: Stri
                 eprintln!("[aegis] failed to cache subscription list {list_id}: {e}");
             }
             let hash = hash_text(&text);
-            let mut items = jsonstore::load_synced(&app, "subs");
-            for it in items.iter_mut() {
-                if it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()) {
-                    it["lastUpdated"] = json!(jsonstore::now_ms());
-                    it["hash"] = json!(hash);
-                    jsonstore::touch(it, &app);
+            // One store lock across the read-modify-write: this runs on a per-subscription
+            // thread, so several of them plus the UI's `subs.*` channels race this file.
+            // Without the lock a concurrent `subs.add` landing between the load and the save
+            // is silently overwritten, and the successful save hides the loss.
+            jsonstore::with_store_lock("subs", || {
+                let mut items = jsonstore::load_synced(&app, "subs");
+                for it in items.iter_mut() {
+                    if it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()) {
+                        it["lastUpdated"] = json!(jsonstore::now_ms());
+                        it["hash"] = json!(hash);
+                        jsonstore::touch(it, &app);
+                    }
                 }
-            }
-            let _ = jsonstore::save(&app, "subs", &items);
+                let _ = jsonstore::save(&app, "subs", &items);
+            });
             reinstall_adblock(&app);
             crate::emit_event(&app, "subs.changed", Value::Null);
         }
@@ -267,16 +273,20 @@ fn run_update<R: Runtime>(app: &AppHandle<R>) -> Value {
     }
 
     // Stamp the rows we refreshed, then rebuild the engine if anything changed.
-    let mut items = jsonstore::load_synced(app, "subs");
-    for it in items.iter_mut() {
-        let id = it.get("listId").and_then(Value::as_str).map(str::to_string);
-        if let Some(hash) = id.and_then(|id| hashes.get(&id)) {
-            it["lastUpdated"] = json!(now);
-            it["hash"] = json!(hash);
-            jsonstore::touch(it, app);
+    // Same store lock as the per-subscription refresh above: this bulk path and those
+    // threads both rewrite `subs.json`, so the read-modify-write must be serialized.
+    jsonstore::with_store_lock("subs", || {
+        let mut items = jsonstore::load_synced(app, "subs");
+        for it in items.iter_mut() {
+            let id = it.get("listId").and_then(Value::as_str).map(str::to_string);
+            if let Some(hash) = id.and_then(|id| hashes.get(&id)) {
+                it["lastUpdated"] = json!(now);
+                it["hash"] = json!(hash);
+                jsonstore::touch(it, app);
+            }
         }
-    }
-    let _ = jsonstore::save(app, "subs", &items);
+        let _ = jsonstore::save(app, "subs", &items);
+    });
     if !hashes.is_empty() {
         reinstall_adblock(app);
         crate::emit_event(app, "subs.changed", Value::Null);

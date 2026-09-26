@@ -7,8 +7,9 @@
 
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
 
 use adblock::lists::{FilterSet, ParseOptions};
 use adblock::request::Request;
@@ -65,6 +66,13 @@ enum Msg {
     Reload(Vec<String>),
 }
 
+/// How long `should_block` waits for the engine thread's verdict before failing open.
+///
+/// Generous on purpose: a `Msg::Reload` re-parses ~20 MB of filter lists on that thread,
+/// and a filter edit is a foreground user action, so the cost of timing out too eagerly is
+/// a briefly under-blocked page while the cost of waiting too long is a frozen window.
+const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Build the matching engine from every bundled list (ads + trackers + Peter Lowe's +
 /// abuse-TLDs — see `adblock_lists`) plus the caller-supplied `extra` list texts. One
 /// EasyList-scale parse (~20 MB); runs on the engine thread.
@@ -87,17 +95,37 @@ fn tx() -> &'static Sender<Msg> {
         std::thread::spawn(move || {
             let mut engine = build_engine(&[]);
             while let Ok(msg) = rx.recv() {
-                match msg {
-                    Msg::Query(q) => {
-                        let blocked = match Request::new(&q.url, &q.source, &q.rtype) {
-                            Ok(req) => engine.check_network_request(&req).matched,
-                            Err(_) => false, // fail open: unparseable URL is allowed
-                        };
-                        let _ = q.reply.send(blocked);
+                // A panic here must NOT kill this thread. The `!Send` Engine exists ONLY on
+                // this thread, so a dead thread turns ad-blocking off permanently and
+                // silently: every later `tx().send` fails, `should_block` fails open, and
+                // the user just sees a working browser with no ad-blocking and no error.
+                // Catch per message and keep serving. `Msg::Reload` only assigns after
+                // `build_engine` returns, so a panicking reload leaves the previous (still
+                // perfectly valid) engine in place — the failure mode is "your new filter
+                // list didn't apply", not "ad-blocking died".
+                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    match &msg {
+                        Msg::Query(q) => {
+                            let blocked = match Request::new(&q.url, &q.source, &q.rtype) {
+                                Ok(req) => engine.check_network_request(&req).matched,
+                                Err(_) => false, // fail open: unparseable URL is allowed
+                            };
+                            let _ = q.reply.send(blocked);
+                        }
+                        // Rebuild the FilterSet + Engine in place on this thread (the only
+                        // place the !Send Engine can be replaced).
+                        Msg::Reload(extra) => engine = build_engine(extra),
                     }
-                    // Rebuild the FilterSet + Engine in place on this thread (the only
-                    // place the !Send Engine can be replaced).
-                    Msg::Reload(extra) => engine = build_engine(&extra),
+                }));
+                if outcome.is_err() {
+                    eprintln!(
+                        "[aegis-adblock] engine panic recovered; keeping the previous engine"
+                    );
+                    // A Query that panicked never reached its `reply.send`, so its caller
+                    // would otherwise block until QUERY_TIMEOUT. Fail open explicitly.
+                    if let Msg::Query(q) = &msg {
+                        let _ = q.reply.send(false);
+                    }
                 }
             }
         });
@@ -148,7 +176,26 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
         if tx().send(Msg::Query(q)).is_err() {
             return false;
         }
-        answer.recv().unwrap_or(false)
+        // Bounded wait. `Msg` is FIFO on ONE channel, so a `Msg::Reload` (any filter
+        // toggle, custom-filter edit or subscription update) makes every in-flight
+        // `should_block` queue behind a full EasyList re-parse. Unbounded, that froze the
+        // GTK main thread — `should_block` is called from `nav::decide_navigation` for
+        // every subresource, so 40 iframes x a filter edit meant 40 serialized stalls.
+        // Timing out fails OPEN (the request is allowed), so the worst case is that a
+        // filter edit briefly under-blocks instead of hanging the window.
+        match answer.recv_timeout(QUERY_TIMEOUT) {
+            Ok(blocked) => blocked,
+            Err(RecvTimeoutError::Timeout) => {
+                // A late reply is now sitting in this thread's REUSED channel. It must be
+                // drained, or the NEXT query would consume the previous query's verdict
+                // and answer the wrong request.
+                while answer.try_recv().is_ok() {}
+                false
+            }
+            // The engine thread is gone (disconnected). It cannot recover itself, so just
+            // fail open — same as a dead filter engine, and far better than blocking.
+            Err(RecvTimeoutError::Disconnected) => false,
+        }
     })
 }
 
@@ -183,6 +230,12 @@ pub fn is_unwanted_popup(url: &str, opener_url: &str) -> bool {
 /// singleton instance, ignored). Called from the content WebView's
 /// `shouldInterceptRequest`. Lives in `libapp_lib.so`, loaded at startup.
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+// `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+// name means two libraries could export the same symbol, which the linker leaves
+// undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+// by name), so it is allowed here explicitly rather than by the module scope —
+// `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
 #[no_mangle]
 pub extern "system" fn Java_com_aegis_browser_NativeAdblock_shouldBlock(
     mut env: jni::JNIEnv,
@@ -200,7 +253,15 @@ pub extern "system" fn Java_com_aegis_browser_NativeAdblock_shouldBlock(
         .get_string(&request_type)
         .map(|s| s.into())
         .unwrap_or_default();
-    should_block(&url, &source, &rtype) as jni::sys::jboolean
+    // Fails OPEN on a panic, matching `should_block`'s own contract: ad-blocking must
+    // never be the reason a page fails to load.
+    match crate::ffi_guard(|| should_block(&url, &source, &rtype)) {
+        Some(blocked) => blocked as jni::sys::jboolean,
+        None => {
+            eprintln!("[aegis-adblock] should_block panicked; failing open for this request");
+            0
+        }
+    }
 }
 
 #[cfg(test)]
