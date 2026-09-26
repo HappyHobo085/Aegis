@@ -19,6 +19,12 @@ describe('MobileFavourites', () => {
     const { container } = render(<MobileFavourites favorites={[]} onOpen={vi.fn()} />);
     expect(container.querySelector('.mobile-favourites')).toBeInTheDocument();
   });
+  it('exposes a Favourites navigation landmark', () => {
+    render(<MobileFavourites favorites={favs} onOpen={vi.fn()} />);
+    // Was a <div aria-label>, which screen readers ignore — the label never
+    // reached anyone. Mirrors the desktop FavoritesBar's <nav aria-label>.
+    expect(screen.getByRole('navigation', { name: /favourites/i })).toBeInTheDocument();
+  });
   it('shows a + button when onAdd is provided', () => {
     const onAdd = vi.fn();
     render(<MobileFavourites favorites={favs} onOpen={vi.fn()} onAdd={onAdd} />);

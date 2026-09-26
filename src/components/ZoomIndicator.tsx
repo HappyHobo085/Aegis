@@ -1,17 +1,20 @@
 // src/components/ZoomIndicator.tsx
 import { ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { formatZoom } from '../lib/zoom';
 import { useDialog } from '../hooks/useDialog';
+import { useChromePopoverInset } from '../hooks/useChromePopover';
+import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 
 export interface ZoomIndicatorProps {
   factor: number;
   zoomIn(): void;
   zoomOut(): void;
   reset(): void;
-  /** Called when the popover opens or closes; used by the App to raise the chrome above
-   *  the content webview while the dropdown is visible (same mechanism as the shield popover). */
+  /** Called when the popover opens or closes. The desktop compositor no longer needs
+   *  this (the popover registers its own measured inset, see useChromePopover); the
+   *  mobile shell still uses it to lower its native content view. */
   onOpenChange?(open: boolean): void;
 }
 
@@ -22,9 +25,22 @@ function Popover({
   reset,
   onClose,
   wrapperRef,
-}: ZoomIndicatorProps & { onClose: () => void; wrapperRef: RefObject<HTMLElement | null> }) {
+  popoverRef,
+}: ZoomIndicatorProps & {
+  onClose: () => void;
+  wrapperRef: RefObject<HTMLElement | null>;
+  popoverRef: RefObject<HTMLDivElement | null>;
+}) {
   const labelId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
+  // Stable: React must not detach the node the inset observer is watching.
+  const setRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      dialogRef.current = el;
+      popoverRef.current = el;
+    },
+    [dialogRef, popoverRef],
+  );
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
 
@@ -43,7 +59,7 @@ function Popover({
 
   return (
     <div
-      ref={dialogRef}
+      ref={setRef}
       role="dialog"
       aria-modal="false"
       aria-labelledby={labelId}
@@ -75,6 +91,10 @@ export function ZoomIndicator({
 }: ZoomIndicatorProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  // Self-registering: a popover that renders is a popover that reserves its space,
+  // so the content webview can never sit on top of it.
+  const [popoverRef, popoverHeight] = useMeasuredHeight<HTMLDivElement>(open);
+  useChromePopoverInset('zoom-indicator', popoverHeight);
 
   const handleOpenChange = (next: boolean): void => {
     setOpen(next);
@@ -101,6 +121,7 @@ export function ZoomIndicator({
           reset={reset}
           onClose={() => handleOpenChange(false)}
           wrapperRef={wrapperRef}
+          popoverRef={popoverRef}
         />
       )}
     </div>

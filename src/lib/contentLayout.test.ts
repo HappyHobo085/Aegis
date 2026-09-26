@@ -7,8 +7,6 @@ describe('computeContentLayout', () => {
       computeContentLayout({
         fullOverlay: false,
         sidebar: false,
-        shield: false,
-        zoom: false,
         sidebarWidth: 280,
       }),
     ).toEqual({ overlay: false, sidebar: false, width: 280 });
@@ -19,8 +17,6 @@ describe('computeContentLayout', () => {
       computeContentLayout({
         fullOverlay: true,
         sidebar: false,
-        shield: false,
-        zoom: false,
         sidebarWidth: 280,
       }),
     ).toEqual({ overlay: true, sidebar: false, width: 280 });
@@ -31,35 +27,9 @@ describe('computeContentLayout', () => {
       computeContentLayout({
         fullOverlay: false,
         sidebar: true,
-        shield: false,
-        zoom: false,
         sidebarWidth: 300,
       }),
     ).toEqual({ overlay: true, sidebar: true, width: 300 });
-  });
-
-  it('the shield popover rides the chrome but does NOT inset', () => {
-    expect(
-      computeContentLayout({
-        fullOverlay: false,
-        sidebar: false,
-        shield: true,
-        zoom: false,
-        sidebarWidth: 280,
-      }),
-    ).toEqual({ overlay: true, sidebar: false, width: 280 });
-  });
-
-  it('the zoom popover rides the chrome but does NOT inset', () => {
-    expect(
-      computeContentLayout({
-        fullOverlay: false,
-        sidebar: false,
-        shield: false,
-        zoom: true,
-        sidebarWidth: 280,
-      }),
-    ).toEqual({ overlay: true, sidebar: false, width: 280 });
   });
 
   it('a full overlay suppresses the sidebar inset (overlay wins)', () => {
@@ -67,10 +37,24 @@ describe('computeContentLayout', () => {
       computeContentLayout({
         fullOverlay: true,
         sidebar: true,
-        shield: false,
-        zoom: false,
         sidebarWidth: 280,
       }),
     ).toEqual({ overlay: true, sidebar: false, width: 280 });
+  });
+
+  // Chrome popovers (omnibox, site info, shield, zoom) are NOT part of this
+  // derivation any more: they inset the content top by their own measured height
+  // (useChromePopover) so the page stays visible behind them, instead of riding a
+  // boolean that blanks the whole content webview.
+  it('knows nothing about popovers — only fullOverlay and sidebar reach the content layout', () => {
+    expect(
+      Object.keys(
+        computeContentLayout({
+          fullOverlay: false,
+          sidebar: false,
+          sidebarWidth: 320,
+        }),
+      ).sort(),
+    ).toEqual(['overlay', 'sidebar', 'width']);
   });
 });

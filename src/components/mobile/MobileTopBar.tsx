@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { RotateCw, X, ChevronUp, ChevronDown } from 'lucide-react';
 import { AddressBar } from '../AddressBar';
-import type { SiteInfo } from '../AddressBar';
+import type { OmniboxStores, SiteInfo } from '../AddressBar';
 
 interface MobileTopBarProps {
   url: string;
@@ -10,6 +10,11 @@ interface MobileTopBarProps {
   siteInfo?: SiteInfo;
   /** Shield icon rendered inline inside the address bar pill (right edge). */
   inlineShield?: ReactNode;
+  /** Stores for the address-bar suggestion list. */
+  omnibox?: OmniboxStores;
+  /** Reported when a chrome overlay anchored to the address bar opens/closes; the
+   *  mobile shell lowers its native content view for it (see MobileApp). */
+  onDropdownOpenChange?(open: boolean): void;
   onNavigate(raw: string): void;
   onReloadOrStop(): void;
   bottomBarHidden: boolean;
@@ -22,6 +27,8 @@ export function MobileTopBar({
   isPrivate = false,
   siteInfo,
   inlineShield,
+  omnibox,
+  onDropdownOpenChange,
   onNavigate,
   onReloadOrStop,
   bottomBarHidden,
@@ -36,6 +43,8 @@ export function MobileTopBar({
           isPrivate={isPrivate}
           siteInfo={siteInfo}
           inlineRight={inlineShield}
+          omnibox={omnibox}
+          onDropdownOpenChange={onDropdownOpenChange}
           onSubmit={onNavigate}
         />
         <button

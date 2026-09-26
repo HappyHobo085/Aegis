@@ -4,7 +4,7 @@ import type { ReactNode } from 'react';
 import { MoreHorizontal } from 'lucide-react';
 import type { AdblockState, NavState } from '../../shared/types';
 import type { ProtectionSummary } from '../lib/protectionSummary';
-import type { SiteInfo } from './AddressBar';
+import type { OmniboxStores, SiteInfo } from './AddressBar';
 import { NavControls } from './NavControls';
 import { AddressBar } from './AddressBar';
 import { AdblockShield } from './AdblockShield';
@@ -49,6 +49,10 @@ export interface ToolbarProps {
   isNarrow?: boolean;
   isPrivate?: boolean;
   siteInfo?: SiteInfo;
+  /** Stores for the address-bar suggestion list. Omit to keep the field plain. */
+  omnibox?: OmniboxStores;
+  /** See `AddressBar.onDropdownOpenChange` — the mobile shell's inset signal. */
+  onDropdownOpenChange?(open: boolean): void;
 }
 
 /** The "More" overflow popover that holds the secondary toolbar actions when the
@@ -112,6 +116,8 @@ export function Toolbar({
   isNarrow = false,
   isPrivate = false,
   siteInfo,
+  omnibox,
+  onDropdownOpenChange,
 }: ToolbarProps) {
   const secondary = (
     <>
@@ -137,6 +143,8 @@ export function Toolbar({
         isLoading={state.isLoading}
         isPrivate={isPrivate}
         siteInfo={siteInfo}
+        omnibox={omnibox}
+        onDropdownOpenChange={onDropdownOpenChange}
         onSubmit={navigate}
       />
       <AdblockShield

@@ -1,10 +1,12 @@
 // src/components/AdblockShield.tsx
-import { useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { EyeOff, Fingerprint, Lock, Network, Shield, ShieldOff, Video } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { AdblockState } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
+import { useChromePopoverInset } from '../hooks/useChromePopover';
+import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import type { ProtectionSummary } from '../lib/protectionSummary';
 
 export interface AdblockShieldProps {
@@ -14,9 +16,9 @@ export interface AdblockShieldProps {
   host: string | null;
   setEnabled(enabled: boolean): void;
   toggleAllowlist(): void;
-  /** Notified when the popover opens/closes, so the app can raise the chrome above
-   *  the opaque, always-on-top content webview on Tauri (else the popover renders
-   *  behind the page). No-op on Electron's transparent-chrome architecture. */
+  /** Notified when the popover opens/closes. The desktop compositor no longer needs
+   *  this (the popover registers its own measured inset, see useChromePopover); the
+   *  mobile shell still uses it to lower its native content view. */
   onOpenChange?(open: boolean): void;
   /** When provided, the popover shows a "Reload to apply" button next to the
    *  "Applies on reload" copy. The coordinator (App) wires this to reload the
@@ -90,9 +92,22 @@ function Popover({
   protection,
   onClose,
   wrapperRef,
-}: AdblockShieldProps & { onClose: () => void; wrapperRef: RefObject<HTMLElement | null> }) {
+  popoverRef,
+}: AdblockShieldProps & {
+  onClose: () => void;
+  wrapperRef: RefObject<HTMLElement | null>;
+  popoverRef: RefObject<HTMLDivElement | null>;
+}) {
   const labelId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
+  // Stable: React must not detach the node the inset observer is watching.
+  const setRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      dialogRef.current = el;
+      popoverRef.current = el;
+    },
+    [dialogRef, popoverRef],
+  );
   const onCloseRef = useRef(onClose);
   onCloseRef.current = onClose;
   // Close on an outside click, consistent with ZoomIndicator / ToolbarOverflow (the shield
@@ -116,7 +131,7 @@ function Popover({
 
   return (
     <div
-      ref={dialogRef}
+      ref={setRef}
       role="dialog"
       aria-modal="false"
       aria-labelledby={labelId}
@@ -193,6 +208,10 @@ function Popover({
 export function AdblockShield(props: AdblockShieldProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
+  // Self-registering: a popover that renders is a popover that reserves its space,
+  // so the content webview can never sit on top of it.
+  const [popoverRef, popoverHeight] = useMeasuredHeight<HTMLDivElement>(open);
+  useChromePopoverInset('adblock-shield', popoverHeight);
   const changeOpen = (v: boolean) => {
     setOpen(v);
     props.onOpenChange?.(v);
@@ -227,7 +246,14 @@ export function AdblockShield(props: AdblockShieldProps) {
           </span>
         )}
       </button>
-      {open && <Popover {...props} onClose={() => changeOpen(false)} wrapperRef={wrapperRef} />}
+      {open && (
+        <Popover
+          {...props}
+          onClose={() => changeOpen(false)}
+          wrapperRef={wrapperRef}
+          popoverRef={popoverRef}
+        />
+      )}
     </div>
   );
 }

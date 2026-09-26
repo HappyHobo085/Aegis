@@ -3,6 +3,7 @@ import { useEffect, useId, useMemo, useState } from 'react';
 import { Bookmark, Pencil, Plus, X } from 'lucide-react';
 import type { SavedItem } from '../../shared/types';
 import { normalizeSavedUrl } from '../lib/addressParse';
+import { formatHost, formatRelativeTime } from '../lib/format';
 import { TagInput } from './TagInput';
 import { TagFilter } from './TagFilter';
 
@@ -213,6 +214,7 @@ export function SavedPanel({
           {filtered.map((item) => {
             const label = item.title.length > 0 ? item.title : item.url;
             const isEditing = editingId === item.id;
+            const host = formatHost(item.url);
             return (
               <li key={item.id} className="saved-panel__row">
                 {isEditing ? (
@@ -256,7 +258,12 @@ export function SavedPanel({
                       onClick={() => onOpen(item.url)}
                     >
                       <span className="saved-panel__title">{label}</span>
-                      <span className="saved-panel__url">{item.url}</span>
+                      <span className="saved-panel__meta">
+                        {host.length > 0 && <span className="saved-panel__host">{host}</span>}
+                        <span className="saved-panel__saved">
+                          saved {formatRelativeTime(item.savedAt)}
+                        </span>
+                      </span>
                       {item.tags.length > 0 && (
                         <span className="saved-panel__chips">
                           {item.tags.map((t) => (

@@ -111,7 +111,7 @@ describe('App', () => {
   it('renders the toolbar address bar', async () => {
     render(<App />);
     await waitFor(() =>
-      expect(screen.getByRole('textbox', { name: /address/i })).toBeInTheDocument(),
+      expect(screen.getByRole('combobox', { name: /address/i })).toBeInTheDocument(),
     );
   });
 
@@ -435,14 +435,14 @@ describe('App', () => {
 
     // Normal chrome is present.
     const enter = await screen.findByRole('button', { name: /enter fullscreen/i });
-    expect(screen.getByRole('textbox', { name: /address/i })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /address/i })).toBeInTheDocument();
 
     // Enter fullscreen.
     await userEvent.click(enter);
     await waitFor(() => expect(setFullscreen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, true));
 
     // Chrome (toolbar/favbar) is gone; only the corner exit button renders.
-    expect(screen.queryByRole('textbox', { name: /address/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('combobox', { name: /address/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /enter fullscreen/i })).not.toBeInTheDocument();
     const exit = screen.getByRole('button', { name: /exit fullscreen/i });
     expect(exit).toBeInTheDocument();
@@ -450,7 +450,7 @@ describe('App', () => {
     // Exit fullscreen restores the normal chrome.
     await userEvent.click(exit);
     await waitFor(() => expect(setFullscreen).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, false));
-    expect(screen.getByRole('textbox', { name: /address/i })).toBeInTheDocument();
+    expect(screen.getByRole('combobox', { name: /address/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /enter fullscreen/i })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /exit fullscreen/i })).not.toBeInTheDocument();
   });

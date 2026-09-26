@@ -40,7 +40,7 @@ const handlers = () => ({
 describe('Toolbar', () => {
   it('shows the current URL in the address input', () => {
     render(<Toolbar state={state} {...handlers()} />);
-    expect(screen.getByRole('textbox', { name: /address/i })).toHaveValue('https://example.com/');
+    expect(screen.getByRole('combobox', { name: /address/i })).toHaveValue('https://example.com/');
   });
 
   it('enables Back when canGoBack and disables Forward when !canGoForward', () => {
@@ -63,7 +63,7 @@ describe('Toolbar', () => {
   it('submitting the address bar calls navigate with the typed value', async () => {
     const h = handlers();
     render(<Toolbar state={state} {...h} />);
-    const input = screen.getByRole('textbox', { name: /address/i });
+    const input = screen.getByRole('combobox', { name: /address/i });
     await userEvent.clear(input);
     await userEvent.type(input, 'https://typed.example.org/{Enter}');
     expect(h.navigate).toHaveBeenCalledWith('https://typed.example.org/');

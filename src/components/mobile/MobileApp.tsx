@@ -88,6 +88,8 @@ export function MobileApp() {
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab>('appearance');
   const [commandOpen, setCommandOpen] = useState(false);
   const [shieldOpen, setShieldOpen] = useState(false);
+  // True while the address-bar suggestion list (or site-info popover) is up.
+  const [addressOpen, setAddressOpen] = useState(false);
   const [bottomBarHidden, setBottomBarHidden] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
 
@@ -123,10 +125,15 @@ export function MobileApp() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const overlayOpen = sheet !== null || shieldOpen;
+  // The address-bar suggestion list is a chrome overlay too: the native content
+  // WebView sits on top of the chrome WebView, so it must be lowered for the
+  // dropdown to be visible (the desktop shell insets by the measured height
+  // instead — see useChromePopover; a single WebView has nothing to inset).
+  const overlayOpen = sheet !== null || shieldOpen || addressOpen;
   useEffect(() => {
     void aegis.view.setChromeOverlay(tabs.activeId, overlayOpen);
   }, [overlayOpen, tabs.activeId]);
+
   useEffect(() => {
     setBackInterceptActive(sheet !== null || fullscreen);
     window.__aegisMobileBack = () => {
@@ -221,6 +228,12 @@ export function MobileApp() {
             onOpenPrivacySettings: () => openSettings('security'),
           }}
           inlineShield={shield}
+          omnibox={{
+            favorites: favorites.favorites,
+            saved: saved.items,
+            searchTemplate: nav.searchTemplate,
+          }}
+          onDropdownOpenChange={setAddressOpen}
           onNavigate={nav.navigate}
           onReloadOrStop={nav.reloadOrStop}
           bottomBarHidden={bottomBarHidden}
@@ -416,7 +429,11 @@ export function MobileApp() {
             onOpenProxy: () => openSettings('proxy'),
             settings: settings.settings,
             update: settings.update,
-            listExceptions: () => aegis.safety.listExceptions(),
+            // Pass the module function itself. A fresh arrow here is a new identity on every
+            // MobileApp render, and SecurityTab lists this in its effect deps — so every nav
+            // state / tabs.state / blockedCount update re-fetched and re-rendered the tab.
+            // Desktop already passes the stable function (App.tsx).
+            listExceptions: aegis.safety.listExceptions,
             removeException: (h: string) => void aegis.safety.removeException(h),
             fingerprintState: fingerprint.state,
             toggleFingerprintAllowlist: fingerprint.toggleAllowlist,

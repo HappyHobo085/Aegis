@@ -8,6 +8,7 @@ import { confirm, toast } from './lib/toast';
 import { useChromeHeights } from './hooks/useChromeHeights';
 import { hostOf, originOf } from './lib/url';
 import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChromeSurfaces';
+import { ChromePopoverProvider, useChromePopoverRegistry } from './hooks/useChromePopover';
 import { computeContentLayout, computeSplitLayout, clampResizeDelta } from './lib/contentLayout';
 import type { PaneRect } from './lib/contentLayout';
 import { protectionSummary } from './lib/protectionSummary';
@@ -116,13 +117,7 @@ function DesktopApp() {
   const nav = useNav(tabs.activeId);
   const isNarrow = useNarrowViewport();
   const adblock = useAdblock(tabs.activeId, nav.state.url);
-  // The ad-block shield popover is a chrome dropdown; track it so the content webview
-  // is lowered while it's open (Tauri's content view is opaque and on top).
-  const [shieldOpen, setShieldOpen] = useState(false);
   const zoom = useZoom(tabs.activeId);
-  // The zoom indicator popover is a chrome dropdown; like the shield popover, track it so the
-  // content webview is lowered while it's open (Tauri's content view is opaque and on top).
-  const [zoomOpen, setZoomOpen] = useState(false);
   const favorites = useFavorites(nav.state.url);
   const history = useHistory();
   const saved = useSaved(nav.state.url);
@@ -195,7 +190,29 @@ function DesktopApp() {
       openManager: () => setManagerOpen(true),
       closeManager: () => setManagerOpen(false),
       setSidebar: (open) => setSidebarOpen(open),
-      setShield: (open) => setShieldOpen(open),
+      // The shield popover owns its own open state (it registers its measured
+      // height with the popover registry, so App needs no copy). Drive it the way
+      // a user does — through the button — and no-op when it is already in the
+      // requested state, so `setShield(true)`/`setShield(false)` stay idempotent.
+      setShield: (open) => {
+        const button = document.querySelector<HTMLButtonElement>('.adblock-shield__button');
+        if (!button) return;
+        if ((button.getAttribute('aria-expanded') === 'true') !== open) button.click();
+      },
+      // The omnibox owns its open state too (it is `focus && !dismissed && rows`).
+      // Drive it the way a user does — focus the field, which selects the URL and
+      // seeds the list from history.
+      setOmnibox: (open) => {
+        const input = document.querySelector<HTMLInputElement>(
+          '.address-bar__field input[role="combobox"]',
+        );
+        if (!input) return;
+        if (open) {
+          if (document.activeElement !== input) input.focus();
+          return;
+        }
+        if (document.activeElement === input) input.blur();
+      },
       enterFullscreen: () => setFullscreen(true),
       exitFullscreen: () => setFullscreen(false),
       showError: (f) => {
@@ -223,10 +240,20 @@ function DesktopApp() {
     });
   }, []);
 
+  // The tallest open chrome popover (omnibox / site info / shield / zoom). Each
+  // registers its own measured height; the compositor turns the tallest into the
+  // extra content-top inset below.
+  const { inset: popoverInset } = useChromePopoverRegistry();
+
   // Report measured chrome inset to Rust so the content webview sits below it.
-  // The find bar is the only dynamic chrome element — it appears/disappears after
+  // The find bar is the only dynamic chrome ELEMENT — it appears/disappears after
   // mount, so useChromeHeights (one-shot) can't measure it. Add FIND_BAR_H when open.
-  const contentTop = chrome.topInset + (find.open ? FIND_BAR_H : 0);
+  // Chrome popovers (omnibox, site info, shield, zoom) are different: they hang
+  // BELOW the chrome and are taller than nothing, so each registers its own
+  // measured height and the tallest one is added here. That insets the opaque
+  // content webview just far enough to reveal the popover while the page stays
+  // visible behind it — see useChromePopover.
+  const contentTop = chrome.topInset + (find.open ? FIND_BAR_H : 0) + popoverInset;
   useContentInset(tabs.activeId, contentTop);
 
   // Sync the content-top CSS variable so fixed-position chrome surfaces (sidebar, scrim)
@@ -252,12 +279,10 @@ function DesktopApp() {
       computeContentLayout({
         fullOverlay: fullOverlayActive,
         sidebar: sidebarOpen,
-        shield: shieldOpen,
-        zoom: zoomOpen,
         sidebarWidth,
       }),
     );
-  }, [tabs.activeId, fullOverlayActive, sidebarOpen, shieldOpen, zoomOpen, sidebarWidth]);
+  }, [tabs.activeId, fullOverlayActive, sidebarOpen, sidebarWidth]);
 
   // Fullscreen: main shrinks chrome to a top-right corner and fills the window
   // with content. Renderer reflects the toggle below (after all hooks).
@@ -679,11 +704,15 @@ function DesktopApp() {
           host: activeHost,
           setEnabled: adblock.setEnabled,
           toggleAllowlist: adblock.toggleAllowlist,
-          onOpenChange: setShieldOpen,
           onReload: nav.reloadOrStop,
           protection: activeProtection,
         }}
         isPrivate={activeProtection.privateMode}
+        omnibox={{
+          favorites: favorites.favorites,
+          saved: saved.items,
+          searchTemplate: nav.searchTemplate,
+        }}
         siteInfo={{
           origin: activeOrigin,
           host: activeHost,
@@ -731,7 +760,6 @@ function DesktopApp() {
             zoomIn={zoom.zoomIn}
             zoomOut={zoom.zoomOut}
             reset={zoom.reset}
-            onOpenChange={setZoomOpen}
           />
         }
         splitIndicator={
@@ -975,7 +1003,9 @@ export function App() {
   if (getIsMobile()) return <MobileApp />;
   return (
     <ChromeSurfaceProvider>
-      <DesktopApp />
+      <ChromePopoverProvider>
+        <DesktopApp />
+      </ChromePopoverProvider>
     </ChromeSurfaceProvider>
   );
 }

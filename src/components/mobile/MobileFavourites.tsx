@@ -9,7 +9,10 @@ interface MobileFavouritesProps {
 
 export function MobileFavourites({ favorites, onOpen, onAdd }: MobileFavouritesProps) {
   return (
-    <div className="mobile-favourites" aria-label="Favourites">
+    // A <nav>, not a <div aria-label>: aria-label is ignored on a generic element,
+    // so the "Favourites" landmark never reached a screen reader. This matches the
+    // desktop FavoritesBar, which is the same landmark on the same surface.
+    <nav className="mobile-favourites" aria-label="Favourites">
       {favorites.map((f) => (
         <button
           key={f.id}
@@ -31,6 +34,6 @@ export function MobileFavourites({ favorites, onOpen, onAdd }: MobileFavouritesP
           <Plus size={14} aria-hidden="true" />
         </button>
       )}
-    </div>
+    </nav>
   );
 }

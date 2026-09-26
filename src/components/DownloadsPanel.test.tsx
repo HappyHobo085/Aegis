@@ -50,10 +50,46 @@ describe('DownloadsPanel', () => {
     expect(screen.getByRole('group', { name: /downloads/i })).toBeInTheDocument();
   });
 
-  it('lists each download by filename with its url', () => {
+  it('lists each download by filename with its host', () => {
     render(<DownloadsPanel {...props({ downloads: [entry()] })} />);
     expect(screen.getByText('file.zip')).toBeInTheDocument();
-    expect(screen.getByText('https://example.com/file.zip')).toBeInTheDocument();
+    // The host, not the full URL — the filename and size carry the detail.
+    expect(screen.getByText('example.com')).toBeInTheDocument();
+  });
+
+  it('shows "received of total" while progressing and just the total once done', () => {
+    const { unmount } = render(
+      <DownloadsPanel
+        {...props({
+          downloads: [entry({ state: 'progressing', receivedBytes: 1536, totalBytes: 4_500_000 })],
+        })}
+      />,
+    );
+    expect(screen.getByText('1.5 KB of 4.3 MB')).toBeInTheDocument();
+    unmount();
+    render(
+      <DownloadsPanel
+        {...props({ downloads: [entry({ state: 'completed', totalBytes: 4_500_000 })] })}
+      />,
+    );
+    expect(screen.getByText('4.3 MB')).toBeInTheDocument();
+  });
+
+  it('folds long lists to five rows behind a Show all toggle', async () => {
+    const many = Array.from({ length: 8 }, (_, i) => entry({ id: i + 1, filename: `f${i}.zip` }));
+    render(<DownloadsPanel {...props({ downloads: many })} />);
+    expect(screen.getByRole('button', { name: /show all 8 downloads/i })).toBeInTheDocument();
+    // Only the first five rows are rendered while folded.
+    expect(screen.getByText('f4.zip')).toBeInTheDocument();
+    expect(screen.queryByText('f5.zip')).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole('button', { name: /show all 8 downloads/i }));
+    expect(screen.getByText('f7.zip')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /show less/i })).toBeInTheDocument();
+  });
+
+  it('does not offer the fold when the list is short', () => {
+    render(<DownloadsPanel {...props({ downloads: [entry({ id: 1 }), entry({ id: 2 })] })} />);
+    expect(screen.queryByRole('button', { name: /show all/i })).not.toBeInTheDocument();
   });
 
   it('shows Open file / Show in folder for a completed download and calls the handlers', async () => {

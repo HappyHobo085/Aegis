@@ -746,6 +746,147 @@ body.aegis-fullscreen {
   }
 }
 
+/* ─── Omnibox (address-bar suggestions) ─────────────────────────────
+   Anchored to .address-bar__field (position: relative). The component's
+   measured height is handed to the compositor (useChromePopover), which insets
+   the opaque content webview by exactly this much so the list is never painted
+   behind the page. z-index matches .site-identity, which shares the anchor. */
+
+.omnibox {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  z-index: 5100;
+  /* Fixed px, never vh: the content inset follows this box, so a viewport-sized
+     height would feed back into the layout (see useMeasuredHeight). */
+  max-height: 384px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-modal);
+  color: var(--fg);
+}
+
+.omnibox__row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 36px;
+  padding: 5px 8px;
+  border-radius: var(--radius-2);
+  cursor: pointer;
+  scroll-margin: 4px;
+}
+
+.omnibox__row--active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.omnibox__icon {
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-1);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+}
+
+.omnibox__row--active .omnibox__icon {
+  color: var(--accent);
+}
+
+.omnibox__text {
+  display: grid;
+  gap: 1px;
+  flex: 1;
+  min-width: 0;
+}
+
+.omnibox__title,
+.omnibox__url {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.omnibox__title {
+  font-size: var(--font-size-4);
+  line-height: 1.25;
+}
+
+.omnibox__url {
+  color: var(--fg-muted);
+  font-size: var(--font-size-2);
+  line-height: 1.25;
+}
+
+.omnibox__hit {
+  padding: 0;
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--accent) 28%, transparent);
+  color: inherit;
+  font-weight: 600;
+}
+
+.omnibox__kind {
+  flex-shrink: 0;
+  align-self: center;
+  padding: 1px 6px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-pill);
+  color: var(--fg-muted);
+  font-size: var(--font-size-1);
+  line-height: 1.4;
+  white-space: nowrap;
+}
+
+.omnibox__hint {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 6px 8px 2px;
+  border-top: 1px solid var(--border-2);
+  color: var(--fg-muted);
+  font-size: var(--font-size-1);
+}
+
+.omnibox kbd {
+  display: inline-block;
+  min-width: 15px;
+  padding: 0 4px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-1);
+  background: var(--bg-subtle);
+  color: var(--fg-muted);
+  font-family: inherit;
+  font-size: var(--font-size-1);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Touch: rows are the tap targets, so give them the 44px minimum. */
+.aegis-mobile .omnibox__row,
+.aegis-narrow .omnibox__row {
+  min-height: 44px;
+}
+
+.aegis-mobile .omnibox__title {
+  font-size: var(--font-size-5);
+}
+
+/* The mobile top bar is `position: fixed`, so the dropdown must clear the system
+   status bar padding that MainActivity pushes in as --aegis-inset-top. */
+.aegis-mobile .omnibox {
+  max-height: 320px;
+}
+
 /* ─── Downloads badge ────────────────────────────────────────────── */
 
 /* Wrapper button is already styled by the icon-button rule above;
@@ -1273,8 +1414,7 @@ body.aegis-fullscreen {
   right: 0;
   bottom: 0;
   width: 320px; /* SIDEBAR_W */
-  background: var(--glass-3);
-  backdrop-filter: var(--blur-3);
+  background: var(--bg-elevated);
   -webkit-backdrop-filter: var(--blur-3);
   border-left: 1px solid var(--glass-border);
   box-shadow: var(--shadow-modal);
@@ -1557,20 +1697,98 @@ body.aegis-fullscreen {
   max-width: 100%;
 }
 
-/* URL line */
-.history-panel__url {
+/* Meta line: host + relative time, replacing the old full-URL + locale-timestamp
+   pair. Same two-part layout, but the host is what identifies a site and
+   "12 min ago" is far scannable than "12/03/2026, 15:18:02". */
+.history-panel__meta,
+.saved-panel__meta,
+.downloads-panel__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
   font-size: 11px;
+  line-height: 1.4;
   color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 100%;
 }
 
-/* Timestamp */
-.history-panel__time {
-  font-size: 11px;
+.history-panel__host,
+.saved-panel__host {
+  flex-shrink: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-panel__time,
+.saved-panel__saved {
+  flex-shrink: 0;
+  margin-left: auto;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+/* Group headers for the day buckets ("Today", "Yesterday", …). */
+.history-panel__groups {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.history-panel__group + .history-panel__group {
+  margin-top: 8px;
+}
+
+.history-panel__group-header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 6px 12px 4px;
+  background: var(--bg-elevated);
   color: var(--fg-muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* Count + Clear-all row. The count is a polite live region, so it needs to sit
+   in normal flow (not absolutely positioned) to announce reliably. */
+.history-panel__toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.history-panel__count {
+  color: var(--fg-muted);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-panel__search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--fg-muted);
+}
+
+.history-panel__search-clear:hover {
+  background: var(--glass-1);
+  color: var(--fg);
 }
 
 /* Remove (×) button */
@@ -1809,16 +2027,6 @@ body.aegis-fullscreen {
      unbroken strings too so nothing is hidden. */
   white-space: normal;
   overflow-wrap: anywhere;
-  max-width: 100%;
-}
-
-/* URL line */
-.saved-panel__url {
-  font-size: 11px;
-  color: var(--fg-muted);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   max-width: 100%;
 }
 
@@ -2166,20 +2374,28 @@ body.aegis-fullscreen {
   border-color: var(--accent-color);
 }
 
+/* Show all / Show less — the fold for long lists. Full width so it reads as a
+   list-level control rather than a per-row action. */
+.downloads-panel__show-all {
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  color: var(--fg-muted);
+  font-size: 12px;
+}
+
+.downloads-panel__show-all:hover {
+  border-color: var(--accent-color);
+  color: var(--fg);
+}
+
 /* Filename — primary label */
 .downloads-panel__filename {
   font-weight: 600;
   font-size: 14px;
   color: var(--fg);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-/* URL */
-.downloads-panel__url {
-  font-size: 11px;
-  color: var(--fg-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2257,9 +2473,11 @@ body.aegis-fullscreen {
 
 /* Content card — centered, constrained */
 .settings-modal__content {
-  background: var(--glass-3);
-  backdrop-filter: var(--blur-3);
-  -webkit-backdrop-filter: var(--blur-3);
+  /* Solid, not glass. The scrim hides the content webview, so there is nothing behind
+     the card to blur — a translucent panel just read as the same value as its own
+     backdrop. --bg-elevated is the palette's panel colour in both themes (#1a1a24 dark,
+     #ffffff light); the border + --shadow-3 carry the separation instead. */
+  background: var(--bg-elevated);
   border: 1px solid var(--glass-border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-3);
@@ -3879,8 +4097,7 @@ body.aegis-fullscreen {
 
 /* Dialog card — normal flex child of the scrim */
 .confirm-dialog {
-  background: var(--glass-3);
-  backdrop-filter: var(--blur-3);
+  background: var(--bg-elevated);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-3);
   max-width: 380px;
@@ -4298,8 +4515,7 @@ body.aegis-fullscreen {
 
 /* Inner card — centered */
 .error-overlay__panel {
-  background: var(--glass-3);
-  backdrop-filter: var(--blur-3);
+  background: var(--bg-elevated);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-3);
   max-width: 480px;
@@ -4841,8 +5057,7 @@ a:focus-visible {
 }
 .interstitial__panel {
   max-width: 560px;
-  background: var(--glass-3);
-  backdrop-filter: var(--blur-3);
+  background: var(--bg-elevated);
   border-radius: var(--r-lg);
   padding: 28px 32px;
   color: var(--fg);
@@ -5005,6 +5220,30 @@ a:focus-visible {
 .mobile-favourites__chip:active {
   background: var(--glass-2);
 }
+
+/* Touch targets. The visual box stays 28px because MOBILE_FAV_H (36dp) is
+   contractually locked to the content-WebView margins in MainActivity.kt — grow
+   the chips and the native content area no longer lines up. So on touch
+   pointers the *hit* area is grown instead, with an overlay pseudo-element that
+   contributes nothing to layout. The pseudo-element is 44px tall (the floor the
+   rest of the mobile chrome holds) and keeps the element's own width, so
+   neighbouring chips' targets never overlap. */
+@media (pointer: coarse) {
+  .mobile-favourites__chip,
+  .mobile-favourites__add {
+    position: relative;
+  }
+  .mobile-favourites__chip::after,
+  .mobile-favourites__add::after {
+    content: '';
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    height: 44px;
+    transform: translateY(-50%);
+  }
+}
 .mobile-favourites__add {
   flex: 0 0 auto;
   display: inline-flex;
@@ -5089,8 +5328,7 @@ a:focus-visible {
   z-index: 50;
   display: flex;
   flex-direction: column;
-  background: var(--glass-3);
-  backdrop-filter: var(--blur-3);
+  background: var(--bg-elevated);
   -webkit-backdrop-filter: var(--blur-3);
   border: 1px solid var(--glass-border);
   border-bottom: 0;
@@ -5649,8 +5887,8 @@ a:focus-visible {
   gap: 8px;
   padding: 10px 14px;
   border-radius: var(--r-md);
-  background: var(--glass-3);
-  border: 1px solid var(--glass-2);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
   color: var(--fg);
   font-size: var(--font-size-4);

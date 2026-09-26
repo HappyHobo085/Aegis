@@ -1,6 +1,6 @@
 // src/components/HistoryPanel.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { HistoryEntry } from '../../shared/types';
 
@@ -10,13 +10,23 @@ vi.mock('../lib/toast', () => ({
 }));
 
 import { HistoryPanel } from './HistoryPanel';
+import { formatRelativeTime } from '../lib/format';
 
+const HOUR = 3_600_000;
+const DAY = 86_400_000;
+
+// Relative to "now" on purpose: the panel groups rows into day buckets, so a
+// hard-coded epoch would land every fixture in the "Earlier" bucket and make the
+// grouping assertions meaningless (and time-dependent).
+const now = Date.now();
 const entries: HistoryEntry[] = [
-  { id: 2, url: 'https://b.example/', title: 'Beta', visitedAt: 1_700_000_000_000 },
-  { id: 1, url: 'https://a.example/', title: '', visitedAt: 1_600_000_000_000 },
+  { id: 2, url: 'https://b.example/', title: 'Beta', visitedAt: now - 2 * HOUR },
+  { id: 1, url: 'https://a.example/', title: '', visitedAt: now - 3 * DAY },
 ];
 
-function props() {
+type PanelProps = React.ComponentProps<typeof HistoryPanel>;
+
+function props(overrides: Partial<PanelProps> = {}): PanelProps {
   return {
     entries,
     query: '',
@@ -25,6 +35,7 @@ function props() {
     remove: vi.fn(async () => {}),
     clear: vi.fn(async () => {}),
     onOpen: vi.fn(),
+    ...overrides,
   };
 }
 
@@ -44,10 +55,39 @@ describe('HistoryPanel', () => {
     expect(screen.getByRole('button', { name: /open https:\/\/a\.example/i })).toBeInTheDocument();
   });
 
-  it('shows a localized timestamp for each entry', () => {
+  it('shows the host and a relative time for each entry', () => {
     render(<HistoryPanel {...props()} />);
-    const expected = new Date(1_700_000_000_000).toLocaleString();
-    expect(screen.getByText(expected)).toBeInTheDocument();
+    // The full URL and the locale timestamp are gone: the host identifies the
+    // site and the age is what people scan for.
+    expect(screen.getByText('b.example')).toBeInTheDocument();
+    expect(screen.getByText(formatRelativeTime(entries[0].visitedAt))).toBeInTheDocument();
+    expect(screen.queryByText('https://b.example/')).not.toBeInTheDocument();
+  });
+
+  it('groups entries under day-bucket headers, newest group first', () => {
+    render(<HistoryPanel {...props()} />);
+    const headers = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
+    expect(headers).toEqual(['Today', 'Earlier this week']);
+  });
+
+  it('announces the result count while filtering', () => {
+    render(<HistoryPanel {...props({ query: 'beta' })} />);
+    expect(screen.getByRole('status')).toHaveTextContent('2 results for “beta”');
+  });
+
+  it('searches as you type after the debounce', async () => {
+    const p = props();
+    render(<HistoryPanel {...p} />);
+    await userEvent.type(screen.getByRole('searchbox', { name: /search history/i }), 'x');
+    expect(p.search).not.toHaveBeenCalled();
+    await waitFor(() => expect(p.search).toHaveBeenCalled(), { timeout: 1000 });
+  });
+
+  it('offers a way to clear an active search', async () => {
+    const p = props({ query: 'beta' });
+    render(<HistoryPanel {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /clear history search/i }));
+    expect(p.setQuery).toHaveBeenCalledWith('');
   });
 
   it('clicking an entry calls onOpen with its url', async () => {
