@@ -9,10 +9,26 @@
 # (MainActivity$Bridge, via addJavascriptInterface). R8/minify in the release build
 # would otherwise rename those @JavascriptInterface methods, breaking every
 # window.AegisAndroid call (nav, content-visibility, fullscreen, back). Keep them.
-# (The Rust JNI exports — NativeAdblock.shouldBlock etc. — are already kept by the wry
-# rule `-keep class com.aegis.browser.* { native <methods>; }`.)
 -keepclassmembers class * {
     @android.webkit.JavascriptInterface <methods>;
+}
+
+# The nine Rust JNI exports (NativeAdblock.shouldBlock, NativeSafety.isMalwareHost,
+# NativeRedirectGuard.shouldBlock, NativeInject.documentStartScript,
+# NativeWebrtc.shimScript, NativeFarble.farbleScript, NativeFormDetect.formDetectionScript,
+# NativeProxy.proxyConfig, NativeSyncKeystore.provideClass) are `external fun`s — R8 cannot
+# see that the Rust side binds to them by name, so renaming either side breaks the JNI
+# binding (UnsatisfiedLinkError / NoSuchMethodError at CALL time, i.e. ad-block injection,
+# the WebRTC shim and malware blocking silently dying in the release build only).
+# This keep used to be an IMPLICIT dependency on two files this repo does not own:
+# Android's default proguard file (getDefaultProguardFile("proguard-android-optimize.txt")
+# in build.gradle.kts) and the generated
+# src/main/java/com/aegis/browser/generated/proguard-wry.pro — it is NOT a contract wry
+# offers us. Both are replaceable at any time, and the AegisKeystore rule below is the
+# proof that such a swap does happen and fails only at runtime, with no build error. So
+# state the JNI keep explicitly here, in the file this repo actually tracks.
+-keepclasseswithmembernames class com.aegis.browser.** {
+    native <methods>;
 }
 
 # AegisKeystore.wrap/unwrap are *plain* (non-native) static methods that Rust calls from

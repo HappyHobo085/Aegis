@@ -29,6 +29,8 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
     fun gestureCanGoBack(): Boolean
     fun gestureCanGoForward(): Boolean
     fun gestureAtTop(): Boolean
+    /** The tab the gestures act on — the pull-to-refresh latch is keyed on it. */
+    fun gestureActiveTabId(): Int
     fun gestureBack()
     fun gestureForward()
     fun gestureReload()
@@ -40,13 +42,26 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
   private val edgePx = 20f * density
   private val slop = ViewConfiguration.get(context).scaledTouchSlop.toFloat()
   private val pullMaxPx = 140f * density
+  // Android's per-edge budget for system-gesture exclusion. A request LARGER than this is
+  // IGNORED, not clamped — so a full-height strip on a tall phone drops the request
+  // entirely (see updateGestureExclusion).
+  private val exclusionBudgetPx = 200f * density
 
   private var mode = Mode.NONE
   private var startX = 0f
   private var startY = 0f
   private var curX = 0f
   private var curY = 0f
+  // Pull-to-refresh latch, keyed by the OWNING TAB. The container is shared by every tab,
+  // and the gesture always runs on the active one — but a tab that switched away before
+  // its load finished never got the old single stopRefresh() (its onPageFinished was
+  // filtered out on activeTabId), which left the latch set for the rest of the process:
+  // onInterceptTouchEvent then refused every edge-swipe AND pull-to-refresh, mode stayed
+  // REFRESH, and drawSpinner's postInvalidateOnAnimation() spun at 60fps forever. There
+  // are now three ways out — this tab's onPageFinished, a tab switch (cancelRefresh), and
+  // the hard timeout in startRefresh for a load that never finishes at all.
   private var refreshing = false
+  private var refreshTabId = -1
   private var spin = 0f
 
   private val disc = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1f6feb") }
@@ -63,12 +78,35 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
 
   override fun onSizeChanged(w: Int, h: Int, ow: Int, oh: Int) {
     super.onSizeChanged(w, h, ow, oh)
-    // Claim the left/right edge strips from Android's system back gesture (gesture-nav
-    // phones reserve the edges) so our edge-swipe can win there. No-op below API 29.
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-      val e = edgePx.toInt()
-      systemGestureExclusionRects = listOf(Rect(0, 0, e, h), Rect(w - e, 0, w, h))
-    }
+    updateGestureExclusion()
+  }
+
+  /**
+   * (Re)declare the edge strips we claim from Android's system gestures. No-op below
+   * API 29 (the setter doesn't exist there).
+   *
+   * Two things the naive `Rect(0, 0, e, h)` request got wrong, both of which made the
+   * feature silently dead on exactly the gesture-nav phones it targets:
+   *  - Android IGNORES an over-budget exclusion request instead of clamping it. The cap
+   *    is ~200dp per edge, and a full-height strip on a tall phone is several times that,
+   *    so the whole request was dropped and the system back gesture won every swipe. The
+   *    height is therefore capped at the budget and anchored to the BOTTOM of the
+   *    container (the thumb end).
+   *  - It claimed the right edge unconditionally even though the system back gesture is
+   *    single-edge, and claimed edges the app cannot use. Now each edge is claimed only
+   *    when the active tab can actually go that way, so an edge we would ignore is left
+   *    to the system. The host re-runs this on tab activation and on every nav-state
+   *    change (back/forward availability flips with each navigation).
+   */
+  fun updateGestureExclusion() {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+    val h = height
+    val e = edgePx.toInt()
+    val cap = min(h, exclusionBudgetPx.toInt())
+    val rects = ArrayList<Rect>(2)
+    if (host.gestureCanGoBack()) rects.add(Rect(0, h - cap, e, h))
+    if (host.gestureCanGoForward()) rects.add(Rect(width - e, h - cap, width, h))
+    systemGestureExclusionRects = rects
   }
 
   override fun onInterceptTouchEvent(ev: MotionEvent): Boolean {
@@ -115,7 +153,7 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
       Mode.FORWARD -> { if (startX - curX >= hDistance()) host.gestureForward(); mode = Mode.NONE }
       Mode.REFRESH -> {
         if (curY - startY >= pullThreshold()) {
-          refreshing = true; spin = 0f; host.gestureReload(); postInvalidateOnAnimation()
+          startRefresh(host.gestureActiveTabId())
         } else {
           mode = Mode.NONE
         }
@@ -125,9 +163,34 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
     invalidate()
   }
 
-  /** Called by the host when the active tab finishes (re)loading — hides the spinner. */
-  fun stopRefresh() {
-    if (refreshing) { refreshing = false; mode = Mode.NONE; invalidate() }
+  /** Latch the spinner on for [tabId]. It is released by that tab's onPageFinished, by a
+   *  tab switch, or by the hard timeout — a load the WebView never reports finishing (an
+   *  aborted navigation, a discarded tab) can no longer wedge every gesture forever. */
+  private fun startRefresh(tabId: Int) {
+    refreshing = true
+    refreshTabId = tabId
+    spin = 0f
+    postInvalidateOnAnimation()
+    postDelayed({ stopRefresh(tabId) }, REFRESH_TIMEOUT_MS)
+  }
+
+  /** Called by the host when tab [tabId] finishes (re)loading — hides the spinner. Only
+   *  clears THIS tab's latch: a background tab finishing must not stop the spinner the
+   *  user is currently watching on the active tab. */
+  fun stopRefresh(tabId: Int) {
+    if (refreshTabId == tabId) clearRefresh()
+  }
+
+  /** Drop the latch outright, whoever owns it — the host calls this on a tab switch (the
+   *  spinner belonged to the tab being left behind, whose onPageFinished may never come). */
+  fun cancelRefresh() = clearRefresh()
+
+  private fun clearRefresh() {
+    refreshTabId = -1
+    if (!refreshing) return
+    refreshing = false
+    mode = Mode.NONE
+    invalidate()
   }
 
   // Draw the indicator AFTER the child WebViews so it isn't occluded by the active
@@ -177,5 +240,12 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
     if (mode == Mode.BACK) { p.moveTo(cx + a, cy - a); p.lineTo(cx - a, cy); p.lineTo(cx + a, cy + a) }
     else { p.moveTo(cx - a, cy - a); p.lineTo(cx + a, cy); p.lineTo(cx - a, cy + a) }
     canvas.drawPath(p, glyph)
+  }
+
+  companion object {
+    /** Hard cap on the pull-to-refresh latch. Generous enough for a slow real page, short
+     *  enough that a never-finishing load costs the user 15s of dead gestures, not a
+     *  wedged session. */
+    private const val REFRESH_TIMEOUT_MS = 15_000L
   }
 }

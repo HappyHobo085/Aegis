@@ -5,13 +5,28 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- android:allowBackup="false" (on <application> below) is a PRIVACY requirement, not
+         a default. With no allowBackup / fullBackupContent / dataExtractionRules attribute
+         the platform default is TRUE, so BOTH cloud backup AND device-to-device transfer
+         carry the whole app data dir off-device — and those stores are UNENCRYPTED JSON
+         (history.json, favorites.json, saved.json, allowlist.json, settings.json,
+         customFilters) plus vault.json and the wrapped sync-root blobs. That is exactly the
+         data this product exists to keep on the user's own device, so both transports are
+         opted out of rather than filtered. -->
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.app"
+        android:allowBackup="false"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
+        <!-- configChanges also covers fontScale / density / layoutDirection / colorMode:
+             the platform default RECREATES the Activity on those, and every tab WebView
+             pins this Activity's context + a renderer process, so a system font-size
+             change used to destroy the whole browsing session. Handling them in-process
+             keeps the tabs alive (the chrome and content webviews pick up the new density
+             on their own next layout). -->
         <activity
-            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|smallestScreenSize|screenLayout|uiMode|fontScale|density|layoutDirection|colorMode"
             android:windowSoftInputMode="adjustResize"
             android:launchMode="singleTask"
             android:label="@string/main_activity_title"

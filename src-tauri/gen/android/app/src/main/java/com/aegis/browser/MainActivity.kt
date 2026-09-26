@@ -1,9 +1,12 @@
 package com.aegis.browser
 
 import android.graphics.Bitmap
+import android.graphics.Color
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.view.ViewGroup
@@ -25,7 +28,6 @@ import androidx.webkit.ProxyConfig
 import androidx.webkit.ProxyController
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
-import com.google.android.material.snackbar.Snackbar
 import java.io.ByteArrayInputStream
 import org.json.JSONObject
 
@@ -43,11 +45,23 @@ import org.json.JSONObject
  */
 class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   private var contentWebView: WebView? = null
-  private var chromeWebView: WebView? = null
+
+  // Written on the UI thread (onWebViewCreate) but READ from a WebView network thread
+  // (pushBlockedCount ← shouldInterceptRequest), so it needs a memory barrier — @Volatile,
+  // like the other cross-thread scalars below.
+  @Volatile private var chromeWebView: WebView? = null
 
   // One native WebView per tab (live tabs); the active one is mirrored into contentWebView
   // so the existing margin/overlay/nav logic keeps targeting "the active tab".
   private val tabWebViews = HashMap<Int, WebView>()
+  // Per-tab WebChromeClient, kept so an HTML5-fullscreen view added to window.decorView
+  // (which no tab owns) can be taken back down on teardown / Activity destroy. UI thread only.
+  private val chromeClients = HashMap<Int, WebChromeClient>()
+  // Live popup-capture WebViews (onCreateWindow). Each is a full WebView (~30-80 MB), so
+  // every escape route has to destroy it: the URL capture, window.close(), a bounded
+  // timeout for the about:blank + document.write pop-under that never navigates at all,
+  // and onDestroy. UI thread only.
+  private val popupTemps = HashSet<WebView>()
   // Per-tab zoom (textZoom percent, 100 == 1.0). Session-only (not persisted), matching
   // the desktop v1 design. Kept on discard so a reactivated tab restores its zoom;
   // dropped on close (session ends).
@@ -108,6 +122,19 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // cache it here to include in the __aegisFindState push.
   @Volatile private var currentFindQuery = ""
 
+  // Coalescing for the chrome pushes. noteBlocked → pushBlockedCount fires once per
+  // BLOCKED request (a heavy ad-heavy page = dozens per navigation), and pushNavState
+  // fires three times per navigation (onPageStarted + doUpdateVisitedHistory +
+  // onPageFinished) — each one a separate evaluateJavascript round-trip into the chrome.
+  // The chrome only ever renders the LATEST value, so we keep the newest payload per tab
+  // and flush at most once per PUSH_FLUSH_MS. pushBlockedCount is reached from a WebView
+  // network thread, hence the lock; the flush itself always runs on the UI thread.
+  private val pushLock = Any()
+  private val pendingNavJs = LinkedHashMap<Int, String>()
+  private val pendingBlockedJs = LinkedHashMap<Int, String>()
+  private var flushQueued = false
+  private val pushHandler = Handler(Looper.getMainLooper())
+
   private fun updateContentVisibility() {
     contentWebView?.visibility = if (hasPage && !overlayHidden) View.VISIBLE else View.GONE
   }
@@ -151,6 +178,92 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
   }
 
+  // --- Lifecycle ---------------------------------------------------------------------
+  //
+  // The tab WebViews are the app's memory. Each one pins this Activity's Context and a
+  // renderer process, so without this teardown every tab survived an Activity destroy
+  // (rotation, a font-scale/density change before configChanges covered it, a task
+  // eviction) — and a background tab kept running page JS, timers and polling.
+
+  override fun onPause() {
+    super.onPause()
+    for (wv in tabWebViews.values) wv.onPause()
+    for (wv in popupTemps) wv.onPause()
+    // Per-view onPause() does NOT stop JavaScript (platform doc) — it only pauses playback
+    // and animations. pauseTimers() is what stops JS timers, and although it is an
+    // INSTANCE method it is a process-GLOBAL request ("for all WebViews", platform doc), so
+    // one call on the chrome webview — which always exists — freezes page JS, timers and
+    // polling in every background tab.
+    chromeWebView?.pauseTimers()
+  }
+
+  override fun onResume() {
+    super.onResume()
+    for (wv in tabWebViews.values) wv.onResume()
+    for (wv in popupTemps) wv.onResume()
+    chromeWebView?.resumeTimers()
+  }
+
+  override fun onDestroy() {
+    // Undo the global timer pause FIRST: pauseTimers() is sticky, so an Activity destroyed
+    // while paused would otherwise leave every WebView the process creates next frozen.
+    chromeWebView?.resumeTimers()
+    // Take down the HTML5-fullscreen views: they are added to window.decorView, not to a
+    // tab, so no tab teardown would ever remove them.
+    for (client in chromeClients.values) {
+      try {
+        client.onHideCustomView()
+      } catch (t: Throwable) {
+        Log.w("AegisLifecycle", "hide custom view on destroy failed", t)
+      }
+    }
+    chromeClients.clear()
+    // Popup capture WebViews are not in tabWebViews; destroy them through the same
+    // once-only path (clearing the set first means the TTL timers become no-ops).
+    val temps = popupTemps.toList()
+    popupTemps.clear()
+    for (wv in temps) destroyWebView(wv)
+    for (wv in tabWebViews.values) {
+      destroyWebView(wv, gestureContainer)
+    }
+    tabWebViews.clear()
+    tabZoom.clear()
+    privateTabs.clear()
+    pageUrls.clear()
+    pageBlocked.clear()
+    gestureContainer = null
+    contentWebView = null
+    chromeWebView = null
+    activeTabId = -1
+    pushHandler.removeCallbacksAndMessages(null)
+    synchronized(pushLock) {
+      pendingNavJs.clear()
+      pendingBlockedJs.clear()
+    }
+    super.onDestroy()
+  }
+
+  /** Destroy one WebView: stop it, drop its clients (so no callback can re-enter a dead
+   *  view), detach it from the view system, then destroy it — the platform requires the
+   *  removal BEFORE destroy(). Best-effort per step: a WebView that is already half-dead
+   *  throws, and that must not abort the rest of the teardown. */
+  private fun destroyWebView(wv: WebView, parent: ViewGroup? = null) {
+    try {
+      wv.stopLoading()
+      // Drop our clients so no callback can re-enter a view we are tearing down.
+      // setWebViewClient is @NonNull in the platform stub (so `null` is not assignable
+      // from Kotlin) while setWebChromeClient is @Nullable — an empty client releases the
+      // same reference.
+      wv.webChromeClient = null
+      wv.webViewClient = WebViewClient()
+      // detach BEFORE destroy(): the platform requires the view out of the hierarchy first
+      parent?.removeView(wv)
+      wv.destroy()
+    } catch (t: Throwable) {
+      Log.w("AegisLifecycle", "webview teardown failed", t)
+    }
+  }
+
   // Back-press precedence: (a) a chrome sheet/menu is open -> tell the chrome to close
   // it (window.__aegisMobileBack) and consume the press; (b) else the content page can
   // go back -> navigate it back; (c) else default (exit). The chrome sets
@@ -166,10 +279,10 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
   }
 
-  /** Count one blocked ad/tracker subresource on tab [id] and push the running totals to
-   *  the chrome's shield badge via window.__aegisBlockedCount (the Android mirror of the
-   *  Rust adblock::note_blocked → adblock.blockedCount event). Runs on a WebView network
-   *  thread; the JS hop is posted to the chrome webview. */
+  /** Count one blocked ad/tracker subresource on tab [id] and record the running totals —
+   *  the Android mirror of the Rust adblock::note_blocked → adblock.blockedCount event.
+   *  Runs on a WebView network thread; the push to the chrome is coalesced (see
+   *  [queuePush]). */
   private fun noteBlocked(id: Int) {
     val session = sessionBlocked.incrementAndGet()
     val page = pageBlocked.merge(id, 1, Integer::sum) ?: 1
@@ -190,12 +303,49 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       .put("viewId", id)
       .put("page", page)
       .put("session", session)
-    val js = "window.__aegisBlockedCount && window.__aegisBlockedCount($obj)"
-    chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
+    queuePush(pendingBlockedJs, id, "window.__aegisBlockedCount && window.__aegisBlockedCount($obj)")
+  }
+
+  /** Keep the newest [js] for tab [id] in [pending] and schedule a flush. Several tabs can
+   *  be pending at once; the flush sends the newest payload for each. Reached from the UI
+   *  thread (nav events) and from WebView network threads (the blocked-count path). */
+  private fun queuePush(pending: MutableMap<Int, String>, id: Int, js: String) {
+    val schedule = synchronized(pushLock) {
+      pending[id] = js
+      if (flushQueued) false else { flushQueued = true; true }
+    }
+    if (schedule) pushHandler.postDelayed({ flushPushes() }, PUSH_FLUSH_MS)
+  }
+
+  /** Take everything queued since the last flush: the newest payload per tab, nav state
+   *  first so the address bar is never a frame behind the badge. */
+  private fun drainPendingPushes(): List<String> = synchronized(pushLock) {
+    flushQueued = false
+    val out = ArrayList<String>(pendingNavJs.size + pendingBlockedJs.size)
+    out.addAll(pendingNavJs.values)
+    out.addAll(pendingBlockedJs.values)
+    pendingNavJs.clear()
+    pendingBlockedJs.clear()
+    out
+  }
+
+  /** Deliver the coalesced chrome pushes. Runs on the UI thread (main-looper Handler),
+   *  so evaluateJavascript is safe here and no per-call post is needed. */
+  private fun flushPushes() {
+    val payloads = drainPendingPushes()
+    if (payloads.isEmpty()) return
+    val chrome = chromeWebView ?: return
+    try {
+      payloads.forEach { chrome.evaluateJavascript(it, null) }
+    } catch (t: Throwable) {
+      Log.w("AegisPush", "chrome push failed", t)
+    }
   }
 
   /** Build a per-tab WebViewClient. All fields (pageUrls, pushNavState) are threaded
-   *  through [id] so each tab's navigation events carry the right tab identity. */
+   *  through [id] so each tab's navigation events carry the right tab identity — and so
+   *  the reactive UI (malware interstitial, popup first-party context) acts on the tab
+   *  that actually fired the event, never on whichever tab happens to be active. */
   private fun makeContentClient(id: Int): WebViewClient = object : WebViewClient() {
     override fun onPageStarted(view: WebView, url: String, favicon: Bitmap?) {
       pageUrls[id] = url
@@ -205,7 +355,11 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
 
     override fun onPageFinished(view: WebView, url: String) {
       pushNavState(id, url, false, view)
-      if (id == activeTabId) gestureContainer?.stopRefresh()
+      // Per-TAB, not "the active tab": the pull-to-refresh spinner belongs to the tab the
+      // gesture ran on, and this is the only reliable end to it. Filtering on activeTabId
+      // left the latch set whenever the user switched tabs mid-load, which killed
+      // edge-swipe back/forward AND pull-to-refresh for the rest of the process.
+      gestureContainer?.stopRefresh(id)
     }
 
     override fun doUpdateVisitedHistory(view: WebView, url: String, isReload: Boolean) {
@@ -264,16 +418,17 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       // Scripted cross-origin top-frame redirect guard (anti-malvertising).
       val current = pageUrls[id] ?: ""
       val scripted = !request.hasGesture()
-      if (current.isNotEmpty() &&
-          NativeRedirectGuard.shouldBlock(current, raw, scripted, request.isForMainFrame)) {
+      if (current.isNotEmpty() && redirectBlocked(current, raw, scripted, request.isForMainFrame)) {
         Log.i("AegisRedirect", "BLOCK $raw (from $current)")
         showRedirectBlocked(raw)
         return true
       }
 
       return when (val target = secureUrl(raw)) {
+        // Act on THIS tab: a background tab hitting a malware host must show the warning in
+        // its own webview, not replace the page the user is actually looking at.
         null -> {
-          showMalwareWarning(raw)
+          showMalwareWarning(id, view, raw, MALWARE_REASON)
           true
         }
         raw -> false // unchanged: let the WebView proceed
@@ -285,9 +440,11 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
   }
 
-  /** Build a tab-agnostic WebChromeClient handling HTML5 fullscreen (video etc.) and
-   *  multi-window (target=_blank / window.open → background tab via __aegisOpenTab). */
-  private fun makeChromeClient(): WebChromeClient = object : WebChromeClient() {
+  /** Build tab [id]'s WebChromeClient: HTML5 fullscreen (video etc.) and multi-window
+   *  (target=_blank / window.open → background tab via __aegisOpenTab). It is per-tab
+   *  because the popup path needs the OPENER's identity (its first-party ad-block context
+   *  and its "no gesture" answer), not the active tab's. */
+  private fun makeChromeClient(id: Int): WebChromeClient = object : WebChromeClient() {
     private var customView: View? = null
     private var customCallback: WebChromeClient.CustomViewCallback? = null
 
@@ -295,7 +452,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       if (customView != null) onHideCustomView()
       customView = view
       customCallback = callback
-      view.setBackgroundColor(android.graphics.Color.BLACK)
+      view.setBackgroundColor(Color.BLACK)
       (window.decorView as ViewGroup).addView(
         view,
         FrameLayout.LayoutParams(
@@ -331,29 +488,55 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     ): Boolean {
       val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
       val temp = WebView(this@MainActivity)
+      // The popup renders real web content while it lives here, so it gets the same
+      // hardening as a tab (no file:// or content:// reads, no cleartext subresources).
+      hardenContentWebView(temp.settings)
+      popupTemps.add(temp)
+      // A capture WebView is a full WebView (~30-80 MB), so EVERY exit destroys it. The
+      // URL capture below only covers popups that navigate; the two common shapes it
+      // misses are (a) window.open() with no URL, which the opener then fills with
+      // document.write / document.open — the canonical ad pop-under, the exact thing this
+      // handler exists to suppress — and (b) a popup the page closes with window.close(),
+      // which reaches onCloseWindow below and used to leak every time. The TTL covers both,
+      // and onDestroy (see there) is the backstop if the process outlives the activity.
+      // Destroy is posted because tearing a WebView down from inside its own client
+      // callback is fragile; the TTL is not in a callback, but it reuses the same helper.
+      temp.postDelayed({ destroyPopupTemp(temp) }, POPUP_TEMP_TTL_MS)
       temp.webViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(v: WebView, req: WebResourceRequest): Boolean {
           val url = req.url?.toString() ?: return true
           // Drop ad pop-unders instead of opening a background tab: blank/script-scheme
           // shells (window.open('about:blank') the opener scripts → a dead empty tab)
           // and ad/tracker destinations (same engine + synced toggle/allowlist as
-          // shouldInterceptRequest). The opener is the active tab; legit target=_blank
-          // links to a real page still open a tab.
+          // shouldInterceptRequest). The opener is THIS tab — a background tab's popup is
+          // judged against the page that opened it, not the page the user is looking at.
           val lower = url.trim().lowercase()
-          val opener = pageUrls[activeTabId] ?: ""
-          if (lower.isEmpty() || lower.startsWith("about:") || lower.startsWith("javascript:") ||
-            NativeAdblock.shouldBlock(url, opener, "document")) {
-            temp.post { temp.destroy() }
+          val opener = pageUrls[id] ?: ""
+          val drop = try {
+            lower.isEmpty() || lower.startsWith("about:") || lower.startsWith("javascript:") ||
+              NativeAdblock.shouldBlock(url, opener, "document")
+          } catch (t: Throwable) {
+            // Fail open (let the link open) + log, like the shouldInterceptRequest guard:
+            // a JNI error here would otherwise propagate out of a UI-thread callback.
+            Log.w("AegisAdblock", "popup check failed for $url", t)
+            false
+          }
+          if (drop) {
+            temp.post { destroyPopupTemp(temp) }
             return true
           }
           chromeWebView?.evaluateJavascript(
             "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(url)})",
             null,
           )
-          // Defer destroy: tearing down a WebView from inside its own client callback
-          // is fragile; post it to run after the callback returns.
-          temp.post { temp.destroy() }
+          temp.post { destroyPopupTemp(temp) }
           return true
+        }
+      }
+      temp.webChromeClient = object : WebChromeClient() {
+        // window.close() → destroy, or a popup-closing ad loop leaks a WebView per call.
+        override fun onCloseWindow(closed: WebView) {
+          closed.post { destroyPopupTemp(closed) }
         }
       }
       transport.webView = temp
@@ -362,13 +545,59 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
   }
 
+  /** Destroy a popup capture WebView exactly once. Membership in [popupTemps] IS the
+   *  liveness check, so the URL capture, the TTL timer and onDestroy can all race here
+   *  and only the first one through destroys it. */
+  private fun destroyPopupTemp(wv: WebView) {
+    if (!popupTemps.remove(wv)) return // already destroyed
+    try {
+      wv.stopLoading()
+      wv.destroy()
+    } catch (t: Throwable) {
+      Log.w("AegisPopup", "popup teardown failed", t)
+    }
+  }
+
   /** Create a new native WebView for [id], configure it, add it hidden to the container,
    *  and begin loading [url]. The caller registers it in tabWebViews. */
   // The document-start script (pop-under guard + injected ad-block tier) from the Rust
-  // adblock_inject module. Computed ONCE — the ~1 MB string crossing JNI per tab would be
-  // wasteful. Empty if the JNI getter fails, which disables injection rather than crashing.
-  private val documentStartScript: String by lazy {
-    try { NativeInject.documentStartScript() } catch (_: Throwable) { "" }
+  // adblock_inject module. The SAME string for every tab and up to ~1MB, so it is built
+  // ONCE and cached (re-reading it per tab would copy ~1MB over JNI per tab). A JNI failure
+  // returns "" — which disables injection rather than crashing — and is NOT cached, so a
+  // later tab retries instead of losing injection for the whole process. Warmed on a worker
+  // thread at boot (see onWebViewCreate) so the build never lands on the UI thread.
+  @Volatile private var documentStartScriptCache: String? = null
+
+  private fun documentStartScript(): String {
+    documentStartScriptCache?.let { return it }
+    val script = try {
+      NativeInject.documentStartScript()
+    } catch (t: Throwable) {
+      Log.w("AegisInject", "document-start script unavailable; injection disabled", t)
+      ""
+    }
+    if (script.isNotEmpty()) documentStartScriptCache = script
+    return script
+  }
+
+  /** Hardening for every CONTENT WebView (a tab, and the popup capture alike): a browsed
+   *  page gets no filesystem / content-provider reads and no cleartext subresources.
+   *  These are independent switches and the platform only defaults them to false from
+   *  API 30 — minSdk is 24, so on Android 7-9 a content WebView could otherwise read
+   *  file:// and content:// URIs, and any page could pull a cleartext subresource into an
+   *  https document. Deliberately NOT applied to the chrome webview: it serves the local
+   *  Tauri UI and keeps the settings Rust configured for it. */
+  // setAllowFileAccessFromFileURLs is deprecated (a no-op from API 30, where file access is
+  // off by default) but is still the ONLY control over file:// XHR on Android 7-9, which
+  // minSdk 24 still covers — so it is called deliberately.
+  @Suppress("DEPRECATION")
+  private fun hardenContentWebView(s: WebSettings) {
+    s.setAllowFileAccess(false)
+    s.setAllowContentAccess(false)
+    s.setAllowFileAccessFromFileURLs(false)
+    s.setMixedContentMode(WebSettings.MIXED_CONTENT_NEVER_ALLOW)
+    // Safe Browsing exists from API 26 (minSdk is 24).
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) s.safeBrowsingEnabled = true
   }
 
   private fun createTabWebView(id: Int, url: String, isPrivate: Boolean = false): WebView {
@@ -377,6 +606,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     wv.settings.domStorageEnabled = !isPrivate
     wv.settings.databaseEnabled = !isPrivate
     wv.settings.saveFormData = !isPrivate
+    hardenContentWebView(wv.settings)
     // Anti-fingerprint: present a vanilla mobile Chrome UA (no "; wv" WebView marker).
     wv.settings.userAgentString = CHROME_UA
     // Replay any session zoom stored for this tab (e.g. after a discard→reactivate) so
@@ -391,7 +621,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // Multi-window support for target=_blank / window.open (Task 9).
     wv.settings.setSupportMultipleWindows(true)
     wv.settings.javaScriptCanOpenWindowsAutomatically = true
-    wv.webChromeClient = makeChromeClient()
+    wv.webChromeClient = makeChromeClient(id).also { chromeClients[id] = it }
     wv.webViewClient = makeContentClient(id)
     // Find-in-page: receive match counts from findAllAsync and push them to the chrome
     // via __aegisFindState. Only push when this tab is the active one (mirroring
@@ -407,11 +637,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // initialization_script_for_all_frames. Guarded on the runtime feature (older System
     // WebView lacks DOCUMENT_START_SCRIPT → would throw); a malformed origin rule can also
     // throw IllegalArgumentException, so keep the try/catch.
-    if (documentStartScript.isNotEmpty() &&
+    val inject = documentStartScript()
+    if (inject.isNotEmpty() &&
       WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
     ) {
       try {
-        WebViewCompat.addDocumentStartJavaScript(wv, documentStartScript, setOf("*"))
+        WebViewCompat.addDocumentStartJavaScript(wv, inject, setOf("*"))
       } catch (t: Throwable) {
         Log.w("AegisInject", "document-start inject failed", t)
       }
@@ -420,7 +651,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // tab (NOT cached) so a policy change applies to new tabs; "" when no filtering
     // applies ("default" policy).
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-      val webrtc = try { NativeWebrtc.shimScript() } catch (_: Throwable) { "" }
+      val webrtc = try {
+        NativeWebrtc.shimScript()
+      } catch (t: Throwable) {
+        Log.w("AegisWebrtc", "webrtc shim unavailable", t)
+        ""
+      }
       if (webrtc.isNotEmpty()) {
         try {
           WebViewCompat.addDocumentStartJavaScript(wv, webrtc, setOf("*"))
@@ -434,8 +670,18 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // applies (level "off" or clamped bogus value). The content host is passed so the Rust
     // JNI getter can check the per-site fp-allowlist (mirrored from FarbleState).
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-      val contentHost = try { Uri.parse(url).host ?: "" } catch (_: Throwable) { "" }
-      val farble = try { NativeFarble.farbleScript(contentHost) } catch (_: Throwable) { "" }
+      val contentHost = try {
+        Uri.parse(url).host ?: ""
+      } catch (t: Throwable) {
+        Log.w("AegisFarble", "could not read the tab host", t)
+        ""
+      }
+      val farble = try {
+        NativeFarble.farbleScript(contentHost)
+      } catch (t: Throwable) {
+        Log.w("AegisFarble", "farble shim unavailable", t)
+        ""
+      }
       if (farble.isNotEmpty()) {
         try {
           WebViewCompat.addDocumentStartJavaScript(wv, farble, setOf("*"))
@@ -447,7 +693,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // Vault autofill badge + form detection, document-start. Handles password-field
     // detection, autofill-badge rendering, badge clicks, and form-submission listening.
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-      val vaultScript = try { NativeFormDetect.formDetectionScript() } catch (_: Throwable) { "" }
+      val vaultScript = try {
+        NativeFormDetect.formDetectionScript()
+      } catch (t: Throwable) {
+        Log.w("AegisVaultInject", "vault script unavailable", t)
+        ""
+      }
       if (vaultScript.isNotEmpty()) {
         try {
           WebViewCompat.addDocumentStartJavaScript(wv, vaultScript, setOf("*"))
@@ -462,8 +713,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     )
     wv.visibility = View.GONE
     gestureContainer?.addView(wv, lp)
-    pageUrls[id] = url
-    wv.loadUrl(url)
+    // Re-apply the navigation policy at the single place that actually loads: no caller may
+    // hand a content WebView a file:// or content:// URL. loadableUrl is idempotent, so
+    // activateTab's earlier application of the same policy costs nothing.
+    val start = loadableUrl(url)
+    pageUrls[id] = start
+    wv.loadUrl(start)
     return wv
   }
 
@@ -522,20 +777,59 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       // from the very first navigation — before the React chrome can call setProxy.
       // ProxyController.setProxyOverride is PROCESS-GLOBAL: it routes ALL WebViews in
       // this process (content AND chrome) through the proxy.  The chrome's own origin
-      // is bypassed via bypassSimpleHostnames() + addDirect() in Bridge.setProxy, so
-      // the React UI itself is NOT proxied.  If the feature is unsupported (old WebView)
-      // this is a graceful no-op.
+      // is bypassed via bypassSimpleHostnames() + addDirect() in the shared
+      // proxyBuilder(), so the React UI itself is NOT proxied.  If the feature is
+      // unsupported (old WebView) this is a graceful no-op.
       applyBootProxy()
-      // Warm the adblock engine (parses EasyList ~once) off the UI thread so the
-      // first page's first request isn't stalled building it.
+      // Warm the native side off the UI thread, for the same reason: the adblock engine
+      // parses EasyList once, and the document-start script getter builds a
+      // multi-hundred-KB-to-~1MB JS string. Both are cached afterwards, so this cost is
+      // paid once per process instead of stalling the first tab's activation. A race with
+      // the first real read just builds the string twice.
       Thread {
         try {
           NativeAdblock.shouldBlock("https://aegis.invalid/", "https://aegis.invalid/", "other")
-        } catch (_: Throwable) {
+        } catch (t: Throwable) {
+          Log.w("AegisAdblock", "engine warm-up failed", t)
+        }
+        try {
+          documentStartScript()
+        } catch (t: Throwable) {
+          Log.w("AegisInject", "script warm-up failed", t)
         }
       }.start()
     }
   }
+
+  /** The ONE ProxyConfig builder, shared by the boot path and the bridge. The bypass list
+   *  used to be duplicated verbatim in both and HAD DIVERGED (boot read bypassHosts as a
+   *  JSON array, the bridge took a comma-split string), so the two could never be kept in
+   *  lockstep. Throws IllegalArgumentException from addProxyRule/addBypassRule on a
+   *  malformed entry — callers must build inside their own try. */
+  private fun proxyBuilder(scheme: String, host: String, port: Int, bypassHosts: List<String>): ProxyConfig {
+    val builder = ProxyConfig.Builder().addProxyRule("$scheme://$host:$port")
+    // Bypass the chrome's own origin (localhost / tauri.localhost) + simple hostnames
+    // so the React UI is not proxied.  Fall through to direct for non-matching rules.
+    builder.bypassSimpleHostnames()
+    // Explicitly bypass the chrome's own origin so the React UI is never proxied.
+    // bypassSimpleHostnames() only covers dotless hostnames; tauri.localhost is dotted
+    // and would otherwise be routed through the proxy, breaking the chrome UI.
+    builder.addBypassRule("tauri.localhost")
+    builder.addBypassRule("127.0.0.1")
+    builder.addBypassRule("localhost")
+    builder.addDirect()
+    for (h in bypassHosts) {
+      val t = h.trim()
+      if (t.isNotEmpty()) builder.addBypassRule(t)
+    }
+    return builder.build()
+  }
+
+  /** Proxy sanity check shared by both apply paths. A bad scheme/host/port from the chrome
+   *  (a typo in Settings) must be a logged no-op, not an IllegalArgumentException out of
+   *  ProxyConfig.Builder on the UI thread. */
+  private fun isValidProxy(scheme: String, host: String, port: Int): Boolean =
+    (scheme == "http" || scheme == "socks5") && host.isNotEmpty() && port in 1..65535
 
   /**
    * Apply the persisted proxy config at boot (called once from onWebViewCreate.post).
@@ -560,35 +854,25 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       val mode = obj.optString("mode", "off")
       if (mode != "proxy") {
         // OFF or unrecognised — clear any previously applied override (idempotent).
-        ProxyController.getInstance().clearProxyOverride({ it.run() }, { })
+        ProxyController.getInstance().clearProxyOverride({ it.run() }, {})
         return
       }
       val scheme = obj.optString("scheme", "http")
       val host = obj.optString("host", "")
       val port = obj.optInt("port", 0)
-      if (host.isEmpty() || port < 1 || port > 65535) return // invalid config — direct
-      val rule = "$scheme://$host:$port"
-      val builder = ProxyConfig.Builder().addProxyRule(rule)
-      // Bypass the chrome's own origin (localhost / tauri.localhost) + simple hostnames
-      // so the React UI is not proxied.  Fall through to direct for non-matching rules.
-      builder.bypassSimpleHostnames()
-      // Explicitly bypass the chrome's own origin so the React UI is never proxied.
-      // bypassSimpleHostnames() only covers dotless hostnames; tauri.localhost is dotted
-      // and would otherwise be routed through the proxy, breaking the chrome UI.
-      builder.addBypassRule("tauri.localhost")
-      builder.addBypassRule("127.0.0.1")
-      builder.addBypassRule("localhost")
-      builder.addDirect()
+      if (!isValidProxy(scheme, host, port)) return // invalid config — direct
+      val bypass = mutableListOf<String>()
       val bypassArr = obj.optJSONArray("bypassHosts")
       if (bypassArr != null) {
-        for (i in 0 until bypassArr.length()) {
-          val h = bypassArr.optString(i, "").trim()
-          if (h.isNotEmpty()) builder.addBypassRule(h)
-        }
+        for (i in 0 until bypassArr.length()) bypass.add(bypassArr.optString(i, ""))
       }
-      ProxyController.getInstance().setProxyOverride(builder.build(), { it.run() }, {
-        Log.i("AegisProxy", "boot proxy applied: $rule")
-      })
+      // The builder throws on a malformed rule, so it stays INSIDE this try (Bridge.setProxy
+      // got this wrong once and crashed the app on a bad rule from the chrome).
+      ProxyController.getInstance().setProxyOverride(
+        proxyBuilder(scheme, host, port, bypass), { it.run() }, {
+          Log.i("AegisProxy", "boot proxy applied: $scheme://$host:$port")
+        },
+      )
     } catch (t: Throwable) {
       Log.w("AegisProxy", "boot proxy apply failed", t)
     }
@@ -603,13 +887,45 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     val path = url.substringBefore('?').substringBefore('#')
     return when {
       accept.contains("text/css") || path.endsWith(".css") -> "stylesheet"
-      accept.startsWith("image/") ||
-        Regex("\\.(png|jpe?g|gif|webp|svg|ico|bmp)$").containsMatchIn(path) -> "image"
+      accept.startsWith("image/") || IMAGE_EXT.containsMatchIn(path) -> "image"
       accept.contains("javascript") || path.endsWith(".js") -> "script"
       accept.contains("text/html") -> "sub_frame"
-      Regex("\\.(woff2?|ttf|otf|eot)$").containsMatchIn(path) -> "font"
+      FONT_EXT.containsMatchIn(path) -> "font"
       else -> "other"
     }
+  }
+
+  /** JNI-safe malware-host check. shouldInterceptRequest already fails open on a native
+   *  error; this is the same treatment for the UI-thread path, where an exception would
+   *  propagate out of a WebView callback (or a Bridge lambda) and take the app down. */
+  private fun isMalwareHost(host: String): Boolean = try {
+    NativeSafety.isMalwareHost(host)
+  } catch (t: Throwable) {
+    Log.w("AegisSafety", "isMalwareHost($host) failed; allowing", t)
+    false
+  }
+
+  /** JNI-safe scripted-redirect check — fails open (allow the navigation) and logs. */
+  private fun redirectBlocked(current: String, target: String, scripted: Boolean, mainFrame: Boolean): Boolean = try {
+    NativeRedirectGuard.shouldBlock(current, target, scripted, mainFrame)
+  } catch (t: Throwable) {
+    Log.w("AegisRedirect", "shouldBlock($target) failed; allowing", t)
+    false
+  }
+
+  /** The scheme allowlist for anything a CONTENT WebView is asked to load: http/https,
+   *  plus about: (the chrome's empty-tab/home state — `about:blank` is the only one the app
+   *  drives). file:/content:/data:/blob:/javascript:/intent: have no business in a browsed
+   *  page: the first two are filesystem / content-provider READS, and javascript: is a code
+   *  injection vector. Every load site funnels through here (see [loadableUrl]) so there is
+   *  exactly one allowlist. */
+  private fun isLoadableUrl(raw: String): Boolean {
+    val scheme = try {
+      Uri.parse(raw).scheme?.lowercase()
+    } catch (_: Throwable) {
+      null
+    } ?: return false
+    return scheme == "http" || scheme == "https" || scheme == "about"
   }
 
   /** Security policy for a main-frame navigation target: returns the URL to actually
@@ -622,7 +938,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       return raw
     }
     val host = uri.host ?: return raw
-    if (NativeSafety.isMalwareHost(host)) return null
+    if (isMalwareHost(host)) return null
     val localhost = host == "localhost" || host == "127.0.0.1" || host == "::1"
     if (uri.scheme == "http" && !localhost) {
       return "https://" + raw.substring("http://".length)
@@ -630,9 +946,30 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     return raw
   }
 
-  /** Replace the content with a malware warning (the desktop shows a richer
-   *  interstitial; a session "proceed anyway" on mobile is a follow-up). */
-  private fun showMalwareWarning(url: String) {
+  /** The URL a content WebView should actually load for [raw]: the [secureUrl] policy
+   *  (malware block + HTTPS-Only upgrade) with the scheme allowlist applied. A refused
+   *  scheme degrades to about:blank rather than handing the WebView the raw string —
+   *  secureUrl alone used to pass any host-less URL (file://, content://) straight
+   *  through, because it returns `raw` unchanged when there is no host. */
+  private fun loadableUrl(raw: String): String =
+    secureUrl(raw)?.takeIf { isLoadableUrl(it) } ?: ABOUT_BLANK
+
+  /** The user-facing reason [raw] may not be loaded, or null when it is fine. Separate from
+   *  [loadableUrl] so the block page can SAY why — a malware host and a file:// URL are
+   *  both "blocked" but they are not the same message. */
+  private fun blockReason(raw: String): String? = when {
+    !isLoadableUrl(raw) -> SCHEME_REASON
+    secureUrl(raw) == null -> MALWARE_REASON
+    else -> null
+  }
+
+  /** Replace tab [id]'s content with a block page (the desktop shows a richer
+   *  interstitial; a session "proceed anyway" on mobile is a follow-up). Acts on [view] —
+   *  the tab that actually navigated — and pushes nav state for [id]: a BACKGROUND tab
+   *  hitting a malware host must not replace the page the user is looking at.
+   *  [reason] is the user-facing sentence, so the copy matches the actual reason the load
+   *  was refused (malware host vs. a scheme outside the allowlist). */
+  private fun showMalwareWarning(id: Int, view: WebView, url: String, reason: String) {
     val host = (try {
       Uri.parse(url).host
     } catch (_: Throwable) {
@@ -644,13 +981,23 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       <style>body{background:#1a0b0b;color:#fecaca;font-family:sans-serif;padding:24px;line-height:1.5}
       h1{color:#fca5a5}code{color:#fcd34d;word-break:break-all}</style></head>
       <body><h1>&#9888; Dangerous site blocked</h1>
-      <p>Aegis blocked <code>$safeHost</code> because it's on a known-malware list.</p>
+      <p>Aegis blocked <code>$safeHost</code> — $reason</p>
       <p>For your safety, the page was not loaded.</p></body></html>
     """.trimIndent()
-    hasPage = true
-    updateContentVisibility()
-    contentWebView?.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
-    pushNavState(activeTabId, url, false)
+    // Stop the page before replacing its document — a background tab would otherwise keep
+    // fetching while the warning is displayed.
+    try {
+      view.stopLoading()
+    } catch (t: Throwable) {
+      Log.w("AegisSafety", "stopLoading before interstitial failed", t)
+    }
+    if (id == activeTabId) {
+      hasPage = true
+      updateContentVisibility()
+    }
+    view.setBackgroundColor(Color.BLACK)
+    view.loadDataWithBaseURL(null, html, "text/html", "utf-8", null)
+    pushNavState(id, url, false, view)
   }
 
   private fun blockedResponse(): WebResourceResponse =
@@ -671,8 +1018,10 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       .put("canGoForward", c?.canGoForward() ?: false)
       .put("isLoading", loading)
       .put("crashed", false)
-    val js = "window.__aegisNavState && window.__aegisNavState($obj)"
-    chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
+    queuePush(pendingNavJs, id, "window.__aegisNavState && window.__aegisNavState($obj)")
+    // Back/forward availability is what decides which system-gesture edge strips we may
+    // claim, so re-evaluate whenever the active tab's nav state moves.
+    if (id == activeTabId) gestureContainer?.updateGestureExclusion()
   }
 
   /** Push find-in-page result state to the chrome's React state (FindState shape, viewId
@@ -714,19 +1063,22 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
    * (tab is gone permanently so the stored zoom is useless).
    */
   private fun teardownTab(id: Int, keepZoom: Boolean) {
+    // An HTML5-fullscreen view lives on window.decorView, not on the tab, so closing the tab
+    // has to take it down explicitly or it survives with no owner.
+    chromeClients.remove(id)?.onHideCustomView()
     tabWebViews.remove(id)?.let { wv ->
       wv.visibility = View.GONE
-      gestureContainer?.removeView(wv)
       if (privateTabs.contains(id)) {
-        // Clear this tab's HTTP cache/navigation/form state. DOM storage is disabled for
-        // private WebViews; deleteAllData is global, so do not use it here.
+        // Clear this tab's HTTP cache/form state. DOM storage is disabled for private
+        // WebViews; deleteAllData is global, so do not use it here. No about:blank load
+        // first: it is asynchronous and the destroy() below cancels it, so it only queued a
+        // request we were going to throw away. No clearHistory() either — the WebView is
+        // about to be destroyed, so its back/forward list has no reader left.
         wv.stopLoading()
-        wv.loadUrl("about:blank")
         wv.clearCache(true)
-        wv.clearHistory()
         wv.clearFormData()
       }
-      wv.destroy()
+      destroyWebView(wv, gestureContainer)
     }
     pageUrls.remove(id)
     pageBlocked.remove(id)
@@ -749,19 +1101,40 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     @JavascriptInterface
     @JvmOverloads
     fun activateTab(id: Int, url: String, isPrivate: Boolean = false) = runOnUiThread {
+      // A tab switch cancels any in-flight pull-to-refresh: the spinner belongs to the tab
+      // we are leaving, and its onPageFinished may never arrive (an aborted load, a discarded
+      // tab) — a stuck latch kills every gesture in the container. Keyed per tab in
+      // GestureContainer, so this clears the shared slot unconditionally.
+      gestureContainer?.cancelRefresh()
+      // Navigation policy applied BEFORE anything loads: HTTPS-Only upgrade / malware block
+      // plus the scheme allowlist (loadableUrl degrades a refused scheme to about:blank).
+      val target = loadableUrl(url)
+      // A tab RESTORE must not silently land on about:blank when the policy is what refused
+      // it: re-activating a tab that pointed at a known-malware host (or a file:// URL)
+      // should say so, exactly like a live navigation does.
+      val reason = if (url == ABOUT_BLANK || url.isEmpty()) null else blockReason(url)
       if (isPrivate) privateTabs.add(id)
       CookieManager.getInstance().setAcceptCookie(!privateTabs.contains(id))
-      val wv = tabWebViews[id] ?: createTabWebView(id, url, isPrivate).also { tabWebViews[id] = it }
+      val wv = tabWebViews[id] ?: createTabWebView(id, target, isPrivate).also { tabWebViews[id] = it }
       activeTabId = id
       contentWebView = wv
       for ((tid, w) in tabWebViews) if (tid != id) w.visibility = View.GONE
-      hasPage = (pageUrls[id] ?: url) != "about:blank"
+      hasPage = (pageUrls[id] ?: target) != ABOUT_BLANK
       applyContentMargins()
       updateContentVisibility()
       // Re-push this tab's nav state so the chrome's address bar + back/forward update to
       // it. Switching to an already-live tab fires no page-load event, so without this the
-      // chrome's useNav would reset to a blank state for the newly-activated tab.
-      pushNavState(id, pageUrls[id] ?: url, false, wv)
+      // chrome's useNav would reset to a blank state for the newly-activated tab. Skipped
+      // when the block page is going up: it pushes the refused URL itself, and the coalesced
+      // push keeps the LAST write, so this would otherwise blank the address bar.
+      if (reason != null) {
+        showMalwareWarning(id, wv, url, reason)
+      } else {
+        pushNavState(id, pageUrls[id] ?: target, false, wv)
+      }
+      // The new active tab has its own back/forward availability, so the gesture container
+      // has to re-decide which system-gesture edges it may claim.
+      gestureContainer?.updateGestureExclusion()
     }
 
     /** Permanently close a tab: destroy its WebView and remove it from the map. */
@@ -783,22 +1156,28 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     @JavascriptInterface
     fun navigate(url: String) = runOnUiThread {
       val c = contentWebView ?: return@runOnUiThread
-      if (url.isEmpty() || url == "about:blank") {
+      if (url.isEmpty() || url == ABOUT_BLANK) {
         // Home: hide the content webview so the chrome's home screen shows, and
         // clear the address bar (blank state).
         hasPage = false
         updateContentVisibility()
-        if (activeTabId >= 0) pageUrls[activeTabId] = "about:blank"
-        pushNavState(activeTabId, "about:blank", false)
+        if (activeTabId >= 0) pageUrls[activeTabId] = ABOUT_BLANK
+        pushNavState(activeTabId, ABOUT_BLANK, false)
       } else {
-        // Apply the security policy (malware block / HTTPS-Only upgrade) before load.
-        when (val target = secureUrl(url)) {
-          null -> showMalwareWarning(url)
-          else -> {
+        // Apply the security policy (malware block / HTTPS-Only upgrade) and the scheme
+        // allowlist before load. Both refusals land on the SAME block page the tab already
+        // knows how to render, so a mistyped file:// path is not silently a blank tab.
+        when (val reason = blockReason(url)) {
+          null -> {
+            val target = secureUrl(url) ?: ABOUT_BLANK
             hasPage = true
             updateContentVisibility()
             if (activeTabId >= 0) pageUrls[activeTabId] = target
             c.loadUrl(target)
+          }
+          else -> {
+            Log.i("AegisNav", "refused $url: $reason")
+            showMalwareWarning(activeTabId, c, url, reason)
           }
         }
       }
@@ -870,7 +1249,8 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
           android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))
             .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
         )
-      } catch (_: Throwable) {
+      } catch (t: Throwable) {
+        Log.w("AegisNav", "openExternal failed for $url", t)
       }
     }
 
@@ -932,23 +1312,17 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     @JavascriptInterface
     fun setProxy(scheme: String, host: String, port: Int, bypass: String) = runOnUiThread {
       if (!WebViewFeature.isFeatureSupported(WebViewFeature.PROXY_OVERRIDE)) return@runOnUiThread
-      val rule = "$scheme://$host:$port"
-      val builder = ProxyConfig.Builder().addProxyRule(rule)
-      // Bypass the chrome's own origin (localhost / tauri.localhost) + simple hostnames
-      // so the React UI is not routed through the proxy.
-      builder.bypassSimpleHostnames()
-      // Explicitly bypass the chrome's own origin so the React UI is never proxied.
-      // bypassSimpleHostnames() only covers dotless hostnames; tauri.localhost is dotted
-      // and would otherwise be routed through the proxy, breaking the chrome UI.
-      builder.addBypassRule("tauri.localhost")
-      builder.addBypassRule("127.0.0.1")
-      builder.addBypassRule("localhost")
-      builder.addDirect()
-      bypass.split(",").map { it.trim() }.filter { it.isNotEmpty() }.forEach {
-        builder.addBypassRule(it)
+      // Validate BEFORE building: ProxyConfig.Builder.addProxyRule throws
+      // IllegalArgumentException on a malformed rule, so a bad scheme/host/port typed in
+      // Settings must be a logged no-op, not an app crash on the UI thread.
+      if (!isValidProxy(scheme, host, port)) {
+        Log.w("AegisProxy", "ignoring invalid proxy config $scheme://$host:$port")
+        return@runOnUiThread
       }
+      val rule = "$scheme://$host:$port"
       try {
-        ProxyController.getInstance().setProxyOverride(builder.build(), { it.run() }, {
+        val builder = proxyBuilder(scheme, host, port, bypass.split(","))
+        ProxyController.getInstance().setProxyOverride(builder, { it.run() }, {
           Log.i("AegisProxy", "proxy set: $rule")
         })
       } catch (t: Throwable) {
@@ -978,6 +1352,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   override fun gestureCanGoBack(): Boolean = contentWebView?.canGoBack() == true
   override fun gestureCanGoForward(): Boolean = contentWebView?.canGoForward() == true
   override fun gestureAtTop(): Boolean = (contentWebView?.scrollY ?: 1) == 0
+  override fun gestureActiveTabId(): Int = activeTabId
   override fun gestureBack() { contentWebView?.let { if (it.canGoBack()) it.goBack() } }
   override fun gestureForward() { contentWebView?.let { if (it.canGoForward()) it.goForward() } }
   override fun gestureReload() { contentWebView?.reload() }
@@ -987,5 +1362,30 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // build's Chrome UA in nav.rs. Bump the Chrome version alongside it.
     private const val CHROME_UA =
       "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Mobile Safari/537.36"
+
+    // The chrome's empty-tab / home URL. Used as the neutral state when a navigation is
+    // refused, so every "no page" comparison reads the same value.
+    private const val ABOUT_BLANK = "about:blank"
+
+    // Upper bound on how long a coalesced chrome push may sit in the queue. Long enough to
+    // swallow a burst of blocked subresources / nav events, short enough to stay invisible
+    // (well under a frame budget the user could perceive as lag).
+    private const val PUSH_FLUSH_MS = 100L
+
+    // A popup capture WebView that never navigates (window.open() + document.write, or a
+    // popup the page never closes) is destroyed after this long. Generous enough for a real
+    // popup's first navigation to be captured, short enough to bound the memory an
+    // ad-driven window.open() loop can hold.
+    private const val POPUP_TEMP_TTL_MS = 10_000L
+
+    // Block-page copy, kept with the other constants so showMalwareWarning's callers all
+    // phrase a refusal the same way (and so a new refusal reason has one obvious home).
+    private const val MALWARE_REASON = "it's on a known-malware list."
+    private const val SCHEME_REASON = "only web addresses (http/https) open in a tab."
+
+    // requestType() runs once per HTTP subresource (shouldInterceptRequest), so these two
+    // patterns are compiled once here instead of per request.
+    private val IMAGE_EXT = Regex("\\.(png|jpe?g|gif|webp|svg|ico|bmp)$")
+    private val FONT_EXT = Regex("\\.(woff2?|ttf|otf|eot)$")
   }
 }

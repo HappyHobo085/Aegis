@@ -1,5 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!-- Kept deliberately NARROW. The stock template declared <external-path path="."/> and
+     <cache-path path="."/>, i.e. the WHOLE external-storage tree plus the whole cache dir
+     were addressable through this provider. Nothing calls FileProvider.getUriForFile today,
+     so no grant exists — but the provider is grant-capable, so the first share-sheet /
+     "open in…" handoff would hand out arbitrary files under external storage. Scope it to
+     the app's own external dir and to one cache subdirectory instead. The provider itself
+     stays exported="false" (see AndroidManifest.xml); a URI is only ever usable by a
+     component we explicitly grant it to. -->
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-  <external-path name="my_images" path="." />
-  <cache-path name="my_cache_images" path="." />
+  <!-- getExternalFilesDir(): the app-scoped external dir, auto-cleaned on uninstall. -->
+  <external-files-path name="external_files" path="." />
+  <!-- The app's own cache, narrowed to the images/ subtree any image handoff would use. -->
+  <cache-path name="cache_images" path="images/" />
 </paths>
