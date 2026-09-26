@@ -7,7 +7,10 @@ dist/
 # Local data backups produced by the in-app Export (default filename); personal data
 aegis-export.json
 
-# Autopilot run output (report.json/html, screenshots, app.log) — written to
-# <repo-root>/target/autopilot/<ts>/ by scripts/autopilot/run-autopilot.sh.
-# (src-tauri/target — the cargo build dir — is ignored separately.)
+# Cargo build dirs. `tauri build` and the cross-compile helper can put a target dir
+# at the repo root; src-tauri/target is ignored by src-tauri/.gitignore. (There is no
+# autopilot run-output dir to ignore here — the live/app-level autopilot launcher
+# scripts/autopilot/run-autopilot.sh that an earlier revision of this comment
+# referenced does not exist; the harness that does run is the vitest-level one in
+# src/autopilot/.)
 /target/

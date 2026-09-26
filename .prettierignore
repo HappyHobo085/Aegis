@@ -4,11 +4,11 @@ node_modules
 target
 src-tauri/target
 src-tauri/gen
-scripts/autopilot/fixture
 sync-server
 package-lock.json
 *.AppImage
 # Rust-embedded JS assets (include_str!'d + string-matched by cargo tests) — must not be reformatted
 src-tauri/src
-# SDD scratch (git-ignored working files) — keep out of the local format:check
+# Agent scratch dirs (git-ignored working files) — keep out of the local format:check
 .superpowers
+.opencode
