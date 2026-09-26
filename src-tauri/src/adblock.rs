@@ -145,18 +145,18 @@ pub fn load_allowlist_hosts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
 }
 
 /// Add a host (revive a tombstone in place, or stamp a new record).
-fn add_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
-    jsonstore::add_host(app, "allowlist", host);
+fn add_host<R: Runtime>(app: &AppHandle<R>, host: &str) -> Result<(), String> {
+    jsonstore::add_host(app, "allowlist", host)
 }
 
 /// Tombstone a host.
-fn remove_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
-    jsonstore::remove_host(app, "allowlist", host);
+fn remove_host<R: Runtime>(app: &AppHandle<R>, host: &str) -> Result<(), String> {
+    jsonstore::remove_host(app, "allowlist", host)
 }
 
 /// Tombstone every live host (clear).
-fn clear_hosts<R: Runtime>(app: &AppHandle<R>) {
-    jsonstore::clear_hosts(app, "allowlist");
+fn clear_hosts<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    jsonstore::clear_hosts(app, "allowlist")
 }
 
 /// Refresh the in-memory Inner.allowlist cache from the persisted store.
@@ -238,12 +238,18 @@ pub fn dispatch<R: Runtime>(
                 .unwrap_or("")
                 .to_string();
             if !host.is_empty() {
-                if channel == "adblock.removeAllowlist" {
-                    remove_host(app, &host);
-                } else if load_allowlist_hosts(app).iter().any(|h| h == &host) {
-                    remove_host(app, &host); // toggle off
+                // A failed write is reported, not swallowed — otherwise the caller gets `Ok`,
+                // the UI re-renders as if the toggle took, and nothing actually changed.
+                // `removeAllowlist` and the "currently listed" toggle both mean the same thing:
+                // drop it. Only the not-present case adds.
+                let listed = load_allowlist_hosts(app).iter().any(|h| h == &host);
+                let saved = if channel == "adblock.removeAllowlist" || listed {
+                    remove_host(app, &host)
                 } else {
-                    add_host(app, &host); // toggle on
+                    add_host(app, &host) // toggle on
+                };
+                if let Err(e) = saved {
+                    return Some(Err(e));
                 }
             }
             reseed_inner(app); // refresh the in-memory cache from the persisted store
@@ -253,7 +259,10 @@ pub fn dispatch<R: Runtime>(
         }
 
         "adblock.clearAllowlist" => {
-            clear_hosts(app);
+            // Same contract: a silently-failed "clear all" would resurrect every host.
+            if let Err(e) = clear_hosts(app) {
+                return Some(Err(e));
+            }
             reseed_inner(app);
             sync_engine(app);
             crate::sync::nudge(app);

@@ -22,7 +22,13 @@ use tauri::{AppHandle, Manager};
 /// statics (e.g. `sync_identity::NODE_ID`, the adblock counters), so they must not
 /// run concurrently. A poisoned lock from a panicking test is recovered (we only
 /// guard the env, not invariants), so one failing test doesn't cascade-fail the rest.
-fn lock() -> std::sync::MutexGuard<'static, ()> {
+///
+/// `pub` because process-global state is not confined to AppHandle tests: `vault`'s
+/// unlock-rate-limiter statics (`FAILED_ATTEMPTS` / `LAST_FAILURE_MS`) and
+/// `adblock_engine`'s policy statics are mutated by tests that need this lock too. While
+/// this was private those tests raced the AppHandle ones under `cargo test`'s parallel
+/// execution, because they could not reach it.
+pub fn lock() -> std::sync::MutexGuard<'static, ()> {
     static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
     LOCK.get_or_init(|| Mutex::new(()))
         .lock()

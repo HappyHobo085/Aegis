@@ -1,13 +1,19 @@
 //! Pure `ProxyConfig` parse/validate/URI core. No Tauri types — fully unit-tested.
-//! The Tauri layer (Tasks 2-6) reads `default_uri()` and `bypass_hosts` to configure
-//! the content webview's proxy on every platform.
+//! The Tauri layer reads `default_uri()` and `bypass_hosts` to configure the content
+//! webview's proxy on every platform.
 
-// Tasks 2-6 consume this module; suppress dead-code warnings until they are wired in.
-#![allow(dead_code)]
+// NOTE: this module used to carry a crate-wide `#![allow(dead_code)]` on the grounds that
+// "Tasks 2-6 consume this module; suppress dead-code warnings until they are wired in". They
+// are wired in — the dispatch arms, the boot seed and the per-platform `apply_to_tab` are all
+// live — so the suppression only served to hide genuinely unreachable items (a dead helper is
+// indistinguishable from a used one once the lint is off). It was removed; if a target-specific
+// build turns up something only one platform calls, that gets a narrow `#[cfg]` + `allow`
+// with a reason, not a blanket one.
 
 use serde_json::Value;
 use std::net::ToSocketAddrs;
 use std::sync::Mutex;
+use std::time::Duration;
 use tauri::{AppHandle, Manager, Runtime};
 
 /// Parsed, validated proxy configuration.
@@ -62,6 +68,13 @@ impl ProxyConfig {
             .unwrap_or("")
             .trim()
             .to_string();
+        // Blank (not keep) an invalid host: `is_active()` requires a non-empty host, so
+        // a bad value deactivates the proxy instead of being applied.
+        let host = if is_valid_proxy_host(&host) {
+            host
+        } else {
+            String::new()
+        };
 
         // Accept both integer and float JSON numbers; clamp to u16 range.
         let port_raw = v.get("port").and_then(|p| p.as_u64()).unwrap_or(0);
@@ -74,6 +87,12 @@ impl ProxyConfig {
         // Canonical key is "bypassHosts" (array of strings) — matches settings.json default,
         // state_json, and the TS ProxyConfig interface. The old "bypass" comma-string key is
         // removed; all persisted data uses the array form via the serde rename above.
+        //
+        // Each entry is dropped unless it is a well-formed bypass token. These are joined
+        // with ';' into a single `--proxy-bypass-list=` switch, so an entry carrying a
+        // space, '=', a quote, or the ';' separator itself would split into extra switches
+        // or extra rules. `*` (e.g. `*.example.com`), `/` (CIDR), and `<local>` are all real
+        // Chromium bypass syntax and are allowed.
         let bypass_hosts = v
             .get("bypassHosts")
             .and_then(|b| b.as_array())
@@ -81,7 +100,7 @@ impl ProxyConfig {
                 arr.iter()
                     .filter_map(|e| e.as_str())
                     .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| is_valid_bypass_host(s))
                     .collect()
             })
             .unwrap_or_default();
@@ -115,6 +134,48 @@ impl ProxyConfig {
         }
         Some(format!("{}://{}:{}", self.scheme, self.host, self.port))
     }
+}
+
+// ─── Input validation ────────────────────────────────────────────────────────
+
+/// True for a hostname/IP literal we are willing to interpolate into a proxy URI.
+///
+/// The value reaches `default_uri()` and from there, on Windows, a Chromium/WebView2
+/// `additional_browser_args` string built by `nav` as ` --proxy-server={uri}`. That is
+/// a *command line*, so a single space terminates the argument and everything after it
+/// becomes another browser switch: a host of
+/// `127.0.0.1:1 --remote-debugging-port=9222 --disable-web-security` would inject
+/// switches into every content webview Aegis later spawns, and `--remote-debugging-port`
+/// opens a DevTools-protocol endpoint that fully controls the pages inside it.
+///
+/// Validating here, in the one place a `ProxyConfig` is ever built, means no consumer has
+/// to remember to re-check — and because `is_active()` already requires a non-empty host,
+/// a rejected host simply disables the proxy instead of being applied unsafely.
+fn is_valid_proxy_host(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 255
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':' | '[' | ']' | '%')
+        })
+}
+
+/// True for a `--proxy-bypass-list` entry.
+///
+/// Wider than the host rule, because Chromium's bypass syntax legitimately uses
+/// wildcards (`*.example.com`), CIDR (`10.0.0.0/8`), host:port, and the literal
+/// `<local>`. The characters that must NOT appear are the ones that would break out of
+/// the single switch these get joined into: whitespace, `=`, quotes, and `;` — the join
+/// separator itself.
+fn is_valid_bypass_host(s: &str) -> bool {
+    !s.is_empty()
+        && s.len() <= 255
+        && s.chars().all(|c| {
+            c.is_ascii_alphanumeric()
+                || matches!(
+                    c,
+                    '.' | '-' | '_' | ':' | '*' | '[' | ']' | '%' | '/' | '<' | '>'
+                )
+        })
 }
 
 // ---------------------------------------------------------------------------
@@ -178,14 +239,18 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
 ///   verified without a macOS toolchain (objc2 cannot be compiled from Linux).
 ///   Deferred to a Mac-developer follow-up (sub-project I). macOS builds and runs,
 ///   just with no proxy support.
-///   See `docs/roadmap/macOS-proxy-bindings.md` for the full implementation guide.
+///   The 383-line implementation guide that used to live at
+///   `docs/roadmap/macOS-proxy-bindings.md` was deleted in commit 58d2c4b and is NOT
+///   recoverable from this repo — this is genuinely lost institutional knowledge, so the
+///   macOS tier has to be re-derived from scratch (objc2 / Network.framework bindings,
+///   which cannot be compiled or verified from Linux).
 pub fn apply_to_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let cfg = current(app);
     #[cfg(target_os = "linux")]
     crate::linux_layout::apply_proxy_label(app, &crate::nav::content_label(id), &cfg);
     // macOS: documented no-op — direct connection. Network.framework binding deferred
-    // to a Mac-developer follow-up; see doc-comment above and
-    // docs/roadmap/macOS-proxy-bindings.md.
+    // to a Mac-developer follow-up; see the doc-comment above (the original
+    // implementation guide was deleted in commit 58d2c4b and is not recoverable).
     #[cfg(target_os = "macos")]
     let _ = (id, cfg);
     // Windows: spawn-time only (see doc-comment above).
@@ -245,6 +310,12 @@ pub fn note_config(cfg: &ProxyConfig) {
 /// Panic-safe via `catch_unwind` — a JNI frame that unwinds across a non-unwinding
 /// boundary causes SIGABRT (see the Android JNI crash gotcha in the project memory).
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+// `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+// name means two libraries could export the same symbol, which the linker leaves
+// undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+// by name), so it is allowed here explicitly rather than by the module scope —
+// `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
 #[no_mangle]
 pub extern "system" fn Java_com_aegis_browser_NativeProxy_proxyConfig<'a>(
     env: jni::JNIEnv<'a>,
@@ -299,7 +370,7 @@ pub fn dispatch<R: Runtime>(
 
         "proxy.testConnection" => {
             let cfg = ProxyConfig::from_value(payload.get("config").unwrap_or(&Value::Null));
-            Some(Ok(test_connection(&cfg)))
+            Some(Ok(test_connection_bounded(cfg)))
         }
 
         _ => None,
@@ -309,9 +380,20 @@ pub fn dispatch<R: Runtime>(
 /// TCP-connect probe: attempts to reach `cfg.host:cfg.port` within 3 s.
 /// Returns `{ ok, latencyMs?, error? }`.
 ///
+/// **Module-private on purpose**, but the guarantee is narrower than it looks and is worth
+/// being precise about. `pub` → private stops *other modules* from adopting this for a new
+/// channel (the realistic regression: someone adds a `proxy.testSomething` and reaches for the
+/// probe directly). It does **not** stop the `proxy.testConnection` arm in this same file from
+/// being re-pointed at it, because `dispatch` can still name a module-private item. That arm
+/// is covered only end-to-end by
+/// `the_test_connection_channel_answers_through_the_bounded_probe`, which cannot tell a
+/// bounded call from an unbounded one — a reachable host answers identically either way.
+/// Closing that last gap needs a source-level check on the arm, which is deliberately not
+/// added here; the two `await_probe` tests are what pin the bounding itself.
+///
 /// Proves host:port is TCP-reachable, NOT that traffic egresses through the proxy.
 /// The live egress trace (Task 9) is the definitive proof.
-pub fn test_connection(cfg: &ProxyConfig) -> Value {
+fn test_connection(cfg: &ProxyConfig) -> Value {
     if cfg.host.is_empty() {
         return serde_json::json!({ "ok": false, "error": "host is empty" });
     }
@@ -334,9 +416,78 @@ pub fn test_connection(cfg: &ProxyConfig) -> Value {
     }
 }
 
+/// How long the IPC thread will wait for a TCP probe before giving up on it.
+///
+/// Strictly greater than the probe's own 3 s connect timeout so a *reachable* host always
+/// gets to report its real latency rather than being cut off at the budget.
+const PROBE_BUDGET: Duration = Duration::from_secs(4);
+
+/// Run `work` on a worker thread and wait up to `budget` for its result.
+///
+/// `proxy.testConnection` is reached through `ipc`, a **synchronous** `#[tauri::command]`,
+/// so it runs on the UI thread. The probe it performs is not safely bounded there: the DNS
+/// lookup in [`test_connection`] is `to_socket_addrs()`, which has **no timeout of its own**
+/// and blocks for as long as the platform resolver takes (tens of seconds on a broken or
+/// captive network), and only the TCP connect after it is capped. On a bad network, pressing
+/// "Test connection" therefore froze the entire window — toolbar, tab strip and page — for
+/// the length of a DNS timeout, with no way to cancel it.
+///
+/// std offers no way to put a deadline on `to_socket_addrs`, so rather than pretend the work
+/// is bounded we move it off the UI thread and bound only the *wait*. That is the property
+/// that actually matters: the UI is released after `budget` no matter what the resolver does.
+///
+/// The abandoned worker is not cancelled — `std::thread` has no join-with-timeout — but it
+/// terminates on its own once the resolver gives up, its result is simply dropped, and at
+/// most one exists per probe the user explicitly asked for.
+fn await_probe<T: Send + 'static>(
+    work: impl FnOnce() -> T + Send + 'static,
+    budget: Duration,
+) -> Option<T> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        // A send failure just means the caller already hit its budget.
+        let _ = tx.send(work());
+    });
+    rx.recv_timeout(budget).ok()
+}
+
+/// The `proxy.testConnection` entry point: [`test_connection`] on a worker thread, with the
+/// UI thread's wait capped at [`PROBE_BUDGET`].
+///
+/// On timeout it reports a *distinct* error rather than a bare failure. "Timed out" and
+/// "refused" are different diagnoses for the user (a firewall/blackhole vs a dead proxy),
+/// and collapsing them into one `ok: false` is the same class of bug as `form.detectLoginForm`
+/// answering `false` for a page it never inspected.
+pub fn test_connection_bounded(cfg: ProxyConfig) -> Value {
+    test_connection_within(move || test_connection(&cfg), PROBE_BUDGET)
+}
+
+/// [`test_connection_bounded`] with both the work and the budget injectable.
+///
+/// The work is a parameter for the same reason the budget is: a test has to be able to
+/// provoke the timeout arm **deterministically**. Note that a closed *loopback* port is not a
+/// slow probe — the kernel refuses it instantly, so it comes back well inside any budget and
+/// can never exercise this path. Injecting the work is the only reliable way in.
+fn test_connection_within(
+    work: impl FnOnce() -> Value + Send + 'static,
+    budget: Duration,
+) -> Value {
+    match await_probe(work, budget) {
+        Some(v) => v,
+        None => serde_json::json!({
+            "ok": false,
+            "error": format!(
+                "probe timed out after {}s (the host may be unreachable, or DNS is not responding)",
+                budget.as_secs()
+            ),
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn from_value_applies_defaults_and_clamps() {
@@ -563,5 +714,207 @@ mod tests {
         };
         let result = test_connection(&cfg);
         assert_eq!(result.get("ok").and_then(|v| v.as_bool()), Some(false));
+    }
+
+    // ── The UI thread must not be hostage to the resolver ────────────────────
+    //
+    // `test_connection` calls `to_socket_addrs()`, which has no timeout of its own. Because
+    // `ipc` is a synchronous command these run on the UI thread, so an unbounded lookup
+    // froze the whole window. `await_probe` is the seam that makes that wait bounded, and
+    // the work is injected here so the timing is deterministic rather than dependent on a
+    // real resolver.
+
+    #[test]
+    fn a_probe_that_finishes_in_time_returns_its_value() {
+        let got = await_probe(|| 41u32 + 1, Duration::from_secs(30));
+        assert_eq!(got, Some(42));
+    }
+
+    #[test]
+    fn a_probe_that_overruns_its_budget_is_dropped_rather_than_waited_on() {
+        // 500 ms of work against a 20 ms budget: the slow direction, so this is the case that
+        // reproduces the freeze (a fast probe would pass even if the budget were ignored).
+        let started = std::time::Instant::now();
+        let got = await_probe(
+            || {
+                std::thread::sleep(Duration::from_millis(500));
+                "should never be observed"
+            },
+            Duration::from_millis(20),
+        );
+        assert_eq!(got, None);
+        // The point of the fix: the CALLER is released at the budget, not at 500 ms.
+        assert!(
+            started.elapsed() < Duration::from_millis(400),
+            "await_probe blocked for {:?}, so the UI thread would still be frozen",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_timed_out_probe_reports_a_distinct_error_not_a_bare_failure() {
+        // A slow probe that would otherwise report "Connection refused": the bounded entry
+        // point must report the TIMEOUT instead. This is the decisive guard — the timing test
+        // above proves only that the wait RETURNS, not that the probe's own diagnosis is
+        // discarded rather than passed off as the answer.
+        let out = test_connection_within(
+            || {
+                std::thread::sleep(Duration::from_millis(400));
+                serde_json::json!({ "ok": false, "error": "Connection refused (os error 111)" })
+            },
+            Duration::from_millis(1),
+        );
+        assert_eq!(out.get("ok").and_then(|v| v.as_bool()), Some(false));
+        let err = out
+            .get("error")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        assert!(
+            err.contains("timed out"),
+            "a 1 ms budget must yield the timeout diagnosis, got {err:?}"
+        );
+        assert!(
+            !err.contains("refused"),
+            "the probe's own result leaked through, so the budget was not applied: {err:?}"
+        );
+    }
+
+    #[test]
+    fn the_budget_outlasts_the_connect_timeout_but_stays_short() {
+        // A budget at or below `test_connection`'s own 3 s connect timeout would report
+        // "timed out" for a proxy that is merely slow, which is a worse lie than a long wait.
+        assert!(
+            PROBE_BUDGET > Duration::from_secs(3),
+            "budget must outlast the probe's 3s connect timeout"
+        );
+        assert!(
+            PROBE_BUDGET <= Duration::from_secs(10),
+            "a budget this long still reads as a freeze to the user"
+        );
+    }
+
+    #[test]
+    fn the_bounded_entry_point_still_answers_a_reachable_host() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cfg = ProxyConfig {
+            mode: "proxy".into(),
+            scheme: "http".into(),
+            host: "127.0.0.1".into(),
+            port,
+            bypass_hosts: vec![],
+        };
+        // End to end through the worker thread — the reachable path must not be broken by
+        // the very change that rescues the slow one.
+        let result = test_connection_bounded(cfg);
+        assert_eq!(result.get("ok").and_then(|v| v.as_bool()), Some(true));
+        assert!(result.get("latencyMs").is_some());
+    }
+
+    /// The end-to-end check that the `proxy.testConnection` arm is still owned here and still
+    /// answers. The *bounding* itself is pinned by the two tests above plus the module-private
+    /// `test_connection` (re-pointing the arm at it would not compile).
+    #[test]
+    fn the_test_connection_channel_answers_through_the_bounded_probe() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        crate::test_support::with_tmp_app(|app| {
+            let out = dispatch(
+                app,
+                "proxy.testConnection",
+                &serde_json::json!({
+                    "config": { "mode": "proxy", "scheme": "http", "host": "127.0.0.1", "port": port }
+                }),
+            )
+            .expect("proxy.testConnection must be owned by this module")
+            .expect("a reachable proxy must not error");
+            assert_eq!(out.get("ok").and_then(|v| v.as_bool()), Some(true));
+            assert!(out.get("latencyMs").is_some());
+        });
+    }
+    // ── Host / bypass validation (command-line injection) ────────────────────
+    //
+    // A proxy host is interpolated into ` --proxy-server={uri}` inside Chromium's
+    // `additional_browser_args` on Windows, and bypass entries are joined with ';' into
+    // ` --proxy-bypass-list=`. Both are command lines, so a stray space turns the rest
+    // of the value into extra browser switches. These pin the fix at the parse point.
+
+    #[test]
+    fn accepts_ordinary_hosts() {
+        for h in [
+            "127.0.0.1",
+            "proxy.example.com",
+            "my-proxy.internal",
+            "under_score",
+            "10.0.0.5",
+            "[::1]",
+            "fe80::1%eth0",
+        ] {
+            let c = ProxyConfig::from_value(&json!({
+                "mode": "proxy", "scheme": "http", "host": h, "port": 8080
+            }));
+            assert_eq!(c.host, h, "{h} should be accepted");
+            assert!(c.is_active(), "{h} should yield an active config");
+        }
+    }
+
+    #[test]
+    fn rejects_hosts_that_could_inject_a_browser_switch() {
+        for h in [
+            "127.0.0.1:1 --remote-debugging-port=9222",
+            "127.0.0.1:1 --disable-web-security",
+            "host --proxy-bypass-list=",
+            "evil\" --x",
+            "a b",
+            "",
+            "  ",
+        ] {
+            let c = ProxyConfig::from_value(&json!({
+                "mode": "proxy", "scheme": "http", "host": h, "port": 8080
+            }));
+            assert_eq!(c.host, "", "host {h:?} must be rejected");
+            assert!(
+                !c.is_active(),
+                "a rejected host must not produce an active proxy"
+            );
+            assert_eq!(c.default_uri(), None, "no URI may be built from {h:?}");
+        }
+    }
+
+    #[test]
+    fn keeps_real_bypass_syntax_and_drops_injected_entries() {
+        let c = ProxyConfig::from_value(&json!({
+            "mode": "proxy", "scheme": "http", "host": "127.0.0.1", "port": 8080,
+            "bypassHosts": [
+                "*.example.com",
+                "localhost",
+                "10.0.0.0/8",
+                "intranet.corp:8080",
+                "<local>",
+                "bad; --remote-debugging-port=9222",
+                "a b",
+                "x --disable-web-security"
+            ]
+        }));
+        assert_eq!(
+            c.bypass_hosts,
+            vec![
+                "*.example.com".to_string(),
+                "localhost".to_string(),
+                "10.0.0.0/8".to_string(),
+                "intranet.corp:8080".to_string(),
+                "<local>".to_string()
+            ],
+            "real bypass tokens survive; anything with a space or a ';' is dropped"
+        );
+        // The whole joined list must still be a single, space-free argument.
+        let joined = c.bypass_hosts.join(";");
+        assert!(
+            !joined.contains(' '),
+            "joined bypass list must contain no spaces"
+        );
+        assert!(!joined.contains(';') || joined.matches(';').count() == 4);
     }
 }

@@ -1,23 +1,58 @@
 // src-tauri/src/form.rs — Login form detection for vault autofill triggering.
 //
-// Two detection modes:
-// 1. **One-shot** (`form.detectLoginForm`): evaluates JS in the active content webview,
-//    waits for the result via a oneshot channel. Used by explicit IPC queries.
-// 2. **Event-driven** (`form.state`): an injected MutationObserver in the content webview
-//    emits `form:formStateChanged` whenever password fields appear/disappear. The Rust
-//    listener relays these as `form.state` events to the chrome, so the UI reacts in
-//    real time without polling.
+// ## STATUS: NEITHER DETECTION MODE CURRENTLY WORKS. Read this before wiring anything up.
+//
+// The design has two modes:
+//
+// 1. **One-shot** (`form.detectLoginForm`) — evaluate JS in the active content webview and
+//    wait for the result over the Tauri event bridge.
+// 2. **Event-driven** (`form.state`) — an injected MutationObserver in the content webview
+//    emits `form:formStateChanged` whenever password fields appear/disappear, and
+//    [`install_listener`] relays it to the chrome as `form.state`.
+//
+// Both need a **content webview → core callback**, and that transport does not exist:
+//
+// - The JS in both modes ends in `window.__TAURI__.emit(...)`, but a **content** webview is
+//   created with no Tauri capability (`src-tauri/capabilities/default.json` matches only the
+//   `main` window and declares no `remote` block) and `withGlobalTauri` is absent from
+//   `tauri.conf.json`. So `window.__TAURI__` is `undefined` in a content webview and the emit
+//   is unreachable. Verified against tauri 2.11's `ipc/authority.rs`: `Origin::matches` returns
+//   false for `(Local, Remote)`, which is what keeps untrusted pages off the `ipc` command.
+// - There is **no** injected callback that stands in for it. Grepping the tree for a
+//   content→core shim turns up only `__aegisFind` (a macOS find-in-page shim), `__aegisBlocked`
+//   (a page-local DOM stub) and the Android `__aegisOpenTab` / `__aegisRedirectBlocked` bridges.
+//   Nothing emits `form:formStateChanged` or `form:detectionResult` from any platform.
+// - The MutationObserver this module documents **is not in the codebase at all** — it was
+//   described in a comment, never written.
+//
+// So mode 2's listener has no producer, and mode 1 could only ever have timed out.
+//
+// ## What mode 1 does now, and why it is an `Err` rather than a `false`
+//
+// It used to `eval` the detection script, wait on a oneshot channel for a result that could
+// never arrive, burn the full 5 s timeout, and then answer `{hasLoginForm: false}`. That had
+// two problems, and both were worse than being broken:
+//
+// 1. `ipc` is a **synchronous** `#[tauri::command]`, so it runs on the main thread — a
+//    guaranteed 5-second UI freeze on every call, for every channel, not just this one.
+// 2. `{hasLoginForm: false}` is a **lie**: it tells the renderer "I inspected this page and
+//    there is no login form", when in fact nothing inspected anything. A caller could not tell
+//    that apart from a real negative, so the feature would look alive in the UI while being
+//    permanently dead underneath.
+//
+// It now returns an `Err` naming the missing transport, so a caller can distinguish
+//! "unsupported" from "no login form here" and no longer blocks the main thread.
+//
+// The pending-request machinery and the two relay listeners in [`install_listener`] are kept
+// deliberately: they are exactly what whoever adds the transport needs, and a listener that
+// has no producer yet costs nothing. This module is the seam, not the mechanism.
 
 use std::collections::HashMap;
 use std::sync::mpsc;
 use std::sync::OnceLock;
-use std::time::Duration;
 
 use parking_lot::Mutex;
-use tauri::{AppHandle, Listener, Manager};
-use uuid::Uuid;
-
-use crate::nav::active_webview;
+use tauri::{AppHandle, Listener};
 
 /// Pending detection requests: request_id → oneshot sender.
 static PENDING_REQUESTS: OnceLock<Mutex<HashMap<String, mpsc::SyncSender<FormDetectionResult>>>> =
@@ -121,12 +156,13 @@ pub fn install_listener(app: &AppHandle) {
 
 /// Handle form detection IPC calls.
 pub fn dispatch(
-    app: &AppHandle,
+    _app: &AppHandle,
     channel: &str,
     _payload: &serde_json::Value,
 ) -> Option<Result<serde_json::Value, String>> {
     match channel {
-        "form.detectLoginForm" => detect_login_form(app),
+        // No app handle needed: this refuses without touching any state (see `detect_login_form`).
+        "form.detectLoginForm" => detect_login_form(),
         _ => None,
     }
 }
@@ -137,90 +173,29 @@ struct FormDetectionResult {
     domain: Option<String>,
 }
 
-/// Evaluate detection JS in the active **content** webview and wait for the
-/// result via the Tauri event bridge.
-fn detect_login_form(app: &AppHandle) -> Option<Result<serde_json::Value, String>> {
-    // FIX: get the CONTENT webview (where the user's page lives), not the
-    // chrome webview. The chrome webview has no login forms to detect.
-    let content = active_webview(app).or_else(|| {
-        // Fallback: the main window (chrome) if no content webview exists yet
-        app.get_webview_window("main").map(|w| w.as_ref().clone())
-    })?;
+/// The error `form.detectLoginForm` returns, and the whole reason this function is honest
+/// instead of merely broken.
+///
+/// Split out as a `const` so a test can assert on the message without standing up an app —
+/// which matters, because the entire point is that this path must never be reached by a real
+/// caller, so there is nothing app-shaped left to exercise.
+const DETECT_UNSUPPORTED: &str = "form.detectLoginForm is not implemented: the content webview \
+has no Tauri capability and `withGlobalTauri` is off, so `window.__TAURI__.emit` is unreachable \
+from the page and there is no injected content->core callback to replace it. The core cannot \
+evaluate JS in a content webview and read the answer back, so it refuses instead of blocking the \
+main thread waiting for a result that can never arrive. See the module header for what a real fix \
+needs.";
 
-    let request_id = Uuid::new_v4().to_string();
-    let (tx, rx) = mpsc::sync_channel(1);
-    get_pending_requests().lock().insert(request_id.clone(), tx);
-
-    let detection_script = format!(
-        r#"(function() {{
-            var result = {{ hasLoginForm: false, domain: null }};
-            try {{
-                var forms = document.forms;
-                for (var i = 0; i < forms.length; i++) {{
-                    var form = forms[i];
-                    var inputs = form.querySelectorAll('input');
-                    var hasPassword = false;
-                    var hasEmailOrText = false;
-                    for (var j = 0; j < inputs.length; j++) {{
-                        var type = (inputs[j].type || '').toLowerCase();
-                        if (type === 'password') hasPassword = true;
-                        if (type === 'email' || type === 'text') hasEmailOrText = true;
-                    }}
-                    if (hasPassword && hasEmailOrText) {{
-                        result.domain = window.location.hostname;
-                        try {{
-                            if (form.action) {{
-                                var u = new URL(form.action, window.location.href);
-                                result.domain = u.hostname;
-                            }}
-                        }} catch(e) {{}}
-                        result.hasLoginForm = true;
-                        break;
-                    }}
-                }}
-                if (!result.hasLoginForm) {{
-                    var pwInputs = document.querySelectorAll('input[type="password"]');
-                    if (pwInputs.length > 0) {{
-                        result.domain = window.location.hostname;
-                        result.hasLoginForm = true;
-                    }}
-                }}
-            }} catch(e) {{}}
-            if (typeof window.__TAURI__ !== 'undefined') {{
-                window.__TAURI__.emit('form:detectionResult', {{
-                    requestId: '{}',
-                    hasLoginForm: result.hasLoginForm,
-                    domain: result.domain
-                }});
-            }}
-        }})();"#,
-        request_id
-    );
-
-    if content.eval(&detection_script).is_err() {
-        get_pending_requests().lock().remove(&request_id);
-        return Some(Ok(serde_json::to_value(&FormDetectionResult {
-            has_login_form: false,
-            domain: None,
-        })
-        .unwrap()));
-    }
-
-    // Wait for the event listener to deliver the result, with a 5 s timeout
-    match rx.recv_timeout(Duration::from_secs(5)) {
-        Ok(result) => {
-            get_pending_requests().lock().remove(&request_id);
-            Some(Ok(serde_json::to_value(&result).unwrap()))
-        }
-        Err(_) => {
-            get_pending_requests().lock().remove(&request_id);
-            Some(Ok(serde_json::to_value(&FormDetectionResult {
-                has_login_form: false,
-                domain: None,
-            })
-            .unwrap()))
-        }
-    }
+/// Answer `form.detectLoginForm` — by refusing, immediately.
+///
+/// Takes no `&AppHandle` and reads no state on purpose: the old version resolved the active
+/// content webview, armed a oneshot channel, `eval`'d a detection script into the page, and then
+/// blocked the main thread for the full 5 s timeout, because the page could not emit a result
+/// back (see the module header). It then reported `{hasLoginForm: false}` — a value
+/// indistinguishable from "I looked at this page and there is no login form", so a caller had no
+/// way to know the feature was dead. A refused promise is visible; a plausible `false` is not.
+fn detect_login_form() -> Option<Result<serde_json::Value, String>> {
+    Some(Err(DETECT_UNSUPPORTED.to_string()))
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
@@ -228,6 +203,41 @@ fn detect_login_form(app: &AppHandle) -> Option<Result<serde_json::Value, String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The channel must refuse, and the message must name the actual blocker.
+    ///
+    /// The bug this pins is subtle and was invisible to the whole suite: the old
+    /// implementation was a *plausible* answer, not a crash. It blocked the main thread for 5 s
+    /// and then returned `{hasLoginForm: false}` — exactly what a caller sees on a page with no
+    /// login form — so every test and every consumer agreed it was working.
+    #[test]
+    fn detect_login_form_refuses_instead_of_reporting_a_bogus_negative() {
+        let out = detect_login_form().expect("the channel must still be dispatched");
+        let err = out.expect_err("must not answer Ok: a `false` here is a lie about the page");
+        assert_eq!(err, DETECT_UNSUPPORTED);
+        // Name the two things a fixer needs: the missing capability/global, and the fact that
+        // the old answer was worse than useless.
+        assert!(
+            err.contains("withGlobalTauri"),
+            "message must name the cause: {err}"
+        );
+        assert!(
+            err.contains("main thread"),
+            "message must name the freeze it avoids: {err}"
+        );
+    }
+
+    /// The refusal must be a *prompt* refusal — nothing in this path may block.
+    ///
+    /// This is the property the 5 s `recv_timeout` violated, and asserting only on the error
+    /// string would not catch a reintroduced timeout. An app handle is not needed because
+    /// `detect_login_form` does not take one; that is itself the guarantee.
+    #[test]
+    fn detect_login_form_needs_no_app_handle_so_it_cannot_block_on_one() {
+        // Compile-time proof of the above: this only type-checks if the fn is app-free.
+        let f: fn() -> Option<Result<serde_json::Value, String>> = detect_login_form;
+        assert!(f().is_some());
+    }
 
     #[test]
     fn form_state_event_has_required_fields() {

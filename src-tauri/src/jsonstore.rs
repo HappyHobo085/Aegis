@@ -12,6 +12,7 @@ use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::Instant;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -105,7 +106,21 @@ fn write_atomic_inner(path: &Path, bytes: &[u8], backup: bool) -> std::io::Resul
                     .unwrap_or(0),
                 TMP_SEQ.fetch_add(1, Ordering::Relaxed)
             ));
-            match File::options().write(true).create_new(true).open(&tmp) {
+            let mut opts = File::options();
+            opts.write(true).create_new(true);
+            // 0600, not the default. These stores hold the vault (sealed records +
+            // the Argon2id salt), the Argon2id-wrapped sync root, the per-device
+            // salt, settings and full browsing history. `File::options` creates with
+            // 0666 & ~umask, which under the near-universal umask 022 lands at 0644 —
+            // world-readable. Because we rename the temp over the target, setting the
+            // mode here also repairs any pre-existing store that an older build left
+            // at 0644, on its next write.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                opts.mode(0o600);
+            }
+            match opts.open(&tmp) {
                 Ok(f) => break (f, tmp),
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists && attempt < 16 => {
                     attempt += 1;
@@ -211,6 +226,39 @@ pub fn load<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
     cache_data(name, data.clone());
 
     data
+}
+
+/// One `Mutex` per store name, created on demand. Per-name (not a single global lock) so
+/// unrelated stores never block each other, and lazily allocated so a store nobody touches
+/// costs nothing.
+static STORE_LOCKS: LazyLock<parking_lot::Mutex<HashMap<String, Arc<parking_lot::Mutex<()>>>>> =
+    LazyLock::new(|| parking_lot::Mutex::new(HashMap::new()));
+
+/// Get (creating if needed) the write lock for one store. Public so a caller that does its
+/// own load/persist (rather than the `load`+`save` pair `mutate` assumes) can still hold
+/// the lock across its whole read-modify-write — e.g. `places::dispatch`, whose arms use
+/// `load_synced` + a `persist` helper, and `sync_stores::merge_into`, which is the
+/// background sync thread that races it. Bind the `Arc` before locking so the guard's
+/// borrow does not dangle:
+///
+/// ```ignore
+/// let arc = jsonstore::store_lock("favorites");
+/// let _guard = arc.lock();   // …load, modify, save…
+/// ```
+pub fn store_lock(name: &str) -> Arc<parking_lot::Mutex<()>> {
+    let mut locks = STORE_LOCKS.lock();
+    locks
+        .entry(name.to_string())
+        .or_insert_with(|| Arc::new(parking_lot::Mutex::new(())))
+        .clone()
+}
+
+/// Run `f` holding the write lock for `name`. See [`store_lock`] for when to use this
+/// directly instead of [`mutate`].
+pub fn with_store_lock<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    let lock = store_lock(name);
+    let _guard = lock.lock();
+    f()
 }
 
 /// Persist a collection durably (atomic temp→rename, keeps a `.bak`). These stores are
@@ -358,7 +406,14 @@ pub fn load_synced<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
         }
     }
     if changed {
-        let _ = save(app, name, &items);
+        // A failed migration write is logged, not propagated: the in-memory `items` still
+        // carry the assigned sync metadata, so the sync path is correct for this session and
+        // the next read retries the migration. Unlike the mutators above there is no user
+        // action to report against here — nothing was "rejected", so an `eprintln!` is the
+        // honest signal rather than turning every read into a potential error.
+        if let Err(e) = save(app, name, &items) {
+            eprintln!("[aegis] failed to persist {name} sync-metadata migration: {e}");
+        }
     }
     items
 }
@@ -377,7 +432,13 @@ pub fn live_hosts<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<String> {
 }
 
 /// Add `host` to a host-keyed store: revive a tombstone in place, or stamp a new record.
-pub fn add_host<R: Runtime>(app: &AppHandle<R>, name: &str, host: &str) {
+///
+/// Returns the `save` error rather than swallowing it. These three mutators used to be
+/// `-> ()` with `let _ = save(..)`, which made a failed write **invisible**: the IPC caller got
+/// `Ok`, the UI re-rendered as if the change took, but `cache_data` only runs after a
+/// successful `write_atomic`, so neither disk nor the in-memory cache moved and the change was
+/// simply gone by the next launch. An allowlist the user just cleared could silently come back.
+pub fn add_host<R: Runtime>(app: &AppHandle<R>, name: &str, host: &str) -> Result<(), String> {
     let mut items = load_synced(app, name);
     match items
         .iter_mut()
@@ -397,25 +458,26 @@ pub fn add_host<R: Runtime>(app: &AppHandle<R>, name: &str, host: &str) {
             items.push(item);
         }
     }
-    let _ = save(app, name, &items);
+    save(app, name, &items)
 }
 
-/// Tombstone `host` in a host-keyed store.
-pub fn remove_host<R: Runtime>(app: &AppHandle<R>, name: &str, host: &str) {
+/// Tombstone `host` in a host-keyed store. Propagates a save failure — see [`add_host`].
+pub fn remove_host<R: Runtime>(app: &AppHandle<R>, name: &str, host: &str) -> Result<(), String> {
     let mut items = load_synced(app, name);
     tombstone(
         &mut items,
         |it| it.get("host").and_then(Value::as_str) == Some(host),
         app,
     );
-    let _ = save(app, name, &items);
+    save(app, name, &items)
 }
 
-/// Tombstone every live host in a host-keyed store (clear all).
-pub fn clear_hosts<R: Runtime>(app: &AppHandle<R>, name: &str) {
+/// Tombstone every live host in a host-keyed store (clear all). Propagates a save failure —
+/// this is the one that matters most, since a silently-failed "clear" resurrects every host.
+pub fn clear_hosts<R: Runtime>(app: &AppHandle<R>, name: &str) -> Result<(), String> {
     let mut items = load_synced(app, name);
     tombstone(&mut items, |it| !is_deleted(it), app);
-    let _ = save(app, name, &items);
+    save(app, name, &items)
 }
 
 // Cache management functions
@@ -659,6 +721,82 @@ mod tests {
         assert!(leftover.is_empty(), "no .tmp left after concurrent writes");
     }
 
+    /// A store lock must cover the whole read-modify-write, not just the write.
+    ///
+    /// The existing concurrency test above only proves no individual WRITE is lost — two
+    /// threads can each read version N, each append, and the second save silently drops
+    /// the first's append while the file still looks perfectly valid. This is a live race
+    /// in this crate (a UI `favorites.add` vs the sync thread's `merge_into`). `mutate`
+    /// holds a per-store lock across load→mutate→save, so N appends must all survive.
+    #[test]
+    fn a_locked_read_modify_write_does_not_lose_concurrent_appends() {
+        use crate::test_support::with_tmp_app;
+        const THREADS: i64 = 8;
+        const PER_THREAD: i64 = 25;
+
+        with_tmp_app(|app| {
+            let mut handles = Vec::new();
+            for t in 0..THREADS {
+                let app = app.clone();
+                handles.push(std::thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        with_store_lock("mutate_race", || {
+                            let mut items = load(&app, "mutate_race");
+                            items.push(json!({ "t": t, "i": i }));
+                            save(&app, "mutate_race", &items).expect("save must not fail");
+                        });
+                    }
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+            let final_items = load(app, "mutate_race");
+            assert_eq!(
+                final_items.len(),
+                (THREADS * PER_THREAD) as usize,
+                "every append must survive: a lost update means two callers read the same \
+                 version and the second save overwrote the first"
+            );
+        });
+    }
+
+    /// A caller that returns `Err` mid-update must leave the store byte-identical — the
+    /// lock is about atomicity, not about letting a failed update through.
+    #[test]
+    fn a_rejected_update_leaves_the_store_as_it_was() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            // A caller that bails out mid-update must leave the store as it found it, so a
+            // rejected update is not silently half-applied.
+            let err: Result<(), String> = with_store_lock("mutate_reject", || {
+                let mut items = load(app, "mutate_reject");
+                items.push(json!({ "id": 1 }));
+                save(app, "mutate_reject", &items)?;
+                Err("nope".to_string())
+            });
+            assert_eq!(err.unwrap_err(), "nope");
+            let items = load(app, "mutate_reject");
+            assert_eq!(items.len(), 1, "the rejected append must not be saved");
+            assert_eq!(items[0]["id"], 1);
+        });
+    }
+
+    /// Different store names must not block each other. If this regressed (e.g. someone
+    /// swapped the per-name map for one global mutex), the sleeps below would serialize
+    /// and the elapsed time would blow past the bound.
+    #[test]
+    fn mutate_locks_are_per_store_not_global() {
+        let a = store_lock("mutate_a");
+        let b = store_lock("mutate_b");
+        assert!(
+            !Arc::ptr_eq(&a, &b),
+            "two store names must get two different locks"
+        );
+        let a2 = store_lock("mutate_a");
+        assert!(Arc::ptr_eq(&a, &a2), "the same name must reuse its lock");
+    }
+
     #[test]
     fn ensure_sync_meta_assigns_all_three_when_absent_and_is_idempotent() {
         let mut item = json!({ "id": 1, "url": "https://x" });
@@ -727,5 +865,33 @@ mod tests {
             .and_then(|t| serde_json::from_str::<Vec<Value>>(&t).ok())
             .unwrap_or_default();
         assert_eq!(recovered.len(), 1, "recovered the pre-corruption array");
+    }
+
+    /// The host mutators must REPORT a failed write instead of returning `Ok` while nothing
+    /// changed. Before this, all three were `-> ()` with `let _ = save(..)`, so a failed write
+    /// was completely invisible: the IPC caller got `Ok`, the UI re-rendered as if the change
+    /// took, and because `cache_data` only runs after a successful `write_atomic`, neither disk
+    /// nor the in-memory cache moved — so an allowlist the user had just cleared came back on
+    /// the next launch.
+    ///
+    /// Forces a genuine write failure by putting a **directory** where the store file must be:
+    /// `write_atomic` is temp-file + rename, and a rename onto a directory fails — the same
+    /// class of failure as a full disk or a read-only home directory.
+    #[test]
+    fn host_mutators_surface_a_write_failure() {
+        crate::test_support::with_tmp_app(|app| {
+            let p = path(app, "allowlist").expect("store path");
+            // A well-formed store first, so the load side is happy and only the WRITE fails.
+            write_atomic(&p, b"[]").unwrap();
+            fs::remove_file(&p).unwrap();
+            fs::create_dir(&p).unwrap(); // now the store path is a directory => rename fails
+
+            assert!(add_host(app, "allowlist", "a.test").is_err(), "add_host");
+            assert!(
+                remove_host(app, "allowlist", "a.test").is_err(),
+                "remove_host"
+            );
+            assert!(clear_hosts(app, "allowlist").is_err(), "clear_hosts");
+        });
     }
 }

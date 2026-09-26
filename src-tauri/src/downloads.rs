@@ -209,21 +209,32 @@ pub fn on_requested<R: Runtime>(
     }
 }
 
-/// On DownloadEvent::Finished: mark the newest progressing entry completed/interrupted.
+/// On DownloadEvent::Finished: mark the download that just finished.
+///
+/// `url` is the URL the event carried. It MUST be matched on, not "whichever row is newest and
+/// still progressing": with two concurrent downloads, finishing the first would mark the SECOND
+/// complete while the first stayed `progressing` forever — and since `openFile`/`showInFolder`/
+/// `remove` are all keyed on the row's id, the wrong file gets opened. The event always supplies
+/// the url, so pass it; `None` is the last-resort fallback to the old newest-progressing scan.
 #[cfg_attr(target_os = "android", allow(dead_code))]
-pub fn on_finished<R: Runtime>(app: &AppHandle<R>, success: bool) {
+pub fn on_finished<R: Runtime>(app: &AppHandle<R>, success: bool, url: Option<&str>) {
+    let url = url.filter(|u| !u.is_empty());
     let changed = mutate(app, false, |items| {
+        // Prefer an exact url match, and among those the newest, so a restarted transfer of the
+        // same url still settles on the right row.
+        if let Some(target) = url {
+            if let Some(it) = items.iter_mut().rev().find(|it| {
+                !jsonstore::is_deleted(it) && it.get("url").and_then(Value::as_str) == Some(target)
+            }) {
+                finish_row(it, success, app);
+                return true;
+            }
+        }
         for it in items.iter_mut().rev() {
             if !jsonstore::is_deleted(it)
                 && it.get("state").and_then(Value::as_str) == Some("progressing")
             {
-                if let Some(o) = it.as_object_mut() {
-                    o.insert(
-                        "state".into(),
-                        json!(if success { "completed" } else { "interrupted" }),
-                    );
-                }
-                jsonstore::touch(it, app);
+                finish_row(it, success, app);
                 return true;
             }
         }
@@ -232,6 +243,16 @@ pub fn on_finished<R: Runtime>(app: &AppHandle<R>, success: bool) {
     if changed {
         crate::emit_event(app, "downloads.changed", Value::Null);
     }
+}
+
+fn finish_row<R: Runtime>(it: &mut Value, success: bool, app: &AppHandle<R>) {
+    if let Some(o) = it.as_object_mut() {
+        o.insert(
+            "state".into(),
+            json!(if success { "completed" } else { "interrupted" }),
+        );
+    }
+    jsonstore::touch(it, app);
 }
 
 pub fn dispatch<R: Runtime>(
@@ -406,7 +427,7 @@ mod tests {
         with_tmp_app(|app| {
             let mut d = PathBuf::new();
             on_requested(app, "https://files.test/a.bin", &mut d, false);
-            on_finished(app, true);
+            on_finished(app, true, Some("https://files.test/a.bin"));
             let rows = live_rows(app);
             assert_eq!(
                 rows[0].get("state").and_then(Value::as_str),
@@ -420,7 +441,7 @@ mod tests {
         with_tmp_app(|app| {
             let mut d = PathBuf::new();
             on_requested(app, "https://files.test/a.bin", &mut d, false);
-            on_finished(app, false);
+            on_finished(app, false, Some("https://files.test/a.bin"));
             assert_eq!(
                 live_rows(app)[0].get("state").and_then(Value::as_str),
                 Some("interrupted")
@@ -433,7 +454,7 @@ mod tests {
         with_tmp_app(|app| {
             let mut d = PathBuf::new();
             on_requested(app, "https://files.test/a.bin", &mut d, false);
-            on_finished(app, true);
+            on_finished(app, true, Some("https://files.test/a.bin"));
             let id = live_rows(app)[0].get("id").and_then(Value::as_i64).unwrap();
             let after = dispatch(app, "downloads.remove", &json!({ "id": id }))
                 .unwrap()
@@ -450,7 +471,7 @@ mod tests {
             // one finished, one still progressing.
             let mut d = PathBuf::new();
             on_requested(app, "https://files.test/done.bin", &mut d, false);
-            on_finished(app, true);
+            on_finished(app, true, Some("https://files.test/done.bin"));
             let mut d2 = PathBuf::new();
             on_requested(app, "https://files.test/inflight.bin", &mut d2, false);
             let after = dispatch(app, "downloads.clear", &json!({}))
@@ -489,6 +510,59 @@ mod tests {
                 &dl_dir.join("missing.bin").to_string_lossy()
             ));
             assert!(!trusted_download_path(app, "relative.bin"));
+        });
+    }
+
+    /// The regression this guards: with two downloads in flight, `on_finished` used to mark
+    /// "whichever row is newest and still progressing", so finishing the FIRST marked the SECOND
+    /// complete and left the first `progressing` forever. `openFile`/`showInFolder`/`remove` are
+    /// all keyed on the row id, so that also meant opening the wrong file.
+    #[test]
+    fn finishing_one_of_two_concurrent_downloads_marks_that_one() {
+        with_tmp_app(|app| {
+            let mut d1 = PathBuf::new();
+            on_requested(app, "https://files.test/first.bin", &mut d1, false);
+            let mut d2 = PathBuf::new();
+            on_requested(app, "https://files.test/second.bin", &mut d2, false);
+            assert_eq!(live_rows(app).len(), 2);
+
+            // Finish ONLY the first one.
+            on_finished(app, true, Some("https://files.test/first.bin"));
+
+            let rows = live_rows(app);
+            let state = |u: &str| {
+                rows.iter()
+                    .find(|r| r.get("url").and_then(Value::as_str) == Some(u))
+                    .and_then(|r| r.get("state"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("<missing>")
+                    .to_string()
+            };
+            assert_eq!(state("https://files.test/first.bin"), "completed");
+            // The second must still be in flight — this is the assertion the old code failed.
+            assert_eq!(state("https://files.test/second.bin"), "progressing");
+        });
+    }
+
+    /// The exact-url match must not resurrect a row the user already removed: a tombstoned
+    /// download that finishes late must stay gone rather than being marked completed.
+    #[test]
+    fn finishing_a_removed_download_does_not_bring_it_back() {
+        with_tmp_app(|app| {
+            let mut d = PathBuf::new();
+            on_requested(app, "https://files.test/gone.bin", &mut d, false);
+            let id = live_rows(app)[0].get("id").and_then(Value::as_i64).unwrap();
+            let _ = dispatch(app, "downloads.remove", &json!({ "id": id }));
+            assert!(
+                live_rows(app).is_empty(),
+                "precondition: the row is tombstoned"
+            );
+
+            on_finished(app, true, Some("https://files.test/gone.bin"));
+            assert!(
+                live_rows(app).is_empty(),
+                "a late finish event must not resurrect a removed download"
+            );
         });
     }
 }

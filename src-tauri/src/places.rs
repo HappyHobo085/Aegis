@@ -35,6 +35,15 @@ pub fn dispatch<R: Runtime>(
     channel: &str,
     payload: &Value,
 ) -> Option<Result<Value, String>> {
+    // Every arm below is a read-modify-write on ONE jsonstore collection, and the
+    // background sync thread writes the same files via `sync_stores::merge_into`. Hold that
+    // store's write lock for the whole `match` so the two cannot interleave — otherwise a
+    // `favorites.add` landing between sync's read and sync's save is silently dropped.
+    // The store is the channel's prefix (`favorites.add` → `favorites`), so one rule covers
+    // every arm. Read-only arms are unaffected apart from a little serialization on the
+    // same collection, which is the correct trade for losing no writes.
+    let store_arc = crate::jsonstore::store_lock(store_of(channel));
+    let _store_guard = store_arc.lock();
     match channel {
         // ---- favorites ----
         "favorites.list" => Some(Ok(json!(jsonstore::live(jsonstore::load_synced(
@@ -214,6 +223,12 @@ pub fn dispatch<R: Runtime>(
 
 /// Save the FULL array (tombstones kept on disk) and return only the LIVE records.
 /// Nudges a background sync pass (no-op when sync is disabled).
+/// The jsonstore collection a channel operates on: the part before the first `.`
+/// (`favorites.add` → `favorites`). See the lock comment in [`dispatch`].
+fn store_of(channel: &str) -> &str {
+    channel.split_once('.').map_or(channel, |(s, _)| s)
+}
+
 fn persist<R: Runtime>(app: &AppHandle<R>, name: &str, items: Vec<Value>) -> Result<Value, String> {
     jsonstore::save(app, name, &items)?;
     // favorites + saved are SYNCABLE → nudge a sync (no-op when sync is disabled).

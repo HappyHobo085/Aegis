@@ -206,6 +206,12 @@ pub fn android_host_allowlisted(host: &str) -> bool {
 /// Registered as a per-tab document-start script in `MainActivity.createTabWebView`.
 /// Returns null jstring on failure (Kotlin skips registration).
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+// `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+// name means two libraries could export the same symbol, which the linker leaves
+// undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+// by name), so it is allowed here explicitly rather than by the module scope —
+// `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
 #[no_mangle]
 pub extern "system" fn Java_com_aegis_browser_NativeFarble_farbleScript<'a>(
     mut env: jni::JNIEnv<'a>,
@@ -280,18 +286,18 @@ fn load_fp_allowlist_hosts<R: Runtime>(app: &AppHandle<R>) -> Vec<String> {
 }
 
 /// Add a host to the fp-allowlist (revive a tombstone in place, or stamp a new record).
-fn add_fp_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
-    jsonstore::add_host(app, "fp-allowlist", host);
+fn add_fp_host<R: Runtime>(app: &AppHandle<R>, host: &str) -> Result<(), String> {
+    jsonstore::add_host(app, "fp-allowlist", host)
 }
 
 /// Tombstone a host in the fp-allowlist.
-fn remove_fp_host<R: Runtime>(app: &AppHandle<R>, host: &str) {
-    jsonstore::remove_host(app, "fp-allowlist", host);
+fn remove_fp_host<R: Runtime>(app: &AppHandle<R>, host: &str) -> Result<(), String> {
+    jsonstore::remove_host(app, "fp-allowlist", host)
 }
 
 /// Tombstone every live fp-allowlist host (clear all).
-fn clear_fp_hosts<R: Runtime>(app: &AppHandle<R>) {
-    jsonstore::clear_hosts(app, "fp-allowlist");
+fn clear_fp_hosts<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+    jsonstore::clear_hosts(app, "fp-allowlist")
 }
 
 /// Refresh the in-memory FarbleState.allowlist cache from the persisted store.
@@ -342,10 +348,15 @@ pub fn dispatch<R: Runtime>(
                 .unwrap_or("")
                 .to_string();
             if !host.is_empty() {
-                if load_fp_allowlist_hosts(app).iter().any(|h| h == &host) {
-                    remove_fp_host(app, &host); // toggle off
+                // Propagate a failed write instead of reporting a success that never landed —
+                // a farbling escape hatch the user just removed must not silently come back.
+                let saved = if load_fp_allowlist_hosts(app).iter().any(|h| h == &host) {
+                    remove_fp_host(app, &host) // toggle off
                 } else {
-                    add_fp_host(app, &host); // toggle on
+                    add_fp_host(app, &host) // toggle on
+                };
+                if let Err(e) = saved {
+                    return Some(Err(e));
                 }
             }
             reseed_fp_inner(app);
@@ -360,7 +371,9 @@ pub fn dispatch<R: Runtime>(
                 .unwrap_or("")
                 .to_string();
             if !host.is_empty() {
-                remove_fp_host(app, &host);
+                if let Err(e) = remove_fp_host(app, &host) {
+                    return Some(Err(e));
+                }
             }
             reseed_fp_inner(app);
             crate::sync::nudge(app);
@@ -368,7 +381,9 @@ pub fn dispatch<R: Runtime>(
         }
 
         "fingerprint.clearAllowlist" => {
-            clear_fp_hosts(app);
+            if let Err(e) = clear_fp_hosts(app) {
+                return Some(Err(e));
+            }
             reseed_fp_inner(app);
             crate::sync::nudge(app);
             Some(Ok(fp_state_json(app)))
