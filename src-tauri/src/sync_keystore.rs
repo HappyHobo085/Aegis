@@ -218,6 +218,12 @@ mod android_keystore {
 
     /// Called once by the Android runtime when the native library is loaded; stashes the VM
     /// so Rust→Java up-calls (the hardware Keystore) can attach without ndk-glue.
+    #[allow(unsafe_code)]
+    // `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+    // name means two libraries could export the same symbol, which the linker leaves
+    // undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+    // by name), so it is allowed here explicitly rather than by the module scope —
+    // `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
     #[no_mangle]
     pub extern "system" fn JNI_OnLoad(
         vm: *mut jni::sys::JavaVM,
@@ -233,17 +239,30 @@ mod android_keystore {
     /// Called from `MainActivity.onCreate` *before* `super.onCreate` (which is what runs
     /// `Rust.create()` → our `setup()` → the boot sync restore), so the class is always in
     /// place before any up-call. Safe to call more than once; the first one wins.
+    #[allow(unsafe_code)]
+    // `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+    // name means two libraries could export the same symbol, which the linker leaves
+    // undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+    // by name), so it is allowed here explicitly rather than by the module scope —
+    // `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
     #[no_mangle]
     pub extern "system" fn Java_com_aegis_browser_NativeSyncKeystore_provideClass(
         env: jni::JNIEnv,
         _class: JClass<'_>,
         class: JObject<'_>,
     ) {
-        match env.new_global_ref(&class) {
-            Ok(g) => {
+        // This runs from `MainActivity.onCreate` *before* `super.onCreate`, i.e. during
+        // class initialization, and it was the one export with no guard at all — a panic
+        // here aborts the app before the UI ever appears. `env` is captured by reference
+        // only (it is !UnwindSafe), which `AssertUnwindSafe` asserts is fine.
+        match crate::ffi_guard(|| env.new_global_ref(&class)) {
+            Some(Ok(g)) => {
                 let _ = KEYSTORE_CLASS.set(g);
             }
-            Err(e) => eprintln!("[aegis-sync] could not pin the AegisKeystore class: {e}"),
+            Some(Err(e)) => {
+                eprintln!("[aegis-sync] could not pin the AegisKeystore class: {e}")
+            }
+            None => eprintln!("[aegis-sync] provideClass panicked; class not cached"),
         }
     }
 

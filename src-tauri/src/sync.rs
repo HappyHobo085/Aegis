@@ -57,6 +57,11 @@ pub struct Inner {
     status: Status,
     last_sync_ms: i64,
     last_error: String,
+    /// Bumped every time sync is enabled/disabled. A pass snapshots it before it starts and
+    /// re-checks before touching the network, so disabling mid-pass actually stops the upload
+    /// instead of letting an already-spawned thread keep pushing the user's data. See
+    /// [`cancelled`].
+    generation: u64,
 }
 
 impl Default for SyncState {
@@ -71,17 +76,23 @@ impl Default for SyncState {
             status: Status::Disabled,
             last_sync_ms: 0,
             last_error: String::new(),
+            generation: 0,
         }))
     }
 }
 
-/// Whether the sync engine is currently enabled. Other modules (notably the vault) must gate
-/// their sync work on this rather than hardcoding a policy, otherwise a disabled account can
-/// still upload user data. Uses `try_state` so it is safe to call before setup completes.
-pub fn is_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
-    app.try_state::<SyncState>()
-        .map(|s| s.0.lock().unwrap_or_else(|e| e.into_inner()).enabled)
-        .unwrap_or(false)
+/// True when sync was enabled/disabled since `gen` was captured, i.e. the pass that
+/// snapshotted `gen` must stop touching the network.
+///
+/// This is what makes "stop syncing" mean *stop now*. Previously `sync.disable` cleared the
+/// root and set `Status::Disabled`, but a pass that had already snapshotted the root kept
+/// pushing every namespace to the server, and then unconditionally wrote `Status::Idle` on
+/// completion — so the UI showed a disabled account as idle while the upload finished.
+fn cancelled<R: Runtime>(app: &AppHandle<R>, gen: u64) -> bool {
+    let st = app.try_state::<SyncState>();
+    let Some(st) = st else { return true };
+    let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+    g.generation != gen || !g.enabled
 }
 
 // A durable "user disabled sync" marker so disable() sticks across restarts (the seed may
@@ -105,6 +116,16 @@ fn is_disabled_flag<R: Runtime>(app: &AppHandle<R>) -> bool {
     disabled_flag_path(app).map(|p| p.exists()).unwrap_or(false)
 }
 
+/// Whether sync is currently enabled for this install (i.e. the account is set up and not
+/// disabled by the durable user-disabled marker). Read WITHOUT taking the state lock into a
+/// long-held guard by callers that also need other state, so this is the cheap accessor the
+/// vault bridge uses to decide whether it may sync at all.
+pub fn is_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<SyncState>()
+        .map(|s| s.0.lock().unwrap_or_else(|e| e.into_inner()).enabled)
+        .unwrap_or(false)
+}
+
 fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     let st = app.state::<SyncState>();
     let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -112,6 +133,9 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
         "enabled": g.enabled,
         "status": g.status.as_str(),
         "serverUrl": crate::settings::sync_server_url(app),
+        // The core's own view of the `syncAllowInsecure` waiver, so the UI can report the
+        // decision that is actually in force rather than echoing the checkbox back.
+        "allowInsecure": crate::settings::sync_allow_insecure(app),
         "lastSyncMs": g.last_sync_ms,
         "lastError": g.last_error,
         "deviceId": g.device_id,
@@ -129,7 +153,7 @@ fn emit_state<R: Runtime>(app: &AppHandle<R>) {
 
 /// Seal a local record into a wire record `{uuid, hlc, deleted, nonce, ct}` — cleartext
 /// uuid/hlc/deleted (so the server can key/order without decrypting) + the sealed record.
-fn seal_wire(data_key: &[u8; 32], ns: &str, rec: &Value) -> Result<Value, String> {
+pub(crate) fn seal_wire(data_key: &[u8; 32], ns: &str, rec: &Value) -> Result<Value, String> {
     let uuid = rec
         .get("uuid")
         .and_then(Value::as_str)
@@ -149,7 +173,7 @@ fn seal_wire(data_key: &[u8; 32], ns: &str, rec: &Value) -> Result<Value, String
 
 /// Open a wire record back into the local record, authenticating it against the cleartext
 /// uuid/hlc (the AAD binding). Returns the decrypted local record.
-fn open_wire(data_key: &[u8; 32], ns: &str, w: &Value) -> Result<Value, String> {
+pub(crate) fn open_wire(data_key: &[u8; 32], ns: &str, w: &Value) -> Result<Value, String> {
     let uuid = w
         .get("uuid")
         .and_then(Value::as_str)
@@ -170,7 +194,22 @@ fn open_wire(data_key: &[u8; 32], ns: &str, w: &Value) -> Result<Value, String> 
     // left on the freed heap — the sync root path already does this.
     let pt = crypto::open(data_key, &nonce, &ct, ns, uuid, &hlc.bytes())?;
     let pt = zeroize::Zeroizing::new(pt);
-    serde_json::from_slice(&pt).map_err(|e| e.to_string())
+    let mut rec: Value = serde_json::from_slice(&pt).map_err(|e| e.to_string())?;
+    // Adopt the server's ORDERING stamp. `hlc` is AEAD-bound (see `crypto::aad_for`), so the
+    // server must never rewrite it — when it needs to break a cross-record HLC tie it records
+    // the bump in a separate `ord` field and leaves `hlc` byte-identical. We take `ord` as the
+    // record's HLC so our merge and our HLC clock agree with the server's total order instead of
+    // re-deriving an arbitrary local tie-break. The AAD check above is unaffected: it ran against
+    // the wire `hlc`, exactly as sent. Safe to repeat — the next push seals with whatever we
+    // adopted, and the server echoes that same value back as `hlc`.
+    if let Some(ord) = w.get("ord").filter(|o| !o.is_null()) {
+        if Some(ord) != w.get("hlc") {
+            if let Some(o) = rec.as_object_mut() {
+                o.insert("hlc".to_string(), ord.clone());
+            }
+        }
+    }
+    Ok(rec)
 }
 
 // --- HTTP (reqwest blocking on a dedicated thread, per the subs.rs pattern) ---
@@ -230,7 +269,7 @@ fn auth_header(account_id: &str, device_seed: &[u8; 32]) -> Result<String, Strin
 }
 
 /// One sync pass: per namespace pull→merge→push. Runs on the caller's (background) thread.
-fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
+fn sync_once<R: Runtime>(app: &AppHandle<R>, gen: u64) -> Result<(), String> {
     // Snapshot what we need under the lock (clone the root; the clone zeroizes on drop).
     let (root, account_id, device_seed) = {
         let st = app.state::<SyncState>();
@@ -244,10 +283,10 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         }
     };
     let server = crate::settings::sync_server_url(app);
-    if server.is_empty() {
+    if server.trim().is_empty() {
         return Err("no sync server configured (set it in Settings → Sync)".into());
     }
-    let base = server.trim_end_matches('/').to_string();
+    let base = validated_base_for(app, &server)?;
 
     // Clone app handle for use in threads (we'll clone it further inside each closure)
     let app_clone = app.clone();
@@ -263,19 +302,39 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
             let app = app_clone.clone(); // Clone the app handle for this thread
 
             let mut changed_arrays = Vec::new();
+            // Per-namespace tolerance. This loop used `?`, so the FIRST failure
+            // stranded every namespace after it: one 413 on `favorites` meant
+            // `allowlist` (which drives the ad-block engine) and `saved` silently
+            // stopped syncing too. The outer `sync_once` handler already isolates
+            // namespaces this way; this intra-thread loop did not.
+            let mut first_err: Option<String> = None;
             for &ns in sync_stores::SYNCABLE {
                 let dk = crypto::data_key(&root, ns);
-                let changed = sync_ns(
+                match sync_ns(
                     &app,
                     &base,
                     ns,
                     &dk,
                     &account_id,
                     &device_seed,
+                    gen,
                     || sync_stores::read_all(&app, ns),
                     |remote| sync_stores::merge_into(&app, ns, remote),
-                )?;
-                changed_arrays.push((ns.to_string(), changed));
+                ) {
+                    Ok(changed) => changed_arrays.push((ns.to_string(), changed)),
+                    Err(e) => {
+                        eprintln!("[aegis-sync] namespace {ns} failed: {e}");
+                        if first_err.is_none() {
+                            first_err = Some(format!("{ns}: {e}"));
+                        }
+                    }
+                }
+            }
+            // A partial sync is far better than none, so only surface an error
+            // when NOTHING synced — otherwise the caller would report the whole
+            // pass as failed and the successful namespaces' changes would be lost.
+            if changed_arrays.is_empty() {
+                return Err(first_err.unwrap_or_else(|| "no namespaces synced".into()));
             }
             Ok(changed_arrays)
         }
@@ -298,6 +357,7 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                 &dk,
                 &account_id,
                 &device_seed,
+                gen,
                 || crate::settings::sync_records(&app),
                 |remote| crate::settings::merge_remote(&app, remote),
             )?;
@@ -322,6 +382,7 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
                 &dk,
                 &account_id,
                 &device_seed,
+                gen,
                 || vec![crate::customfilters::sync_record(&app)],
                 |remote| {
                     let mut ch = Vec::new();
@@ -339,20 +400,20 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         }
     };
 
+    // The vault is a FOURTH, independent operation, and deliberately not one of the array
+    // stores: its records are sealed under a master-password key, so the generic
+    // pull→merge→push shape does not apply (see `sync_vault`'s module docs). It also runs even
+    // when the vault is locked, because the salt-publication half of the handshake must still
+    // reach the account for a device that is waiting to adopt it.
     let vault_op = {
         let root = root.clone();
         let account_id = account_id.clone();
         let device_seed = device_seed.clone();
         let base = base.clone();
         let app_clone = app_clone.clone();
-        move || -> Result<(String, Vec<String>), String> {
+        move || -> Result<(Vec<String>, Vec<String>), String> {
             let app = app_clone.clone();
-            if !crate::sync_vault::is_sync_enabled(&app) {
-                return Ok(("vault".to_string(), Vec::new()));
-            }
-            let dk = crypto::data_key(&root, "pwvault");
-            let changed = sync_vault_once(&app, &base, &account_id, &device_seed, &dk)?;
-            Ok(("vault".to_string(), changed))
+            crate::sync_vault::sync_vault_once(&app, &base, &account_id, &device_seed, &root, gen)
         }
     };
 
@@ -403,8 +464,28 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         Err(e) if first_err.is_none() => first_err = Some(e),
         Err(_) => {}
     }
+    // The vault reports `(changed, quarantined)`. Quarantined records are ones a peer sent that
+    // did not authenticate under this device's vault key — they are dropped, never written, and
+    // logged by `vault::merge_remote`. Surfacing the count as an event (rather than an error) is
+    // deliberate: an unauthenticated write is a rejected attack, not a sync failure, and the
+    // user's other namespaces must not be reported as failed because of it.
     match vault_result {
-        Ok((ns, changed)) => emit_changed(app, &ns, &changed),
+        Ok((changed, quarantined)) => {
+            if !changed.is_empty() {
+                crate::emit_event(
+                    app,
+                    "sync.changed",
+                    json!({ "namespace": "pwvault", "changedUuids": changed }),
+                );
+            }
+            if !quarantined.is_empty() {
+                crate::emit_event(
+                    app,
+                    "sync.vaultQuarantined",
+                    json!({ "count": quarantined.len(), "uuids": quarantined }),
+                );
+            }
+        }
         Err(e) if first_err.is_none() => first_err = Some(e),
         Err(_) => {}
     }
@@ -425,88 +506,53 @@ fn emit_changed<R: Runtime>(app: &AppHandle<R>, ns: &str, changed: &[String]) {
     }
 }
 
-/// Vault sync: pull→merge→push for the `pwvault` namespace. Unlike the array stores,
-/// vault records are already sealed ciphertext (XChaCha20-Poly1305 under the vault key).
-/// We wrap them in the sync transport layer (sealed with the sync data key) for encrypted
-/// transit, then unwrap on the receiving device. The vault's own seal stays intact —
-/// the server never sees plaintext credentials.
-fn sync_vault_once<R: Runtime>(
-    _app: &AppHandle<R>,
-    base: &str,
-    account_id: &str,
-    device_seed: &[u8; 32],
-    data_key: &[u8; 32],
-) -> Result<Vec<String>, String> {
-    let ns = "pwvault";
-
-    // --- Pull remote vault sealed records ---
-    let pulled = http(
-        "GET",
-        format!("{base}/v1/records?ns={ns}"),
-        auth_header(account_id, device_seed)?,
-        None,
-        SYNC_TIMEOUT_SECS,
-    )?;
-    let mut remote_sealed = Vec::new();
-    if let Some(arr) = pulled.get("records").and_then(Value::as_array) {
-        for w in arr {
-            match open_wire(data_key, ns, w) {
-                // open_wire decrypts the sync transport layer, returning the inner
-                // vault-sealed record {uuid, updatedAt, nonce, ct} (plus any synthetic
-                // hlc we added on the sending side — harmless extra field).
-                Ok(rec) => remote_sealed.push(rec),
-                Err(e) => eprintln!("[aegis-sync] skip undecryptable {ns} record: {e}"),
-            }
-        }
-    }
-
-    // --- Merge remote sealed records into local vault ---
-    let changed = crate::sync_vault::apply_synced(_app, &remote_sealed);
-
-    // --- Push local vault sealed records ---
-    let local = crate::sync_vault::read_for_sync(_app);
-    let mut wire = Vec::with_capacity(local.len());
-    for r in &local {
-        // Vault records use `updatedAt` (i64 ms timestamp) instead of the sync HLC
-        // triple. Fabricate a deterministic synthetic HLC from `updatedAt` so
-        // `seal_wire` can bind it as AAD — the receiving side sees the same HLC
-        // after decryption, and the server orders by it consistently.
-        let ts = r.get("updatedAt").and_then(Value::as_i64).unwrap_or(0);
-        let mut record = r.clone();
-        if let Some(obj) = record.as_object_mut() {
-            obj.entry(String::from("hlc")).or_insert(json!({
-                "wall_ms": ts,
-                "counter": 0,
-                "node": "vault",
-            }));
-        }
-        match seal_wire(data_key, ns, &record) {
-            Ok(w) => wire.push(w),
-            Err(e) => eprintln!("[aegis-sync] skip unsealable {ns} record: {e}"),
-        }
-    }
-    http(
-        "POST",
-        format!("{base}/v1/records"),
-        auth_header(account_id, device_seed)?,
-        Some(json!({ "ns": ns, "records": wire })),
-        SYNC_TIMEOUT_SECS,
-    )?;
-
-    Ok(changed)
-}
-
 /// Pull → decrypt → merge → push for ONE namespace. `read_local` is read AFTER the merge so
 /// the push reflects the merged-latest (the server applies HLC-LWW, so a stale push is
 /// ignored). Decrypt/seal failures on a single record are skipped + logged, never aborting.
 #[allow(clippy::too_many_arguments)]
-fn sync_ns<R: Runtime>(
-    _app: &AppHandle<R>,
+/// Records per `POST /v1/records` request.
+///
+/// The server rejects a body with more than `MAX_RECORDS_PER_REQUEST` (1000) records, and
+/// this client used to push a whole namespace in ONE un-chunked request. So a user with
+/// 1001 favourites could **never push again**: the 413 was permanent (raising the server
+/// cap or splitting the store were the only escapes) and silent — the sole symptom was
+/// `lastError: "HTTP 413"` in the sync panel. 500 leaves headroom so a future server-side
+/// cap reduction does not immediately re-break it.
+const PUSH_CHUNK: usize = 500;
+
+/// Split one namespace's sealed records into request-sized batches.
+///
+/// Pure and `pub(crate)` so the property that actually fixes the bug — *no single request
+/// ever exceeds the cap* — is unit-testable without standing up an HTTP server (there is
+/// no mock transport in this module, which is why `sync_ns` itself has no test).
+///
+/// An empty namespace yields exactly ONE empty batch: the pre-chunking code always issued
+/// a POST per namespace, and dropping that would silently stop proving the device is alive.
+pub(crate) fn push_batches(wire: &[Value]) -> Vec<&[Value]> {
+    if wire.is_empty() {
+        return vec![&[]];
+    }
+    wire.chunks(PUSH_CHUNK).collect()
+}
+
+// The nine parameters are genuinely independent (transport base, namespace, its derived
+// key, the two auth inputs, the cancellation generation, and the two store seams) and
+// every one is threaded straight into a helper that takes it alone. Bundling them into
+// a context struct would move the arity problem rather than solve it while making the
+// single call site harder to read. Clippy's 7-arg default is a style rule, not a
+// correctness one, and CI runs `-D warnings`, so the lint is allowed explicitly here
+// rather than left to fail the build.
+// `read_local`/`merge` are the store seams: they let the array stores and the vault share
+// this transport without either knowing about the other's storage.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sync_ns<R: Runtime>(
+    app: &AppHandle<R>,
     base: &str,
     ns: &str,
     data_key: &[u8; 32],
     account_id: &str,
     device_seed: &[u8; 32],
+    gen: u64,
     read_local: impl Fn() -> Vec<Value>,
     merge: impl Fn(&[Value]) -> Vec<String>,
 ) -> Result<Vec<String>, String> {
@@ -530,6 +576,12 @@ fn sync_ns<R: Runtime>(
         }
     }
     let changed = merge(&decrypted);
+    // Re-check immediately before the push: a `sync.disable` during the pull must not be
+    // followed by an upload the user explicitly asked us to stop. The merge above is local
+    // and already durable, so returning here loses nothing that wasn't already saved.
+    if cancelled(app, gen) {
+        return Ok(changed);
+    }
     let local = read_local();
     let mut wire = Vec::with_capacity(local.len());
     for r in &local {
@@ -538,13 +590,21 @@ fn sync_ns<R: Runtime>(
             Err(e) => eprintln!("[aegis-sync] skip unsealable {ns} record: {e}"),
         }
     }
-    http(
-        "POST",
-        format!("{base}/v1/records"),
-        auth_header(account_id, device_seed)?,
-        Some(json!({ "ns": ns, "records": wire })),
-        SYNC_TIMEOUT_SECS,
-    )?;
+    // Chunk the push — see `push_batches` for why the 413 cliff was permanent.
+    let batches = push_batches(&wire);
+    for (i, batch) in batches.iter().enumerate() {
+        if cancelled(app, gen) {
+            return Ok(changed);
+        }
+        http(
+            "POST",
+            format!("{base}/v1/records"),
+            auth_header(account_id, device_seed)?,
+            Some(json!({ "ns": ns, "records": batch })),
+            SYNC_TIMEOUT_SECS,
+        )
+        .map_err(|e| format!("{ns}: push batch {}/{} failed: {e}", i + 1, batches.len()))?;
+    }
     Ok(changed)
 }
 
@@ -560,10 +620,18 @@ fn register_device<R: Runtime>(
     root: &RootSecret,
 ) {
     let server = crate::settings::sync_server_url(app);
-    if server.is_empty() {
+    if server.trim().is_empty() {
         return;
     }
-    let base = server.trim_end_matches('/').to_string();
+    // Best-effort: a URL that fails validation skips device registration rather than
+    // sending the device token in the clear. The sync pass surfaces the error to the user.
+    let base = match validated_base_for(app, &server) {
+        Ok(b) => b,
+        Err(e) => {
+            eprintln!("[aegis-sync] skipping device registration: {e}");
+            return;
+        }
+    };
     let account_sig = {
         let sk = crypto::account_signing_key(root);
         let msg = format!("aegis-register-v1\n{account_id}\n{device_id}");
@@ -639,6 +707,7 @@ fn unlock_with_root<R: Runtime>(app: &AppHandle<R>, root: RootSecret, passphrase
 
 /// Trigger a background sync pass (no-op if disabled). Debounced only by the engine status.
 pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
+    let gen;
     {
         let st = app.state::<SyncState>();
         let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -646,18 +715,26 @@ pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
             return;
         }
         g.status = Status::Syncing;
+        gen = g.generation;
     }
     let app = app.clone();
     std::thread::spawn(move || {
         // Panic-safe: a panic in sync_once must reset status to Error, not leave it stuck
         // on "syncing" forever (SyncState's lock isn't held across sync_once, so no poison).
         let result =
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sync_once(&app))) {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| sync_once(&app, gen))) {
                 Ok(r) => r,
                 Err(_) => Err("sync task panicked".to_string()),
             };
         let st = app.state::<SyncState>();
         let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+        // A disable/enable that landed while this pass was in flight owns the status now —
+        // don't stomp `Disabled` (or a fresh `Syncing`) with this pass's outcome.
+        if g.generation != gen {
+            drop(g);
+            emit_state(&app);
+            return;
+        }
         match result {
             Ok(()) => {
                 g.status = Status::Idle;
@@ -676,16 +753,43 @@ pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
 
 /// At boot: spawn the periodic background sync, then (unless the user durably disabled
 /// sync) auto-unlock from the OS keychain and enable.
+/// How long the periodic thread should wait before the next pass, given the configured
+/// interval. `None` means "poll the setting again instead of passing".
+///
+/// `syncIntervalSec == 0` is the documented way to switch periodic sync off, and it used to
+/// be a hot spin: `sleep(0)` returns immediately, `nudge` only short-circuits while a pass is
+/// already `Syncing`, and the gap between passes is milliseconds — so the app free-ran
+/// pull → merge → push forever, burning CPU and hammering the server. It is reachable from an
+/// imported `data.export` bundle as well as the settings UI, so it is not merely a footgun.
+fn periodic_delay(secs: u64) -> Option<Duration> {
+    if secs == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(secs))
+    }
+}
+
+/// How often the periodic thread re-reads the interval while periodic sync is switched off.
+/// Bounded so re-enabling it takes effect promptly without the thread spinning.
+const PERIODIC_OFF_POLL_SECS: u64 = 30;
+
+/// At boot: spawn the periodic background sync, then (unless the user durably disabled
+/// sync) auto-unlock from the OS keychain and enable.
 pub fn start<R: Runtime>(app: &AppHandle<R>) {
     // Low-frequency periodic sync so peers converge even without local edits. A no-op while
     // disabled; debounced by the Syncing guard. One thread for the process lifetime.
     {
         let app = app.clone();
         std::thread::spawn(move || loop {
-            std::thread::sleep(Duration::from_secs(crate::settings::sync_interval_sec(
-                &app,
-            )));
-            nudge(&app);
+            match periodic_delay(crate::settings::sync_interval_sec(&app)) {
+                Some(d) => {
+                    std::thread::sleep(d);
+                    nudge(&app);
+                }
+                // Periodic sync is switched off. Park instead of passing — but keep reading the
+                // setting so switching it back on resumes without a restart.
+                None => std::thread::sleep(Duration::from_secs(PERIODIC_OFF_POLL_SECS)),
+            }
         });
     }
     // Respect a durable disable (the seed may still be in the keychain if not forgotten).
@@ -702,22 +806,97 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Build the unauthenticated health-probe URL from a user-entered server URL. `None` for an
-/// empty/whitespace entry. Trims surrounding whitespace and any trailing slashes.
-fn healthz_url(raw: &str) -> Option<String> {
+/// Validate a user-entered sync server URL and return it with trailing slashes trimmed.
+///
+/// Every sync request carries a real per-device `Authorization` header (an Ed25519-signed
+/// credential derived from the sync root), and the request/response bodies are the user's
+/// settings, history, bookmarks, subscriptions and custom filters. Plaintext transport is
+/// therefore only acceptable for a loopback server the user runs on their own machine, where
+/// the bytes never leave the host. Everything else must be https — unless the user has
+/// explicitly set `syncAllowInsecure`, which waives the rule for a plaintext remote server.
+///
+/// `allow_insecure` is that setting, read at the point of use by the callers. What the waiver
+/// does and does not buy, stated plainly: the record bodies are sealed under the sync root, so
+/// their *contents* stay unreadable, and a forged body fails the AEAD check. What a network
+/// attacker still gets is everything outside that envelope — which endpoints you talk to and
+/// when (full traffic analysis), the ability to drop, delay or reorder records (so deletions
+/// and edits can be selectively withheld or resurrected), and the ability to capture a
+/// `Authorization` header and replay it (the replay set is in-memory, so a restart clears it
+/// but a live process does not).
+///
+/// This is enforced here — at the point of use — rather than only when the setting is
+/// written, because `syncServerUrl` is a free-text setting that `settings.set` and an imported
+/// `data.export` bundle can both write. Those two write paths are the equivalent of the user
+/// typing the box: the same trust, not a bypass around it.
+fn validated_base(raw: &str, allow_insecure: bool) -> Result<String, String> {
     let base = raw.trim().trim_end_matches('/');
     if base.is_empty() {
-        return None;
+        return Err("sync server URL is not configured".into());
     }
+    let lower = base.to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        return Ok(base.to_string());
+    }
+    if let Some(rest) = lower.strip_prefix("http://") {
+        // Host = authority up to the first '/', '?' or '#', minus any userinfo and port.
+        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+        let authority = authority
+            .rsplit_once('@')
+            .map(|(_, h)| h)
+            .unwrap_or(authority);
+        // Split off the port. A bracketed IPv6 literal is `[::1]:8787`, where the port colon
+        // is the one AFTER the closing bracket — splitting on the first colon would cut a
+        // hole in the middle of the address and reject a legitimate loopback server.
+        let host = if authority.starts_with('[') {
+            // `[::1]:8787` — the port colon is the one after the closing bracket, so slice
+            // the literal out by its own brackets rather than splitting on ':'.
+            authority
+                .find(']')
+                .map(|close| &authority[1..close])
+                .unwrap_or("")
+        } else {
+            authority.split(':').next().unwrap_or("")
+        };
+        let is_loopback = host.eq_ignore_ascii_case("localhost")
+            || host
+                .parse::<std::net::IpAddr>()
+                .map(|ip| ip.is_loopback())
+                .unwrap_or(false);
+        if is_loopback {
+            return Ok(base.to_string());
+        }
+        if allow_insecure {
+            return Ok(base.to_string());
+        }
+    }
+    Err("sync server must be https:// — plain http:// is only allowed for localhost (or when you allow an unencrypted server in Settings → Sync)".into())
+}
+
+/// Validate `syncServerUrl` as it is configured, honoring the `syncAllowInsecure` waiver.
+fn validated_base_for<R: Runtime>(app: &AppHandle<R>, raw: &str) -> Result<String, String> {
+    validated_base(raw, crate::settings::sync_allow_insecure(app))
+}
+
+/// Build the unauthenticated health-probe URL from a user-entered server URL. `None` for an
+/// empty/whitespace entry. Trims surrounding whitespace and any trailing slashes. The scheme
+/// is validated first so the probe can't be pointed at a plaintext remote host.
+fn healthz_url(raw: &str, allow_insecure: bool) -> Option<String> {
+    let base = validated_base(raw, allow_insecure).ok()?;
     Some(format!("{base}/healthz"))
 }
 
 /// Probe `{url}/healthz` (unauthenticated) with a short timeout. Returns a STRUCTURED result —
 /// a failed probe is a value, not a thrown IPC error. Uses the spawn-thread + reqwest::blocking
 /// pattern (blocking client can't run in the command's async context); 8s keeps it interactive.
-fn test_connection(raw_url: &str) -> Value {
-    let Some(target) = healthz_url(raw_url) else {
-        return json!({ "ok": false, "error": "Enter a server URL first" });
+fn test_connection<R: Runtime>(app: &AppHandle<R>, raw_url: &str) -> Value {
+    let allow_insecure = crate::settings::sync_allow_insecure(app);
+    let Some(target) = healthz_url(raw_url, allow_insecure) else {
+        // Distinguish "you left it blank" from "that URL would send your device token in
+        // the clear", so the user learns *why* rather than just seeing a failed probe.
+        return match validated_base(raw_url, allow_insecure) {
+            Err(e) => json!({ "ok": false, "error": e }),
+            Ok(_) => json!({ "ok": false, "error": "Enter a server URL first" }),
+        };
     };
     let start = std::time::Instant::now();
     let probe = std::thread::spawn(move || -> Result<(), String> {
@@ -829,7 +1008,7 @@ pub fn dispatch<R: Runtime>(
 
         "sync.testConnection" => {
             let url = payload.get("url").and_then(Value::as_str).unwrap_or("");
-            Some(Ok(test_connection(url)))
+            Some(Ok(test_connection(app, url)))
         }
 
         "sync.getRecoveryPhrase" => {
@@ -862,10 +1041,13 @@ pub fn dispatch<R: Runtime>(
                 }
             };
             let server = crate::settings::sync_server_url(app);
-            if server.is_empty() {
+            if server.trim().is_empty() {
                 return Some(Ok(json!([])));
             }
-            let base = server.trim_end_matches('/').to_string();
+            let base = match validated_base_for(app, &server) {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
             let auth = match auth_header(&account_id, &device_seed) {
                 Ok(a) => a,
                 Err(e) => return Some(Err(e)),
@@ -921,7 +1103,10 @@ pub fn dispatch<R: Runtime>(
                 }
             };
             let server = crate::settings::sync_server_url(app);
-            let base = server.trim_end_matches('/').to_string();
+            let base = match validated_base_for(app, &server) {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
             let auth = match auth_header(&account_id, &device_seed) {
                 Ok(a) => a,
                 Err(e) => return Some(Err(e)),
@@ -962,6 +1147,77 @@ mod tests {
         }
     }
 
+    /// The cleartext `hlc` on a wire record is AEAD-associated data, so a peer that rewrites it
+    /// invalidates the tag and the record can never be opened again. The reference server used to
+    /// do exactly that — bumping `hlc` to break a cross-record HLC tie without re-sealing `ct` —
+    /// which permanently bricked every record it touched (and, because the retry then lost the
+    /// per-uuid LWW gate as stale, made them unwritable too). Pin the client half of that
+    /// contract: a rewritten `hlc` must be REJECTED, never silently accepted.
+    #[test]
+    fn open_wire_rejects_a_record_whose_hlc_was_rewritten() {
+        let key = [7u8; 32];
+        let rec = json!({
+            "uuid": "u1",
+            "name": "Fav",
+            "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" },
+        });
+        let sealed = seal_wire(&key, "favorites", &rec).unwrap();
+
+        let mut tampered = sealed.clone();
+        tampered["hlc"] = json!({ "wall_ms": 9_999, "counter": 0, "node": "n1" });
+        assert!(
+            open_wire(&key, "favorites", &tampered).is_err(),
+            "a rewritten hlc must fail the AEAD check, not open"
+        );
+
+        // Same record untouched still opens — the guard must not be vacuously true.
+        assert!(open_wire(&key, "favorites", &sealed).is_ok());
+    }
+
+    /// The server's tie-break now lands in a SEPARATE `ord` field so `hlc` stays
+    /// authenticating. The client must adopt `ord` as the record's HLC, otherwise its own merge
+    /// would re-derive an arbitrary local tie-break and disagree with the server's total order.
+    #[test]
+    fn open_wire_adopts_the_servers_ordering_stamp() {
+        let key = [7u8; 32];
+        let rec = json!({
+            "uuid": "u1",
+            "name": "Fav",
+            "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" },
+        });
+        let mut sealed = seal_wire(&key, "favorites", &rec).unwrap();
+        let ord = json!({ "wall_ms": 1000, "counter": 3, "node": "n1" });
+        sealed["ord"] = ord.clone();
+
+        let opened = open_wire(&key, "favorites", &sealed).unwrap();
+        assert_eq!(
+            opened["hlc"], ord,
+            "the server's ordering stamp must win so our merge matches its order"
+        );
+        // The rest of the record is untouched by the adoption.
+        assert_eq!(opened["name"], json!("Fav"));
+        assert_eq!(opened["uuid"], json!("u1"));
+    }
+
+    /// An old server (or a record from before `ord` existed) sends no `ord` at all. The adoption
+    /// must be a no-op there, not an error and not a clobber.
+    #[test]
+    fn open_wire_leaves_hlc_alone_when_the_server_sent_no_ord() {
+        let key = [7u8; 32];
+        let hlc = json!({ "wall_ms": 1000, "counter": 2, "node": "n1" });
+        let sealed = seal_wire(
+            &key,
+            "favorites",
+            &json!({ "uuid": "u1", "name": "Fav", "hlc": hlc.clone() }),
+        )
+        .unwrap();
+        assert!(
+            sealed.get("ord").is_none(),
+            "seal_wire must not invent an ord"
+        );
+        assert_eq!(open_wire(&key, "favorites", &sealed).unwrap()["hlc"], hlc);
+    }
+
     #[test]
     fn restart_restores_an_enabled_sync_state() {
         crate::test_support::with_tmp_app(|app| {
@@ -985,6 +1241,7 @@ mod tests {
                 device_id: String::new(),
                 backing: "none".into(),
                 status: Status::Disabled,
+                generation: 0,
                 last_sync_ms: 0,
                 last_error: String::new(),
             };
@@ -1034,6 +1291,7 @@ mod tests {
                 device_id: String::new(),
                 backing: "none".into(),
                 status: Status::Disabled,
+                generation: 0,
                 last_sync_ms: 0,
                 last_error: String::new(),
             };
@@ -1043,27 +1301,233 @@ mod tests {
         });
     }
 
+    /// `syncIntervalSec == 0` means "no periodic pass". It must NOT become `sleep(0)`,
+    /// which returns instantly and free-runs pull -> merge -> push forever.
+    #[test]
+    fn a_zero_interval_disables_the_periodic_pass_instead_of_spinning() {
+        assert_eq!(periodic_delay(0), None);
+        assert_eq!(periodic_delay(300), Some(Duration::from_secs(300)));
+        assert_eq!(periodic_delay(1), Some(Duration::from_secs(1)));
+        // The parked thread still re-reads the setting, so this poll interval is what decides
+        // how long re-enabling periodic sync takes. It must be long enough to be cheap and
+        // short enough to feel immediate.
+        const {
+            assert!(
+                PERIODIC_OFF_POLL_SECS >= 5 && PERIODIC_OFF_POLL_SECS <= 60,
+                "the off-poll must stay responsive without spinning"
+            )
+        }
+    }
+
+    /// Disabling mid-pass must actually stop the upload. Before the generation counter,
+    /// `sync.disable` cleared the root and set `Disabled`, but the already-spawned pass kept
+    /// pushing every namespace and then unconditionally wrote `Idle` over `Disabled`.
+    #[test]
+    fn a_generation_change_cancels_an_in_flight_pass() {
+        crate::test_support::with_tmp_app(|app| {
+            // Not cancelled while enabled at the same generation.
+            let enabled = dispatch(app, "sync.enableNew", &Value::Null)
+                .unwrap()
+                .unwrap();
+            assert_eq!(state_json(app)["enabled"], json!(true));
+            let gen = {
+                let st = app.state::<SyncState>();
+                let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+                g.generation
+            };
+            assert!(!cancelled(app, gen), "a live pass must not cancel itself");
+            // A pass that started one generation ago is cancelled — this is the disable case.
+            assert!(cancelled(app, gen + 1), "a bumped generation must cancel");
+            // Disabling must bump the generation, not just clear the root.
+            let _ = dispatch(app, "sync.disable", &Value::Null).unwrap();
+            assert_eq!(state_json(app)["enabled"], json!(false));
+            assert!(
+                cancelled(app, gen),
+                "disabling must cancel the pass that was already in flight"
+            );
+            let _ = enabled;
+        });
+    }
+
     #[test]
     fn healthz_url_builds_or_rejects() {
-        assert_eq!(healthz_url(""), None);
-        assert_eq!(healthz_url("   "), None);
+        assert_eq!(healthz_url("", false), None);
+        assert_eq!(healthz_url("   ", false), None);
+        // Plaintext is refused for a remote host, so the probe can't be aimed at one.
+        assert_eq!(healthz_url("http://sync.example.com:8787", false), None);
+        // ...but a loopback server the user runs themselves is fine.
         assert_eq!(
-            healthz_url("http://h:8787"),
-            Some("http://h:8787/healthz".to_string())
+            healthz_url("http://127.0.0.1:8787", false),
+            Some("http://127.0.0.1:8787/healthz".to_string())
         );
         assert_eq!(
-            healthz_url("http://h:8787/"),
-            Some("http://h:8787/healthz".to_string())
+            healthz_url("http://localhost:8787", false),
+            Some("http://localhost:8787/healthz".to_string())
         );
         assert_eq!(
-            healthz_url("  https://sync.example.com/  "),
+            healthz_url("http://[::1]:8787", false),
+            Some("http://[::1]:8787/healthz".to_string())
+        );
+        assert_eq!(
+            healthz_url("  https://sync.example.com/  ", false),
             Some("https://sync.example.com/healthz".to_string())
         );
         // A double trailing slash (copy-paste artifact) collapses to one — no `//healthz`.
         assert_eq!(
-            healthz_url("http://h:8787//"),
-            Some("http://h:8787/healthz".to_string())
+            healthz_url("http://127.0.0.1:8787//", false),
+            Some("http://127.0.0.1:8787/healthz".to_string())
         );
+        // The waiver applies to the probe too, so "Test connection" can reach a plaintext
+        // server the user has explicitly allowed (it is the only way to confirm one works).
+        assert_eq!(
+            healthz_url("http://sync.example.com:8787", true),
+            Some("http://sync.example.com:8787/healthz".to_string())
+        );
+    }
+
+    /// The sync transport carries a per-device `Authorization` credential and the user's
+    /// stores, so plaintext must be confined to loopback. These cases are the security
+    /// property, not incidental formatting. The `false` here is the DEFAULT posture — the
+    /// `syncAllowInsecure` waiver is opt-in, and `allow_insecure_waiver_opens_plaintext_remote`
+    /// covers what it changes.
+    #[test]
+    fn validated_base_requires_https_except_loopback() {
+        // https: always fine, trailing slashes trimmed.
+        assert_eq!(
+            validated_base("https://sync.example.com/", false),
+            Ok("https://sync.example.com".into())
+        );
+        assert_eq!(
+            validated_base("  https://sync.example.com//  ", false),
+            Ok("https://sync.example.com".into())
+        );
+        // Uppercase scheme is still https.
+        assert_eq!(
+            validated_base("HTTPS://Sync.Example.com", false),
+            Ok("HTTPS://Sync.Example.com".into())
+        );
+
+        // http: loopback forms allowed.
+        for ok in [
+            "http://localhost",
+            "http://localhost:8787",
+            "http://LOCALHOST:8787",
+            "http://127.0.0.1:8787",
+            "http://127.0.0.2",
+            "http://[::1]:8787",
+            // userinfo must not smuggle a remote host past the check.
+            "http://user:pw@localhost:8787",
+        ] {
+            assert!(
+                validated_base(ok, false).is_ok(),
+                "expected loopback http to be allowed: {ok}"
+            );
+        }
+
+        // http: everything else rejected, including the near-misses people actually type.
+        for bad in [
+            "http://sync.example.com",
+            "http://sync.example.com:8787",
+            "http://192.168.1.10:8787", // RFC1918 — still leaves the host
+            "http://10.0.0.5",
+            "http://169.254.169.254",    // link-local metadata endpoint
+            "http://[::ffff:127.0.0.1]", // v4-mapped must not sneak through
+            "http://localhost.evil.com", // suffix trick
+            "http://notlocalhost",
+            "ftp://sync.example.com", // no scheme we trust at all
+            "sync.example.com",       // scheme-less
+        ] {
+            assert!(
+                validated_base(bad, false).is_err(),
+                "expected rejection for: {bad}"
+            );
+        }
+
+        // Empty / whitespace is "not configured", not a validation failure.
+        assert!(validated_base("", false).is_err());
+        assert!(validated_base("    ", false).is_err());
+        assert!(validated_base("///", false).is_err());
+    }
+
+    /// The `syncAllowInsecure` waiver: with it on, a plaintext REMOTE server is accepted —
+    /// and only that changes. https/loopback keep working, an empty URL stays "not
+    /// configured", and a scheme we have no business speaking (`ftp:`, scheme-less) is still
+    /// refused, because the waiver relaxes *transport* encryption, not URL parsing.
+    #[test]
+    fn allow_insecure_waiver_opens_plaintext_remote() {
+        for ok in [
+            "http://sync.example.com",
+            "http://sync.example.com:8787",
+            "http://192.168.1.10:8787",  // a LAN self-hoster
+            "http://localhost:8787",     // unchanged
+            "https://sync.example.com/", // unchanged
+        ] {
+            assert!(
+                validated_base(ok, true).is_ok(),
+                "expected the waiver to allow: {ok}"
+            );
+        }
+        // The same values still fail with the waiver OFF — the default posture is untouched.
+        for bad in ["http://sync.example.com", "http://192.168.1.10:8787"] {
+            assert!(validated_base(bad, false).is_err());
+        }
+        // Not a blanket "accept any string": unparseable/absent schemes stay rejected.
+        for still_bad in [
+            "",
+            "   ",
+            "///",
+            "ftp://sync.example.com",
+            "sync.example.com",
+        ] {
+            assert!(
+                validated_base(still_bad, true).is_err(),
+                "waiver must not accept: {still_bad}"
+            );
+        }
+    }
+
+    #[test]
+    fn push_batches_never_exceeds_the_servers_request_cap() {
+        // The regression this pins: one request per namespace meant a store that grew past
+        // the server's `MAX_RECORDS_PER_REQUEST` (1000) could never sync again, silently.
+        for n in [0usize, 1, 499, 500, 501, 1000, 1001, 5001] {
+            let wire: Vec<Value> = (0..n).map(|i| json!({ "uuid": format!("r{i}") })).collect();
+            let batches = push_batches(&wire);
+            for b in &batches {
+                assert!(
+                    b.len() <= PUSH_CHUNK,
+                    "n={n}: a batch carried {} records, over the {PUSH_CHUNK} cap",
+                    b.len()
+                );
+            }
+            // Nothing dropped, nothing duplicated, order preserved.
+            let flat: Vec<&Value> = batches.iter().flat_map(|b| b.iter()).collect();
+            assert_eq!(flat.len(), n, "n={n}: record count changed");
+            for (i, r) in flat.iter().enumerate() {
+                assert_eq!(
+                    r["uuid"],
+                    json!(format!("r{i}")),
+                    "n={n}: record {i} out of order"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn push_batches_splits_just_past_the_cap_and_keeps_one_empty_batch() {
+        // 1001 favourites = exactly the user the single-request bug locked out.
+        let wire: Vec<Value> = (0..1001)
+            .map(|i| json!({ "uuid": format!("r{i}") }))
+            .collect();
+        let batches = push_batches(&wire);
+        assert_eq!(batches.len(), 3, "1001 records should split into 500+500+1");
+        assert_eq!(batches[0].len(), PUSH_CHUNK);
+        assert_eq!(batches[1].len(), PUSH_CHUNK);
+        assert_eq!(batches[2].len(), 1);
+        // Empty still POSTs once, so the device keeps proving it is alive.
+        let empty = push_batches(&[]);
+        assert_eq!(empty.len(), 1);
+        assert!(empty[0].is_empty());
     }
 
     #[test]

@@ -35,7 +35,6 @@ pub fn read_all<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
 fn merge_records(
     mut local: Vec<Value>,
     remote: &[Value],
-    store_name: &str,
     node: &str,
     now_ms: i64,
 ) -> (Vec<Value>, Vec<String>) {
@@ -75,7 +74,15 @@ fn merge_records(
             None => {
                 let mut incoming = r.clone();
                 if incoming.get("id").is_some() {
-                    let fresh = crate::jsonstore::next_id_optimized(&local, store_name);
+                    // NOT `next_id_optimized`: that helper answers from a process-global cache
+                    // keyed by store name, and it ignores the `items` argument entirely on a
+                    // cache hit. `local` here is an in-memory Vec that never goes through
+                    // `load`/`save`, so the cache still holds the value computed from the
+                    // PRE-merge array for the whole loop — which handed two remote records
+                    // arriving in one batch the SAME fresh id, so `remove {id}`/`update {id}`
+                    // hit both. The O(n) scan sees each record as it is pushed, so consecutive
+                    // inserts get consecutive ids.
+                    let fresh = crate::jsonstore::next_id(&local);
                     if let Some(obj) = incoming.as_object_mut() {
                         obj.insert("id".into(), Value::from(fresh)); // avoid id collision
                     }
@@ -91,10 +98,21 @@ fn merge_records(
 /// Merge `remote` into the local `name` store (HLC-LWW), persist if anything changed, and
 /// return the changed uuids. An allowlist merge re-seeds the in-memory allowlist + engine.
 pub fn merge_into<R: Runtime>(app: &AppHandle<R>, name: &str, remote: &[Value]) -> Vec<String> {
+    // Hold the per-store write lock across the WHOLE read-modify-write. This runs on the
+    // background sync thread and races the UI's own `places::dispatch` arms on the very
+    // same file (`favorites.json`, `saved.json`, …). Without the lock, a `favorites.add`
+    // that lands between our `read_all` and our `save` is silently overwritten — the user's
+    // just-made favorite disappears, and because `save` succeeded the file looks perfectly
+    // healthy so nothing reports the loss. `jsonstore::write_atomic` only guarantees that no
+    // individual WRITE is lost, never that a read-modify-write is atomic.
+    crate::jsonstore::with_store_lock(name, || merge_into_locked(app, name, remote))
+}
+
+/// The body of [`merge_into`]; runs with `name`'s store lock already held.
+fn merge_into_locked<R: Runtime>(app: &AppHandle<R>, name: &str, remote: &[Value]) -> Vec<String> {
     let node = crate::sync_identity::node_id(app);
     let local = read_all(app, name);
-    let (mut merged, mut changed) =
-        merge_records(local, remote, name, &node, crate::jsonstore::now_ms());
+    let (mut merged, mut changed) = merge_records(local, remote, &node, crate::jsonstore::now_ms());
     // Collapse cross-device duplicates (same normalized url/host): tombstone the losers so the
     // deletion converges across devices. Idempotent — tombstoned losers are skipped next pass.
     let losers = duplicate_losers(&merged, key_field_for(name));
@@ -115,7 +133,17 @@ pub fn merge_into<R: Runtime>(app: &AppHandle<R>, name: &str, remote: &[Value]) 
         }
     }
     if !changed.is_empty() {
-        let _ = crate::jsonstore::save(app, name, &merged);
+        // A failed write here is NOT cosmetic: `save` is the only thing that puts the merged
+        // rows on disk, and `jsonstore`'s cache is only refreshed after a successful
+        // `write_atomic`. So swallowing the error returned `Ok`-shaped success to the sync
+        // engine, which then reported the namespace as synced and cleared its dirty flag —
+        // while neither disk nor cache moved. The peer's rows would be re-fetched and
+        // re-merged every pass and never stick, with nothing anywhere reporting why. Unlike
+        // the local mutators (see `jsonstore::add_host`) there is no "the user watches the
+        // row" feedback path here at all, so the log line is the ONLY signal.
+        if let Err(e) = crate::jsonstore::save(app, name, &merged) {
+            eprintln!("[aegis] failed to persist merged {name} from sync: {e}");
+        }
         if name == "allowlist" {
             // The allowlist drives the engine policy → refresh the cache + engine.
             crate::adblock::seed_from_disk(app);
@@ -316,7 +344,7 @@ mod tests {
     fn merge_inserts_new_uuids() {
         let local = vec![rec("a", 1, false, "local-a")];
         let remote = vec![rec("b", 1, false, "remote-b")];
-        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert_eq!(changed, vec!["b".to_string()]);
         assert_eq!(merged.len(), 2);
     }
@@ -326,7 +354,7 @@ mod tests {
         // Remote newer → replace (and the payload updates).
         let local = vec![rec("a", 1, false, "old")];
         let remote = vec![rec("a", 5, false, "new")];
-        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert_eq!(changed, vec!["a".to_string()]);
         assert_eq!(
             merged[0].get("payload").and_then(Value::as_str),
@@ -336,7 +364,7 @@ mod tests {
         // Older remote → ignored (no change).
         let local = vec![rec("a", 9, false, "keep")];
         let remote = vec![rec("a", 2, false, "stale")];
-        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert!(changed.is_empty());
         assert_eq!(
             merged[0].get("payload").and_then(Value::as_str),
@@ -349,7 +377,7 @@ mod tests {
         // A newer remote tombstone deletes a live local record.
         let local = vec![rec("a", 1, false, "live")];
         let remote = vec![rec("a", 5, true, "live")];
-        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert_eq!(changed, vec!["a".to_string()]);
         assert!(crate::jsonstore::is_deleted(&merged[0]));
         // live() then hides it.
@@ -367,7 +395,7 @@ mod tests {
             "id": 1, "uuid": "remote-uuid",
             "hlc": { "wall_ms": 1, "counter": 0, "node": "b" }, "deleted": false
         })];
-        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert_eq!(changed, vec!["remote-uuid".to_string()]);
         assert_eq!(merged.len(), 2);
         // The two records keep distinct ids so a renderer `remove {id}` can't hit both.
@@ -382,6 +410,51 @@ mod tests {
         );
     }
 
+    /// The single-insert test above cannot see the bug this one exists for: `next_id_optimized`
+    /// answers from a process-global cache keyed by store name and ignores its `items`
+    /// argument, and inside `merge_records` the local array never round-trips through
+    /// `load`/`save` — so the cache stayed pinned at the value computed before the loop and the
+    /// SECOND insert in the same batch was handed the id the first one had just taken. Two
+    /// favorites sharing an id means `remove {id}` tombstones both and `update {id}` rewrites
+    /// both.
+    ///
+    /// Driven through the real `merge_into` seam, NOT `merge_records` directly: the bug only
+    /// reproduces when `NEXT_ID_CACHE` is warm, and it is `read_all` → `load` that warms it, in
+    /// production and here alike. A test that called `merge_records` with a hand-built array
+    /// would leave the cache cold, take the O(n) fallback, and pass against the broken code.
+    #[test]
+    fn two_remote_inserts_in_one_batch_get_distinct_ids() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            let remote = vec![
+                json!({
+                    "id": 7, "uuid": "remote-a", "url": "https://a.test/",
+                    "hlc": { "wall_ms": 2, "counter": 0, "node": "b" }, "deleted": false
+                }),
+                json!({
+                    "id": 7, "uuid": "remote-b", "url": "https://b.test/",
+                    "hlc": { "wall_ms": 3, "counter": 0, "node": "b" }, "deleted": false
+                }),
+            ];
+            merge_into(app, "favorites", &remote);
+
+            let merged = crate::jsonstore::load_synced(app, "favorites");
+            assert_eq!(merged.len(), 2, "both remote records must land: {merged:?}");
+
+            let mut ids: Vec<i64> = merged
+                .iter()
+                .filter_map(|r| r.get("id").and_then(Value::as_i64))
+                .collect();
+            ids.sort_unstable();
+            assert_eq!(
+                ids.len(),
+                2,
+                "each inserted record needs its own local id or remove/update hit both: {ids:?}"
+            );
+            assert_ne!(ids[0], ids[1], "batch inserts collided: {ids:?}");
+        });
+    }
+
     #[test]
     fn merge_preserves_local_id_on_replace() {
         // Same uuid on both devices but different local ids; remote dominates by HLC.
@@ -393,7 +466,7 @@ mod tests {
             "id": 99, "uuid": "u", "payload": "new",
             "hlc": { "wall_ms": 5, "counter": 0, "node": "b" }, "deleted": false
         })];
-        let (merged, _) = merge_records(local, &remote, "test", "n", 100);
+        let (merged, _) = merge_records(local, &remote, "n", 100);
         assert_eq!(
             merged[0].get("payload").and_then(Value::as_str),
             Some("new")
@@ -409,7 +482,7 @@ mod tests {
     fn merge_skips_records_missing_uuid_or_hlc() {
         let local: Vec<Value> = vec![];
         let remote = vec![json!({ "payload": "no-meta" }), rec("ok", 1, false, "x")];
-        let (merged, changed) = merge_records(local, &remote, "test", "n", 100);
+        let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert_eq!(changed, vec!["ok".to_string()]); // only the well-formed one
         assert_eq!(merged.len(), 1);
     }

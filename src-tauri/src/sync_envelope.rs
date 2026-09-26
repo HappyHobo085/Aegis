@@ -77,10 +77,34 @@ fn next_tick(prev: (i64, u32), now_ms: i64) -> (i64, u32) {
     }
 }
 
+/// How far ahead of local time a remote stamp is trusted when advancing the clock.
+///
+/// HLC receive is an unbounded `max`, so a single record carrying a far-future `wall_ms`
+/// pins the PROCESS-GLOBAL clock and every later local edit inherits that stamp. With
+/// `i64::MAX` that is unrecoverable: the poisoned stamp wins LWW forever on the server AND
+/// beats every genuine peer update, so the namespace is stuck until the store is deleted.
+///
+/// Clamping is what makes it *self-healing*: the clock is only pushed to `now + 60s`, real
+/// time then passes that mark on its own, and the next tick moves past it. The same bound
+/// the auth path already applies to token timestamps (`MAX_FUTURE_SKEW_MS` in
+/// `sync-server/src/main.rs`) — a device more than a minute ahead is already broken, and its
+/// own records would be rejected by a strict peer regardless.
+const MAX_REMOTE_SKEW_MS: i64 = 60_000;
+
 /// Pure HLC receive: the next local `(wall, counter)` dominating both the prior local
 /// state and the observed remote `(wall, counter)` (standard HLC update).
+///
+/// The remote wall is clamped to `now_ms + MAX_REMOTE_SKEW_MS` (see that const). `local.0`
+/// is deliberately NOT clamped: doing so could move the clock backwards and break the
+/// monotonicity every other stamp relies on. The consequence is that a clock already
+/// poisoned by a pre-fix build cannot be repaired in-process — which is precisely why the
+/// clamp has to happen at this boundary, on the way IN.
 #[allow(dead_code)] // via observe() — dead on the Android cdylib until F2b's merge runs
 fn next_observe(local: (i64, u32), now_ms: i64, remote: (i64, u32)) -> (i64, u32) {
+    let remote = (
+        remote.0.min(now_ms.saturating_add(MAX_REMOTE_SKEW_MS)),
+        remote.1,
+    );
     let max_wall = now_ms.max(local.0).max(remote.0);
     let counter = if max_wall == local.0 && max_wall == remote.0 {
         local.1.max(remote.1) + 1
@@ -121,6 +145,68 @@ pub fn observe(node: &str, now_ms: i64, remote: &Hlc) -> Hlc {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A hostile/broken peer stamping `i64::MAX` must NOT pin the clock. This is the
+    /// regression guard for permanent sync poisoning: before the clamp in `next_observe`,
+    /// the unbounded `max` adopted `i64::MAX` and every later tick inherited it.
+    #[test]
+    fn a_far_future_remote_stamp_cannot_poison_the_clock() {
+        let now = 1_000i64;
+        let (wall, counter) = next_observe((now, 0), now, (i64::MAX, 7));
+        assert!(
+            wall <= now + MAX_REMOTE_SKEW_MS,
+            "clock adopted an absurd remote wall: {wall}"
+        );
+        // Crucially it is strictly LESS than the attacker asked for — this is a clamp, not a
+        // "reject the whole observation".
+        assert!(wall < i64::MAX);
+        // And the counter still advanced, so a same-millisecond local edit is orderable.
+        assert!(counter > 0, "counter should still advance past the remote");
+    }
+
+    /// The self-healing property that makes a clamp strictly better than `i64::MAX`:
+    /// once real time passes the clamped mark, the next tick moves past it on its own.
+    #[test]
+    fn a_clamped_clock_recovers_once_real_time_passes_it() {
+        let start = 1_000i64;
+        let clamped = now_future_bound(start);
+        // Simulate the worst case: the clock sits exactly at the clamp ceiling.
+        let (poisoned_wall, poisoned_counter) = (clamped, 3u32);
+        // Real time has now advanced well past the ceiling (e.g. 10 minutes later).
+        let later = start + 600_000;
+        let (wall, _) = next_observe((poisoned_wall, poisoned_counter), later, (0, 0));
+        assert!(
+            wall > poisoned_wall,
+            "clock must escape the clamp on its own once real time passes it"
+        );
+        assert!(wall <= later, "clock must not run ahead of real time");
+    }
+
+    /// Guard against the opposite failure: an in-window remote stamp (ordinary clock skew
+    /// between two real devices) MUST still advance the clock — otherwise the clamp would
+    /// silently break legitimate HLC receive.
+    #[test]
+    fn an_in_window_remote_stamp_still_advances_the_clock() {
+        let now = 1_000i64;
+        // 30s ahead: real, plausible skew between two devices.
+        let (wall, counter) = next_observe((now, 0), now, (now + 30_000, 4));
+        assert_eq!(wall, now + 30_000, "an in-window stamp must be adopted");
+        assert_eq!(counter, 5, "counter must be remote.counter + 1");
+    }
+
+    /// A remote stamp in the PAST is left alone: LWW simply loses, which is harmless.
+    #[test]
+    fn a_past_remote_stamp_does_not_move_the_clock_backwards() {
+        let now = 1_000i64;
+        let (wall, counter) = next_observe((now, 5), now, (1, 9));
+        assert_eq!(wall, now, "the clock must never regress");
+        assert_eq!(counter, 6, "counter must still advance past the remote");
+    }
+
+    /// Test helper: the clamp ceiling `next_observe` would use for a given `now`.
+    fn now_future_bound(now: i64) -> i64 {
+        now.saturating_add(MAX_REMOTE_SKEW_MS)
+    }
 
     #[test]
     fn ordering_is_wall_then_counter_then_node() {
