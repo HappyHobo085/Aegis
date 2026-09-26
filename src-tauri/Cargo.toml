@@ -3,10 +3,18 @@ name = "app"
 version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
-license = ""
+license = "AGPL-3.0-only"
 repository = ""
 edition = "2021"
-rust-version = "1.80.0"
+# MSRV, TESTED (not aspirational): the `msrv` job in .github/workflows/ci.yml
+# extracts this value out of this file, installs exactly that toolchain, and runs
+# `cargo check --locked` on both crates with it. The previous value (1.80.0) was
+# never checked by anything, and it was simply wrong — the resolved dependency graph
+# does not build on 1.80. Keep this number and the README's "MSRV" line in step; if
+# the msrv job goes red, this is the number that is wrong, not the job.
+# Note: the macOS-only objc2 stack has a higher floor than the Linux/Windows one, so
+# the msrv job runs on Linux only. See rust-toolchain.toml for the CI toolchain pin.
+rust-version = "1.85.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -118,7 +126,7 @@ tauri = { version = "2.11.2", features = ["test"] }
 # codegen-units = 256, no strip). DELIBERATELY NOT `panic = "abort"`: the
 # `catch_unwind` guards in sync_keystore/farble/proxy/sync turn a panic beneath an
 # `extern "C"`/JNI frame into a caught error instead of a SIGABRT (see those modules
-# + the Android JNI up-call notes in CLAUDE.md). `panic = "abort"` would make those
+# + the Android JNI up-call notes in AGENTS.md). `panic = "abort"` would make those
 # guards no-ops and reintroduce that crash class.
 [profile.release]
 lto = true

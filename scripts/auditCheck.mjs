@@ -16,6 +16,45 @@
 export const BLOCKING_SEVERITIES = ['high', 'critical'];
 
 /**
+ * Why `auditJson` is NOT a usable audit report, or `null` if it is one.
+ *
+ * This exists because the gate used to fail OPEN. `npm audit --json` exits
+ * non-zero both when it finds advisories (the report still goes to stdout) and when
+ * it dies outright — e.g. a malformed `overrides` block, which makes npm emit a
+ * *valid JSON* `{"error":{...}}` object on stdout. `JSON.parse` therefore succeeds,
+ * `collectBlockingAdvisories` finds no `vulnerabilities` key, and the CLI reported
+ * "OK — no blocking high/critical advisories" with exit 0. A supply-chain gate that
+ * reports success because its own audit could not run is worse than no gate at all.
+ *
+ * A real audit report always carries a `vulnerabilities` OBJECT (possibly empty —
+ * a clean tree legitimately reports `{}`) and a numeric `auditReportVersion`.
+ * Anything else, or an `error` key, is a failed audit rather than a clean one.
+ *
+ * @param {unknown} auditJson parsed `npm audit --json` output
+ * @returns {string|null} a human-readable reason, or null when the shape is valid
+ */
+export function auditReportProblem(auditJson) {
+  if (!auditJson || typeof auditJson !== 'object' || Array.isArray(auditJson)) {
+    return 'report is not a JSON object';
+  }
+  if (auditJson.error) {
+    const code = auditJson.error.code ? ` (code ${auditJson.error.code})` : '';
+    return `npm audit reported an error${code}: ${auditJson.error.summary || auditJson.error.detail || 'no detail'}`;
+  }
+  if (typeof auditJson.auditReportVersion !== 'number') {
+    return 'report has no numeric `auditReportVersion`';
+  }
+  if (
+    !auditJson.vulnerabilities ||
+    typeof auditJson.vulnerabilities !== 'object' ||
+    Array.isArray(auditJson.vulnerabilities)
+  ) {
+    return 'report has no `vulnerabilities` object';
+  }
+  return null;
+}
+
+/**
  * Collect distinct high/critical advisory objects from an npm-audit v2 report,
  * deduped by `source` (or `url` when source is absent).
  * @param {object} auditJson parsed `npm audit --json`

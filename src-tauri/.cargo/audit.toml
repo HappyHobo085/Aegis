@@ -1,6 +1,28 @@
-# cargo-audit config. The gate runs advisory-only (continue-on-error) today; to promote
-# it to blocking, drop `continue-on-error` in ci.yml and list any consciously-accepted
-# advisory id here WITH justification in the commit — the Rust analog of
-# scripts/.audit-allowlist.json. Empty = nothing accepted yet.
+# cargo-audit config for the `src-tauri` crate.
+#
+# THIS FILE IS AUTHORITATIVE — cargo-audit resolves `.cargo/audit.toml` relative to the
+# CURRENT WORKING DIRECTORY (cargo-audit/src/commands.rs: `PathBuf::from("./.cargo")
+# .join("audit.toml")`; no ancestor search), so the `rust` job runs
+# `cargo audit` with `working-directory: src-tauri`. It previously ran from the repo
+# root with `--file src-tauri/Cargo.lock`, which meant this file was never read at all
+# and the two accepted advisories lived only in CLI flags where no comment could
+# explain them.
+#
+# THE GATE IS BLOCKING. The old header here claimed "the gate runs advisory-only
+# (continue-on-error) today"; that was false and has been for some time — there is no
+# `continue-on-error` and no `|| true` anywhere in .github/workflows, so a new advisory
+# fails the job. Do not add one to weaken it without saying so here first.
+#
+# To accept a new advisory: add its id below WITH the one-line reason it is accepted,
+# so whoever reads this next can decide whether to unpin it. This is the Rust analog of
+# .audit-allowlist.json.
 [advisories]
-ignore = []
+ignore = [
+  # RUSTSEC-2026-0194 (quick-xml): fixed upstream in >=0.41, but the Tauri/plist
+  # dependency chain pins plist 1.9.0, whose quick-xml requirement is still ^0.39.2.
+  # Unpinned only when plist moves.
+  "RUSTSEC-2026-0194",
+  # RUSTSEC-2026-0195 (quick-xml, second advisory): same plist 1.9.0 -> quick-xml
+  # ^0.39.2 constraint as above; fixed by the same upstream release.
+  "RUSTSEC-2026-0195",
+]

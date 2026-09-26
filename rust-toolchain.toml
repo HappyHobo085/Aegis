@@ -1,0 +1,21 @@
+# The ONE Rust toolchain definition for this repo.
+#
+# Every workflow installs the toolchain by reading THIS file (the
+# `actions-rust-lang/setup-rust-toolchain` steps pass no `toolchain:` input, which
+# makes the action run `rustup show active-toolchain` against the repo root), and a
+# local `cargo` in this directory resolves to the same compiler via rustup's
+# directory override. There is deliberately no second copy of the version anywhere
+# in .github/workflows — that duplication is what let a new stable clippy lint turn
+# CI red with zero code change and nothing recording which compiler produced a build.
+#
+# Pinning an exact version (not the `stable` channel) means a new stable release
+# cannot break the gate on its own; bumping it is a one-line, reviewable commit that
+# also re-records the compiler for the next release. Dependabot does NOT touch this
+# file — do it by hand, and expect to re-read the clippy output when you do.
+#
+# `profile = "minimal"` keeps rustup from installing rust-docs; the CI steps add the
+# components they actually use (rustfmt, clippy) and cross-compile targets.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

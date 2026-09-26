@@ -11,6 +11,13 @@ name: Tauri Build Check
 # No signing / release — that's tauri-release.yml on a version tag. Runs on demand
 # (workflow_dispatch) only — no auto-run on push to main; trigger it from the
 # Actions tab ("Run workflow") when you want fresh cross-OS build artifacts.
+#
+# What this is NOT: the gate for "does the Windows/macOS/Android cfg surface still
+# compile". That is ci.yml's `cross-target` job, which runs `cargo check --locked` for
+# x86_64-pc-windows-gnu, aarch64-linux-android and x86_64-apple-darwin on every push and
+# PR. This workflow stays dispatch-only because it is the expensive one (full link +
+# bundle + APK); that cost is exactly why it cannot be the only place the platform-gated
+# code is compiled.
 on:
   workflow_dispatch: {}
 
@@ -86,10 +93,16 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '22.23.3'
           cache: 'npm'
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Toolchain comes from rust-toolchain.toml at the repo root (omitting
+      # `toolchain:` makes this action read that file), replacing the floating
+      # `dtolnay/rust-toolchain@stable`. `cache: 'false'` — the explicit actions/cache
+      # step below owns caching.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: 'false'
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -111,10 +124,16 @@ jobs:
       # are ignored on Windows/macOS.) matrix.bundles is '--no-bundle' on Windows (we
       # ship the raw exe), '--bundles appimage'/'--bundles rpm' on Linux, and empty on
       # macOS (defaults).
+      # NOTE: the Tauri CLI invokes cargo itself and exposes no --locked passthrough, so
+      # this step does not enforce Cargo.lock. The `--locked` enforcement lives in
+      # ci.yml, where cargo is driven directly.
       - name: Build
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
           NO_STRIP: '1'
+          # Ad-hoc signature, NOT a real one. This workflow publishes no release, so
+          # there is nothing to code-sign for; macOS will still Gatekeeper-block the
+          # .app on another machine. See tauri-release.yml for the shipping path.
           APPLE_SIGNING_IDENTITY: '-'
         run: npm run tauri -- build ${{ matrix.bundles }}
 
@@ -142,7 +161,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '22.23.3'
           cache: 'npm'
 
       - uses: actions/setup-java@v5
@@ -151,10 +170,14 @@ jobs:
           java-version: '21'
 
       # Android targets for the Rust core (it compiles to a per-ABI cdylib bundled in
-      # the APK).
-      - uses: dtolnay/rust-toolchain@stable
+      # the APK). The base toolchain version comes from rust-toolchain.toml; the ABIs
+      # are added on top. ci.yml's `cross-target` job now compile-checks
+      # aarch64-linux-android on every PR, so this job is about the APK, not the
+      # cfg(windows/android) surface.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          target: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          cache: 'false'
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -171,7 +194,9 @@ jobs:
       # the debug key when no keystore.properties is present, so it still installs on any
       # device with "install unknown apps" enabled (no release key needed). NOTE: each CI
       # runner generates its own debug key, so two CI APKs can't update each other — fine
-      # for a one-off install/test; a stable channel comes from tauri-release.yml on a tag.
+      # for a one-off install/test. tauri-release.yml also builds an APK on a tag, but
+      # that one is debug-key-signed too, so it is a one-off-install artifact and NOT an
+      # update channel; see the loud note in tauri-release.yml.
       # The Android SDK + NDK are preinstalled on the runner; point Tauri at the latest NDK.
       - name: Build release APK
         run: |

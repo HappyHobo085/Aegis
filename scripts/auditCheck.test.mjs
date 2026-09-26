@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { collectBlockingAdvisories, isAllowlisted, evaluateAudit } from './auditCheck.mjs';
+import {
+  auditReportProblem,
+  collectBlockingAdvisories,
+  isAllowlisted,
+  evaluateAudit,
+} from './auditCheck.mjs';
 
 // Realistic auditReportVersion-2 fixture: two high/critical advisories, one
 // moderate (ignored), and one purely-transitive string `via` (ignored).
@@ -121,5 +126,42 @@ describe('evaluateAudit', () => {
 
   it('treats a missing allowlist as empty (all blocking)', () => {
     expect(evaluateAudit(REPORT, {}).blocking.length).toBe(2);
+  });
+});
+
+// The gate used to FAIL OPEN. `npm audit --json` writes a *valid JSON* error object
+// to stdout when it dies before auditing (a malformed `overrides` block did
+// exactly this), so `JSON.parse` succeeded, no `vulnerabilities` key was found, and
+// the CLI printed "OK — no blocking high/critical advisories" with exit 0. These
+// tests pin the shape check that makes it fail closed instead.
+describe('auditReportProblem', () => {
+  it('accepts a real audit report, including a clean one with no vulnerabilities', () => {
+    expect(auditReportProblem(REPORT)).toBeNull();
+    expect(auditReportProblem({ auditReportVersion: 2, vulnerabilities: {} })).toBeNull();
+  });
+
+  it('rejects the `{"error":…}` object npm emits when the audit itself dies', () => {
+    const problem = auditReportProblem({
+      error: { code: 'EINVALIDOVERRIDE', summary: 'Override without name: //' },
+    });
+    expect(problem).toContain('EINVALIDOVERRIDE');
+    expect(problem).toContain('Override without name');
+  });
+
+  it('rejects a report with no vulnerabilities object, and explains why', () => {
+    expect(auditReportProblem({ auditReportVersion: 2 })).toContain('vulnerabilities');
+    expect(auditReportProblem({ auditReportVersion: 2, vulnerabilities: [] })).toContain(
+      'vulnerabilities',
+    );
+  });
+
+  it('rejects a report with no auditReportVersion', () => {
+    expect(auditReportProblem({ vulnerabilities: {} })).toContain('auditReportVersion');
+  });
+
+  it('rejects non-objects and null', () => {
+    for (const bad of [null, undefined, 42, 'nope', []]) {
+      expect(auditReportProblem(bad)).toBeTruthy();
+    }
   });
 });

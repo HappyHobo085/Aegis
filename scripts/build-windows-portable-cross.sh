@@ -32,7 +32,10 @@ echo ">> building renderer (dist) for embedding…"
 npm run build:renderer
 
 echo ">> cross-compiling release exe (cargo, x86_64-pc-windows-gnu / GNU)…"
-cargo build --release --target x86_64-pc-windows-gnu --manifest-path src-tauri/Cargo.toml
+# --locked so the build uses the committed Cargo.lock verbatim; without it cargo
+# silently re-resolves whenever the manifest and the lock disagree, which is how a
+# local "it builds" can differ from what CI built.
+cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path src-tauri/Cargo.toml
 
 SRC=src-tauri/target/x86_64-pc-windows-gnu/release/app.exe
 DST=src-tauri/target/x86_64-pc-windows-gnu/release/Aegis_x64_portable.exe

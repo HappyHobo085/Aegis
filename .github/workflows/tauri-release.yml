@@ -1,38 +1,87 @@
 name: Tauri Release
 
 # Build Aegis (Tauri) for all desktop OSes and publish a GitHub Release with the
-# auto-update artifacts (latest.json + signed bundles) on a version tag. This is
-# the electron-updater equivalent for the Tauri rewrite — the update feed the app
-# checks. Signing uses the minisign keypair generated with `tauri signer generate`;
-# add the private key as the TAURI_SIGNING_PRIVATE_KEY repo secret (and the password
-# as TAURI_SIGNING_PRIVATE_KEY_PASSWORD if the key has one). Dormant until the Tauri
-# app is on the default branch + a v* tag is pushed.
+# auto-update artifacts (latest.json + signed bundles) on a version tag. This is the
+# electron-updater equivalent for the Tauri rewrite — the update feed the app
+# checks. Update signing uses the minisign keypair generated with `tauri signer
+# generate`; add the private key as the TAURI_SIGNING_PRIVATE_KEY repo secret (and
+# the password as TAURI_SIGNING_PRIVATE_KEY_PASSWORD if the key has one). Dormant until
+# the Tauri app is on the default branch + a v* tag is pushed.
 on:
   push:
     tags:
       - 'v*'
   workflow_dispatch: {}
 
+# `contents: write`     — create the draft release, upload assets + SHA256SUMS.
+# `id-token: write`     — the OIDC token actions/attest needs for a Sigstore cert.
+# `attestations: write` — persist the provenance attestation.
+# `artifact-metadata: write` — the artifact storage record actions/attest creates.
 permissions:
   contents: write
+  id-token: write
+  attestations: write
+  artifact-metadata: write
 
 jobs:
+  # TAG GUARD. `workflow_dispatch` is kept (not dropped) on purpose: it is the only way
+  # to re-run a release whose tag push half-failed (one matrix leg red, the draft
+  # release created but incomplete) without deleting and re-pushing the tag — and
+  # deleting/moving a tag users' update clients have already seen is worse than a
+  # re-run. The cost of keeping it is that a dispatch can target a BRANCH, and this
+  # workflow holds the update-signing key plus `contents: write`: a branch dispatch
+  # would build that branch with the release key and create a release tagged `main`.
+  # The only backstop used to be `releaseDraft: true`, i.e. a human noticing. So the
+  # affordance stays and the footgun is closed here, before any step that can reach a
+  # secret or the release API runs.
+  preflight:
+    name: Require a version tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse anything that is not a v* tag
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -eu
+          echo "ref_type='$REF_TYPE' ref_name='$REF_NAME'"
+          if [ "$REF_TYPE" != 'tag' ]; then
+            echo "::error::This workflow must run on a TAG, not a $REF_TYPE. A" \
+              "$REF_TYPE dispatch would build that ref with the update-signing key" \
+              "(contents: write) and publish a release tagged '$REF_NAME'."
+            echo "::error::Push a version tag instead:" \
+              "git tag v0.1.0 && git push origin v0.1.0"
+            exit 1
+          fi
+          if ! printf '%s' "$REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+.][0-9A-Za-z.+-]+)?$'; then
+            echo "::error::Tag '$REF_NAME' is not vMAJOR.MINOR.PATCH. The release name," \
+              "the updater version comparison and the Android versionCode all derive" \
+              "from it."
+            exit 1
+          fi
+          echo "OK: releasing from tag '$REF_NAME'."
+
   release:
+    needs: preflight
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
           - platform: macos-15 # Apple Silicon
+            label: macos-arm64
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             args: '--target aarch64-apple-darwin --bundles app,dmg'
           - platform: macos-15 # Intel
+            label: macos-x64
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
             args: '--target x86_64-apple-darwin --bundles app,dmg'
           - platform: ubuntu-24.04
+            label: linux
             rust_targets: ''
             args: '--bundles appimage,deb,rpm --config src-tauri/tauri.appimage-mediaframework.conf.json'
           - platform: windows-latest
+            label: windows
             rust_targets: ''
             args: '--bundles nsis'
     runs-on: ${{ matrix.platform }}
@@ -59,12 +108,16 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: '22'
+          node-version: '22.23.3'
           cache: 'npm'
 
-      - uses: dtolnay/rust-toolchain@stable
+      # Base toolchain from rust-toolchain.toml (omitting `toolchain:` makes this action
+      # read that file rather than a channel that floats); the per-OS release targets are
+      # added on top. `cache: 'false'` — the explicit actions/cache step below owns it.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
-          targets: ${{ matrix.rust_targets }}
+          target: ${{ matrix.rust_targets }}
+          cache: 'false'
 
       - name: Cache cargo
         uses: actions/cache@v6
@@ -77,21 +130,283 @@ jobs:
 
       - run: npm ci
 
+      # Loud, NON-BLOCKING notice about the three secrets this workflow consumes. A
+      # release with no update signature builds and publishes perfectly well — it just
+      # ships a `latest.json` clients will refuse, which is exactly the kind of failure
+      # that went unnoticed before. Signing is deliberately not a hard blocker (it would
+      # break the entire release flow for anyone without a Developer ID cert), so the
+      # absence is made impossible to miss here instead.
+      - name: Signing preflight (loud, non-blocking)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+        run: |
+          if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "::warning title=Unsigned updater::TAURI_SIGNING_PRIVATE_KEY is not set —" \
+              "this release ships WITHOUT an update signature and clients will refuse to" \
+              "auto-update from it. Add the minisign private key (tauri signer generate)" \
+              "as the TAURI_SIGNING_PRIVATE_KEY repo secret, plus" \
+              "TAURI_SIGNING_PRIVATE_KEY_PASSWORD if the key has a password."
+          else
+            echo "TAURI_SIGNING_PRIVATE_KEY present."
+          fi
+          if [ -z "$APPLE_SIGNING_IDENTITY" ]; then
+            echo "::warning title=Ad-hoc macOS signature::APPLE_SIGNING_IDENTITY is not set —" \
+              "the .app/.dmg get an AD-HOC signature ('-'), which Gatekeeper blocks on any" \
+              "other Mac and which is not notarized. Add an Apple Developer ID Application" \
+              "certificate as the APPLE_SIGNING_IDENTITY secret to fix this."
+          else
+            echo "APPLE_SIGNING_IDENTITY present."
+          fi
+          if [ -z "$WINDOWS_CERTIFICATE" ]; then
+            echo "::warning title=Unsigned Windows installer::WINDOWS_CERTIFICATE is not set —" \
+              "the NSIS installer ships unsigned, so SmartScreen shows an 'unknown publisher'" \
+              "warning. Add a code-signing cert (.pfx) as the WINDOWS_CERTIFICATE secret," \
+              "with WINDOWS_CERTIFICATE_PASSWORD if it has one."
+          else
+            echo "WINDOWS_CERTIFICATE present."
+          fi
+
       - name: Build + publish (signed updater artifacts)
+        id: publish
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          APPLE_SIGNING_IDENTITY: '-'
-          # Update-signing keypair (tauri signer generate). Absent today -> build
-          # still succeeds but produces no signature; add the secret to enable
-          # auto-update. Windows/macOS OS code-signing secrets are separate and
-          # also drop-in later (WINDOWS_CERTIFICATE, APPLE_CERTIFICATE, ...).
+          # macOS code signing. An unset secret falls back to ad-hoc ('-'), which is what
+          # this workflow always did — but it is now an explicit fallback rather than a
+          # hardcoded value, so turning on real signing is a secret, not a code change.
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY || '-' }}
+          # Update-signing keypair (tauri signer generate). Absent -> the build still
+          # succeeds but produces no signature; the preflight step above shouts about it.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          # Windows code signing. Tauri wants a certificate FILE, so the secret has to be
+          # materialised on disk and the path handed over. With no secret this step is
+          # skipped entirely and the installer ships unsigned (loudly, per preflight).
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Aegis ${{ github.ref_name }}'
-          releaseBody: 'See the assets to download and install. Auto-update via latest.json.'
+          releaseBody: |
+            Download the asset for your platform and check it before you run it:
+
+            ```
+            sha256sum --ignore-missing -c SHA256SUMS   # after extracting this file
+            gh attestation verify <asset> --repo ${{ github.repository }}
+            ```
+
+            Auto-update uses `latest.json`, whose minisign signature the app verifies
+            against the public key embedded in the build. SHA256SUMS covers every asset
+            in this release, including the Android APK.
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}
+
+      # This leg's slice of SHA256SUMS, in `shasum -a 256` format so the attest job can
+      # concatenate fragments without rewriting a line. Keyed on the BASENAME, because
+      # that is the name the asset carries on the release, so a user can run
+      # `sha256sum -c` on a single downloaded file.
+      #
+      # The file list comes from tauri-action's `artifactPaths` output — exactly the
+      # paths it attached to the release. Deliberately NOT `find` over
+      # target/release/bundle: that would walk into the macOS `Aegis.app` directory
+      # (hundreds of internal files, none of which is a published asset) and would miss
+      # the archive tauri-action actually uploads in its place.
+      - name: Checksum this leg's published artifacts
+        if: always()
+        shell: bash
+        env:
+          ARTIFACT_PATHS: ${{ steps.publish.outputs.artifactPaths }}
+        run: |
+          set -eu
+          if [ -z "${ARTIFACT_PATHS:-}" ]; then
+            echo "::error::tauri-action reported no artifactPaths for ${{ matrix.label }} —" \
+              "nothing to checksum. Check whether the build step above failed."
+            exit 1
+          fi
+          mapfile -t PATHS < <(
+            printf '%s' "$ARTIFACT_PATHS" | tr -d '[]"' | tr ',' '\n' | sed '/^[[:space:]]*$/d'
+          )
+          mkdir -p checksums
+          : > "checksums/${{ matrix.label }}.sha256"
+          for p in "${PATHS[@]}"; do
+            if [ ! -f "$p" ]; then
+              echo "::error::tauri-action reported an artifact that is not a file: $p"
+              exit 1
+            fi
+            read -r digest _ < <(sha256sum "$p")
+            printf '%s  %s\n' "$digest" "$(basename "$p")" \
+              >> "checksums/${{ matrix.label }}.sha256"
+          done
+          cat "checksums/${{ matrix.label }}.sha256"
+          if ! grep -q . "checksums/${{ matrix.label }}.sha256"; then
+            echo "::error::Empty checksum fragment for ${{ matrix.label }}."
+            exit 1
+          fi
+
+      - name: Upload checksum fragment
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: aegis-checksums-${{ matrix.label }}
+          path: checksums/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+  android:
+    name: Android APK
+    needs: preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.23.3'
+          cache: 'npm'
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
+          cache: 'false'
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: android-release-${{ hashFiles('src-tauri/Cargo.lock') }}
+
+      - run: npm ci
+
+      # Build a RELEASE APK (minified, not debuggable), identical to the
+      # tauri-build-check.yml android job. The Android SDK + NDK are preinstalled.
+      - name: Build release APK
+        run: |
+          export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
+          echo "Using NDK at $NDK_HOME"
+          npm run tauri -- android build --apk
+
+      - name: Collect the APK
+        shell: bash
+        run: |
+          set -eu
+          rm -rf dist-apk && mkdir -p dist-apk
+          shopt -s nullglob
+          APKS=(src-tauri/gen/android/app/build/outputs/apk/*/*/*.apk)
+          if [ ${#APKS[@]} -eq 0 ]; then
+            echo "::error::No APK under src-tauri/gen/android/app/build/outputs/apk/."
+            exit 1
+          fi
+          for f in "${APKS[@]}"; do cp "$f" "dist-apk/$(basename "$f")"; done
+          ls -l dist-apk
+
+      - name: Checksum the APK
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p checksums
+          # Basename-keyed, matching the desktop legs and the release asset name.
+          : > checksums/android.sha256
+          for f in dist-apk/*.apk; do
+            read -r digest _ < <(sha256sum "$f")
+            printf '%s  %s\n' "$digest" "$(basename "$f")" >> checksums/android.sha256
+          done
+          cat checksums/android.sha256
+
+      - name: Attach the APK to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -eu
+          # The draft release already exists: this job `needs` the desktop matrix, whose
+          # tauri-action step creates it. --clobber makes a re-run idempotent.
+          gh release upload '${{ github.ref_name }}' dist-apk/*.apk --clobber
+
+      - name: Upload checksum fragment
+        uses: actions/upload-artifact@v7
+        with:
+          name: aegis-checksums-android
+          path: checksums/*.sha256
+          if-no-files-found: error
+          retention-days: 7
+
+      # Stated here rather than only in a comment because the docs used to claim a
+      # "stable channel comes from tauri-release.yml on a tag" for Android, which was
+      # never true and is still not: see the body of this step.
+      - name: 'Loud note: this APK is a one-off install, NOT an update channel'
+        run: |
+          echo "::warning title=APK is a one-off install, not an update channel::This APK" \
+            "is signed with the throwaway debug key Gradle generates when no" \
+            "keystore.properties is present. Every CI run mints its own key, so no two" \
+            "release APKs can update one another, and none of them matches the key an" \
+            "already-installed app was signed with. It is published so a downloader can" \
+            "grab the build; updating an existing install means uninstalling first" \
+            "(which clears app data). For a real Android update channel, add a" \
+            "keystore.properties secret (storeFile/storePassword/keyAlias/keyPassword)" \
+            "and delete this step in the same commit."
+
+  attest:
+    name: Checksums + provenance
+    needs: [preflight, release, android]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Collect every leg's checksum fragment
+        uses: actions/download-artifact@v7
+        with:
+          pattern: aegis-checksums-*
+          merge-multiple: false
+
+      - name: Assemble SHA256SUMS
+        shell: bash
+        run: |
+          set -eu
+          # Fragments are already `shasum -a 256` format, so concatenation is the job.
+          # A duplicate basename would mean two legs published clashing asset names —
+          # that is a release bug, not something to silently collapse.
+          find . -name '*.sha256' -type f -print0 | xargs -0 cat | sort -k2 > SHA256SUMS
+          echo "SHA256SUMS:"; cat SHA256SUMS
+          if ! grep -q . SHA256SUMS; then
+            echo "::error::SHA256SUMS is empty — no leg produced checksums."
+            exit 1
+          fi
+          DUPES=$(cut -d' ' -f3- SHA256SUMS | sort | uniq -d)
+          if [ -n "$DUPES" ]; then
+            echo "::error::Duplicate asset names across release legs:"
+            echo "$DUPES"
+            exit 1
+          fi
+
+      - name: Upload SHA256SUMS to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload '${{ github.ref_name }}' SHA256SUMS --clobber
+
+      - name: Upload SHA256SUMS as a workflow artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: aegis-SHA256SUMS
+          path: SHA256SUMS
+          if-no-files-found: error
+          retention-days: 90
+
+      # `subject-checksums` turns EVERY line of the file into an attested subject, so one
+      # call covers the whole published set. continue-on-error: an attestation failure
+      # (repo plan limits, an expired OIDC token) must not cost the release its binaries
+      # — but it stays a visible warning rather than being ignored.
+      - name: Attest build provenance
+        continue-on-error: true
+        uses: actions/attest@v4
+        with:
+          subject-checksums: SHA256SUMS
