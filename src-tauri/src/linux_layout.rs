@@ -7,8 +7,14 @@
 // Hierarchy before:  GtkApplicationWindow → GtkBox → [chrome, content]
 // Hierarchy after:   GtkApplicationWindow → GtkBox → GtkFixed → [chrome@(0,0), content@(left,top)]
 use gtk::prelude::*;
+// `Error::code()` is NOT generic: `glib::ErrorDomain` is implemented per error-domain ENUM, and
+// the crate-root `glib::ErrorDomain` is the same-named *derive macro* (re-exported from
+// glib_macros), so the trait must be imported from `glib::error::`.
+use glib::error::ErrorDomain;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use tauri::{AppHandle, Manager};
-use webkit2gtk::WebViewExt;
+use webkit2gtk::{LoadEvent, WebViewExt};
 
 /// Remove a webview from the GTK container by its label.
 /// This is called when a webview is closed to avoid dangling pointers in the layout function.
@@ -42,6 +48,109 @@ pub fn remove_webview_label(app: &AppHandle, label: &str) {
         if widget_still_has_parent && parent_unchanged && widget_is_in_container {
             container.remove(&widget);
         }
+    });
+}
+
+/// Surface main-frame load failures and renderer-process crashes to the chrome as
+/// `nav.failed` / `nav.crashed`, so the renderer can draw its own error/retry UI instead of
+/// leaving the user on WebKit's bare error page.
+///
+/// `load-failed` fires for SUBFRAMES as well and the signal arguments carry no frame flag, so
+/// emitting unconditionally would replace the page with a full-screen error every time an image
+/// or an ad request fails. `load-changed`, by contrast, is main-frame only, so we track "a
+/// main-frame load is in progress" there and gate the failure/crash emission on it.
+/// Map a WebKitGTK `load-failed` `glib::Error` to the integer code the chrome reports as
+/// `nav.failed.errorCode`.
+///
+/// `glib::Error` has NO generic `code()` — the integer only exists on the concrete error-domain
+/// ENUM (each implements `glib::error::ErrorDomain`). WebKitGTK raises `WEBKIT_NETWORK_ERROR` for
+/// DNS/TLS/connection failures and `WEBKIT_POLICY_ERROR` when a policy decision refused the load,
+/// so those are the two domains worth decoding. Anything else yields 0; the human-readable
+/// `errorDescription` carries the detail either way.
+fn webkit_error_code(err: &glib::Error) -> i32 {
+    use webkit2gtk::{NetworkError, PolicyError};
+    if let Some(e) = err.kind::<NetworkError>() {
+        return ErrorDomain::code(e);
+    }
+    if let Some(e) = err.kind::<PolicyError>() {
+        return ErrorDomain::code(e);
+    }
+    0
+}
+
+pub fn connect_nav_failure_label(app: &AppHandle, label: &str) {
+    let Some(content) = app.get_webview(label) else {
+        return;
+    };
+    let Some(id) = label
+        .strip_prefix("content:")
+        .and_then(|s| s.parse::<u32>().ok())
+    else {
+        return;
+    };
+    let app = app.clone();
+    // Shared between the three handlers below. `with_webview` requires its closure to be
+    // `Send`, so this must be an `Arc<AtomicBool>` rather than an `Rc<Cell<bool>>`; the
+    // handlers all run on the GTK main thread, so `Relaxed` ordering is sufficient.
+    let main_frame_loading = Arc::new(AtomicBool::new(false));
+    let _ = content.with_webview(move |pw| {
+        let wv = pw.inner();
+
+        let loading_phase = main_frame_loading.clone();
+        wv.connect_load_changed(move |_wv, event| match event {
+            LoadEvent::Started => loading_phase.store(true, Ordering::Relaxed),
+            LoadEvent::Committed | LoadEvent::Finished => {
+                loading_phase.store(false, Ordering::Relaxed)
+            }
+            _ => {}
+        });
+
+        let loading = main_frame_loading.clone();
+        let fail_app = app.clone();
+        wv.connect_load_failed(move |_wv, _event, validated_url, err| {
+            // Not our main frame (or no load in flight): let WebKit handle it silently.
+            if !loading.load(Ordering::Relaxed) {
+                return false;
+            }
+            loading.store(false, Ordering::Relaxed);
+            crate::nav::emit_nav_failed(
+                &fail_app,
+                id,
+                webkit_error_code(err),
+                err.message(),
+                validated_url,
+                "load",
+            );
+            // Aegis renders its own error view, so suppress WebKit's default error page.
+            true
+        });
+
+        // Certificate failures are a separate signal; without this a TLS error would only
+        // surface as a generic "load" failure and the renderer could not style it as a cert
+        // error (`kind: 'cert'`).
+        let loading_cert = main_frame_loading.clone();
+        let cert_app = app.clone();
+        wv.connect_load_failed_with_tls_errors(move |_wv, validated_url, _cert, flags| {
+            if !loading_cert.load(Ordering::Relaxed) {
+                return false;
+            }
+            loading_cert.store(false, Ordering::Relaxed);
+            crate::nav::emit_nav_failed(
+                &cert_app,
+                id,
+                flags.bits() as i32,
+                "TLS certificate rejected",
+                validated_url,
+                "cert",
+            );
+            true
+        });
+
+        let crash_app = app.clone();
+        wv.connect_web_process_terminated(move |_wv, reason| {
+            main_frame_loading.store(false, Ordering::Relaxed);
+            crate::nav::emit_nav_crashed(&crash_app, id, &format!("{reason:?}"));
+        });
     });
 }
 
@@ -284,7 +393,20 @@ pub fn install_nav_policy(app: &AppHandle, label: &str) {
                             // we're leaving.
                             let current = wv.uri().map(|s| s.to_string()).unwrap_or_default();
                             crate::redirect_guard::note_nav(
-                                &app, id, &current, &target, scripted, is_redirect,
+                                &app,
+                                id,
+                                &current,
+                                &target,
+                                scripted,
+                                is_redirect,
+                                // WebKitGTK's NavigationAction carries NO frame flag (only
+                                // `ResponsePolicyDecision` does, via
+                                // `is_main_frame_main_resource()`, and that is the response
+                                // path below). Recording `true` keeps the previous
+                                // record-unconditionally behaviour: a subframe can no longer
+                                // clobber a main-frame entry, and a subframe-only entry is
+                                // never consumed by the main-frame Response lookup.
+                                true,
                             );
                         }
                     }
@@ -329,7 +451,7 @@ pub fn install_nav_policy(app: &AppHandle, label: &str) {
 /// Shared by the Esc key handler and the native floating exit button.
 fn exit_fullscreen(app: &AppHandle) {
     if let Some(s) = app.try_state::<crate::view::ContentInset>() {
-        let mut g = s.0.lock().unwrap();
+        let mut g = s.0.lock().unwrap_or_else(|e| e.into_inner());
         if g.fullscreen {
             g.fullscreen = false;
             drop(g);
@@ -359,7 +481,7 @@ pub fn connect_fullscreen_exit_label(app: &AppHandle, label: &str) {
             if ev.keyval() == gtk::gdk::keys::constants::Escape {
                 let in_fs = app
                     .try_state::<crate::view::ContentInset>()
-                    .map(|s| s.0.lock().unwrap().fullscreen)
+                    .map(|s| s.0.lock().unwrap_or_else(|e| e.into_inner()).fullscreen)
                     .unwrap_or(false);
                 if in_fs {
                     exit_fullscreen(&app);
@@ -539,7 +661,7 @@ static FIXED_SIZE_HANDLER: std::sync::Once = std::sync::Once::new();
 fn size_fixed_children(app: &AppHandle, fixed: &gtk::Fixed) {
     let (left, top, right) = app
         .try_state::<LayoutInsets>()
-        .map(|s| *s.0.lock().unwrap())
+        .map(|s| *s.0.lock().unwrap_or_else(|e| e.into_inner()))
         .unwrap_or((0, 0, 0));
     let a = fixed.allocation();
     let (fw, fh) = (a.width(), a.height());
@@ -624,7 +746,7 @@ pub fn layout(
     // webviews on a window resize (they carry a 0×0 size request so they don't pin the
     // window minimum — see the SIZING NOTE above).
     if let Some(s) = app.try_state::<LayoutInsets>() {
-        *s.0.lock().unwrap() = (left, top, right);
+        *s.0.lock().unwrap_or_else(|e| e.into_inner()) = (left, top, right);
     }
     let active_label = crate::nav::active_content_label(app);
     let Some(active) = app.get_webview(&active_label) else {
@@ -636,7 +758,7 @@ pub fn layout(
     let active_at_home = app
         .try_state::<crate::tabs::Tabs>()
         .map(|s| {
-            let r = s.reg.lock().unwrap();
+            let r = s.reg.lock().unwrap_or_else(|e| e.into_inner());
             let id = r.active_id();
             r.url_of(id)
                 .map(|u| u.starts_with("about:"))

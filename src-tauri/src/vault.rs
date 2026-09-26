@@ -496,7 +496,10 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
         // Records present on disk that couldn't be decrypted (corrupt/truncated). Preserved,
         // not dropped — the UI warns the user instead of silently losing credentials.
         "undecryptable": g.orphans.len(),
-        "syncEnabled": false, // will be wired to sync settings in Task 6
+        // Must mirror `sync_vault::is_sync_enabled` — the UI shows this as the authoritative
+        // "your vault is being uploaded" state, so it can no longer be a hardcoded `false`
+        // while the sync path unconditionally uploads.
+        "syncEnabled": crate::sync_vault::is_sync_enabled(app),
     })
 }
 
@@ -895,7 +898,7 @@ mod tests {
         assert_eq!(err, VaultError::Locked);
 
         // Inner.records must be empty (no plaintext survives).
-        let inner = vs.0.lock().unwrap();
+        let inner = vs.0.lock().unwrap_or_else(|e| e.into_inner());
         assert!(inner.records.is_empty(), "records must be empty after lock");
         assert!(inner.key.is_none(), "key must be None after lock");
     }
@@ -1074,7 +1077,7 @@ mod tests {
 
             // Persist to the temp dir.
             {
-                let g = vs.0.lock().unwrap();
+                let g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
                 persist(app, &g).expect("persist failed");
             }
 
@@ -1111,7 +1114,7 @@ mod tests {
             // Add a record via add_record then upsert it.
             let t = now_ms();
             let cred = {
-                let mut g = vs.0.lock().unwrap();
+                let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
                 let c = add_record(
                     &mut g.records,
                     "https://vault.test",
@@ -1145,7 +1148,7 @@ mod tests {
 
             // Add then update.
             let uuid = {
-                let mut g = vs.0.lock().unwrap();
+                let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
                 let c = add_record(&mut g.records, "old.site", "dan", "old-pw", "", now_ms());
                 let uuid = c.uuid.clone();
                 update_record(
@@ -1183,7 +1186,7 @@ mod tests {
 
             // Add two creds, remove one.
             let uuid_to_remove = {
-                let mut g = vs.0.lock().unwrap();
+                let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
                 let c1 = add_record(&mut g.records, "keep.io", "eve", "p1", "", now_ms());
                 let c2 = add_record(&mut g.records, "remove.io", "frank", "p2", "", now_ms());
                 let remove_uuid = c2.uuid.clone();
@@ -1223,7 +1226,7 @@ mod tests {
             let vs = VaultState::default();
             vs.create("correct-pw").expect("create");
             {
-                let g = vs.0.lock().unwrap();
+                let g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
                 persist(app, &g).expect("persist");
             }
             let loaded = read_file(app).expect("read_file");
@@ -1631,7 +1634,7 @@ mod tests {
         vs.create("pw").expect("create");
         let t = now_ms();
         {
-            let mut g = vs.0.lock().unwrap();
+            let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
             add_record(&mut g.records, "github.com", "alice", "pass1", "", t);
             add_record(&mut g.records, "github.com", "bob", "pass2", "", t);
             add_record(&mut g.records, "google.com", "charlie", "pass3", "", t);
@@ -1649,7 +1652,7 @@ mod tests {
         let vs = VaultState::default();
         vs.create("pw").expect("create");
         {
-            let mut g = vs.0.lock().unwrap();
+            let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
             add_record(&mut g.records, "GitHub.com", "alice", "pass1", "", now_ms());
         }
         let results = vs.autofill_suggestions("github.com").unwrap();
@@ -1668,7 +1671,7 @@ mod tests {
         vs.create("long-pw!").expect("create");
         let t = now_ms();
         {
-            let mut g = vs.0.lock().unwrap();
+            let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
             add_record(&mut g.records, "github.com", "alice", "pass1", "", t);
             add_record(&mut g.records, "api.example.com", "bob", "pass2", "", t);
         }
@@ -1706,7 +1709,7 @@ mod tests {
         let vs = VaultState::default();
         vs.create("pw").expect("create");
         {
-            let mut g = vs.0.lock().unwrap();
+            let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
             add_record(&mut g.records, "example.com", "u", "p", "", now_ms());
         }
         vs.lock();
@@ -1720,7 +1723,7 @@ mod tests {
         let vs = VaultState::default();
         vs.create("pw").expect("create");
         {
-            let mut g = vs.0.lock().unwrap();
+            let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
             add_record(&mut g.records, "example.com", "u", "p", "", now_ms());
         }
         let results = vs.autofill_suggestions("").unwrap();
@@ -1741,7 +1744,7 @@ mod tests {
         let vs = VaultState::default();
         vs.create("pw").expect("create");
         {
-            let mut g = vs.0.lock().unwrap();
+            let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
             add_record(&mut g.records, "github.com", "alice", "pass1", "", now_ms());
         }
         let results = vs.autofill_suggestions("unrelated.com").unwrap();

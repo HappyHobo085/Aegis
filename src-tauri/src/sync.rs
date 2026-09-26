@@ -75,15 +75,24 @@ impl Default for SyncState {
     }
 }
 
+/// Whether the sync engine is currently enabled. Other modules (notably the vault) must gate
+/// their sync work on this rather than hardcoding a policy, otherwise a disabled account can
+/// still upload user data. Uses `try_state` so it is safe to call before setup completes.
+pub fn is_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
+    app.try_state::<SyncState>()
+        .map(|s| s.0.lock().unwrap_or_else(|e| e.into_inner()).enabled)
+        .unwrap_or(false)
+}
+
 // A durable "user disabled sync" marker so disable() sticks across restarts (the seed may
 // remain in the keychain when not forgotten, but boot must NOT auto-re-enable).
-fn disabled_flag_path(app: &AppHandle) -> Option<std::path::PathBuf> {
+fn disabled_flag_path<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
     app.path()
         .app_data_dir()
         .ok()
         .map(|d| d.join("sync-disabled.flag"))
 }
-fn set_disabled_flag(app: &AppHandle, disabled: bool) {
+fn set_disabled_flag<R: Runtime>(app: &AppHandle<R>, disabled: bool) {
     if let Some(p) = disabled_flag_path(app) {
         if disabled {
             let _ = std::fs::write(&p, b"1");
@@ -92,7 +101,7 @@ fn set_disabled_flag(app: &AppHandle, disabled: bool) {
         }
     }
 }
-fn is_disabled_flag(app: &AppHandle) -> bool {
+fn is_disabled_flag<R: Runtime>(app: &AppHandle<R>) -> bool {
     disabled_flag_path(app).map(|p| p.exists()).unwrap_or(false)
 }
 
@@ -156,7 +165,11 @@ fn open_wire(data_key: &[u8; 32], ns: &str, w: &Value) -> Result<Value, String> 
         .and_then(Value::as_str)
         .and_then(unhex)
         .ok_or("wire bad ct")?;
+    // The recovered plaintext is user data (history titles, favorite URLs, vault records). Wrap
+    // it in `Zeroizing` so the buffer is wiped as soon as this function returns instead of being
+    // left on the freed heap — the sync root path already does this.
     let pt = crypto::open(data_key, &nonce, &ct, ns, uuid, &hlc.bytes())?;
+    let pt = zeroize::Zeroizing::new(pt);
     serde_json::from_slice(&pt).map_err(|e| e.to_string())
 }
 
@@ -363,18 +376,43 @@ fn sync_once<R: Runtime>(app: &AppHandle<R>) -> Result<(), String> {
         .join()
         .map_err(|_| "Vault thread panicked".to_string())?;
 
-    // Emit changed events
-    for (ns, changed) in array_results? {
-        emit_changed(app, &ns, &changed);
-    }
-    let (settings_ns, settings_changed) = settings_result?;
-    emit_changed(app, &settings_ns, &settings_changed);
-    let (custom_filters_ns, custom_filters_changed) = custom_filters_result?;
-    emit_changed(app, &custom_filters_ns, &custom_filters_changed);
-    let (vault_ns, vault_changed) = vault_result?;
-    emit_changed(app, &vault_ns, &vault_changed);
+    // Emit changed events.
+    //
+    // Every merge thread has ALREADY run and written its store by this point, so a failure in
+    // one of them must not suppress the events for the others — the renderer would otherwise
+    // keep showing pre-merge data for stores that were in fact updated, with no way to notice.
+    // Emit whatever succeeded, then surface the first error (if any) so the caller still learns
+    // that this pass was incomplete.
+    let mut first_err: Option<String> = None;
 
-    Ok(())
+    match array_results {
+        Ok(results) => {
+            for (ns, changed) in results {
+                emit_changed(app, &ns, &changed);
+            }
+        }
+        Err(e) => first_err = Some(e),
+    }
+    match settings_result {
+        Ok((ns, changed)) => emit_changed(app, &ns, &changed),
+        Err(e) if first_err.is_none() => first_err = Some(e),
+        Err(_) => {}
+    }
+    match custom_filters_result {
+        Ok((ns, changed)) => emit_changed(app, &ns, &changed),
+        Err(e) if first_err.is_none() => first_err = Some(e),
+        Err(_) => {}
+    }
+    match vault_result {
+        Ok((ns, changed)) => emit_changed(app, &ns, &changed),
+        Err(e) if first_err.is_none() => first_err = Some(e),
+        Err(_) => {}
+    }
+
+    match first_err {
+        Some(e) => Err(e),
+        None => Ok(()),
+    }
 }
 
 fn emit_changed<R: Runtime>(app: &AppHandle<R>, ns: &str, changed: &[String]) {
@@ -514,8 +552,8 @@ fn sync_ns<R: Runtime>(
 /// an ACCOUNT-ROOT signature over (accountId, deviceId): the account id is the account's
 /// public key, so the server verifies this proves possession of the root — without it,
 /// anyone who learned the public account id could self-register a rogue device.
-fn register_device(
-    app: &AppHandle,
+fn register_device<R: Runtime>(
+    app: &AppHandle<R>,
     account_id: &str,
     device_id: &str,
     device_seed: &[u8; 32],
@@ -548,7 +586,7 @@ fn register_device(
 
 /// Bring sync up for `root` (new or restored): derive identity, persist the seed, register,
 /// set state. Returns the chosen vault backing.
-fn enable_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<&str>) {
+fn enable_with_root<R: Runtime>(app: &AppHandle<R>, root: RootSecret, passphrase: Option<&str>) {
     set_disabled_flag(app, false); // re-enabling clears any prior durable "disabled" marker
     let salt = sync_keystore::device_local_salt(app);
     let device_seed = crypto::device_signing_seed(&root, &salt);
@@ -588,7 +626,7 @@ fn enable_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<&str>)
 
 /// Persist the root and unlock sync before returning to the renderer. Device registration
 /// and the first sync still run in the background, but the seed is durable once this returns.
-fn unlock_with_root(app: &AppHandle, root: RootSecret, passphrase: Option<String>) {
+fn unlock_with_root<R: Runtime>(app: &AppHandle<R>, root: RootSecret, passphrase: Option<String>) {
     {
         let st = app.state::<SyncState>();
         let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -638,7 +676,7 @@ pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
 
 /// At boot: spawn the periodic background sync, then (unless the user durably disabled
 /// sync) auto-unlock from the OS keychain and enable.
-pub fn start(app: &AppHandle) {
+pub fn start<R: Runtime>(app: &AppHandle<R>) {
     // Low-frequency periodic sync so peers converge even without local edits. A no-op while
     // disabled; debounced by the Syncing guard. One thread for the process lifetime.
     {
@@ -703,7 +741,11 @@ fn test_connection(raw_url: &str) -> Value {
     }
 }
 
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     match channel {
         "sync.getState" => Some(Ok(state_json(app))),
 
@@ -905,6 +947,101 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A restart must bring the Settings → Sync panel back ENABLED. `boot_restore` is the
+    /// body of `start()` minus the perpetual periodic-sync thread (a test must not leak one).
+    fn boot_restore<R: Runtime>(app: &AppHandle<R>) {
+        if is_disabled_flag(app) {
+            return;
+        }
+        if !sync_keystore::has_stored_root(app) {
+            return;
+        }
+        if let Some(root) = sync_keystore::load_root(app, None) {
+            enable_with_root(app, root, None);
+        }
+    }
+
+    #[test]
+    fn restart_restores_an_enabled_sync_state() {
+        crate::test_support::with_tmp_app(|app| {
+            // 1. First run: the user enables sync from Settings → Sync.
+            let enabled = dispatch(app, "sync.enableNew", &Value::Null)
+                .unwrap()
+                .unwrap();
+            assert!(enabled["recoveryPhrase"].as_str().is_some());
+            assert_eq!(state_json(app)["enabled"], json!(true));
+            let account = state_json(app)["accountId"].as_str().unwrap().to_string();
+
+            // 2. Restart: a FRESH SyncState (as a new process would have) + the same keychain.
+            *app.state::<SyncState>()
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Inner {
+                root: None,
+                device_seed: None,
+                enabled: false,
+                account_id: String::new(),
+                device_id: String::new(),
+                backing: "none".into(),
+                status: Status::Disabled,
+                last_sync_ms: 0,
+                last_error: String::new(),
+            };
+
+            // 3. Boot. The panel must render the ENABLED view again, for the SAME account.
+            boot_restore(app);
+            let after = state_json(app);
+            assert_eq!(after["enabled"], json!(true), "sync must re-enable at boot");
+            // The regression this guards: store_root silently fell through to
+            // VaultBacking::None (the OS keychain rejected the non-UTF-8 seed), so the
+            // root was never durable and the next boot had nothing to restore.
+            assert_eq!(
+                after["vaultBacking"],
+                json!("keychain"),
+                "the seed must be persisted in the OS keychain, not held in memory only"
+            );
+            // `status` is deliberately not asserted to an exact value: enable_with_root
+            // spawns a background register_device + nudge pass that flips it to
+            // "syncing"/"error", so any exact read here races that thread. What must
+            // never happen is a boot that leaves sync disabled — the original symptom.
+            assert_ne!(after["status"], json!("disabled"));
+            assert_eq!(
+                after["accountId"].as_str(),
+                Some(account.as_str()),
+                "the restored root must be the one the user enabled"
+            );
+            assert_eq!(after["hasStoredRoot"], json!(true));
+        });
+    }
+
+    #[test]
+    fn restart_respects_a_durable_disable() {
+        crate::test_support::with_tmp_app(|app| {
+            dispatch(app, "sync.enableNew", &Value::Null)
+                .unwrap()
+                .unwrap();
+            // Disable WITHOUT forgetting, so the seed is still in the keychain.
+            let _ = dispatch(app, "sync.disable", &json!({ "forget": false })).unwrap();
+            *app.state::<SyncState>()
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) = Inner {
+                root: None,
+                device_seed: None,
+                enabled: false,
+                account_id: String::new(),
+                device_id: String::new(),
+                backing: "none".into(),
+                status: Status::Disabled,
+                last_sync_ms: 0,
+                last_error: String::new(),
+            };
+            // The durable marker wins over the still-present keychain seed.
+            boot_restore(app);
+            assert_eq!(state_json(app)["enabled"], json!(false));
+        });
+    }
 
     #[test]
     fn healthz_url_builds_or_rejects() {

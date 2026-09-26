@@ -125,6 +125,7 @@ pub fn note_nav(
     target: &str,
     scripted: bool,
     is_redirect: bool,
+    main_frame: bool,
 ) {
     let chain = if is_redirect {
         chain_origin(app, tab).unwrap_or(ChainStart {
@@ -147,7 +148,7 @@ pub fn note_nav(
         }
         c
     };
-    record_action(app, tab, target, chain);
+    record_action(app, tab, target, chain, main_frame);
 }
 
 /// Linux Response phase: decide whether to CANCEL `final_url`, returning `Some(from)` to block.
@@ -273,9 +274,16 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, t
 /// resolved `ChainStart` for each NavigationAction by (tab, normalized-url), then look
 /// it up at the (main-frame) Response. Linux-only — the other platforms get gesture +
 /// main-frame in one place.
+///
+/// The value carries the recording NavigationAction's main-frame flag. A subframe shares the
+/// tab id with the main frame, so without this a subframe to the same normalized URL would
+/// either overwrite the main frame's entry or be CONSUMED by the main-frame Response lookup —
+/// and a consumed entry means `decide_at_response` returns `None`, i.e. the guard FAILS OPEN
+/// for a navigation it was supposed to police. Subframe entries are never consumed and never
+/// overwrite a main-frame one; `clear_tab` drops them.
 #[derive(Default)]
 #[cfg_attr(target_os = "android", allow(dead_code))]
-pub struct NavActions(pub Mutex<HashMap<(u32, String), ChainStart>>);
+pub struct NavActions(pub Mutex<HashMap<(u32, String), (ChainStart, bool)>>);
 
 /// Normalize a URL into a stable correlation key (ignore fragment / trailing slash, since the
 /// NavigationAction target and the Response URL can differ in those).
@@ -297,24 +305,34 @@ fn norm_key(url: &str) -> String {
 }
 
 /// Record the `ChainStart` to apply at the Response for `target` (Linux two-phase).
+/// `main_frame` is the recording `NavigationAction`'s frame flag.
 #[cfg_attr(target_os = "android", allow(dead_code))]
-pub fn record_action(app: &AppHandle, tab: u32, target: &str, chain: ChainStart) {
+pub fn record_action(app: &AppHandle, tab: u32, target: &str, chain: ChainStart, main_frame: bool) {
     if let Some(s) = app.try_state::<NavActions>() {
-        s.0.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert((tab, norm_key(target)), chain);
+        let key = (tab, norm_key(target));
+        let mut m = s.0.lock().unwrap_or_else(|e| e.into_inner());
+        // A subframe must not clobber a main-frame entry that is still awaiting its Response.
+        if !main_frame && m.get(&key).is_some_and(|(_, mf)| *mf) {
+            return;
+        }
+        m.insert(key, (chain, main_frame));
     }
 }
 
-/// Take the recorded `ChainStart` matching `target` for `tab`, if any.
+/// Take the recorded main-frame `ChainStart` matching `target` for `tab`, if any.
+///
+/// A subframe entry under the same key is deliberately LEFT IN PLACE and reported as no match:
+/// consuming it would strip the main frame's decision (fail-open), and this is only ever called
+/// from the main-frame Response path, so `None` is the correct answer for a subframe-only key.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn take_action(app: &AppHandle, tab: u32, target: &str) -> Option<ChainStart> {
     let s = app.try_state::<NavActions>()?;
-    let info =
-        s.0.lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .remove(&(tab, norm_key(target)));
-    info
+    let key = (tab, norm_key(target));
+    let mut m = s.0.lock().unwrap_or_else(|e| e.into_inner());
+    match m.get(&key) {
+        Some((_, true)) => m.remove(&key).map(|(c, _)| c),
+        _ => None,
+    }
 }
 
 /// Drop a tab's recorded NavigationActions once its top-frame load resolves, so subframe

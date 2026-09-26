@@ -89,14 +89,13 @@ pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, remote: &[Value]) -> Vec<Str
     changed
 }
 
-/// Check whether vault sync is enabled. Currently hardcoded to `true` when the
-/// sync engine is active — will be wired to a user-facing toggle in a follow-up.
+/// Whether the vault's records may be uploaded.
+///
+/// This MUST agree with what the UI reports as `syncEnabled`, or a user who has turned sync off
+/// would still have their (encrypted) vault uploaded with no way to see or stop it. It used to
+/// ignore `app` and hardcode `true`; it now defers to the sync engine's own enabled flag.
 pub fn is_sync_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
-    let _ = app;
-    // Vault sync is enabled when the general sync engine is running.
-    // Phase B initial wire: always-on (the sync module's own start() gates on
-    // keychain availability). A dedicated toggle will be added in the settings UI.
-    true
+    crate::sync::is_enabled(app)
 }
 
 // ─── Tests ───────────────────────────────────────────────────────────────

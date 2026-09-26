@@ -134,7 +134,7 @@ pub(crate) fn emit_state(app: &AppHandle, id: u32, url: &str, title: &str, loadi
 /// Emit a `nav.failed` event when a page load fails (network error, certificate
 /// error, DNS failure, etc.). The `kind` discriminates load errors (`"load"`) from
 /// certificate errors (`"cert"`).
-#[allow(dead_code)] // TODO(M12): wired when platform load-failure signals are connected
+#[allow(dead_code)] // Windows/macOS/Android still need their own signal wiring (see below).
 pub(crate) fn emit_nav_failed(
     app: &AppHandle,
     id: u32,
@@ -157,7 +157,8 @@ pub(crate) fn emit_nav_failed(
 }
 
 /// Emit a `nav.crashed` event when the webview/renderer process crashes.
-#[allow(dead_code)] // TODO(M12): wired when platform crash signals are connected
+/// Wired on Linux by `linux_layout::connect_nav_failure_label`.
+#[allow(dead_code)] // Windows/macOS/Android still need their own signal wiring (see below).
 pub(crate) fn emit_nav_crashed(app: &AppHandle, id: u32, reason: &str) {
     crate::emit_event(
         app,
@@ -171,13 +172,11 @@ pub(crate) fn emit_nav_crashed(app: &AppHandle, id: u32, reason: &str) {
 
 // TODO(M12): Wire platform-specific load-failure and crash signals to the helpers above.
 //
-// **Linux (WebKitGTK):** After `crate::linux_layout::install_nav_policy(app, &label)` in
-// `spawn_tab`, connect:
-//   - `WebViewExt::connect_load_failed(move |_, _, _, _| emit_nav_failed(...))` — fires on
-//     network errors, certificate errors, DNS failures. The error domain string distinguishes
-//     "load" vs "cert".
-//   - `WebViewExt::connect_web_process_crashed(move |_| emit_nav_crashed(...))` — fires when
-//     the WebKit web process crashes.
+// **Linux (WebKitGTK): DONE** — `linux_layout::connect_nav_failure_label` is called from
+// `spawn_tab` right after `install_nav_policy`. It gates `load-failed` on main-frame load state
+// (tracked via `load-changed`, which is main-frame only) so a failing subresource cannot
+// replace the page with an error view, and adds `load-failed-with-tls-errors` to emit
+// `kind: "cert"`.
 //
 // **Windows (WebView2):** After `crate::adblock_win::install(...)` in `spawn_tab`, use
 // `content.with_webview(move |pw| { ... })` to access the `ICoreWebView2` COM interface and
@@ -572,6 +571,9 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
         // nav policy + the gesture/frame-aware redirect guard). MUST run after the webview is
         // built (wry connects its handler during build); with_webview here satisfies that.
         crate::linux_layout::install_nav_policy(app, &label);
+        // Surface main-frame load failures / web-process crashes as `nav.failed` /
+        // `nav.crashed` so the chrome can draw its own error + retry UI.
+        crate::linux_layout::connect_nav_failure_label(app, &label);
         // WebRTC native backstop: WebKitGTK's set_enable_webrtc is all-or-nothing, so it
         // only enforces "disable" (worker-tight); public-only/default rely on the injected
         // shim. Skipped for allowlisted ("trusted") hosts.
@@ -764,10 +766,19 @@ mod tests {
     #[test]
     fn content_flag_round_trips() {
         let id = 99_001; // unlikely to collide with other tests sharing the global
-        assert!(!tabs_with_content().lock().unwrap().contains(&id));
+        assert!(!tabs_with_content()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&id));
         mark_tab_has_content(id);
-        assert!(tabs_with_content().lock().unwrap().contains(&id));
+        assert!(tabs_with_content()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&id));
         forget_tab_content(id);
-        assert!(!tabs_with_content().lock().unwrap().contains(&id));
+        assert!(!tabs_with_content()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .contains(&id));
     }
 }

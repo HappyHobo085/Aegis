@@ -193,23 +193,33 @@ pub fn dispatch<R: Runtime>(
                 .to_string();
             let allow = decision == "allow" || decision == "allow-once";
             let remember = decision != "allow-once";
+            // Resolve the pending request EAGERLY so an unknown/duplicate id is reported instead
+            // of being silently swallowed. Previously the `PENDING.remove` only ran inside
+            // `if let Some(..)`, so a resolve for an id the chrome had already dropped (double
+            // click, or a prompt for a webview that went away) still answered `ok`, the chrome
+            // dismissed the row, and the page's `PermissionRequest` stayed pending forever —
+            // WebKit then blocks that permission on the page with no way for the user to answer.
             #[cfg(target_os = "linux")]
             {
                 let app2 = app.clone();
                 let _ = app.run_on_main_thread(move || {
                     use webkit2gtk::PermissionRequestExt;
-                    PENDING.with(|p| {
-                        if let Some((req, origin, permission)) = p.borrow_mut().remove(&id) {
-                            if allow {
-                                req.allow();
-                            } else {
-                                req.deny();
-                            }
-                            if remember {
-                                persist(&app2, &origin, &permission, allow);
-                            }
-                        }
-                    });
+                    let entry = PENDING.with(|p| p.borrow_mut().remove(&id));
+                    let Some((req, origin, permission)) = entry else {
+                        eprintln!(
+                            "[aegis-perm] resolve for unknown/stale request id={id} \
+                             (already answered, or the webview is gone); ignoring"
+                        );
+                        return;
+                    };
+                    if allow {
+                        req.allow();
+                    } else {
+                        req.deny();
+                    }
+                    if remember {
+                        persist(&app2, &origin, &permission, allow);
+                    }
                 });
             }
             #[cfg(not(target_os = "linux"))]

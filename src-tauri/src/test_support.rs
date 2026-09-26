@@ -110,6 +110,16 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
     #[cfg(target_os = "linux")]
     app.manage(crate::linux_layout::LayoutInsets::default());
 
+    // The OS keychain has no per-app namespace — one entry (service "com.aegis.browser",
+    // user "sync-root") is shared by the whole machine. Point this app at a private entry
+    // so a test that stores a seed neither reads nor clobbers the developer's REAL sync
+    // seed, and so two tests can never collide on it.
+    static SLOT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    crate::sync_keystore::manage_test_slot(
+        app.handle(),
+        SLOT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+    );
+
     let out = f(app.handle());
 
     drop(app);
