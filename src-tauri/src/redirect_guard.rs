@@ -16,6 +16,21 @@
 //! took. Legit redirect chains (a user-clicked OAuth/shortener bounce, or an
 //! address-bar nav that the server redirects) stay allowed because their chain
 //! ORIGIN was a user gesture or an app-initiated nav.
+//!
+//! # Which platforms wire a hook
+//!
+//! Linux calls `note_nav` + `decide_at_response` (two-phase: `NavigationAction` carries the
+//! gesture/redirect flags, `ResponsePolicyDecision` carries reliable main-frame), Windows calls
+//! `block_at_start` (top-frame `NavigationStarting` has both in one place), and Android calls
+//! `should_block` through JNI. **macOS wires none of them** — there is no `nav_policy_mac.rs` —
+//! so on that target only `expect` (from `nav.rs`) is reachable and the rest of this module is
+//! inert. Rather than annotate a dozen items for a target that has no implementation, the allow
+//! below is scoped to macOS; Linux, Windows and Android keep dead-code linting fully on.
+//!
+//! Note: `-D warnings` only surfaces one wave of diagnostics per run. While this module had
+//! macOS *type* errors, rustc aborted before the late dead-code pass, so the macOS job reported
+//! none of this — fixing those errors is what exposed it.
+#![cfg_attr(target_os = "macos", allow(dead_code))]
 use tauri::{AppHandle, Manager, Url};
 
 /// The core cross-origin test, exposed for Android's JNI hook (which has reliable
@@ -96,6 +111,10 @@ fn same_target(a: &str, b: &str) -> bool {
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub struct ChainStart {
     pub from: String,
+    // Read only by Linux's `decide_at_response`, which matches PendingNavs against the chain's
+    // ORIGIN target (the URL the app asked for) rather than the post-redirect `final_url`.
+    // Windows' `block_at_start` matches against `target` directly at each hop instead.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
     pub origin_target: String,
     pub scripted: bool,
     // Read only on Windows (`block_at_start`); Linux resolves app-initiated in `decide_at_response`.
@@ -121,6 +140,7 @@ pub fn should_block_pred(scripted: bool, from: &str, target: &str, app_initiated
 /// decision point, because WebKit fires `NavigationAction` repeatedly (and for subframes) and the
 /// PendingNavs match is one-shot. Used by Linux's two-phase hook (`decide_at_response` decides).
 #[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(target_os = "windows", allow(dead_code))] // Linux-only phase; Windows uses `block_at_start`.
 pub fn note_nav(
     app: &AppHandle,
     tab: u32,
@@ -160,6 +180,7 @@ pub fn note_nav(
 /// redirected). Doing it at the single committed Response (not per NavigationAction) makes it
 /// robust to WebKit firing NavigationAction several times for one navigation.
 #[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(target_os = "windows", allow(dead_code))] // Linux's committed-Response phase; Windows decides at NavigationStarting.
 pub fn decide_at_response(app: &AppHandle, tab: u32, final_url: &str) -> Option<String> {
     let chain = take_action(app, tab, final_url)?;
     let app_initiated = app
@@ -228,6 +249,7 @@ pub fn chain_origin(app: &AppHandle, tab: u32) -> Option<ChainStart> {
 
 /// Drop a tab's in-flight chain once its top-frame load resolves.
 #[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(target_os = "windows", allow(dead_code))] // Linux clears the chain at its Response; Windows never seeds one it must clear.
 pub fn clear_chain(app: &AppHandle, tab: u32) {
     if let Some(s) = app.try_state::<Chains>() {
         s.0.lock().unwrap_or_else(|e| e.into_inner()).remove(&tab);
@@ -286,11 +308,15 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, t
 /// overwrite a main-frame one; `clear_tab` drops them.
 #[derive(Default)]
 #[cfg_attr(target_os = "android", allow(dead_code))]
+// The Linux (tab, url) -> action correlation map. Registered unconditionally in lib.rs so the
+// state shape is identical everywhere, but only the Linux two-phase path ever reads it.
+#[cfg_attr(target_os = "windows", allow(dead_code))]
 pub struct NavActions(pub Mutex<HashMap<(u32, String), (ChainStart, bool)>>);
 
 /// Normalize a URL into a stable correlation key (ignore fragment / trailing slash, since the
 /// NavigationAction target and the Response URL can differ in those).
 #[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(target_os = "windows", allow(dead_code))] // Linux correlation key; Windows has one signal, not two to correlate.
 fn norm_key(url: &str) -> String {
     match Url::parse(url) {
         Ok(u) => format!(
@@ -310,6 +336,7 @@ fn norm_key(url: &str) -> String {
 /// Record the `ChainStart` to apply at the Response for `target` (Linux two-phase).
 /// `main_frame` is the recording `NavigationAction`'s frame flag.
 #[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(target_os = "windows", allow(dead_code))] // Linux-only; only `note_nav` (Linux) records.
 pub fn record_action(app: &AppHandle, tab: u32, target: &str, chain: ChainStart, main_frame: bool) {
     if let Some(s) = app.try_state::<NavActions>() {
         let key = (tab, norm_key(target));
@@ -328,6 +355,7 @@ pub fn record_action(app: &AppHandle, tab: u32, target: &str, chain: ChainStart,
 /// consuming it would strip the main frame's decision (fail-open), and this is only ever called
 /// from the main-frame Response path, so `None` is the correct answer for a subframe-only key.
 #[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(target_os = "windows", allow(dead_code))] // Linux-only; only `decide_at_response` (Linux) consumes.
 pub fn take_action(app: &AppHandle, tab: u32, target: &str) -> Option<ChainStart> {
     let s = app.try_state::<NavActions>()?;
     let key = (tab, norm_key(target));
@@ -341,6 +369,7 @@ pub fn take_action(app: &AppHandle, tab: u32, target: &str) -> Option<ChainStart
 /// Drop a tab's recorded NavigationActions once its top-frame load resolves, so subframe
 /// entries that never matched a main-frame Response don't accumulate.
 #[cfg_attr(target_os = "android", allow(dead_code))]
+#[cfg_attr(target_os = "windows", allow(dead_code))] // Linux-only subframe-entry cleanup; Windows records no actions.
 pub fn clear_tab_actions(app: &AppHandle, tab: u32) {
     if let Some(s) = app.try_state::<NavActions>() {
         s.0.lock()

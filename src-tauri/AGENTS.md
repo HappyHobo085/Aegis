@@ -184,15 +184,25 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     older runtime, all find calls are **silent no-ops** (browsing unaffected). The
     minimum runtime build is not confirmable from Linux; device testing records it.
     Compile-verified via `cargo check --target x86_64-pc-windows-gnu`.
-  - `find_mac.rs` — **`WKWebView::findString:withConfiguration:completionHandler:`**
-    (objc2-web-kit, features `WKFindConfiguration` + `WKFindResult`). **Degraded:**
-    `WKFindResult` exposes only `matchFound` (bool) — no match count, no highlight-all,
-    no active index. The FindBar shows "1 match" when something is found and "0 matches"
-    otherwise; real count + highlight-all would require a JS-shim tier. `next`/`prev` re-issue
-    `findString:`
-    with `backwards` toggled; the last
-    query is stored per tab in `LAST_QUERY` (`OnceLock<Mutex<HashMap<u32, String>>>`).
-    macOS objc2 code cannot be compiled from Linux — **CI-only verify** (macos-latest).
+  - `find_mac.rs` — a **JS shim** (`find_shim.js`, bundled with `include_str!`), _not_
+    the native `findString:withConfiguration:completionHandler:`. That native API returns
+    only `matchFound` (a bool) — no match count, no highlight-all, no active index — and
+    macOS was the one platform still stuck on it, so the shim closes that parity gap.
+    At tab spawn (`install`) it is injected via `evaluateJavaScript` and defines
+    `window.__aegisFind(query, caseSensitive, direction, close)`: a `TreeWalker` over
+    visible text nodes, highlighting every match with `Range` + overlay divs and
+    tracking the active index, returning the result as the sentinel
+    `AEGISFIND:{matchCount}:{activeMatchIndex}` (also set on `document.title` for a
+    brief period, for any title observers). Every `start`/`next`/`prev`/`close`
+    re-injects it idempotently (`if (window.__aegisFind) return`) so it survives
+    in-tab navigation. `next`/`prev` reuse the last query + case-sensitivity, stored
+    per tab in `LAST_QUERY` (`OnceLock<Mutex<HashMap<u32, (String, bool)>>>`).
+    WKWebView access mirrors `nav_url_mac::install`: `with_webview` →
+    `pw.inner() as *mut WKWebView` → `Retained::retain(ptr)`, and the `with_webview`
+    callback already runs on the main thread, so nothing is marshalled inside it.
+    macOS objc2 code cannot be compiled from Linux — **CI-only verify**
+    (`cargo check --target x86_64-apple-darwin` on the `cross-target` matrix; GUI
+    behavior needs a macOS desktop session).
   - **Android** — `find` is handled entirely in Kotlin (`MainActivity.kt`). The
     `AegisAndroid` JS bridge exposes `find(query, caseSensitive)`, `findNext()`,
     `findPrev()`, and `findClose()`. `findAllAsync(query)` is called on the active tab's
@@ -472,7 +482,9 @@ syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserv
   - Unit-tested in `proxy::tests`: `from_value` parse/validate, `default_uri` schemes,
     `is_active` guard, `test_connection` socket probe, serde `bypassHosts` round-trip
     (the canonical key lesson — see gotcha 21 below).
-- **Misc** — `picker.rs` (element picker, Linux-only), `update.rs` (tauri-plugin-updater state).
+- **Misc** — `picker.rs` (element picker, **desktop-only**: Linux/Windows/macOS each inject
+  the overlay natively; Android has no tier and `picker.start` answers `{ok:false}`),
+  `update.rs` (tauri-plugin-updater state).
 
 ## There are no dev-only autopilot commands
 
@@ -750,7 +762,12 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     `tabs.create(url, true)` (with a grace period for chrome-initiated navigations to
     suppress spurious bg tabs from old-page timer redirects). Other platforms keep
     Tauri's `on_navigation` + their own native top-frame hooks (Windows `NavigationStarting`,
-    macOS `WKNavigationDelegate`, Android `shouldOverrideUrlLoading`). The block notification is
+    macOS `WKNavigationDelegate`, Android `shouldOverrideUrlLoading`). **The scripted-redirect
+    GUARD specifically has no macOS tier** — there is no `nav_policy_mac.rs`, so nothing on
+    macOS calls `note_nav`/`decide_at_response`/`block_at_start` and only `redirect_guard::expect`
+    (from `nav.rs`) is reachable there. That is why `redirect_guard.rs` carries a macOS-scoped
+    `#![cfg_attr(target_os = "macos", allow(dead_code))]`; Windows keeps the lint on and annotates
+    only the Linux-only items. The block notification is
     platform-native: desktop auto-opens a background tab; **Android shows a Material
     `Snackbar`** (a chrome-layer bar can't paint over the native content WebView) with
     the same "Open anyway" → new-tab action (`MainActivity.showRedirectBlocked`).
@@ -807,11 +824,11 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
       **Requires a 2024+ WebView2 Runtime** — `cast::<ICoreWebView2_28>()` fails silently
       on older runtimes (browsing unaffected, find is a no-op). Compile-verified via gnu
       cross-check + CI; GUI runtime-verify pending user's Windows 11 device.
-    - **macOS** (`WKWebView::findString:withConfiguration:completionHandler:`):
-      **degraded** — `WKFindResult` exposes only `matchFound` (bool); no real count, no
-      highlight-all, no active index. FindBar shows "1 match" / "0 matches". JS-shim tier
-      for real count + highlight is a recorded follow-up. CI-compile-only; GUI requires a
-      macOS desktop session.
+    - **macOS** (JS shim in `find_mac.rs`, `find_shim.js`): real match count + real active
+      index + highlight-all, via a `TreeWalker` over visible text nodes — the shim exists
+      precisely because the native `findString:withConfiguration:completionHandler:` returns
+      only `matchFound` (bool). Reads back through the `AEGISFIND:{count}:{index}` sentinel.
+      CI-compile-only; GUI requires a macOS desktop session.
     - **Android** (Kotlin `WebView.findAllAsync`): real count + active index (ordinal + 1)
       - highlight-all. **Case-insensitive only** — the `caseSensitive` flag is accepted but
         the Android WebView find API has no case-sensitive mode. Kotlin compile-verified; GUI

@@ -76,6 +76,11 @@ pub fn content_visible(lay: &Layout) -> bool {
 /// Hide the content for a full-window chrome overlay (settings, downloads, …) so the
 /// chrome shows above the opaque content webview. The sidebar is NOT a full overlay — it
 /// insets the content (page stays visible beside it), so it keeps content shown.
+// `app` and `visible` are used only by the platform branches below (Linux's
+// `set_content_visible`, and the Win/macOS `w.show()/w.hide()`), and Android runs
+// neither — it has no separate content webview to toggle. Same allow as
+// `apply_inset` below, for the same reason.
+#[allow(unused_variables)]
 fn apply_visibility(app: &AppHandle, lay: Layout) {
     let visible = content_visible(&lay);
     #[cfg(target_os = "linux")]

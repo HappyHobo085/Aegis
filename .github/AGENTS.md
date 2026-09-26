@@ -6,17 +6,49 @@ GitHub Actions workflows and Dependabot config for Aegis.
 
 - **`ci.yml`** (CI) — the always-on gate. Runs on every PR, on every push to `main`
   (so a direct push is gated too, not just PRs), weekly (Mon 06:17 UTC), and on
-  demand. Ubuntu only; two parallel jobs:
+  demand. Five job groups, all on `ubuntu-latest` except the macOS cross-check:
   - **`web`**: `npm ci` → `npm run typecheck` (scoped `tsc --noEmit` via
     `tsconfig.build.json`, which excludes test files + `src/testFixtures` to skip the
     known test-only type noise) → `npm run lint` (ESLint flat config, errors fail /
     warnings are the migration backlog) → `npm run format:check` (Prettier) →
     `npm test` (vitest node + jsdom) → `node scripts/check-npm-audit.mjs`.
-  - **`rust`**: installs the webkit2gtk build deps, then
-    `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` (the 357
-    `src-tauri` unit tests, Linux-cfg paths) for `src-tauri/Cargo.toml`, plus an
-    advisory (non-blocking) `cargo audit` over the crypto/keyring/TLS deps.
-    The standalone `sync-server/` crate is NOT gated here (separate non-workspace crate).
+  - **`rust`** (the `src-tauri` crate): installs the webkit2gtk build deps, then
+    `cargo fmt --check` → `cargo clippy --locked --all-targets -- -D warnings` →
+    `cargo test --locked` (the 418 `src-tauri` unit tests, Linux-cfg paths) →
+    a **BLOCKING** `cargo audit` over the crypto/keyring/TLS surface. The audit runs
+    with `working-directory: src-tauri` on purpose: cargo-audit resolves its config as
+    `./.cargo/audit.toml` relative to the CWD and does not search ancestors, so that is
+    what makes `src-tauri/.cargo/audit.toml` authoritative. There is no
+    `continue-on-error` and no `|| true` — a new advisory fails the job.
+  - **`sync-server`**: the same fmt/clippy/test treatment plus its own **blocking**
+    `cargo audit` for the standalone crate (the one internet-facing service in the
+    project). It is a separate non-workspace crate, so it needs no webkit2gtk and has
+    its own `sync-server/.cargo/audit.toml`.
+  - **`cross-target`** (matrix, `cargo check --locked` only — no link, no test, no
+    bundle): `x86_64-pc-windows-gnu` + `aarch64-linux-android` on ubuntu (mingw-w64 /
+    the Android NDK supply the cross toolchain) and `x86_64-apple-darwin` on a
+    **macOS-15** runner, because objc2's build script needs a macOS C toolchain and
+    cannot be cross-compiled from Linux. This is the only job that compiles
+    `nav_url_win.rs`, `nav_url_mac.rs`, `zoom_win.rs`, `zoom_mac.rs` and the JNI /
+    `sync_keystore` / `ffi_guard` block — everything else is Linux-cfg. `fail-fast` is
+    off so all three surfaces report at once.
+  - **`msrv`**: `cargo check --locked` for BOTH manifests against the `rust-version`
+    declared in each `Cargo.toml`, on a toolchain resolved from that manifest (the one
+    job that deliberately does NOT use `rust-toolchain.toml`, so a new stable release
+    cannot silently break the declared floor).
+
+  Every cargo invocation passes `--locked` (only `cargo fmt` does not — cargo-fmt has
+  no such flag), so **`Cargo.lock` is part of the gate**: a dependency change that is
+  not committed with its manifest fails the build rather than silently resolving.
+
+  The Rust jobs also run with `RUSTFLAGS: -D warnings` **injected from outside this
+  repository** — it appears in every Rust job's environment but is in no workflow,
+  manifest, or `.cargo/config.toml` in the tree (the only `.cargo` dir is
+  `src-tauri/.cargo/`, and it holds just `audit.toml`). That is why a dead-code or
+  unused-import warning on the Windows/macOS/Android-only code turns CI red even
+  though `ci.yml` only spells out `-D warnings` for clippy. Treat "all three
+  cross-target surfaces are warning-clean" as a real requirement.
+
 - **`tauri-build-check.yml`** (Tauri Build Check) — proves the app compiles, links,
   and bundles on real OSes and produces downloadable artifacts for on-device
   testing. Triggers on demand only (`workflow_dispatch`) — deliberately NOT on push,
@@ -44,8 +76,11 @@ Weekly npm + github-actions + **cargo** updates. Minor/patch bumps are grouped i
 single PR per ecosystem to reduce noise; major bumps arrive individually. Cargo is
 tracked for **both** Rust manifests — `/src-tauri` (the Tauri core) and `/sync-server`
 (the standalone self-hosted sync server) — so `Cargo.lock` no longer drifts unmanaged.
-The CI `rust` job's `cargo audit` is advisory (non-blocking); the Dependabot cargo
-PRs are the currency mechanism for the crypto/keyring/TLS surface.
+The CI `rust` and `sync-server` jobs both run a **blocking** `cargo audit`, so a
+Dependabot bump that lands a vulnerable version goes red rather than waiting for the
+weekly schedule; the accept-lists that keep known-and-accepted advisories out of that
+path are `src-tauri/.cargo/audit.toml` and `sync-server/.cargo/audit.toml`, each entry
+carrying the one-line reason it is accepted.
 
 ## Notes
 

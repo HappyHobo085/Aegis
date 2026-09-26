@@ -5,7 +5,11 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, Runtime, Url, WebviewUrl};
+use tauri::{AppHandle, Manager, Runtime, Url};
+// `WebviewUrl` has exactly one user, `spawn_tab`, which is `#[cfg(desktop)]`. Android
+// builds a single webview in Kotlin instead, so importing it there is an unused import.
+#[cfg(desktop)]
+use tauri::WebviewUrl;
 
 /// Tabs that have committed at least one real (non-`about:blank`) top-frame page.
 /// Used to auto-close pop-under shells: a background tab opened by `window.open` that
@@ -127,6 +131,7 @@ pub fn active_content_label<R: Runtime>(app: &AppHandle<R>) -> String {
     content_label(id)
 }
 /// The active tab's webview, if it exists.
+#[cfg_attr(target_os = "android", allow(dead_code))] // Android is a single webview built in Kotlin; only the desktop paths ask for this.
 pub fn active_webview<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::Webview<R>> {
     app.get_webview(&active_content_label(app))
 }

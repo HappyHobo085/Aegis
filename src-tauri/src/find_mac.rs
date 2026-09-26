@@ -26,8 +26,8 @@
 //!
 //! # WKWebView access
 //! Mirrors `nav_url_mac::install`: `with_webview` → `pw.inner() as *mut WKWebView`
-//! → `Retained::retain(ptr)`.  The `with_webview` callback runs on the main
-//! thread, so `MainThreadMarker::new_unchecked()` is safe within it.
+//! → `Retained::retain(ptr)`. The `with_webview` callback runs on the main
+//! thread, so no thread-marshalling is needed inside it.
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -35,7 +35,6 @@ use std::sync::{Mutex, OnceLock};
 use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::MainThreadMarker;
 use objc2_foundation::{NSError, NSString};
 use objc2_web_kit::WKWebView;
 use tauri::{AppHandle, Manager};
@@ -132,6 +131,13 @@ where
     with_content_webview(app, id, move |wv| {
         unsafe {
             let ns_js = NSString::from_str(&js);
+            // A block is an `Fn`, NOT an `FnOnce`: WebKit retains it and owns when
+            // (or how many times) it invokes the handler, so capturing `f` directly
+            // fails to compile ("expected a closure that implements the `Fn` trait,
+            // but this closure only implements `FnOnce`"). Park it in a slot and
+            // `take()` it, so the handler fires at most once and repeat invocations
+            // are a no-op rather than a panic.
+            let f_slot = Mutex::new(Some(f));
             let block = RcBlock::new(move |result: *mut AnyObject, _error: *mut NSError| {
                 let (count, idx) = if !result.is_null() {
                     // SAFETY: result is a non-null NSString returned by the JS expression
@@ -141,7 +147,9 @@ where
                 } else {
                     (0, 0)
                 };
-                f(count, idx);
+                if let Some(f) = f_slot.lock().ok().and_then(|mut slot| slot.take()) {
+                    f(count, idx);
+                }
             });
             // evaluateJavaScript:completionHandler: (requires block2 feature).
             // &*block coerces RcBlock → &Block via Deref.
@@ -186,11 +194,11 @@ pub fn install(pw: &tauri::webview::PlatformWebview, _app: AppHandle, _id: u32) 
     };
     unsafe {
         let ns_js = NSString::from_str(FIND_SHIM_JS);
-        // Fire-and-forget: the completion handler is a no-op.  We only need the
-        // shim defined; the actual find calls happen later via `start`/`next`/etc.
-        let _block = RcBlock::new(move |_result: *mut AnyObject, _error: *mut NSError| {});
-        // We intentionally don't keep the block alive — the evaluateJavaScript
-        // call retains it internally until the JS finishes executing.
+        // Fire-and-forget, and genuinely so: we only need the shim defined; the
+        // actual find calls happen later via `start`/`next`/etc. No completion
+        // handler is passed (previously one was built and then dropped, with a
+        // comment claiming WebKit retained it — `None` was what was actually
+        // sent, so the block was pure waste).
         wv.evaluateJavaScript_completionHandler(&ns_js, None);
     }
 }

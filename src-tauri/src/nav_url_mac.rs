@@ -187,12 +187,16 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
     };
 
     // ── URL observer: same-document navigations for the address bar ──
+    // `app` is moved into this `move` closure, so the title observer below needs
+    // its own clone. (Sharing one `app` between the two closures does not
+    // compile: "use of moved value: `app`".)
+    let app_url = app.clone();
     let url_observer = UrlObserver::new(
         webview.clone(),
         Box::new(move |url: String| {
             if !url.is_empty() {
                 // Same-document URL change (History API/hash) → not a fresh load.
-                crate::nav::emit_state(&app, id, &url, "", false);
+                crate::nav::emit_state(&app_url, id, &url, "", false);
             }
         }),
     );

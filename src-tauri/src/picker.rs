@@ -25,6 +25,15 @@
 //! cannot produce a matching nonce, so it cannot write a filter rule. The
 //! remaining checks in `build_rule` (host + selector charset) and the
 //! `MAX_FILTER_BYTES` cap are defence in depth behind that gate.
+//!
+//! On Android the picker is not implemented — `dispatch` falls through to the
+//! unsupported-platform branch and answers `{ok:false}` — so the entire
+//! sentinel-authorisation half of this module (SENTINEL, the session/nonce
+//! machinery, `on_picked`, `build_rule` and its validators) has no caller there
+//! and warns as dead code. The allow is Android-scoped: desktop keeps the lint on,
+//! so a genuinely dead item there still fails CI's `-D warnings` cross-target gate.
+#![cfg_attr(target_os = "android", allow(dead_code))]
+
 use serde_json::{json, Value};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -352,7 +361,13 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
         let Some(content) = crate::nav::active_webview(app) else {
             return Some(Ok(json!({ "ok": false })));
         };
-        let _ = content.with_webview(|pw| {
+        // `move` is REQUIRED here, not stylistic: `with_webview` takes a
+        // `FnOnce(..) + Send + 'static` closure, and `NSString::from_str(&js)`
+        // only *borrows* the local `js`. Without `move` the closure captures `js`
+        // by reference and fails to compile with "closure may outlive the current
+        // function, but it borrows `js`". The Linux branch below does the same
+        // thing via `HSTRING::from(js)`, which moves instead of borrowing.
+        let _ = content.with_webview(move |pw| {
             let ptr = pw.inner() as *mut WKWebView;
             if ptr.is_null() {
                 return;

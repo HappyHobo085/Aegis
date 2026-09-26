@@ -25,4 +25,16 @@ ignore = [
   # RUSTSEC-2026-0195 (quick-xml, second advisory): same plist 1.9.0 -> quick-xml
   # ^0.39.2 constraint as above; fixed by the same upstream release.
   "RUSTSEC-2026-0195",
+  # RUSTSEC-2026-0235 (rkyv 0.7.46, OOB read on untrusted archives). NOT FIXABLE BY A BUMP:
+  # the advisory needs rkyv >=0.8.17, but the only dependent is rust_decimal 1.42.1, whose
+  # requirement is ^0.7 — 0.8 is semver-incompatible, so cargo cannot resolve it here.
+  #
+  # It is also NOT A REAL EXPOSURE: rkyv is an OPTIONAL, feature-gated dependency of
+  # rust_decimal (behind its `rkyv` / `serde-with-arbitrary-precision` features), and no
+  # Aegis build enables it. rust_decimal itself IS in the graph (byte-unit ->
+  # tauri-plugin-log), but `cargo tree -e features | grep -c rkyv` returns 0, i.e. rkyv is
+  # never compiled into any Aegis binary. cargo-audit reports it anyway because it scans the
+  # flat Cargo.lock, which cannot express optionality. Re-check with that command before
+  # assuming this is still true; if it ever returns non-zero, this ignore MUST be removed.
+  "RUSTSEC-2026-0235",
 ]
