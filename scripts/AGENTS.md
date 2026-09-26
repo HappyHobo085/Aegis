@@ -91,7 +91,7 @@ Convenience wrappers around the release builds (each resolves the repo root via
   mismatch — wipes that app's data).
 - **`build-appimage.sh`** — the release AppImage. Mirrors the CI `aegis-linux-appimage`
   job: `tauri build --bundles appimage --config src-tauri/tauri.appimage-mediaframework.conf.json`
-  (the media-framework override ships matched GStreamer plugins — see `src-tauri/CLAUDE.md`
+  (the media-framework override ships matched GStreamer plugins — see `src-tauri/AGENTS.md`
   gotcha 12). Output under `src-tauri/target/release/bundle/appimage/*.AppImage`.
 - **`build-windows-portable.ps1`** — **run on a Windows host** (MSVC + NASM + CMake). Mirrors
   the CI `aegis-windows-portable` job: `tauri build --no-bundle` then copy

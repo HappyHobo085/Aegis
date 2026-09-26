@@ -3,7 +3,7 @@
 //! noise — so a site sees a stable-but-unique fingerprint within a session. Opt-in (default
 //! `off`); per-site allowlist escape hatch. FAIL-OPEN throughout (a shim bug never breaks a
 //! page). Honest limit: a same-world JS shim is detectable and on WebKit the UA already lies
-//! about the engine — see src-tauri/CLAUDE.md. The shipped JS is single-sourced in
+//! about the engine — see src-tauri/AGENTS.md. The shipped JS is single-sourced in
 //! `farble.standard.js`/`farble.strict.js` and executed by the vitest runtime test
 //! (src/lib/farbleShim.test.ts), which is AUTHORITATIVE for runtime behavior.
 //!
@@ -265,7 +265,7 @@ pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
     }
     match app.try_state::<FarbleState>() {
         Some(s) => {
-            let g = s.0.lock().unwrap();
+            let g = s.0.lock().unwrap_or_else(|e| e.into_inner());
             g.allowlist
                 .iter()
                 .any(|h| host == h || host.ends_with(&format!(".{h}")))
@@ -300,7 +300,7 @@ fn clear_fp_hosts<R: Runtime>(app: &AppHandle<R>) {
 fn reseed_fp_inner<R: Runtime>(app: &AppHandle<R>) {
     let hosts = load_fp_allowlist_hosts(app);
     if let Some(s) = app.try_state::<FarbleState>() {
-        s.0.lock().unwrap().allowlist = hosts.clone();
+        s.0.lock().unwrap_or_else(|e| e.into_inner()).allowlist = hosts.clone();
     }
     // Android: mirror into the JNI-global so the per-tab farble getter can
     // check whether a host is allowlisted (no AppHandle on the JNI thread).
@@ -319,7 +319,7 @@ fn fp_state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     let lvl = level(app);
     match app.try_state::<FarbleState>() {
         Some(s) => {
-            let g = s.0.lock().unwrap();
+            let g = s.0.lock().unwrap_or_else(|e| e.into_inner());
             json!({ "level": lvl, "allowlistedHosts": g.allowlist })
         }
         None => json!({ "level": lvl, "allowlistedHosts": [] }),

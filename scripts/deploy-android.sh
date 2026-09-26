@@ -7,7 +7,7 @@
 #   --reinstall   if the in-place update fails (signature mismatch), uninstall the
 #                 existing app first, then install fresh (WIPES that app's data).
 #
-# Requirements on this host (see src-tauri/CLAUDE.md gotcha 8 + the android build memory):
+# Requirements on this host (see src-tauri/AGENTS.md gotcha 8 + the android build memory):
 #   - JDK 21 (Android Studio JBR) — Gradle/AGP break under JDK 25
 #   - Android SDK + NDK 27, a connected device with USB debugging, adb on PATH
 set -euo pipefail

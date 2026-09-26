@@ -28,7 +28,7 @@ Android (iOS is a future, macOS/Xcode-gated tier).
 
 ## Folder map
 
-| Folder          | What it is                                          | Has its own CLAUDE.md |
+| Folder          | What it is                                          | Has its own AGENTS.md |
 | --------------- | --------------------------------------------------- | --------------------- |
 | `src/`          | React renderer (the UI / "chrome")                  | yes                   |
 | `src-tauri/`    | Rust core + native platform code                    | yes                   |
@@ -39,7 +39,7 @@ Android (iOS is a future, macOS/Xcode-gated tier).
 | `dist/`         | Vite build output (gitignored)                      | generated, no docs    |
 | `node_modules/` | npm deps (gitignored)                               | generated, no docs    |
 
-> **The `CLAUDE.md` files are living docs.** Every folder's `CLAUDE.md` (this one
+> **The `AGENTS.md` files are living docs.** Every folder's `AGENTS.md` (this one
 > included) documents _current_ behavior — when a change makes one stale, update it
 > in the same commit. Treat them as part of the code, not a one-time snapshot.
 
@@ -116,7 +116,7 @@ platforms: Linux via `connect_block_counter`/`resource-load-started`, Windows vi
 `WebResourceRequested` network tier in `adblock_win.rs`, and Android via
 `shouldInterceptRequest` in `MainActivity.kt`. Each platform's count reflects what
 its own ad-block tier sees — content-filter-blocked requests on Linux are cancelled
-before the signal fires and are never counted; see gotcha 6 in `src-tauri/CLAUDE.md`
+before the signal fires and are never counted; see gotcha 6 in `src-tauri/AGENTS.md`
 for the honest per-platform framing.) Android browses + ad-blocks + is secure
 (verified on emulator). macOS compiles + bundles green in CI but is not yet
 GUI-runtime-verified. iOS is unstarted (needs macOS + Xcode).
@@ -198,7 +198,7 @@ parity matrix:
   (WebView2 browser args are immutable after creation). NOTE: because content webviews
   carry these args, each distinct args set lives in its OWN WebView2 user-data-folder
   (`EBWebView-content-<hash>`) — required to avoid a blank-page failure; see
-  `src-tauri/CLAUDE.md` gotcha 23.
+  `src-tauri/AGENTS.md` gotcha 23.
 - **macOS** — NOT implemented. Direct connection. `WKWebsiteDataStore.proxyConfigurations`
   (macOS 14+) requires raw `msg_send!` / hand-rolled `nw_proxy_config_*` Network.framework
   bindings that cannot be compiled or verified from Linux (objc2 needs a macOS toolchain).

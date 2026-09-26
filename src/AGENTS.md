@@ -44,8 +44,9 @@ Channel and event names, and all payload/return types, are defined once in
   `fullOverlayActive` from the registry and computes the content layout via
   `computeContentLayout` (`src/lib/contentLayout.ts`), mirrored on the Rust side by
   `view::content_visible`. **To add a new full-window overlay, call `useChromeSurface`
-  in its component — there is no central union to update.** The sidebar (insets) and
-  shield popover (dropdown) are NOT registry surfaces; they stay as direct `App` state.
+  in its component — there is no central union to update.** The sidebar is not a
+  registry surface either — it insets from the right via `view.setSidebar` and stays
+  direct `App` state.
   The `src/autopilot/compositor.test.tsx` drift guard fails the build if an overlay
   reachable via the autopilot control does not lower the content.
   `useChromeSurface` is a **no-op** outside a `ChromeSurfaceProvider` (so surfaces
@@ -57,6 +58,29 @@ width)` so the page insets from the right and stays visible. Width is remembered
   in localStorage.
 - **Content inset** is set deterministically from layout constants in `lib/layout.ts`
   (toolbar + favbar height), via `hooks/useContentInset.ts` — no DOM measurement.
+- **Chrome popovers (dropdowns/dialogs anchored below the chrome) are the OTHER half of
+  the compositor** and must never use `useChromeSurface`. A popover has to leave the page
+  visible, so it can't set `overlay: true` (Rust's `view::content_visible` would hide the
+  webview and blank the window). Instead the popover **measures itself** and the tallest
+  open popover's height is added to the content top inset — same `view.setContentInset`
+  path the FindBar uses. To add one, call **both** hooks in the component:
+  - `useMeasuredHeight<HTMLDivElement>(open)` (`hooks/useMeasuredHeight.ts`) → `[ref,
+height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open` goes
+    false. An observer is safe here (unlike `useChromeHeights`, which avoids them) because
+    the chrome webview fills the window and is never resized by the content inset.
+  - `useChromePopoverInset('<id>', height)` (`hooks/useChromePopover.tsx`) → registers
+    while open, unregisters on unmount. `App.tsx` reads `inset` = **max, not sum**, from
+    the registry. `useChromePopoverInset` is a no-op outside `ChromePopoverProvider` (the
+    mobile shell has no provider and hides content via `view.setChromeOverlay` instead);
+    `useChromePopoverRegistry` throws outside one.
+  - Because the inset follows the measured box, a popover's CSS `max-height` must be a
+    **fixed px value, never `vh`** — a viewport-relative height would feed back into the
+    layout on every measure.
+  - Popover anchors need `position: relative` (`.address-bar__field` already is) and
+    `z-index: 5100`, matching `.site-identity`.
+  - `useDialog` returns a **stable** ref object, so a popover that must be observed has to
+    merge the two refs in a `useCallback` (stable identity) — an inline merge function
+    detaches and re-attaches the node every render and the observer would never fire.
 - **One hook per domain** in `hooks/` (nav, adblock, history, saved, favorites,
   settings, subscriptions, customFilters, downloads, permissions, update, safety,
   **tabs**, **find**, **fingerprint**, **proxy**). Components stay presentational; state + IPC wiring
@@ -139,7 +163,7 @@ bypassHosts, active, uri }`). Seeds from `aegis.proxy.getState()` on mount; subs
   - A note informs the user that the proxy covers browsed pages only (not the OS or other
     apps) and that DNS/QUIC may still leak outside the proxy path.
   - On Windows: a note warns that proxy changes apply only to new or reloaded tabs
-    (spawn-time limitation — see `src-tauri/CLAUDE.md` gotcha 22).
+    (spawn-time limitation — see `src-tauri/AGENTS.md` gotcha 22).
     Autopilot coverage: `proxy.state` catalog entry (`channels: [proxy.getState,
 proxy.setConfig, proxy.clear, proxy.testConnection]`) with a `verify` round-trip (sets a
     probe config, asserts host/port/bypassHosts persist, restores). Interaction specs in
@@ -152,10 +176,30 @@ proxy.setConfig, proxy.clear, proxy.testConnection]`) with a `verify` round-trip
 - **`components/ZoomIndicator`** — toolbar zoom widget. Shows the current zoom percent as
   a clickable label; clicking opens a popover (role=`dialog`) with Zoom-out / percent /
   Zoom-in / Reset buttons. Purely presentational; receives `{ factor, zoomIn, zoomOut,
-reset, onOpenChange }` from `useZoom`. `onOpenChange` lets `App.tsx` raise the chrome
-  above the content webview while the popover is open (same mechanism as the shield popover).
+reset, onOpenChange }` from `useZoom`. It **self-registers with the compositor** via
+  `useMeasuredHeight` + `useChromePopoverInset('zoom-indicator', …)` (it takes an optional
+  `popoverRef` for the measured node), so the content webview insets below it while open.
+  `onOpenChange` is now only consumed by the **mobile** shell (`view.setChromeOverlay`);
+  the desktop compositor no longer needs it. `components/AdblockShield` follows the
+  identical self-registration pattern with the id `adblock-shield`.
   On Android the `MobileMenuSheet` exposes the same zoom controls via the bridge; there is
   no separate `ZoomIndicator` in the mobile shell.
+- **Omnibox (address-bar suggestions).** `AddressBar` is a **combobox**: with an
+  `omnibox={{ favorites, saved, searchTemplate }}` prop it renders `OmniboxDropdown`
+  (`role="listbox"`) below the field, ranked by the pure `buildOmniboxSuggestions`
+  (`lib/omnibox.ts`) over history + favorites + saved pages + an optional "Go to …" row +
+  a trailing "Search for “…”" row. `hooks/useOmnibox.ts` owns the debounced (90 ms)
+  history query (a monotonic seq ref drops stale `history.search`/`history.list`
+  responses) and the `activeIndex`; `useNav` exposes `searchTemplate` for the search row.
+  Keyboard: ↑/↓ move, Enter picks the active row (otherwise the form submits the raw
+  text), Escape dismisses **keeping the text and focus**, blur dismisses and reverts the
+  field to the live URL. Picking uses `onMouseDown` + `preventDefault` so the input never
+  loses focus. `AddressBar` stays dumb about the compositor: it measures the dropdown with
+  `useMeasuredHeight` and registers `useChromePopoverInset('address-omnibox')`. Both
+  desktop (`Toolbar` → `App`) and mobile (`MobileTopBar` → `MobileApp`, which folds it
+  into `view.setChromeOverlay`) pass the stores; without the `omnibox` prop the dropdown
+  never opens. Autopilot: the `addressBarSuggestions` screen + three `omnibox.*`
+  interaction specs in `interactions/toolbar.ts`.
 - **`components/TabStrip`** — the top row of the chrome, rendered above the
   toolbar on desktop only (hidden on mobile via `.aegis-mobile`). Shows the tab
   list and drives `tabs.create`/`tabs.activate`/`tabs.close` etc. Private tabs
@@ -170,6 +214,28 @@ reset, onOpenChange }` from `useZoom`. `onOpenChange` lets `App.tsx` raise the c
 - **`lib/layout.ts`** gained `TABSTRIP_H` (the pixel height reserved for the
   tab strip), used by `useContentInset` to keep the content webview positioned
   below it.
+- **`lib/format.ts`** — the display formatters the list panels share, so they stay
+  presentational: `formatHost(url)` (hostname minus `www.`, `''` for non-http or
+  unparseable — callers omit the meta line when it's empty), `formatRelativeTime(ts,
+now?)` (`just now` → `12 min ago` → `3 h ago` → `Yesterday, 14:32` → `Tue, 09:12` →
+  `12 Mar` → `12 Mar 2024`; never a negative age for a future timestamp),
+  `formatBytes(n)` (`1.5 KB`, `4.3 MB`; the decimal is dropped at 10 and above), and
+  the day-bucket trio `dayBucket` / `dayBucketLabel` / `groupByDay`. **Every function
+  takes an explicit `now` (defaulting to `Date.now()`)** so the tests pin the clock
+  instead of depending on the day the suite runs. Use these in a new list panel rather
+  than calling `toLocaleString()` inline.
+- **List-panel row anatomy (History / Saved / Downloads).** Each row is
+  `title` + a **meta line** = `host` + a right-aligned timestamp, and the full URL is
+  _never_ printed — it is long, redundant with the title, and eats the width the host
+  needs. The shared classes are `.history-panel__meta`, `.saved-panel__meta`,
+  `.downloads-panel__meta`, `__host` (shrinks + ellipsis) and `__time` / `__saved`
+  (`margin-left: auto`, never shrinks). History additionally groups rows by day:
+  `.history-panel__groups` → `<section aria-labelledby>` per bucket with a sticky
+  `<h3>` header ("Today" / "Yesterday" / "Earlier this week" / "Earlier"), built by
+  `groupByDay` so the group order is fixed rather than data-derived. A row's
+  `aria-label` still carries the full URL, so nothing is lost to a screen reader.
+  History and Downloads search/filter live-filter as you type; Downloads folds to
+  `COLLAPSED_ROWS` (5) behind a "Show all N" button.
 - **Theme tokens (`index.css` / `lib/theme.ts`).** `index.css` ships two palettes:
   `[data-theme="dark"]` (the original flat `:root` tokens, moved verbatim — dark look
   is unchanged) and `[data-theme="light"]` (a parallel white-surface palette). `<html
@@ -183,6 +249,18 @@ data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
   accent is `#2563eb` (white-on-accent ≈ AA); muted text is `--fg-muted` lifted to
   meet AA on input surfaces. `index.css` also ships a `prefers-reduced-motion` block,
   an `.sr-only` utility, a `--font-size-*` type ramp, and a styled native `<select>`.
+- **Solid panels, glass only over live content.** Every full-window overlay card
+  (`.settings-modal__content`, `.confirm-dialog`, `.error-overlay__panel`,
+  `.interstitial__panel`, `.downloads-modal`, `.favorites-manager`,
+  `.permission-prompt`, `.command-palette`, `.onboarding__card`, `.toast`,
+  `.autofill-save-prompt`, `.mobile-sheet`, `.sidebar__panel`) is **solid
+  `var(--bg-elevated)` + a border + a shadow, with NO `backdrop-filter`**. A
+  full-window overlay sets `overlay: true`, which _hides_ the content webview, so
+  there is no page behind the card to blur — `--glass-3` (white @ 10% dark) just
+  composited to a flat value nearly identical to its own backdrop. Translucency
+  is reserved for surfaces that genuinely float over a **live** page:
+  `.adblock-shield__popover`, `.zoom-indicator__popover`, `.site-identity`,
+  `.find-bar`, `.ws-ctx-menu`. Don't "unify" these two groups.
 - **`components/SettingsModal`** groups its tabs into labelled sections via `TAB_GROUPS`
   (the flattened group order IS `TAB_ORDER`) rendered as a vertical left rail with
   roving arrow-key navigation; on `.aegis-mobile`/`.aegis-narrow` the rail becomes a
@@ -200,9 +278,18 @@ data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
   narrow desktop window keeps a usable address bar. The desktop never swaps to the Android
   `MobileApp` shell — that shell is wired to the native content bridge and can't drive the
   Tauri content webview; the narrow desktop layout adapts in place instead.
-- **`useDialog(onClose, { initialFocus })`** — optional `initialFocus` lands focus on a
-  specific element (used to focus the SAFE button in confirm/permission dialogs). The
+- **`useDialog(onClose, { initialFocus }, open = true)`** — optional `initialFocus` lands focus
+  on a specific element (used to focus the SAFE button in confirm/permission dialogs). The
   `confirm(message, { destructive })` helper styles the affirmative button as dangerous.
+  **Pass the third `open` argument when the component stays MOUNTED but renders `null` while
+  closed** (e.g. `CommandPalette`, `Onboarding`, `SafetyInterstitial`). The hook's single
+  effect installs the focus trap, the Escape handler and the focus-restore cleanup, and it
+  bails when the node is absent — so a dialog that is always mounted and conditionally
+  rendered would install all of that exactly once against no node, and silently have no
+  focus trap, no Escape and no focus restore. Omit `open` for a dialog whose parent
+  conditionally renders it (it then mounts fresh with a node and works unchanged).
+  The hook returns a real `RefObject` (not a callback ref) because several call sites write
+  `.current` from a stable ref callback to share the node with a measurement probe.
 
 ## Mobile shell (`components/mobile/`, Android)
 
@@ -238,6 +325,17 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
   favourites chips clear the ~36px touch-target floor.) The mobile `MobileSheet` dismiss is
   a Close (X) button (focus-trapped via `useDialog`), and touch targets in the mobile
   chrome are ≥44px.
+- **Touch targets vs. layout heights (the one place they conflict).** Most mobile controls
+  are simply sized ≥44px: `.mobile-topbar__reload`/`__toggle` (44×44),
+  `.mobile-bottombar__btn` (56), `.mobile-menu__item` (52), `.omnibox__row` (44). The
+  favourites bar is the exception — its chips and add button are 28px because `MOBILE_FAV_H`
+  is locked to the native WebView margins, and growing them would desync the layout. Under
+  `@media (pointer: coarse)` they instead get an **overlay `::after` pseudo-element**
+  (`position: absolute; left/right: 0; top: 50%; height: 44px; translateY(-50%)`) that
+  enlarges the _hit_ area without contributing to layout, and deliberately keeps the
+  element's own width so neighbouring chips' targets can't overlap. **If you add a control
+  to a height-constrained mobile bar, grow it with that technique — don't raise the CSS
+  height, and don't raise `lib/layout.ts` without also editing `MainActivity.kt`.**
 - **Bottom-bar toggle** and **fullscreen** (hide all chrome — desktop parity) call
   `setBottomBarHidden` / `setFullscreen` on the bridge; the native side shrinks the
   content webview's margins so the page reclaims the space.
@@ -324,7 +422,7 @@ Vite dead-code-eliminates it on `build:renderer`.
   `writeReport(report, html)` → `invoke('autopilot_write_report', …)`,
   `done()` → `invoke('autopilot_done')`,
   `emitEvent(channel, payload)` → `invoke('autopilot_emit_event', …)`.
-  These commands are NOT in the production `ipc` dispatcher; see `src-tauri/CLAUDE.md`.
+  These commands are NOT in the production `ipc` dispatcher; see `src-tauri/AGENTS.md`.
 - **`report.ts`** — `Report` / `StepResult` types, `summarize`, `renderReportHtml`.
   Produces the JSON report and the standalone HTML screenshot gallery.
 

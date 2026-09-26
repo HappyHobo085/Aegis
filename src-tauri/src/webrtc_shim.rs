@@ -35,7 +35,7 @@
 //! through. The native backstops (Linux `set_enable_webrtc`, Windows
 //! `--force-webrtc-ip-handling-policy`) ARE engine-wide and remain belt-and-suspenders should a
 //! non-standard engine ever expose it in a worker; macOS and Android are shim-only (so they'd
-//! rely solely on the Window-only exposure holding). See the matrix in src-tauri/CLAUDE.md.
+//! rely solely on the Window-only exposure holding). See the matrix in src-tauri/AGENTS.md.
 
 use std::sync::OnceLock;
 

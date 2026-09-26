@@ -3,7 +3,7 @@
 # distro (incl. Fedora). Mirrors the CI 'aegis-linux-appimage' job: bundles ONLY the
 # AppImage (skips the .deb) and applies the media-framework config override so the
 # bundled GStreamer plugins are version-matched to the host (HTML5 <video> works —
-# see src-tauri/CLAUDE.md gotcha 12).
+# see src-tauri/AGENTS.md gotcha 12).
 #
 # Usage:  bash scripts/build-appimage.sh
 #

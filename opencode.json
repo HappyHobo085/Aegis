@@ -2,13 +2,13 @@
   "$schema": "https://opencode.ai/config.json",
 
   "instructions": [
-    "CLAUDE.md",
-    "src/CLAUDE.md",
-    "src-tauri/CLAUDE.md",
-    "shared/CLAUDE.md",
-    "scripts/CLAUDE.md",
-    "sync-server/CLAUDE.md",
-    ".github/CLAUDE.md"
+    "AGENTS.md",
+    "src/AGENTS.md",
+    "src-tauri/AGENTS.md",
+    "shared/AGENTS.md",
+    "scripts/AGENTS.md",
+    "sync-server/AGENTS.md",
+    ".github/AGENTS.md"
   ],
 
   "permission": {

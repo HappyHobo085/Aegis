@@ -11,7 +11,7 @@
 #   - rustup target add x86_64-pc-windows-gnu        (installed on this host)
 #   - mingw-w64 gcc                                  (Fedora: sudo dnf install mingw64-gcc)
 #   - if cargo's TLS to crates.io fails behind a CA-revocation-blocking network, set
-#     http.check-revoke=false (see src-tauri/CLAUDE.md gotcha 15).
+#     http.check-revoke=false (see src-tauri/AGENTS.md gotcha 15).
 #
 # Usage:  bash scripts/build-windows-portable-cross.sh
 set -euo pipefail

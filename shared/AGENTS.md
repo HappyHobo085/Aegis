@@ -27,7 +27,7 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
 from, to }`) — the native redirect guard cancelled a scripted cross-origin top-frame
     redirect. The chrome automatically opens the blocked destination in a new background tab
     via `tabs.create(url, true)` (Android `__aegisOpenTab` equivalent). Emitted per-platform
-    from the native nav-policy hook; see `src-tauri/CLAUDE.md` gotcha 14.
+    from the native nav-policy hook; see `src-tauri/AGENTS.md` gotcha 14.
   - `find.*` channels + `find.state` event:
     - `find.start` (payload `{ query, caseSensitive?, viewId? }`) — begin/update a
       find-in-page session on the active (or specified) tab.
