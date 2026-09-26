@@ -38,7 +38,7 @@ dotted event name.
   lifecycle (`create`/`activate`/`close`/`reopen_closed`), pinned/reorder,
   per-tab back/forward history (`record_nav`/`go_back`/`go_forward`),
   time-based idle sweep (`sweep_idle`), session (de)serialization
-  (`to_persisted`/`restore`). 24 unit tests.
+  (`to_persisted`/`restore`). 49 unit tests.
 - **`tabs.rs`** — Tauri layer over the registry: `tabs.*` IPC dispatch, applies
   spawn/close decisions to child webviews, the idle-sweep background thread
   (`start_idle_sweep`), `tabs.json` session persistence, `open_background`
@@ -188,8 +188,8 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     (objc2-web-kit, features `WKFindConfiguration` + `WKFindResult`). **Degraded:**
     `WKFindResult` exposes only `matchFound` (bool) — no match count, no highlight-all,
     no active index. The FindBar shows "1 match" when something is found and "0 matches"
-    otherwise; real count + highlight-all would require a JS-shim tier (spec at
-    `docs/roadmap/phase-2-parity-gaps-spec.md` Gap 3). `next`/`prev` re-issue `findString:`
+    otherwise; real count + highlight-all would require a JS-shim tier. `next`/`prev` re-issue
+    `findString:`
     with `backwards` toggled; the last
     query is stored per tab in `LAST_QUERY` (`OnceLock<Mutex<HashMap<u32, String>>>`).
     macOS objc2 code cannot be compiled from Linux — **CI-only verify** (macos-latest).
@@ -259,6 +259,34 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   **Argon2id** passphrase KDF, `zeroize`-on-drop. A self-hosted reference server is the
   standalone `sync-server/` crate. `sync.*` data channels flow on Android for free
   (they ride the normal `ipc` chokepoint, not the `AegisAndroid` nav bridge).
+  - **The sync transport is HTTPS-only by default, with an explicit per-device waiver
+    (`syncAllowInsecure`, default `false`).** `sync::validated_base(raw, allow_insecure)`
+    accepts `https://` always and `http://` only for a genuine loopback host
+    (`localhost` / any `127.0.0.0/8` literal / `::1`; userinfo stripped, a bracketed IPv6
+    literal sliced by its own brackets, and both the `localhost.evil.com` suffix trick and
+    the `[::ffff:127.0.0.1]` v4-mapped form rejected). With the waiver on, a plaintext
+    REMOTE host is accepted — that is the whole point, for operators whose `sync-server` has
+    no TLS terminator in front. It is read at the **point of use** via
+    `validated_base_for(app, ..)`, so all six request paths honor it: the periodic pass,
+    `syncNow`, `register_device`, `sync.listDevices`, `sync.removeDevice`, and the
+    `/healthz` probe behind `sync.testConnection`. What the waiver does NOT do: stop record
+    bodies being sealed end-to-end (they still are; a forged body still fails AEAD). What it
+    gives up: the network path learns which server you talk to and when, can drop/delay/
+    reorder records (so deletions and edits can be selectively withheld), and can capture +
+    replay an `Authorization` header (the replay set is in-memory — a restart clears it, a
+    live process does not). **Unit-tested** in `sync::tests`:
+    `allow_insecure_waiver_opens_plaintext_remote` pins that the waiver relaxes _transport_
+    only, so `ftp:` / scheme-less / empty are still rejected with it on.
+  - **`syncAllowInsecure` is LOCAL-ONLY and is never synced, by design** (see
+    `LOCAL_ONLY_KEYS` in `settings.rs`). `syncServerUrl` IS an ordinary synced setting, so a
+    peer that can write it can already redirect this device anywhere; a waiver that travelled
+    with it would let one poisoned record pair (`syncServerUrl: "http://evil.example"` +
+    `syncAllowInsecure: true`) turn a remote setting write into a silent transport downgrade.
+    Enforced at three points: `record_change` (never recorded), the
+    `ensure_sync_projection` migration seed, and `apply_synced` (inbound peer records
+    ignored). `sync::state_json` publishes `allowInsecure` so the Sync tab reports the
+    decision the core is actually enforcing instead of echoing its own checkbox. Covered by
+    `settings::tests::sync_allow_insecure_is_local_only`.
 - **Anti-fingerprinting / farbling** — `farble.rs`: opt-in document-start JS shim
   that perturbs fingerprinting surfaces with per-frame-origin, per-session deterministic
   noise. Key design points:
@@ -283,8 +311,9 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     allowlist). Managed by `FarbleState` + `host_allowlisted`; dispatched via `fingerprint.*`
     IPC channels (`getState`/`toggleAllowlist`/`removeAllowlist`/`clearAllowlist`);
     `seed_from_disk` pre-warms it at boot. Desktop only in v1 — the Android JNI getter has
-    no `AppHandle`, so `host_allowlisted` is always `false` on Android (parity gap, documented,
-    fix path specified in `docs/roadmap/phase-2-parity-gaps-spec.md` Gap 2 / Task 1).
+    no `AppHandle`, so `host_allowlisted` is always `false` on Android. The parity gap and the
+    intended `ANDROID_FP_ALLOWLIST` fix are described in gotcha 22 below; the parity-gaps
+    spec that used to specify it was deleted in commit 58d2c4b and is NOT recoverable.
   - **Per-spawn limitation** — like the WebRTC shim, the farble shim is evaluated once at
     content-webview creation. Toggling level or fp-allowlist applies only to newly
     spawned/reloaded tabs; in-tab SPA navigations to a different host are not re-evaluated.
@@ -351,13 +380,56 @@ records[{uuid, updatedAt, nonce, ct}]}`. The only cleartext fields are the
     empty) by default and at every boot — never auto-unlocked from a keychain in Phase A.
     On `vault.lock`, `Zeroizing` wipes the DEK on drop; `Cred` is `Zeroize+ZeroizeOnDrop`.
     Every read/mutate channel returns `Err("vault is locked")` when `key` is `None`.
-  - **No page bridge:** the `vault.state` event carries only `{exists, unlocked, count,
-undecryptable}` — no credential data (`undecryptable` = on-disk records that failed to
-    decrypt; preserved verbatim by `persist`/`Inner.orphans`, surfaced so the UI warns instead
-    of silently dropping them). Plaintext credentials live only in `Inner.records` (in-process,
-    while unlocked) and transiently in the serde_json `Zeroizing` buffer during seal/open.
-    The content webview has no vault path: no `vault` reference in `adblock_inject.rs`,
-    `nav.rs`, `webrtc_shim.rs`, or `MainActivity.kt` (grep-verified).
+  - **The vault DOES sync**, but only under three conditions that must all hold — see
+    `sync_vault.rs` (its module header is the canonical design note) and `vault.rs`'s
+    header. The old bridge was removed because it merged remote records by `updatedAt`
+    _without decrypting them_, which let a peer overwrite a real credential with
+    permanently unreadable ciphertext. What replaced it fixes both halves of that: - **Portability.** The cross-device failure was never "the Argon2id salt is secret" —
+    a salt is public by design and is stored in plaintext in `vault.json`. It was that
+    every device minted its _own_ random salt, so `Argon2id(password, salt)` differed
+    per device. The KDF is therefore UNCHANGED: the account publishes one salt as a
+    single record (`uuid:"meta"`) in a new synced namespace **`pwvault-meta`** (sealed
+    under `crypto::data_key(root,"pwvault-meta")`), and a joining device **adopts** it
+    via `reseal_with_salt` — pure re-encryption, no new derivation. The file's
+    already-written-but-previously-unread `"v"` field is the KDF version:
+    `KDF_V_LOCAL=1` (per-device salt, cannot sync) / `KDF_V_SYNCED=2` (adopted).
+    The adopted salt is cached in `vault-sync.json` so the sync pass (has the root, no
+    password) and `vault.unlock` (has the password, no root) can meet without either
+    blocking; **unlock never touches the network, and removing the account can never
+    brick the vault.** - **Integrity.** `vault::merge_remote` authenticates every incoming record with
+    `open_record(&vk, r)` BEFORE it is allowed anywhere near the file. Failures are
+    counted as quarantined, never written, and reported via the **`sync.vaultQuarantined`**
+    event (`{count, uuids}`) — an _event_, not a sync error, because a rejected forgery
+    is a security outcome and must not fail the namespaces that did merge. So a peer
+    holding the recovery phrase but NOT the master password cannot derive the vault key
+    (it lacks the Argon2id output) and cannot forge an authenticating record. - **Consent.** A separate persisted `syncVault` setting, **default `false`**, gates
+    the whole thing — configuring a server must never silently start uploading
+    credentials. `VaultState.syncEnabled` is `settings.syncVault && sync enabled &&
+vault unlocked && adopted`; `adoptionNote?` appears only on the `vault.unlock`
+    response when adoption was refused (e.g. undecryptable records block the re-seal),
+    and the unlock itself still succeeds. - **Two seal layers, both required.** The wire record is sealed under the SYNC ROOT
+    (`seal_wire(data_key(root,"pwvault"), "pwvault", rec)`), wrapping a record layer
+    `{uuid,updatedAt,nonce,ct}` sealed under the VAULT key. Vault records carry
+    `updatedAt` (i64 ms) rather than a real HLC, so the push side synthesises a stable
+    `{"wall_ms":updatedAt,"counter":0,"node":"vault"}` into the transport's cleartext
+    `hlc` AAD field, derived from the record's own timestamp so re-pushing an unchanged
+    record reuses the same AAD instead of forking a new version. - **A locked vault does not sync at all** — it is neither uploaded nor merged, because
+    you cannot merge records you cannot decrypt.
+  - **`vault.state` carries no credential data:** only `{exists, unlocked, count, undecryptable,
+syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserved verbatim by
+    `persist`/`Inner.orphans`, surfaced so the UI warns instead of silently dropping them).
+    Plaintext credentials live only in `Inner.records` (in-process, while unlocked) and
+    transiently in the serde_json `Zeroizing` buffer during seal/open.
+  - **The content webview DOES get an autofill script** — this older claim ("no page bridge")
+    was wrong. `adblock_inject.rs:103` appends `vault_inject::script()` (from
+    `vault_inject.js`) to the document-start injection, and on Android
+    `NativeFormDetect.formDetectionScript` returns the same script. It emits
+    `form:formStateChanged` / `form:willSubmit` / `vault:requestFill` and listens for
+    `vault:autofillResult` / `vault:autofillData` — but every one of those calls is gated on
+    `window.__TAURI__`, which is **undefined in every webview because `withGlobalTauri` is not
+    enabled**, so the whole path is inert. Do not read inert as safe: Tauri 2's `app.emit`
+    broadcasts to every webview and this codebase has no `emit_to`, so enabling `withGlobalTauri`
+    would deliver any credential to every open tab. Phase A ships no autofill.
   - **IPC dispatch** in `lib.rs` via the standard `vault::dispatch(&app, &channel,
 &payload)` arm. Channels: `vault.getState`, `vault.create`, `vault.unlock`,
     `vault.lock`, `vault.list`, `vault.add`, `vault.update`, `vault.remove`,
@@ -400,45 +472,19 @@ undecryptable}` — no credential data (`undecryptable` = on-disk records that f
   - Unit-tested in `proxy::tests`: `from_value` parse/validate, `default_uri` schemes,
     `is_active` guard, `test_connection` socket probe, serde `bypassHosts` round-trip
     (the canonical key lesson — see gotcha 21 below).
-- **Misc** — `picker.rs` (element picker, Linux-only; cross-platform path specified in
-  `docs/roadmap/phase-2-parity-gaps-spec.md` Gap 4), `update.rs` (tauri-plugin-updater state).
+- **Misc** — `picker.rs` (element picker, Linux-only), `update.rs` (tauri-plugin-updater state).
 
-## Dev-only autopilot commands (`src-tauri/src/autopilot.rs`)
+## There are no dev-only autopilot commands
 
-The entire module is guarded by `#![cfg(debug_assertions)]`, so it compiles only in
-debug builds and is **completely absent from release binaries**.
+Earlier revisions of this file documented a `src-tauri/src/autopilot.rs` module with four
+`#[tauri::command]` functions (`autopilot_screenshot`, `autopilot_write_report`,
+`autopilot_done`, `autopilot_emit_event`) registered through a cfg-split
+`invoke_handler`. **That module does not exist.** `lib.rs` has a single
+`generate_handler![ipc]`, and `shared/types.ts`'s `IPC` const has no autopilot channels.
 
-Four `#[tauri::command]` functions are registered:
-
-| Command                  | What it does                                                                                                                                        |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `autopilot_screenshot`   | Calls `spectacle -b -n -a -o <dir>/shots/<name>.png` (best-effort; Linux/KDE).                                                                      |
-| `autopilot_write_report` | Writes `report.json` + `report.html` to `$AEGIS_AUTOPILOT_OUT` (or a temp dir).                                                                     |
-| `autopilot_done`         | Writes `done.sentinel` to the output dir — the launcher's watchdog polls for this.                                                                  |
-| `autopilot_emit_event`   | Re-uses the production `emit_event()` (`.`→`:` rewrite) to synthesize events the live runner needs (e.g. `nav.failed`, `safety.interstitialShown`). |
-
-**These commands are NOT in the `ipc()` dispatcher and NOT in `shared/types.ts`
-`IPC` const.** They are a private side channel: the renderer calls them directly by
-name via `devEmit.ts`, bypassing the single `ipc` chokepoint on purpose (they have no
-production caller). Do not add them to the dispatcher.
-
-`lib.rs` registers them through a cfg-split `invoke_handler`:
-
-```rust
-#[cfg(debug_assertions)]
-let builder = builder.invoke_handler(tauri::generate_handler![
-    ipc,
-    autopilot::autopilot_screenshot,
-    autopilot::autopilot_write_report,
-    autopilot::autopilot_done,
-    autopilot::autopilot_emit_event
-]);
-#[cfg(not(debug_assertions))]
-let builder = builder.invoke_handler(tauri::generate_handler![ipc]);
-```
-
-`$AEGIS_AUTOPILOT_OUT` points to the timestamped `target/autopilot/<ts>/` dir created
-by the launcher (`run-autopilot.sh`); in tests it defaults to a temp dir.
+Do not add such a side channel. Every renderer→core call goes through the one `ipc`
+chokepoint (see the top of this file); a debug-only bypass would be a second, untested
+path through the same boundary.
 
 ## Key dependencies (`Cargo.toml`)
 
@@ -739,6 +785,20 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     webview and hides every other tab's each layout pass (Linux does this in
     `linux_layout::layout`). Without it, switching tabs left the previous page on top.
 
+    **Investigated 2026-09-26: could `ipc` just be made async instead?** No — not as a
+    one-liner, and the reasoning is worth keeping. The deadlock is caused by the main thread
+    being **BLOCKED**, not by being the main thread: `ipc` is synchronous, so the loop cannot
+    pump and WebView2's async `CreateCoreWebView2Controller` never completes. Moving the body
+    to a worker (`#[tauri::command(async)]`) would _unblock_ the loop and so **fix** the
+    Windows bug rather than cause it. But it relocates the hazard: `tabs::spawn` only wraps
+    `nav::spawn_tab` in `thread::spawn` **on Windows** — on Linux/macOS it calls
+    `nav::spawn_tab(app, …)` inline, and `window.add_child` inside `spawn_tab` (plus
+    `window.scale_factor()`/`inner_size()` and, on Linux, the `linux_layout::connect_*` signal
+    wiring) has **no `run_on_main_thread` marshalling at all**. So an async `ipc` would move
+    GTK/WebKitGTK — not thread-safe — onto a worker thread. A correct fix therefore has to add
+    main-thread marshalling to the non-Windows creation path, which needs a real GUI run on
+    Linux, macOS and Windows to validate. Untested on this host, so not applied.
+
 18. **Find-in-page per-platform capability matrix (honest):**
     - **Linux** (WebKitFindController): real match count via `found-text` signal, full
       highlight-all, **no active-index getter** (reports `1` when count > 0 else `0`).
@@ -829,11 +889,11 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     d. **Android has no fp-allowlist in v1 (documented parity gap, fix path specified).**
     The Android JNI getter (`NativeFarble.farbleScript`) has no `AppHandle` and
     therefore no access to the `FarbleState` managed-state; it hardcodes
-    `host_allowlisted = false`. The fix is specified in `docs/roadmap/phase-2-parity-gaps-spec.md`
-    Gap 2 / Task 1 — add an `ANDROID_FP_ALLOWLIST` process-global (mirroring the
-    existing `ANDROID_LEVEL` pattern) and update the JNI getter to accept a `host`
-    parameter from Kotlin. See `docs/roadmap/phase-2-parity-gaps-plan.md` Task 1
-    for the full implementation plan.
+    `host_allowlisted = false`. The fix is to add an `ANDROID_FP_ALLOWLIST` process-global
+    (mirroring the existing `ANDROID_LEVEL` pattern) and update the JNI getter to accept a
+    `host` parameter from Kotlin. The parity-gaps spec AND its implementation plan that
+    used to hold this were both deleted in commit 58d2c4b and are NOT recoverable, so this
+    paragraph is the only surviving record of the intended change.
 
 ### Multi-webview Linux layout (hard-won facts)
 
@@ -892,7 +952,9 @@ widget above native WebKit windows.
       Rust cannot up-call into Kotlin; the bridge is read-only from Kotlin's side
       (Kotlin pulls the config from `proxy_config_json`, Rust never pushes).
     - **macOS**: no-op — proxy is not implemented; macOS builds and browses
-      without it. Implementation guide at `docs/roadmap/macOS-proxy-bindings.md`.
+      without it. The implementation guide for this was deleted in commit 58d2c4b and is
+      NOT recoverable, so the macOS tier has to be re-derived from scratch (raw `msg_send!`
+      / `nw_proxy_config_*` Network.framework bindings, uncompilable from Linux).
 
 23. **Windows: content webviews need their OWN user-data-folder, keyed on their
     browser args (the `additional_browser_args` blank-page regression).** WebView2

@@ -9,17 +9,25 @@ GitHub Actions workflows in `.github/workflows/`:
 
 - **`ci.yml`** (CI) — the always-on gate. Runs on every PR, on every push to `main`
   (so a direct push is gated too, not just PRs), weekly (Mon 06:17 UTC), and on
-  demand. Ubuntu only; two parallel jobs:
-  - **`web`**: `npm ci` → `npm run typecheck` (scoped `tsc --noEmit` via
-    `tsconfig.build.json`, which excludes test files + `src/testFixtures` to skip the
-    known test-only type noise) → `npm run lint` (ESLint flat config, errors fail /
-    warnings are the migration backlog) → `npm run format:check` (Prettier) →
-    `npm test` (vitest node + jsdom) → `node scripts/check-npm-audit.mjs`.
+  demand. Ubuntu only; three parallel jobs:
+  - **`web`**: `npm ci` → `npm run typecheck` (`tsc --noEmit` via
+    `tsconfig.build.json`, which now typechecks test files and `src/testFixtures`
+    too — a test-only type error is a real error) → `npm run lint` (ESLint flat
+    config, errors fail / warnings are the migration backlog) →
+    `npm run format:check` (Prettier) → `npm test` (vitest node + jsdom) →
+    `node scripts/check-npm-audit.mjs`.
   - **`rust`**: installs the webkit2gtk build deps, then
-    `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` (the 119
-    `src-tauri` unit tests, Linux-cfg paths) for `src-tauri/Cargo.toml`, plus an
-    advisory (non-blocking) `cargo audit` over the crypto/keyring/TLS deps.
-    The standalone `sync-server/` crate is NOT gated here (separate non-workspace crate).
+    `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` (the
+    `src-tauri` unit tests, Linux-cfg paths) for `src-tauri/Cargo.toml`, plus
+    `cargo audit` over the crypto/keyring/TLS deps. That audit is **blocking**
+    despite the historical "advisory" label — it has no `continue-on-error`, so any
+    new advisory fails the job. Two known findings
+    (`RUSTSEC-2026-0194`, `RUSTSEC-2026-0195`) are pinned open via `--ignore`
+    because the Tauri/plist chain constrains quick-xml; they carry no expiry.
+  - **`sync-server`**: the same fmt/clippy/test/audit sequence for the standalone
+    `sync-server/Cargo.toml`. It is the only internet-facing service, and it had no
+    CI at all before — a `sync-server` lockfile with a vulnerable dependency would
+    not have been caught.
 
 - **`tauri-build-check.yml`** (Tauri Build Check) — proves the app compiles, links,
   and bundles on real OSes and produces downloadable artifacts for on-device testing.
@@ -72,6 +80,29 @@ PRs are the currency mechanism for the crypto/keyring/TLS surface.
 high/critical advisory, add its numeric `source` or `url` there **with
 justification in the commit** — that's the documented escape hatch.
 
+## Version overrides
+
+`package.json` also carries an `overrides` block, which is the **preferred** way to
+clear a high/critical advisory: it forces a fixed transitive version repo-wide,
+rather than silencing the check. `npm audit fix` cannot be relied on here — on this
+tree it aborts with an internal npm error (`Cannot read properties of null (reading
+'edgesOut')`), so the overrides are written by hand.
+
+Current entries, and why each exists:
+
+- `brace-expansion` `^5.0.9` — GHSA-rgw5-rvv9-x895 (unbounded intermediate arrays).
+  Pulled in by `eslint` → `minimatch`. Was on `main` before this file was written.
+- `browserslist` `^4.29.1` — GHSA-c83g-rgw3-j3cx (unbounded memory growth) and
+  GHSA-73wf-gq98-2v4g (uncaught crash via untrusted `browserslist-stats.json`).
+  Pulled in by `@babel/helper-compilation-targets`. The first advisory was already
+  on `main`; the second arrived with `@rolldown/plugin-babel`.
+- `nanoid` `^3.3.18` — GHSA-2v37-7h3g-55p8 (infinite loop when `size` is 0). Pulled
+  in by `postcss`. Already on `main`.
+
+npm has no JSON comment support, so this file is where the rationale lives. A
+`"//"` key inside `overrides` is a hard error (`Override without name: //`), not a
+comment.
+
 ## Run
 
 ```bash
@@ -104,79 +135,18 @@ Convenience wrappers around the release builds (each resolves the repo root via
 
 ## Autopilot launcher (`scripts/autopilot/`)
 
-**Linux only. Needs a real display (X11 or Wayland).** Drives the entire Aegis feature
-surface through the real Rust core in an isolated, disposable environment.
+**There is no live autopilot launcher in this repo.** `scripts/autopilot/` — the
+`run-autopilot.sh` entry point, `summarize.mjs`, `fixture-server.mjs` and the `fixture/`
+ad-bait page that earlier revisions of this file documented — does not exist, and neither
+does `src/autopilot/run.ts` / `report.ts` or the `src-tauri/src/autopilot.rs` module.
 
-### Files
+What actually runs is the vitest-level autopilot under `src/autopilot/`, covered in
+`src/AGENTS.md`: the feature `CATALOG`, the `SCREENS` list, the interaction specs, and the
+`coverage.test.ts` drift guard, all executing against `src/testFixtures/aegisMock.ts`.
 
-- **`run-autopilot.sh`** — the entry point. Creates a timestamped output directory
-  (`target/autopilot/<ts>/`), spins up the fixture server, launches `npm run tauri:dev`
-  with a disposable XDG profile (`XDG_DATA_HOME`/`XDG_CONFIG_HOME` → a `mktemp` dir so
-  no user data is touched), and polls for `done.sentinel` (written by
-  `autopilot_done` on the Rust side). On exit (including error/timeout), a trap kills
-  the app + fixture server and deletes the temp profile.
-  - **Key env vars passed to the app:**
-    - `VITE_AEGIS_AUTOPILOT=1` — activates the `main.tsx` bootstrap branch.
-    - `VITE_AEGIS_AUTOPILOT_FIXTURE=http://127.0.0.1:8137/` — URL of the fixture page
-      used for the ad-block induction step.
-    - `VITE_AEGIS_AUTOPILOT_DISPLAY=1` (or empty) — whether to attempt screenshots
-      (`spectacle`). Set automatically from `$DISPLAY`/`$WAYLAND_DISPLAY`.
-    - `AEGIS_AUTOPILOT_OUT=<ts-dir>` — where the Rust commands write report files.
-    - `AEGIS_AUTOPILOT_TRACE=1` — makes `linux_layout::connect_block_counter` log a
-      `[aegis-count] block=… page=… url=…` line per subresource to `app.log`. The
-      summarizer reads these to assert ad-block **blocking** (see `summarize.mjs`).
-  - **Watchdog:** polls `done.sentinel` every second with a configurable timeout
-    (default 1800 s — the first run compiles the Rust core, which a cold `tauri dev`
-    build can take 10-20 min; override with `AEGIS_AUTOPILOT_TIMEOUT=<seconds>`). Then
-    runs `summarize.mjs` and exits non-zero if any step failed **or** ad-block blocking
-    regressed.
-  - Report lands in `target/autopilot/<ts>/report.html` (screenshot gallery) and
-    `target/autopilot/<ts>/report.json`.
-
-- **`summarize.mjs`** — prints the run summary and computes the **authoritative ad-block
-  blocking verdict** from the `[aegis-count]` A/B trace in `app.log`. The live shield
-  COUNT can't prove blocking for well-known hosts (the WebKit content filter cancels a
-  matched request _before_ `resource-load-started` fires, so the counter never sees it —
-  see `src-tauri/src/linux_layout.rs`). Instead the fixture is loaded twice — ad-block
-  OFF (`?ab=off`, filter removed) then ON (`?ab=on`, filter active) — and the verdict is
-  PASS when ad subresources fire in the OFF phase and **vanish** in the ON phase, FAIL if
-  any still load with ad-block ON, SKIP if no trace. Pure logic is unit-tested in
-  `summarize.test.mjs` (node project) against a real captured trace.
-
-- **`fixture-server.mjs`** — a tiny Node `http.createServer` that serves files from
-  `scripts/autopilot/fixture/` over HTTP on `127.0.0.1:8137`. Must be HTTP (not
-  `file://`) so the content webview's network ad-block filtering applies. The query
-  string is ignored for routing (`split('?')[0]`), so the `?ab=off`/`?ab=on` phase
-  markers still serve `index.html` while forcing a full reload. Path traversal is
-  rejected (`403`); unknown paths return `404`.
-
-- **`fixture/index.html`** — an ad-bait page: an inline script fires requests
-  (`new Image().src`, **cache-busted per load** with a unique query) to known third-party
-  ad/tracker hosts so the ad-block A/B trace can verify real blocking. The specific
-  domains come from the Brave `adblock` filter lists bundled in the Rust core (EasyList +
-  EasyPrivacy + Peter Lowe's + abuse-TLDs). Cache-busting matters because WebKit
-  negative-caches a blocked URL, so static ad URLs wouldn't re-fire the load signal.
-
-### How to run
-
-```bash
-bash scripts/autopilot/run-autopilot.sh
-```
-
-Expected output: `RESULT: N passed, 0 failed, M skipped`, then
-`ad-block blocking (trace): PASS — N ad subresource(s) loaded with ad-block OFF, 0 with
-ad-block ON`, and the gallery path. If `$DISPLAY`/`$WAYLAND_DISPLAY` is unset, screenshots
-are skipped and the functional tour still runs (IPC + ad-block steps only).
-
-### Live run step order (from `src/autopilot/run.ts`)
-
-1. **Screen tour** — every `SCREENS` entry is reached, screenshotted, and torn down.
-2. **Catalog verification** — every `CATALOG` entry's `exercise(api)` runs. If `live=true`,
-   `verify(api)` also runs for entries that declare it (functional round-trips on the
-   disposable profile).
-3. **Interaction specs** — every `INTERACTIONS` spec with `layers.includes('live')` runs
-   via `makeLiveCtx`. Results appear in the report as `interaction:<spec.id>` rows.
-   All mobile-only specs (`domain: 'mobile.*'`) are `['vitest']` only and are NOT
-   included in the live run (the live harness drives only the desktop shell).
-4. **Ad-block induction** — A/B navigation of the fixture page (ad-block OFF then ON)
-   to verify blocking at the network layer.
+Consequence worth stating plainly: **no automated gate here exercises the real Rust core
+or a real webview.** Platform-specific behaviour (the Linux WebKit content-filter tier,
+the Windows `WebView2` network tier, the Android Kotlin `shouldInterceptRequest` tier,
+multi-webview layout, the OS keychain, StrongBox) is covered only by the manual
+verification notes in `src-tauri/AGENTS.md`, and `tauri-build-check.yml` only proves the
+app compiles and bundles per-OS — it runs no tests.

@@ -13,7 +13,7 @@ GitHub Actions workflows and Dependabot config for Aegis.
     warnings are the migration backlog) → `npm run format:check` (Prettier) →
     `npm test` (vitest node + jsdom) → `node scripts/check-npm-audit.mjs`.
   - **`rust`**: installs the webkit2gtk build deps, then
-    `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` (the 119
+    `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` (the 357
     `src-tauri` unit tests, Linux-cfg paths) for `src-tauri/Cargo.toml`, plus an
     advisory (non-blocking) `cargo audit` over the crypto/keyring/TLS deps.
     The standalone `sync-server/` crate is NOT gated here (separate non-workspace crate).

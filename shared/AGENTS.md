@@ -24,10 +24,18 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
   - `tabs.state` event (emitted on every structural change) + `tabs.shortcut`
     event (Ctrl+T/W/Shift+T from native accelerator/GTK hook).
   - `redirect.blocked` event (`evtRedirectBlocked`, payload `RedirectBlocked { viewId,
-from, to }`) — the native redirect guard cancelled a scripted cross-origin top-frame
-    redirect. The chrome automatically opens the blocked destination in a new background tab
-    via `tabs.create(url, true)` (Android `__aegisOpenTab` equivalent). Emitted per-platform
-    from the native nav-policy hook; see `src-tauri/AGENTS.md` gotcha 14.
+from, to }`) — **DECLARED BUT NOT EMITTED ANYWHERE.** An earlier version of this doc
+    claimed it was "emitted per-platform from the native nav-policy hook"; that was false and
+    `channelDrift.test.ts` now fails the build if a doc drifts that way again. The blocked-redirect
+    behaviour really does ship, but through two mechanisms that bypass this event entirely:
+    desktop opens the destination natively in `redirect_guard::on_blocked_redirect_to_new_tab`
+    (→ `tabs::open_redirect_background`), and Android injects `window.__aegisOpenTab(...)` into
+    the chrome from `MainActivity.kt`. The renderer's `aegis.redirect.onBlocked` callback
+    (`App.tsx`) _also_ calls `tabs.create(r.to, true)`, so **emitting this event from Rust would
+    open two background tabs per blocked redirect** — the missing producer is load-bearing, not
+    an oversight. If you ever wire it up, delete one of the two open paths in the same change.
+    `autopilot/channelDrift.test.ts` lists this channel in a `KNOWN_UNPRODUCED` inventory with
+    this reasoning; adding a fourth unexplained orphan still fails the build.
   - `find.*` channels + `find.state` event:
     - `find.start` (payload `{ query, caseSensitive?, viewId? }`) — begin/update a
       find-in-page session on the active (or specified) tab.
@@ -35,7 +43,32 @@ from, to }`) — the native redirect guard cancelled a scripted cross-origin top
       match within the current session.
     - `find.close` (payload `{ viewId? }`) — end the session and clear all highlights.
     - `find.state` event (`evtFindState`, payload `FindState { viewId, query, matchCount, activeMatchIndex }`) — pushed by the Rust/Kotlin back-end whenever match counts change. On Android this is emitted via `window.__aegisFindState(...)`, matching the `pushNavState` / `__aegisNavState` bridge pattern.
-  - **`vault.*` channels** (Phase A — manage only, NO autofill, NO page→core bridge):
+  - **`sync.*` — the vault-sync opt-in** (see `src-tauri/src/sync_vault.rs` for the
+    wire format, which is deliberately NOT a plain `sync.ns` — read that header first):
+    - `Settings.syncVault?: boolean` — **defaults to `false`**, and is a _separate_
+      opt-in from configuring `syncServerUrl`. Configuring a server must never silently
+      start uploading credentials, so nothing is synced until the user turns this on
+      explicitly (Settings → Sync → "Password vault").
+    - The flag alone is not sufficient: it only takes effect once this device has
+      **adopted the account's shared vault salt**. Adoption happens on the next
+      `vault.unlock` (a re-seal, so it needs the master password) and only if the vault
+      has no undecryptable records. Until then `VaultState.syncEnabled` is `false` and
+      the Sync tab says so.
+    - `sync.vaultQuarantined` event (`evtSyncVaultQuarantined`, payload
+      `SyncVaultQuarantined { count, uuids }`) — a peer sent a record that failed
+      authentication under the local vault key, so it was rejected and never written.
+      This is an **event, not a sync error**: a rejected forgery is a security outcome
+      and must not fail the namespaces that did merge. A peer holding the recovery
+      phrase but NOT the master password cannot derive the vault key, so its writes land
+      here.
+    - `VaultState.syncEnabled` is true only when the opt-in is on **and** sync is enabled
+      **and** the vault is unlocked **and** adoption happened. `VaultState.adoptionNote?`
+      appears only on the `vault.unlock` response, and only when adoption was _refused_
+      (e.g. undecryptable records present) — the unlock still succeeded; it is a warning,
+      not a failure.
+  - **`vault.*` channels** (Phase A — manage only, NO autofill; note `vault_inject.js` IS
+    injected at document start but is inert because `withGlobalTauri` is not enabled, and
+    no component subscribes to `vault:autofillResult` — see `src-tauri/AGENTS.md`):
     - `vault.getState` → `VaultState` — whether a vault exists, is unlocked, and how many
       records it holds. Safe to call at any time.
     - `vault.create(masterPassword)` → `VaultState` — initialize a new vault with the given
@@ -86,6 +119,18 @@ dot-separated and unique, so a malformed/colliding name fails the test):
 **Settings-field shortcut.** A new _settings field_ needs **no new channel** — add it
 to `settings.rs defaults()` + the `Settings` interface here; `settings.set`
 shallow-merges it. A Rust reader (mirror `https_only()`) exposes it to the core.
+
+**Local-only settings (the exception to "settings are synced").** Not every settings
+field may ride the sync projection. A field listed in `LOCAL_ONLY_KEYS`
+(`src-tauri/src/settings.rs`) is persisted by `settings.set` but **never** recorded into
+`settings-sync.json`, is skipped by the migration seed, and is ignored when a peer's
+record claims it. Its current member is `syncAllowInsecure` — the waiver that lets the
+sync server be plaintext `http://` — because `syncServerUrl` IS synced: a waiver that
+travelled with it would let one poisoned record pair walk a device onto a plaintext
+server, i.e. a remote settings write would become a silent transport downgrade. If you add
+a settings field that weakens a _local_ security decision, add it to that list and extend
+`settings::tests::sync_allow_insecure_is_local_only`-style coverage, rather than letting it
+sync by default.
 
 **Event-driven refetch.** A `*.changed` event must drive a **targeted per-store
 refetch** (the precedent is `useHistory` subscribing `onChanged(() => list())`), never

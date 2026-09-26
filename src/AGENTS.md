@@ -56,8 +56,12 @@ Channel and event names, and all payload/return types, are defined once in
 - **Sidebar is a right panel,** not an overlay: it calls `view.setSidebar(active,
 width)` so the page insets from the right and stays visible. Width is remembered
   in localStorage.
-- **Content inset** is set deterministically from layout constants in `lib/layout.ts`
-  (toolbar + favbar height), via `hooks/useContentInset.ts` — no DOM measurement.
+- **Content inset** is the sum of the chrome's real heights: `hooks/useChromeHeights.ts`
+  measures the chrome elements with `getBoundingClientRect` (falling back to the
+  constants in `lib/layout.ts` before the first measurement) and
+  `hooks/useContentInset.ts` forwards the resulting `topInset` to
+  `view.setContentInset`. It is **not** purely deterministic — a chrome element that
+  appears after mount changes the inset.
 - **Chrome popovers (dropdowns/dialogs anchored below the chrome) are the OTHER half of
   the compositor** and must never use `useChromeSurface`. A popover has to leave the page
   visible, so it can't set `overlay: true` (Rust's `view::content_visible` would hide the
@@ -88,6 +92,53 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
 - **`hooks/useTabs`** — owns `TabsState` (the ordered tab list), the active tab
   id, and per-tab nav-state + page titles. All chrome features (nav bar, adblock
   shield, overlays, inset sidebar) key on the active tab id.
+- **Subscribe BEFORE you seed (`hooks/subscribeBeforeFetch.test.tsx` is the guard).** Every
+  hook that seeds itself from a `getState`/`get`/`list` call AND subscribes to a live event
+  must register the subscription **first**. `aegis.X.onY(cb)` reaches the core through an
+  async `listen()`, but the backend listener only exists once the `listen` IPC is
+  _processed_ — and both requests ride the same transport, so seeding first meant any event
+  emitted in that window was lost with nothing to refetch it. This applies to
+  `useTabs`, `useSync`, `useProxy`, `useAdblock`, `useZoom`, `usePermissions` and
+  `useDownloads`. It does **not** apply to the hooks that subscribe through the local
+  `syncBus` (`onSyncChange` is a synchronous in-renderer pub/sub, so there is no window):
+  `useSaved`, `useSettings`, `useFingerprint`, and `useAdblock`'s allowlist channel.
+  The regression test models the transport honestly (ordered dispatch, listener registered
+  at process time, the transition emitted between the two) because `vitest.setup.ts` mocks
+  `listen` as an already-resolved promise — a zero-width window that hides the whole class
+  of bug.
+- **`hooks/useChromeHeights`** — measures the chrome bands and derives `topInset`, which
+  `App` reports to `view.setContentInset`. The measuring `useLayoutEffect` has **no
+  dependency array**: it runs after every commit and bails unless the measured elements'
+  _presence signature_ changed. It must stay that way. It used to be keyed on
+  `[containerRef]`, which is a `useRef` created once in `App` and never reassigned — so the
+  effect ran exactly once for the life of the app and the signature check was dead code. A
+  single "Toggle favorites bar" then left a permanent 36 px gap above the content. The
+  FindBar is measured here too, so `App` must NOT add `FIND_BAR_H` on top of `topInset`
+  (that is how it got there in the first place, and it would now double-count to 80 px).
+  The pre-measure `INITIAL.topInset` uses the same terms as the measured value, so the very
+  first `setContentInset` is not off by the FindBar. The existing tests pass a FRESH
+  `{ current: el }` object per render, which makes the dep unstable and masks the bug —
+  `renderWithStableRef` is the shape that actually proves it (`App.tsx` uses a real `useRef`).
+- **`components/SyncSettingsTab`** — the "Sync" tab. Two views (setup vs. running) plus a
+  shared **`TransportSection`** rendered in _both_, so the unencrypted-HTTP waiver is
+  reachable both before setup and while running (the running view is the only place it can
+  be revoked). Local helpers `isInsecureRemoteUrl(url)` / `transportLabel(url)` classify the
+  configured server — `URL` parsing, NOT string splitting, so `http://localhost.evil.com`
+  is correctly treated as remote exactly as the Rust validator treats it. The panel is
+  **props-driven** like the `syncVault` opt-in (`checked={…}` + `update({…})`), and prefers
+  the CORE's `state.allowInsecure` over the local settings value so it reports the decision
+  actually in force. **The recovery phrase is the one reveal that must be asked for:**
+  `enableNew` returns the 24 words to the panel, which shows them with an "I've saved it"
+  acknowledgement, and the running view's "Show recovery phrase" runs a `confirm()` before
+  calling `useSync.getRecoveryPhrase(true)`. The hook used to hardcode `{ confirm: true }`,
+  which turned the core's "gated on an explicit confirm" contract into a bypass; the flag now
+  has to be the user's own answer, and the hook throws if it is not.
+  Autopilot coverage: the `settings:sync` screen plus the
+  `settings.sync.allowInsecure` interaction spec (vitest asserts the `settings.set` wiring;
+  live asserts `sync.getState().allowInsecure` flips and restores it) and the
+  `syncAllowInsecure` cases in `SyncSettingsTab.test.tsx`, which render the panel under a
+  **stateful parent** because the vitest `aegis` mock does not feed `settings.set` back into
+  React state.
 - **`hooks/useVault`** — owns vault UI state (`VaultState`) and exposes the typed vault
   API to `VaultSettingsTab`. **Security note:** decrypted records are NEVER held in React
   state — `list`, `add`, `update`, `remove`, and `search` each call the IPC directly and
@@ -106,7 +157,9 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   the host allowlist. Re-reads state after every mutation so the UI reflects the Rust
   source of truth. Android fp-allowlist gap is being addressed — the fix path
   (an `ANDROID_FP_ALLOWLIST` process-global mirroring the existing `ANDROID_LEVEL`
-  pattern) is specified in `docs/roadmap/phase-2-parity-gaps-spec.md` Gap 2 / Task 1.
+  pattern) is described in the `farble.rs` section of `src-tauri/AGENTS.md` — the
+  parity-gaps spec that used to specify it was deleted in commit 58d2c4b and is NOT
+  recoverable from this repo.
 - **`hooks/useFind`** — owns find-in-page UI state for the active view. Subscribes to
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.
@@ -127,13 +180,36 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   - Record passwords are **masked by default** (`type="password"`) and revealed only on
     explicit per-row "Reveal" click; each row tracks its own reveal state in
     `revealedUuids` (a `Set<string>` in local state, cleared on lock).
-  - "Copy" copies the plaintext to the clipboard without ever showing it.
+  - "Copy" copies the plaintext to the clipboard without ever showing it. The 60 s
+    clear-timer handle lives in a ref: a second Copy cancels the first (otherwise the first
+    timer wipes the secret the UI just promised would survive 60 s) and the timer is cleared
+    on unmount (otherwise closing Settings blanks whatever the user copied since).
   - "Delete" removes the record from the vault (confirm on the row).
   - Records are NOT stored in `useVault` state — `VaultSettingsTab` calls
     `vault.list()` on unlock and holds the list locally; the hook never persists plaintext.
     Registers as a compositor surface via `useChromeSurface` (it opens inside Settings, which
     is already a registered overlay, so the content webview is already lowered — no
     additional compositor registration needed for the tab itself).
+- **Password-vault autofill has NO UI surface, and the copy must not pretend otherwise.** The
+  chrome-side chain `AutofillBadge` → `useVaultDomainSuggestions` → `useVaultAutofill`, plus
+  `useLoginFormDetector` (whose only job was an unconditional 2 s `form.detectLoginForm`
+  poll behind that badge), was deleted as dead, unmounted code. `vault.autofill` and
+  `vault.autofillSuggestions` remain declared in `shared/types.ts` and **do** work in Rust —
+  they are covered at the IPC level by the autopilot's `vault.crud` and
+  `vault.autofillSuggestions` catalog entries, which is what keeps the drift guards honest.
+  **`form.detectLoginForm` is different: it is declared but the core REFUSES it** (`Err`, not
+  `Ok`). A content webview has no Tauri capability and `withGlobalTauri` is off, so the page
+  cannot `emit` a detection result back, and there is no injected content→core callback to
+  replace it — so the old implementation could only ever burn a 5 s main-thread timeout and
+  return `hasLoginForm: false`, a value indistinguishable from a real negative. It now fails
+  fast and names the missing transport; see the `form.rs` module header for what a real fix
+  needs. The mock rejects to match, and the catalog entry asserts the refusal — do **not**
+  "fix" that entry back to `expect(typeof result.hasLoginForm).toBe('boolean')`, which is
+  exactly what let the broken version pass. `VaultSettingsTab`'s notice therefore says Aegis
+  does **not** fill login forms yet (honest-UI-copy convention, same rule as the Proxy tab
+  never saying "VPN"). `useAutofillSave` is likewise unmounted; its `form.willSubmit` producer
+  (`vault_inject.rs`) is real, so it is the natural starting point if the feature is ever
+  finished rather than a stub to delete.
 - **`components/SecuritySettingsTab`** — the "Security" tab inside the Settings modal.
   Includes the anti-fingerprinting section (rendered via `useFingerprint`):
   - A level selector (`off` / `standard` / `strict`) with explanatory copy. The UI copy
@@ -144,8 +220,9 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
     current browsing host, remove individual hosts, clear all. Allowlisted hosts receive no
     farble shim — the fp-allowlist is separate from the ad-block allowlist.
   - Autopilot coverage: catalog entry `fingerprint.crud` (`channels: [fingerprint.getState,
-fingerprint.toggleAllowlist, fingerprint.clearAllowlist]`; `verify` round-trip that
-    toggles a host on/off and asserts the state); interaction specs in
+fingerprint.toggleAllowlist, fingerprint.clearAllowlist]`; its `exercise` is a read-only
+    probe, and the mutating channels are in `UNTESTED_CHANNELS` because the mock is
+    stateless); interaction specs in
     `src/autopilot/interactions/settings.ts` cover the level select and the allowlist
     toggle/clear controls.
 - **`hooks/useProxy`** — owns proxy UI state (`ProxyState`: `{ mode, scheme, host, port,
@@ -165,8 +242,11 @@ bypassHosts, active, uri }`). Seeds from `aegis.proxy.getState()` on mount; subs
   - On Windows: a note warns that proxy changes apply only to new or reloaded tabs
     (spawn-time limitation — see `src-tauri/AGENTS.md` gotcha 22).
     Autopilot coverage: `proxy.state` catalog entry (`channels: [proxy.getState,
-proxy.setConfig, proxy.clear, proxy.testConnection]`) with a `verify` round-trip (sets a
-    probe config, asserts host/port/bypassHosts persist, restores). Interaction specs in
+proxy.setConfig, proxy.clear, proxy.testConnection]`) whose `exercise` is a read-only
+    probe — the set→assert→restore round-trip is **not** automated, because mutating a
+    live proxy config from a stateless mock proves nothing, so those channels are in
+    `UNTESTED_CHANNELS` (`proxy.rs`'s unit tests cover the config validation).
+    Interaction specs in
     `src/autopilot/interactions/settings.ts` cover the mode select, host/port inputs, bypass
     add/remove, Apply/Turn-off/Test buttons.
 - **`components/FindBar`** — Ctrl+F infobar (purely presentational): text input,
@@ -209,8 +289,9 @@ reset, onOpenChange }` from `useZoom`. It **self-registers with the compositor**
   call is wired to `Ctrl+Shift+N` in `App.tsx`. Mobile: the `MobileTabSwitcher`
   also exposes a new-private-tab entry. Interaction specs in
   `src/autopilot/interactions/tabs.ts` cover both the button click and the
-  keyboard shortcut; the catalog `verify` in `catalog.ts` asserts a private
-  navigation leaves no history row (live-gated, runs against the real Rust core).
+  keyboard shortcut. The catalog's "a private navigation leaves no history row"
+  assertion is **not** automated — it needs a real webview, and `history.remove` is in
+  `UNTESTED_CHANNELS`; `tabs.rs`'s unit tests cover the private-flag propagation instead.
 - **`lib/layout.ts`** gained `TABSTRIP_H` (the pixel height reserved for the
   tab strip), used by `useContentInset` to keep the content webview positioned
   below it.
@@ -269,10 +350,9 @@ data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
   `screens.ts` `settings:<tab>` walk (autopilot drift).
 - **`components/Onboarding`** is the first-run welcome modal (replaced the one-line
   `WelcomeHint`): surfaces the signature features + a default-search-engine picker,
-  rendered by both shells. It is localStorage-gated (`ONBOARDING_STORAGE_KEY`), **not**
-  shown during the live autopilot (`VITE_AEGIS_AUTOPILOT`), and defaulted to "completed"
-  for vitest in `vitest.setup.ts` so the tours aren't blocked (its own test opts in via
-  `forceOpen`).
+  rendered by both shells. It is localStorage-gated (`ONBOARDING_STORAGE_KEY`) and
+  defaulted to "completed" for vitest in `vitest.setup.ts` so the tours aren't blocked
+  (its own test opts in via `forceOpen`).
 - **Responsive desktop shell.** `hooks/useNarrowViewport` (matchMedia, `≤680px`) toggles
   `.aegis-narrow` on `<html>` and drives `Toolbar`'s overflow ("More tools") menu so a
   narrow desktop window keeps a usable address bar. The desktop never swaps to the Android
@@ -290,6 +370,25 @@ data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
   conditionally renders it (it then mounts fresh with a node and works unchanged).
   The hook returns a real `RefObject` (not a callback ref) because several call sites write
   `.current` from a stable ref callback to share the node with a measurement probe.
+  The previously-focused element is captured **inside** the `open` effect, not at mount: a
+  `useRef(document.activeElement)` initialised on the first render only ever held whatever
+  was focused then, so for the always-mounted dialogs the third `open` argument exists for,
+  every open after the first restored focus to a stale (or already-removed) element — i.e.
+  `<body>`, which makes the next Tab restart from the document top.
+- **Full-window z-order is the `--z-*` scale at the top of `index.css`.** Every band carries
+  the value the rule already had — the sole exception is the command palette (11200 → 11150,
+  see below) — so adopting it changed no rendering; what it buys is that the bands are named,
+  that no two rules have to SHARE a number, and that one intended relationship is expressed
+  rather than implied. `.confirm-dialog__scrim` and `.command-palette__scrim` were both
+  `11200`, so their paint order was decided by DOM position in `App.tsx` (later wins), which
+  nothing documented. `--z-confirm` (11200) is deliberately **above** `--z-palette` (11150),
+  which is above `--z-prompt` (11100): a blocking modal raised by a palette action must not
+  be occluded by the launcher. The scale is ascending except `--z-interstitial` (10100) over
+  `--z-toast` (10020) — pre-existing and deliberate, preserved. Do not renumber to sort: each
+  value is another rule's z-index. Adding a full-window surface means adding a band, not
+  another magic number. NOT in the scale, on purpose: anchored popovers (5000/5100), the
+  toolbar's own stacking (100/`--z-toolbar-menu`), the mobile shell (10/50) and in-container
+  locals (1, 2).
 
 ## Mobile shell (`components/mobile/`, Android)
 
@@ -357,11 +456,10 @@ Run the whole suite with `npm test` from the repo root.
 
 ## Autopilot harness (`src/autopilot/`)
 
-A dev-only test harness that drives the entire feature surface — IPC layer and UI
-screens — through the real Rust core (live) or through mocks (vitest). **Never
-compiled into production**: every public entry is gated behind
-`import.meta.env.DEV && import.meta.env.VITE_AEGIS_AUTOPILOT` in `main.tsx`, and
-Vite dead-code-eliminates it on `build:renderer`.
+A test harness that drives the entire feature surface — IPC layer and UI screens —
+through mocks in vitest. It is **test-only code**: it lives under `src/autopilot/`, is
+imported solely from `*.test.ts(x)` files, and never from `src/main.tsx` or any
+production module, so it is not part of the shipped renderer bundle at all.
 
 ### Files
 
@@ -369,26 +467,31 @@ Vite dead-code-eliminates it on `build:renderer`.
   favorites, history, saved, settings, adblock, subs, customFilters, downloads,
   permissions, data, picker, update, safety, sync) has one entry with `id`, `domain`,
   `title`, `channels[]` (the `IPC.*` constants it exercises), and `exercise(api)` (an
-  async function that calls the real or mocked `AegisApi`). An entry may also carry an
-  optional **`verify(api)`** — a real **functional round-trip** that performs a user
-  action, asserts the effect, and restores state (favorites add/update/reorder/remove,
-  saved add + **tag** update/rename/delete, **history** navigate→remove→clear, ad-block
-  enable + allowlist add/remove/clear, settings/customFilters get→set→restore, tabs
-  create→close, nav navigate→poll, subs toggle, data export). `verify` runs **only in the
-  live run** (`run.ts` gates it on `RunDeps.live`) on the disposable profile — so deletes/
-  clears are safe — and is skipped under the vitest mock (which returns empty shapes).
+  async function that calls the real or mocked `AegisApi`).
+  There is deliberately **no** `verify(api)` round-trip field. It used to exist here, and 19
+  entries implemented it, but nothing ever called it: the vitest tour calls only
+  `exercise`, and the "live run" its doc comment pointed at (`run.ts`, gated on
+  `RunDeps.live`) does not exist in this repo. They could not be moved into the tour
+  either — the `find` one waited on an event the mock never fires, and the `sync`/`vault`
+  ones asserted state transitions a stateless mock can only fake — so they were deleted
+  and the coverage they claimed is now attributed to what actually executes: the
+  interaction tour and the Rust unit tests. **Do not reintroduce a "runs live only"
+  coverage claim; there is nowhere for it to run.**
   Also exports
   `UNTESTED_CHANNELS` — channels that exist in catalog entries but whose `exercise`
-  bodies intentionally skip calling them live (destructive, OS-bound, or
+  bodies intentionally skip calling them (destructive, OS-bound, or
   fire-and-forget). This set is enforcement documentation, not an escape hatch: the
-  drift guard asserts every member also appears in some catalog entry's `channels`.
+  drift guard asserts every member also appears in some catalog entry's `channels`. The
+  set's own doc comment splits them into "covered elsewhere (interaction tour / Rust
+  tests)" and "genuinely unverified" — read that comment rather than assuming a listing
+  means a gap.
   **Vault coverage (`vault.crud`):** all nine `vault.*` channels are listed in the
-  `vault.crud` entry's `channels[]`. The `verify(api)` round-trip creates a throwaway
-  vault on the disposable profile, unlocks it, asserts the locked-list is rejected,
-  adds a record, updates it, searches it, removes it, and locks — with state assertions
-  at every step. `vaultCreate`/`vaultUnlock`/`vaultLock`/`vaultAdd`/`vaultUpdate`/
-  `vaultRemove` are also listed in `UNTESTED_CHANNELS` (the `exercise` body only calls
-  `getState`; the round-trips happen in `verify` which runs live only). The
+  `vault.crud` entry's `channels[]`, and the `exercise` body calls only the read-only
+  `getState`. `vaultCreate`/`vaultUnlock`/`vaultLock`/`vaultAdd`/`vaultUpdate`/
+  `vaultRemove` are therefore in `UNTESTED_CHANNELS`. They are **not** round-trip tested:
+  they are driven at the UI level by `interactions/vault.ts` (create, unlock, add, update,
+  row delete), and the seal / unlock / merge / tombstone logic is covered by `vault.rs`'s
+  own unit tests. The
   `settings:vault` screen is registered in `screens.ts` via the standard
   `settings:<tab>` pattern and is reached by the autopilot's settings-tab walk.
 - **`screens.ts`** — `SCREENS: ScreenSpec[]`. Every reachable UI state: `home`,
@@ -406,25 +509,6 @@ Vite dead-code-eliminates it on `build:renderer`.
 - **`reach.ts`** — `reachScreen(control, screen, opts)` / `leaveScreen(control, screen)`.
   Drives `control` (and emits dev events for `'event'`-type screens) to reach a given
   `ScreenSpec`, then tears it down after the screenshot. Adapts to the `via` field.
-- **`run.ts`** — `runAutopilot(partial?)`. The orchestrator: walks every `SCREEN`
-  (reach → screenshot → leave), exercises every `CATALOG` entry against the real core,
-  runs each entry's optional `verify(api)` functional round-trip, then the ad-block
-  induction — an A/B navigation of the fixture (ad-block OFF then ON) that records the
-  live shield count (an honest _skip_ when it doesn't rise: well-known hosts are blocked
-  by the WebKit content filter before the counter signal fires; blocking itself is proven
-  by the launcher's A/B trace check — `summarize.mjs`). Finally calls
-  `devEmit.writeReport` + `devEmit.done`. Dependency-injected
-  via `RunDeps` so vitest can pass mocks; `liveDeps()` wires the real `aegis` API and
-  `devEmit.*` calls. `hasDisplay` (from `VITE_AEGIS_AUTOPILOT_DISPLAY`) controls
-  whether screenshots are attempted.
-- **`devEmit.ts`** — thin wrappers over the four dev-only Rust commands:
-  `screenshot(name)` → `invoke('autopilot_screenshot', …)`,
-  `writeReport(report, html)` → `invoke('autopilot_write_report', …)`,
-  `done()` → `invoke('autopilot_done')`,
-  `emitEvent(channel, payload)` → `invoke('autopilot_emit_event', …)`.
-  These commands are NOT in the production `ipc` dispatcher; see `src-tauri/AGENTS.md`.
-- **`report.ts`** — `Report` / `StepResult` types, `summarize`, `renderReportHtml`.
-  Produces the JSON report and the standalone HTML screenshot gallery.
 
 ### Interaction catalog (`interactions/` + `interactionCtx.ts`)
 
@@ -517,20 +601,7 @@ aegis, reachFn)`. Provides:
   from `shared/types.ts` appears in `CATALOG[*].channels` (failing the build when a new
   feature is added without a catalog entry). Also asserts every `UNTESTED_CHANNELS`
   member appears in some catalog entry's `channels`.
-- **`control.test.ts`**, **`reach.test.ts`**, **`devEmit.test.ts`**,
-  **`run.test.ts`**, **`report.test.ts`**, **`screens.test.ts`**,
+- **`control.test.ts`**, **`reach.test.ts`**, **`screens.test.ts`**,
   **`registration.test.tsx`** — unit tests for each individual module.
-
-### Bootstrap (main.tsx)
-
-```ts
-if (import.meta.env.DEV && import.meta.env.VITE_AEGIS_AUTOPILOT) {
-  // Give the app a moment to mount + register its control surface, then run.
-  setTimeout(() => {
-    void import('./autopilot/run').then((m) => m.runAutopilot());
-  }, 1500);
-}
-```
-
-The 1 500 ms delay lets `App` mount and register `window.__aegisAutopilot` before the
-runner tries to use it.
+  The 1 500 ms delay lets `App` mount and register `window.__aegisAutopilot` before the
+  runner tries to use it.

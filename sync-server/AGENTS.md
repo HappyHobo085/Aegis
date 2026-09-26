@@ -13,6 +13,31 @@ unauthenticated liveness probe (`/healthz`). Auth is the per-device Ed25519 `Aeg
 device registration additionally requires an account-root signature, so only a holder of the
 recovery phrase can register a device.
 
+## Device ownership + revocation
+
+Removal is **real** revocation, not a registry edit. The two facts that make it work:
+
+- **Every device on an account derives the SAME account key** (`HKDF(root, "account-sign")`) from
+  the recovery phrase. A self-hosted server therefore **cannot** tell the owner from a paired
+  device using the account key alone — so a device you "removed" could simply re-register, and any
+  paired device could evict any other, including the owner. Both were true before this shipped.
+- **The missing state is held server-side** (the one place a removed device cannot write):
+  `Store.revoked: HashSet<(account, deviceId)>` is a permanent deny-list consulted by
+  `post_device` (`403` on a hit), and `Store.owner: HashMap<account, deviceId>` records the
+  **first** device to register, set with `or_insert_with` and deliberately **never cleared by
+  `remove_device`** (clearing it would hand the role to whoever acted next). Removing *another*
+  device requires being the owner; removing *yourself* is always allowed — that is sign-out, and
+  it correctly ends in revocation.
+- **The last device cannot be removed** (`409`). Revocation is permanent by design, so allowing it
+  would lock the account out of its own server with no in-band recovery.
+- Both maps are **persisted** (`Snapshot.revoked` / `.owners`, all `#[serde(default)]`, written
+  sorted so an unchanged store rewrites an identical file). In-memory-only would have made
+  revocation a speed bump that a restart undoes.
+- **Operator recovery for a lost owner device:** the operator — who owns the data file, and is the
+  root of trust for a self-hosted server — deletes that account's `owner` entry from
+  `aegis-sync.json` and restarts. This is deliberately out-of-band: there is no in-app path, because
+  an in-app path would be reachable by the very device being recovered from.
+
 ## Hardening (replay + quotas)
 
 - **Replay defense:** `verify_auth` records each spent `(device, nonce)` pair (after the

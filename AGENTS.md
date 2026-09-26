@@ -59,13 +59,20 @@ Native build deps: a Rust toolchain; on Linux, webkit2gtk/gtk dev packages.
 ### Autopilot test harness
 
 ```bash
-npm test                                  # includes the exhaustive vitest tour + drift guard
-bash scripts/autopilot/run-autopilot.sh   # launch the real app + autonomously test every feature (Linux, needs a display)
+npm test    # the exhaustive vitest tour + the IPC drift guard
 ```
 
-The live autopilot drives every feature through the real Rust core and screenshots
-every UI state; the report lands in `target/autopilot/<timestamp>/report.html`. It runs
-only in dev (`VITE_AEGIS_AUTOPILOT`) and is dead-code-eliminated from production builds.
+The autopilot is a **vitest-level** harness: `src/autopilot/` holds the feature `CATALOG`,
+the `SCREENS` list, the interaction specs, and the drift guards, all of which run against
+`src/testFixtures/aegisMock.ts` (a mock of the IPC surface) — not against a real browser.
+`src/autopilot/coverage.test.ts` is the load-bearing guard: it fails the build if an IPC
+channel or a screen has no catalog entry.
+
+There is **no** live/app-level autopilot in this repo. Earlier revisions of this file
+described a `scripts/autopilot/run-autopilot.sh` launcher, `src/autopilot/run.ts`,
+`src/autopilot/report.ts`, `src/lib/devEmit.ts`, a `src-tauri/src/autopilot.rs` module and
+four dev-only Rust commands. None of them exist; the docs that described them have been
+corrected rather than left as aspirational instructions.
 
 ## Conventions that matter everywhere
 
@@ -95,16 +102,18 @@ only in dev (`VITE_AEGIS_AUTOPILOT`) and is dead-code-eliminated from production
   exist to catch any bug a real user might hit, so they must **exhaustively cover
   everything a user can do**. Before any `git push` to `main`, bring the autopilot up to
   cover every user-facing change in the push — and verify it:
-  - **New command channel** → catalog entry (`channels` + `exercise`) and, if it mutates
-    user data, a `verify(api)` round-trip (action → assert effect → restore).
+  - **New command channel** → catalog entry (`channels` + `exercise`). If it mutates user
+    data, the mutation must be driven somewhere that **actually executes**: an interaction
+    test in `src/autopilot/interactions/` (real UI, runs in `npm test`) and/or a unit test
+    in the owning Rust module. There is no live autopilot in this repo, so a round-trip
+    that "would run live" runs nowhere — see `src/autopilot/catalog.ts`.
   - **New UI screen / overlay / infobar** → a `screens.ts` entry (+ `reach.ts` wiring).
   - **New interactive control or user action** → an interaction test that drives the real
-    UI the way a user does (click/type/keyboard) and asserts the effect — in the vitest
-    interaction tour (continuous) and, for Linux-runtime behavior, the live autopilot.
-  - **Gate:** `npm test` green, and run `bash scripts/autopilot/run-autopilot.sh` (Linux)
-    for any change that touches runtime behavior — `RESULT: … 0 failed` and `ad-block
-blocking (trace): PASS`. A push that adds a capability without its autopilot coverage
-    is incomplete.
+    UI the way a user does (click/type/keyboard) and asserts the effect, in the vitest
+    interaction tour. Add it to `src/autopilot/interactions/` and it runs continuously.
+  - **Gate:** `npm test` green. A push that adds a capability without its autopilot
+    coverage is incomplete. Runtime behaviour on real hardware is **not** covered by any
+    automated gate here — see gotcha 17 in `src-tauri/AGENTS.md` for the known gaps.
 
 ## Status (as of the Tauri migration branch)
 
@@ -137,9 +146,10 @@ privateness; Android is a best-effort weaker tier — `LOAD_NO_CACHE` + 3rd-part
 refused + cache/history cleared on close, but first-party cookies linger in Android's
 process-global jar after close, which is documented and accepted). Affordance: **New
 private tab** button in `TabStrip` + `Ctrl+Shift+N` (desktop) + mobile tab switcher.
-Autopilot: catalog `verify` asserts a private navigation leaves no history row (live
-gated); interaction specs cover the button + keyboard shortcut. Runtime verify: Linux
-live GUI and Win/macOS GUI **PENDING** user sessions; Android device verify **PENDING**.
+Autopilot: interaction specs cover the button + the keyboard shortcut. The "a private
+navigation leaves no history row" assertion is **not** automated — the channel that would
+prove it needs a real webview, and `history.remove` is in `UNTESTED_CHANNELS`. Runtime
+verify: Linux live GUI and Win/macOS GUI **PENDING** user sessions; Android device verify **PENDING**.
 The **OS-keychain anchor** is desktop-done / Android hardware-anchored — **sub-project
 J DONE.** Android now PREFERS StrongBox (hardware Secure Element where the device has
 `FEATURE_STRONGBOX_KEYSTORE`, graceful TEE fallback otherwise); the seed-at-rest
@@ -157,10 +167,14 @@ Chrome-148 UA). `strict` adds WebGL (`getParameter` UNMASKED\_\*/`readPixels`/
 `getSupportedExtensions`/`getShaderPrecisionFormat`). Shipped on all four platforms:
 desktop via `adblock_inject::script` document-start (same injection path as the WebRTC
 shim), Android via `NativeFarble` JNI getter + `MainActivity.createTabWebView`
-registration. Per-site fp-allowlist (`fp-allowlist` syncable store, `fingerprint.*` IPC
+registration. Per-site fp-allowlist (`fp-allowlist` store — **local-only, it is NOT in
+`sync_stores::SYNCABLE`**, so a restore from backup is the only way to move it;
+`fingerprint.*` IPC
 channels, `useFingerprint` hook + SecurityTab UI) — desktop only in v1 (Android farbles
-all hosts; parity gap documented, fix path specified in `docs/roadmap/phase-2-parity-gaps-spec.md`
-Gap 2 / Task 1 — `ANDROID_FP_ALLOWLIST` pattern). Session salt = CSPRNG `OnceLock<[u8;32]>`, NEVER
+all hosts; parity gap documented in the `farble.rs` section of `src-tauri/AGENTS.md`,
+where the intended `ANDROID_FP_ALLOWLIST` process-global fix is described — the
+parity-gaps spec that used to specify it was deleted in commit 58d2c4b and is NOT
+recoverable from this repo). Session salt = CSPRNG `OnceLock<[u8;32]>`, NEVER
 persisted; page sees only `public_seed = HKDF-SHA256(salt)` (one-way — not a
 super-cookie). Seed is baked INSIDE the IIFE closure, not a top-level `var`/`window.*`
 (a top-level var leaks to `window` = cross-site super-cookie; shim runtime tests run
@@ -168,8 +182,8 @@ in true global scope via indirect eval to catch this). Per-spawn: level/allowlis
 to newly created/reloaded tabs only. Honest limits: a same-world JS shim is detectable
 (default-off for this reason); on WebKit the Chrome-148 UA already lies about the engine;
 per-frame-origin seeding (not Brave's per-top-eTLD+1); Android has no fp-allowlist (v1).
-`vitest farbleShim.test.ts` is authoritative for shim runtime behavior and passes (814
-tests). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
+`vitest src/lib/farbleShim.test.ts` is authoritative for shim runtime behavior and passes
+(22 tests; the tree has ~1022 TS tests in total — run `npm test` for the full count). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
 are **PENDING** user. **Content-webview Proxy** (`proxy.rs`; sub-project M): routes
 browsed pages through a user-configured HTTP or SOCKS5 proxy. **This is a Proxy, not a
 VPN** — it covers the content webview only (not the OS, not other apps, not the chrome's
@@ -178,8 +192,10 @@ WebRTC IP-leak fix (shipped), but DNS/QUIC/UDP egress is outside the proxy path.
 for light geo/region testing or pairing an external proxy — not anonymity. Shipped
 `proxy.*` IPC (`proxy.getState` / `proxy.setConfig` / `proxy.clear` /
 `proxy.testConnection`), `ProxySettingsTab` + `useProxy` hook, and autopilot coverage
-(`proxy.state` catalog entry with `verify` round-trip + interaction specs). Per-platform
-parity matrix:
+(`proxy.state` catalog entry + interaction specs). The set→assert→restore round-trip is
+**not** automated: `proxy.setConfig`/`clear` are destructive to a live config and the mock
+has no state, so they sit in `UNTESTED_CHANNELS`; `proxy.rs`'s unit tests cover the config
+validation. Per-platform parity matrix:
 
 - **Linux** — live proxy via WebKitGTK `WebsiteDataManagerExt::set_network_proxy_settings`
   (`NetworkProxyMode::Custom` / `Default`). Per-webview fan-out + spawn-inherit. Egress
@@ -202,7 +218,8 @@ parity matrix:
 - **macOS** — NOT implemented. Direct connection. `WKWebsiteDataStore.proxyConfigurations`
   (macOS 14+) requires raw `msg_send!` / hand-rolled `nw_proxy_config_*` Network.framework
   bindings that cannot be compiled or verified from Linux (objc2 needs a macOS toolchain).
-  Implementation guide at `docs/roadmap/macOS-proxy-bindings.md`. macOS builds and runs;
+  The implementation guide for this was deleted in commit 58d2c4b and is NOT
+  recoverable, so the macOS tier has to be re-derived from scratch. macOS builds and runs;
   proxy is simply absent.
 
 ## Cleanup After Implementation
@@ -214,4 +231,6 @@ parity matrix:
   - Keep the repository clean by removing these artifacts before pushing changes
 
 **Remaining roadmap features:** password-vault autofill (Phase B), anti-fingerprinting
-runtime verifies, and content-webview proxy macOS tier — see `docs/FEATURE_ROADMAP.md`.
+runtime verifies, and content-webview proxy macOS tier. The roadmap that tracked these was
+deleted in commit 58d2c4b; `CHANGELOG.md` and the status sections of the per-folder
+`AGENTS.md` files are the current record of what is and is not done.
