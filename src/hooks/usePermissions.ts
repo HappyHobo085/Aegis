@@ -26,11 +26,15 @@ export function usePermissions(): {
 
   useEffect(() => {
     let active = true;
-    void aegis.permissions.list().then((next) => {
-      if (active) setPermissions(next);
-    });
+    // BUG(F2): subscribe BEFORE the seed fetch. `permissions.onPrompt` registers its backend
+    // listener only when the `listen` IPC is processed, so a prompt emitted while the
+    // `permissions.list` round-trip was still queued used to be dropped on the floor and
+    // never re-surfaced — the user never saw the permission dialog at all.
     const unsubscribe = aegis.permissions.onPrompt((p: PermissionPrompt) => {
       setPrompt(p);
+    });
+    void aegis.permissions.list().then((next) => {
+      if (active) setPermissions(next);
     });
     return () => {
       active = false;

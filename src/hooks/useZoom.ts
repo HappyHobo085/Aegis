@@ -25,22 +25,24 @@ export function useZoom(activeId: ViewId): {
 } {
   const [factor, setFactor] = useState(ZOOM_DEFAULT);
 
-  // Seed from the backend on mount / active-view change.
+  // Subscribe to live zoom changes, THEN seed. Filtered to the active view.
+  //
+  // BUG(F2): these were two effects, with the seed (`zoom.get`) first. `onChanged` registers
+  // its backend listener only when the `listen` IPC is processed, so a `zoom.changed` event
+  // emitted while the `zoom.get` round-trip was still queued was lost and nothing refetched —
+  // leaving the toolbar showing the wrong zoom until the next change or a tab switch.
   useEffect(() => {
+    const off = aegis.zoom.onChanged((s) => {
+      if (s.viewId === activeId) setFactor(s.factor);
+    });
     let live = true;
     void aegis.zoom.get(activeId).then((s) => {
       if (live) setFactor(s.factor);
     });
     return () => {
       live = false;
+      off();
     };
-  }, [activeId]);
-
-  // Subscribe to live zoom changes; filter to the active view.
-  useEffect(() => {
-    return aegis.zoom.onChanged((s) => {
-      if (s.viewId === activeId) setFactor(s.factor);
-    });
   }, [activeId]);
 
   const apply = useCallback(

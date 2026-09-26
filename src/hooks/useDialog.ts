@@ -33,18 +33,21 @@ export function useDialog<T extends HTMLElement>(
   const initialFocusRef = useRef(opts.initialFocus);
   initialFocusRef.current = opts.initialFocus;
 
-  // Capture the previously-focused element during the render phase, before React
-  // commits DOM mutations. At render time the old focused element is still in the
-  // DOM, which lets us restore focus correctly even when the element is removed
-  // as part of the same rerender that mounts this dialog.
-  const previouslyFocusedRef = useRef<HTMLElement | null>(
-    document.activeElement as HTMLElement | null,
-  );
-
   useEffect(() => {
     if (!open) return;
     const node = ref.current;
     if (!node) return;
+
+    // BUG(F3): this used to be a `useRef(document.activeElement)` initialised once during
+    // the FIRST render, so it only ever held whatever was focused when the component
+    // mounted. That is right for a dialog that unmounts when closed, but WRONG for the
+    // always-mounted `open`-prop dialogs this third argument exists for (CommandPalette,
+    // Onboarding, SafetyInterstitial): after one Ctrl+K→Enter, the stored element is gone
+    // and the restore focused <body>, so the next Tab restarted from the document top.
+    // Capture inside the effect instead, so each open→close cycle records the element that
+    // is actually focused at the moment this dialog opens. `useEffect` runs after the
+    // commit, so nothing has been unfocused or removed yet — the element is still live.
+    const previouslyFocused = document.activeElement as HTMLElement | null;
 
     const getFocusable = (): HTMLElement[] =>
       Array.from(node.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
@@ -90,9 +93,8 @@ export function useDialog<T extends HTMLElement>(
     node.addEventListener('keydown', handleKeyDown);
     return () => {
       node.removeEventListener('keydown', handleKeyDown);
-      const prev = previouslyFocusedRef.current;
-      if (prev && typeof prev.focus === 'function') {
-        prev.focus();
+      if (previouslyFocused && typeof previouslyFocused.focus === 'function') {
+        previouslyFocused.focus();
       }
     };
   }, [open]);

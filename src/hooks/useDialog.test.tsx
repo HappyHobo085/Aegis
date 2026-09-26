@@ -74,4 +74,78 @@ describe('useDialog', () => {
     );
     expect(trigger).toHaveFocus();
   });
+
+  // BUG(F3): the `open` third argument exists precisely for dialogs that stay MOUNTED and
+  // render `null` while closed. Those were capturing `document.activeElement` ONCE, at the
+  // component's first render, so every open AFTER the first restored focus to a stale (or
+  // already-removed) element — for a removed one, `<body>`, which makes the next Tab start
+  // from the document top.
+  describe('always-mounted dialogs (the `open` prop)', () => {
+    function PersistentDialog({ open }: { open: boolean }) {
+      const ref = useDialog<HTMLDivElement>(() => {}, {}, open);
+      if (!open) return null;
+      return (
+        <div ref={ref} role="dialog" aria-modal="true">
+          <button type="button">first</button>
+          <button type="button">last</button>
+        </div>
+      );
+    }
+
+    it('captures the focused element on EACH open, not just the first', () => {
+      const outsideA = document.createElement('button');
+      outsideA.textContent = 'outside-a';
+      const outsideB = document.createElement('button');
+      outsideB.textContent = 'outside-b';
+      document.body.append(outsideA, outsideB);
+
+      try {
+        const { rerender } = render(<PersistentDialog open={false} />);
+
+        // Open #1 — focused element is outsideA.
+        outsideA.focus();
+        expect(outsideA).toHaveFocus();
+        rerender(<PersistentDialog open />);
+        expect(screen.getByRole('button', { name: 'first' })).toHaveFocus();
+        // Close #1 — focus goes back to where it came from.
+        rerender(<PersistentDialog open={false} />);
+        expect(outsideA).toHaveFocus();
+
+        // Open #2 from a DIFFERENT element. A mount-time capture would still hold
+        // outsideA here and restore to the wrong place.
+        outsideB.focus();
+        expect(outsideB).toHaveFocus();
+        rerender(<PersistentDialog open />);
+        expect(screen.getByRole('button', { name: 'first' })).toHaveFocus();
+        rerender(<PersistentDialog open={false} />);
+        expect(outsideB).toHaveFocus();
+      } finally {
+        outsideA.remove();
+        outsideB.remove();
+      }
+    });
+
+    it('restores focus to the element focused at the LAST open, not <body>', () => {
+      const trigger = document.createElement('button');
+      document.body.appendChild(trigger);
+      try {
+        const { rerender } = render(<PersistentDialog open={false} />);
+        // Mount while nothing is focused at all (body) — that is what the old mount-time
+        // capture stored, forever.
+        rerender(<PersistentDialog open />);
+        expect(screen.getByRole('button', { name: 'first' })).toHaveFocus();
+        rerender(<PersistentDialog open={false} />);
+
+        // Now the user focuses the omnibox-ish trigger and reopens.
+        trigger.focus();
+        rerender(<PersistentDialog open />);
+        expect(screen.getByRole('button', { name: 'first' })).toHaveFocus();
+        rerender(<PersistentDialog open={false} />);
+        expect(trigger).toHaveFocus();
+        expect(document.body).not.toHaveFocus();
+      } finally {
+        trigger.remove();
+      }
+    });
+  });
 });

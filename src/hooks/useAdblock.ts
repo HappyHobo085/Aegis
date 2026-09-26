@@ -34,13 +34,10 @@ export function useAdblock(
 
   useEffect(() => {
     let active = true;
-    void aegis.adblock.getState().then((s) => {
-      if (!active) return;
-      setState(s);
-      // Recover the active page's count on mount / tab-switch (live blockedCount events
-      // emitted before this subscription — e.g. the restored boot page — were missed).
-      setPage(s.pageBlocked ?? 0);
-    });
+    // BUG(F2): subscribe BEFORE the seed fetch. `onBlockedCount` registers its backend
+    // listener only when the `listen` IPC is processed, so a block counted while the
+    // `adblock.getState` round-trip was still queued was lost — the shield then reported a
+    // stale page count for the rest of the view's life.
     const unsubscribe = aegis.adblock.onBlockedCount((c: BlockedCount) => {
       if (c.viewId !== viewId) return;
       setPage(c.page);
@@ -49,6 +46,13 @@ export function useAdblock(
       setState((prev) =>
         prev.sessionBlocked === c.session ? prev : { ...prev, sessionBlocked: c.session },
       );
+    });
+    void aegis.adblock.getState().then((s) => {
+      if (!active) return;
+      setState(s);
+      // Recover the active page's count on mount / tab-switch (live blockedCount events
+      // emitted before this subscription — e.g. the restored boot page — were missed).
+      setPage(s.pageBlocked ?? 0);
     });
     // The allowlist is syncable — refetch state (incl. allowlistedHosts) when sync merges it.
     const offSync = onSyncChange('allowlist', () => {

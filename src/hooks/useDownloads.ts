@@ -25,11 +25,15 @@ export function useDownloads(): {
 
   useEffect(() => {
     let active = true;
-    void aegis.downloads.list().then((next) => {
-      if (active) setDownloads(next);
-    });
+    // BUG(F2): subscribe BEFORE the seed fetch. `downloads.onChanged` registers its backend
+    // listener only when the `listen` IPC is processed, so a progress/done event emitted
+    // while the `downloads.list` round-trip was still queued was lost — and the list fetch
+    // had already snapshotted the pre-event state, so the entry stayed frozen.
     const unsubscribe = aegis.downloads.onChanged(() => {
       void refresh();
+    });
+    void aegis.downloads.list().then((next) => {
+      if (active) setDownloads(next);
     });
     return () => {
       active = false;

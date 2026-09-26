@@ -18,10 +18,15 @@ export function useTabs(): {
 
   useEffect(() => {
     let active = true;
+    // BUG(F2): the seed fetch used to be dispatched FIRST. `aegis.tabs.onState` goes through
+    // an async `listen()`, but the backend listener is registered when the `listen` IPC is
+    // PROCESSED — and both requests ride the same transport, so Rust handled `tabs.list`
+    // strictly before the subscription existed. Any `tabs.state` emitted in that window was
+    // lost permanently and nothing refetched. Subscribe FIRST, then seed.
+    const off = aegis.tabs.onState((s) => setState(s));
     void aegis.tabs.list().then((s) => {
       if (active) setState(s);
     });
-    const off = aegis.tabs.onState((s) => setState(s));
     return () => {
       active = false;
       off();

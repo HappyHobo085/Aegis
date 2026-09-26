@@ -25,10 +25,13 @@ export function useProxy(): UseProxy {
 
   useEffect(() => {
     let active = true;
+    // BUG(F2): subscribe BEFORE the seed fetch — `onState` registers its backend listener
+    // only when the `listen` IPC is processed, and a `proxy.state` emitted while the
+    // `getState` round-trip was still queued used to be lost with no refetch behind it.
+    const offState = aegis.proxy.onState((s) => setState(s));
     void aegis.proxy.getState().then((s) => {
       if (active) setState(s);
     });
-    const offState = aegis.proxy.onState((s) => setState(s));
     return () => {
       active = false;
       offState();
