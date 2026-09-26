@@ -242,7 +242,7 @@ mod tests {
             assert!(result.is_ok(), "enter with 2 tabs should succeed");
 
             let state = app.state::<SplitState>();
-            let inner = state.inner.lock().unwrap();
+            let inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(inner.panes.len(), 2, "should have 2 panes");
             assert_eq!(inner.focused_pane_id, 1, "first pane should be focused");
             assert_eq!(inner.panes[0].tab_id, 1);
@@ -261,7 +261,7 @@ mod tests {
             assert!(result.unwrap() == Value::Null, "exit should return null");
 
             let state = app.state::<SplitState>();
-            let inner = state.inner.lock().unwrap();
+            let inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
             assert!(inner.panes.is_empty(), "panes should be empty after exit");
         });
     }
@@ -275,7 +275,7 @@ mod tests {
             assert!(result.is_ok(), "resize should succeed");
 
             let state = app.state::<SplitState>();
-            let inner = state.inner.lock().unwrap();
+            let inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
             // After normalization, widths sum to 1.0 and proportions are preserved.
             // pane1: 0.3/0.8 = 0.375, pane2: 0.5/0.8 = 0.625
             let total_w: f64 = inner.panes.iter().map(|p| p.width).sum();
@@ -301,7 +301,7 @@ mod tests {
             assert!(result.is_ok(), "focus should succeed");
 
             let state = app.state::<SplitState>();
-            let inner = state.inner.lock().unwrap();
+            let inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(inner.focused_pane_id, 2);
         });
     }
@@ -348,7 +348,7 @@ mod tests {
             assert!(result.is_ok(), "enter with 3 tabs should succeed");
 
             let state = app.state::<SplitState>();
-            let inner = state.inner.lock().unwrap();
+            let inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(inner.panes.len(), 3);
             // Each pane gets 1/3 of the width.
             assert!((inner.panes[0].width - 1.0 / 3.0).abs() < f64::EPSILON);
@@ -364,7 +364,7 @@ mod tests {
             assert!(result.is_ok(), "enter with 4 tabs should succeed");
 
             let state = app.state::<SplitState>();
-            let inner = state.inner.lock().unwrap();
+            let inner = state.inner.lock().unwrap_or_else(|e| e.into_inner());
             assert_eq!(inner.panes.len(), 4);
             // Each pane gets 0.25 width.
             assert!((inner.panes[0].width - 0.25).abs() < f64::EPSILON);

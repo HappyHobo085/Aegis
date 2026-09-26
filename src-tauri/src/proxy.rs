@@ -141,7 +141,7 @@ impl Default for ProxyState {
 /// settings store if the state is not managed (e.g. minimal test harness).
 pub fn current<R: Runtime>(app: &AppHandle<R>) -> ProxyConfig {
     if let Some(st) = app.try_state::<ProxyState>() {
-        return st.0.lock().unwrap().clone();
+        return st.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
     }
     ProxyConfig::from_value(&crate::settings::proxy_config(app))
 }
@@ -205,7 +205,7 @@ pub fn apply_to_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
 /// `clearProxy` bridge methods apply it to `ProxyController` process-globally.
 pub fn apply<R: Runtime>(app: &AppHandle<R>) {
     if let Some(s) = app.try_state::<crate::tabs::Tabs>() {
-        let ids: Vec<u32> = s.reg.lock().unwrap().all_ids();
+        let ids: Vec<u32> = s.reg.lock().unwrap_or_else(|e| e.into_inner()).all_ids();
         for id in ids {
             apply_to_tab(app, id);
         }
@@ -291,7 +291,7 @@ pub fn dispatch<R: Runtime>(
             }
             crate::settings::write(app, &s);
             if let Some(st) = app.try_state::<ProxyState>() {
-                *st.0.lock().unwrap() = cfg;
+                *st.0.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
             }
             apply(app);
             Some(Ok(state_json(app)))

@@ -74,7 +74,7 @@ fn newer_android_version(manifest: &str, current: &str) -> Option<String> {
 
 fn set(app: &AppHandle, v: Value) {
     if let Some(s) = app.try_state::<UpdateState>() {
-        *s.0.lock().unwrap() = v.clone();
+        *s.0.lock().unwrap_or_else(|e| e.into_inner()) = v.clone();
     }
     crate::emit_event(app, "update.state", v);
 }
@@ -85,7 +85,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Resu
         "update.getState" => {
             let v = app
                 .try_state::<UpdateState>()
-                .map(|s| s.0.lock().unwrap().clone())
+                .map(|s| s.0.lock().unwrap_or_else(|e| e.into_inner()).clone())
                 .unwrap_or_else(idle);
             Some(Ok(v))
         }

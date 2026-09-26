@@ -433,7 +433,11 @@ mod tests {
                 "session total is unchanged after reset_page"
             );
             assert_eq!(
-                page_map().lock().unwrap().get(&tab_id).copied(),
+                page_map()
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get(&tab_id)
+                    .copied(),
                 Some(0),
                 "per-page count is zero after reset_page"
             );
@@ -454,7 +458,14 @@ mod tests {
         assert_eq!(p1, 1);
         assert_eq!(p2, 2, "page count accumulates within a tab");
         let s = zero_page(id);
-        assert_eq!(page_map().lock().unwrap().get(&id).copied(), Some(0));
+        assert_eq!(
+            page_map()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&id)
+                .copied(),
+            Some(0)
+        );
         // zero_page returns the *session* total, which is monotonic and unaffected.
         let (s_after, p_after) = bump_blocked(id);
         assert_eq!(p_after, 1, "page count restarts at 1 after a reset");

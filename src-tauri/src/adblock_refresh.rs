@@ -27,7 +27,7 @@ pub fn refresh<R: Runtime>(app: &AppHandle<R>) {
     {
         // Re-mirror the live on/off + allowlist policy.
         if let Some(s) = app.try_state::<crate::adblock::AdblockState>() {
-            let g = s.0.lock().unwrap();
+            let g = s.0.lock().unwrap_or_else(|e| e.into_inner());
             crate::adblock_engine::set_policy(g.enabled, &g.allowlist);
         }
         // Rebuild the engine FilterSet = bundled lists + enabled subs + custom filters.

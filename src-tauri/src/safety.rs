@@ -225,7 +225,10 @@ mod tests {
     fn proceed_records_exception_and_clears_interstitial() {
         with_tmp_app(|app| {
             // Seed an interstitial as raise() would.
-            *app.state::<SafetyState>().interstitial.lock().unwrap() =
+            *app.state::<SafetyState>()
+                .interstitial
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()) =
                 json!({ "url": format!("https://{MALWARE_HOST}/"), "reason": "malware" });
             let url = format!("https://{MALWARE_HOST}/");
             dispatch(app, "safety.proceed", &json!({ "url": url }))

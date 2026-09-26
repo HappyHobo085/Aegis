@@ -36,12 +36,16 @@ fn state_value<R: Runtime>(app: &AppHandle<R>) -> Value {
 }
 
 fn state_tabs<R: Runtime>(app: &AppHandle<R>) -> TabsState {
-    app.state::<Tabs>().reg.lock().unwrap().tabs_state()
+    app.state::<Tabs>()
+        .reg
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .tabs_state()
 }
 
 fn workspace_state_value<R: Runtime>(app: &AppHandle<R>) -> Value {
     let tabs = app.state::<Tabs>();
-    let reg = tabs.reg.lock().unwrap();
+    let reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
     let workspaces = reg.workspace_list();
     let active_id = reg.active_workspace_id().to_string();
     serde_json::json!({
@@ -67,7 +71,7 @@ fn emit_workspace_and_persist<R: Runtime>(app: &AppHandle<R>) {
 fn record_nav<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str, title: &str) {
     {
         let tabs = app.state::<Tabs>();
-        let mut reg = tabs.reg.lock().unwrap();
+        let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
         if !url.is_empty() {
             reg.record_nav(id, url);
         }
@@ -82,7 +86,10 @@ fn record_nav<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str, title: &str) {
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn on_tab_url<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
-        s.reg.lock().unwrap().record_nav(id, url);
+        s.reg
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record_nav(id, url);
     }
     emit_and_persist(app);
 }
@@ -92,7 +99,10 @@ pub fn on_tab_url<R: Runtime>(app: &AppHandle<R>, id: u32, url: &str) {
 #[allow(dead_code)] // only called from the Linux WebKit title-changed signal (linux_layout)
 pub fn on_tab_title<R: Runtime>(app: &AppHandle<R>, id: u32, title: &str) {
     if let Some(s) = app.try_state::<Tabs>() {
-        s.reg.lock().unwrap().set_title(id, title.to_string());
+        s.reg
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .set_title(id, title.to_string());
     }
     emit_and_persist(app);
 }
@@ -125,7 +135,12 @@ fn spawn(app: &AppHandle, id: u32, url: &str, private: bool) {
 /// Whether tab `id` is a private (incognito) tab. Defaults to false for an unknown id.
 pub fn is_private<R: Runtime>(app: &AppHandle<R>, id: u32) -> bool {
     app.try_state::<Tabs>()
-        .and_then(|s| s.reg.lock().unwrap().is_private(id))
+        .and_then(|s| {
+            s.reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .is_private(id)
+        })
         .unwrap_or(false)
 }
 
@@ -186,7 +201,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
         "tabs.activate" => {
             let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
-            let to_spawn = app.state::<Tabs>().reg.lock().unwrap().activate(id, now);
+            let to_spawn = app
+                .state::<Tabs>()
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .activate(id, now);
             if let Some(u) = to_spawn {
                 // Read privateness from the registry: only non-private discarded tabs
                 // are ever respawned (private tabs are exempt from the idle sweep).
@@ -199,7 +219,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         }
         "tabs.close" => {
             let id = payload.get("id").and_then(Value::as_u64).unwrap_or(0) as u32;
-            let out = app.state::<Tabs>().reg.lock().unwrap().close(id, now);
+            let out = app
+                .state::<Tabs>()
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .close(id, now);
             if out.closed_live {
                 close_webview(app, id);
             }
@@ -214,7 +239,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             Some(Ok(state_value(app)))
         }
         "tabs.reopenClosed" => {
-            let reopened = app.state::<Tabs>().reg.lock().unwrap().reopen_closed(now);
+            let reopened = app
+                .state::<Tabs>()
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .reopen_closed(now);
             if let Some((id, u)) = reopened {
                 // Reopened tabs are always non-private (reopen_closed creates non-private tabs).
                 spawn(app, id, &u, false);
@@ -247,7 +277,11 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                         .collect()
                 })
                 .unwrap_or_default();
-            app.state::<Tabs>().reg.lock().unwrap().reorder(&ids);
+            app.state::<Tabs>()
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .reorder(&ids);
             emit_and_persist(app);
             Some(Ok(state_value(app)))
         }
@@ -258,7 +292,11 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            app.state::<Tabs>().reg.lock().unwrap().set_title(id, title);
+            app.state::<Tabs>()
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .set_title(id, title);
             emit_and_persist(app);
             Some(Ok(state_value(app)))
         }
@@ -282,7 +320,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .unwrap_or("slate");
             let ws = {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.create_workspace(name, color)
             };
             emit_workspace_and_persist(app);
@@ -292,7 +330,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             let id = payload.get("id").and_then(Value::as_str).unwrap_or("");
             let success = {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.switch_workspace(id)
             };
             if success {
@@ -310,7 +348,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .unwrap_or("Untitled");
             let result = {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.rename_workspace(id, name)
             };
             emit_workspace_and_persist(app);
@@ -327,7 +365,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .unwrap_or("slate");
             let result = {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.set_workspace_color(id, color)
             };
             emit_workspace_and_persist(app);
@@ -340,7 +378,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             let id = payload.get("id").and_then(Value::as_str).unwrap_or("");
             let success = {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.remove_workspace(id)
             };
             if success {
@@ -365,7 +403,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 .unwrap_or_default();
             {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.reorder_workspaces(&ids);
             }
             emit_workspace_and_persist(app);
@@ -381,7 +419,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 #[allow(dead_code)] // desktop-only caller (nav::on_navigation); the mobile build stubs spawn_tab
 pub fn close_tab(app: &AppHandle, id: u32) {
     let now = now_ms(app);
-    let out = app.state::<Tabs>().reg.lock().unwrap().close(id, now);
+    let out = app
+        .state::<Tabs>()
+        .reg
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .close(id, now);
     if out.closed_live {
         close_webview(app, id);
     }
@@ -410,12 +453,12 @@ pub fn open_background(app: &AppHandle, url: &str, private: bool) {
 #[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn open_redirect_background(app: &AppHandle, url: &str, private: bool) -> u32 {
     let now = now_ms(app);
-    let (id, _u) = app.state::<Tabs>().reg.lock().unwrap().create_private(
-        Some(url.to_string()),
-        true,
-        now,
-        private,
-    );
+    let (id, _u) = app
+        .state::<Tabs>()
+        .reg
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .create_private(Some(url.to_string()), true, now, private);
     emit_and_persist(app);
     id
 }
@@ -430,7 +473,11 @@ pub fn persist<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     let session = match app.try_state::<Tabs>() {
-        Some(s) => s.reg.lock().unwrap().to_persisted(),
+        Some(s) => s
+            .reg
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .to_persisted(),
         None => return,
     };
     if let Ok(txt) = serde_json::to_string_pretty(&session) {
@@ -465,7 +512,7 @@ pub fn start_idle_sweep(app: &AppHandle) {
             let aggressive_threshold = crate::settings::aggressive_sweep_threshold(&app);
             let now = now_ms(&app);
             let victims = match app.try_state::<Tabs>() {
-                Some(s) => s.reg.lock().unwrap().sweep_idle(
+                Some(s) => s.reg.lock().unwrap_or_else(|e| e.into_inner()).sweep_idle(
                     now,
                     timeout_ms,
                     bg_timeout_ms,
@@ -487,7 +534,7 @@ pub fn start_idle_sweep(app: &AppHandle) {
                 // and Rust's Mutex is non-reentrant (same-thread re-lock = deadlock).
                 {
                     let tabs = app2.state::<Tabs>();
-                    let mut reg = tabs.reg.lock().unwrap();
+                    let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                     reg.remove_tabs(&victims);
                 }
                 emit_and_persist(&app2); // strip re-renders the discarded tabs as "asleep"
@@ -512,7 +559,7 @@ mod tests {
             // has 2 tabs (the boot tab + the new one).
             {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.create(Some("https://a.test/".into()), false, 0);
             }
 
@@ -533,7 +580,7 @@ mod tests {
             // Capture the expected values from the registry.
             let expected = {
                 let tabs = app.state::<Tabs>();
-                let reg = tabs.reg.lock().unwrap();
+                let reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.to_persisted()
             };
 
@@ -574,7 +621,7 @@ mod tests {
         with_tmp_app(|app| {
             {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 // Create a pinned tab with a title.
                 let (id, _) = reg.create(Some("https://pinned.test/".into()), false, 0);
                 reg.set_pinned(id, true);
@@ -607,7 +654,7 @@ mod tests {
     fn managed_registry_tabs_state_is_well_formed() {
         with_tmp_app(|app| {
             let state = app.state::<Tabs>();
-            let reg = state.reg.lock().unwrap();
+            let reg = state.reg.lock().unwrap_or_else(|e| e.into_inner());
             let ts = reg.tabs_state();
 
             assert!(
@@ -646,7 +693,7 @@ mod tests {
             // Mutate via the registry directly (same code dispatch("tabs.setTitle") calls).
             {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.set_title(1, "Hello".into());
             }
 
@@ -688,7 +735,7 @@ mod tests {
         with_tmp_app(|app| {
             {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.set_pinned(1, true);
             }
 
@@ -714,7 +761,7 @@ mod tests {
             // Create a second tab so we have ids [1, 2].
             let id2 = {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 let (id, _) = reg.create(Some("https://b.test/".into()), false, 0);
                 id
             };
@@ -722,12 +769,12 @@ mod tests {
             // Reorder to [id2, 1].
             {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 reg.reorder(&[id2, 1]);
             }
 
             let state = app.state::<Tabs>();
-            let reg = state.reg.lock().unwrap();
+            let reg = state.reg.lock().unwrap_or_else(|e| e.into_inner());
             let ts = reg.tabs_state();
 
             assert!(ts.tabs.len() >= 2, "must have at least 2 tabs after create");
@@ -773,7 +820,7 @@ mod tests {
         with_tmp_app(|app| {
             {
                 let tabs = app.state::<Tabs>();
-                let mut reg = tabs.reg.lock().unwrap();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 // create_private(url, background, now_ms, private=true)
                 reg.create_private(Some("https://private.test/".into()), false, 0, true);
             }
@@ -781,7 +828,7 @@ mod tests {
             // is_private returns true for the new tab; we check by inspecting the registry.
             let private_id = {
                 let tabs = app.state::<Tabs>();
-                let reg = tabs.reg.lock().unwrap();
+                let reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
                 let ts = reg.tabs_state();
                 // The private tab is the most recently created (active, id > 1).
                 ts.active_id

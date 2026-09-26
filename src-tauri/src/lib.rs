@@ -542,15 +542,12 @@ pub fn run() {
             let cfg =
                 crate::proxy::ProxyConfig::from_value(&crate::settings::proxy_config(app.handle()));
             if let Some(st) = app.handle().try_state::<crate::proxy::ProxyState>() {
-                *st.0.lock().unwrap() = cfg;
+                *st.0.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
             }
             // Apply the persisted proxy immediately so a saved ON config is live from the
             // first navigation (no-op now; Tasks 3-6 fill apply() with per-platform setters).
             crate::proxy::apply(app.handle());
         }
-
-        // Sync: auto-unlock from the OS keychain if a seed is stored, and start syncing.
-        crate::sync::start(app.handle());
 
         // Initialize the tab registry: restore from tabs.json if it exists,
         // otherwise start fresh with the configured home page.  Only the active
@@ -563,7 +560,12 @@ pub fn run() {
             None => crate::tab_registry::Registry::new(home.clone()),
         };
         app.manage(tabs::Tabs::from_registry(reg));
-        let active = app.state::<tabs::Tabs>().reg.lock().unwrap().active_id();
+        let active = app
+            .state::<tabs::Tabs>()
+            .reg
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .active_id();
         let active_url = app
             .state::<tabs::Tabs>()
             .reg
@@ -582,6 +584,24 @@ pub fn run() {
             t_session.elapsed().as_millis()
         );
         tabs::start_idle_sweep(app.handle());
+
+        // Sync: auto-unlock from the OS keychain if a seed is stored, and start syncing.
+        //
+        // ORDERING: this MUST run after every `.manage()` above — in particular after
+        // `tabs::Tabs`. Tauri builds the configured windows/webviews (app.rs
+        // `setup()`: the `WebviewWindowBuilder::from_config` loop) BEFORE it invokes
+        // this `setup` closure, so the renderer's first IPCs are already in flight
+        // while we are still registering state. Any IPC that reaches a
+        // `.state::<Tabs>()` in that window panics, and because it unwinds through a
+        // `extern "system"` JNI frame it cannot be caught — the whole process aborts
+        // with SIGABRT ("state() called before manage() for app_lib::tabs::Tabs").
+        // The boot restore does real blocking work (a JNI round-trip into the
+        // hardware keystore, ~100ms+ on a StrongBox device) which used to sit *before*
+        // `manage(Tabs)` and reliably lost that race, killing the app on every launch
+        // once the seed finally started persisting. Restoring the root is also more
+        // correct with the registry live, since the restore kicks off a sync pass.
+        crate::sync::start(app.handle());
+
         // Coalesce per-navigation history writes into a periodic background flush (the
         // live history lives in an in-memory cache; see history.rs "Write batching").
         history::start_flush(app.handle());
@@ -616,7 +636,12 @@ pub fn run() {
         // Emit the restored tabs state so the chrome renders all tabs immediately
         // (belt-and-suspenders: the chrome also calls tabs.list on mount).
         crate::emit_event(app.handle(), "tabs.state", {
-            let s = app.state::<tabs::Tabs>().reg.lock().unwrap().tabs_state();
+            let s = app
+                .state::<tabs::Tabs>()
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .tabs_state();
             serde_json::to_value(s).unwrap_or(serde_json::Value::Null)
         });
 

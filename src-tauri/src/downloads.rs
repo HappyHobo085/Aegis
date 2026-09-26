@@ -48,7 +48,7 @@ fn ensure_loaded<R: Runtime>(app: &AppHandle<R>, inner: &mut DlInner) {
 /// Serves from the in-memory cache when managed; falls back to disk otherwise.
 fn snapshot<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
     if let Some(store) = app.try_state::<DownloadsStore>() {
-        let mut inner = store.0.lock().unwrap();
+        let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());
         ensure_loaded(app, &mut inner);
         inner.items.clone()
     } else {
@@ -65,7 +65,7 @@ fn mutate<R: Runtime>(
 ) -> bool {
     if let Some(store) = app.try_state::<DownloadsStore>() {
         let changed = {
-            let mut inner = store.0.lock().unwrap();
+            let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());
             ensure_loaded(app, &mut inner);
             let changed = f(&mut inner.items);
             if changed {
@@ -95,7 +95,7 @@ pub fn flush<R: Runtime>(app: &AppHandle<R>) {
         return;
     };
     let pending = {
-        let mut inner = store.0.lock().unwrap();
+        let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());
         if !inner.loaded || !inner.dirty {
             return;
         }
@@ -103,7 +103,7 @@ pub fn flush<R: Runtime>(app: &AppHandle<R>) {
         inner.items.clone()
     };
     if jsonstore::save(app, "downloads", &pending).is_err() {
-        store.0.lock().unwrap().dirty = true;
+        store.0.lock().unwrap_or_else(|e| e.into_inner()).dirty = true;
     }
 }
 
@@ -111,7 +111,7 @@ pub fn flush<R: Runtime>(app: &AppHandle<R>) {
 /// downloads file.
 pub fn invalidate<R: Runtime>(app: &AppHandle<R>) {
     if let Some(store) = app.try_state::<DownloadsStore>() {
-        let mut inner = store.0.lock().unwrap();
+        let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());
         inner.items.clear();
         inner.loaded = false;
         inner.dirty = false;

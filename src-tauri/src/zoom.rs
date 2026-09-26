@@ -33,7 +33,12 @@ pub fn clamp(f: f64) -> f64 {
 /// The stored factor for tab `id`, or 1.0 if unset.
 pub fn factor_of(app: &AppHandle, id: u32) -> f64 {
     app.try_state::<ZoomStore>()
-        .map(|s| *s.0.lock().unwrap().get(&id).unwrap_or(&1.0))
+        .map(|s| {
+            *s.0.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&id)
+                .unwrap_or(&1.0)
+        })
         .unwrap_or(1.0)
 }
 
@@ -41,7 +46,7 @@ pub fn factor_of(app: &AppHandle, id: u32) -> f64 {
 fn put(app: &AppHandle, id: u32, factor: f64) -> Value {
     let f = clamp(factor);
     if let Some(s) = app.try_state::<ZoomStore>() {
-        s.0.lock().unwrap().insert(id, f);
+        s.0.lock().unwrap_or_else(|e| e.into_inner()).insert(id, f);
     }
     apply_native(app, id, f);
     let state = json!({ "viewId": id, "factor": f });
@@ -88,7 +93,7 @@ fn apply_native(app: &AppHandle, id: u32, factor: f64) {
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     let active = || {
         app.try_state::<crate::tabs::Tabs>()
-            .map(|s| s.reg.lock().unwrap().active_id())
+            .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
             .unwrap_or(1)
     };
     let id = payload

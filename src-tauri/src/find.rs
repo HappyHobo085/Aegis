@@ -25,7 +25,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
         .map(|n| n as u32)
         .unwrap_or_else(|| {
             app.try_state::<crate::tabs::Tabs>()
-                .map(|s| s.reg.lock().unwrap().active_id())
+                .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
                 .unwrap_or(1)
         });
 
