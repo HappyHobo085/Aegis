@@ -1,5 +1,5 @@
 // src/components/HistoryPanel.test.tsx
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { HistoryEntry } from '../../shared/types';
@@ -15,10 +15,17 @@ import { formatRelativeTime } from '../lib/format';
 const HOUR = 3_600_000;
 const DAY = 86_400_000;
 
-// Relative to "now" on purpose: the panel groups rows into day buckets, so a
-// hard-coded epoch would land every fixture in the "Earlier" bucket and make the
-// grouping assertions meaningless (and time-dependent).
-const now = Date.now();
+// A FIXED instant, not `Date.now()`.
+//
+// Relative-to-now was the original intent — a hard-coded epoch lands every fixture in one
+// bucket and makes the grouping assertions meaningless — but it was still time-of-day flaky:
+// `now - 2 * HOUR` expects the "Today" bucket, so any run between local midnight and 02:00 put
+// that row in "Yesterday" and the test failed. It did exactly that on a 01:20 run.
+//
+// 2026-01-15 is a local Thursday noon: minus 2 h is still Thursday (Today), and minus 3 days
+// is the preceding Monday, comfortably inside "Earlier this week" with no boundary nearby.
+const FIXED_NOW = new Date(2026, 0, 15, 12, 0, 0).getTime();
+const now = FIXED_NOW;
 const entries: HistoryEntry[] = [
   { id: 2, url: 'https://b.example/', title: 'Beta', visitedAt: now - 2 * HOUR },
   { id: 1, url: 'https://a.example/', title: '', visitedAt: now - 3 * DAY },
@@ -65,9 +72,16 @@ describe('HistoryPanel', () => {
   });
 
   it('groups entries under day-bucket headers, newest group first', () => {
-    render(<HistoryPanel {...props()} />);
-    const headers = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
-    expect(headers).toEqual(['Today', 'Earlier this week']);
+    // The panel buckets by the LOCAL calendar day, so the system clock has to agree with the
+    // fixtures above. Without this the test only passes when it runs outside 00:00–02:00.
+    vi.setSystemTime(FIXED_NOW);
+    try {
+      render(<HistoryPanel {...props()} />);
+      const headers = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
+      expect(headers).toEqual(['Today', 'Earlier this week']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('announces the result count while filtering', () => {
