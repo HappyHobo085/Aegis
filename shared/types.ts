@@ -126,6 +126,11 @@ export const IPC = {
   // events (main -> chrome): engine state + a targeted post-merge change notice
   evtSyncState: 'sync.state',
   evtSyncChanged: 'sync.changed',
+  // event (main -> chrome): a sync peer tried to write a vault record that did not
+  // authenticate under this device's vault key, so it was QUARANTINED and never written.
+  // A rejected forgery, not a sync failure — reported separately so it can never fail the
+  // other namespaces or surface as a scary sync error. See `src-tauri/AGENTS.md`.
+  evtSyncVaultQuarantined: 'sync.vaultQuarantined',
   // form detection (main <- chrome)
   formDetectLoginForm: 'form.detectLoginForm',
   evtFormDetectResult: 'form.detectionResult',
@@ -160,9 +165,6 @@ export const IPC = {
   // form detection events (Phase B)
   evtFormState: 'form.state',
   evtFormWillSubmit: 'form.willSubmit',
-  // autofill events (content webview ↔ chrome)
-  evtVaultAutofillData: 'vault.autofillData',
-  evtVaultAutofillResult: 'vault.autofillResult',
   // fingerprint per-site allowlist (chrome -> main)
   fingerprintGetState: 'fingerprint.getState',
   fingerprintToggleAllowlist: 'fingerprint.toggleAllowlist',
@@ -179,6 +181,7 @@ export const IPC = {
   splitExit: 'split.exit',
   splitResize: 'split.resize',
   splitFocus: 'split.focus',
+  splitGetState: 'split.getState',
   // event (main -> chrome): current split layout (null = no split)
   evtSplitState: 'split.state',
   // workspaces (chrome -> main)
@@ -364,8 +367,15 @@ export interface VaultState {
    * credentials. 0 in the normal case.
    */
   undecryptable: number;
-  /** Whether vault records are synced via the E2E sync engine. */
+  /** Whether vault records are synced via the E2E sync engine. True only when the
+   * `syncVault` opt-in is on, sync itself is enabled, the vault is unlocked, AND this
+   * device has adopted the account's shared salt. */
   syncEnabled: boolean;
+  /** Present only on the `vault.unlock` response, and only when this device could NOT
+   * adopt the account's shared salt (e.g. the vault holds records it cannot decrypt, which
+   * a re-seal would drop). The unlock itself still succeeded — this is a warning, not a
+   * failure: the vault stays local-only and the user keeps full access to their records. */
+  adoptionNote?: string;
 }
 export interface VaultRecord {
   uuid: string;
@@ -497,7 +507,7 @@ export interface Settings {
   homeUrl: string;
   primaryColor: string;
   defaultSearchTemplate: string; // e.g. https://duckduckgo.com/?q=%s
-  searchEngines: SearchEngine[]; // seeded; not editable until Phase 4
+  searchEngines: SearchEngine[]; // editable in Settings → Search; validated by settings.rs
   hideChromeByDefault: boolean;
   downloadDir: string; // '' → main resolves to app.getPath('downloads')
   httpsOnly: boolean;
@@ -522,6 +532,27 @@ export interface Settings {
    * local). Self-hosted: paste your reference-server URL. The server only ever sees
    * opaque ciphertext. */
   syncServerUrl?: string;
+  /** Opt-in waiver that lets `syncServerUrl` be a **plaintext `http://`** server on a
+   * non-loopback host. Default **false**, and it does not disable encryption of the synced
+   * data — records are still sealed end-to-end. What it gives up is transport security for
+   * the sync connection: a network attacker sees which server you talk to and when, and
+   * can drop/reorder records or replay a captured device token. It exists because the
+   * self-hosted `sync-server` serves plain HTTP and some operators front it with nothing.
+   * **Never synced** (see `LOCAL_ONLY_KEYS` in `src-tauri/src/settings.rs`): `syncServerUrl`
+   * IS synced, so a waiver that travelled with it would let a poisoned pair of records
+   * walk this device onto a plaintext server. */
+  syncAllowInsecure?: boolean;
+  /** Opt-in: include the password vault in E2E sync. Default **off**, and deliberately
+   * separate from `syncServerUrl` — configuring a server must never silently start
+   * uploading credentials. Records cross the wire as ciphertext sealed under the sync
+   * root AND, again, under the vault key, so a peer holding the recovery phrase but not
+   * the master password can neither read the vault nor forge a record that authenticates
+   * (rejected ones are quarantined and reported via `sync.vaultQuarantined`).
+   * Turning this on is also not sufficient on its own: a vault created with its own
+   * per-device salt cannot sync until it ADOPTS the account's shared salt, which happens
+   * on the next unlock and only if the vault has no undecryptable records. Until then
+   * `VaultState.syncEnabled` is false — the honest answer. */
+  syncVault?: boolean;
   /** Milliseconds a background-created tab (opened via target=_blank / window.open)
    * may sit idle before it is discarded. Default 30000 (30 s). 0 disables the
    * background-tab timeout (but not the standard idle timeout). */
@@ -542,6 +573,9 @@ export interface SyncState {
   accountId: string;
   vaultBacking: 'keychain' | 'passphrase' | 'none';
   hasStoredRoot: boolean;
+  /** The core's own view of the `syncAllowInsecure` waiver (Settings), so the Sync tab
+   * reports the decision actually in force rather than echoing its own checkbox back. */
+  allowInsecure?: boolean;
 }
 
 export interface SyncDevice {
@@ -555,6 +589,16 @@ export interface SyncDevice {
 export interface SyncChanged {
   namespace: string;
   changedUuids: string[];
+}
+
+/** A sync peer submitted vault record(s) that failed to authenticate under this device's
+ * vault key. They were quarantined: never written, never merged, and the local record with
+ * the same uuid is untouched. Emitted as an event rather than a sync error, because a
+ * rejected forgery is a security outcome worth surfacing — not a reason to fail the pass.
+ * Expected to be absent; if it appears repeatedly, treat it as a possible attack. */
+export interface SyncVaultQuarantined {
+  count: number;
+  uuids: string[];
 }
 
 /** Live match state pushed by the Rust/Kotlin back-end during a find-in-page session.
@@ -730,6 +774,7 @@ export interface AegisApi {
     removeDevice(deviceId: string): Promise<SyncDevice[]>;
     onState(cb: (s: SyncState) => void): () => void;
     onChanged(cb: (c: SyncChanged) => void): () => void;
+    onVaultQuarantined(cb: (q: SyncVaultQuarantined) => void): () => void;
   };
   find: {
     /** Begin (or refine) a search for `query` on the view. */
@@ -796,6 +841,14 @@ export interface AegisApi {
     onState(cb: (workspaces: WorkspaceState) => void): () => void;
   };
   split: {
+    /**
+     * Fetch the current split layout, or null when split mode is inactive.
+     *
+     * A fetch seam, not a convenience: `split.state` is only emitted from the
+     * mutation handlers, so a renderer that remounts would otherwise wait
+     * forever for an event that never comes.
+     */
+    getState(): Promise<SplitLayout | null>;
     /** Enter split-view mode with the given tab ids (2-4 panes). */
     enter(tabIds: number[]): Promise<void>;
     /** Exit split-view mode, returning to single-pane. */

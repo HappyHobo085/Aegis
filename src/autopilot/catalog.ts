@@ -12,11 +12,31 @@ export interface FeatureCheck {
   title: string;
   channels: string[];
   exercise(api: AegisApi): Promise<void>;
-  /** Real round-trip: does an action, asserts the effect, restores state. Returns a
-   *  short success detail. Throws on assertion failure. Live run only — NOT called
-   *  from the vitest tour or the mock-based run.test.ts. */
-  verify?(api: AegisApi): Promise<string>;
 }
+
+// There is deliberately NO `verify(api)` round-trip field any more.
+//
+// It used to exist here ("does an action, asserts the effect, restores state") and 19
+// entries implemented it. It was called by NOTHING: `tour.test.tsx` only ever calls
+// `exercise`, and the "live run" its doc comment referred to (`run.ts`, gated on
+// `RunDeps.live`) does not exist in this repo — the root `AGENTS.md` says so explicitly.
+// So ~470 lines of real round-trip logic were unreachable, while the docs and the
+// "add a `verify(api)` round-trip" instruction in the root `AGENTS.md` described them as
+// coverage. A guard that reads as coverage but never runs is worse than no guard: it
+// makes the drift report look complete.
+//
+// They could not simply have been moved into the vitest tour either, because they are
+// structurally live-only:
+//   - `find` waited on a `find.state` event that the mock's `onState` never invokes, so
+//     it would burn its 8s deadline and then throw by design.
+//   - `sync` and `vault` asserted *state transitions* (enableFromPhrase → listDevices →
+//     removeDevice → disable; create → unlock → add → list → search → update → remove).
+//     `aegisMock` is non-stateful — it returns a fixed value regardless of arguments — so
+//     those assertions could only ever pass vacuously.
+// Deleting them is the honest outcome, and the coverage they claimed is now described
+// where it actually lives: the interaction tour (`src/autopilot/interactions/`, which
+// drives the real UI) and the Rust unit tests. Gaps that neither covers are named
+// explicitly in UNTESTED_CHANNELS below.
 
 const V = PRIMARY_VIEW_ID;
 function assertArray(x: unknown): void {
@@ -44,21 +64,6 @@ export const CATALOG: FeatureCheck[] = [
     channels: [IPC.navNavigate],
     exercise: async (a) => {
       await a.nav.navigate(V, 'https://example.com/');
-    },
-    verify: async (a) => {
-      await a.nav.navigate(V, 'https://example.com/');
-      // Poll up to ~8s for the nav state URL to reflect the navigation.
-      const deadline = Date.now() + AdaptiveTimeout.ms(8000);
-      let url = '';
-      while (Date.now() < deadline) {
-        const state = await a.nav.getState(V);
-        url = state.url;
-        if (url.includes('example.com')) break;
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      if (!url.includes('example.com'))
-        throw new Error(`navigate: url '${url}' never contained 'example.com'`);
-      return `nav navigate→poll ok (url=${url})`;
     },
   },
   {
@@ -107,66 +112,6 @@ export const CATALOG: FeatureCheck[] = [
       await a.tabs.activate(V);
       await a.tabs.reopenClosed();
     },
-    verify: async (a) => {
-      const before = await a.tabs.list();
-      const beforeIds = new Set(before.tabs.map((t) => t.id));
-      const created = await a.tabs.create('https://ap-tab.test/', true);
-      const newTab = created.tabs.find((t) => !beforeIds.has(t.id));
-      if (!newTab) throw new Error('create: no new tab id in returned state');
-      const afterClose = await a.tabs.close(newTab.id);
-      if (afterClose.tabs.some((t) => t.id === newTab.id))
-        throw new Error('close: new tab still in list');
-
-      // PRIVATE TAB: browsing in it must leave NO history row.
-      //
-      // The probe must be a URL the live fixture server actually serves so that a
-      // NON-private navigation WOULD record a history row.  Using a .test/ or
-      // .invalid/ domain (NXDOMAIN) means the navigation fails before any page
-      // loads, so the Rust history store never writes regardless of the private
-      // flag — a passing assertion that proves nothing about private mode.
-      //
-      // VITE_AEGIS_AUTOPILOT_FIXTURE is the live fixture server base (e.g.
-      // http://127.0.0.1:8137/), always set by run-autopilot.sh.  The query
-      // marker makes the URL unique so history.search returns at most one hit.
-      const ts = Date.now();
-      const fixtureBase =
-        (import.meta.env.VITE_AEGIS_AUTOPILOT_FIXTURE as string) || 'http://127.0.0.1:8137/';
-      const normalProbe = `${fixtureBase}?aegis-normal-probe=${ts}`;
-      const privateProbe = `${fixtureBase}?aegis-private-probe=${ts}`;
-
-      // Sanity: a NORMAL navigation to the fixture MUST record a history row,
-      // proving this URL path actually goes through the history store.
-      const normalTab = await a.tabs.create(normalProbe, false, false);
-      const normalTabId = normalTab.tabs.find((t) => !beforeIds.has(t.id) && !t.private)?.id;
-      if (normalTabId === undefined) throw new Error('private-sanity: no normal tab created');
-      await a.nav.navigate(normalTabId, normalProbe);
-      // History recording is async (page load → record on title/load signal). A fixed wait
-      // raced it under load (left 0 rows). Poll up to ~6s for the row to appear instead.
-      let normalHits = 0;
-      for (let i = 0; i < 20 && normalHits === 0; i++) {
-        await new Promise((r) => setTimeout(r, 300));
-        normalHits = (await a.history.search(normalProbe)).length;
-      }
-      await a.tabs.close(normalTabId);
-      if (normalHits === 0)
-        throw new Error(
-          `private-sanity: normal nav to ${normalProbe} left 0 history rows — probe path is not being recorded; fix the probe URL before trusting the private-tab assertion`,
-        );
-
-      // Now the actual private-tab check.
-      const privCreated = await a.tabs.create(privateProbe, false, true);
-      const pid = privCreated.tabs.find((t) => t.private)?.id;
-      if (pid === undefined) throw new Error('private: created tab not marked private in state');
-      // Navigate the private tab and give the (skipped) history write a chance to (not) happen.
-      await a.nav.navigate(pid, privateProbe);
-      await new Promise((r) => setTimeout(r, 1500));
-      const hits = (await a.history.search(privateProbe)).length;
-      await a.tabs.close(pid);
-      if (hits !== 0)
-        throw new Error(`private: navigation left ${hits} history row(s) for ${privateProbe}`);
-
-      return `tabs create(bg)→assert→close ok (newId=${newTab.id}); private-leaves-no-history ok (privId=${pid}, sanity=${normalHits} normal rows recorded)`;
-    },
   },
   // view — overlay/visibility calls are pure layout side-effects on the native webview stack;
   // there is no readable state to assert after the call without a screenshot.
@@ -209,37 +154,11 @@ export const CATALOG: FeatureCheck[] = [
       assertArray(await a.favorites.update(1, { name: 'Updated' }));
       assertArray(await a.favorites.reorder([]));
     },
-    verify: async (a) => {
-      const u1 = 'https://ap-fav1.test/',
-        u2 = 'https://ap-fav2.test/';
-      await a.favorites.add({ name: 'AP-fav1', url: u1 });
-      const added = await a.favorites.add({ name: 'AP-fav2', url: u2 });
-      const f1 = added.find((f) => f.url === u1),
-        f2 = added.find((f) => f.url === u2);
-      if (!f1 || !f2) throw new Error('add: both probe favorites not present');
-      // update (rename) f1
-      const renamed = await a.favorites.update(f1.id, { name: 'AP-fav1-renamed' });
-      if (renamed.find((f) => f.id === f1.id)?.name !== 'AP-fav1-renamed')
-        throw new Error('update: name not changed');
-      // reorder: put f2 before f1 (reorder assigns position 0,1,2… in requested order)
-      const others = renamed.filter((f) => f.id !== f1.id && f.id !== f2.id).map((f) => f.id);
-      const reordered = await a.favorites.reorder([f2.id, f1.id, ...others]);
-      const pos = (id: number) => reordered.find((f) => f.id === id)?.position;
-      const p2 = pos(f2.id),
-        p1 = pos(f1.id);
-      if (p2 === undefined || p1 === undefined || p2 >= p1)
-        throw new Error(`reorder: expected f2 before f1 (positions ${p2}, ${p1})`);
-      // remove both probes
-      await a.favorites.remove(f1.id);
-      const afterRemove = await a.favorites.remove(f2.id);
-      if (afterRemove.some((f) => f.url === u1 || f.url === u2))
-        throw new Error('remove: a probe favorite survived');
-      return 'favorite add×2→update(rename)→reorder→remove×2 ok';
-    },
   },
   // history — entries are written by the core on real navigation (no direct add channel),
-  // so the live verify navigates for real, then deletes (remove + clear; safe on the
-  // disposable profile). exercise stays a read-only probe for the mock-based tour.
+  // so `exercise` stays a read-only probe. A navigate → assert-row → delete round-trip
+  // needs a real webview and is NOT done here; see UNTESTED_CHANNELS for the channels
+  // that leaves uncovered.
   {
     id: 'history.crud',
     domain: 'history',
@@ -248,30 +167,6 @@ export const CATALOG: FeatureCheck[] = [
     exercise: async (a) => {
       assertArray(await a.history.list({}));
       assertArray(await a.history.search('a'));
-    },
-    verify: async (a) => {
-      // A real navigation records a history entry (on the title-changed signal). Poll until
-      // it appears (proving recording fired), then delete that entry and assert it's gone.
-      await a.nav.navigate(V, 'https://example.com/');
-      let entry: { id: number; url: string } | undefined;
-      const deadline = Date.now() + AdaptiveTimeout.ms(8000);
-      while (Date.now() < deadline) {
-        entry = (await a.history.list({})).find((h) => h.url.includes('example.com'));
-        if (entry) break;
-        await new Promise((r) => setTimeout(r, 400));
-      }
-      if (!entry) throw new Error('history: no entry appeared after navigating example.com');
-      const id = entry.id;
-      await a.history.remove(id); // returns void → re-list to assert
-      if ((await a.history.list({})).some((h) => h.id === id))
-        throw new Error('remove: entry still present');
-      // clear all — the title-changed that created our entry has already fired (it's why the
-      // entry appeared), so no late write races this; disposable profile makes it safe.
-      await a.history.clear();
-      const afterClear = await a.history.list({});
-      if (afterClear.length !== 0)
-        throw new Error(`clear: expected empty history, got ${afterClear.length}`);
-      return 'history navigate→list→remove→clear ok';
     },
   },
   // saved
@@ -295,36 +190,6 @@ export const CATALOG: FeatureCheck[] = [
       await a.saved.has('https://s.test/');
       assertArray(await a.saved.tagUnion());
     },
-    verify: async (a) => {
-      const probeUrl = 'https://ap-saved.test/';
-      // add with two (uniquely-named, collision-proof) tags
-      await a.saved.add({ url: probeUrl, title: 'AP', tags: ['ap-tagA', 'ap-tagB'] });
-      if (!(await a.saved.has(probeUrl))) throw new Error('has: expected true after add');
-      let item = (await a.saved.list()).find((i) => i.url === probeUrl);
-      if (!item) throw new Error('list: probe url not found');
-      if (!item.tags.includes('ap-tagA') || !item.tags.includes('ap-tagB'))
-        throw new Error('add: tags not stored');
-      const id = item.id;
-      // update tags: drop ap-tagA, add ap-tagC (update replaces the tags array)
-      item = (await a.saved.update(id, { tags: ['ap-tagB', 'ap-tagC'] })).find((i) => i.id === id);
-      if (!item || item.tags.includes('ap-tagA') || !item.tags.includes('ap-tagC'))
-        throw new Error('update: tags not replaced');
-      // rename tag ap-tagB → ap-tagB2 (global across saved items)
-      item = (await a.saved.renameTag('ap-tagB', 'ap-tagB2')).find((i) => i.id === id);
-      if (!item || item.tags.includes('ap-tagB') || !item.tags.includes('ap-tagB2'))
-        throw new Error('renameTag: tag not renamed');
-      // tagUnion reflects the renamed + added tags
-      const union = await a.saved.tagUnion();
-      if (!union.includes('ap-tagB2') || !union.includes('ap-tagC'))
-        throw new Error('tagUnion: expected tags missing');
-      // delete tag ap-tagC (global)
-      item = (await a.saved.deleteTag('ap-tagC')).find((i) => i.id === id);
-      if (!item || item.tags.includes('ap-tagC')) throw new Error('deleteTag: tag not removed');
-      // remove the item
-      await a.saved.remove(id);
-      if (await a.saved.has(probeUrl)) throw new Error('has: expected false after remove');
-      return 'saved add(tags)→update→renameTag→tagUnion→deleteTag→remove ok';
-    },
   },
   // settings
   {
@@ -336,17 +201,6 @@ export const CATALOG: FeatureCheck[] = [
       const s = await a.settings.get();
       assertObject(s);
       assertObject(await a.settings.set({ primaryColor: s.primaryColor }));
-    },
-    verify: async (a) => {
-      const original = await a.settings.get();
-      const probe = '#abcdef';
-      const after = await a.settings.set({ primaryColor: probe });
-      if (after.primaryColor !== probe)
-        throw new Error(`set: expected '${probe}', got '${after.primaryColor}'`);
-      const restored = await a.settings.set({ primaryColor: original.primaryColor });
-      if (restored.primaryColor !== original.primaryColor)
-        throw new Error('restore: primaryColor mismatch');
-      return 'settings get→set→assert→restore ok';
     },
   },
   // adblock
@@ -368,29 +222,9 @@ export const CATALOG: FeatureCheck[] = [
       assertObject(await a.adblock.removeAllowlist('ap.test'));
       assertObject(await a.adblock.clearAllowlist());
     },
-    verify: async (a) => {
-      const h1 = 'ap-allow1.test',
-        h2 = 'ap-allow2.test';
-      const off = await a.adblock.setEnabled(false);
-      if (off.enabled !== false) throw new Error('setEnabled(false): still enabled');
-      const on = await a.adblock.setEnabled(true);
-      if (on.enabled !== true) throw new Error('setEnabled(true): not enabled');
-      await a.adblock.toggleAllowlist(h1);
-      const toggled = await a.adblock.toggleAllowlist(h2);
-      if (!toggled.allowlistedHosts.includes(h1) || !toggled.allowlistedHosts.includes(h2))
-        throw new Error('toggleAllowlist: both hosts not present');
-      const removed = await a.adblock.removeAllowlist(h1);
-      if (removed.allowlistedHosts.includes(h1))
-        throw new Error('removeAllowlist: host still present');
-      if (!removed.allowlistedHosts.includes(h2))
-        throw new Error('removeAllowlist: removed the wrong host');
-      const cleared = await a.adblock.clearAllowlist();
-      if (cleared.allowlistedHosts.length !== 0)
-        throw new Error(`clearAllowlist: expected empty, got ${cleared.allowlistedHosts.length}`);
-      return 'adblock setEnabled off→on→allowlist add×2→remove→clear ok';
-    },
   },
-  // lists — triggering a real network fetch in a verify round-trip is too slow/fragile.
+  // lists — `exercise` does not trigger a real network fetch (too slow/fragile for a
+  // mocked tour); `subs.rs`'s own Rust unit tests cover the fetch.
   {
     id: 'lists.updateNow',
     domain: 'lists',
@@ -411,21 +245,11 @@ export const CATALOG: FeatureCheck[] = [
     exercise: async (a) => {
       assertArray(await a.subs.list());
     },
-    // READ-ONLY verify: assert the built-in defaults are seeded + flagged. The
+    // READ-ONLY probe: assert the built-in defaults are seeded + flagged. The
     // setEnabled round-trip lives in the `settings.filterLists.toggleSub` interaction
-    // (a separate tour phase) + the Rust unit tests — deliberately NOT here, because a
-    // live setEnabled triggers a content-filter reinstall (install_adblock re-converts
-    // every list) and, with subs now seeded, that reinstall collided with the find
-    // verify a few steps later (the live autopilot caught it).
-    verify: async (a) => {
-      const list = await a.subs.list();
-      for (const id of ['easylist', 'easyprivacy', 'peter-lowe']) {
-        const def = list.find((s) => s.listId === id);
-        if (!def) throw new Error(`seeded default subscription missing: ${id}`);
-        if (!def.builtin) throw new Error(`default subscription ${id} not flagged builtin`);
-      }
-      return `subs defaults seeded + builtin (easylist/easyprivacy/peter-lowe); ${list.length} total`;
-    },
+    // (a separate tour phase) + the Rust unit tests — deliberately NOT here, because
+    // setEnabled triggers a content-filter reinstall (install_adblock re-converts every
+    // list), which is far too slow and destructive for a mocked tour.
   },
   // customFilters
   {
@@ -437,16 +261,6 @@ export const CATALOG: FeatureCheck[] = [
       const t = await a.customFilters.get();
       if (typeof t !== 'string') throw new Error('string');
       await a.customFilters.set(t);
-    },
-    verify: async (a) => {
-      const c0 = await a.customFilters.get();
-      const probe = '! aegis-autopilot\n||ap-cf.test^';
-      const setResult = await a.customFilters.set(probe);
-      if (setResult !== probe) throw new Error(`set: returned '${setResult}', expected probe`);
-      const readBack = await a.customFilters.get();
-      if (readBack !== probe) throw new Error(`get after set: '${readBack}' !== probe`);
-      await a.customFilters.set(c0); // restore
-      return 'customFilters get→set→assert→restore ok';
     },
   },
   // downloads — no deterministic write path via IPC; entries are written by the core on
@@ -491,12 +305,6 @@ export const CATALOG: FeatureCheck[] = [
     channels: [IPC.dataExport, IPC.dataImport],
     exercise: async (a) => {
       assertObject(await a.data.export());
-    },
-    verify: async (a) => {
-      const r = await a.data.export();
-      if (!r.ok && !r.path)
-        throw new Error(`export: not ok and no path (got ${JSON.stringify(r)})`);
-      return `data export ok${r.path ? ` (${r.path})` : ''}`;
     },
   },
   // picker — start() is OS/interaction-bound: it attaches a native click-listener to the
@@ -565,38 +373,9 @@ export const CATALOG: FeatureCheck[] = [
       await a.sync.getRecoveryPhrase({ confirm: false });
       const devices = await a.sync.listDevices();
       assertArray(devices);
-      // Note: We can't actually remove a device without one existing, so we skip that call
-      // in exercise to avoid errors, but it's covered in verify
-    },
-    verify: async (a) => {
-      // Enable sync with a dummy phrase to test removal
-      await a.sync.enableFromPhrase({
-        phrase: 'test test test test test test test test test test test junk',
-      });
-      const devicesBefore = await a.sync.listDevices();
-      // Remove the first device if any exist
-      if (devicesBefore.length > 0) {
-        await a.sync.removeDevice(devicesBefore[0].deviceId);
-      }
-      const devicesAfter = await a.sync.listDevices();
-      // Should have one less device (or same if none existed)
-      expect(devicesAfter.length).toBeLessThanOrEqual(devicesBefore.length);
-
-      // Test that disable works
-      await a.sync.disable({});
-
-      // Test that getRecoveryPhrase fails when disabled
-      try {
-        await a.sync.getRecoveryPhrase({ confirm: false });
-        throw new Error('Expected getRecoveryPhrase to fail when disabled');
-      } catch (e) {
-        // Expected
-      }
-
-      // Re-enable for other tests
-      await a.sync.enableNew({});
-
-      return 'sync get→disable→testConnection→getRecoveryPhrase→listDevices→removeDevice ok';
+      // Note: `removeDevice` is deliberately not called — the mock has no devices to
+      // remove. It is in UNTESTED_CHANNELS, and `sync-server`'s Rust unit tests cover
+      // the revocation/ownership rules that make it meaningful.
     },
   },
   // zoom (page zoom — session-only per tab)
@@ -609,22 +388,6 @@ export const CATALOG: FeatureCheck[] = [
       assertObject(await a.zoom.get(V));
       assertObject(await a.zoom.set(V, 1.25));
       assertObject(await a.zoom.reset(V));
-    },
-    verify: async (a) => {
-      const before = (await a.zoom.get(V)).factor;
-      const set = await a.zoom.set(V, 1.5);
-      if (Math.abs(set.factor - 1.5) > 1e-6)
-        throw new Error(`zoom.set: expected 1.5, got ${set.factor}`);
-      const got = await a.zoom.get(V);
-      if (Math.abs(got.factor - 1.5) > 1e-6)
-        throw new Error(`zoom.get after set: expected 1.5, got ${got.factor}`);
-      const clamped = await a.zoom.set(V, 99); // clamp check
-      if (clamped.factor !== 3.0)
-        throw new Error(`zoom.set clamp: expected 3.0, got ${clamped.factor}`);
-      const reset = await a.zoom.reset(V);
-      if (reset.factor !== 1.0) throw new Error(`zoom.reset: expected 1.0, got ${reset.factor}`);
-      await a.zoom.set(V, before); // restore
-      return 'zoom set→get→clamp→reset→restore ok';
     },
   },
   // find-in-page
@@ -639,32 +402,18 @@ export const CATALOG: FeatureCheck[] = [
       await a.find.prev(V);
       await a.find.close(V);
     },
-    // find mutates webview search state; the live round-trip navigates to a page with
-    // known text, subscribes to find.state, starts a search, waits for the first match
-    // event, then closes.  Runs ONLY in the live run (RunDeps.live) — skipped by vitest
-    // mock (aegis.find.onState is a vi.fn that never invokes the callback).
-    verify: async (a) => {
-      await a.nav.navigate(V, 'https://example.com/');
-      // example.com contains the word "Example". Subscribe BEFORE searching so we don't
-      // race the event.
-      let got: { matchCount: number } | null = null;
-      const off = a.find.onState((s) => {
-        if (s.viewId === V) got = s;
-      });
-      const deadline = Date.now() + AdaptiveTimeout.ms(8000);
-      await a.find.start(V, 'Example');
-      while (Date.now() < deadline && got === null) await new Promise((r) => setTimeout(r, 300));
-      off();
-      await a.find.close(V);
-      if (got === null) throw new Error('find: no find.state event after start');
-      return `find start→state(matchCount=${(got as { matchCount: number }).matchCount})→close ok`;
-    },
+    // find mutates webview search state, so `exercise` only drives start→next→prev→close
+    // as a smoke test. The real round-trip (navigate to a page with known text, subscribe
+    // to find.state, start, wait for the first match event, then close) is NOT done here:
+    // it needs a real webview plus event delivery, and the mock's `onState` is a `vi.fn`
+    // that never invokes the callback, so it would just burn its deadline and throw.
   },
-  // vault (Phase A+B — password manager, chrome-only with autofill).  The live verify
-  // creates/unlocks a throwaway vault on the disposable profile, round-trips a
-  // credential, then locks.  Safe to mutate (disposable profile starts empty).
-  // vaultCreate/Unlock/Lock/Add/Update/Remove are listed in UNTESTED_CHANNELS
-  // (exercise calls only the read-only getState; the mutating calls are live-verify-only).
+  // vault (Phase A+B — password manager, chrome-only with autofill). `exercise` calls only
+  // the read-only getState: creating and unlocking a vault is a destructive, password-
+  // bearing operation that has no meaning against a mock. The mutating channels are
+  // listed in UNTESTED_CHANNELS and are driven at the UI level by the interaction tour
+  // (interactions/vault.ts: create.submit, unlock.submit, row.delete, …); the seal/unlock/
+  // merge logic itself is covered by vault.rs's own unit tests.
   {
     id: 'vault.crud',
     domain: 'vault',
@@ -685,90 +434,19 @@ export const CATALOG: FeatureCheck[] = [
     exercise: async (a) => {
       assertObject(await a.vault.getState());
     },
-    verify: async (a) => {
-      const pw = 'ap-vault-pass-9271';
-      let st = await a.vault.getState();
-      // Create only if absent (the disposable profile starts empty); else unlock.
-      if (!st.exists) st = await a.vault.create(pw);
-      else if (!st.unlocked) st = await a.vault.unlock(pw);
-      if (!st.unlocked) throw new Error('vault: not unlocked after create/unlock');
-      const probeSite = 'https://ap-vault.test/';
-      const added = await a.vault.add({
-        site: probeSite,
-        username: 'ap-user',
-        password: 'ap-secret',
-        notes: 'n',
-      });
-      const rec = added.find((r) => r.site === probeSite);
-      if (!rec) throw new Error('add: probe credential not in list');
-      if (rec.password !== 'ap-secret') throw new Error('add: password not round-tripped');
-      // search finds it by site substring
-      const found = await a.vault.search('ap-vault');
-      if (!found.some((r) => r.uuid === rec.uuid)) throw new Error('search: probe not found');
-      // update the username, assert it changed
-      const updated = await a.vault.update(rec.uuid, { username: 'ap-user-2' });
-      if (updated.find((r) => r.uuid === rec.uuid)?.username !== 'ap-user-2')
-        throw new Error('update: username not changed');
-      // remove it
-      const afterRemove = await a.vault.remove(rec.uuid);
-      if (afterRemove.some((r) => r.uuid === rec.uuid)) throw new Error('remove: probe survived');
-      // lock zeroizes — list must now error (locked) and getState.unlocked=false
-      await a.vault.lock();
-      const locked = await a.vault.getState();
-      if (locked.unlocked) throw new Error('lock: still unlocked');
-      let listErrored = false;
-      try {
-        await a.vault.list();
-      } catch {
-        listErrored = true;
-      }
-      if (!listErrored) throw new Error('lock: list did not error while locked');
-      // Wrong-password rejection: attempt to unlock with a deliberately wrong master password
-      // and assert the call rejects.  The vault must remain locked after this step (verified
-      // by the getState() call below).  Live-only (runs on the disposable profile).
-      let wrongPwRejected = false;
-      try {
-        await a.vault.unlock('WRONG-PASSWORD-x9z!');
-      } catch {
-        wrongPwRejected = true;
-      }
-      if (!wrongPwRejected) throw new Error('vault: wrong password was NOT rejected by unlock');
-      const stillLocked = await a.vault.getState();
-      if (stillLocked.unlocked)
-        throw new Error('vault: wrong-password attempt left vault unlocked');
-      return 'vault create→unlock→add→search→update→remove→lock(+locked-list-rejected+wrong-pw-rejected) ok';
-    },
   },
   // vault autofill suggestions (Phase B)
   {
     id: 'vault.autofillSuggestions',
     domain: 'vault',
     title: 'Vault autofill suggestions by domain',
+    // CHANNEL-LEVEL ONLY. The Rust handlers exist, but nothing in the chrome calls them yet:
+    // the `AutofillBadge` → `useVaultDomainSuggestions` → `useVaultAutofill` chain was deleted
+    // as dead, unmounted code, and the "Passwords" tab copy no longer promises autofill. This
+    // entry is the coverage for the IPC contract, not a claim that a UI affordance exists.
     channels: [IPC.vaultAutofillSuggestions],
     exercise: async (a) => {
       assertArray(await a.vault.autofillSuggestions('example.com'));
-    },
-    verify: async (a) => {
-      // Create+unlock vault, add a credential, query suggestions, clean up.
-      const pw = 'ap-autofill-8312';
-      let st = await a.vault.getState();
-      if (!st.exists) st = await a.vault.create(pw);
-      else if (!st.unlocked) st = await a.vault.unlock(pw);
-      if (!st.unlocked) throw new Error('vault.autofillSuggestions: not unlocked');
-      const added = await a.vault.add({
-        site: 'https://autofill-probe.test/',
-        username: 'af-user',
-        password: 'af-pass',
-      });
-      const probe = added.find((r) => r.site === 'https://autofill-probe.test/');
-      if (!probe) throw new Error('add: probe credential not in list');
-      const suggestions = await a.vault.autofillSuggestions('autofill-probe.test');
-      if (suggestions.length !== 1)
-        throw new Error(`expected 1 suggestion, got ${suggestions.length}`);
-      if (suggestions[0].username !== 'af-user') throw new Error('suggestion username mismatch');
-      // Cleanup
-      await a.vault.remove(probe.uuid);
-      return `autofillSuggestions('autofill-probe.test') -> 1 match ok`;
     },
   },
   // form detection
@@ -776,22 +454,24 @@ export const CATALOG: FeatureCheck[] = [
     id: 'form.detectLoginForm',
     domain: 'form',
     title: 'Form detection for login forms',
+    // CHANNEL-LEVEL ONLY. `useLoginFormDetector` — the only caller, and the source of an
+    // unconditional 2 s `form.detectLoginForm` poll — was deleted along with the dead
+    // `AutofillBadge` subtree it existed to feed. No UI surface calls this today.
+    //
+    // The core REFUSES this channel rather than answering: a content webview has no Tauri
+    // capability and `withGlobalTauri` is off, so the page cannot emit a result back. The old
+    // implementation burned a 5 s main-thread timeout and then returned `hasLoginForm: false`,
+    // which is indistinguishable from a real negative. See `src-tauri/src/form.rs`. So this
+    // exercise asserts the refusal rather than a boolean — asserting `hasLoginForm === false`
+    // here is what let the broken version pass.
     channels: [IPC.formDetectLoginForm, IPC.evtFormDetectResult],
     exercise: async (a) => {
-      // Just test that the IPC calls don't throw
-      await a.form.detectLoginForm();
-      // We can't easily test the event without a real webview, but we can test the subscription returns a function
+      await expect(a.form.detectLoginForm()).rejects.toThrow(/not implemented/);
+      // The event side has no producer on any platform either, but subscribing is still the
+      // contract the chrome relies on, so check it yields a working unsubscribe.
       const unsubscribe = a.form.onLoginFormDetected(() => {});
       expect(typeof unsubscribe).toBe('function');
-      // Call the unsubscribe to clean up
       unsubscribe();
-    },
-    verify: async (a) => {
-      // For now, just verify the IPC call works - real verification would require a test page with a form
-      const result = await a.form.detectLoginForm();
-      expect(typeof result.hasLoginForm).toBe('boolean');
-      // Domain can be string or undefined
-      return `form detectLoginForm -> hasLoginForm=${result.hasLoginForm}, domain=${result.domain ?? 'undefined'}`;
     },
   },
   // fingerprint allowlist
@@ -810,51 +490,6 @@ export const CATALOG: FeatureCheck[] = [
       assertObject(await a.fingerprint.toggleAllowlist('ap-fp.test'));
       assertObject(await a.fingerprint.removeAllowlist('ap-fp.test'));
       assertObject(await a.fingerprint.clearAllowlist());
-    },
-    verify: async (a) => {
-      const probe = 'ap-fp-verify.test';
-
-      // 1. Baseline: probe host must not be present.
-      const before = await a.fingerprint.getState();
-      if (before.allowlistedHosts.includes(probe)) await a.fingerprint.removeAllowlist(probe); // clean up stale probe from a prior run
-
-      // 2. toggleAllowlist adds the host.
-      const toggled = await a.fingerprint.toggleAllowlist(probe);
-      if (!toggled.allowlistedHosts.includes(probe))
-        throw new Error(`toggleAllowlist: "${probe}" not present in returned state`);
-
-      // 3. getState reflects it.
-      const afterToggle = await a.fingerprint.getState();
-      if (!afterToggle.allowlistedHosts.includes(probe))
-        throw new Error(`getState after toggle: "${probe}" not in allowlistedHosts`);
-
-      // 4. removeAllowlist removes it.
-      const removed = await a.fingerprint.removeAllowlist(probe);
-      if (removed.allowlistedHosts.includes(probe))
-        throw new Error(`removeAllowlist: "${probe}" still in returned state`);
-
-      // 5. getState confirms it is gone.
-      const afterRemove = await a.fingerprint.getState();
-      if (afterRemove.allowlistedHosts.includes(probe))
-        throw new Error(`getState after remove: "${probe}" still in allowlistedHosts`);
-
-      // 6. Round-trip the antiFingerprint setting: set to 'standard', assert, restore.
-      const origSettings = await a.settings.get();
-      const origLevel = origSettings.antiFingerprint;
-      await a.settings.set({ antiFingerprint: 'standard' });
-      const afterSet = await a.settings.get();
-      if (afterSet.antiFingerprint !== 'standard')
-        throw new Error(
-          `settings.set antiFingerprint: expected 'standard', got '${afterSet.antiFingerprint}'`,
-        );
-      await a.settings.set({ antiFingerprint: origLevel });
-      const restored = await a.settings.get();
-      if (restored.antiFingerprint !== origLevel)
-        throw new Error(
-          `settings restore antiFingerprint: expected '${origLevel}', got '${restored.antiFingerprint}'`,
-        );
-
-      return `fingerprint toggle→getState→remove→getState ok; antiFingerprint standard→restored('${origLevel}') ok`;
     },
   },
   // proxy — IPC seam + native apply (Tasks 2-6); coverage added by Task 8.
@@ -891,54 +526,6 @@ export const CATALOG: FeatureCheck[] = [
         }),
       );
     },
-    verify: async (a) => {
-      // Capture original state so we can restore it after the round-trip.
-      const orig = await a.proxy.getState();
-
-      // 1. Set a probe config (port 9 = discard; never actually reachable — safe).
-      const probe = {
-        mode: 'proxy' as const,
-        scheme: 'http' as const,
-        host: '127.0.0.1',
-        port: 9,
-        bypassHosts: ['localhost'],
-      };
-      const after = await a.proxy.setConfig(probe);
-      if (after.host !== '127.0.0.1')
-        throw new Error(`proxy.setConfig did not persist host (got "${after.host}")`);
-      if (after.port !== 9)
-        throw new Error(`proxy.setConfig did not persist port (got ${after.port})`);
-      if (!after.bypassHosts.includes('localhost'))
-        throw new Error('proxy.setConfig did not persist bypassHosts');
-
-      // 2. getState must reflect the same config.
-      const got = await a.proxy.getState();
-      if (got.host !== '127.0.0.1')
-        throw new Error(`proxy.getState after setConfig: host mismatch (got "${got.host}")`);
-
-      // 3. testConnection against port 9 (discard) — unreachable, so ok:false is the
-      //    expected result.  We just assert the call returns an object with an ok field.
-      const testResult = await a.proxy.testConnection(probe);
-      if (typeof testResult.ok !== 'boolean')
-        throw new Error(
-          `proxy.testConnection: result.ok is not a boolean (got ${JSON.stringify(testResult)})`,
-        );
-
-      // 4. clear() restores an off/empty state.
-      const cleared = await a.proxy.clear();
-      if (cleared.mode !== 'off')
-        throw new Error(`proxy.clear: mode is "${cleared.mode}", expected "off"`);
-
-      // 5. Restore the original config (setConfig with original values so user's proxy
-      //    settings are not lost).
-      const restored = await a.proxy.setConfig(orig);
-      if (restored.mode !== orig.mode)
-        throw new Error(
-          `proxy restore: mode mismatch (got "${restored.mode}", expected "${orig.mode}")`,
-        );
-
-      return `proxy getState→setConfig(probe)→assert→testConnection(port:9 ok:${testResult.ok})→clear→restore ok`;
-    },
   },
   // workspaces
   {
@@ -966,34 +553,17 @@ export const CATALOG: FeatureCheck[] = [
       await a.workspace.reorder([ws.id, 'default']);
       await a.workspace.remove(ws.id);
     },
-    verify: async (a) => {
-      const before = await a.workspace.list();
-      const beforeLen = Array.isArray(before)
-        ? before.length
-        : ((before as any).workspaces?.length ?? 0);
-      const created = await a.workspace.create('Verify WS', '#f43f5e');
-      await a.workspace.switch(created.id);
-      await a.tabs.list(); // tab list should reflect the new workspace
-      await a.workspace.switch('default');
-      await a.workspace.remove(created.id);
-      const after = await a.workspace.list();
-      const afterLen = Array.isArray(after)
-        ? after.length
-        : ((after as any).workspaces?.length ?? 0);
-      if (afterLen !== beforeLen)
-        throw new Error(`workspace remove: expected ${beforeLen} workspaces, got ${afterLen}`);
-      return 'workspace CRUD round-trip ok';
-    },
   },
   // split view
   {
     id: 'split.crud',
     domain: 'split',
-    title: 'Split view enter/exit/resize/focus',
-    channels: [IPC.splitEnter, IPC.splitExit, IPC.splitResize, IPC.splitFocus],
+    title: 'Split view getState/enter/exit/resize/focus',
+    channels: [IPC.splitGetState, IPC.splitEnter, IPC.splitExit, IPC.splitResize, IPC.splitFocus],
     exercise: async (a) => {
       // exercise exercises the channels but does not assert success — the Rust
       // side may reject the call if fewer than 2 tabs exist (vitest mock).
+      await a.split.getState().catch(() => {});
       await a.split.enter([1, 2]).catch(() => {});
       await a.split.resize(1, 600, 800).catch(() => {});
       await a.split.focus(1).catch(() => {});
@@ -1003,17 +573,29 @@ export const CATALOG: FeatureCheck[] = [
 ];
 
 // Channels whose `exercise` body intentionally does NOT call them (destructive,
-// OS/file/window-bound, or fire-and-forget). Many of these ARE round-tripped by the
-// live `verify()` functions (which run only in the live run, on a disposable profile,
-// so deletes are safe): favorites update/remove/reorder, saved update/renameTag/
-// deleteTag/remove, history remove/clear, subs setEnabled. The remainder genuinely
-// can't be round-tripped without real OS/file/network/interaction state (a real
-// download, permission prompt, malware interstitial, sync server, or app restart) and
-// stay live-/manual-only. This set is DOCUMENTATION, not an escape hatch: the coverage
-// drift guard asserts every member here ALSO appears in some catalog entry's `channels`,
-// so a channel can never skip the catalog by being listed here alone.
+// OS/file/window-bound, or fire-and-forget).
+//
+// Two tiers, and the difference matters when reading a coverage report:
+//
+//  1. Covered elsewhere — the interaction tour (`src/autopilot/interactions/`) drives the
+//     real UI for these, and/or the owning Rust module has its own unit tests. E.g.
+//     favorites/saved update+remove, subs setEnabled, the vault mutators, find.
+//  2. Genuinely unverified — cannot be round-tripped without real OS/file/network/
+//     interactive state (a real download, permission prompt, malware interstitial, a live
+//     sync server, or an app restart). Nothing automated exercises these end to end.
+//
+// There is no third tier that used to be here. These channels were previously described
+// as "round-tripped by the live `verify()` functions", but no such run exists — see the
+// note above the `FeatureCheck` interface. Do not add coverage claims here that no
+// executing test backs.
+//
+// This set is DOCUMENTATION, not an escape hatch: `coverage.test.ts` asserts every member
+// here ALSO appears in some catalog entry's `channels`, so a channel can never skip the
+// catalog by being listed here alone. But that guard only checks the channel is *named* —
+// it cannot check that the entry's exercise, or a sibling test, does anything meaningful.
 export const UNTESTED_CHANNELS = new Set<string>([
-  // file/OS-bound — exercised live only, would mutate the host in vitest:
+  // file/OS-bound — would mutate the host if called in vitest, and no automated test
+  // exercises them end to end:
   IPC.downloadsOpenFile,
   IPC.downloadsShowInFolder,
   IPC.downloadsCancel,
@@ -1043,10 +625,11 @@ export const UNTESTED_CHANNELS = new Set<string>([
   IPC.syncTestConnection,
   IPC.syncGetRecoveryPhrase,
   IPC.syncRemoveDevice,
-  // vault — these channels are not called by the vault.crud exercise() body (which calls
-  // only the read-only getState); they ARE covered by the interaction tour
-  // (vault.row.delete → vaultRemove; vault.create.submit → vaultCreate; etc.) and/or the
-  // live verify() round-trip.  Listed here only because exercise() skips them:
+  // vault — not called by the vault.crud exercise() body (which calls only the read-only
+  // getState). Covered at the UI level by the interaction tour (interactions/vault.ts:
+  // create.submit → vaultCreate, unlock.submit → vaultUnlock, row.delete → vaultRemove, …);
+  // the seal/unlock/merge logic is covered by vault.rs's unit tests. Listed here only
+  // because exercise() skips them:
   IPC.vaultCreate,
   IPC.vaultUnlock,
   IPC.vaultLock,

@@ -15,7 +15,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 import { invoke } from '@tauri-apps/api/core';
-import { aegis } from './ipcClient';
+import { aegis, AegisIpcError } from './ipcClient';
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
@@ -126,5 +126,76 @@ describe('aegis.zoom IPC routing', () => {
       channel: 'zoom.get',
       payload: { viewId: 1 },
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Rejection boundary
+//
+// The core returns Err(String) for ORDINARY conditions — the vault is locked,
+// split.enter needs 2-4 tabs, the proxy is unreachable. Those used to reach the
+// renderer as a bare string thrown from ~58 uncaught `void aegis.*` sites, with
+// nothing catching them: the only handler was the ErrorBoundary, which replaces
+// the WHOLE chrome, so a locked vault could blank the entire window. Every
+// channel now routes through one `call()` that wraps the rejection in a typed
+// AegisIpcError, which `main.tsx` surfaces as a rate-limited toast.
+// ---------------------------------------------------------------------------
+describe('ipc rejection boundary', () => {
+  it('wraps a core rejection in an AegisIpcError carrying the channel', async () => {
+    mockInvoke.mockRejectedValueOnce('vault is locked');
+    const err = await aegis.vault.list().then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AegisIpcError);
+    const typed = err as AegisIpcError;
+    expect(typed.name).toBe('AegisIpcError');
+    expect(typed.channel).toBe('vault.list');
+    // Tauri rejects with the bare String a Rust Err(String) carried, so the message
+    // must survive the wrapping verbatim — that string is what the user reads.
+    expect(typed.message).toBe('vault is locked');
+  });
+
+  it('preserves the message when invoke rejects with an Error instead of a string', async () => {
+    mockInvoke.mockRejectedValueOnce(new Error('boom'));
+    const err = await aegis.zoom.get(1).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(err).toBeInstanceOf(AegisIpcError);
+    expect((err as AegisIpcError).message).toBe('boom');
+  });
+
+  it('a rejected dedupable call is not replayed to the next caller', async () => {
+    // `nav.getState` is dedupable with a 100ms window. Without the rejection
+    // eviction, the cached REJECTION would be handed to every caller inside that
+    // window, so one transient failure (vault locked at that instant, proxy
+    // briefly down) surfaced as a burst of unrelated-looking errors. The second
+    // identical call must reach the backend again.
+    mockInvoke.mockRejectedValueOnce('first failure');
+    const first = await aegis.nav.getState(1).then(
+      () => null,
+      (e: unknown) => e,
+    );
+    expect(first).toBeInstanceOf(AegisIpcError);
+
+    mockInvoke.mockResolvedValueOnce({ viewId: 1, url: 'https://recovered.example' });
+    const second = await aegis.nav.getState(1);
+    expect(second).toEqual({ viewId: 1, url: 'https://recovered.example' });
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('a RESOLVING dedupable call is still collapsed, so the optimization survives', async () => {
+    // Guard against "fixing" the eviction by dropping dedup entirely: two identical
+    // reads inside the window must still produce a single invoke.
+    //
+    // Uses `history.search` rather than `nav.getState` because the dedup cache is
+    // module-global and outlives an individual test — the preceding test leaves a
+    // RESOLVED `nav.getState` entry behind, which would be served from cache here
+    // and make the invoke count 0. Each test needs a channel nothing else touched.
+    mockInvoke.mockResolvedValue([]);
+    await aegis.history.search('dedup-probe');
+    await aegis.history.search('dedup-probe');
+    expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 });

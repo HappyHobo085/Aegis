@@ -4,6 +4,7 @@
 import { vi } from 'vitest';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
 import type {
+  AegisApi,
   NavState,
   Settings,
   FingerprintState,
@@ -35,6 +36,13 @@ const baseSettings: Settings = {
   antiFingerprint: 'off',
 };
 
+/// The mock is annotated as `AegisApi` on purpose: it is the stand-in for the real IPC
+/// surface in every jsdom test, so if it drifts from the contract the tests will happily
+/// pass against a shape the core never produces. `satisfies` (rather than a cast) is what
+/// makes that a compile error instead of a silent lie — which is how the missing
+/// `vault.onChanged` / `form.onState` members and the `workspace.*` return-type mismatches
+/// were found. The test-only helpers above the `aegis` key (setBackInterceptActive etc.) are
+/// real exports of `ipcClient`, so the annotation is applied to the `aegis` member alone.
 export function aegisMockModule() {
   return {
     // Standalone mobile-only functions exported from ipcClient (no-ops off Android;
@@ -132,6 +140,9 @@ export function aegisMockModule() {
           removeDevice: vi.fn().mockResolvedValue([]),
           onState: vi.fn().mockReturnValue(() => {}),
           onChanged: vi.fn().mockReturnValue(() => {}),
+          // Reports records a peer tried to push that failed authentication. See the
+          // quarantine path in the Rust core; a test that wants to exercise it sets this mock.
+          onVaultQuarantined: vi.fn().mockReturnValue(() => {}),
         };
       })(),
       favorites: {
@@ -224,8 +235,21 @@ export function aegisMockModule() {
           .mockResolvedValue({ level: 'off', allowlistedHosts: [] } satisfies FingerprintState),
       },
       form: {
-        detectLoginForm: vi.fn().mockResolvedValue({ hasLoginForm: false, domain: undefined }),
+        // Must REJECT, matching the core. The core refuses this channel because a content
+        // webview cannot emit a result back to it; the old mock resolved `hasLoginForm: false`,
+        // which is precisely the lie that let the broken core pass every test. A mock that is
+        // more optimistic than the real thing is worse than no mock.
+        detectLoginForm: vi
+          .fn()
+          .mockRejectedValue(
+            new Error('form.detectLoginForm is not implemented: no content->core transport'),
+          ),
         onLoginFormDetected: vi.fn().mockReturnValue(() => {}),
+        // Added when the mock was annotated as `AegisApi`: the real surface has had these
+        // two since form detection was wired, and their absence here is exactly why a
+        // component calling them would have thrown a TypeError in any test that mounted it.
+        onState: vi.fn().mockReturnValue(() => {}),
+        onWillSubmit: vi.fn().mockReturnValue(() => {}),
       },
       proxy: (() => {
         const baseProxyState: ProxyState = {
@@ -280,6 +304,12 @@ export function aegisMockModule() {
         remove: vi.fn().mockResolvedValue([]),
         search: vi.fn().mockResolvedValue([]),
         autofillSuggestions: vi.fn().mockResolvedValue([]),
+        // Also found by the `AegisApi` annotation. `autofill` is the autofill plumbing the
+        // real core exposes; the mock previously omitted both it and `onChanged`, so any
+        // component subscribing to a cross-device vault change tested against a member that
+        // did not exist.
+        autofill: vi.fn().mockResolvedValue([]),
+        onChanged: vi.fn().mockReturnValue(() => {}),
         onState: vi.fn().mockReturnValue(() => {}),
       },
       workspace: (() => {
@@ -334,6 +364,7 @@ export function aegisMockModule() {
         };
       })(),
       split: {
+        getState: vi.fn().mockResolvedValue(null),
         enter: vi.fn().mockResolvedValue(undefined),
         exit: vi.fn().mockResolvedValue(undefined),
         resize: vi.fn().mockResolvedValue(undefined),
@@ -470,6 +501,6 @@ export function aegisMockModule() {
         onState: vi.fn(() => () => {}),
         onShortcut: vi.fn(() => () => {}),
       },
-    },
+    } satisfies AegisApi,
   };
 }

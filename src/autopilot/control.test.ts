@@ -20,6 +20,7 @@ function fake(): AutopilotControl {
     openConfirm: vi.fn(),
     openFind: vi.fn(),
     closeFind: vi.fn(),
+    setOmnibox: vi.fn(),
     setHistoryEntries: vi.fn(),
     setSavedItems: vi.fn(),
     setSitePermissions: vi.fn(),

@@ -63,6 +63,7 @@ export const INTERACTIVE_CONTROLS = new Set<string>([
   'settings.security.httpsOnly',
   'settings.security.webrtcPolicy',
   'settings.sync.setServerUrl',
+  'settings.sync.allowInsecure',
   'settings.sync.testConnection',
   'settings.sync.startNew',
   'settings.sync.restorePhrase',

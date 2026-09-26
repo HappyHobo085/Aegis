@@ -44,6 +44,16 @@ export interface InteractionCtx {
   byRole(role: string, name?: string | RegExp): HTMLElement | null;
   byText(text: string | RegExp): HTMLElement | null;
   byLabel(label: string | RegExp): HTMLElement | null;
+  /**
+   * Await an element that may not be in the DOM yet.
+   *
+   * Required for anything behind a `lazy()` + Suspense boundary: the first mount of a
+   * lazily-imported Settings tab suspends on the dynamic import, so `byLabel` in the
+   * very next line returns null. The vitest layer delegates to `@testing-library`'s
+   * `waitFor` (which re-enters `act()`, flushing the Suspense resolution); the live
+   * layer polls. `label` is for the failure message.
+   */
+  waitForEl<T extends Element>(fn: () => T | null, label: string): Promise<T>;
   bySelector(sel: string): HTMLElement | null;
   aegis: AegisApi;
   calls: CallLog;

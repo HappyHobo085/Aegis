@@ -27,6 +27,7 @@ import {
   SyncState,
   SyncDevice,
   SyncChanged,
+  SyncVaultQuarantined,
   FindState,
   ZoomState,
   VaultState,
@@ -43,8 +44,63 @@ import {
   WorkspaceState,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
-import { call, on } from './tauriInvoke';
+import { call as rawCall, on } from './tauriInvoke';
 import { clampZoom } from './zoom';
+
+/**
+ * A renderer→core call that the Rust side rejected.
+ *
+ * The core returns `Err(String)` for a lot of *ordinary* conditions — the vault being
+ * locked, `split.enter` needing 2–4 tab ids, an unreachable proxy. Those rejections used
+ * to reach call sites as bare strings from the ~58 `void aegis.*` fire-and-forget
+ * invocations with nothing catching them, so the only thing that ever handled a rejected
+ * IPC was the `ErrorBoundary` in `main.tsx` — which replaces the ENTIRE chrome with
+ * "Something went wrong". A locked vault could therefore blank the whole window.
+ *
+ * Wrapping the single `call` chokepoint (all 120 channels route through `dedupedCall`, and
+ * every non-dedupable mutation routes straight to `call`) means the rejection is now a
+ * *typed* value, so `main.tsx`'s `unhandledrejection` handler can show a toast for it
+ * instead of letting it become a full-window crash card. Call sites that DO catch can
+ * still `instanceof`-check it to distinguish an expected condition from a real fault.
+ */
+export class AegisIpcError extends Error {
+  /** The IPC channel that rejected, e.g. `'vault.list'`. */
+  readonly channel: string;
+
+  constructor(channel: string, message: string) {
+    super(message);
+    this.name = 'AegisIpcError';
+    this.channel = channel;
+  }
+}
+
+/**
+ * Best-effort human-readable text for whatever the IPC layer threw.
+ *
+ * Tauri 2 rejects with the bare `String` a Rust `Err(String)` carried, but `invoke` can
+ * also reject with an `Error` (a missing command, a deserialization failure) or, in tests,
+ * anything at all — so this must not assume a shape.
+ */
+function ipcErrorText(e: unknown): string {
+  if (typeof e === 'string') return e;
+  if (e instanceof Error) return e.message;
+  if (e && typeof e === 'object' && 'message' in e && typeof e.message === 'string') {
+    return e.message;
+  }
+  return String(e);
+}
+
+/**
+ * The one place a renderer→core rejection becomes an `AegisIpcError`.
+ *
+ * Deliberately wraps rather than swallows: callers that await still get a rejection (so
+ * their existing `try`/`catch` keeps working), it is just now identifiable.
+ */
+function call<T>(channel: string, payload?: Record<string, unknown>): Promise<T> {
+  return rawCall<T>(channel, payload).catch((e: unknown) => {
+    throw new AegisIpcError(channel, ipcErrorText(e));
+  });
+}
 
 type IPCChannel = (typeof IPC)[keyof typeof IPC];
 
@@ -134,14 +190,6 @@ const DEDUPABLE_CHANNELS: ReadonlySet<string> = new Set(
   Object.keys(DEDUP_WINDOWS).filter((ch) => ch !== 'default'),
 );
 
-// Telemetry tracking for dedup effectiveness
-const dedupStats = {
-  hits: 0,
-  misses: 0,
-  hitsByChannel: new Map<string, number>(),
-  missesByChannel: new Map<string, number>(),
-};
-
 const dedupeCache = new Map<string, DedupEntry<any>>();
 
 // Deterministic cleanup every 10 seconds, started LAZILY on the first deduped call rather than
@@ -198,20 +246,25 @@ function dedupedCall<T>(channel: IPCChannel, payload: any): Promise<T> {
   // Check if we have a recent call for this key
   const cached = dedupeCache.get(key);
   if (cached && now - cached.timestamp < window) {
-    // Record hit and return the cached promise
-    dedupStats.hits++;
-    dedupStats.hitsByChannel.set(channel, (dedupStats.hitsByChannel.get(channel) || 0) + 1);
     return cached.promise as Promise<T>;
   }
-
-  // Record miss
-  dedupStats.misses++;
-  dedupStats.missesByChannel.set(channel, (dedupStats.missesByChannel.get(channel) || 0) + 1);
 
   // Make the actual call and cache the promise
   const promise = call<T>(channel, payload);
   dedupeCache.set(key, { timestamp: now, promise });
   ensureCleanupTimer();
+
+  // A REJECTED promise must not stay memoized. `cleanupCache` only evicts on age, so
+  // without this a single transient failure (a vault that was locked at that instant, a
+  // proxy that was briefly down) is replayed to every caller for the next `window * 2` —
+  // turning one flaky response into a burst of unrelated-looking errors. Evicting here
+  // means the next caller retries for real, which is what a read-only query wants.
+  // Guarded on identity so a newer entry for the same key is not removed.
+  void promise.catch(() => {
+    if (dedupeCache.get(key)?.promise === promise) {
+      dedupeCache.delete(key);
+    }
+  });
 
   return promise;
 }
@@ -570,6 +623,7 @@ export const aegis: AegisApi = {
     removeDevice: (deviceId) => dedupedCall<SyncDevice[]>(IPC.syncRemoveDevice, { deviceId }),
     onState: (cb) => on<SyncState>(IPC.evtSyncState, cb),
     onChanged: (cb) => on<SyncChanged>(IPC.evtSyncChanged, cb),
+    onVaultQuarantined: (cb) => on<SyncVaultQuarantined>(IPC.evtSyncVaultQuarantined, cb),
   },
   find: {
     start: (viewId, query, caseSensitive = false) => {
@@ -719,8 +773,11 @@ export const aegis: AegisApi = {
       dedupedCall<VaultRecord[]>(IPC.vaultUpdate, { uuid, partial }),
     remove: (uuid: string) => dedupedCall<VaultRecord[]>(IPC.vaultRemove, { uuid }),
     search: (q: string) => dedupedCall<VaultRecord[]>(IPC.vaultSearch, { q }),
-    // Phase B — autofill hooks exist on the JS side; Rust handler is not yet implemented.
-    // The hooks (useVaultAutofill) call these methods; removing them breaks the build.
+    // Phase B — the Rust handlers exist (`vault.rs`), but NO UI surface calls these yet: the
+    // chrome-side autofill hook chain (`AutofillBadge` → `useVaultDomainSuggestions` →
+    // `useVaultAutofill`) was deleted as dead, unmounted code. The channels stay declared and
+    // stay covered by the autopilot's `vault.crud` / `vault.autofillSuggestions` catalog
+    // entries; deleting them here would break that coverage, not the build.
     autofill: (options: { domain: string; username?: string }) =>
       dedupedCall<VaultRecord[]>(IPC.vaultAutofill, options),
     autofillSuggestions: (domain: string) =>
@@ -756,6 +813,7 @@ export const aegis: AegisApi = {
       on<WorkspaceState>(IPC.evtWorkspaceState, cb),
   },
   split: {
+    getState: () => dedupedCall<SplitLayout | null>(IPC.splitGetState, undefined),
     enter: (tabIds: number[]) => dedupedCall<void>(IPC.splitEnter, tabIds),
     exit: () => dedupedCall<void>(IPC.splitExit, undefined),
     resize: (paneId: number, width: number, height: number) =>

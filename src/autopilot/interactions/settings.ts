@@ -324,7 +324,10 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         if (ctx.layer === 'vitest') {
           // Seed: mock subs.add to return the probe sub and click "Add list".
           (ctx.aegis.subs.add as unknown as SubsMockFn).mockResolvedValue([PROBE_SUB]);
-          const urlInput = ctx.byLabel(/^List URL$/i);
+          const urlInput = await ctx.waitForEl(
+            () => ctx.byLabel(/^List URL$/i),
+            '"List URL" input on Filter Lists tab',
+          );
           if (!urlInput) throw new Error('"List URL" input not found on Filter Lists tab');
           await ctx.type(urlInput, PROBE_SUB.url);
           const addBtn = ctx.byRole('button', /^Add list$/);
@@ -506,11 +509,15 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         if (ctx.layer === 'live') {
           _originalFilters = await ctx.aegis.customFilters.get();
         }
-        const textarea = ctx.byLabel(/^Custom filters$/i);
-        if (!textarea) throw new Error('"Custom filters" textarea not found on My Filters tab');
+        const textarea = await ctx.waitForEl(
+          () => ctx.byLabel(/^Custom filters$/i),
+          '"Custom filters" textarea on the My Filters tab',
+        );
         await ctx.type(textarea, NEW_FILTERS);
-        const saveBtn = ctx.byLabel(/^Save filters$/i);
-        if (!saveBtn) throw new Error('"Save filters" button not found');
+        const saveBtn = await ctx.waitForEl(
+          () => ctx.byLabel(/^Save filters$/i),
+          '"Save filters" button',
+        );
         await ctx.click(saveBtn);
       },
       assert: async (ctx: InteractionCtx) => {
@@ -825,7 +832,10 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         if (ctx.layer === 'live') {
           _originalHttpsOnly = (await ctx.aegis.settings.get()).httpsOnly;
         }
-        const checkbox = ctx.byLabel(/^HTTPS-Only mode$/i);
+        const checkbox = await ctx.waitForEl(
+          () => ctx.byLabel(/^HTTPS-Only mode$/i),
+          '"HTTPS-Only mode" checkbox on Security tab',
+        );
         if (!checkbox) throw new Error('"HTTPS-Only mode" checkbox not found on Security tab');
         await ctx.click(checkbox);
       },
@@ -1056,7 +1066,10 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
     // The vitest mock covers the IPC wiring; the live catalog entry covers sync end-to-end.
     layers: ['vitest'],
     run: async (ctx) => {
-      const input = ctx.byLabel(/^Sync server URL$/i);
+      const input = await ctx.waitForEl(
+        () => ctx.byLabel(/^Sync server URL$/i),
+        '"Sync server URL" input on Sync tab',
+      );
       if (!input) throw new Error('"Sync server URL" input not found on Sync tab');
       await ctx.type(input, 'https://ap7sync.example');
       // Blur fires onBlur → onSetServerUrl → settings.update({syncServerUrl}).
@@ -1077,6 +1090,67 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       return 'Sync server URL blur → settings.set({syncServerUrl})';
     },
   },
+
+  (() => {
+    let _original: boolean | undefined;
+    return {
+      id: 'settings.sync.allowInsecure',
+      domain: 'settings.sync',
+      description:
+        'Tick the unencrypted-HTTP sync waiver → settings.set({syncAllowInsecure}) called',
+      screen: 'settings:sync',
+      layers: ['vitest', 'live'] as InteractionLayer[],
+      run: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'live') {
+          _original = (await ctx.aegis.sync.getState()).allowInsecure ?? false;
+        }
+        // Type a plaintext REMOTE server first: the waiver is only meaningful there, and
+        // that is what puts the panel into the "refused / insecure" state a user reacts to.
+        const input = await ctx.waitForEl(
+          () => ctx.byLabel(/^Sync server URL$/i),
+          '"Sync server URL" input on Sync tab',
+        );
+        if (!input) throw new Error('"Sync server URL" input not found on Sync tab');
+        await ctx.type(input, 'http://sync.example.com:8787');
+        (input as HTMLElement).blur();
+        await new Promise((r) => setTimeout(r, 50));
+
+        const waiver = await ctx.waitForEl(
+          () => ctx.byLabel(/allow an unencrypted http sync server/i),
+          'the unencrypted-HTTP waiver checkbox on Sync tab',
+        );
+        if (!waiver) throw new Error('the unencrypted-HTTP waiver checkbox is not on the Sync tab');
+        await ctx.click(waiver);
+        await new Promise((r) => setTimeout(r, 100));
+      },
+      assert: async (ctx: InteractionCtx) => {
+        if (ctx.layer === 'vitest') {
+          // vitest asserts the IPC wiring only. The panel reacting to the write is covered by
+          // `SyncSettingsTab.test.tsx`, which renders it under a real stateful parent (the
+          // vitest `aegis` mock does not feed `settings.set` back into React state).
+          if (
+            !ctx.calls.called('settings.set', (a) => {
+              const p = a[0] as Partial<AegisSettings>;
+              return p?.syncAllowInsecure === true;
+            })
+          )
+            throw new Error(
+              'settings.set not called with syncAllowInsecure:true after ticking the waiver',
+            );
+          return 'Waiver ticked → settings.set({syncAllowInsecure:true})';
+        }
+        // live: the CORE must report the waiver it is actually enforcing.
+        await new Promise((r) => setTimeout(r, 400));
+        const st = await ctx.aegis.sync.getState();
+        if (st.allowInsecure === _original)
+          throw new Error(`live: allowInsecure did not flip (still ${st.allowInsecure})`);
+        // Restore. This flag is local-only and never synced, so a leftover value cannot
+        // travel to other devices — but restore anyway so a run can't leave it flipped.
+        await ctx.aegis.settings.set({ syncAllowInsecure: _original });
+        return `Waiver toggled → sync.getState().allowInsecure ${_original}→${st.allowInsecure} (restored)`;
+      },
+    } satisfies InteractionSpec;
+  })(),
 
   {
     id: 'settings.sync.testConnection',
@@ -1262,7 +1336,10 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
         if (ctx.layer === 'live') {
           _originalMode = (await ctx.aegis.proxy.getState()).mode;
         }
-        const select = ctx.byLabel(/^Proxy mode$/);
+        const select = await ctx.waitForEl(
+          () => ctx.byLabel(/^Proxy mode$/),
+          '"Proxy mode" select on Proxy tab',
+        );
         if (!select) throw new Error('"Proxy mode" select not found on Proxy tab');
         // Select elements do not support userEvent.clear() — use native change dispatch.
         fireInputChange(select, 'proxy');
@@ -1308,8 +1385,10 @@ export const SETTINGS_INTERACTIONS: InteractionSpec[] = [
       run: async (ctx: InteractionCtx) => {
         // Switch mode to proxy via the select (fires handleModeChange → local state update
         // → proxy.setConfig as a side-effect), which reveals the host/port fields.
-        const modeSelect = ctx.byLabel(/^Proxy mode$/);
-        if (!modeSelect) throw new Error('"Proxy mode" select not found on Proxy tab');
+        const modeSelect = await ctx.waitForEl(
+          () => ctx.byLabel(/^Proxy mode$/),
+          '"Proxy mode" select on Proxy tab',
+        );
         fireInputChange(modeSelect, 'proxy');
         // Wait for the mode select async handler and React re-render.
         await new Promise((r) => setTimeout(r, 100));

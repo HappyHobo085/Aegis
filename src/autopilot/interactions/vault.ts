@@ -116,7 +116,10 @@ export const VAULT_INTERACTIONS: InteractionSpec[] = [
         undecryptable: 0,
         syncEnabled: false,
       });
-      const masterInput = ctx.byLabel(/^Master password$/);
+      const masterInput = await ctx.waitForEl(
+        () => ctx.byLabel(/^Master password$/),
+        '"Master password" input on vault create form',
+      );
       if (!masterInput) throw new Error('"Master password" input not found on vault create form');
       const confirmInput = ctx.byLabel(/^Confirm password$/);
       if (!confirmInput) throw new Error('"Confirm password" input not found on vault create form');
@@ -419,7 +422,9 @@ export const VAULT_INTERACTIONS: InteractionSpec[] = [
           updatedAt: Date.now(),
         },
       ]);
-      // Trigger suggestions via the vault API (would be called by useVaultDomainSuggestions).
+      // The channel-level query, which is all that exists: there is no autofill badge in the
+      // chrome (the AutofillBadge subtree was deleted as dead, unmounted code), so this spec
+      // exercises the IPC contract rather than any UI affordance.
       await ctx.aegis.vault.autofillSuggestions('github.com');
     },
     assert: async (ctx: InteractionCtx) => {

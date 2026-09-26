@@ -1,5 +1,5 @@
 // src/autopilot/interactionCtx.ts
-import { within, fireEvent, act } from '@testing-library/react';
+import { within, fireEvent, act, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { flushSync } from 'react-dom';
 import type {
@@ -178,6 +178,28 @@ export function makeVitestCtx(root: HTMLElement, aegis: AegisApi, reach: Reach):
     byRole: (role, name) => q.queryByRole(role, name ? { name } : undefined) as HTMLElement | null,
     byText: (text) => q.queryByText(text) as HTMLElement | null,
     byLabel: (label) => q.queryByLabelText(label) as HTMLElement | null,
+    // Every Settings tab except Appearance is `lazy()`-imported behind a Suspense
+    // boundary (SettingsModal.tsx:19-24), so a tab's FIRST mount suspends on the
+    // dynamic import and only later mounts resolve synchronously. A spec that switches
+    // to a cold tab and immediately queries it was therefore depending on import
+    // timing rather than on the app — and the React Compiler's change in commit
+    // scheduling turned that latent coupling into 6 real failures.
+    //
+    // Two things matter here. `waitFor` re-enters `act()` on every poll, which is what
+    // actually flushes the Suspense resolution (a bare `setTimeout` poll never does).
+    // And the timeout must be generous: vitest has to transform each lazily-imported
+    // tab on first import, and with the React Compiler active that is ~6x the
+    // un-compiled cost — well past `waitFor`'s 1s default, which is why a shorter
+    // budget fails only on whichever spec touches a given tab FIRST.
+    waitForEl: (fn, label) =>
+      waitFor(
+        () => {
+          const el = fn();
+          if (!el) throw new Error(`waiting for ${label}`);
+          return el;
+        },
+        { timeout: 10_000 },
+      ) as Promise<never>,
     bySelector: (sel) => root.querySelector(sel),
     aegis,
     calls: vitestCallLog(aegis),
@@ -426,6 +448,17 @@ export function makeLiveCtx(aegis: AegisApi, reach: Reach): InteractionCtx {
         if (target) return target as HTMLElement;
       }
       return null;
+    },
+    // Live layer: the real webview resolves the import well before a spec acts, so a
+    // plain poll is the right amount of machinery. Same 10s budget as the vitest layer
+    // so a spec reads identically against both.
+    waitForEl: async (fn, label) => {
+      for (let i = 0; i < 400; i++) {
+        const el = fn();
+        if (el) return el;
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error(`timed out waiting for ${label}`);
     },
     bySelector: (sel) => root.querySelector(sel),
     aegis,
