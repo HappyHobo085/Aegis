@@ -605,6 +605,20 @@ pub(crate) fn sync_ns<R: Runtime>(
         )
         .map_err(|e| format!("{ns}: push batch {}/{} failed: {e}", i + 1, batches.len()))?;
     }
+    // Reap tombstones that are older than the GC horizon. This is the ONLY safe place to do
+    // it, and the placement is the whole point: the pull's `merge` above has already landed
+    // durably, and every push batch above returned `Ok` (the `?` would have bailed out
+    // otherwise). So any tombstone still sitting locally is one the server has now seen. Run
+    // it on the pull path instead and a namespace whose PUSH failed would have its fresh,
+    // never-uploaded delete silently discarded — losing the delete permanently and letting
+    // the record reappear from a peer. Scoped to the array stores, which are the ones whose
+    // tombstones ride `merge_into`; the settings/vault projections have their own lifecycle.
+    if sync_stores::SYNCABLE.contains(&ns) {
+        let reaped = sync_stores::gc_tombstones(app, ns, crate::jsonstore::now_ms());
+        if reaped > 0 {
+            eprintln!("[aegis-sync] reaped {reaped} expired {ns} tombstone(s)");
+        }
+    }
     Ok(changed)
 }
 

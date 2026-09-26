@@ -51,8 +51,9 @@ fn merge_records(
         // (next_id = max+1), so two devices independently assign 1,2,3…; the renderer keys
         // its mutations by `id`, so the merged array must stay id-unique or a `remove {id}`
         // would hit the wrong record. We therefore preserve the LOCAL id on replace and
-        // re-key an inserted remote record to a fresh local id. Records without an `id`
-        // (e.g. allowlist, keyed by host) are untouched.
+        // re-key an inserted remote record to a fresh local id — ALWAYS, including when the
+        // remote record carries no `id` (allowlist rows are host-keyed, but a missing id is
+        // what made `remove`'s `Option` comparison match every row at once).
         match local
             .iter_mut()
             .find(|l| crate::jsonstore::uuid_of(l) == Some(ruuid))
@@ -73,19 +74,29 @@ fn merge_records(
             }
             None => {
                 let mut incoming = r.clone();
-                if incoming.get("id").is_some() {
-                    // NOT `next_id_optimized`: that helper answers from a process-global cache
-                    // keyed by store name, and it ignores the `items` argument entirely on a
-                    // cache hit. `local` here is an in-memory Vec that never goes through
-                    // `load`/`save`, so the cache still holds the value computed from the
-                    // PRE-merge array for the whole loop — which handed two remote records
-                    // arriving in one batch the SAME fresh id, so `remove {id}`/`update {id}`
-                    // hit both. The O(n) scan sees each record as it is pushed, so consecutive
-                    // inserts get consecutive ids.
-                    let fresh = crate::jsonstore::next_id(&local);
-                    if let Some(obj) = incoming.as_object_mut() {
-                        obj.insert("id".into(), Value::from(fresh)); // avoid id collision
-                    }
+                // ALWAYS assign a device-local id — the previous `if incoming.get("id").is_some()`
+                // guard left a remotely-inserted record with NO id at all, and that is far worse
+                // than an id collision. The renderer keys every mutation by `id`, and
+                // `places::saved.remove` matched with `id_of(it) == id`, which compares
+                // `Option<i64>`s: a payload with a missing/non-integer `id` yields `None`, and
+                // `None == None` is true for EVERY id-less row. One such call therefore
+                // tombstoned the user's entire saved-pages list in a single pass — 104 records,
+                // one `wall_ms`, counters marching from the node's current value. The store is
+                // gone on every device the moment that propagates, because the tombstones sync.
+                // Assigning an id here closes the root cause (the renderer can no longer be
+                // handed a row whose `id` is `undefined`); the `None`-rejection in `places.rs`
+                // is the backstop that stops one bad payload from wiping a store.
+                //
+                // NOT `next_id_optimized`: that helper answers from a process-global cache keyed
+                // by store name and ignores the `items` argument entirely on a cache hit.
+                // `local` here is an in-memory Vec that never goes through `load`/`save`, so the
+                // cache still holds the value computed from the PRE-merge array for the whole
+                // loop — which handed two remote records arriving in one batch the SAME fresh
+                // id, so `remove {id}`/`update {id}` hit both. The O(n) scan sees each record as
+                // it is pushed, so consecutive inserts get consecutive ids.
+                let fresh = crate::jsonstore::next_id(&local);
+                if let Some(obj) = incoming.as_object_mut() {
+                    obj.insert("id".into(), Value::from(fresh));
                 }
                 local.push(incoming);
                 changed.push(ruuid.to_string());
@@ -151,6 +162,62 @@ fn merge_into_locked<R: Runtime>(app: &AppHandle<R>, name: &str, remote: &[Value
         }
     }
     changed
+}
+
+/// Age at which a local tombstone is garbage-collected after a successful sync.
+///
+/// WHY A HORIZON AND NOT "DELETE IT ONCE PUSHED": a tombstone exists so that a delete made
+/// on one device reaches every OTHER device. A client cannot know when the last other device
+/// has seen it, so the only sound local rule is time-based: keep the tombstone at least as
+/// long as any peer could plausibly have been offline, then drop it. Thirty days is far beyond
+/// any realistic offline window — a device gone longer than that is re-syncing from scratch
+/// anyway, and the server's own `TOMBSTONE_RETENTION_PER_NS` bound applies in parallel.
+///
+/// This is deliberately a *bound*, not a proof: it makes the effective tombstone lifetime
+/// shorter than "until every peer has seen it". The alternative — never GC'ing — is what let
+/// today's incident leave 104 dead rows in `saved` indefinitely. Callers MUST only invoke this
+/// after a pass that PUSHED as well as pulled; dropping a tombstone that never reached the
+/// server loses the delete permanently and lets the record reappear from a peer.
+pub const TOMBSTONE_GC_AGE_MS: i64 = 30 * 24 * 60 * 60 * 1000;
+
+/// Reap tombstones in `name` whose HLC is older than `TOMBSTONE_GC_AGE_MS`, returning the count.
+///
+/// Split out from [`merge_into_locked`] and deliberately NOT called from it: `merge_into`
+/// runs on the PULL path, and a pull can succeed while the push that should have carried a
+/// fresh local tombstone to the server failed. Collecting there would silently discard a delete
+/// the server never heard about. The caller is responsible for invoking this only once the
+/// namespace's push AND pull have both succeeded.
+pub fn gc_tombstones<R: Runtime>(app: &AppHandle<R>, name: &str, now_ms: i64) -> usize {
+    let cutoff = now_ms.saturating_sub(TOMBSTONE_GC_AGE_MS);
+    crate::jsonstore::with_store_lock(name, || {
+        let mut items = crate::jsonstore::load_synced(app, name);
+        let before = items.len();
+        items.retain(|it| {
+            if !crate::jsonstore::is_deleted(it) {
+                return true;
+            }
+            // A tombstone with no parseable HLC is kept: we cannot prove it is old, and
+            // dropping an undatable one is exactly the silent-delete we are avoiding.
+            // NOTE: unreachable via this call path — `load_synced` above runs
+            // `ensure_sync_meta`, which stamps an HLC onto anything missing one. Defence in
+            // depth, kept deliberately; see `gc_keeps_a_tombstone_that_arrives_without_an_hlc`
+            // for the probe that proves it is not load-bearing.
+            match crate::sync_envelope::from_value(it) {
+                Some(h) => h.wall_ms >= cutoff,
+                None => true,
+            }
+        });
+        let reaped = before - items.len();
+        if reaped > 0 {
+            if let Err(e) = crate::jsonstore::save(app, name, &items) {
+                // Same reasoning as the merge's own save: swallowing this reports a clean
+                // namespace while nothing moved, and there is no user-visible surface here.
+                eprintln!("[aegis] failed to persist {name} tombstone GC: {e}");
+                return 0;
+            }
+        }
+        reaped
+    })
 }
 
 /// Normalize a favorites/saved URL for dup detection: drop the #fragment and trailing
@@ -455,6 +522,39 @@ mod tests {
         });
     }
 
+    /// The regression guard for the 2026-09-26 data-loss incident: a remotely-inserted record
+    /// MUST be given a device-local `id`, even when the wire record carries none.
+    ///
+    /// Wire records only ever carry `uuid / hlc / deleted / ord? / nonce / ct` — no `id` — so
+    /// the old `if incoming.get("id").is_some()` guard was false for essentially every pulled
+    /// record and it was stored with **no id at all**. Two things then went wrong at once: the
+    /// renderer got rows whose `row.id` was `undefined` (so tapping delete sent
+    /// `{ id: undefined }`), and `places.rs`'s `id_of(it) == id` predicate compared
+    /// `None == None` — true for every id-less row — so ONE `saved.remove` tombstoned the entire
+    /// store. That is exactly what happened: 104 `saved` tombstones sharing one `wall_ms`.
+    #[test]
+    fn a_pulled_record_with_no_id_is_given_a_fresh_local_id() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            // A record exactly as the server hands it over: no `id` key at all.
+            let remote = vec![json!({
+                "uuid": "remote-no-id",
+                "url": "https://no-id.test/",
+                "hlc": { "wall_ms": 5, "counter": 0, "node": "b" },
+                "deleted": false
+            })];
+            merge_into(app, "saved", &remote);
+
+            let merged = crate::jsonstore::load_synced(app, "saved");
+            assert_eq!(merged.len(), 1, "the record must land: {merged:?}");
+            assert_eq!(
+                merged[0].get("id").and_then(Value::as_i64),
+                Some(0),
+                "a merged record with no local id is the data-loss bug: {merged:?}"
+            );
+        });
+    }
+
     #[test]
     fn merge_preserves_local_id_on_replace() {
         // Same uuid on both devices but different local ids; remote dominates by HLC.
@@ -485,6 +585,114 @@ mod tests {
         let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert_eq!(changed, vec!["ok".to_string()]); // only the well-formed one
         assert_eq!(merged.len(), 1);
+    }
+
+    // ---- local tombstone GC -------------------------------------------------
+    //
+    // The 2026-09-26 incident left 104 dead `saved` rows that would otherwise sit in every
+    // client's store forever. `gc_tombstones` is the reaper; these pin both halves of the
+    // safety rule — old tombstones go, and nothing that still carries information stays.
+
+    /// Deliberately in the PAST relative to the real clock.
+    ///
+    /// `gc_tombstones` reads through `load_synced`, which calls `ensure_sync_meta` and so
+    /// STAMPS A FRESH HLC (from the real clock, i.e. "now") onto any record that lacks one.
+    /// If this constant were set in the future, that fresh stamp would fall *before* the
+    /// cutoff and the record would be reaped — which is exactly how the
+    /// "no parseable HLC is kept" test first failed (`left: 1, right: 0`). A past constant
+    /// keeps a freshly-stamped row comfortably on the young side of the horizon.
+    const NOW: i64 = 1_700_000_000_000i64;
+
+    #[test]
+    fn gc_reaps_a_tombstone_older_than_the_horizon() {
+        crate::test_support::with_tmp_app(|app| {
+            let old = json!({
+                "uuid": "aaaa", "url": "https://a.test/",
+                "hlc": { "wall_ms": NOW - TOMBSTONE_GC_AGE_MS - 1, "counter": 0, "node": "n" },
+                "deleted": true,
+            });
+            let keep = json!({
+                "uuid": "bbbb", "url": "https://b.test/",
+                "hlc": { "wall_ms": NOW - TOMBSTONE_GC_AGE_MS + 60_000, "counter": 0, "node": "n" },
+                "deleted": true,
+            });
+            let live = json!({
+                "uuid": "cccc", "url": "https://c.test/",
+                "hlc": { "wall_ms": NOW - TOMBSTONE_GC_AGE_MS - 1, "counter": 0, "node": "n" },
+                "deleted": false,
+            });
+            crate::jsonstore::save(app, "saved", &[old, keep, live]).expect("seed the saved store");
+
+            let reaped = gc_tombstones(app, "saved", NOW);
+            assert_eq!(reaped, 1, "exactly the expired tombstone should be reaped");
+            let left = crate::jsonstore::load(app, "saved");
+            let uuids: Vec<&str> = left
+                .iter()
+                .filter_map(|v| v.get("uuid").and_then(Value::as_str))
+                .collect();
+            assert_eq!(
+                uuids,
+                vec!["bbbb", "cccc"],
+                "the recent tombstone AND the live row must both survive"
+            );
+        });
+    }
+
+    #[test]
+    fn gc_keeps_a_tombstone_exactly_at_the_cutoff() {
+        // The retain test is `h.wall_ms >= cutoff`, so a tombstone landing exactly on the
+        // cutoff is KEPT. That is the conservative side: reaping it would need the horizon
+        // to be one millisecond larger, and a clock that reads a hair differently on two
+        // devices must not decide that a delete is old enough to forget.
+        crate::test_support::with_tmp_app(|app| {
+            let at_cutoff = json!({
+                "uuid": "dddd", "url": "https://d.test/",
+                "hlc": { "wall_ms": NOW - TOMBSTONE_GC_AGE_MS, "counter": 0, "node": "n" },
+                "deleted": true,
+            });
+            crate::jsonstore::save(app, "saved", &[at_cutoff]).expect("seed the saved store");
+            assert_eq!(gc_tombstones(app, "saved", NOW), 0);
+            assert_eq!(crate::jsonstore::load(app, "saved").len(), 1);
+        });
+    }
+
+    #[test]
+    fn gc_keeps_a_tombstone_that_arrives_without_an_hlc() {
+        // A record with no `hlc` is the case the `None =>` arm defends. It is NOT reachable
+        // through this entry point: `gc_tombstones` reads via `load_synced`, and
+        // `ensure_sync_meta` stamps a fresh HLC on anything missing one, so by the time the
+        // retain runs the record is datable and young. Probing `None => false` (i.e. reaping
+        // the undatable case) leaves this test GREEN — proof the arm is defence-in-depth
+        // rather than load-bearing, and that this test pins the *outcome* (a tombstone with
+        // no HLC of its own is kept) rather than that specific branch.
+        //
+        // The arm is kept anyway: it is one line, it is the safe direction, and a future
+        // change to the read path must not silently turn "undatable" into "delete".
+        crate::test_support::with_tmp_app(|app| {
+            let undatable = json!({
+                "uuid": "eeee", "url": "https://e.test/", "deleted": true,
+            });
+            crate::jsonstore::save(app, "saved", &[undatable]).expect("seed the saved store");
+            assert_eq!(gc_tombstones(app, "saved", NOW), 0);
+            assert_eq!(crate::jsonstore::load(app, "saved").len(), 1);
+        });
+    }
+
+    #[test]
+    fn gc_is_idempotent_and_never_reports_a_reap_it_did_not_persist() {
+        crate::test_support::with_tmp_app(|app| {
+            let old = json!({
+                "uuid": "ffff", "url": "https://f.test/",
+                "hlc": { "wall_ms": NOW - TOMBSTONE_GC_AGE_MS - 1, "counter": 0, "node": "n" },
+                "deleted": true,
+            });
+            crate::jsonstore::save(app, "saved", &[old]).expect("seed the saved store");
+            assert_eq!(gc_tombstones(app, "saved", NOW), 1);
+            // A second pass has nothing left to do and must not claim otherwise, otherwise the
+            // `[aegis-sync] reaped N` log line becomes a lie the user cannot act on.
+            assert_eq!(gc_tombstones(app, "saved", NOW), 0);
+            assert!(crate::jsonstore::load(app, "saved").is_empty());
+        });
     }
 
     #[test]
