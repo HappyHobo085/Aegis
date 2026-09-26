@@ -119,11 +119,28 @@ pub fn dispatch<R: Runtime>(
             let node = crate::sync_identity::node_id(app);
             for s in STORES {
                 if let Some(arr) = bundle.get(*s).and_then(Value::as_array) {
-                    // Migrate envelope-less rows (a v1 bundle, or hand-edited) so every
-                    // imported record is syncable; rows that already have a uuid keep it.
+                    // Fill any gaps (a v1 or hand-edited bundle) AND re-stamp every LIVE row to
+                    // now, so the import counts as a modification made here rather than
+                    // inheriting the exporting machine's timestamps.
+                    //
+                    // This is load-bearing, not cosmetic: last-writer-wins is decided purely by
+                    // `hlc`, so a bundle that keeps its old stamps silently LOSES to whatever
+                    // the server already holds. The 2026-09-26 recovery is the concrete case —
+                    // the server still carried 104 `saved` tombstones stamped later in the day
+                    // than the bundle, so re-importing without this would have re-deleted the
+                    // rows it was restoring. See `jsonstore::restamp_after_import`, which also
+                    // explains why tombstones are deliberately left at their original stamp.
                     let mut migrated = arr.clone();
                     for it in migrated.iter_mut() {
-                        jsonstore::ensure_sync_meta(it, &node, jsonstore::now_ms());
+                        jsonstore::restamp_after_import(it, &node);
+                        // `savedAt` is the time the reading list *displays*. Leaving it at the
+                        // export date would make a just-restored page look months old, so the
+                        // import re-stamps it too — an import means "this is saved now".
+                        if *s == "saved" && !jsonstore::is_deleted(it) {
+                            if let Some(o) = it.as_object_mut() {
+                                o.insert("savedAt".into(), json!(jsonstore::now_ms()));
+                            }
+                        }
                     }
                     let _ = jsonstore::save(app, s, &migrated);
                     counts.insert((*s).into(), json!(arr.len()));
@@ -508,6 +525,92 @@ mod tests {
     /// An unknown key must be refused, not written. The allowlist is an ALLOW list on
     /// purpose: a new setting is not renderer- or bundle-writable until someone has decided
     /// what a valid value for it is.
+    #[test]
+    fn import_re_stamps_live_rows_so_the_restore_beats_whatever_the_server_holds() {
+        // The regression this pins: the bundle carries the EXPORTING machine's `hlc`, and
+        // last-writer-wins is decided purely by that field. With the old `ensure_sync_meta`
+        // (which only fills gaps) a row written earlier in the day than the server's state
+        // silently loses — which is exactly how the 2026-09-26 recovery would have re-deleted
+        // the rows it was restoring.
+        crate::test_support::with_tmp_app(|app| {
+            let old = 1_700_000_000_000i64;
+            let bundle = json!({
+                "saved": [{
+                    "id": 1, "url": "https://a.test/", "title": "A",
+                    "uuid": "11111111-1111-1111-1111-111111111111",
+                    "hlc": { "wall_ms": old, "counter": 0, "node": "other-machine" },
+                    "deleted": false,
+                    "savedAt": old,
+                }],
+            });
+            let res = dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
+                .expect("data.import is owned by this module")
+                .expect("a well-formed bundle must import cleanly");
+            assert_eq!(res.get("ok").and_then(Value::as_bool), Some(true));
+            let row = &crate::jsonstore::load(app, "saved")[0];
+            let hlc = crate::sync_envelope::from_value(row).expect("imported row must have an hlc");
+            assert!(
+                hlc.wall_ms > old,
+                "import must re-stamp the row to now, got wall_ms {} (was {old})",
+                hlc.wall_ms
+            );
+            assert_eq!(
+                row.get("uuid").and_then(Value::as_str),
+                Some("11111111-1111-1111-1111-111111111111"),
+                "the uuid is the record's identity and must NOT be regenerated"
+            );
+            let saved_at = row
+                .get("savedAt")
+                .and_then(Value::as_i64)
+                .expect("savedAt must survive");
+            assert!(
+                saved_at > old,
+                "the reading list must show the restore, not the export date"
+            );
+        });
+    }
+
+    #[test]
+    fn import_leaves_a_tombstone_at_its_original_stamp() {
+        // The conservative direction. Re-stamping a tombstone would turn a stale "deleted"
+        // into a fresh one and mass-delete on every other device as soon as the bundle synced.
+        // A stale delete must stay weak so it loses to a live record.
+        crate::test_support::with_tmp_app(|app| {
+            let old = 1_700_000_000_000i64;
+            let bundle = json!({
+                "saved": [{
+                    "id": 1, "url": "https://gone.test/", "title": "Gone",
+                    "uuid": "22222222-2222-2222-2222-222222222222",
+                    "hlc": { "wall_ms": old, "counter": 0, "node": "other-machine" },
+                    "deleted": true,
+                    "savedAt": old,
+                }],
+            });
+            let res = dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
+                .expect("data.import is owned by this module")
+                .expect("a well-formed bundle must import cleanly");
+            assert_eq!(res.get("ok").and_then(Value::as_bool), Some(true));
+            let row = &crate::jsonstore::load(app, "saved")[0];
+            assert!(
+                crate::jsonstore::is_deleted(row),
+                "the row must stay a tombstone"
+            );
+            let hlc = crate::sync_envelope::from_value(row).expect("tombstone keeps its hlc");
+            assert_eq!(
+                hlc.wall_ms, old,
+                "a tombstone must NOT be re-stamped by an import"
+            );
+            let saved_at = row
+                .get("savedAt")
+                .and_then(Value::as_i64)
+                .expect("savedAt survives");
+            assert_eq!(
+                saved_at, old,
+                "a tombstone's display timestamp is left alone too"
+            );
+        });
+    }
+
     #[test]
     fn import_refuses_an_unknown_setting_key() {
         with_tmp_app(|app| {

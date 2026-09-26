@@ -407,6 +407,58 @@ pub fn touch<R: Runtime>(item: &mut Value, app: &AppHandle<R>) {
     }
 }
 
+/// Re-stamp an imported record so the import counts as a modification **made now**.
+///
+/// # Why this exists
+/// `ensure_sync_meta` (used by the import path until 2026-09-27) only fills in what is
+/// *absent*, which is right for the lazy pre-sync migration but wrong for an import. A bundle
+/// written by another machine carries that machine's `hlc`, and last-writer-wins is decided
+/// purely by `hlc`. So a restore inherited the bundle's timestamps and then **lost every
+/// conflict to whatever the server already held** — which is precisely how the 2026-09-26
+/// recovery failed: the server still carried 104 `saved` tombstones stamped
+/// `wall_ms: 1790457549251`, and a bundle written at 12:38 the same day is older than them, so
+/// re-importing it would have re-deleted the very rows it was restoring.
+///
+/// An import is an explicit human act ("make this what my data is now"), so the records it
+/// brings in must be *newer* than the state being replaced. Hence a fresh `hlc` here.
+///
+/// # Tombstones are deliberately NOT re-stamped
+/// Re-stamping a tombstone would turn a stale "deleted" into a fresh one and mass-delete on
+/// every other device the moment the bundle synced. Leaving tombstones at their original
+/// timestamp is the conservative direction: a stale delete stays weak and loses to a live
+/// record, so a restore can never become an accidental wipe. (The reverse hazard — an old
+/// tombstone being *resurrected* — is pre-existing and is handled by the retention window.)
+///
+/// # What is preserved
+/// The `uuid` is never regenerated: it is the record's identity for dedup and for
+/// `remove {uuid}` on the server. Re-stamping only the clock is what "the same record, just
+/// modified" means. Rows already carrying a `uuid`/`deleted` keep them.
+///
+/// AppHandle-free (takes `node`) so it is unit-testable, like `ensure_sync_meta`.
+/// Returns whether anything was changed.
+pub fn restamp_after_import(item: &mut Value, node: &str) -> bool {
+    let Some(obj) = item.as_object_mut() else {
+        return false;
+    };
+    let mut changed = false;
+    if !obj.contains_key("uuid") {
+        obj.insert("uuid".into(), json!(uuid::Uuid::new_v4().to_string()));
+        changed = true;
+    }
+    if !obj.contains_key("deleted") {
+        obj.insert("deleted".into(), json!(false));
+        changed = true;
+    }
+    // Read the flag back out of the object we just mutated: a row that arrived *without* a
+    // `deleted` key is live (the default we just inserted), and a row that arrived with
+    // `deleted: true` must be left alone.
+    if obj.get("deleted").and_then(Value::as_bool) != Some(true) {
+        obj.insert("hlc".into(), fresh_hlc(node));
+        changed = true;
+    }
+    changed
+}
+
 /// Tombstone (set `deleted=true` + bump hlc) every record matching `pred`. The records
 /// stay in the array so the delete propagates to peers. Returns whether any matched.
 pub fn tombstone<R: Runtime>(
