@@ -4,8 +4,20 @@ services:
     image: aegis-sync-server
     restart: unless-stopped
     ports:
-      - "${AEGIS_SYNC_PORT:-8787}:8787"
+      # Loopback by DEFAULT. The container has no TLS listener of its own and its
+      # transport-level auth is nil (the Ed25519 AegisSig token is application-level),
+      # so publishing 8787 on every interface hands an unencrypted, unauthenticated-
+      # at-the-transport sync endpoint to the whole network. Reaching it from another
+      # host therefore needs a TLS reverse proxy in front of it — and once you have
+      # one, bind the port to the proxy's address rather than 0.0.0.0 (see DOCKER.md).
+      # To publish deliberately: AEGIS_SYNC_BIND=0.0.0.0 docker compose up -d
+      - "${AEGIS_SYNC_BIND:-127.0.0.1}:${AEGIS_SYNC_PORT:-8787}:8787"
     environment:
+      # AEGIS_SYNC_ADDR=0.0.0.0:8787
+      # Binding the LISTENER to 0.0.0.0 inside the container is required regardless of
+      # the host-side mapping above: Docker's port publishing reaches the container
+      # over its bridge IP, so a 127.0.0.1 listener would be unreachable even when the
+      # mapping is wide. The two are independent — this one is not the exposure.
       - AEGIS_SYNC_ADDR=0.0.0.0:8787
       - AEGIS_SYNC_DATA=/data/aegis-sync.json
     volumes:
