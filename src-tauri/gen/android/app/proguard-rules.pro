@@ -15,6 +15,17 @@
     @android.webkit.JavascriptInterface <methods>;
 }
 
+# AegisKeystore.wrap/unwrap are *plain* (non-native) static methods that Rust calls from
+# the other direction, via a JNI up-call (src-tauri/src/sync_keystore.rs). R8 cannot see
+# those call sites, so the minified release build strips them — verified by dexdump on the
+# shipped APK, where Lcom/aegis/browser/AegisKeystore; had "Direct methods : -" i.e. zero
+# methods. The up-call then died with NoSuchMethodError, the seed was never persisted, and
+# Settings → Sync fell back to the setup screen after every restart. Keep them by name.
+-keep class com.aegis.browser.AegisKeystore {
+    public static java.lang.String wrap(byte[]);
+    public static byte[] unwrap(java.lang.String);
+}
+
 # Uncomment this to preserve the line number information for
 # debugging stack traces.
 #-keepattributes SourceFile,LineNumberTable

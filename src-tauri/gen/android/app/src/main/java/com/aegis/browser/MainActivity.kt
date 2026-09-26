@@ -128,6 +128,14 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
 
   override fun onCreate(savedInstanceState: Bundle?) {
     enableEdgeToEdge()
+    // Hand the sync Keystore class to native BEFORE super.onCreate(), because that is what runs
+    // Rust.create() → the Rust setup() hook → the boot-time sync restore, which up-calls
+    // AegisKeystore. See NativeSyncKeystore for why Rust can't look the class up itself.
+    try {
+      NativeSyncKeystore.provideClass(AegisKeystore::class.java)
+    } catch (t: Throwable) {
+      Log.w("AegisSync", "could not provide the Keystore class to native", t)
+    }
     super.onCreate(savedInstanceState)
     // Draw into the display cutout on every edge so notches / punch-holes / curved
     // edges are reported as insets (which we push to the chrome) instead of letterboxed.
@@ -217,7 +225,14 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       if (!url.startsWith("http")) return null // skip about:/data:/blob:/file:
       return try {
         val host = request.url?.host
-        val firstParty = pageUrls[id] ?: ""
+        // First-party context. For the top-level DOCUMENT, the document is by definition its
+        // own first party — and `pageUrls[id]` is still the PREVIOUS page at this point
+        // (onPageStarted/doUpdateVisitedHistory for this navigation have not run yet), so using
+        // it here evaluated document-type ad rules against the wrong origin and could block a
+        // legitimate first-party document into a blank page. Subresources keep using the
+        // committed page URL.
+        val firstParty =
+          if (request.isForMainFrame) url else (pageUrls[id] ?: "")
         when {
           host != null && NativeSafety.isMalwareHost(host) -> {
             Log.i("AegisSafety", "BLOCK malware $url")
