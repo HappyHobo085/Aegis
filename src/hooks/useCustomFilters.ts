@@ -15,15 +15,20 @@ export function useCustomFilters(): {
       void aegis.customFilters.get().then((stored) => {
         if (active) setText(stored);
       });
-    load();
-    // Refetch when sync merges a remote custom-filter change.
-    const off = onSyncChange('customFilters', load);
+    // BUG(F2): `picker.onPicked` is an async `listen()` — its backend listener exists only
+    // once that IPC is processed — so it must be registered BEFORE the seed fetch. The
+    // `onSyncChange` bus below is synchronous, so it has no window and its position does not
+    // matter; `picker.onPicked` is the one that did, and a pick made while
+    // `customFilters.get` was in flight was lost.
     // Refetch when the ELEMENT PICKER appends a rule. `customfilters.rs` emits
     // nothing of its own, so without this a Settings > My Filters panel that is
     // already open keeps showing the pre-pick text until it is reopened — the
     // toolbar picker and the settings modal are rendered together, so both can be
     // open at once. `picker.picked` is the only signal the core sends.
     const offPicked = aegis.picker.onPicked(load);
+    load();
+    // Refetch when sync merges a remote custom-filter change.
+    const off = onSyncChange('customFilters', load);
     return () => {
       active = false;
       off();

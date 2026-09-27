@@ -97,15 +97,29 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   must register the subscription **first**. `aegis.X.onY(cb)` reaches the core through an
   async `listen()`, but the backend listener only exists once the `listen` IPC is
   _processed_ — and both requests ride the same transport, so seeding first meant any event
-  emitted in that window was lost with nothing to refetch it. This applies to
-  `useTabs`, `useSync`, `useProxy`, `useAdblock`, `useZoom`, `usePermissions` and
-  `useDownloads`. It does **not** apply to the hooks that subscribe through the local
-  `syncBus` (`onSyncChange` is a synchronous in-renderer pub/sub, so there is no window):
-  `useSaved`, `useSettings`, `useFingerprint`, and `useAdblock`'s allowlist channel.
-  The regression test models the transport honestly (ordered dispatch, listener registered
-  at process time, the transition emitted between the two) because `vitest.setup.ts` mocks
-  `listen` as an already-resolved promise — a zero-width window that hides the whole class
-  of bug.
+  emitted in that window was lost with nothing to refetch it. It does **not** apply to a hook
+  that subscribes only through the local `syncBus` (`onSyncChange` is a synchronous
+  in-renderer pub/sub, so there is no window): `useSaved`, `useSettings`, `useFingerprint`,
+  and `useAdblock`'s allowlist channel. **A hook can be in both camps** — `useCustomFilters`
+  subscribes to the syncBus (position irrelevant) _and_ to `aegis.picker.onPicked`, which is
+  a real async `listen()` and must be registered first. Judge each subscription, not each
+  hook.
+  **The list is DERIVED, not hand-maintained.** The guard scans `hooks/use[A-Z]*.ts` for
+  files that read a seed (`aegis.*.getState|get|list`) _and_ register an async
+  `aegis.*.on*` subscription, and fails if any of them has no case in its own table — so a
+  new seeding hook cannot join the class silently. Two details make that scan sound: it
+  **strips comments first** (otherwise `useDownloads`' own `// BUG(F2): subscribe BEFORE…`
+  note reads as a seed preceding a correctly-ordered subscribe, and the guard
+  false-positives), and the scan is a **superset trigger only** — the ordering assertion is
+  behavioural, never textual. The second, uniform assertion per case
+  (`` `useFoo — its first request on mount is a subscribe, not a fetch` ``) needs no
+  per-hook observable, so it also covers hooks whose seed feeds a shape the file never reads.
+  To prove the completeness guard is not vacuous, add a throwaway
+  `hooks/useVacProbe.ts` that seeds and subscribes with no case: the guard must go red and
+  **name** it. The regression test models the transport honestly (ordered dispatch, listener
+  registered at process time, the transition emitted between the two) because
+  `vitest.setup.ts` mocks `listen` as an already-resolved promise — a zero-width window that
+  hides the whole class of bug.
 - **`hooks/useChromeHeights`** — measures the chrome bands and derives `topInset`, which
   `App` reports to `view.setContentInset`. The measuring `useLayoutEffect` has **no
   dependency array**: it runs after every commit and bails unless the measured elements'
@@ -494,6 +508,6 @@ claim that something is broken.
 `src/main.tsx` (the `createRoot` entry point), `src/vite-env.d.ts`, and
 `src/testFixtures/**` (a mock). The measured totals, the ratchet and the full gap
 decomposition live in the **root** `AGENTS.md`; they are not restated here. Short version:
-`src/` is at 88.0% statements (736/6139 uncovered) and the debt is concentrated in
+`src/` is at 88.0% statements (736/6148 uncovered) and the debt is concentrated in
 `src/components/` (479) and the `App.tsx` root (152) — the hooks sit at 42 uncovered
-statements out of 1372, and `shared/` is at 0.
+statements out of 1350, and `shared/` is at 0.

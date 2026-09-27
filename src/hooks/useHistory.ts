@@ -41,12 +41,16 @@ export function useHistory(): {
   }, []);
 
   useEffect(() => {
-    // Initial load goes through refresh() so it shares the seq-guard (a slow mount
-    // fetch can't clobber a fast history.changed refresh, or vice versa).
-    void refresh();
+    // BUG(F2): subscribe BEFORE the seed fetch. `history.onChanged` registers its backend
+    // listener only when the `listen` IPC is processed, so a visit recorded while the initial
+    // `history.list` was still queued was lost with nothing to refetch it — the panel would
+    // not show the page the user had just visited.
     const unsubscribe = aegis.history.onChanged(() => {
       void refresh();
     });
+    // Initial load goes through refresh() so it shares the seq-guard (a slow mount
+    // fetch can't clobber a fast history.changed refresh, or vice versa).
+    void refresh();
     return () => {
       refreshSeq.current++; // invalidate any in-flight refresh on unmount
       unsubscribe();

@@ -40,10 +40,13 @@ export function useVault(): UseVault {
 
   useEffect(() => {
     let active = true;
+    // BUG(F2): subscribe BEFORE the seed fetch, or an unlock that completes while
+    // `vault.getState` is in flight is lost — the Passwords panel keeps saying "locked" and
+    // offers no way in until the user triggers another vault event.
+    const off = aegis.vault.onState((s) => setState(s));
     void aegis.vault.getState().then((s) => {
       if (active) setState(s);
     });
-    const off = aegis.vault.onState((s) => setState(s));
     return () => {
       active = false;
       off();

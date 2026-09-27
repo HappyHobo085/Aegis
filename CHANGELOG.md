@@ -9,6 +9,36 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Seven hooks seeded themselves from the core BEFORE registering their live
+  subscription**, so a state event emitted in that window was lost with nothing to
+  refetch it. `aegis.X.onY(cb)` reaches the core through an async `listen()`, but the
+  backend listener only exists once the `listen` IPC is _processed_, and both requests
+  ride the same transport — so the seven dispatched the seed first and had a real,
+  non-zero window in which an event was dropped. Each had a concrete user-visible
+  loss: `useNav` left the address bar on the page the user had just left; `useSafety`
+  could lose a malware interstitial entirely, so no warning page was ever shown;
+  `useUpdate` never learned a download had finished, so the update prompt and its
+  restart button could not appear; `useVault` lost a completing unlock, leaving the
+  Passwords panel "locked" with no way in; `useCustomFilters` kept showing the
+  pre-pick text in an already-open My Filters panel; `useSubscriptions` and
+  `useHistory` dropped a subscription change and a recorded visit respectively. All
+  seven now register the subscription first, with a `// BUG(F2):` note naming the
+  loss next to the ordering.
+  `useCustomFilters` was the subtle one: it subscribes to the _local synchronous_
+  `syncBus`, where position is irrelevant, **and** to `aegis.picker.onPicked`, a real
+  async `listen()` that was registered after the seed — so the rule is per
+  subscription, not per hook.
+- **The regression guard's hook list is now derived instead of hand-maintained.** It
+  scans `hooks/` for files that read a seed and register an async `aegis.*.on*`
+  subscription, and fails if any of them has no case — so a new seeding hook cannot
+  join this class silently. The scan strips comments first (otherwise a hook's own
+  explanatory note reads as a misplaced seed) and is used only as a completeness
+  trigger; the ordering assertion itself is behavioural, driving a real mid-flight
+  event through a transport that registers listeners at process time. Each case also
+  asserts uniformly that the hook's _first_ request on mount is the subscription,
+  which needs no per-hook observable. Proven non-vacuous: an added throwaway
+  `useVacProbe.ts` with no case turns the guard red and it names the file.
+
 - **A blocked-redirect loop could drive unbounded background tabs and quadratic
   `tabs.json` writes.** Every blocked redirect opened its destination natively, with no
   rate limit and no dedup, and each open re-serialised the entire tab registry with an

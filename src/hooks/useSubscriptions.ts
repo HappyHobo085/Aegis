@@ -18,6 +18,11 @@ export function useSubscriptions(): {
       void aegis.subs.list().then((items) => {
         if (active) setSubs(items);
       });
+    // BUG(F2): subscribe BEFORE the seed fetch. `subs.onChanged` registers its backend listener
+    // only when the `listen` IPC is processed, so a `subs.changed` emitted while
+    // `subs.list` was still queued was lost — and the hook's own re-read on it is the only
+    // thing that ever fixes up the stale metadata.
+    const off = aegis.subs.onChanged(load);
     load();
     // `subs.add` and `subs.setEnabled` return the store BEFORE their background
     // fetch runs, so a brand-new row comes back with `lastUpdated: null` and is
@@ -26,7 +31,6 @@ export function useSubscriptions(): {
     // previously had NO subscription at all, so the metadata stayed stale forever.
     // `updateNow` deliberately keeps its own explicit re-read — it already awaits
     // its own event, and a second refetch there would be a redundant round trip.
-    const off = aegis.subs.onChanged(load);
     return () => {
       active = false;
       off();

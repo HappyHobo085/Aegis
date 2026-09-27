@@ -34,6 +34,14 @@ export function useNav(viewId: ViewId): {
 
   useEffect(() => {
     let active = true;
+    // BUG(F2): subscribe BEFORE the seed fetch. `nav.onState` registers its backend listener
+    // only once the `listen` IPC is processed, and both requests ride the same transport — so
+    // fetching first meant a navigation that completed while `nav.getState` was still in flight
+    // was lost with nothing to refetch it, leaving the address bar on the page the user just
+    // left.
+    const unsubscribe = aegis.nav.onState((s) => {
+      if (s.viewId === viewId) setState(s);
+    });
     void aegis.nav.getState(viewId).then((s) => {
       if (active) setState(s);
     });
@@ -44,9 +52,6 @@ export function useNav(viewId: ViewId): {
     // search engine (or it syncs from another device) — without waiting for a reload.
     const offSettings = onSettingsChange((s) => {
       if (active) setSearchTemplate(s.defaultSearchTemplate);
-    });
-    const unsubscribe = aegis.nav.onState((s) => {
-      if (s.viewId === viewId) setState(s);
     });
     return () => {
       active = false;
