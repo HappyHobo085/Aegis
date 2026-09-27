@@ -36,6 +36,14 @@ GitHub Actions workflows and Dependabot config for Aegis.
     declared in each `Cargo.toml`, on a toolchain resolved from that manifest (the one
     job that deliberately does NOT use `rust-toolchain.toml`, so a new stable release
     cannot silently break the declared floor).
+    The commands are `cargo +<msrv> check …`, and the `+<msrv>` is **load-bearing**.
+    `dtolnay/rust-toolchain` only sets the rustup _default_, and a default loses to the
+    _directory override_ that the repo-root `rust-toolchain.toml` installs — so a plain
+    `cargo check` here compiled 1.98.0 and the declared floor was never built (proved in
+    CI run 36281195902, the only job syncing two toolchains; and locally, where
+    `cargo --version` reports the override's 1.98.0 while `cargo +stable --version`
+    reports the default's 1.98.1). Each step echoes `cargo +<msrv> --version` so the
+    toolchain that actually ran is one grep away in the log.
 
   Every cargo invocation passes `--locked` (only `cargo fmt` does not — cargo-fmt has
   no such flag), so **`Cargo.lock` is part of the gate**: a dependency change that is

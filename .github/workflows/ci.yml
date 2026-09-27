@@ -331,6 +331,16 @@ jobs:
       # NOTE: keep `rust-version` three-component (1.85.0, not 1.85) — dtolnay's action
       # rewrites a bare `1.NN` into whatever the current release cycle is, which would
       # silently stop testing the declared floor.
+      #
+      # Installing it is NOT enough: `dtolnay/rust-toolchain` sets the rustup DEFAULT,
+      # and a default loses to a DIRECTORY OVERRIDE. rust-toolchain.toml sits at the
+      # repo root and pins 1.98.0, and these steps run from the repo root, so a plain
+      # `cargo check` here resolved 1.98.0 and silently re-checked what the `rust` job
+      # already checks — the declared floor was never compiled at all (CI run
+      # 36281195902: this job was the only one syncing BOTH 1.85.0 and 1.98.0, and
+      # `cargo check (src-tauri)` was the step that reported "syncing channel updates
+      # for 1.98.0" → "Compiling app"). The `+toolchain` form below outranks both the
+      # override and the default, which is what actually makes this job test the floor.
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
@@ -343,7 +353,14 @@ jobs:
             src-tauri/target
             sync-server/target
           key: ci-msrv-${{ steps.msrv.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock', 'sync-server/Cargo.lock') }}
+      # `+<version>` is load-bearing, not stylistic — see the note on the step above.
+      # Echoing `cargo --version` makes the toolchain that actually ran visible in the
+      # log, so a future regression here is a one-line read instead of a hunt.
       - name: cargo check (src-tauri)
-        run: cargo check --locked --manifest-path src-tauri/Cargo.toml
+        run: |
+          cargo +${{ steps.msrv.outputs.version }} --version
+          cargo +${{ steps.msrv.outputs.version }} check --locked --manifest-path src-tauri/Cargo.toml
       - name: cargo check (sync-server)
-        run: cargo check --locked --manifest-path sync-server/Cargo.toml
+        run: |
+          cargo +${{ steps.msrv.outputs.version }} --version
+          cargo +${{ steps.msrv.outputs.version }} check --locked --manifest-path sync-server/Cargo.toml
