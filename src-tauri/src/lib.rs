@@ -285,18 +285,27 @@ pub fn install_adblock<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         .join("content-filters");
     let custom = customfilters::load(&app);
     let subs_text = subs::enabled_text(&app);
+    // The per-host allowlist becomes `ignore-previous-rules` exemptions INSIDE the converted
+    // rules (adblock_convert::allowlist_exemptions), so it is part of the filter content and
+    // must be part of the cache key — otherwise a stale compiled filter is reused across an
+    // allowlist change and the exemption silently never appears. Read from the persisted
+    // store (not the in-memory cache) so this is correct even if the two are briefly out of
+    // step, and so the hash matches what `adblock::dispatch` re-applies through.
+    let allowlist = adblock::load_allowlist_hosts(&app);
     std::thread::spawn(move || {
         use std::hash::{Hash, Hasher};
         // Convert EVERY bundled list (ads + trackers + Peter Lowe's), not just EasyList,
         // so the WebKit content filters match the same set as the engine/inject tiers.
         let bundled = adblock_lists::ALL;
-        // Cache key = source hash (all bundled lists + custom rules + enabled subscriptions).
+        // Cache key = source hash (all bundled lists + custom rules + enabled subscriptions
+        // + the allowlist the exemptions are generated from).
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         for list in bundled {
             list.hash(&mut hasher);
         }
         custom.hash(&mut hasher);
         subs_text.hash(&mut hasher);
+        allowlist.hash(&mut hasher);
         let marker = store_dir.join(format!("v{:x}.ready", hasher.finish()));
         let cached = marker.exists();
         let sources: Vec<&str> = bundled
@@ -304,7 +313,7 @@ pub fn install_adblock<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
             .copied()
             .chain([custom.as_str(), subs_text.as_str()])
             .collect();
-        match adblock_convert::to_content_blocker_chunks(&sources, 25_000) {
+        match adblock_convert::to_content_blocker_chunks(&sources, 25_000, &allowlist) {
             Ok(chunks) => {
                 eprintln!(
                     "[aegis-cf] filter lists -> {} chunks (cached={cached})",

@@ -14,6 +14,14 @@
 // Converted rules already include cosmetic `css-display-none`, so the content filters
 // cover element hiding too.
 //
+// The per-host ad-block allowlist rides along as `ignore-previous-rules` exceptions
+// compiled INTO these rules (`adblock_convert::allowlist_exemptions`) — WebKit has no
+// per-request interception to consult at filter-compile time. Because `ignore-previous-
+// rules` only reaches rules in the SAME content filter, and each chunk here is its own
+// filter, the converter appends a copy of the exceptions to EVERY chunk. An allowlist
+// change therefore has to rebuild and re-apply the filters, which `adblock.rs` does via
+// `install_adblock` (the result is hash-cached on the lists + the allowlist).
+//
 // Mechanism proven (a content filter blocks a target URL; verified 2026-06-13).
 #![allow(dead_code)]
 use std::ffi::CString;

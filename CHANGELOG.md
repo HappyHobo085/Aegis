@@ -9,6 +9,29 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The ad-block allowlist was accepted by the UI and then ignored by every tier that
+  actually blocks something.** "Allowlist this site" — which also doubles as the per-site
+  WebRTC escape hatch, i.e. "I trust this site" — filtered the site anyway on all four
+  platforms, in three different ways. The injected-JS tier already _received_ the
+  allowlist flag and used it only for the WebRTC shim, so an allowlisted page still had its
+  beacons rejected, its ad slots hidden and its cross-origin `window.open` stubbed. The
+  WebView2 tier passed an empty source page, which made the engine's per-page veto
+  unreachable and made every request look first-party (so the privacy lists'
+  `$third-party` rules never fired either). The declarative WebKit filters — the _only_
+  tier that blocks a page's subresources on Linux — had nowhere to ask, so the allowlist
+  was recorded in state and never applied to the filters, and toggling it did nothing at
+  all there.
+  Each tier now honours it by the mechanism it actually has: the engine vetoes per
+  request; the WebKit filters carry `ignore-previous-rules` exceptions scoped by
+  `if-domain`, compiled in and rebuilt on change; the injected JS omits the whole
+  ad-block layer. Two consequences worth stating plainly: the engine's veto was an
+  **exact** host match, so an allowlisted `example.com` never covered `www.example.com`
+  even in principle (the UI said it did) — the scope test is now one shared, documented
+  function; and the WebKit exception must be repeated in _every_ chunk, because
+  `ignore-previous-rules` reaches only rules in the same content filter and each chunk is
+  its own. A malformed allowlist host (the store is syncable, so it is remotely writable)
+  is now dropped rather than handed to WebKit, which would discard the whole filter and
+  turn ad-blocking off everywhere.
 - **The element picker's confirmation toast never appeared, on any platform.** The
   toolbar picker awaits a `rule` off the return value of `picker.start`, but `start`
   only injects the picking overlay and returns — and none of its four platform arms ever

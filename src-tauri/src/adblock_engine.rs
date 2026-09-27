@@ -5,7 +5,6 @@
 //! WebKit content filters (`adblock_webkit.rs`); this is their Chromium-side
 //! counterpart, reusing the same EasyList and engine the desktop converter parses.
 
-use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
@@ -19,11 +18,15 @@ use adblock::Engine;
 /// `adblock::dispatch` (the JNI `should_block` runs without an AppHandle, so it
 /// reads these instead). Defaults match `AdblockState::default()` (on, empty), so no
 /// startup sync is needed.
+///
+/// A `Vec`, not a `HashSet`: the veto is a subdomain test (`adblock::host_covered`), which
+/// a set cannot answer, and the list is a handful of user-added hosts — cheaper to scan
+/// than to hash a string per request.
 static ENABLED: AtomicBool = AtomicBool::new(true);
-static ALLOWLIST: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static ALLOWLIST: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
 
-fn allowlist() -> &'static Mutex<HashSet<String>> {
-    ALLOWLIST.get_or_init(|| Mutex::new(HashSet::new()))
+fn allowlist() -> &'static Mutex<Vec<String>> {
+    ALLOWLIST.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 /// Mirror the ad-block on/off + per-host allowlist into the engine's view. Called
@@ -33,6 +36,18 @@ pub fn set_policy(enabled: bool, allowlisted_hosts: &[String]) {
     let mut a = allowlist().lock().unwrap_or_else(|e| e.into_inner());
     a.clear();
     a.extend(allowlisted_hosts.iter().map(|h| h.to_ascii_lowercase()));
+}
+
+/// Whether the engine's mirrored allowlist covers `host`, with the same scope as
+/// `adblock::host_allowlisted` (exact or subdomain). Exists because the JNI tier runs
+/// without an `AppHandle` and so cannot read `AdblockState`; it reads the same mirror
+/// `should_block` does.
+pub fn host_is_allowlisted(host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    let g = allowlist().lock().unwrap_or_else(|e| e.into_inner());
+    crate::adblock::host_covered(&g, host)
 }
 
 /// Lowercased host of a URL (minimal parse — scheme://[user@]host[:port]/...).
@@ -153,11 +168,7 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
         return false;
     }
     if let Some(host) = host_of(source_url) {
-        if allowlist()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(&host)
-        {
+        if host_is_allowlisted(&host) {
             return false;
         }
     }

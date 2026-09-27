@@ -115,6 +115,14 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
   - `adblock.rs` — state machine (enabled + allowlist), `adblock.*` IPC.
     `sync_engine` mirrors the on/off + allowlist into `adblock_engine` on **all**
     targets (desktop + Android), so the pop-under check honors them everywhere.
+    **`host_covered(allowlist, host)` is the ONE definition of the allowlist's scope**
+    (exact host or a subdomain of it; `notexample.com` is not covered by
+    `example.com`). Every tier that cannot ask the engine goes through it —
+    `adblock_engine`'s per-request veto, `adblock_inject`'s compose decision, and
+    `host_allowlisted` — because they had drifted: the engine's was an exact `HashSet`
+    hit with no subdomain case, so an allowlisted site's subdomains stayed filtered
+    there while the UI promised otherwise. It is allocation-free deliberately
+    (`should_block` runs it per intercepted subresource).
     Also owns the **shield-badge counters**: `note_blocked`/`reset_page` keep a
     monotonic session total + per-tab page count and emit `adblock.blockedCount`;
     `getState` returns the active tab's `pageBlocked` so the chrome recovers the
@@ -131,7 +139,37 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     content-filter-blocked ads (cancelled before the signal fires); see gotcha 6.
     **Unit-tested via `test_support::with_tmp_app`:** default state, `set_enabled`,
     `toggle_allowlist` + subdomain coverage + persist, `clear_allowlist`,
-    `note_blocked` session/page counters, per-tab page count + reset (8 tests).
+    `note_blocked` session/page counters, per-tab page count + reset, plus the pure
+    `host_covered` scope table and the engine's subdomain veto (10 tests).
+    **The allowlist reaches every tier, each by a different mechanism** — this was the
+    defect it did NOT do before (a "trusted site" was still filtered everywhere):
+    - **engine** (`adblock_engine`): `set_policy` mirrors the hosts in; `should_block`
+      vetoes on an allowlisted page host. Android's `shouldInterceptRequest` and the
+      desktop pop-under check both go through it.
+    - **declarative WebKit filters** (Linux — the only tier that blocks a page's
+      subresources there): no per-request seam exists, so the allowlist is compiled
+      INTO the rules as `ignore-previous-rules` exceptions scoped by `if-domain`
+      (`adblock_convert::allowlist_exemptions`), and `after_allowlist_change` rebuilds
+      - re-applies them via `install_adblock` (hash-cached on the lists **and** the
+        allowlist). **The exception is appended to EVERY chunk**, not once at the end:
+        `install_on` loads each chunk as its own content filter and WebKit's
+        `ignore-previous-rules` reaches only rules in the SAME filter
+        (webkit.org/blog/3476), so a single trailing copy would cancel only the last
+        chunk's ~3k of ~78k rules and look perfectly correct while exempting nothing.
+    - **injected JS** (`adblock_inject`): `script()` was already handed
+      `host_allowlisted` but used it only for the WebRTC shim; `adblock_layer` now
+      gates the pop-under guard + the fetch/XHR/cosmetic body on it. Farbling is NOT
+      gated (separate `fp-allowlist`). Android's JNI getter takes the page host and
+      calls the same seam via `adblock_engine::host_is_allowlisted`.
+    - **Windows WebView2** (`adblock_win`): `handle` passed an empty source page, so
+      the allowlist veto was unreachable (`host_of("")` is `None`) and every request
+      looked first-party. It now reads the real page URL from `ICoreWebView2::Source`.
+      Compile-verified only — the module is `#[cfg(target_os = "windows")]`, so no
+      test for it can run on a Linux host.
+      A non-ASCII or otherwise malformed allowlist host is DROPPED, not passed to WebKit
+      (`adblock_convert::usable_if_domain`): a filter WebKit cannot compile is discarded
+      wholesale, which would disable ad-blocking for every site. The allowlist is a
+      SYNCABLE store, so a remote device can put an arbitrary string in it.
   - `adblock_engine.rs` — Brave `adblock::Engine`. **`Engine` is `!Send`**, so it
     lives on one dedicated thread (OnceLock); queries cross via mpsc. Android JNI
     entry `should_block(...)`. Compiled on **all desktop + Android** (not just
@@ -143,7 +181,9 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     `MainActivity.onCreateWindow` via `NativeAdblock.shouldBlock`.
   - `adblock_webkit.rs` (Linux) — declarative WebKit content filters via
     `adblock_convert.rs` (Brave → Safari content-blocker JSON), chunked ~25k
-    rules/filter (WebKit caps ~50k), disk-cached by hash. **Filters are per-webview
+    rules/filter (WebKit caps ~50k), disk-cached by hash **over the lists AND the
+    allowlist** (the allowlist is compiled into the rules, so it is part of the filter
+    content). **Filters are per-webview
     (per-tab), not global** — `apply_filters` covers every content webview + caches
     the chunks; `nav::spawn_tab` calls `apply_to_new_tab` so tabs opened _after_
     boot get filters too (not just the boot-active tab); `remove_all` clears all.
@@ -155,9 +195,14 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     a new window to a rotating ad domain no list can track. Same-origin / `about:blank` opens
     pass through (native `on_new_window` vets those). Trade-off: legit cross-origin scripted
     popups (e.g. OAuth) are blocked too; real `<a target=_blank>` links still open.
+    `adblock_layer(allowed)` is the single seam gating the guard + the heavy body on the
+    ad-block allowlist (an allowlisted page gets neither), used by desktop `compose` and
+    by Android's `NativeInject.documentStartScript(host)` JNI getter alike. Kotlin's
+    `documentStartScriptCache` is therefore a `ConcurrentHashMap` **keyed by host**, not a
+    single value — a process-wide one would hand the first tab's script to every later tab.
     **Anti-fingerprinting (farbling) — Task 6:** `script(app, host_allowlisted, host)` now
     also appends `farble::shim_for(level, fp_allowlisted)` after the popup guard (and after
-    the non-Linux ad-block body) via `compose(webrtc, farble)`. The farble shim uses the
+    the non-Linux ad-block body) via `compose(webrtc, farble, adblock_allowed)`. The farble shim uses the
     SEPARATE `fp-allowlist` (`farble::host_allowlisted`), not the ad-block allowlist. `off`
     level or an fp-allowlisted host → `""` → no injection (fail-safe no-op). **Per-spawn
     limitation (same as WebRTC shim):** the shim is evaluated once at content-webview creation;

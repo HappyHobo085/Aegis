@@ -571,22 +571,30 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   /** Create a new native WebView for [id], configure it, add it hidden to the container,
    *  and begin loading [url]. The caller registers it in tabWebViews. */
   // The document-start script (pop-under guard + injected ad-block tier) from the Rust
-  // adblock_inject module. The SAME string for every tab and up to ~1MB, so it is built
-  // ONCE and cached (re-reading it per tab would copy ~1MB over JNI per tab). A JNI failure
-  // returns "" — which disables injection rather than crashing — and is NOT cached, so a
-  // later tab retries instead of losing injection for the whole process. Warmed on a worker
-  // thread at boot (see onWebViewCreate) so the build never lands on the UI thread.
-  @Volatile private var documentStartScriptCache: String? = null
+  // adblock_inject module, up to ~1MB — so it is cached rather than rebuilt per tab
+  // (re-reading it per tab would copy ~1MB over JNI per tab).
+  //
+  // The cache is keyed BY HOST, not a single value: the script depends on the ad-block
+  // allowlist, and an allowlisted page must receive NO ad-block injection. A single
+  // process-wide value would hand whichever tab was created first its script to every
+  // later tab, so the allowlist would apply to the wrong pages (or to none). Keying by host
+  // keeps the ~1MB saving for the overwhelmingly common case of a user browsing one site.
+  //
+  // A JNI failure returns "" — which disables injection rather than crashing — and is NOT
+  // cached, so a later tab retries instead of losing injection for the whole process. Warmed
+  // on a worker thread at boot (see onWebViewCreate) so the build never lands on the UI
+  // thread.
+  private val documentStartScriptCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
-  private fun documentStartScript(): String {
-    documentStartScriptCache?.let { return it }
+  private fun documentStartScript(host: String): String {
+    documentStartScriptCache[host]?.let { return it }
     val script = try {
-      NativeInject.documentStartScript()
+      NativeInject.documentStartScript(host)
     } catch (t: Throwable) {
       Log.w("AegisInject", "document-start script unavailable; injection disabled", t)
       ""
     }
-    if (script.isNotEmpty()) documentStartScriptCache = script
+    if (script.isNotEmpty()) documentStartScriptCache[host] = script
     return script
   }
 
@@ -647,7 +655,17 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // initialization_script_for_all_frames. Guarded on the runtime feature (older System
     // WebView lacks DOCUMENT_START_SCRIPT → would throw); a malformed origin rule can also
     // throw IllegalArgumentException, so keep the try/catch.
-    val inject = documentStartScript()
+    // The content host, read ONCE and shared by the two per-site policy getters below: the
+    // ad-block allowlist (an allowlisted page gets no ad-block injection) and the
+    // SEPARATE farble fp-allowlist. An empty host means "unknown" and both Rust getters
+    // treat it as not-allowlisted, i.e. the protections stay on.
+    val contentHost = try {
+      Uri.parse(url).host ?: ""
+    } catch (t: Throwable) {
+      Log.w("AegisInject", "could not read the tab host", t)
+      ""
+    }
+    val inject = documentStartScript(contentHost)
     if (inject.isNotEmpty() &&
       WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
     ) {
@@ -677,15 +695,9 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
     // Anti-fingerprinting (farbling) shim, document-start, per the user's antiFingerprint
     // level. Read fresh per tab so a level change applies to new tabs; "" when no farbling
-    // applies (level "off" or clamped bogus value). The content host is passed so the Rust
-    // JNI getter can check the per-site fp-allowlist (mirrored from FarbleState).
+    // applies (level "off" or clamped bogus value). `contentHost` (read above) is passed so
+    // the Rust JNI getter can check the per-site fp-allowlist (mirrored from FarbleState).
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-      val contentHost = try {
-        Uri.parse(url).host ?: ""
-      } catch (t: Throwable) {
-        Log.w("AegisFarble", "could not read the tab host", t)
-        ""
-      }
       val farble = try {
         NativeFarble.farbleScript(contentHost)
       } catch (t: Throwable) {
@@ -803,7 +815,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
           Log.w("AegisAdblock", "engine warm-up failed", t)
         }
         try {
-          documentStartScript()
+          documentStartScript("")
         } catch (t: Throwable) {
           Log.w("AegisInject", "script warm-up failed", t)
         }

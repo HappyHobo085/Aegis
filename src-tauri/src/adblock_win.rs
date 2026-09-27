@@ -8,10 +8,14 @@
 //!
 //! Intricate unsafe COM, mirroring wry's webview2 handler patterns. Compile-verified
 //! (`cargo check --target x86_64-pc-windows-gnu` + the CI msvc build); the runtime
-//! behavior needs a Windows desktop to confirm.
+//! behavior needs a Windows desktop to confirm. There is consequently no unit test for
+//! this module — `mod adblock_win` is `#[cfg(target_os = "windows")]`, so a test here
+//! could only ever run on a Windows machine. What IS covered on every platform is the
+//! policy both this tier and Android's share, in `adblock_engine::should_block`; the
+//! Windows-specific part is only the plumbing that supplies the page URL.
 
 use webview2_com::Microsoft::Web::WebView2::Win32::{
-    ICoreWebView2Environment, ICoreWebView2WebResourceRequestedEventArgs,
+    ICoreWebView2, ICoreWebView2Environment, ICoreWebView2WebResourceRequestedEventArgs,
     COREWEBVIEW2_WEB_RESOURCE_CONTEXT_ALL,
 };
 use webview2_com::WebResourceRequestedEventHandler;
@@ -42,11 +46,11 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: tauri::AppHandle, id: 
             return;
         }
         let env = environment.clone();
-        let handler = WebResourceRequestedEventHandler::create(Box::new(move |_core, args| {
+        let handler = WebResourceRequestedEventHandler::create(Box::new(move |core, args| {
             if let Some(args) = args {
                 // Fail open: never break a page if our check errors. Count only in the
                 // branch that actually blocks (not allowed requests, not pop-under path).
-                if handle(&env, &args).unwrap_or(false) {
+                if handle(&env, core.as_ref(), &args).unwrap_or(false) {
                     crate::adblock::note_blocked(&app, id);
                 }
             }
@@ -57,6 +61,32 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: tauri::AppHandle, id: 
     }
 }
 
+/// The page URL the WebView is currently showing, or `""` if it can't be read.
+///
+/// Needed because the ad-block allowlist is a PER-PAGE trust list, and
+/// `ICoreWebView2WebResourceRequestedEventArgs` exposes no source-document property —
+/// the event args carry only the request. `ICoreWebView2::Source` (handed to the handler
+/// as its first argument) is the page the request belongs to.
+///
+/// Reading it per request is a COM call on the UI thread's hot path, so it is only done
+/// when the engine would otherwise block: `should_block` short-circuits on its toggle
+/// first, and the URL is parsed only on the blocking path.
+///
+/// # Safety
+/// Caller must ensure COM pointers are valid and this runs on the UI thread.
+unsafe fn page_url(core: Option<&ICoreWebView2>) -> String {
+    let Some(core) = core else {
+        return String::new();
+    };
+    let mut src = PWSTR::null();
+    // A failure here is not worth propagating: an unknown page just means the allowlist
+    // veto can't apply, which is the same as the pre-fix behaviour.
+    if core.Source(&mut src).is_err() || src.is_null() {
+        return String::new();
+    }
+    src.to_string().unwrap_or_default()
+}
+
 /// Block a single request if the adblock engine matches it. Returns `Ok(true)` when the
 /// request was blocked (so the caller can count it on the shield badge), `Ok(false)`
 /// when it was allowed.
@@ -65,6 +95,7 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: tauri::AppHandle, id: 
 /// Caller must ensure COM pointers are valid and this runs on the UI thread.
 unsafe fn handle(
     env: &ICoreWebView2Environment,
+    core: Option<&ICoreWebView2>,
     args: &ICoreWebView2WebResourceRequestedEventArgs,
 ) -> Result<bool> {
     let request = args.Request()?;
@@ -77,10 +108,13 @@ unsafe fn handle(
     if !url.starts_with("http") {
         return Ok(false);
     }
-    // EasyList domain anchors (`||host^`) match on the request host regardless of the
-    // source page or resource type, so an empty source / "other" type blocks the bulk
-    // of ad/tracker requests.
-    if crate::adblock_engine::should_block(&url, "", "other") {
+    // Ask the engine first with the real page URL, so BOTH the allowlist veto and any
+    // `$third-party`-conditional rule can see the page. Previously this passed `""`, which
+    // made the allowlist branch unreachable (`host_of("")` is `None`) and made every
+    // request look first-party — the tier blocked EasyList's domain anchors but ignored
+    // both the allowlist and the privacy lists' third-party rules.
+    let page = page_url(core);
+    if crate::adblock_engine::should_block(&url, &page, "other") {
         // Substitute an empty 204 so the resource never loads.
         let response = env.CreateWebResourceResponse(
             None,

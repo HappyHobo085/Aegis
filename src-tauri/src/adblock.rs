@@ -1,8 +1,20 @@
 //! Ad-block on/off + allowlist state, and the `adblock.*` IPC. On Linux,
 //! enabling re-installs the WebKit content filters (cached → fast) and disabling
-//! removes them. Per-host allowlisting on the declarative WebKit tier requires
-//! rebuilding filters with ignore-previous-rules exceptions — for now the host is
-//! recorded in state (a follow-up applies it to the filters).
+//! removes them.
+//!
+//! Every tier honours the per-host allowlist, which required a different mechanism in
+//! each because they block in genuinely different places:
+//!   - the matching engine (`adblock_engine`) just doesn't ask — `set_policy` mirrors the
+//!     hosts in, and `should_block` returns "allowed" for an allowlisted page host. This
+//!     is the tier Android's `shouldInterceptRequest` and the desktop pop-under check use.
+//!   - the declarative WebKit filters (Linux) have no such seam, so the allowlist is
+//!     compiled INTO the rules as `ignore-previous-rules` exemptions scoped by
+//!     `if-domain` (`adblock_convert::allowlist_exemptions`), and an allowlist change
+//!     rebuilds them (`after_allowlist_change`).
+//!   - the injected JS (`adblock_inject`) is not emitted at all for an allowlisted page.
+//!
+//! The allowlist doubles as the per-site WebRTC escape hatch ("trusted site"), and unlike
+//! the farbling allowlist it is SYNCABLE — see `sync_stores::SYNCABLE`.
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Mutex, OnceLock};
@@ -119,10 +131,48 @@ impl Default for AdblockState {
     }
 }
 
-/// Whether `host` is covered by the ad-block allowlist — an exact match or a subdomain
-/// of an allowlisted host (allowlisting `example.com` also covers `www.example.com`).
-/// Reused as the WebRTC per-site escape hatch: an allowlisted site is "trusted", so its
-/// WebRTC isn't filtered by the shim / native backstops.
+/// The ONE definition of the ad-block allowlist's scope: whether `host` is an exact
+/// match for, or a subdomain of, one of `allowlist`'s entries. Allowlisting
+/// `example.com` therefore also covers `www.example.com` but NOT `notexample.com`.
+///
+/// Shared by every tier that cannot ask the engine whether to block (`adblock_engine`'s
+/// per-request veto, `adblock_inject`'s compose decision, and `host_allowlisted` below)
+/// because each of them previously spelled this out on its own and they had drifted: the
+/// engine's was an exact `HashSet` hit with no subdomain case at all, so an allowlisted
+/// site's subdomains stayed filtered there while the UI promised otherwise.
+///
+/// Deliberately byte-exact, like the `adblock::host_allowlisted` expression it replaces:
+/// callers normalise case first (the engine lowercases the URL host, and
+/// `adblock_engine::set_policy` lowercases on store), so this stays a pure scope test and
+/// a case-folding change remains a separate, independently testable decision.
+///
+/// Allocation-free on purpose — `adblock_engine::should_block` calls this for EVERY
+/// intercepted subresource, so the `ends_with(&format!(".{h}"))` idiom it replaces (a
+/// String per entry, per request) is not affordable there.
+pub fn host_covered(allowlist: &[String], host: &str) -> bool {
+    if host.is_empty() {
+        return false;
+    }
+    allowlist.iter().any(|entry| {
+        if entry.is_empty() {
+            return false;
+        }
+        if host == entry {
+            return true;
+        }
+        // Subdomain test as a byte offset instead of `ends_with(&format!(".{entry}"))`.
+        // `>` not `>=` so `host == entry` (already handled) can't be re-matched, and the
+        // byte at the boundary must be the dot — which is what keeps `notexample.com`
+        // from matching entry `example.com`.
+        host.len() > entry.len() + 1
+            && host.ends_with(entry.as_str())
+            && host.as_bytes()[host.len() - entry.len() - 1] == b'.'
+    })
+}
+
+/// Whether `host` is covered by the ad-block allowlist. Reused as the WebRTC per-site
+/// escape hatch: an allowlisted site is "trusted", so its WebRTC isn't filtered by the
+/// shim / native backstops.
 #[cfg_attr(target_os = "android", allow(dead_code))] // desktop-only escape hatch in v1
 pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
     if host.is_empty() {
@@ -131,9 +181,7 @@ pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
     match app.try_state::<AdblockState>() {
         Some(s) => {
             let g = s.0.lock().unwrap_or_else(|e| e.into_inner());
-            g.allowlist
-                .iter()
-                .any(|h| host == h || host.ends_with(&format!(".{h}")))
+            host_covered(&g.allowlist, host)
         }
         None => false,
     }
@@ -207,6 +255,24 @@ fn sync_engine<R: Runtime>(app: &AppHandle<R>) {
     let _ = app;
 }
 
+/// Re-apply every tier that depends on the allowlist after it changed, then nudge sync.
+///
+/// The Linux rebuild is the step that used to be missing, and it is not optional. WebKit
+/// has no "reconfigure the installed filters" call, and the allowlist is compiled INTO the
+/// rules as `ignore-previous-rules` exemptions (`adblock_convert::allowlist_exemptions`),
+/// so the only way an allowlisted host stops being filtered is to reconvert and reload.
+/// Without it, toggling the allowlist did nothing at all on Linux — the tier that blocks
+/// every subresource on that platform. The cost is a full ~78k-rule conversion on a
+/// background thread, identical to what a filter-list edit already pays
+/// (`adblock_refresh::refresh`), and the result is hash-cached, so a repeat is cheap.
+fn after_allowlist_change<R: Runtime>(app: &AppHandle<R>) {
+    reseed_inner(app); // refresh the in-memory cache from the persisted store
+    sync_engine(app);
+    #[cfg(target_os = "linux")]
+    crate::install_adblock(app.clone());
+    crate::sync::nudge(app); // allowlist is SYNCABLE (no-op when sync is disabled)
+}
+
 /// Handle `adblock.*` channels. Returns `None` if not an adblock channel.
 pub fn dispatch<R: Runtime>(
     app: &AppHandle<R>,
@@ -257,9 +323,7 @@ pub fn dispatch<R: Runtime>(
                     return Some(Err(e));
                 }
             }
-            reseed_inner(app); // refresh the in-memory cache from the persisted store
-            sync_engine(app);
-            crate::sync::nudge(app); // allowlist is SYNCABLE (no-op when sync is disabled)
+            after_allowlist_change(app);
             Some(Ok(state_json(app)))
         }
 
@@ -268,9 +332,7 @@ pub fn dispatch<R: Runtime>(
             if let Err(e) = clear_hosts(app) {
                 return Some(Err(e));
             }
-            reseed_inner(app);
-            sync_engine(app);
-            crate::sync::nudge(app);
+            after_allowlist_change(app);
             Some(Ok(state_json(app)))
         }
 
@@ -370,6 +432,69 @@ mod tests {
                 "persisted store is empty after toggle-off"
             );
         });
+    }
+
+    // ── `host_covered`: the shared allowlist-scope predicate ──────────────────────
+    //
+    // Pure and global-state-free, so it needs no lock. It is the ONE definition every tier
+    // goes through, so these cases are the contract for all of them — the engine's
+    // per-request veto, the injected-JS compose decision, and `host_allowlisted` below.
+    #[test]
+    fn host_covered_is_exact_or_subdomain() {
+        let al = vec!["example.com".to_string()];
+        // exact
+        assert!(host_covered(&al, "example.com"));
+        // subdomains, at any depth
+        assert!(host_covered(&al, "www.example.com"));
+        assert!(host_covered(&al, "a.b.c.example.com"));
+        // NOT a suffix match: `notexample.com` and `example.com.evil.test` are unrelated
+        // hosts that merely end with (or contain) the entry.
+        assert!(
+            !host_covered(&al, "notexample.com"),
+            "suffix, not substring"
+        );
+        assert!(
+            !host_covered(&al, "example.com.evil.test"),
+            "must not match an entry that is only a PREFIX of the host"
+        );
+        // a leading-dot entry (`host == entry` would be false, but the subdomain test
+        // must not accidentally match the bare host either)
+        assert!(!host_covered(&al, "ample.com"));
+        // empty host never matches
+        assert!(!host_covered(&al, ""));
+        // an empty entry must not match everything (the `host.len() > entry.len() + 1`
+        // arithmetic would underflow-then-pass on an empty entry if unguarded)
+        assert!(!host_covered(&[String::new()], "example.com"));
+        // multiple entries, and the empty-host guard applies to the caller too
+        let many = vec!["a.test".to_string(), "b.test".to_string()];
+        assert!(host_covered(&many, "x.b.test"));
+        assert!(!host_covered(&many, "c.test"));
+        assert!(
+            !host_covered(&[], "anything.test"),
+            "empty list covers nothing"
+        );
+    }
+
+    /// The subdomain case is what the ENGINE tier was missing. `adblock_engine`'s veto used
+    /// to be an exact `HashSet` hit, so an allowlisted `example.com` still had requests from
+    /// `www.example.com` blocked while `adblock::host_allowlisted` (and the UI) said the
+    /// whole site was trusted. This drives the real engine, so it takes the process-global
+    /// lock (`adblock_engine`'s policy statics are process-wide — see that module's notes).
+    #[test]
+    fn engine_veto_covers_subdomains_of_an_allowlisted_host() {
+        let _guard = crate::test_support::lock();
+        crate::adblock_engine::set_policy(true, &["trusted.example".to_string()]);
+        // The shared predicate the engine now calls must agree with `host_allowlisted`.
+        assert!(
+            crate::adblock_engine::host_is_allowlisted("www.trusted.example"),
+            "an allowlisted host must cover its subdomains at the engine tier, not just \
+             an exact hit"
+        );
+        assert!(!crate::adblock_engine::host_is_allowlisted(
+            "untrusted.example"
+        ));
+        // Reset so no other test sees a mutated engine.
+        crate::adblock_engine::set_policy(true, &[]);
     }
 
     #[test]
