@@ -70,6 +70,68 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
   and recreate exactly the undecryptable-forever state. A stamp in the *past* is harmless (LWW
   just loses), so only the future and the width are policed. `u32::MAX` itself is in range and
   is accepted: the client now carries into the wall instead of overflowing on it.
+- **The cross-uuid HLC tie-break is a FUNCTION OF THE BODY, not of `HashMap` order.** Step 3 of
+  `canonicalize_body` hands out reserved `ord` counters when two different ids carry the same HLC,
+  which is what makes LWW total instead of map-iteration-ordered. It used to walk `result`, which
+  step 2 builds by iterating a `HashMap` — so the first record to arrive kept the client's original
+  counter and the rest got `+1, +2, …` **in hash order**. The same body therefore produced different
+  `ord` values on different server processes and across restarts, and two servers replaying one
+  batch handed clients different orderings for identical content. `result` is now `sort_by`'d on
+  `(wall, counter, node, uuid)` — `uuid` is unique after step 2, which is exactly what makes the
+  sort total, and it must precede the move-consuming loop because `hlc_key` borrows. The occupied
+  counters are tracked as a per-`(wall, node)` `BTreeSet` so the walk can jump to the next free
+  slot instead of scanning, and the walk terminates on `checked_add` rather than saturating: a
+  saturating add at the ceiling would loop forever. The old `MAX_HLC_TIE_BREAKS` cap is gone
+  (the constant survives `#[cfg(test)]` for a regression test) — it made the ordering **non-total**
+  again for clusters larger than the cap, which a body of up to `MAX_RECORDS_PER_REQUEST` records
+  can reach. Its doc had claimed a record past the cap "keeps the last counter it reached, which is
+  still deterministic"; both halves were wrong — the counter depended on hash order, so it was not
+  deterministic, and the counter it kept was one an earlier record in the batch already held.
+- **Tombstone retention is a COUNT *and* an AGE — `max(newest-N, younger-than-the-floor)`.**
+  `TOMBSTONE_RETENTION_PER_NS` (500) alone was not a safety property: one bulk delete ("clear all
+  history", or the vault bulk delete, which the push path's own comment calls "hundreds of
+  tombstones in one request") writes more than that in a single namespace at once, and a pure count
+  evicts the surplus **while it is seconds old**. Every device that was offline during that delete
+  has then never been told, and re-pushes its stale copies on its next sync, resurrecting exactly
+  the rows the user just deleted — the failure the retention doc above already claimed could not
+  happen. `TOMBSTONE_MIN_AGE_MS` (90 days) is the other bound, chosen against the **client's** own
+  30-day tombstone GC: the server deliberately outlives it so it can still answer a device away
+  longer than the client-side window. It is a deliberate size/behaviour trade — a namespace may now
+  hold more than 500 tombstones for as long as they are younger than the floor. The clock is read
+  **once** per reap, so both bounds see the same instant.
+- **A pull reaps only the namespace it serves; a push reaps every namespace.** `prune_tombstones_in`
+  takes an `Option<&str>`, and `get_records` passes `Some(ns)`. Reaping other namespaces from a
+  *read* was pure waste: `post_records` already reaps everything on every push, so the only
+  tombstones that can outlive a reap were created since the last push, and the next push collects
+  them. `Snapshot::from_store_compacting` passes `None` and must stay that way. **Honest limit:** this
+  bounds the work that *allocates and removes* (the doomed set, the cloned-key `HashSet`, the
+  removals) to one namespace, but it does **not** bound the scan of `store.records` itself, because
+  the store has no namespace→records index. Fixing that means maintaining such an index in `Store`
+  and touching every insert/remove site — a structural change, deliberately not smuggled in beside
+  a bug fix.
+- **Two audit findings investigated and found NOT to be defects.** Recorded so the next reader does
+  not re-raise them (both have passing tests that are *guards*, not defect witnesses):
+  - *"A prune on the first write path is discarded."* `post_records` calls `prune_tombstones(&mut g)`
+    before the merge, drops the return, and never sets `changed = true`; the second call after the
+    merge therefore always returns 0, so no `persist()` runs. **The conclusion is right and the
+    consequence is not.** EVERY write to the snapshot goes through `Snapshot::from_store_compacting`,
+    which evaluates the *identical* `tombstones_past_retention` predicate — so a tombstone a reap
+    would drop is already absent from the file. The in-memory store is a superset of the file by
+    construction, a reap only moves memory *toward* the file, and skipping the persist changes
+    nothing observable. `a_reap_cannot_be_undone_by_a_restart_because_it_never_reached_the_file`
+    proves it: the file is byte-identical across such a push, and a reloaded store has nothing left
+    to reap. (Residual, stated rather than overclaimed: between two writes, tombstones can become
+    age-doomed without being count-doomed, so the file can briefly hold one a later prune would drop.
+    That is staleness bounded by the retention window, not data loss, and the next write reaps it.)
+  - *"`duplicate_losers` is not order-independent."* That function is in the **client**
+    (`src-tauri/src/sync_stores.rs`), not here, and the claim is false. `Iterator::max_by` returns
+    the last maximum only on an `Equal` verdict, and the `ub.cmp(ua)` tiebreak returns `Equal` iff
+    the uuids are equal — which requires *both* uuids and HLCs to match, making the maximum unique.
+    The premise also cannot arise: `duplicate_losers` runs on `merged`, the output of
+    `merge_records`, which is keyed by uuid. `duplicate_losers_is_independent_of_input_order` settles
+    it by running **all 24** permutations of a 4-record group (iterative `permutations` helper, no
+    `itertools`) and requiring an identical loser set from each, with `assert_eq!(checked, 24)` so
+    sampling cannot pass as enumeration.
 - **Pull pagination: `MAX_RESPONSE_RECORDS` is a PAGE size, not a `413` cliff.** It used to be a
   hard refusal — `get_records` returned `413` the moment a namespace reached 5,000 records, while
   `MAX_RECORDS_PER_ACCOUNT` (50,000) means a namespace can legitimately grow past it, so such a

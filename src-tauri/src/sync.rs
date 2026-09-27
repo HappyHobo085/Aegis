@@ -62,6 +62,14 @@ pub struct Inner {
     /// instead of letting an already-spawned thread keep pushing the user's data. See
     /// [`cancelled`].
     generation: u64,
+    /// Wall-clock time (ms) before which the client must not retry the server, because the last
+    /// pass was refused with `429`. `0` / a value in the past means "no backoff in force".
+    /// Deliberately NOT in `state_json` — it is retry bookkeeping, not user-visible state, and
+    /// adding it would change the `shared/types.ts` IPC contract for no user-facing reason.
+    rate_limit_until_ms: i64,
+    /// Consecutive rate-limited passes, driving the exponential curve in
+    /// [`rate_limit_backoff`]. Reset to 0 by the first pass that is not rate-limited.
+    consecutive_rate_limits: u32,
 }
 
 impl Default for SyncState {
@@ -77,6 +85,8 @@ impl Default for SyncState {
             last_sync_ms: 0,
             last_error: String::new(),
             generation: 0,
+            rate_limit_until_ms: 0,
+            consecutive_rate_limits: 0,
         }))
     }
 }
@@ -255,12 +265,64 @@ fn http(
     let status = resp.status();
     let text = resp.text().unwrap_or_default();
     if !status.is_success() {
+        // A 429 is the ONE failure the client can do something useful about: the server is
+        // rate-limiting this device, and the lockout is a sliding window that only clears as
+        // the tokens already issued expire (`sync_auth::DEFAULT_TTL_MS`). Retrying sooner just
+        // re-enters the window, so it gets a recognisable prefix and drives an exponential
+        // backoff in `nudge`. Every other status is genuinely indistinguishable to us, so it
+        // keeps the plain form. Tagged (not merely formatted) so `is_rate_limit_error` cannot
+        // match on a server's own body text by accident.
+        if status == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            return Err(format!("{RATE_LIMIT_ERR_PREFIX} ({text})"));
+        }
         return Err(format!("HTTP {status}: {text}"));
     }
     if text.is_empty() {
         return Ok(Value::Null);
     }
     serde_json::from_str(&text).map_err(|e| e.to_string())
+}
+
+/// The canonical prefix of the error [`http`] returns for `429 Too Many Requests`.
+///
+/// A single source of truth shared by the producer ([`http`]) and the consumer
+/// ([`is_rate_limit_error`]), so the two cannot drift apart. The error channel is a plain
+/// `String` end-to-end (≈10 call sites, surfaced to the UI verbatim as `lastError`), so a
+/// documented marker is the cheapest way to carry the one piece of structured information the
+/// retry policy needs.
+pub(crate) const RATE_LIMIT_ERR_PREFIX: &str = "rate limited by the sync server";
+
+/// Whether an error from [`http`] is the server refusing new requests from this device.
+///
+/// The server returns `429` from two caps in its replay-nonce map — per-device and global (see
+/// `sync-server/src/main.rs`). The cap check runs BEFORE the nonce is recorded, so a refused
+/// request consumes nothing: retrying immediately is *safe* but pointless, because the map is
+/// only swept of entries that have EXPIRED, and a token lives [`crate::sync_auth::DEFAULT_TTL_MS`]
+/// (5 minutes). A client that cannot tell a rate-limit from a real error therefore retries every
+/// `syncIntervalSec` — the minimum is 1 second — for up to 5 minutes, i.e. up to ~300 wasted
+/// signed round trips, and reports a bare "HTTP 429" to the user with no hint that waiting is
+/// the fix.
+pub(crate) fn is_rate_limit_error(e: &str) -> bool {
+    e.starts_with(RATE_LIMIT_ERR_PREFIX)
+}
+
+/// How long to stop retrying for after `consecutive` consecutive rate-limited passes.
+///
+/// Exponential, because the server's own lockout is a sliding window that only clears as tokens
+/// expire — a constant short delay would keep the client inside it, and a constant long one
+/// would stall sync long after the server would have accepted it again. The cap is the token TTL
+/// itself: waiting longer than that can never help, because by then every nonce this device minted
+/// has expired and the map has necessarily been swept.
+pub(crate) fn rate_limit_backoff(consecutive: u32) -> Duration {
+    const BASE_SECS: u64 = 30;
+    // Cap the shift at 32 so a client left rate-limited for a very long time cannot overflow the
+    // shift into nonsense; the `min` then saturates it at the TTL, which is the right answer
+    // anyway because waiting longer than the TTL can never help.
+    let shift = consecutive.saturating_sub(1).min(32);
+    let secs = BASE_SECS
+        .saturating_mul(1u64 << shift)
+        .min(crate::sync_auth::DEFAULT_TTL_MS as u64 / 1_000);
+    Duration::from_secs(secs)
 }
 
 fn auth_header(account_id: &str, device_seed: &[u8; 32]) -> Result<String, String> {
@@ -593,6 +655,36 @@ pub(crate) fn next_cursor(page: &Value) -> Option<String> {
         .map(str::to_owned)
 }
 
+/// Decide whether a completed pull of one namespace should be reported as a success.
+///
+/// `served` is how many wire records the server returned for this namespace across every page,
+/// and `opened` how many of them decrypted. The distinction matters because the two failure
+/// modes are otherwise indistinguishable to the caller: a namespace with nothing to pull returns
+/// `Ok(())`, and a namespace where EVERY record failed to open used to return `Ok(())` too — so
+/// `sync_ns` reported success, the engine cleared the namespace's dirty flag, and the UI showed
+/// a clean sync while not one record was readable.
+///
+/// The overwhelmingly likely cause is a data key that no longer matches the key the records were
+/// sealed under (a re-key, a restored backup, an account restored on a second device before its
+/// key arrived). Continuing is what makes that destructive: `sync_ns` pushes the local records up
+/// afterwards, sealing them under the key it thinks is right, and then clears the dirty flag —
+/// so the namespace is left with records that NO device can open, and nothing reports an error.
+///
+/// Only a TOTAL failure is an error. A partial one is tolerated on purpose: a single corrupt or
+/// legacy-keyed record must not block the rest of a namespace from syncing, and
+/// `open_wire`'s own reason (logged per record) is the diagnostic for those.
+pub(crate) fn pull_verdict(ns: &str, served: usize, opened: usize) -> Result<(), String> {
+    if served > 0 && opened == 0 {
+        return Err(format!(
+            "namespace `{ns}`: all {served} record(s) the sync server returned failed to \
+             decrypt. This is almost always a data-key mismatch (a re-key, a restored backup, or \
+             an account restored before its key arrived). Nothing was merged and nothing was \
+             uploaded — fix the key and sync again."
+        ));
+    }
+    Ok(())
+}
+
 // The nine parameters are genuinely independent (transport base, namespace, its derived
 // key, the two auth inputs, the cancellation generation, and the two store seams) and
 // every one is threaded straight into a helper that takes it alone. Bundling them into
@@ -620,6 +712,10 @@ pub(crate) fn sync_ns<R: Runtime>(
     // cursor from spinning us forever; see MAX_PULL_PAGES.
     let mut decrypted: Vec<Value> = Vec::new();
     let mut cursor: Option<String> = None;
+    // `served` counts what the SERVER returned and `decrypted.len()` what we could actually open,
+    // so the two "nothing to do" shapes stay distinguishable: an empty namespace and a namespace
+    // in which nothing opens both used to look like "nothing changed".
+    let mut served: usize = 0;
     for page_no in 0..MAX_PULL_PAGES {
         // A fresh token (fresh nonce) per HTTP request: the server enforces single-use nonces for
         // replay defense (sync-server `verify_auth`), so reusing one token across the GETs (or
@@ -633,6 +729,7 @@ pub(crate) fn sync_ns<R: Runtime>(
             SYNC_TIMEOUT_SECS,
         )?;
         if let Some(arr) = pulled.get("records").and_then(Value::as_array) {
+            served += arr.len();
             for w in arr {
                 match open_wire(data_key, ns, w) {
                     Ok(rec) => decrypted.push(rec),
@@ -651,6 +748,12 @@ pub(crate) fn sync_ns<R: Runtime>(
             );
         }
     }
+    // BEFORE the merge and, critically, before the push below. This used to return `Ok(())`
+    // indistinguishably from an empty namespace, so the engine cleared the namespace's dirty flag
+    // and the UI showed a clean sync while nothing was readable — and then the push sealed the
+    // local records under a key that does not open them, leaving the namespace unreadable on
+    // every device. See `pull_verdict` for why a PARTIAL failure is still tolerated.
+    pull_verdict(ns, served, decrypted.len())?;
     let changed = merge(&decrypted);
     // Re-check immediately before the push: a `sync.disable` during the pull must not be
     // followed by an upload the user explicitly asked us to stop. The merge above is local
@@ -830,9 +933,27 @@ pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
                 g.status = Status::Idle;
                 g.last_sync_ms = crate::jsonstore::now_ms();
                 g.last_error.clear();
+                // The server is answering again, so whatever window it was enforcing has cleared.
+                // Forgetting the counter is what makes the next rate-limit start from the short
+                // end of the curve again instead of inheriting an hours-old streak.
+                g.rate_limit_until_ms = 0;
+                g.consecutive_rate_limits = 0;
             }
             Err(e) => {
                 g.status = Status::Error;
+                if is_rate_limit_error(&e) {
+                    // Bump BEFORE computing, so the first refusal waits the base delay rather
+                    // than the doubled one.
+                    g.consecutive_rate_limits = g.consecutive_rate_limits.saturating_add(1);
+                    let wait = rate_limit_backoff(g.consecutive_rate_limits);
+                    g.rate_limit_until_ms = crate::jsonstore::now_ms()
+                        .saturating_add(i64::try_from(wait.as_millis()).unwrap_or(i64::MAX));
+                    eprintln!(
+                        "[aegis-sync] rate limited ({} consecutive); backing off {}s",
+                        g.consecutive_rate_limits,
+                        wait.as_secs()
+                    );
+                }
                 g.last_error = e;
             }
         }
@@ -841,17 +962,37 @@ pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
     });
 }
 
-/// At boot: spawn the periodic background sync, then (unless the user durably disabled
-/// sync) auto-unlock from the OS keychain and enable.
 /// How long the periodic thread should wait before the next pass, given the configured
-/// interval. `None` means "poll the setting again instead of passing".
+/// interval AND the rate-limit backoff window: the periodic thread must not retry before
+/// `rate_limit_until_ms`, because a retry inside that window is guaranteed to be refused
+/// and each attempt costs a full TLS round trip and an Ed25519 signature verification.
+///
+/// `None` means "poll the setting again instead of passing".
 ///
 /// `syncIntervalSec == 0` is the documented way to switch periodic sync off, and it used to
 /// be a hot spin: `sleep(0)` returns immediately, `nudge` only short-circuits while a pass is
 /// already `Syncing`, and the gap between passes is milliseconds — so the app free-ran
 /// pull → merge → push forever, burning CPU and hammering the server. It is reachable from an
 /// imported `data.export` bundle as well as the settings UI, so it is not merely a footgun.
-fn periodic_delay(secs: u64) -> Option<Duration> {
+///
+/// The backoff can only ever *lengthen* the wait, never shorten it, and it never resurrects a
+/// pass the user switched off: `secs == 0` still returns `None`. `rate_limit_until_ms <= now_ms`
+/// means "no backoff in force" and leaves the configured interval untouched.
+pub(crate) fn next_periodic_delay(
+    secs: u64,
+    now_ms: i64,
+    rate_limit_until_ms: i64,
+) -> Option<Duration> {
+    let base = periodic_base(secs)?;
+    let remaining = rate_limit_until_ms.saturating_sub(now_ms);
+    Some(if remaining > base.as_millis() as i64 {
+        Duration::from_millis(remaining as u64)
+    } else {
+        base
+    })
+}
+
+fn periodic_base(secs: u64) -> Option<Duration> {
     if secs == 0 {
         None
     } else {
@@ -871,7 +1012,18 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
     {
         let app = app.clone();
         std::thread::spawn(move || loop {
-            match periodic_delay(crate::settings::sync_interval_sec(&app)) {
+            // Read the backoff under the lock here, not the configured interval alone, so a
+            // 429 seen by any pass (periodic or user-initiated) actually delays the next one.
+            let rate_limit_until_ms = {
+                let st = app.state::<SyncState>();
+                let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+                g.rate_limit_until_ms
+            };
+            match next_periodic_delay(
+                crate::settings::sync_interval_sec(&app),
+                crate::jsonstore::now_ms(),
+                rate_limit_until_ms,
+            ) {
                 Some(d) => {
                     std::thread::sleep(d);
                     nudge(&app);
@@ -1243,6 +1395,41 @@ mod tests {
     /// which permanently bricked every record it touched (and, because the retry then lost the
     /// per-uuid LWW gate as stale, made them unwritable too). Pin the client half of that
     /// contract: a rewritten `hlc` must be REJECTED, never silently accepted.
+    /// The core of Wave 3(8): a pull in which the server served records and NOT ONE of them
+    /// decrypted must be an ERROR, not an empty success. Otherwise `sync_ns` reports success,
+    /// the engine clears the namespace's dirty flag and the UI shows a clean sync, while the
+    /// namespace is in fact unreadable — and because `sync_ns` pushes local records afterwards,
+    /// it seals them under a key that does not match and leaves the namespace unreadable on
+    /// every device.
+    #[test]
+    fn a_pull_where_nothing_decrypts_is_an_error_not_an_empty_success() {
+        let e = super::pull_verdict("favorites", 12, 0).expect_err(
+            "12 records served and 0 opened is a total decryption failure, which must surface \
+             as an error rather than an empty success",
+        );
+        assert!(
+            e.contains("favorites"),
+            "the error must name the namespace the user can act on: {e}"
+        );
+    }
+
+    /// The inverse, and the case a careless fix would break: an EMPTY namespace is the normal
+    /// "nothing to pull" case and must stay a success, or every fresh namespace would report an
+    /// error forever.
+    #[test]
+    fn a_pull_that_served_nothing_is_a_success() {
+        super::pull_verdict("favorites", 0, 0).expect("an empty namespace is not a failure");
+    }
+
+    /// A PARTIAL failure is tolerated on purpose — one corrupt or legacy-keyed record must not
+    /// block the rest of a namespace from syncing, and `open_wire`'s per-record log line is the
+    /// diagnostic for it. This is the guard against an over-broad fix ("fail on any error").
+    #[test]
+    fn a_pull_where_some_records_open_is_still_a_success() {
+        super::pull_verdict("history", 12, 11).expect("11 of 12 opened is a partial success");
+        super::pull_verdict("history", 1, 1).expect("everything opened is a success");
+    }
+
     #[test]
     fn open_wire_rejects_a_record_whose_hlc_was_rewritten() {
         let key = [7u8; 32];
@@ -1456,6 +1643,8 @@ mod tests {
                 generation: 0,
                 last_sync_ms: 0,
                 last_error: String::new(),
+                rate_limit_until_ms: 0,
+                consecutive_rate_limits: 0,
             };
 
             // 3. Boot. The panel must render the ENABLED view again, for the SAME account.
@@ -1506,6 +1695,8 @@ mod tests {
                 generation: 0,
                 last_sync_ms: 0,
                 last_error: String::new(),
+                rate_limit_until_ms: 0,
+                consecutive_rate_limits: 0,
             };
             // The durable marker wins over the still-present keychain seed.
             boot_restore(app);
@@ -1513,13 +1704,133 @@ mod tests {
         });
     }
 
+    /// A `429` must actually change the retry cadence. Before this, the periodic thread slept
+    /// exactly `syncIntervalSec` and the minimum non-zero value is 1 second, so a rate-limited
+    /// client re-entered a server window that can only clear as its already-issued tokens expire
+    /// (up to `sync_auth::DEFAULT_TTL_MS` = 5 minutes) — up to ~300 signed round trips, each
+    /// costing an Ed25519 verification, with a bare "HTTP 429" shown to the user and no hint
+    /// that waiting is the fix.
+    #[test]
+    fn a_rate_limit_backoff_lengthens_the_periodic_wait() {
+        let now = 1_700_000_000_000i64;
+        let backoff_until = now + 120_000;
+        assert_eq!(
+            next_periodic_delay(1, now, backoff_until),
+            Some(Duration::from_secs(120)),
+            "a 1-second sync interval must NOT be the retry cadence while the server is refusing \
+             this device; the backoff window has to win"
+        );
+        // Once the window has passed, the configured cadence resumes unchanged.
+        assert_eq!(
+            next_periodic_delay(1, backoff_until, backoff_until),
+            Some(Duration::from_secs(1)),
+            "after the backoff expires the configured interval must resume, not stay lengthened"
+        );
+    }
+
+    /// The curve has to be exponential, because the server's limit is a sliding window: a
+    /// constant short delay keeps knocking inside a window that has not opened yet, and a
+    /// constant long one stalls sync for minutes after the server would have accepted again. It
+    /// has to terminate at the token TTL, because waiting longer than that can never help.
+    #[test]
+    fn the_rate_limit_backoff_doubles_and_stops_at_the_token_ttl() {
+        let ttl_secs = (crate::sync_auth::DEFAULT_TTL_MS / 1_000) as u64;
+        let mut prev = rate_limit_backoff(1);
+        assert_eq!(
+            prev,
+            Duration::from_secs(30),
+            "the first refusal waits the base delay"
+        );
+        for n in 2..=8 {
+            let now = rate_limit_backoff(n);
+            assert!(
+                now <= Duration::from_secs(ttl_secs),
+                "refusal {n} waited {now:?}, longer than the {ttl_secs}s token TTL, which can \
+                 never help — every nonce this device minted has expired by then"
+            );
+            // Strictly longer while it is still under the cap; pinned at the cap once it is not.
+            // Asserting "grows" outright would be the wrong invariant, because reaching the cap
+            // IS the termination property.
+            if now < Duration::from_secs(ttl_secs) {
+                assert!(
+                    now > prev,
+                    "refusal {n} must wait longer than refusal {} ({:?} -> {:?})",
+                    n - 1,
+                    prev,
+                    now
+                );
+            } else {
+                assert_eq!(
+                    now,
+                    Duration::from_secs(ttl_secs),
+                    "refusal {n} reached the cap and must stay pinned there"
+                );
+            }
+            prev = now;
+        }
+        assert_eq!(
+            rate_limit_backoff(u32::MAX),
+            Duration::from_secs(ttl_secs),
+            "an absurdly long rate-limited streak must saturate at the cap, not overflow the shift"
+        );
+    }
+
+    /// The backoff may only ever LENGTHEN a wait. Two ways it could wrongly shorten or invent
+    /// one: a stale `rate_limit_until_ms` left in state from a previous window, and the user
+    /// turning periodic sync off while a backoff is in force.
+    #[test]
+    fn the_backoff_never_shortens_a_wait_or_resurrects_a_disabled_periodic_sync() {
+        let now = 1_700_000_000_000i64;
+        // A backoff that has already elapsed must not shorten a 10-minute interval.
+        assert_eq!(
+            next_periodic_delay(600, now, now - 5_000),
+            Some(Duration::from_secs(600)),
+            "an expired backoff must leave the configured interval completely alone"
+        );
+        // `syncIntervalSec == 0` is the documented off switch. A backoff must not turn it back
+        // on, or the app would keep polling a server that just told it to stop.
+        assert_eq!(
+            next_periodic_delay(0, now, now + 300_000),
+            None,
+            "periodic sync switched off must stay off even while a rate-limit backoff is in force"
+        );
+    }
+
+    /// Drift guard: the retry bookkeeping is internal and must NOT reach the IPC contract, which
+    /// lives in `shared/types.ts`. If it ever does, the renderer and the shared types have to
+    /// change together.
+    #[test]
+    fn the_rate_limit_backoff_is_not_exposed_over_ipc() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            let st = app.state::<SyncState>();
+            let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+            g.rate_limit_until_ms = 1_700_000_000_000;
+            g.consecutive_rate_limits = 7;
+            drop(g);
+            let s = state_json(app);
+            assert!(
+                s.get("rateLimitUntilMs").is_none() && s.get("consecutiveRateLimits").is_none(),
+                "the backoff is retry bookkeeping, not user-visible state; exposing it would \
+                 change the shared/types.ts contract for no reason: {s}"
+            );
+        });
+    }
+
     /// `syncIntervalSec == 0` means "no periodic pass". It must NOT become `sleep(0)`,
     /// which returns instantly and free-runs pull -> merge -> push forever.
+    ///
+    /// Called with no backoff in force (`now_ms == rate_limit_until_ms == 0`), so these assert
+    /// the configured interval is used verbatim. The backoff's own lengthening is covered
+    /// separately by `the_backoff_never_shortens_a_wait_or_resurrects_a_disabled_periodic_sync`.
     #[test]
     fn a_zero_interval_disables_the_periodic_pass_instead_of_spinning() {
-        assert_eq!(periodic_delay(0), None);
-        assert_eq!(periodic_delay(300), Some(Duration::from_secs(300)));
-        assert_eq!(periodic_delay(1), Some(Duration::from_secs(1)));
+        assert_eq!(next_periodic_delay(0, 0, 0), None);
+        assert_eq!(
+            next_periodic_delay(300, 0, 0),
+            Some(Duration::from_secs(300))
+        );
+        assert_eq!(next_periodic_delay(1, 0, 0), Some(Duration::from_secs(1)));
         // The parked thread still re-reads the setting, so this poll interval is what decides
         // how long re-enabling periodic sync takes. It must be long enough to be cheap and
         // short enough to feel immediate.

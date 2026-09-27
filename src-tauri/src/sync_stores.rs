@@ -383,6 +383,102 @@ mod tests {
         })
     }
 
+    /// The doc on [`duplicate_losers`] claims it is "Pure + convergent: every device computes
+    /// the same survivor from replicated fields, **independent of record order**." An audit
+    /// finding said that claim is FALSE, on the theory that `Iterator::max_by` returns the LAST
+    /// maximum — which is true, but only decides which element wins on an `Equal` verdict.
+    ///
+    /// This settles it by exhaustive enumeration rather than by argument: every one of the 24
+    /// permutations of a 4-record group, plus a 3-way full-HLC tie, must produce the SAME loser
+    /// set. `Vec` order is the only thing the `groups` `HashMap` can affect, and if the claim
+    /// holds, none of these 24+6 orderings can change the answer.
+    ///
+    /// The audit's premise also cannot arise: `duplicate_losers` is called on `merged`, the
+    /// output of `merge_records`, which is keyed BY uuid — so a group cannot contain two records
+    /// sharing a uuid, and with distinct uuids the `ub.cmp(ua)` tiebreak can only return `Equal`
+    /// when the HLCs are equal AND the uuids are equal, which makes the maximum unique. If
+    /// someone ever removes that uniqueness, this test's sibling below is what notices.
+    #[test]
+    fn duplicate_losers_is_independent_of_input_order() {
+        // Three distinct HLCs plus one that ties the first's HLC exactly, forcing the uuid
+        // tiebreak to decide — the exact path the audit said was order-dependent.
+        let base = [
+            drec("aaa", "http://x/p", "url", 10, false),
+            drec("bbb", "http://x/p", "url", 20, false),
+            drec("ccc", "http://x/p", "url", 10, false),
+            drec("ddd", "http://x/p", "url", 5, false),
+        ];
+        let expected: Vec<String> = {
+            let mut l = duplicate_losers(&base, "url");
+            l.sort();
+            l
+        };
+        assert_eq!(
+            expected,
+            vec!["aaa".to_string(), "ccc".to_string(), "ddd".to_string()],
+            "sanity: only the strictly-highest HLC (bbb) survives; aaa and ccc tie at wall 10 so \
+             the smaller uuid (aaa) wins that pair"
+        );
+        let mut checked = 0;
+        for perm in permutations(&base) {
+            let mut got = duplicate_losers(&perm, "url");
+            got.sort();
+            assert_eq!(
+                got, expected,
+                "permutation {perm:?} produced a different loser set — the survivor is NOT a \
+                 function of the record contents alone"
+            );
+            checked += 1;
+        }
+        assert_eq!(
+            checked, 24,
+            "all 4! orderings must be enumerated, not sampled"
+        );
+    }
+
+    /// All permutations of a small slice, iteratively (no `itertools` dependency).
+    fn permutations<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+        fn go<T: Clone>(cur: &mut Vec<T>, rest: &mut Vec<T>, out: &mut Vec<Vec<T>>) {
+            if rest.is_empty() {
+                out.push(cur.clone());
+                return;
+            }
+            for i in 0..rest.len() {
+                let item = rest.remove(i);
+                cur.push(item.clone());
+                go(cur, rest, out);
+                cur.pop();
+                rest.insert(i, item);
+            }
+        }
+        let mut out = Vec::new();
+        go(&mut Vec::new(), &mut items.to_vec(), &mut out);
+        out
+    }
+
+    /// The duplicate-uuid case the production path cannot produce, pinned so the uniqueness
+    /// invariant is guarded rather than merely assumed. If it DID happen, `max_by` picks the last
+    /// of the tied pair and BOTH uuids land in the loser list — so the caller would tombstone the
+    /// record it meant to keep. Documented rather than defended: fixing it would mean deciding
+    /// which of two records with one identity survives, which is not a decision this function
+    /// can make. The correct defence is the invariant, asserted above.
+    #[test]
+    fn two_records_sharing_a_uuid_and_hlc_lose_both_and_are_unreachable_in_production() {
+        let recs = vec![
+            drec("same", "http://x/p", "url", 10, false),
+            drec("same", "http://x/p", "url", 10, false),
+        ];
+        let mut losers = duplicate_losers(&recs, "url");
+        losers.sort();
+        assert_eq!(
+            losers,
+            vec!["same".to_string()],
+            "with an identical uuid AND hlc there is no tiebreak, so exactly one 'survivor' slot \
+             exists and the other is reported as a loser — which is why `merge_records` keying by \
+             uuid is load-bearing, not incidental"
+        );
+    }
+
     #[test]
     fn dedup_keeps_latest_hlc_survivor() {
         let recs = vec![

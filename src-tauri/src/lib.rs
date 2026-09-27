@@ -535,6 +535,7 @@ pub fn run() {
         .manage(redirect_guard::PendingNavs::default())
         .manage(redirect_guard::NavActions::default())
         .manage(redirect_guard::Chains::default())
+        .manage(redirect_guard::RedirectBudget::default())
         .manage(zoom::ZoomStore::default())
         .manage(vault::VaultState::default())
         .manage(farble::FarbleState::default())

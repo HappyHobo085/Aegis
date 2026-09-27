@@ -13,7 +13,7 @@
 //!
 //! The auth `canonical()` + token shape below MUST match src-tauri/src/sync_auth.rs
 //! byte-for-byte (kept in sync by hand; covered by the round-trip test).
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -409,15 +409,41 @@ struct Snapshot {
 /// a long-offline device resurrect deleted records by re-pushing its stale copy.
 const TOMBSTONE_RETENTION_PER_NS: usize = 500;
 
+/// The other half of the retention rule: a tombstone younger than this is never evicted, however
+/// many newer ones a namespace has. A COUNT alone is not a safety property — one bulk delete
+/// ("clear all history", or the vault bulk delete, which the push path's own comment calls out as
+/// "hundreds of tombstones in one request") writes more than `TOMBSTONE_RETENTION_PER_NS`
+/// tombstones in a single namespace at once, and a pure count would evict the surplus while it
+/// is seconds old. Every device that was offline during that delete has then never been told, and
+/// re-pushes its stale copies on its next sync, resurrecting exactly the rows the user deleted.
+///
+/// 90 days is chosen against the client's own tombstone GC, which drops them at 30 days: the
+/// server deliberately outlives that so it can still answer a device that has been away longer
+/// than the client-side window, and it does not need to outlive it much further. This is a
+/// deliberate size/behaviour trade — a namespace may now hold more than
+/// `TOMBSTONE_RETENTION_PER_NS` tombstones for as long as they are younger than this.
+const TOMBSTONE_MIN_AGE_MS: i64 = 90 * 24 * 60 * 60 * 1_000;
+
 /// Tombstone keys that are past the per-namespace retention window.
+///
+/// A tombstone is doomed only when it is past BOTH bounds (see [`TOMBSTONE_RETENTION_PER_NS`]
+/// and [`TOMBSTONE_MIN_AGE_MS`]), so retention per namespace is
+/// `max(newest-N, everything younger than the age floor)`.
 ///
 /// The HLC ordering within each `(account, ns)` group decides *which* are the doomed ones, and it
 /// is the same ordering the on-disk compaction has always used — so pruning the live store and
 /// compacting the snapshot can never disagree about what should have been kept.
-fn tombstones_past_retention(store: &Store) -> HashSet<RecordKey> {
+fn tombstones_past_retention(store: &Store, only_ns: Option<&str>) -> HashSet<RecordKey> {
+    // Read the clock once, here, so the two bounds below are evaluated against a single instant
+    // rather than re-reading a possibly-ticking clock per candidate.
+    let age_floor = now_ms().saturating_sub(TOMBSTONE_MIN_AGE_MS);
     let mut by_ns: TombstonesByNs<'_> = HashMap::new();
     for (key @ (account, ns, _), rec) in store.records.iter() {
-        if rec.deleted {
+        // `only_ns` still costs a walk of `store.records` to skip the rest — it bounds the set
+        // built and the number of removals, not the scan. See `prune_tombstones_in` for why that
+        // is still worth it, and for why making the scan itself O(namespace) would need an
+        // index this store does not have.
+        if rec.deleted && only_ns.is_none_or(|want| want == ns.as_str()) {
             by_ns.entry((account, ns)).or_default().push(key);
         }
     }
@@ -435,6 +461,12 @@ fn tombstones_past_retention(store: &Store) -> HashSet<RecordKey> {
         doomed.extend(
             keys.iter()
                 .skip(TOMBSTONE_RETENTION_PER_NS)
+                .filter(|k| {
+                    // Past the count window AND past the age floor. The age test is what stops a bulk
+                    // delete from evicting its own fresh tombstones — see TOMBSTONE_MIN_AGE_MS for why
+                    // that resurrects the rows the user just deleted.
+                    hlc_key(&store.records[*k].hlc).0 < age_floor
+                })
                 .map(|k| (*k).clone()),
         );
     }
@@ -448,12 +480,26 @@ fn tombstones_past_retention(store: &Store) -> HashSet<RecordKey> {
 /// re-compacted the same ever-growing set on every single write. Reaping here fixes the actual
 /// leak, and makes the snapshot pass cheap because there is nothing left for it to filter.
 ///
-/// The retention window is deliberately generous (see [`TOMBSTONE_RETENTION_PER_NS`]): a device
-/// returning from a long offline stretch still needs the tombstones that predate its last sync.
-/// Dropping them from memory is only safe because the same window, computed the same way, is what
-/// the snapshot already used — the two can never disagree.
+/// The retention window is deliberately generous (see [`TOMBSTONE_RETENTION_PER_NS`] and
+/// [`TOMBSTONE_MIN_AGE_MS`]): a device returning from a long offline stretch still needs the
+/// tombstones that predate its last sync. Dropping them from memory is only safe because the
+/// same two bounds, computed the same way, are what the snapshot already used — the two can
+/// never disagree.
 fn prune_tombstones(store: &mut Store) -> usize {
-    let doomed = tombstones_past_retention(store);
+    prune_tombstones_in(store, None)
+}
+
+/// Reap, optionally restricted to a single namespace — see [`prune_tombstones`], and
+/// [`get_records`] for why the READ path passes one.
+///
+/// The restriction bounds the work that actually allocates and removes (the doomed set, the
+/// `HashSet` of cloned keys, the removals) to one namespace instead of every account's, which
+/// matters most at the documented `MAX_RECORDS_PER_ACCOUNT` of 50,000. It does **not** bound the
+/// scan of `store.records` itself, because the store has no index from namespace to its records.
+/// Removing that would mean maintaining a per-namespace index in `Store` and touching every
+/// insert/remove site — a structural change, deliberately not smuggled in beside a bug fix.
+fn prune_tombstones_in(store: &mut Store, only_ns: Option<&str>) -> usize {
+    let doomed = tombstones_past_retention(store, only_ns);
     if doomed.is_empty() {
         return 0;
     }
@@ -462,8 +508,9 @@ fn prune_tombstones(store: &mut Store) -> usize {
     }
     let dropped = doomed.len();
     eprintln!(
-        "[aegis-sync-server] pruned {dropped} tombstone(s) past the \
-         {TOMBSTONE_RETENTION_PER_NS}-per-namespace window; {} record(s) remain",
+        "[aegis-sync-server] pruned {dropped} tombstone(s) past both the \
+         {TOMBSTONE_RETENTION_PER_NS}-per-namespace window and the {TOMBSTONE_MIN_AGE_MS}ms \
+         age floor; {} record(s) remain",
         store.records.len()
     );
     dropped
@@ -477,19 +524,23 @@ impl Snapshot {
     /// way to disk only: the in-memory store is left untouched, so compaction can never change
     /// what a client observes right now — it only shrinks the file.
     ///
-    /// Retention is per (account, namespace) and keeps the NEWEST `TOMBSTONE_RETENTION_PER_NS`
-    /// by HLC. Per-namespace matters: with a global budget one chatty namespace would evict
-    /// another's tombstones, letting that namespace's deletions be resurrected. Keeping a
-    /// generous window rather than purging all of them is what makes this safe for a device
-    /// returning from a long offline stretch.
+    /// Retention is per (account, namespace) and keeps a tombstone when it is EITHER among the
+    /// NEWEST `TOMBSTONE_RETENTION_PER_NS` by HLC OR younger than `TOMBSTONE_MIN_AGE_MS`.
+    /// Per-namespace matters: with a global budget one chatty namespace would evict
+    /// another's tombstones, letting that namespace's deletions be resurrected. The age half
+    /// matters because a single bulk delete writes more tombstones at once than the count can
+    /// hold, and a count alone would evict its own freshest ones — see `TOMBSTONE_MIN_AGE_MS`.
+    /// Keeping a generous window rather than purging all of them is what makes this safe for a
+    /// device returning from a long offline stretch.
     fn from_store_compacting(store: &Store) -> Snapshot {
-        let doomed = tombstones_past_retention(store);
+        let doomed = tombstones_past_retention(store, None);
         let dropped = doomed.len();
         let snap = Snapshot::from_store_filtered(store, |key, _rec| !doomed.contains(key));
         if dropped > 0 {
             eprintln!(
                 "[aegis-sync-server] compacted snapshot: dropped {dropped} tombstone(s) past \
-                 the {TOMBSTONE_RETENTION_PER_NS}-per-namespace window; {} record(s) remain",
+                 both the {TOMBSTONE_RETENTION_PER_NS}-per-namespace window and the \
+                 {TOMBSTONE_MIN_AGE_MS}ms age floor; {} record(s) remain",
                 snap.records.len()
             );
         }
@@ -898,36 +949,80 @@ fn canonicalize_body(
     //    them synthesised a non-monotonic stamp. The vault's `updatedAt`-derived stamp used to be
     //    exactly that (constant counter, constant node); the client no longer produces one. The
     //    server must still be a total order against a buggy or hostile peer, though.
+    //
+    //    The result is a DETERMINISTIC total order, and both halves below are load-bearing for
+    //    that. The batch is collected into a `HashMap`, whose iteration order is seeded per
+    //    instance from `RandomState` and so differs between calls and between server processes;
+    //    handing out reserved counters in that order made the SAME body produce DIFFERENT `ord`
+    //    values on different runs, and two servers replaying one batch would hand clients
+    //    different orderings for identical content. So the batch is sorted into a total order on
+    //    `(wall, counter, node, uuid)` first, and only then are counters handed out. `uuid` is
+    //    the final component and is unique after step 2 (empty ids were synthesized apart), which
+    //    is what makes the sort total.
     let mut out: Vec<(String, WireRecord)> = Vec::new();
-    // Ordering tuple -> the uuids holding it, for this (account, ns) only. Built ONCE from the
+    // The counters already occupied in each `(wall, node)` bucket, SORTED, so the walk below can
+    // jump straight to the next free slot instead of testing every integer. Built ONCE from the
     // store and extended as the batch is accepted. The old code re-scanned the entire store for
     // every candidate on every bump iteration, under the global db lock — O(incoming x stored x
     // bumps) with a String allocation per comparison.
-    let mut claimed: HashMap<(i64, u64, String), HashSet<String>> = HashMap::new();
+    let mut occupied: HashMap<(i64, String), BTreeSet<u64>> = HashMap::new();
+    // The uuids sitting on each exact `(wall, counter, node)` tuple, for this (account, ns) only.
+    // This is what distinguishes a genuine cross-uuid tie from an ordinary update: a record whose
+    // OWN previous version is the only claimant on a tuple keeps that tuple, rather than being
+    // bumped on every single write.
+    let mut holders: HashMap<(i64, u64, String), HashSet<String>> = HashMap::new();
     for ((a, n, u), r) in store.records.iter() {
         if a == account && n == ns {
             let (w, c, node) = ord_key(r);
-            claimed
+            occupied.entry((w, node.to_string())).or_default().insert(c);
+            holders
                 .entry((w, c, node.to_string()))
                 .or_default()
                 .insert(u.clone());
         }
     }
+    // Deterministic order first — see the comment above. `hlc_key` borrows, so this cannot move.
+    result.sort_by(|a, b| {
+        let (aw, ac, an) = hlc_key(&a.1.hlc);
+        let (bw, bc, bn) = hlc_key(&b.1.hlc);
+        (aw, ac, an, a.0.as_str()).cmp(&(bw, bc, bn, b.0.as_str()))
+    });
     for (uuid, mut rec) in result {
         let (wall, counter, node) = hlc_key(&rec.hlc);
         let node_owned = node.to_string();
+        let bucket = (wall, node_owned.clone());
+        // Find the lowest counter at or above the client's own that no OTHER uuid holds. A clash
+        // is any other uuid already holding this exact tuple; this record's own previous version
+        // sitting on it is NOT a clash.
+        //
+        // The walk is TOTAL — it has no iteration cap, because a cap silently reintroduced the
+        // very ambiguity it was meant to remove: a batch may carry up to `MAX_RECORDS_PER_REQUEST`
+        // (1000) records, so a cluster larger than any fixed cap exhausted the old loop and left
+        // the tail colliding on the client's original counter, which was already claimed.
+        // Termination does not need a cap: each step advances `bumped` strictly past an occupied
+        // counter, and `occupied` is finite. The `checked_add` guard makes that airtight rather
+        // than merely argued — the input cannot reach `u64::MAX` (`hlc` counters are rejected
+        // above `u32::MAX` by `reject_client_poisoning_stamps`, and `ord` counters are only ever
+        // set here), but a saturating add at the ceiling would loop forever, so it is reported
+        // instead of spun on.
         let mut bumped = counter;
-        for _ in 0..MAX_HLC_TIE_BREAKS {
-            // A clash is any OTHER uuid already holding this exact tuple. This record's own
-            // previous version sitting on the same tuple is NOT a clash — that is an ordinary
-            // update, and treating it as one would bump every update to every record.
-            let held = claimed
-                .get(&(wall, bumped, node_owned.clone()))
+        while let Some(&c) = occupied.get(&bucket).and_then(|s| s.range(bumped..).next()) {
+            let held_by_other = holders
+                .get(&(wall, c, node_owned.clone()))
                 .is_some_and(|us| us.iter().any(|u| u != &uuid));
-            if !held {
-                break;
+            if !held_by_other {
+                break; // `c` is free, or held only by this record's own previous version
             }
-            bumped = bumped.saturating_add(1);
+            match c.checked_add(1) {
+                Some(next) => bumped = next,
+                None => {
+                    eprintln!(
+                        "[aegis-sync-server] WARN cannot total-order record {uuid} in ns {ns:?}: \
+                         the HLC counter space is exhausted at u64::MAX"
+                    );
+                    break;
+                }
+            }
         }
         if bumped != counter {
             eprintln!(
@@ -941,7 +1036,8 @@ fn canonicalize_body(
                 "node": node,
             }));
         }
-        claimed
+        occupied.entry(bucket).or_default().insert(bumped);
+        holders
             .entry((wall, bumped, node_owned))
             .or_default()
             .insert(uuid.clone());
@@ -1012,9 +1108,17 @@ fn reject_client_poisoning_stamps(records: Vec<WireRecord>, now_ms: i64) -> Vec<
         .collect()
 }
 
-/// Upper bound on the counter-bump loop in [`canonicalize_body`]. A pathological batch of
-/// same-HLC records would otherwise spin; past this the record keeps the last counter it
-/// reached, which is still deterministic and still lands in `ord` (never in `hlc`).
+/// The cap that used to bound the counter-bump loop in [`canonicalize_body`]. It is no longer
+/// used in the loop — only by the regression test that pins why the cap had to go.
+///
+/// The old doc claimed that past the cap "the record keeps the last counter it reached, which is
+/// still deterministic". Both halves of that were wrong. The counter it reached depended on
+/// `HashMap` iteration order, so it was not deterministic; and the counter it kept was one an
+/// earlier record in the same batch had already been assigned, so the ordering stopped being
+/// TOTAL — which is the single property the loop exists to provide. The loop is now bounded by
+/// the number of occupied counters in the bucket, not by a constant, and is total by
+/// construction.
+#[cfg(test)]
 const MAX_HLC_TIE_BREAKS: u64 = 64;
 
 /// Sentinel map key for a pushed record that arrived with no id. NUL can't appear in a
@@ -1164,7 +1268,14 @@ async fn get_records(
         // retention window — they would cost the client bytes and quota to no end, since by
         // definition every device has long since synced past them. Tombstones AT the edge of the
         // window are kept, so a device returning from a long offline stretch still gets them.
-        let pruned = prune_tombstones(&mut g);
+        //
+        // Scoped to THIS request's namespace. Reaping every namespace here was the audit finding:
+        // it made every pull of any namespace do work proportional to the whole store, under the
+        // single global `db` mutex, for tombstones this response cannot even ship. Nothing is
+        // lost by scoping — `post_records` reaps ALL namespaces on every push, so the only
+        // tombstones that can outlive a reap are ones created since the last push, and the next
+        // push (to any namespace) collects them.
+        let pruned = prune_tombstones_in(&mut g, Some(&q.ns));
         (
             page_records(
                 &g,
@@ -2456,6 +2567,81 @@ mod tests {
     // write. `prune_tombstones` fixes the actual leak. These tests drive the LIVE store, which
     // the pre-existing compaction tests above never did.
 
+    /// A tombstone is only evicted once it is BOTH outside the newest-N window AND older than
+    /// `TOMBSTONE_MIN_AGE_MS` — i.e. retention per namespace is
+    /// `max(TOMBSTONE_RETENTION_PER_NS, everything newer than the age floor)`.
+    ///
+    /// Without the age half, a single bulk delete destroys most of its own tombstones while
+    /// they are seconds old. "Clear all history" or the vault bulk delete push hundreds or
+    /// thousands of tombstones in one request, and a pure COUNT keeps the newest 500 and drops
+    /// the rest on the spot. A device that was offline when the delete happened has not seen
+    /// ANY of them, so it re-pushes its stale copies and the rows the user just deleted come
+    /// back — which is precisely the failure tombstones exist to prevent, and the retention doc
+    /// above ("dropping every tombstone would let a long-offline device resurrect deleted
+    /// records") already claims cannot happen.
+    ///
+    /// The cost is deliberate and is a size/behaviour trade, not a bug: a namespace can now
+    /// retain more than `TOMBSTONE_RETENTION_PER_NS` tombstones for as long as they are younger
+    /// than the floor. A 90-day floor against the client's own 30-day tombstone GC means any
+    /// device that has been offline longer than 30 days has no use for the survivors anyway, so
+    /// the window that is doing real work is the client's, not the server's.
+    #[test]
+    fn a_bulk_delete_inside_the_age_floor_keeps_every_tombstone() {
+        let mut store = Store::default();
+        let total = TOMBSTONE_RETENTION_PER_NS + 100;
+        // A minute ago: unambiguously inside any sane floor, and far enough from the boundary
+        // that the test cannot be decided by the wall clock ticking during the run.
+        let fresh = now_ms() - 60_000;
+        for i in 0..total {
+            store.records.insert(
+                ("a".into(), "ns".into(), format!("t{i}")),
+                tomb(&format!("t{i}"), fresh + i as i64),
+            );
+        }
+        let dropped = prune_tombstones(&mut store);
+        assert_eq!(
+            dropped, 0,
+            "a bulk delete that happened a minute ago must keep every tombstone: a device \
+             offline during the delete has seen none of them, so re-pushing its stale copies \
+             would resurrect {total} rows the user just deleted"
+        );
+        assert_eq!(store.records.len(), total);
+    }
+
+    /// The companion guard, so "the age floor keeps everything" cannot pass this suite: a
+    /// tombstone past BOTH bounds is still reaped. The count window alone is not sufficient
+    /// here — the survivors are chosen newest-first, so the `i`-th oldest must be among them.
+    #[test]
+    fn tombstones_past_both_bounds_are_still_reaped() {
+        let mut store = Store::default();
+        let total = TOMBSTONE_RETENTION_PER_NS + 100;
+        let ancient = now_ms() - TOMBSTONE_MIN_AGE_MS - 60_000;
+        for i in 0..total {
+            store.records.insert(
+                ("a".into(), "ns".into(), format!("t{i}")),
+                tomb(&format!("t{i}"), ancient + i as i64),
+            );
+        }
+        let dropped = prune_tombstones(&mut store);
+        assert_eq!(
+            dropped, 100,
+            "tombstones older than the floor and outside the newest-N window must still be \
+             reaped, or the store leaks again"
+        );
+        assert_eq!(store.records.len(), TOMBSTONE_RETENTION_PER_NS);
+        // The survivors are the NEWEST 500, so `t500` (the oldest) is the first casualty.
+        assert!(!store.records.contains_key(&(
+            "a".to_string(),
+            "ns".to_string(),
+            "t0".to_string()
+        )));
+        assert!(store.records.contains_key(&(
+            "a".to_string(),
+            "ns".to_string(),
+            "t100".to_string()
+        )));
+    }
+
     #[test]
     fn pruning_reaps_the_live_store_not_just_the_snapshot() {
         let mut store = Store::default();
@@ -2753,6 +2939,90 @@ mod tests {
         );
     }
 
+    /// The tie-break must be a FUNCTION of the body, not of hash iteration order.
+    ///
+    /// `canonicalize_body` collects the batch into a `HashMap<String, WireRecord>` and then
+    /// iterates it to hand out reserved `ord` counters. `HashMap` iteration order is seeded per
+    /// instance from `RandomState`, so it differs between calls AND between server processes.
+    /// The first record to arrive in that order keeps the client's original counter and the rest
+    /// are bumped to +1, +2, … — so the SAME body produced DIFFERENT `ord` values on different
+    /// runs, and two servers replaying the same batch would hand clients different orderings for
+    /// identical content. The existing `identical_hlc_on_different_ids_…` test only asserts the
+    /// counters come out *distinct*, never *which record gets which*, which is why this went
+    /// unnoticed.
+    ///
+    /// 32 identical calls, all required to agree. Under hash-order-dependent assignment the chance
+    /// of 32 agreeing permutations is 1/6^31, i.e. this cannot pass by luck.
+    #[test]
+    fn the_tie_break_is_a_function_of_the_body_not_of_hash_order() {
+        let empty = Store::default();
+        let build = || {
+            vec![
+                body_rec("a", 500, 0, "one"),
+                body_rec("b", 500, 0, "two"),
+                body_rec("c", 500, 0, "three"),
+            ]
+        };
+        // uuid -> the counter it was assigned, from the first call.
+        let first: HashMap<String, u64> = canonicalize_body(build(), "ns", "acct", &empty)
+            .into_iter()
+            .map(|(u, r)| (u, ord_key(&r).1))
+            .collect();
+        for attempt in 1..32 {
+            let again: HashMap<String, u64> = canonicalize_body(build(), "ns", "acct", &empty)
+                .into_iter()
+                .map(|(u, r)| (u, ord_key(&r).1))
+                .collect();
+            assert_eq!(
+                again, first,
+                "call {attempt} assigned different ordering counters for the SAME body — the \
+                 tie-break is following hash iteration order"
+            );
+        }
+        // And the assignment is pinned, not merely self-consistent: the lexically smallest uuid
+        // keeps the client's own counter and the rest ascend from there. That is the only
+        // ordering every device can recompute from replicated fields alone.
+        assert_eq!(
+            first.get("a").copied(),
+            Some(0),
+            "the smallest uuid must keep the client's original counter"
+        );
+        assert_eq!(first.get("b").copied(), Some(1));
+        assert_eq!(first.get("c").copied(), Some(2));
+    }
+
+    /// `MAX_HLC_TIE_BREAKS` capped the upward walk, so a cluster larger than the cap exhausted
+    /// the loop and left the remaining records sitting on the client's original counter — which
+    /// is already claimed. Ordering was non-total again for exactly the hostile batch the walk
+    /// exists to defend against. A body may carry up to `MAX_RECORDS_PER_REQUEST` (1000)
+    /// records, so the cap was reachable.
+    #[test]
+    fn a_cluster_larger_than_the_old_bump_cap_still_gets_a_total_order() {
+        let empty = Store::default();
+        let n = MAX_HLC_TIE_BREAKS + 5;
+        let recs: Vec<WireRecord> = (0..n)
+            .map(|i| body_rec(&format!("r{i:04}"), 500, 0, "ct"))
+            .collect();
+        let out = canonicalize_body(recs, "ns", "acct", &empty);
+        assert_eq!(out.len(), n as usize);
+        let counters: HashSet<u64> = out.iter().map(|(_, r)| ord_key(r).1).collect();
+        assert_eq!(
+            counters.len(),
+            n as usize,
+            "only {} of {n} records got a distinct ordering counter — the walk ran out and left \
+             the rest colliding on the client's original counter",
+            counters.len()
+        );
+        // `hlc` still untouched, for every one of them.
+        for (_, r) in &out {
+            assert_eq!(
+                hlc_key(&r.hlc),
+                (500, 0, "n"),
+                "`hlc` is AEAD-bound and must never be rewritten by the server"
+            );
+        }
+    }
+
     /// The bump must key off the record's OWN previous version being on the same tuple, not off
     /// that version merely existing. An ordinary update would otherwise be mistaken for a clash
     /// and get a reserved counter on every single write.
@@ -2910,6 +3180,254 @@ mod tests {
             "laptop"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A push that reaps tombstones but applies NO new record must not leave a reap that a
+    /// restart can undo — i.e. the tombstones a reap drops must never have reached the file in
+    /// the first place.
+    ///
+    /// This is the assertion behind the audit's 3(4) finding, which claimed the push path's
+    /// first `prune_tombstones` throws its count away (so `changed` stays false and no persist
+    /// runs) and that "a restart re-loads the tombstones from the snapshot".
+    ///
+    /// It cannot, because EVERY write to the snapshot goes through `from_store_compacting`,
+    /// which evaluates the identical `tombstones_past_retention` predicate. A tombstone a reap
+    /// would drop is therefore already absent from the file: the in-memory store is a superset of
+    /// the file by construction, and a reap only moves memory toward the file, never away from
+    /// it. Skipping the persist changes nothing observable, which the byte comparison below pins.
+    ///
+    /// This is the audit finding I did NOT "fix". The one-line change would be harmless but would
+    /// also buy nothing, and a test that can only pass because both paths agree stops meaning
+    /// anything — so the finding is reported instead of patched.
+    #[tokio::test]
+    async fn a_reap_cannot_be_undone_by_a_restart_because_it_never_reached_the_file() {
+        let dir = std::env::temp_dir().join(format!("aegis-sync-reap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("data.json");
+
+        let key = SigningKey::from_bytes(&[77; 32]);
+        let account = "acct-reap".to_string();
+        let device_id = hex_bytes(&key.verifying_key().to_bytes());
+
+        let mut store = Store::default();
+        store.devices.entry(account.clone()).or_default().insert(
+            device_id.clone(),
+            Device {
+                device_id,
+                label: "L".into(),
+                last_seen_ms: 0,
+            },
+        );
+        let seeded = TOMBSTONE_RETENTION_PER_NS + 100;
+        for i in 0..seeded {
+            let t = tomb(&format!("t{i}"), i as i64);
+            store
+                .records
+                .insert((account.clone(), "bm".into(), t.uuid.clone()), t);
+        }
+
+        let state = AppState::new(store, Some(path.clone()));
+        state.persist().await.unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert_eq!(
+            load_store(&path).unwrap().records.len(),
+            TOMBSTONE_RETENTION_PER_NS,
+            "the snapshot must already be compacted, so the doomed tombstones were never written \
+             — which is the whole reason 3(4) is not a defect"
+        );
+
+        // A push that changes nothing: an empty body, so no record can be applied and `changed`
+        // can only ever become true via the prunes.
+        let pushed = post_records(
+            State(state.clone()),
+            signed(&key, &account, "reap-nonce", now_ms() + 300_000),
+            Json(PostRecords {
+                ns: "bm".into(),
+                records: vec![],
+            }),
+        )
+        .await;
+        assert!(pushed.is_ok(), "an empty push must be accepted: {pushed:?}");
+
+        // The in-memory store HAS been reaped…
+        assert_eq!(
+            state.db.lock().unwrap().records.len(),
+            TOMBSTONE_RETENTION_PER_NS,
+            "the push's prune must have dropped the surplus from memory"
+        );
+        // …and the file is byte-identical, so the missing persist cost nothing observable.
+        assert_eq!(
+            std::fs::read(&path).unwrap(),
+            before,
+            "not persisting after a reap must not change the file: every write already compacts \
+             with the same predicate, so the reaped tombstones were never in it"
+        );
+        // And a restart genuinely has nothing to resurrect.
+        let mut reloaded = load_store(&path).unwrap();
+        assert_eq!(
+            prune_tombstones(&mut reloaded),
+            0,
+            "the reloaded store must have nothing left to reap, or the reap WAS undone by the \
+             write path and 3(4) is a real defect"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The read path's reap is scoped to the namespace the request actually serves, so a pull is
+    /// O(the namespace it asked for) rather than O(the entire store — across every account.
+    ///
+    /// `prune_tombstones` walks all of `store.records`, and it used to run on the READ path too,
+    /// so every pull of any namespace re-examined every record on the server under the single
+    /// global `db` mutex. That is the audit finding this test witnesses. The observable
+    /// consequence of scoping is what is asserted here: pulling `zz` must leave `bm`'s tombstones
+    /// exactly where they were, because a reap is only *needed* for what this response can ship.
+    ///
+    /// Nothing is lost by scoping. The WRITE path still reaps every namespace on every push
+    /// (pinned by [`a_push_still_reaps_every_namespace`]), so the only tombstones that can ever
+    /// outlive a reap are ones created since the last push, and the next push — to any namespace —
+    /// collects them.
+    #[tokio::test]
+    async fn a_read_reaps_only_the_namespace_it_serves() {
+        let (state, key, account) = registered(31);
+        let seeded = TOMBSTONE_RETENTION_PER_NS + 100;
+        {
+            let mut g = state.db.lock().unwrap_or_else(|e| e.into_inner());
+            for i in 0..seeded {
+                // Ancient wall_ms: past the count window AND the age floor.
+                let t = tomb(&format!("bm{i}"), i as i64);
+                g.records
+                    .insert((account.clone(), "bm".into(), t.uuid.clone()), t);
+            }
+            g.records.insert(
+                (account.clone(), "zz".into(), "live".into()),
+                WireRecord {
+                    ord: None,
+                    uuid: "live".into(),
+                    hlc: json!({ "wall_ms": now_ms(), "counter": 0, "node": "n" }),
+                    deleted: false,
+                    nonce: "nn".into(),
+                    ct: "cc".into(),
+                },
+            );
+        }
+        // Pull a DIFFERENT namespace. This is the request that must not pay for `bm`.
+        let served = get_records(
+            State(state.clone()),
+            signed(&key, &account, "read-other-ns", now_ms() + 300_000),
+            Query(RecordsQuery {
+                ns: "zz".into(),
+                cursor: None,
+                limit: None,
+            }),
+        )
+        .await
+        .expect("the pull itself must succeed — it is the reap side effect that is under test");
+        assert_eq!(
+            served
+                .0
+                .get("records")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(1),
+            "sanity: the pull served `zz`'s one live record"
+        );
+        let g = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        let bm_tombstones = g
+            .records
+            .iter()
+            .filter(|((a, n, _), r)| a == &account && n == "bm" && r.deleted)
+            .count();
+        assert_eq!(
+            bm_tombstones, seeded,
+            "pulling one namespace reaped {seeded} -> {bm_tombstones} tombstones in an \
+             UNRELATED namespace — the read path is doing O(total store) work it does not need"
+        );
+    }
+
+    /// The other half of the scoping contract, and the guard against an over-broad "fix" that
+    /// simply stops reaping on reads. Pulling the namespace itself must still reap it, or
+    /// tombstones past the window would be served forever.
+    #[tokio::test]
+    async fn a_read_still_reaps_the_namespace_it_serves() {
+        let (state, key, account) = registered(32);
+        let seeded = TOMBSTONE_RETENTION_PER_NS + 100;
+        {
+            let mut g = state.db.lock().unwrap_or_else(|e| e.into_inner());
+            for i in 0..seeded {
+                let t = tomb(&format!("t{i}"), i as i64);
+                g.records
+                    .insert((account.clone(), "bm".into(), t.uuid.clone()), t);
+            }
+        }
+        let body = get_records(
+            State(state.clone()),
+            signed(&key, &account, "read-own-ns", now_ms() + 300_000),
+            Query(RecordsQuery {
+                ns: "bm".into(),
+                cursor: None,
+                limit: None,
+            }),
+        )
+        .await
+        .unwrap();
+        let remaining = state
+            .db
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .records
+            .len();
+        assert_eq!(
+            remaining, TOMBSTONE_RETENTION_PER_NS,
+            "pulling `bm` must still reap its own past-window tombstones, or they are served \
+             forever"
+        );
+        let served = body.0.get("records").and_then(Value::as_array).unwrap();
+        assert_eq!(
+            served.len(),
+            TOMBSTONE_RETENTION_PER_NS,
+            "…and the response must not carry the ones that were past the window"
+        );
+    }
+
+    /// The write path must keep reaping EVERY namespace, which is what makes the read-path
+    /// scoping above safe rather than a leak. A push to one namespace collects the tombstones
+    /// another namespace left behind, so nothing can accumulate between pushes.
+    #[tokio::test]
+    async fn a_push_still_reaps_every_namespace() {
+        let (state, key, account) = registered(33);
+        let seeded = TOMBSTONE_RETENTION_PER_NS + 100;
+        {
+            let mut g = state.db.lock().unwrap_or_else(|e| e.into_inner());
+            for i in 0..seeded {
+                let t = tomb(&format!("t{i}"), i as i64);
+                g.records
+                    .insert((account.clone(), "bm".into(), t.uuid.clone()), t);
+            }
+        }
+        // Push an unrelated namespace. Nothing in `bm` is touched by the merge, so the only
+        // thing that can drop its tombstones is the write path's own global reap.
+        let ok = post_records(
+            State(state.clone()),
+            signed(&key, &account, "push-other-ns", now_ms() + 300_000),
+            Json(PostRecords {
+                ns: "zz".into(),
+                records: vec![],
+            }),
+        )
+        .await
+        .expect("the push itself must succeed — it is the reap side effect that is under test");
+        assert_eq!(ok.0, json!({ "ok": true }), "sanity: the push was accepted");
+        let remaining = state
+            .db
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .records
+            .len();
+        assert_eq!(
+            remaining, TOMBSTONE_RETENTION_PER_NS,
+            "a push to any namespace must still reap every namespace's past-window tombstones — \
+             this is what makes scoping the READ path safe"
+        );
     }
 
     #[tokio::test]

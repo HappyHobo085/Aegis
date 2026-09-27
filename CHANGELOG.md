@@ -9,6 +9,63 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A blocked-redirect loop could drive unbounded background tabs and quadratic
+  `tabs.json` writes.** Every blocked redirect opened its destination natively, with no
+  rate limit and no dedup, and each open re-serialised the entire tab registry with an
+  fsync — so a page bouncing through the guard N times cost N tabs and N full writes,
+  on a path the page itself drives. The origin tab and source URL were already being
+  passed in and ignored. The policy now lives in a managed `RedirectBudget` with **two**
+  independent refusals, because key dedup alone bounds nothing: a hard cap of 3 live
+  redirect tabs (a count is the sound bound, since each holds its slot for at most the
+  30 s auto-close, and a loop whose destinations all differ would slip past dedup
+  alone), and a 120 s per-`(from, to)` dedup window deliberately **longer** than that
+  auto-close, so a _slow_ loop is still refused on its second pass.
+
+- **The server's cross-uuid HLC tie-break depended on `HashMap` iteration order**, so
+  the same push body produced different `ord` stamps on different server processes and
+  across restarts — two servers replaying one batch handed clients different orderings
+  for identical content. The records are now sorted by `(wall, counter, node, uuid)`
+  before the tie-break runs. The old `MAX_HLC_TIE_BREAKS` cap is gone: past it the
+  ordering stopped being _total_, which is the one property the loop exists to provide,
+  and a request may carry up to 1,000 records.
+
+- **Tombstone retention was a count with no age bound.** A single bulk delete — "clear
+  all history", or the vault bulk delete, which the push path's own comment calls
+  "hundreds of tombstones in one request" — writes more than the 500-per-namespace
+  window in one go, and the surplus was evicted **while it was seconds old**. Any device
+  that was offline during the delete had therefore never been told, and resurrected the
+  rows the user had just deleted on its next sync. Retention is now
+  `max(newest-500, younger-than-90-days)`, the age floor chosen against the client's own
+  30-day tombstone GC so the server outlives it and can still answer a device that has
+  been away longer than the client-side window.
+
+- **A pull in which no record could be decrypted was reported as a successful pull.**
+  `open_wire` failures are per-record and non-fatal by design, but a namespace where
+  _every_ served record failed returned an empty success — indistinguishable from
+  "nothing changed" — so the namespace was marked synced and its dirty flag cleared.
+  That is destructive rather than cosmetic, because the client pushes after the merge:
+  it would go on to seal the local records up under the key it believed was right. A
+  total failure is now an error, taken before the merge, and the message says the likely
+  cause is a data-key mismatch (a re-key, a restored backup, or an account restored on a
+  second device before its key arrived). A namespace that served **no** records is still
+  a success, and a partial failure is still tolerated.
+
+- **A `429` from the sync server was retried as fast as `syncIntervalSec` allowed, with
+  no backoff of any kind** — as often as every second, against a server whose per-device
+  nonce cap keeps refusing for up to the 5-minute token TTL. That is up to ~300 signed
+  round trips, each an Ed25519 verification, to be told "wait", and the user saw a bare
+  `HTTP 429` with no hint that waiting was the fix. The refusal is now tagged
+  specifically, the backoff doubles from 30 s and is capped at the TTL (the server's
+  limit is a sliding window, so a constant short delay keeps knocking inside a window
+  that has not opened and a constant long one stalls sync after it would accept again),
+  and a successful pass resets it. Disabling periodic sync still disables it.
+
+- **A read request reaped tombstones from every namespace, not just the one it served.**
+  `post_records` already reaps everything on every push, so reaping other namespaces from
+  a pull was pure waste under the global store lock. A pull now scopes its reap to its
+  own namespace. (The underlying scan of the store is still whole-store — bounding that
+  needs a namespace index, which is a structural change not smuggled in beside a bug fix.)
+
 - **A remote peer could walk the HLC counter off the end of `u32` and rewind this
   device's clock.** The increment sites did `local.1.max(remote.1) + 1` with no
   overflow check, and a peer only had to stamp `counter: 4294967295` on a wall inside

@@ -449,6 +449,33 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     `ns` (a fixed internal string) a raw `&`/`#`/`+` in it would re-parse the query string.
     `MAX_PULL_PAGES` (64) is what stops a server that always answers with a cursor from spinning
     the client; on exhaustion we keep what was pulled, because a partial pull beats none.
+  - **A pull in which NOTHING decrypts is now an `Err`, not an empty success** (`sync::pull_verdict`).
+    `open_wire` failures are per-record and non-fatal by design — one corrupt or legacy-keyed
+    record must not block a namespace, and its own `eprintln!` is the diagnostic. But a namespace
+    where **every** served record failed was returning `Ok(vec![])`, indistinguishable from "nothing
+    changed", so the engine reported the namespace synced and cleared its dirty flag. That is
+    destructive rather than cosmetic, because `sync_ns` PUSHES after the merge: it would go on to
+    seal the local records up under the key it believes is right. The verdict is taken **after the
+    page loop and before the merge**, so a total failure never reaches the push. A namespace that
+    served **zero** records is still a success, or every fresh namespace would error forever.
+    The overwhelmingly likely cause is a data key that no longer matches the one the records were
+    sealed under (a re-key, a restored backup, or an account restored on a second device before
+    its key arrived), so the message says so.
+  - **A `429` from the sync server is TAGGED and backs the periodic pass off**
+    (`RATE_LIMIT_ERR_PREFIX`, `is_rate_limit_error`, `rate_limit_backoff`, `next_periodic_delay`).
+    `http()` flattened every non-2xx into `HTTP {status}: {text}`, so a rate-limit refusal was
+    indistinguishable from any other failure and the periodic thread retried at exactly
+    `syncIntervalSec` with **no backoff of any kind** — as often as every **1 s**, against a
+    server whose per-device nonce cap keeps refusing for up to the 5-minute token TTL, so up to
+    ~300 signed round trips (each an Ed25519 verification) to be told "wait". The backoff doubles
+    from 30 s and is **capped at the TTL**, because the server's limit is a sliding window that
+    only clears as already-issued tokens expire: a constant short delay keeps knocking inside a
+    window that has not opened, and a constant long one stalls sync after the server would accept
+    again. `next_periodic_delay` only ever **lengthens** the wait, and an explicit `syncIntervalSec`
+    of `0` (periodic sync disabled) is never overridden. `rate_limit_until_ms` and
+    `consecutive_rate_limits` live on `sync::Inner` and are deliberately **not** in `state_json`, so
+    the `shared/types.ts` IPC contract is unchanged; a successful pass resets both, so a later
+    refusal restarts at the short end of the curve rather than inheriting a stale streak.
 - **Anti-fingerprinting / farbling** — `farble.rs`: opt-in document-start JS shim
   that perturbs fingerprinting surfaces with per-frame-origin, per-session deterministic
   noise. Key design points:
@@ -1113,8 +1140,31 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     platform-native: desktop auto-opens a background tab; **Android shows a Material
     `Snackbar`** (a chrome-layer bar can't paint over the native content WebView) with
     the same "Open anyway" → new-tab action (`MainActivity.showRedirectBlocked`).
+15. **A blocked-redirect loop is BUDGETED — it cannot drive unbounded background tabs.**
+    `on_blocked_redirect_to_new_tab` opens the destination natively on every block, with no
+    rate limit and no dedup, so a page that bounces through the guard N times cost N tabs **and**
+    N full serialisations of the whole tab registry with an fsync each (`open_redirect_background`
+    → `emit_and_persist` → `tabs::persist`) — quadratic, on a path a page can drive. It already
+    received the origin tab and the source URL as parameters, so everything a dedup key needs was
+    on hand. The policy now lives in the managed `RedirectBudget` (`Arc<Mutex<_>>`, so the
+    `'static` 30 s timer thread can hold a clone — a `tauri::State<'r, T>` clone keeps the `'r`
+    borrow and will not compile into a `'static` closure). **Two** independent refusals, because
+    key dedup alone bounds nothing:
+    - `MAX_LIVE_REDIRECT_TABS = 3` — a **count** is the sound bound here rather than a rate, since
+      each tab holds its slot for at most the 30 s auto-close. Key-only dedup would not stop a
+      loop whose destinations all differ, and a rate alone would not stop a fast one.
+    - `REDIRECT_DEDUP_WINDOW = 120 s` — deliberately **longer** than the 30 s auto-close, so a
+      _slow_ loop is still refused on its second pass rather than slipping through as slots free up.
 
-15. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
+    The check and the record happen under one lock, so a concurrent repeat cannot let both through.
+    `release` is called **unconditionally** on the timer thread, not only when the tab is still a
+    background tab, so a user who closes one by hand does not ratchet the budget shut. Two honest
+    limits: the untested surface is the one-line `if !budget.admit(from, to) { return; }` wiring
+    (same class as the other `setup()` call sites), and `admit` claims a slot only once the tab id
+    exists, so N _truly simultaneous_ distinct-key hops can transiently exceed the cap by N-1 —
+    bounded by thread count, not by anything the page controls.
+
+16. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
     backend). The MSVC "Desktop development with C++" workload bundles CMake; install
     NASM separately (nasm.us) and add it to PATH. CI's `windows-latest` ships both, so
     this only bites local builds. Same-machine aside: behind a network that blocks the
@@ -1122,7 +1172,7 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     fetch with `CRYPT_E_NO_REVOCATION_CHECK` — set `http.check-revoke = false` in
     `~/.cargo/config.toml`.
 
-16. **Windows child webviews need PHYSICAL bounds at fractional DPI.** wry's `add_child`
+17. **Windows child webviews need PHYSICAL bounds at fractional DPI.** wry's `add_child`
     / `set_bounds` called with `LogicalPosition`/`LogicalSize` mispositions the WebView2
     controller's INPUT/hit-test region at non-100% scaling (e.g. 125%): the content
     webview _renders_ below the chrome bars but _captures their clicks_, so the toolbar
@@ -1132,7 +1182,7 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     so the controller's hit rect matches the host window. Only bites fractional DPI — 100%
     is unaffected, which is why CI / 100%-DPI testing missed it. (macOS keeps Logical.)
 
-17. **Windows runtime tab creation must spawn the webview OFF the UI thread, and tabs
+18. **Windows runtime tab creation must spawn the webview OFF the UI thread, and tabs
     need explicit show/hide.** Two pre-existing Windows multi-tab bugs:
     (a) `window.add_child` **deadlocks the UI thread** when called synchronously from the
     `ipc` command — WebView2's async `CreateCoreWebView2Controller` can't complete while
@@ -1158,7 +1208,7 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     main-thread marshalling to the non-Windows creation path, which needs a real GUI run on
     Linux, macOS and Windows to validate. Untested on this host, so not applied.
 
-18. **Find-in-page per-platform capability matrix (honest):**
+19. **Find-in-page per-platform capability matrix (honest):**
     - **Linux** (WebKitFindController): real match count via `found-text` signal, full
       highlight-all, **no active-index getter** (reports `1` when count > 0 else `0`).
       Live-verify pending user display session; cross-check clean.
@@ -1176,7 +1226,7 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
         the Android WebView find API has no case-sensitive mode. Kotlin compile-verified; GUI
         runtime-verify pending device session.
 
-19. **Private tabs use `WebviewBuilder::incognito(true)` on desktop — Android is a
+20. **Private tabs use `WebviewBuilder::incognito(true)` on desktop — Android is a
     best-effort weaker tier with a documented, accepted limit.**
 
         **Desktop (Linux / Windows / macOS):** `nav::spawn_tab(…, private: bool)` calls
@@ -1222,7 +1272,7 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
           first-party-cookie persistence after close is a documented, accepted limit (not
           fixable without a wry or Android per-profile API).
 
-20. **Anti-fingerprinting (farbling) hard-won lessons.** Four lessons from sub-project L:
+21. **Anti-fingerprinting (farbling) hard-won lessons.** Four lessons from sub-project L:
 
     a. **Bake the seed INSIDE the IIFE closure, NEVER as a top-level `var` or `window.*`
     assignment.** A top-level `var __aegisFarbleSeed = '...'` leaks to `window` — any

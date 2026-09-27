@@ -263,14 +263,110 @@ pub fn expect(app: &AppHandle, tab: u32, url: &str) {
     }
 }
 
+/// Admission control for [`on_blocked_redirect_to_new_tab`].
+///
+/// Extracted from that function so the decision is unit-testable without an `AppHandle` — the
+/// function's only other effect is spawning a timer thread, which a test cannot observe.
+///
+/// The [`Clone`] is load-bearing, not convenience: the auto-close timer runs on a `'static`
+/// thread, and `tauri::State<'r, T>`'s own clone keeps the `'r` borrow of the `AppHandle`, so
+/// the state itself cannot be moved into the thread. Cloning out the `Arc` gives a handle with
+/// no borrow, which can.
+#[derive(Clone, Default)]
+pub struct RedirectBudget(std::sync::Arc<std::sync::Mutex<RedirectBudgetInner>>);
+
+#[derive(Default)]
+struct RedirectBudgetInner {
+    /// `(from, to)` pairs this guard already acted on, with the time it did so.
+    recent: std::collections::HashMap<(String, String), std::time::Instant>,
+    /// Tabs this guard opened and has not yet released (auto-closed, or the user closed it).
+    live: std::collections::HashSet<u32>,
+}
+
+/// How many redirect-opened background tabs may be live at once.
+///
+/// The 30 s auto-close timer is what makes a count a sound bound rather than a rate: a tab
+/// occupies its slot for at most 30 s, so this caps the concurrent tab count without
+/// rate-limiting the user. Three leaves room for a page that genuinely bounces the user through
+/// a couple of ad hops while still making an unbounded loop impossible.
+pub const MAX_LIVE_REDIRECT_TABS: usize = 3;
+
+/// How long a `(from, to)` pair stays "already handled" after the guard acts on it.
+///
+/// Must be ≥ the 30 s auto-close timer, or a loop running slower than the timer would re-open
+/// the same destination on every cycle, forever. It is deliberately longer than the timer so a
+/// second hop to the same destination is still refused after the first tab auto-closed.
+pub const REDIRECT_DEDUP_WINDOW: std::time::Duration = std::time::Duration::from_secs(120);
+
+impl RedirectBudget {
+    fn inner(&self) -> std::sync::MutexGuard<'_, RedirectBudgetInner> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// Whether a hop from `from` to `to` should open a background tab right now.
+    ///
+    /// Two independent refusals, because key dedup alone does not bound anything: a loop that
+    /// visits a fresh destination each time has all-distinct keys, and a loop that reuses one
+    /// key is what the dedup catches.
+    ///  - **Already handled** within [`REDIRECT_DEDUP_WINDOW`]. The window is longer than the
+    ///    30 s auto-close, so a slow loop is still refused on its second pass.
+    ///  - **No live slot** in [`MAX_LIVE_REDIRECT_TABS`]. The auto-close timer returns every
+    ///    slot unconditionally (whether or not it actually closed the tab), so this cannot
+    ///    ratchet shut after the user closes a tab by hand.
+    ///
+    /// The check and the key record happen under one lock, so a concurrent repeat of the same
+    /// hop cannot both slip through. The slot is claimed separately, by `occupy`, because the
+    /// tab id does not exist until `open_redirect_background` returns — so N genuinely
+    /// simultaneous *distinct*-key hops can transiently exceed the cap by N-1. That overshoot is
+    /// bounded by the thread count, not by anything the page controls.
+    pub fn admit(&self, from: &str, to: &str) -> bool {
+        let now = std::time::Instant::now();
+        let mut g = self.inner();
+        // Expire first, or `recent` grows for the life of the process.
+        g.recent.retain(|_, at| {
+            now.checked_duration_since(*at)
+                .is_some_and(|d| d < REDIRECT_DEDUP_WINDOW)
+        });
+        let key = (from.to_string(), to.to_string());
+        if g.recent.contains_key(&key) {
+            return false;
+        }
+        if g.live.len() >= MAX_LIVE_REDIRECT_TABS {
+            return false;
+        }
+        g.recent.insert(key, now);
+        true
+    }
+
+    /// Record that tab `id` is now live, occupying one of the budget's slots.
+    pub fn occupy(&self, id: u32) {
+        self.inner().live.insert(id);
+    }
+
+    /// Give `id`'s slot back. Called from the auto-close timer, and safe to call twice.
+    pub fn release(&self, id: u32) {
+        self.inner().live.remove(&id);
+    }
+}
+
 /// When a redirect would be blocked, open the destination in a new background tab.
 /// If the user hasn't activated (viewed) that tab within 30 seconds, it is
 /// automatically closed — preventing a blocked redirect from silently accumulating
 /// background tabs the user never intended to visit.
 #[cfg_attr(target_os = "android", allow(dead_code))]
-pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, to: &str) {
+pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to: &str) {
+    let Some(budget) = app.try_state::<RedirectBudget>() else {
+        return;
+    };
+    if !budget.admit(from, to) {
+        return;
+    }
     let new_id = crate::tabs::open_redirect_background(app, to, false);
+    budget.occupy(new_id);
     let app = app.clone();
+    // `budget` is a `State<'_, _>`; clone the `Arc` out of it so the timer thread gets a handle
+    // with no borrow of `app` (see `RedirectBudget`'s doc).
+    let budget: RedirectBudget = (*budget).clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_secs(30));
         // Only close if the tab still exists AND hasn't been activated (i.e. the
@@ -291,6 +387,7 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, _from: &str, t
         if should_close {
             crate::tabs::close_tab(&app, new_id);
         }
+        budget.release(new_id);
     });
 }
 
@@ -418,6 +515,154 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_shouldBlock(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // --- the redirect-tab budget: a hostile page must not drive unbounded tabs or writes ---
+
+    /// The bug this pins: `on_blocked_redirect_to_new_tab` had no admission control at all, so
+    /// a page running a redirect loop called it once per hop. Each call opened a tab AND did a
+    /// full `serde_json::to_string_pretty` of the whole registry plus an fsync+rename
+    /// (`tabs::open_redirect_background` → `emit_and_persist` → `persist`), and spawned a 30 s
+    /// timer thread. N hops therefore cost N tabs, N full serialisations, N fsyncs and N
+    /// threads — O(N·T) work driven entirely by a third-party page.
+    ///
+    /// The loop shape is `A → B → A → B …`, so the DISTINCT keys are only two. The important
+    /// property is therefore that a repeated key is served once, and that the number of tabs
+    /// the guard can have open at once is bounded — including when every `to` is distinct, which
+    /// is the shape that defeats key-based dedup alone.
+    #[test]
+    fn a_redirect_loop_cannot_drive_unbounded_background_tabs() {
+        let b = RedirectBudget::default();
+        // A ping-pong loop: the same two keys over and over.
+        let mut opened = 0usize;
+        for i in 0..500 {
+            let (from, to) = if i % 2 == 0 {
+                ("https://a.test/", "https://b.test/")
+            } else {
+                ("https://b.test/", "https://a.test/")
+            };
+            if b.admit(from, to) {
+                opened += 1;
+                b.occupy(i as u32);
+            }
+        }
+        assert!(
+            opened <= MAX_LIVE_REDIRECT_TABS,
+            "500 blocked hops across a two-key ping-pong opened {opened} background tabs; the \
+             live set is capped at {MAX_LIVE_REDIRECT_TABS}"
+        );
+        // And the distinct-URL shape, which key dedup alone cannot collapse.
+        let b2 = RedirectBudget::default();
+        let mut opened2 = 0usize;
+        for i in 0..500 {
+            if b2.admit("https://a.test/", &format!("https://t{i}.test/")) {
+                opened2 += 1;
+                b2.occupy(i as u32);
+            }
+        }
+        assert!(
+            opened2 <= MAX_LIVE_REDIRECT_TABS,
+            "500 blocked hops to 500 DISTINCT destinations opened {opened2} background tabs; \
+             the live set is capped at {MAX_LIVE_REDIRECT_TABS}"
+        );
+    }
+
+    /// The budget must not leak: a slot released by the auto-close timer has to come back, or
+    /// the third redirect of a session would be silently dropped and the user would never see
+    /// the destination of a legitimately-blocked hop.
+    #[test]
+    fn a_released_slot_comes_back_so_later_redirects_still_work() {
+        let b = RedirectBudget::default();
+        let mut first = Vec::new();
+        for i in 0..MAX_LIVE_REDIRECT_TABS as u32 {
+            assert!(
+                b.admit("https://a.test/", &format!("https://t{i}.test/")),
+                "hop {i} is within budget and must be admitted"
+            );
+            b.occupy(i);
+            first.push(i);
+        }
+        assert!(
+            !b.admit("https://a.test/", "https://over.test/"),
+            "with every slot taken, another hop must be refused"
+        );
+        for id in first {
+            b.release(id);
+        }
+        assert!(
+            b.admit("https://a.test/", "https://after.test/"),
+            "a released slot must be reusable, otherwise the budget ratchets shut and the user \
+             permanently stops seeing blocked-redirect destinations"
+        );
+    }
+
+    /// A repeat of a key this guard already acted on is refused *while the first tab is still
+    /// live*, because opening a second tab for the same hop serves no purpose — the first one
+    /// is already there. This is the property that collapses the classic A→B→A→B loop to a
+    /// single tab, and it is the reason `admit` remembers keys and not just counts.
+    #[test]
+    fn the_same_hop_is_not_opened_twice_while_its_tab_is_live() {
+        let b = RedirectBudget::default();
+        assert!(
+            b.admit("https://a.test/", "https://b.test/"),
+            "the first hop is admitted"
+        );
+        b.occupy(7);
+        assert!(
+            !b.admit("https://a.test/", "https://b.test/"),
+            "re-opening the same blocked redirect while its tab is still live just doubles the \
+             tabs and the writes for no user benefit"
+        );
+        // A DIFFERENT hop is not affected while under the cap, so this cannot pass by refusing
+        // everything.
+        assert!(
+            b.admit("https://c.test/", "https://d.test/"),
+            "an unrelated blocked redirect must still be admitted while the budget has room"
+        );
+    }
+
+    /// `admit` records the key itself, so a repeat after the slot is released is still refused
+    /// for the remainder of the dedup window — otherwise a loop that runs slower than the
+    /// auto-close timer would re-open the same tab every 30 s forever.
+    #[test]
+    fn a_repeat_is_still_refused_after_the_slot_is_released() {
+        let b = RedirectBudget::default();
+        assert!(b.admit("https://a.test/", "https://b.test/"));
+        b.occupy(7);
+        b.release(7);
+        assert!(
+            !b.admit("https://a.test/", "https://b.test/"),
+            "the dedup window must outlive the auto-close timer, or a slow loop re-opens the \
+             same destination every 30 s indefinitely"
+        );
+    }
+
+    /// `RedirectBudget` is shared with a `'static` timer thread, so the `Arc` clone is the only
+    /// thing that makes the release work. If someone makes it a bare `Mutex`, this stops
+    /// compiling; this test documents the requirement in prose as well as in the type.
+    #[test]
+    fn the_budget_is_cheaply_clonable_for_the_timer_thread() {
+        let b = RedirectBudget::default();
+        let moved: RedirectBudget = b.clone();
+        assert!(moved.admit("https://a.test/", "https://b.test/"));
+        // Fill every slot through the ORIGINAL handle...
+        for i in 0..MAX_LIVE_REDIRECT_TABS as u32 {
+            assert!(b.admit("https://a.test/", &format!("https://t{i}.test/")));
+            b.occupy(i);
+        }
+        // ...and the CLONE must already see them all taken. A copy would see an empty set.
+        assert!(
+            !moved.admit("https://a.test/", "https://fresh.test/"),
+            "a clone must share state with the original, or `release` from the timer thread \
+             would decrement a different set than `occupy` incremented, and the live set would \
+             never come back down"
+        );
+        // And the reverse direction, which is the one the timer thread actually relies on.
+        moved.release(0);
+        assert!(
+            b.admit("https://a.test/", "https://after-release.test/"),
+            "a release through the clone must free the slot the original's `occupy` took"
+        );
+    }
 
     // --- should_block (the cross-origin predicate, Android's entry) ---
     #[test]
