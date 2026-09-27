@@ -73,6 +73,24 @@ PRs are the currency mechanism for the crypto/keyring/TLS surface.
   calls `evaluateAudit()`, and **exits non-zero if any blocking advisory remains**.
   Allowlisted ones are logged and ignored.
 - **`auditCheck.test.mjs`** — unit tests for the pure logic above.
+- **`check-bundle-size.mjs`**, **`check-android-versioncode.mjs`** — the other two
+  CI gates (gzipped `dist/assets` vs `BUDGETS`; Android `versionCode` monotonicity
+  vs `AEGIS_BASE_REF`). They are top-level CLIs like `check-npm-audit.mjs`, with
+  the same "one implementation, wired into both `npm run` and `ci.yml`" shape.
+- **`cliGates.test.mjs`** — spawns all three CLIs as subprocesses in a **copied
+  sandbox** and asserts the exit code _and_ the operator-facing message. Three
+  facts force that shape:
+  - All three read their inputs at module load and call `process.exit()`, so
+    importing one would run it and kill the test worker. There is no in-process
+    seam.
+  - Each resolves its repo root from its **own file location**, so copying the
+    script into a temp dir re-roots it and makes the fixture `dist/`, `.git` and
+    `.audit-allowlist.json` ordinary sandbox files. Nothing in the real working
+    tree is touched — which matters, because there is a **real `dist/`** here.
+  - `npm audit` is reached through `execFileSync('npm', …)`, so the sandbox puts a
+    fixture-printing `npm` shim first on the spawned `PATH`; the shim's own exit
+    code is a variable, because `npm audit` exits non-zero whenever it finds
+    anything (the _normal_ path for a report with findings).
 
 ## Allowlist
 
@@ -135,7 +153,7 @@ comment.
 
 ```bash
 node scripts/check-npm-audit.mjs   # the gate
-npm test                           # includes auditCheck.test.mjs (node project)
+npm test                           # includes auditCheck.test.mjs + cliGates.test.mjs
 ```
 
 ## Build & deploy scripts

@@ -605,3 +605,50 @@ aegis, reachFn)`. Provides:
   **`registration.test.tsx`** — unit tests for each individual module.
   The 1 500 ms delay lets `App` mount and register `window.__aegisAutopilot` before the
   runner tries to use it.
+
+### The seam the mock hides, and the test that covers it
+
+`src/testFixtures/aegisMock.ts` replaces the **whole** `aegis` object. So every other
+`src/` test exercises the React half of the renderer→core seam and **never touches
+`ipcClient.ts`** — the channel string, the `private` vs `isPrivate` rename, the dot→colon
+rewrite in `tauriInvoke.ts` and the whole Android bridge switch were, until
+`src/lib/ipcClient.contract.test.ts`, unasserted by anything. That test mocks **only**
+`@tauri-apps/api/core` + `/event`, so the real `aegis` runs, and it pins every request
+channel in the catalog (128 rows) plus every event subscription (22 rows), with two
+derived ratchets so the table cannot silently shrink or grow stale.
+
+Together the two guards are complementary, not redundant, and each is non-vacuous:
+
+- `shared/ipcCatalog.drift.test.ts` — catalog ↔ Rust ↔ renderer-subscriber (the **outer**
+  hops). Catches a channel with no Rust arm, a Rust arm for an undeclared name, an `evt*`
+  nobody subscribes to, and a raw dotted `emit`.
+- `src/lib/ipcClient.contract.test.ts` — UI action → exact `invoke` payload (the **inner**
+  hop). Catches a wrong channel string, a renamed payload field, a dropped `undefined` vs
+  `{}` distinction.
+
+Proven: adding `nav.bounce` to **both** the catalog and a Rust `match` arm leaves the drift
+test green (the channel has a producer) and turns the contract test red. Neither subsumes
+the other.
+
+### `it.fails` is a used convention here
+
+A test written as `it.fails('…')` **passes while the bug exists and goes red the moment
+someone fixes it** — that is the point, and it is why such a test must assert _behaviour_
+(`toBeCloseTo(…, 9)`), never float bits or an intermediate value. `contentLayout.test.ts`
+carries 3 of them for a **real, unfixed bug**: `App.tsx:578` passes a **fraction** into
+`clampResizeDelta`, which compares it against **pixel** `MIN_PANE_SIZE` / max, so a split
+with a pane under ~17% either does nothing (the handle silently dies) or slams to 0.05/0.95
+on a 10px drag. Note the two bounds are also mutually unsatisfiable as written (200px min +
+80% max), so the eventual fix must derive max from min. Fixing it is a product decision,
+not a one-liner — when you do, the 3 `it.fails` tests are the spec.
+
+### Coverage of `src/`
+
+`npm run test:coverage` measures every `src/` file except three, excluded by
+`coverage.exclude` in `vitest.config.ts` because measuring them is meaningless:
+`src/main.tsx` (the `createRoot` entry point), `src/vite-env.d.ts`, and
+`src/testFixtures/**` (a mock). The measured totals, the ratchet and the full gap
+decomposition live in the **root** `AGENTS.md`; they are not restated here. Short version:
+`src/` is at 87.2% statements (815/6385 uncovered) and the debt is almost entirely
+`src/components/` (520) — the hooks and libs are in the low single digits of uncovered
+statements.

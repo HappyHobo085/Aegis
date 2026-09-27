@@ -3,24 +3,24 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 4856,
-      "covered": 3990,
-      "pct": 82.16
+      "total": 4939,
+      "covered": 4280,
+      "pct": 86.65
     },
     "statements": {
-      "total": 6580,
-      "covered": 5357,
-      "pct": 81.41
+      "total": 6680,
+      "covered": 5674,
+      "pct": 84.94
     },
     "functions": {
-      "total": 1377,
-      "covered": 981,
-      "pct": 71.24
+      "total": 1385,
+      "covered": 1142,
+      "pct": 82.45
     },
     "branches": {
-      "total": 4275,
-      "covered": 3216,
-      "pct": 75.22
+      "total": 4326,
+      "covered": 3331,
+      "pct": 76.99
     }
   },
   "files": {
@@ -112,6 +112,71 @@
         "pct": 0
       }
     },
+    "scripts/coverage-baseline.mjs": {
+      "lines": {
+        "total": 17,
+        "covered": 0,
+        "pct": 0
+      },
+      "statements": {
+        "total": 17,
+        "covered": 0,
+        "pct": 0
+      },
+      "functions": {
+        "total": 1,
+        "covered": 0,
+        "pct": 0
+      },
+      "branches": {
+        "total": 0,
+        "covered": 0
+      }
+    },
+    "scripts/coverage-ratchet.mjs": {
+      "lines": {
+        "total": 34,
+        "covered": 0,
+        "pct": 0
+      },
+      "statements": {
+        "total": 41,
+        "covered": 0,
+        "pct": 0
+      },
+      "functions": {
+        "total": 5,
+        "covered": 0,
+        "pct": 0
+      },
+      "branches": {
+        "total": 10,
+        "covered": 0,
+        "pct": 0
+      }
+    },
+    "scripts/coverageCheck.mjs": {
+      "lines": {
+        "total": 53,
+        "covered": 51,
+        "pct": 96.22
+      },
+      "statements": {
+        "total": 68,
+        "covered": 64,
+        "pct": 94.11
+      },
+      "functions": {
+        "total": 8,
+        "covered": 8,
+        "pct": 100
+      },
+      "branches": {
+        "total": 55,
+        "covered": 49,
+        "pct": 89.09
+      }
+    },
     "shared/types.ts": {
       "lines": {
         "total": 4,
@@ -134,24 +199,24 @@
     },
     "src/App.tsx": {
       "lines": {
-        "total": 354,
-        "covered": 207,
-        "pct": 58.47
+        "total": 341,
+        "covered": 194,
+        "pct": 56.89
       },
       "statements": {
-        "total": 416,
-        "covered": 227,
-        "pct": 54.56
+        "total": 400,
+        "covered": 213,
+        "pct": 53.25
       },
       "functions": {
-        "total": 139,
-        "covered": 61,
-        "pct": 43.88
+        "total": 137,
+        "covered": 58,
+        "pct": 42.33
       },
       "branches": {
-        "total": 211,
-        "covered": 91,
-        "pct": 43.12
+        "total": 199,
+        "covered": 84,
+        "pct": 42.21
       }
     },
     "src/components/AdblockShield.tsx": {
@@ -2159,23 +2224,23 @@
     "src/lib/contentLayout.ts": {
       "lines": {
         "total": 35,
-        "covered": 3,
-        "pct": 8.57
+        "covered": 35,
+        "pct": 100
       },
       "statements": {
         "total": 49,
-        "covered": 3,
-        "pct": 6.12
+        "covered": 46,
+        "pct": 93.87
       },
       "functions": {
         "total": 6,
-        "covered": 1,
-        "pct": 16.66
+        "covered": 6,
+        "pct": 100
       },
       "branches": {
         "total": 36,
-        "covered": 4,
-        "pct": 11.11
+        "covered": 32,
+        "pct": 88.88
       }
     },
     "src/lib/format.ts": {
@@ -2224,24 +2289,24 @@
     },
     "src/lib/ipcClient.ts": {
       "lines": {
-        "total": 310,
-        "covered": 56,
-        "pct": 18.06
+        "total": 302,
+        "covered": 276,
+        "pct": 91.39
       },
       "statements": {
-        "total": 325,
-        "covered": 61,
-        "pct": 18.76
+        "total": 315,
+        "covered": 286,
+        "pct": 90.79
       },
       "functions": {
-        "total": 183,
-        "covered": 21,
-        "pct": 11.47
+        "total": 179,
+        "covered": 172,
+        "pct": 96.08
       },
       "branches": {
-        "total": 98,
-        "covered": 25,
-        "pct": 25.51
+        "total": 96,
+        "covered": 71,
+        "pct": 73.95
       }
     },
     "src/lib/layout.ts": {
@@ -2272,8 +2337,8 @@
       },
       "statements": {
         "total": 75,
-        "covered": 71,
-        "pct": 94.66
+        "covered": 70,
+        "pct": 93.33
       },
       "functions": {
         "total": 11,
@@ -2282,8 +2347,8 @@
       },
       "branches": {
         "total": 53,
-        "covered": 49,
-        "pct": 92.45
+        "covered": 48,
+        "pct": 90.56
       }
     },
     "src/lib/protectionSummary.ts": {
