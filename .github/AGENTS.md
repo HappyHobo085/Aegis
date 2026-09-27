@@ -44,6 +44,15 @@ GitHub Actions workflows and Dependabot config for Aegis.
     `cargo --version` reports the override's 1.98.0 while `cargo +stable --version`
     reports the default's 1.98.1). Each step echoes `cargo +<msrv> --version` so the
     toolchain that actually ran is one grep away in the log.
+    **This gate has now caught two wrong numbers**, which is the only evidence it
+    works: 1.80.0 when the job was written, then 1.85.0 the first time it really
+    compiled (run 36282117889: `rustc 1.85.0 is not supported by the following
+packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
+    `icu*\*`2.2 chain needs 1.86). The floor is **1.88.0** and is owned by the
+    dependency graph, not by this repo's own code. Re-derive it with
+   `cargo metadata --format-version 1 --locked | jq '[.packages[].rust_version] | max'`    after any dependency bump, and move`rust-version`in **both** manifests (the job
+    fails on drift) plus the README's MSRV line. If`msrv` goes red, fix the manifests
+    — do not weaken the job.
 
   Every cargo invocation passes `--locked` (only `cargo fmt` does not — cargo-fmt has
   no such flag), so **`Cargo.lock` is part of the gate**: a dependency change that is

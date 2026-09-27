@@ -8,13 +8,23 @@ repository = ""
 edition = "2021"
 # MSRV, TESTED (not aspirational): the `msrv` job in .github/workflows/ci.yml
 # extracts this value out of this file, installs exactly that toolchain, and runs
-# `cargo check --locked` on both crates with it. The previous value (1.80.0) was
-# never checked by anything, and it was simply wrong — the resolved dependency graph
-# does not build on 1.80. Keep this number and the README's "MSRV" line in step; if
-# the msrv job goes red, this is the number that is wrong, not the job.
+# `cargo +<this> check --locked` on both crates with it.
+#
+# 1.85.0 was just as wrong as the 1.80.0 before it, and the job only caught it once
+# it was really compiling 1.85.0: `dtolnay/rust-toolchain` sets the rustup DEFAULT,
+# which loses to the repo-root rust-toolchain.toml DIRECTORY OVERRIDE, so the job had
+# been silently building 1.98.0 (CI run 36282117889 then failed with "rustc 1.85.0 is
+# not supported by the following packages"). The floor is set by the dependency graph,
+# and `cargo metadata` puts its max at 1.88.0 — darling 0.23, plist 1.9, time 0.3.47,
+# time-core, time-macros and serde_with(-macros) all need 1.88, and the icu_* 2.2 /
+# idna_adapter 1.2.2 chain needs 1.86. Pinning those older instead is not worth it.
+# Re-derive with: cargo metadata --format-version 1 | jq '[.packages[].rust_version
+# |select(startswith("1."))] | max_by(split(".")|map(tonumber))'  — if a bump pushes
+# that max up, this number and the README's "MSRV" line are what must move.
+# If the msrv job goes red for any other reason, this number is the suspect, not the job.
 # Note: the macOS-only objc2 stack has a higher floor than the Linux/Windows one, so
 # the msrv job runs on Linux only. See rust-toolchain.toml for the CI toolchain pin.
-rust-version = "1.85.0"
+rust-version = "1.88.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -7,9 +7,12 @@ edition = "2021"
 # step with `src-tauri/Cargo.toml`, and the `msrv` job in .github/workflows/ci.yml
 # reads BOTH files and fails if they ever disagree — an earlier "1.77.2" here was
 # simply wrong about the crate it claimed to mirror, and no job pinned either value.
-# The previous shared value (1.80.0) was itself never verified and understates the
-# real floor; it is now 1.85.0 and is actually compiled by that job.
-rust-version = "1.85.0"
+# 1.80.0 was then wrong too, and so was the 1.85.0 that replaced it: the msrv job had
+# never actually compiled the declared floor (see src-tauri/Cargo.toml for why).
+# 1.88.0 is the shared value, which is ABOVE this crate's own dependency floor of
+# 1.85.0 — deliberately, because the job enforces equality and the two crates ship and
+# are gated together. A lower number here would just be a number the job rejects.
+rust-version = "1.88.0"
 description = "Reference self-hosted sync server for Aegis — stores opaque ciphertext only."
 license = "AGPL-3.0-only"
 publish = false

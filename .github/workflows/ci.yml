@@ -289,8 +289,16 @@ jobs:
   # MSRV gate: prove the `rust-version` in both manifests is a real lower bound rather
   # than an aspiration. The version is read OUT OF THE MANIFESTS, so this job cannot
   # disagree with them, and the two manifests are checked against each other so they
-  # cannot drift apart. (Both declared 1.80.0 until this job existed, and that number
-  # was simply wrong — nothing had ever compiled the tree with it.)
+  # cannot drift apart.
+  #
+  # It has now caught two wrong numbers, which is the whole point of it. 1.80.0 was
+  # wrong when the job was written. 1.85.0 was still wrong when it first actually ran,
+  # because the steps resolved 1.98.0 through the rust-toolchain.toml directory
+  # override (see the `+<msrv>` note below) — once that was fixed the job failed with
+  # "rustc 1.85.0 is not supported by the following packages" and the floor moved to
+  # 1.88.0, which is what the resolved dependency graph actually requires. A gate that
+  # has never gone red has not been tested; do not "fix" a red msrv by loosening this
+  # job — re-derive the floor from `cargo metadata` and correct the manifests.
   #
   # `cargo check` rather than clippy/test: the claim under test is "this compiles on the
   # MSRV", not "the MSRV has no lints". Linux-only, because the macOS objc2 stack has a
@@ -328,7 +336,7 @@ jobs:
       # The one place a toolchain is NOT taken from rust-toolchain.toml: this job
       # deliberately installs the MSRV, not the CI pin. Reading it from the manifest
       # keeps the tested value and the declared value the same number by construction.
-      # NOTE: keep `rust-version` three-component (1.85.0, not 1.85) — dtolnay's action
+      # NOTE: keep `rust-version` three-component (1.88.0, not 1.88) — dtolnay's action
       # rewrites a bare `1.NN` into whatever the current release cycle is, which would
       # silently stop testing the declared floor.
       #
