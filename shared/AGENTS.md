@@ -26,7 +26,7 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
   - `redirect.blocked` event (`evtRedirectBlocked`, payload `RedirectBlocked { viewId,
 from, to }`) — **DECLARED BUT NOT EMITTED ANYWHERE.** An earlier version of this doc
     claimed it was "emitted per-platform from the native nav-policy hook"; that was false and
-    `channelDrift.test.ts` now fails the build if a doc drifts that way again. The blocked-redirect
+    `ipcCatalog.drift.test.ts` now fails the build if a doc drifts that way again. The blocked-redirect
     behaviour really does ship, but through two mechanisms that bypass this event entirely:
     desktop opens the destination natively in `redirect_guard::on_blocked_redirect_to_new_tab`
     (→ `tabs::open_redirect_background`), and Android injects `window.__aegisOpenTab(...)` into
@@ -98,6 +98,26 @@ password: string; notes: string }` — decrypted record; returned only by direct
     implements). Adding a feature means adding it here first.
 - **`types.test.ts`, `types.update.test.ts`** — assert the contract's invariants
   (e.g. `IPC` channel naming, update-state shape).
+- **`ipcCatalog.drift.test.ts`** — the drift guard, in **four** directions. It is a
+  _source scan_ of `src-tauri/src/*.rs` + `src/**`, not a behavioural test, because
+  `ipc()` takes a concrete wry `&AppHandle` and the renderer specs run against
+  `testFixtures/aegisMock.ts` — so nothing else in the suite can see a channel that
+  the Rust side does not implement.
+  1. **catalog → Rust**: every `IPC` value is implemented somewhere in Rust. This is
+     the direction that matters: it is the one that was blind. Renaming 4 channels to
+     shape-preserving wrong values left all 1346 other tests green.
+  2. **Rust → catalog**: every name Rust _acts on_ — `match channel` arms, `channel ==`
+     guard clauses, `emit_event` args, `.listen` args — is in the catalog. Scoped to
+     those four sites on purpose; a whole-file scan yields 45 false positives
+     (store filenames, test hostnames).
+  3. **catalog event → renderer**: every `evt*` key is referenced by a real `src/`
+     file, so the core never emits into the void.
+  4. **no raw emit**: no channel-shaped literal reaches a bare `app.emit`; Tauri 2
+     rejects dotted event names, so that is a silent no-op, not a shortcut.
+     Each direction carries an **inventory** of known-and-explained exceptions, asserted
+     as an exact set in _both_ directions — a new orphan fails, and so does a stale
+     inventory entry. Adding a key to silence a failure is the antipattern this file
+     exists to prevent; fix the code or the contract instead.
 
 ## Adding a channel
 
@@ -115,6 +135,13 @@ dot-separated and unique, so a malformed/colliding name fails the test):
    rewrite; never `app.emit` a raw dotted name.
 3. **PLACE 3 — `src/lib/ipcClient.ts`:** `call<T>(IPC.x, payload)` for commands;
    `on<T>(IPC.evtX, cb)` for events (tauriInvoke.ts reverses `:`→`.`).
+
+`ipcCatalog.drift.test.ts` is the gate that ties the three together, and it is stricter
+than the three-place rule: PLACE 2 with no PLACE 1 fails direction 1, PLACE 1 with no
+PLACE 2 fails direction 1, a PLACE 2 arm for a name PLACE 1 never declares fails
+direction 2, and an `evt*` key with no `on(…)` caller fails direction 3. Renaming a
+channel to a _shape-preserving_ wrong value — `nav.back` → `nav.backk` — passes
+`types.test.ts`'s naming regex and fails only here.
 
 **Settings-field shortcut.** A new _settings field_ needs **no new channel** — add it
 to `settings.rs defaults()` + the `Settings` interface here; `settings.set`
