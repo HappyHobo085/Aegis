@@ -638,15 +638,20 @@ trigger the ~4-minute full dependency rebuild a `rust-toolchain.toml` edit would
 
 ### Measured, 2026-09-27 (Linux, `cargo llvm-cov --lib --json`, stable 1.98.0)
 
-| Metric               | Measured             | Gap  |
+**The committed floor, taken with NO keyring** (see the floor rule below — these are the
+numbers in `src-tauri/coverage-baseline.json`, and a machine with a working keyring measures
+strictly higher):
+
+| Metric               | Measured (floor)     | Gap  |
 | -------------------- | -------------------- | ---- |
-| lines                | 11175/14750 = 75.76% | 3575 |
-| statements (regions) | 20121/26320 = 76.45% | 6199 |
-| functions            | 1369/1898 = 72.13%   | 529  |
+| lines                | 11038/14750 = 74.83% | 3712 |
+| statements (regions) | 19863/26320 = 75.47% | 6457 |
+| functions            | 1354/1898 = 71.34%   | 544  |
 
 43 of the 44 modules compiled on Linux are gated. Before the exclusion list the
-same run reads 72.78% lines / 73.47% regions / 69.28% functions — the difference
-is entirely `linux_layout.rs`.
+no-keyring run reads 71.89% lines / 72.53% regions / 68.52% functions — the
+difference is entirely `linux_layout.rs`. With a keyring those figures are
+~1pp higher, which is exactly why the floor is the committed number.
 
 **`statements` is llvm `regions`, not an istanbul statement.** A region is a code
 span, not an expression. The label is a deliberate fiction that exists so the
@@ -715,34 +720,45 @@ bus), `adblock_webkit.rs` 21.3%, `nav.rs` 23.8%, `tabs.rs` 41.7%,
 TypeScript side: deleting 0%-covered code moves the ratio and not one test.
 The absolute `covered` column above is the honest companion number.
 
-### The keyring asymmetry (why CI provisions a keyring — TWICE)
+### The Rust coverage baseline is a FLOOR, measured without a keyring
 
-Three tests in `sync_keystore.rs` round-trip a real OS keychain via
-`keyring_available()` (`sync_keystore.rs:430`), which does a real keyring **write**; with
-no keyring they **early-return**, so they pass while covering nothing. A dev box with a
-desktop session has one and a bare GitHub runner does not.
+`src-tauri/coverage-baseline.json` is generated with **no OS keyring available**, and it has
+to be. The three keychain round-trips in `sync_keystore.rs` share one keyring, so their
+covered-line footprint depends on credential state left behind by earlier runs. Measured
+across four runs of the same tree and toolchain: `sync_keystore.rs` covered **286, 289, 300**
+lines with a keyring, and **228** without one; `sync.rs` moves 574 vs 498. CI's
+`cargo llvm-cov` has never had a usable keyring — runs 36325245069 and 36326730887 both
+reported exactly 11038/14750, twice.
 
-**Both cargo invocations in the `rust` job must therefore be wrapped, not just one.**
-`cargo test` and `cargo llvm-cov` are different processes, and each `run:` step in Actions
-is a fresh shell, so `DBUS_SESSION_BUS_ADDRESS` cannot be inherited — the
-`dbus-run-session` + `gnome-keyring-daemon` wrapper genuinely has to appear in both
-steps. I wrapped only `cargo test` at first, and the coverage step then measured a
-**different program than the one CI tests**: 11038/14750 covered lines against a
-11175/14750 baseline, the loss being exactly `sync.rs` 574→498 plus `sync_keystore.rs`
-289→228. Confirmed by reproducing the CI number locally — same toolchain, same
-dependencies, `DBUS_SESSION_BUS_ADDRESS` pointed at nothing — so it is an
-**environment** difference, not a code difference.
+So the committed number is the **least-capable** measurement, and every environment satisfies
+it: a machine with a working keyring covers strictly more and passes, CI without one lands
+exactly on the floor. **A threshold has to be reproducible in every environment or it is not a
+threshold.** A baseline captured on a dev box is a _target_; a baseline captured in the weakest
+environment is a _floor_, and only the floor can gate CI.
 
-Two rules that cost the same investigation:
+Consequences worth knowing before "fixing" this:
 
-- **A coverage baseline must be measured under the environment the tests run in.** A
-  threshold that depends on whether a keyring, a D-Bus session, or a network is present
-  is not a threshold. Do not set a Rust coverage baseline from a box that CI cannot
-  reproduce.
-- **An unchanged denominator with a falling numerator means code stopped EXECUTING**, not
-  that it was deleted. `rust-coverage-ratchet.mjs` now prints per-file covered-line deltas
-  on failure for exactly this reason, so the file is named in one run instead of
-  reconstructed by re-running the toolchain locally.
+- The `rust` job's `cargo test` step IS wrapped in `dbus-run-session` +
+  `gnome-keyring-daemon`, and the `cargo llvm-cov` step deliberately is **not**. The asymmetry
+  is intentional and the comment in `ci.yml` says so. The keyring decides whether those three
+  tests RUN or SKIP — that is test quality. It is deliberately not allowed to decide the
+  coverage number.
+- Wrapping the coverage step to match `cargo test` was tried and **reverted**: it did not make
+  the keyring usable for the test run (the daemon reports `couldn't access control socket` in
+  both steps, and libtest swallows a passing test's `eprintln!`, so the `SKIP keychain tests`
+  line is invisible either way — the _coverage_ was the only honest signal).
+- Two dead ends that cost real time, both measured rather than assumed:
+  - Splitting the step into `cargo llvm-cov --no-run` then `--no-clean` to keep the daemon
+    fresh. `--no-run` does build the instrumented binaries and a plain second run then reuses
+    them in ~19s, so the shape works — but `--no-clean` **merges stale `.profraw` from earlier
+    runs**, inflating the total to 11188 (13 lines of phantom coverage). In CI a cached
+    `target/` could carry `.profraw` too, so `--no-clean` is unsound for a committed number.
+  - Reading `keyring_available()`'s `eprintln!` to decide whether the tests skipped. Useless:
+    libtest captures output from passing tests, so the line never reaches the log in any run.
+- `rust-coverage-ratchet.mjs` prints **per-file covered-line deltas** on failure
+  (`perFileDeltas` / `formatDeltas` in `rustCoverageCheck.mjs`). An **unchanged denominator
+  with a falling numerator** means code stopped EXECUTING, not that it was deleted;
+  `totalDelta` separates the two.
 
 ## Android (`gen/android/`)
 

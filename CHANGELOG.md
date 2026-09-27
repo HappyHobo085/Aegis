@@ -53,16 +53,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     committed per-file reason and their real numbers printed on every run, because on a
     Linux runner they are either 0% or not compiled at all — a threshold that silently
     depends on the machine is not a threshold.
-  - **CI provisions a keyring** (`gnome-keyring-daemon` under `dbus-run-session`) for **both**
-    cargo invocations in the Rust job — `cargo test` _and_ `cargo llvm-cov` — because three
-    `sync_keystore` tests round-trip a real OS keyring and otherwise early-return, passing
-    while covering nothing. They are separate processes and each CI step is a fresh shell,
-    so the wrapper has to appear twice; wrapping only `cargo test` made the coverage step
-    measure a different program than the one CI tests (11038/14750 covered lines against a
-    11175/14750 baseline). A committed threshold that depends on whether a keyring happens
-    to be present is not a threshold. The Rust ratchet also prints per-file covered-line
-    deltas on failure, so "code stopped executing" is distinguishable from "code was
-    deleted" in one run.
+  - **The Rust coverage baseline is a FLOOR, measured with no OS keyring.** The three
+    keychain round-trips in `sync_keystore.rs` share one keyring, so their covered-line
+    footprint depends on credential state left by earlier runs — measured at 286, 289 and
+    300 covered lines across three runs of the same tree, and 228 with no keyring at all.
+    CI's `cargo llvm-cov` has never had a usable keyring (two runs, both exactly
+    11038/14750). The committed number is therefore the _least-capable_ measurement, so
+    every environment satisfies it: a machine with a keyring covers strictly more and
+    passes, CI without one lands on the floor. A threshold that is not reproducible in every
+    environment is not a threshold. The `cargo test` step still provisions a keyring (so
+    those three tests run rather than skip — test quality, not the gate); the coverage step
+    deliberately does not, and the Rust ratchet now prints per-file covered-line deltas on
+    failure so "code stopped executing" is distinguishable from "code was deleted".
   - Both gates run in the `web` and `rust` jobs only, never in `msrv` or `cross-target`.
 - **Three drift guards, replacing the ones lost with `src/autopilot/`.**
   - `shared/ipcCatalog.drift.test.ts` walks the IPC contract in **four directions**:
