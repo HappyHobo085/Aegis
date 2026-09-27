@@ -21,9 +21,14 @@ GitHub Actions workflows in `.github/workflows/`:
     `src-tauri` unit tests, Linux-cfg paths) for `src-tauri/Cargo.toml`, plus
     `cargo audit` over the crypto/keyring/TLS deps. That audit is **blocking**
     despite the historical "advisory" label — it has no `continue-on-error`, so any
-    new advisory fails the job. Two known findings
-    (`RUSTSEC-2026-0194`, `RUSTSEC-2026-0195`) are pinned open via `--ignore`
-    because the Tauri/plist chain constrains quick-xml; they carry no expiry.
+    new advisory fails the job. Ten known findings are accepted in
+    `src-tauri/.cargo/audit.toml` — an `[advisories] ignore` list, not `--ignore`
+    flags, because cargo-audit resolves that path relative to the CWD (hence this
+    step's `working-directory: src-tauri`) — each entry carrying its reason: two
+    quick-xml advisories the Tauri/plist chain constrains, rkyv (optional, never
+    compiled), and the unmaintained/unsound GTK + `unic-*` subtree. They carry no
+    expiry, and an entry is only ever added **after** probing for a fix — see that
+    file's header.
   - **`sync-server`**: the same fmt/clippy/test/audit sequence for the standalone
     `sync-server/Cargo.toml`. It is the only internet-facing service, and it had no
     CI at all before — a `sync-server` lockfile with a vulnerable dependency would
@@ -57,8 +62,11 @@ GitHub Actions workflows in `.github/workflows/`:
 are grouped into a single PR per ecosystem to reduce noise; major bumps arrive individually.
 Cargo is tracked for **both** Rust manifests — `/src-tauri` (the Tauri core) and `/sync-server`
 (the standalone self-hosted sync server) — so `Cargo.lock` no longer drifts unmanaged.
-The CI `rust` job's `cargo audit` is advisory (non-blocking); the Dependabot cargo
-PRs are the currency mechanism for the crypto/keyring/TLS surface.
+The CI `rust` job's `cargo audit` is **blocking**, so a Dependabot bump that lands a
+vulnerable version goes red immediately instead of waiting for the next weekly run;
+the Dependabot cargo PRs remain the currency mechanism for the crypto/keyring/TLS
+surface, and the accept-list that keeps the ten known-and-accepted advisories off
+that path is `src-tauri/.cargo/audit.toml`.
 
 ## Files
 

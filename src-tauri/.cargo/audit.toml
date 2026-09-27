@@ -16,6 +16,23 @@
 # To accept a new advisory: add its id below WITH the one-line reason it is accepted,
 # so whoever reads this next can decide whether to unpin it. This is the Rust analog of
 # .audit-allowlist.json.
+#
+# BUT ACCEPT IT LAST. Every entry below was probed for a fix FIRST, and an accept-list
+# entry is a permanent, reviewable-free excuse — so the question to ask is never "is it
+# noisy" but "is the fix genuinely unresolvable HERE". The probe is cheap and answers it
+# in one command per crate:
+#
+#     cargo update -p <crate>                    # does a compatible fix exist?
+#     cargo update -p <crate> --precise <guess>  # errors distinguish the two failures
+#       "failed to select a version for the requirement `<c> = ^<x>`"  => next version is
+#         SEMVER-INCOMPATIBLE, so only a major bump of a PARENT can fix it (out of scope here)
+#       "no matching package named `<c>` found"                        => the guessed
+#         version DOES NOT EXIST; the crate is at its final release (0.9.x unic-*, 2.0 proc-macro-error)
+#
+# This is how `anyhow` RUSTSEC-2026-0190 came to be FIXED rather than accepted: it was
+# listed in the audit brief as an unfixable transitive unsoundness via tauri 2.11.3, but
+# 1.0.104 exists, satisfies tauri's requirement, and clears the advisory. It is NOT in the
+# list below, and it should stay out — if it ever returns, bump the lockfile, do not ignore.
 [advisories]
 ignore = [
   # RUSTSEC-2026-0194 (quick-xml): fixed upstream in >=0.41, but the Tauri/plist
@@ -37,4 +54,36 @@ ignore = [
   # flat Cargo.lock, which cannot express optionality. Re-check with that command before
   # assuming this is still true; if it ever returns non-zero, this ignore MUST be removed.
   "RUSTSEC-2026-0235",
+
+  # --- The unmaintained/unsound GTK + URL chain. All five probes above FAILED to find a
+  # --- fix, so these are accepted, not overlooked. Grouped by root cause, because a
+  # --- Dependabot bump of the named parent un-ignores all of them at once.
+  #
+  # RUSTSEC-2024-0429 (glib 0.18.5, unsound `Iterator`/`DoubleEndedIterator` impls for
+  # `glib::VariantStrIter`) and RUSTSEC-2024-0370 (proc-macro-error 1.0.4, unmaintained)
+  # share one root: both arrive through glib-macros 0.18.5 <- glib 0.18.5 <- gtk 0.18.2,
+  # the WebKitGTK stack that Linux browsing is built on.
+  #   - glib: `cargo update -p glib` locks 0 packages (0.18.5 IS the newest 0.18);
+  #     0.18.6 does not exist, and 0.19.0 fails with `glib = "^0.18"` — gtk 0.18.2 caps
+  #     it. Fixing this means a gtk/webkit2gtk major bump, which is a Tauri/wry change.
+  #   - proc-macro-error: 2.0.0 does not exist. The crate is at 1.0.4 with no successor
+  #     release; the widely-anticipated 2.0 rewrite was never published. It is a
+  #     build-time-only proc-macro dep of glib-macros, so it ships in no binary.
+  "RUSTSEC-2024-0429",
+  "RUSTSEC-2024-0370",
+  #
+  # The unic-* 0.9.0 family (unic-char-property, unic-char-range, unic-common, unic-ucd-ident,
+  # unic-ucd-version) is unmaintained and arrives as one subtree: urlpattern 0.3.0 ->
+  # tauri-utils 2.9.3 (both a build-dep and a runtime dep of tauri). 0.9.0 is the FINAL
+  # release of the family — the maintainers hard-forked from the abandoned 0.8 line rather
+  # than continue it, which is why 0.9.1 does not exist and 0.8.0 fails with
+  # `unic-char-property = "^0.9.0"`. Nothing downstream can be bumped past this without
+  # urlpattern moving.
+  # (Note for the next reader: RUSTSEC-2024-0370 is proc-macro-error, NOT a unic-* crate —
+  # it is listed above with the GTK group. The unic ids are all 2025-*.)
+  "RUSTSEC-2025-0081",  # unic-char-property
+  "RUSTSEC-2025-0075",  # unic-char-range
+  "RUSTSEC-2025-0080",  # unic-common
+  "RUSTSEC-2025-0100",  # unic-ucd-ident
+  "RUSTSEC-2025-0098",  # unic-ucd-version
 ]

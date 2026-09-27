@@ -223,7 +223,7 @@ jobs:
         if: ${{ !cancelled() }}
         # Run from src-tauri/, NOT the repo root: cargo-audit resolves its config as
         # `./.cargo/audit.toml` relative to the CWD and does not search ancestors, so
-        # this is what makes src-tauri/.cargo/audit.toml authoritative. The two accepted
+        # this is what makes src-tauri/.cargo/audit.toml authoritative. The accepted
         # advisories (with their reasons) live in that file now, not in CLI flags.
         working-directory: src-tauri
         run: |
