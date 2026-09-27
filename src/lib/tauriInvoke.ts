@@ -29,6 +29,14 @@ export function on<T>(event: string, cb: (payload: T) => void): () => void {
   });
   return () => {
     cancelled = true;
-    if (unlisten) unlisten();
+    // Null the handle after releasing it so a second `off()` (a double-invoked cleanup)
+    // cannot release the same backend listener twice. Tauri treats UnlistenFn as
+    // idempotent, so this is belt-and-braces — but "off() releases exactly once" is the
+    // contract every effect cleanup assumes.
+    if (unlisten) {
+      const u = unlisten;
+      unlisten = null;
+      u();
+    }
   };
 }
