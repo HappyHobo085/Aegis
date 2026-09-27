@@ -205,11 +205,22 @@ function WorkspaceSwitcherInner({
             <span
               className="ws-pill__dot ws-pill__dot--clickable"
               style={{ background: newColor }}
+              // mousedown + preventDefault so the dot never steals focus from the name
+              // input. Otherwise that input's onBlur fired first and — with an empty
+              // name — cancelled the whole form, making the picker unreachable until a
+              // name was typed. Same pattern OmniboxDropdown uses for its rows.
+              onMouseDown={(e) => e.preventDefault()}
               onClick={() => setShowColorPicker(showColorPicker ? null : '__new__')}
               aria-label="Choose workspace color"
             />
             {showColorPicker === '__new__' && (
-              <div className="ws-color-picker">
+              <div
+                className="ws-color-picker"
+                // Same focus-preservation reason as the dot above: a swatch mousedown
+                // must not blur the name input, or the empty-name onBlur cancels the
+                // form mid-selection.
+                onMouseDown={(e) => e.preventDefault()}
+              >
                 {WORKSPACE_COLORS.map((c) => (
                   <button
                     key={c.value}
@@ -295,27 +306,6 @@ function WorkspaceSwitcherInner({
             <Palette size={13} aria-hidden="true" />
             Color
           </button>
-          {showColorPicker === ctxMenu.wsId && (
-            <div className="ws-color-picker ws-color-picker--ctx">
-              {WORKSPACE_COLORS.map((c) => {
-                const ws = workspaces.find((w) => w.id === ctxMenu.wsId);
-                return (
-                  <button
-                    key={c.value}
-                    type="button"
-                    className={`ws-color-picker__swatch${ws?.color === c.value ? ' ws-color-picker__swatch--active' : ''}`}
-                    style={{ background: c.value }}
-                    title={c.label}
-                    aria-label={c.label}
-                    onClick={() => {
-                      onSetColor(ctxMenu.wsId, c.value);
-                      setShowColorPicker(null);
-                    }}
-                  />
-                );
-              })}
-            </div>
-          )}
           {!isDefault(ctxMenu.wsId) && (
             <button
               type="button"
@@ -330,6 +320,34 @@ function WorkspaceSwitcherInner({
               Delete
             </button>
           )}
+        </div>
+      )}
+
+      {/* The context-menu colour picker is a SIBLING of the menu, not a child of it.
+          The "Color" menu item sets `showColorPicker` AND clears `ctxMenu`, so a picker
+          rendered inside the `{ctxMenu && …}` block would unmount in the same commit
+          that created it — the affordance did nothing and `onSetColor` was unreachable
+          from the UI. `__new__` is the sentinel the create-form dot uses, so it is
+          excluded here. */}
+      {showColorPicker && showColorPicker !== '__new__' && (
+        <div className="ws-color-picker ws-color-picker--ctx">
+          {WORKSPACE_COLORS.map((c) => {
+            const target = workspaces.find((w) => w.id === showColorPicker);
+            return (
+              <button
+                key={c.value}
+                type="button"
+                className={`ws-color-picker__swatch${target?.color === c.value ? ' ws-color-picker__swatch--active' : ''}`}
+                style={{ background: c.value }}
+                title={c.label}
+                aria-label={c.label}
+                onClick={() => {
+                  onSetColor(showColorPicker, c.value);
+                  setShowColorPicker(null);
+                }}
+              />
+            );
+          })}
         </div>
       )}
     </div>

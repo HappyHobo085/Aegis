@@ -23,6 +23,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   titles while Windows/macOS do not** (they record `""`; only Linux has a title-changed
   signal). Device-verified on a Galaxy S22; the JNI seam itself still has no automated
   coverage — see gotcha 24 in `src-tauri/AGENTS.md`.
+- **`WorkspaceSwitcher`'s context-menu colour picker could never open.** The "Color" item
+  set `showColorPicker` and cleared `ctxMenu` in the same handler, but the picker was
+  rendered inside the `{ctxMenu && …}` block, so it unmounted in the commit that created
+  it — `onSetColor` was unreachable from the UI. The picker is now a sibling of the menu.
+- **Picking a colour for a NEW workspace was unreachable.** Clicking the create form's
+  colour dot (or a swatch) blurred the name input, and the empty-name `onBlur` cancelled
+  the whole form. Both now `preventDefault` on mousedown so the input keeps focus.
+
+### Fixed
+
+- **Browsing history was never recorded on Android, so the mobile History sheet was
+  permanently blank.** `history::record` had exactly one non-test caller: the
+  `on_page_load` closure inside `nav::spawn_tab`. That is a **wry** callback, and
+  Android's content area is a **native Kotlin `WebView`** (`MainActivity.createTabWebView`),
+  so wry never observes a content load and nothing ever called `record` there. The mobile UI
+  was fine — it was a dead store, not a dead panel. Kotlin now reports each
+  `onPageFinished` through a new `NativeHistory.recordVisit` JNI export into
+  `history::record_page_finished`, which resolves the tab's privateness from the registry
+  itself (Kotlin passes a bare tab id and is never trusted with a privateness flag). This
+  is the first `AppHandle`-backed native entry point, hence `ANDROID_APP` + `set_android_app`.
+  Android also has a real `WebView.title` at page-finished, so **Android history now has
+  titles while Windows/macOS do not** (they record `""`; only Linux has a title-changed
+  signal). Device-verified on a Galaxy S22; the JNI seam itself still has no automated
+  coverage — see gotcha 24 in `src-tauri/AGENTS.md`.
 
 Nothing yet.
 
