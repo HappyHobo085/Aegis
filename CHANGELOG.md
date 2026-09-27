@@ -50,6 +50,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 Nothing yet.
 
+### Tests
+
+- New coverage for the previously untested `syncBus`, `protectionSummary`, `useOmnibox`,
+  `useMeasuredHeight`, `useNarrowViewport`, `useSafety`, `useDownloadToasts`,
+  `useAutofillSave`, `NavControls`, `OmniboxDropdown`, `SplitResizeHandle`,
+  `SplitIndicator`, `SkipLink` and `PrivacyDashboard` (2,496 lines, 14 files).
+
 ## [0.1.0] — unreleased
 
 First pre-release. Treat the version number as provisional: the API surface, the
