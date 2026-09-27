@@ -9,6 +9,68 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The omnibox rejected every `host:port`.** RFC 3986 allows `.` and digits in a scheme
+  name, so the scheme test matched `example.com:8080` and `new URL` parsed it with the
+  protocol `example.com:`, which failed the http(s) allowlist. The result was
+  "Aegis can only open web (http and https) addresses" for `localhost:8080`,
+  `example.com:8080`, and every other letter-leading `host:port` — the single most
+  common thing a developer types. `127.0.0.1:3000` was separately mangled into
+  `https://127.0.0.1:3000` (a TLS handshake failure, not a page) and `[::1]:8080`
+  became a search. A `host:port` pair is now recognised as a host before the scheme
+  test: loopback names get `http://` (provably this machine, so no cleartext request
+  can leak off-box) and everything else gets `https://`, so an intranet name is never
+  silently downgraded. A dotless `wiki:8443` is still refused on purpose — it is
+  shape-identical to `javascript:1`, and refusal is the fail-safe answer.
+- **A failed tab spawn left a permanently dead tab.** `spawn()` swallowed the error while
+  the registry row was already `live` and already persisted to `tabs.json`, and
+  `activate` on a live tab is a no-op — so it could never be retried, and session restore
+  re-spawned it and failed identically on every subsequent launch. Both spawn arms now
+  roll the row back.
+- **The "Stop" button reloaded the page.** The toolbar renders an X when `state.isLoading`
+  and the core used to `reload()` unconditionally. The core now tracks per-tab loading
+  (it produced the flag and discarded it) and abandons the load by navigating to
+  `about:blank`, which cancels an in-flight load on all three engines. wry, Tauri and
+  tauri-runtime-wry expose no `stop()` and no `is_loading()` at all, so this is the
+  strongest stop the current dependency set allows.
+- **On Windows, the FindBar wiped its own input.** WebView2's `ICoreWebView2Find` is a
+  one-way API with no term getter, and both change handlers — installed once at spawn,
+  before any query exists — emitted a hardcoded empty query ~120 ms after each keystroke.
+  The renderer treats `find.state` as an authoritative snapshot, so "no query to report"
+  was indistinguishable from "clear what the user is typing". The live query is now
+  remembered per tab and carried in every emit.
+- **`safety.proceed` had no scheme gate.** It navigated for any scheme, and for a hostless
+  one recorded no exception — so the warning was dismissed while the block stayed armed.
+  It now refuses anything but http/https before recording or navigating.
+- **The navigation policy had no scheme check at all.** `decide_navigation` ended in
+  `return true` after the overlay, malware, ad-block and HTTPS-Only checks — none of which
+  had run — so a page-initiated `location = 'file:///…'` was not refused. It now consults
+  the one existing `is_navigable` definition, before every destination-reasoning check.
+- **A `file:` URL could reach `tabs.json` and persist across launches.** `on_tab_url` runs
+  on every page load and wrote the url with no scheme check, which made its sibling
+  writer's claim to be "the last point a non-navigable scheme can be caught" false — that
+  file is what session restore re-spawns from.
+- **Tab and workspace ids could collide at the `u32` ceiling.** Four allocation sites did
+  `next_id += 1` / `max_id + 1`; a hand-edited `tabs.json` with id `4294967295` wraps to 0
+  in release, after which `create` hands out ids already in use and closing a tab destroys
+  a different tab's row. Allocation now skips occupied ids.
+- **A tab switch in fullscreen clobbered the saved window size.** The renderer's effect is
+  keyed on the active tab, so switching tabs in fullscreen re-sent "enter fullscreen" and
+  captured the current fullscreen size — so leaving fullscreen restored a monitor-sized
+  window, the exact bug the save slot exists to prevent.
+- **`Workspace.tab_index` went out on the wire under the wrong name.** `shared/types.ts`
+  declares `tabIndex`; the serialised struct had no rename, so the wire carried
+  `tab_index`. No live symptom (the renderer only reads `id`/`name`/`color`, and
+  reordering rides the array order), but the contract declaration was lying. The on-disk
+  shape deliberately keeps `tab_index` — renaming it would need a read alias, and an
+  unknown JSON field is silently ignored, so every existing workspace would come back at
+  index 0.
+- **Closing a tab from the UI left a stale suppression flag.** The programmatic close path
+  cleared the content/loading sets and the `tabs.close` channel did not — and the channel
+  is the one users press.
+- **The 30-second redirect auto-close did webview work off the main thread** on every
+  platform. On Linux the underlying WebKitGTK objects are not `Send` at all, so this was
+  undefined behaviour rather than a warning. The close now hops to the main thread; the
+  budget slot is released outside the hop so it comes back even during shutdown.
 - **"Update all" in Filter Lists could wedge for the rest of the session.** The button
   disabled itself and re-enabled only in `finally`, but the refresh result arrives as a
   single `lists.updateResult` event emitted as the **last statement of a detached core

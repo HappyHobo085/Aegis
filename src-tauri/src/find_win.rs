@@ -24,6 +24,25 @@ use windows::core::{Interface, HSTRING};
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
+/// The query a `MatchCountChanged` / `ActiveMatchIndexChanged` handler must
+/// report for `id`.
+///
+/// `ICoreWebView2Find` is a ONE-WAY API: it exposes `Stop`, `FindNext`,
+/// `MatchCount` and `ActiveMatchIndex` but no term getter, so the query cannot
+/// be read back off the object the way Linux reads `search_text()`. Both change
+/// handlers are installed ONCE by `install()`, before any query exists, and they
+/// fire independently of `find.start` — `MatchCountChanged` lands roughly 120ms
+/// after a keystroke, matching the FindBar's debounce. The renderer REPLACES
+/// its whole `find.state` on every event, so hardcoding `""` here did not
+/// "report no query", it cleared the text the user was typing into.
+///
+/// Deliberately a named function rather than an inline `live_query(id)`: it is
+/// what the two handlers below call, and the test at the foot of this file
+/// pins THAT expression, on the Windows CI leg, where this module compiles.
+fn handler_query(id: u32) -> String {
+    crate::find::live_query(id)
+}
+
 /// Obtain the `ICoreWebView2Find` for `pw`, returning `None` if the runtime is
 /// too old to support the Find interface.
 ///
@@ -58,7 +77,13 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
                 let _ = find_mc.MatchCount(&mut count);
                 let mut active: i32 = 0;
                 let _ = find_mc.ActiveMatchIndex(&mut active);
-                crate::find::emit_state(&app_mc, id, "", count.max(0) as u32, active.max(0) as u32);
+                crate::find::emit_state(
+                    &app_mc,
+                    id,
+                    &handler_query(id),
+                    count.max(0) as u32,
+                    active.max(0) as u32,
+                );
                 Ok(())
             }));
         let mut token_mc: i64 = 0;
@@ -75,7 +100,13 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
                 let _ = find_ai.MatchCount(&mut count);
                 let mut active: i32 = 0;
                 let _ = find_ai.ActiveMatchIndex(&mut active);
-                crate::find::emit_state(&app_ai, id, "", count.max(0) as u32, active.max(0) as u32);
+                crate::find::emit_state(
+                    &app_ai,
+                    id,
+                    &handler_query(id),
+                    count.max(0) as u32,
+                    active.max(0) as u32,
+                );
                 Ok(())
             }));
         let mut token_ai: i64 = 0;
@@ -89,6 +120,10 @@ pub fn start(app: &AppHandle, id: u32, query: &str, case_sensitive: bool) {
         return;
     };
     let q = query.to_string();
+    // Record the term BEFORE handing off to the webview: the completion handler
+    // below is fire-and-forget, and a change event can fire the moment Start()
+    // is called, so anything recorded after this point would race it.
+    crate::find::note_query(id, &q);
     let cs = case_sensitive;
     let app_clone = app.clone();
     let _ = content.with_webview(move |pw| unsafe {
@@ -97,6 +132,7 @@ pub fn start(app: &AppHandle, id: u32, query: &str, case_sensitive: bool) {
 
         if q.is_empty() {
             let _ = find.Stop();
+            crate::find::forget_query(id);
             crate::find::emit_state(&app_clone, id, "", 0, 0);
             return;
         }
@@ -142,6 +178,9 @@ pub fn close(app: &AppHandle, id: u32) {
         let _ = find.Stop();
     });
     // Always reset — even if the tab was idle-discarded and with_find was a no-op.
+    // The recorded term goes too: a change event arriving after this must report
+    // nothing rather than resurrect the term the user just cleared.
+    crate::find::forget_query(id);
     crate::find::emit_state(app, id, "", 0, 0);
 }
 
@@ -162,4 +201,32 @@ where
             g(&find);
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::handler_query;
+
+    /// Windows-only: this module is `#[cfg(target_os = "windows")]`, so this
+    /// test cannot run on a Linux or macOS CI runner — it runs on the Windows
+    /// leg, which is the only place the module compiles at all. The store's own
+    /// semantics are covered by `find::tests` on every platform; what only this
+    /// file can pin is the argument the two change handlers hand to `emit_state`.
+    #[test]
+    fn a_match_count_change_reports_the_live_query_not_an_empty_one() {
+        crate::find::note_query(7, "needle");
+        let reported = handler_query(7);
+        crate::find::forget_query(7);
+        assert_eq!(
+            reported, "needle",
+            "the renderer REPLACES its whole find.state, so a hardcoded empty \
+             query clears the text the user is typing"
+        );
+    }
+
+    #[test]
+    fn a_change_event_for_a_tab_with_no_find_session_reports_an_empty_query() {
+        crate::find::forget_query(7);
+        assert_eq!(handler_query(7), "");
+    }
 }

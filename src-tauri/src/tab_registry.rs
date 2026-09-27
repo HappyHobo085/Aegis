@@ -5,14 +5,29 @@ use serde::{Deserialize, Serialize};
 
 pub type ViewId = u32;
 
+/// The **wire** shape: this is what `tabs.rs` puts in the `tabs.state` payload,
+/// so it must match the `Workspace` interface in `shared/types.ts` field for
+/// field, camelCase included. It did not — `tab_index` went onto the wire while
+/// the contract declared `tabIndex`. Nothing read the field, so it was latent,
+/// but a contract that lies about the wire is a trap for the next reader.
 #[derive(Clone, Serialize, Deserialize, PartialEq, Debug)]
 pub struct Workspace {
     pub id: String,
     pub name: String,
     pub color: String,
+    #[serde(rename = "tabIndex")]
     pub tab_index: u32,
 }
 
+/// The **on-disk** shape, written into `tabs.json`.
+///
+/// Deliberately KEEPS `tab_index`, and that is not an oversight to be tidied
+/// away: this is a different boundary with a different audience. Renaming it
+/// would need a read alias for existing files, and — because an unknown JSON
+/// field is silently ignored rather than an error — every workspace in every
+/// existing `tabs.json` would come back with `tab_index: 0`, quietly losing the
+/// user's saved order. The Rust field name stays snake_case; only the wire name
+/// is camelCase. See `the_persisted_workspace_shape_keeps_snake_case_on_disk`.
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct PersistedWorkspace {
     pub id: String,
@@ -218,7 +233,9 @@ impl Registry {
             tabs,
             active_id,
             closed_stack: Vec::new(),
-            next_id: session.next_id.max(max_id + 1),
+            next_id: session
+                .next_id
+                .max(max_id.checked_add(1).unwrap_or(ViewId::MAX)),
             home_url,
             workspaces,
             active_workspace_id,
@@ -310,6 +327,43 @@ impl Registry {
         }
     }
 
+    /// Allocate a tab id that is **not already in use**, and leave `next_id`
+    /// pointing past it.
+    ///
+    /// `next_id` on its own is not sufficient, and the reason is the shape of
+    /// this registry's lookups: `idx()` returns the FIRST row whose id matches,
+    /// so a duplicate id does not merely look wrong, it makes `close`,
+    /// `activate` and `focus` act on the WRONG tab — closing tab 1 then
+    /// destroys tab 3's row and leaks tab 1's webview. A duplicate can arrive
+    /// without any bug in the allocator: `tabs.json` is a plain file, and a
+    /// restored or hand-edited one can carry an id at the `u32` ceiling, or an
+    /// id at or past `nextId`.
+    ///
+    /// The loop is bounded by `tabs.len()` because every iteration that does not
+    /// return corresponds to a DISTINCT occupied id, so at most `tabs.len()`
+    /// candidates can be occupied. Reaching the end therefore means the
+    /// registry holds ~4 billion tabs (>400 GB of `Tab` rows, so it cannot be
+    /// represented in memory). That case panics rather than returning a
+    /// duplicate on purpose: a duplicate id silently destroys the wrong tab's
+    /// row, which is unrecoverable user data, whereas a panic at this magnitude
+    /// is a visible, debuggable failure. Do not "fix" this into a silent
+    /// fallback.
+    fn alloc_tab_id(&mut self) -> ViewId {
+        let mut candidate = if self.next_id == 0 { 1 } else { self.next_id };
+        for _ in 0..=self.tabs.len() {
+            if !self.tabs.iter().any(|t| t.id == candidate) {
+                self.next_id = candidate.wrapping_add(1);
+                return candidate;
+            }
+            candidate = if candidate == ViewId::MAX {
+                1
+            } else {
+                candidate + 1
+            };
+        }
+        panic!("tab registry holds every id: refusing to hand out a duplicate");
+    }
+
     pub fn create(
         &mut self,
         url: Option<String>,
@@ -326,8 +380,7 @@ impl Registry {
         now_ms: u64,
         private: bool,
     ) -> (ViewId, String) {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.alloc_tab_id();
         let url = url.unwrap_or_else(|| self.home_url.clone());
         self.tabs.push(Tab {
             id,
@@ -355,6 +408,15 @@ impl Registry {
 
     pub fn is_private(&self, id: ViewId) -> Option<bool> {
         self.idx(id).map(|i| self.tabs[i].private)
+    }
+
+    /// Undo the `live` marking after a content webview could not be created. Returns
+    /// whether the tab was found and had been marked live.
+    pub fn mark_spawn_failed(&mut self, id: ViewId) -> bool {
+        let Some(i) = self.idx(id) else { return false };
+        let was_live = self.tabs[i].live;
+        self.tabs[i].live = false;
+        was_live
     }
 
     /// Returns true if the tab exists and was created in the background (never activated).
@@ -588,8 +650,7 @@ impl Registry {
     /// Reopen the most-recently-closed tab (Ctrl+Shift+T). Returns its (id, url).
     pub fn reopen_closed(&mut self, now_ms: u64) -> Option<(ViewId, String)> {
         let c = self.closed_stack.pop()?;
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.alloc_tab_id();
         let pos = c.position.min(self.tabs.len());
         self.tabs.insert(
             pos,
@@ -630,9 +691,16 @@ impl Registry {
         &self.active_workspace_id
     }
 
-    /// Create a new workspace. Returns the newly created workspace.
-    pub fn create_workspace(&mut self, name: &str, color: &str) -> Workspace {
-        // Generate a unique ID by finding the max numeric suffix across existing workspace IDs.
+    /// Allocate a workspace id that is **not already in use**, keeping the
+    /// `ws-(highest+1)` numbering the rest of this module documents.
+    ///
+    /// Same hazard as [`Registry::alloc_tab_id`], one level up: `rename`,
+    /// `remove` and `switch` all match a workspace by id with a `find`, so a
+    /// duplicate id makes them act on the wrong workspace. `ws.json`'s
+    /// `workspaces` array is user-editable, and `max_num + 1` at the `u32`
+    /// ceiling wraps to `ws-0` in release (and panics in debug) — landing
+    /// squarely on an id the file may already contain.
+    fn alloc_workspace_id(&self) -> String {
         let max_num = self
             .workspaces
             .iter()
@@ -640,7 +708,21 @@ impl Registry {
             .filter_map(|s| s.parse::<u32>().ok())
             .max()
             .unwrap_or(0);
-        let id = format!("ws-{}", max_num + 1);
+        let mut n = max_num.wrapping_add(1);
+        for _ in 0..=self.workspaces.len() {
+            let id = format!("ws-{n}");
+            if !self.workspaces.iter().any(|w| w.id == id) {
+                return id;
+            }
+            n = if n == u32::MAX { 1 } else { n + 1 };
+        }
+        panic!("workspace list holds every id: refusing to hand out a duplicate");
+    }
+
+    /// Create a new workspace. Returns the newly created workspace.
+    pub fn create_workspace(&mut self, name: &str, color: &str) -> Workspace {
+        // Generate a unique ID by finding the max numeric suffix across existing workspace IDs.
+        let id = self.alloc_workspace_id();
         let ws = Workspace {
             id: id.clone(),
             name: name.to_string(),
@@ -1451,6 +1533,67 @@ mod tests {
             assert_eq!(r.active_workspace_id(), "default");
         }
 
+        /// The user-visible property behind `mark_spawn_failed`: a tab whose content
+        /// webview could not be created must be RESPAWNABLE. The registry marks a tab
+        /// `live` when it hands its URL to `spawn`, and `activate` only respawns a tab
+        /// that is NOT live — so a failed spawn that leaves the flag set is a tab that
+        /// can never load a page again, for the rest of the session and across every
+        /// relaunch (session restore respawns from the persisted row).
+        #[test]
+        fn a_tab_whose_spawn_failed_can_be_activated_again() {
+            let mut r = reg();
+            let (id, url) = r.create_private(Some("https://new.test/".into()), false, 0, false);
+            let (other, _) = r.create_private(Some("https://other.test/".into()), false, 0, false);
+
+            // A failed spawn: the row is live (it was created eagerly) but no webview
+            // exists behind it, and re-activating it in place is a no-op because it is
+            // already the active tab.
+            assert!(
+                r.mark_spawn_failed(id),
+                "a live tab must report the rollback"
+            );
+            // First the case that does NOT retry: with the row still live, switching
+            // away and back arms nothing, which is exactly the zombie.
+            let mut live_zombie = reg();
+            let (zid, _) =
+                live_zombie.create_private(Some("https://z.test/".into()), false, 0, false);
+            let (oid, _) =
+                live_zombie.create_private(Some("https://o.test/".into()), false, 0, false);
+            live_zombie.activate(oid, 1);
+            assert_eq!(
+                live_zombie.activate(zid, 2),
+                None,
+                "a tab marked live with no webview behind it can never be respawned"
+            );
+
+            // Now the fixed case: switching to it arms the respawn. (`other` is the
+            // active tab — `create_private` leaves the newest one active — so this is
+            // the same switch-away-and-back the zombie case makes without effect.)
+            let _ = other;
+            assert_eq!(
+                r.activate(id, 1),
+                Some(url.clone()),
+                "a tab whose spawn failed must be respawnable, or it is dead for the session"
+            );
+            // Repeated reports on a tab that has NOT since been respawned are safe: the
+            // second finds the row already un-live and reports "nothing to roll back"
+            // rather than corrupting it. (`id` itself is now live again — `activate` above
+            // re-marks it — so it is the wrong subject for this; use a fresh row.)
+            let (id2, _) = r.create_private(Some("https://twice.test/".into()), false, 0, false);
+            assert!(
+                r.mark_spawn_failed(id2),
+                "a live tab must report the rollback"
+            );
+            assert!(
+                !r.mark_spawn_failed(id2),
+                "a repeated report has nothing left to roll back"
+            );
+            assert!(
+                !r.mark_spawn_failed(9_999_001),
+                "an unknown tab is not an error"
+            );
+        }
+
         #[test]
         fn assign_tab_to_active_reassigns_workspace() {
             let mut r = Registry::new("https://home.test/".into());
@@ -1462,5 +1605,218 @@ mod tests {
             r.assign_tab_to_active(1);
             assert_eq!(r.tab_workspace_id(1).unwrap(), ws1_id);
         }
+    }
+
+    /// `shared/types.ts` declares `Workspace.tabIndex`, and `tabs.rs` puts this
+    /// exact struct in the `tabs.state` payload. Serde had no rename, so the wire
+    /// carried `tab_index` and the contract was a lie — harmless today only
+    /// because no renderer code reads the field (ordering rides the array order).
+    #[test]
+    fn the_workspace_wire_shape_matches_the_declared_contract() {
+        let ws = super::Workspace {
+            id: "ws-1".into(),
+            name: "Main".into(),
+            color: "#fff".into(),
+            tab_index: 7,
+        };
+        let json = serde_json::to_value(&ws).unwrap();
+        assert_eq!(
+            json.get("tabIndex").and_then(|v| v.as_u64()),
+            Some(7),
+            "the wire must carry tabIndex, the name shared/types.ts declares"
+        );
+        assert!(
+            json.get("tab_index").is_none(),
+            "snake_case leaked onto the wire: {json}"
+        );
+    }
+
+    /// The on-disk shape is a DIFFERENT struct and is deliberately NOT renamed.
+    /// `tabs.json` is written with `tab_index`, renaming that field would need a
+    /// read alias and would silently reset every existing workspace's stored
+    /// order to 0. Two names for two different boundaries is the intent.
+    #[test]
+    fn the_persisted_workspace_shape_keeps_snake_case_on_disk() {
+        let pw = super::PersistedWorkspace {
+            id: "ws-1".into(),
+            name: "Main".into(),
+            color: "#fff".into(),
+            tab_index: 7,
+        };
+        let json = serde_json::to_value(&pw).unwrap();
+        assert_eq!(json.get("tab_index").and_then(|v| v.as_u64()), Some(7));
+        assert!(json.get("tabIndex").is_none());
+        // And it must round-trip, so an existing tabs.json keeps its order.
+        let back: super::PersistedWorkspace = serde_json::from_value(json).unwrap();
+        assert_eq!(back.tab_index, 7);
+    }
+
+    // ── 6(8): id allocation must never collide, at any magnitude ─────────────
+
+    /// A `tabs.json` is a plain file a user (or a sync merge, or a truncated
+    /// write) can leave with an id at the `u32` ceiling. The allocator was
+    /// `session.next_id.max(max_id + 1)`, so `max_id + 1` at the ceiling
+    /// **panics in debug and wraps to 0 in release** — and the wrapped value is
+    /// what makes this a correctness bug rather than a crash: `create` then
+    /// starts handing out ids that are ALREADY IN USE, and `idx()` returns the
+    /// FIRST match, so `close`/`activate`/`focus` all act on the wrong tab.
+    #[test]
+    fn a_restored_session_whose_tab_id_sits_at_the_ceiling_still_allocs_fresh_ids() {
+        let tab = |id: ViewId, url: &str| PersistedTab {
+            id,
+            url: url.into(),
+            title: String::new(),
+            pinned: false,
+            workspace_id: String::new(),
+        };
+        let session = PersistedSession {
+            tabs: vec![
+                tab(u32::MAX, "https://ceiling.test/"),
+                tab(7, "https://seven.test/"),
+            ],
+            active_id: 7,
+            next_id: u32::MAX,
+            workspaces: Vec::new(),
+            active_workspace_id: "default".into(),
+        };
+        let mut r = Registry::restore(session, "https://home.test/".into());
+        // The ids that existed BEFORE any allocation. A new id colliding with
+        // one of these is the defect; being present in `r.tabs` afterwards is
+        // not, because creating a tab is what puts it there.
+        let pre_existing: Vec<ViewId> = r.tabs.iter().map(|t| t.id).collect();
+
+        let (first, _) = r.create(None, false, 0);
+        let (second, _) = r.create(None, false, 0);
+        assert!(
+            !pre_existing.contains(&first),
+            "a fresh id must not duplicate an existing tab: {pre_existing:?}"
+        );
+        assert!(
+            !pre_existing.contains(&second),
+            "…and neither must the next: {pre_existing:?}"
+        );
+        assert_ne!(
+            first, second,
+            "two tabs created back to back must not share an id — idx() returns \
+             the first match, so closing one would close the other"
+        );
+        // The colliding-id hazard, stated as an executable consequence: closing
+        // `first` must remove THAT row and leave the restored ceiling row alone.
+        let before = r.tabs.len();
+        r.close(first, 0);
+        assert_eq!(
+            r.tabs.len(),
+            before - 1,
+            "close must remove exactly one tab"
+        );
+        assert!(
+            r.tabs.iter().any(|t| t.id == u32::MAX),
+            "the tab at the ceiling must survive closing the newly created one"
+        );
+    }
+
+    /// The same hazard one level up: `create_workspace` numbered the new
+    /// workspace `max_num + 1`, which wraps to `ws-0` for a session carrying
+    /// `ws-4294967295` — and a duplicate workspace id makes `rename`/`remove`/
+    /// `switch` operate on the wrong workspace.
+    #[test]
+    fn a_new_workspace_never_reuses_an_existing_id_at_the_numeric_ceiling() {
+        let mut r = Registry::restore(
+            PersistedSession {
+                tabs: vec![PersistedTab {
+                    id: 1,
+                    url: "https://a.test/".into(),
+                    title: String::new(),
+                    pinned: false,
+                    workspace_id: String::new(),
+                }],
+                active_id: 1,
+                next_id: 2,
+                workspaces: vec![
+                    super::PersistedWorkspace {
+                        id: "default".into(),
+                        name: "General".into(),
+                        color: "slate".into(),
+                        tab_index: 0,
+                    },
+                    // Both the ceiling (so `max_num + 1` overflows) and the
+                    // wrapped landing site (so the release-mode collision is
+                    // covered by the same fixture).
+                    super::PersistedWorkspace {
+                        id: "ws-4294967295".into(),
+                        name: "Ceiling".into(),
+                        color: "red".into(),
+                        tab_index: 1,
+                    },
+                    super::PersistedWorkspace {
+                        id: "ws-0".into(),
+                        name: "Zero".into(),
+                        color: "red".into(),
+                        tab_index: 2,
+                    },
+                ],
+                active_workspace_id: "default".into(),
+            },
+            "https://home.test/".into(),
+        );
+        let ws = r.create_workspace("Fresh", "blue");
+        let ids: Vec<&str> = r.workspaces.iter().map(|w| w.id.as_str()).collect();
+        assert!(
+            !ids[..ids.len() - 1].contains(&ws.id.as_str()),
+            "a new workspace must not reuse an existing id: {ids:?}"
+        );
+        // And the consequence: renaming the new one must not rename the old.
+        r.rename_workspace(&ws.id, "Renamed");
+        let zero = r
+            .workspaces
+            .iter()
+            .find(|w| w.id == "ws-0")
+            .expect("the pre-existing ws-0 must still exist");
+        assert_eq!(
+            zero.name, "Zero",
+            "renaming one workspace must not touch another"
+        );
+    }
+
+    /// Anti-over-fix: the allocator's normal behaviour is unchanged. Ids still
+    /// come from the session's `nextId` and still increase, and a workspace is
+    /// still `ws-(highest+1)` — a "fix" that renumbered everything from 1, or
+    /// that always scanned from the bottom, would break saved tab ordering and
+    /// must not pass.
+    #[test]
+    fn ordinary_allocation_is_unchanged_by_the_collision_guard() {
+        let mut r = Registry::restore(
+            PersistedSession {
+                tabs: vec![PersistedTab {
+                    id: 5,
+                    url: "https://a.test/".into(),
+                    title: String::new(),
+                    pinned: false,
+                    workspace_id: String::new(),
+                }],
+                active_id: 5,
+                next_id: 6,
+                workspaces: vec![super::PersistedWorkspace {
+                    id: "default".into(),
+                    name: "General".into(),
+                    color: "slate".into(),
+                    tab_index: 0,
+                }],
+                active_workspace_id: "default".into(),
+            },
+            "https://home.test/".into(),
+        );
+        let (a, _) = r.create(None, false, 0);
+        let (b, _) = r.create(None, false, 0);
+        assert_eq!(
+            (a, b),
+            (6, 7),
+            "ids must continue from the session's nextId"
+        );
+        let ws = r.create_workspace("Second", "blue");
+        assert_eq!(
+            ws.id, "ws-1",
+            "the first created workspace keeps the ws-(max+1) numbering"
+        );
     }
 }

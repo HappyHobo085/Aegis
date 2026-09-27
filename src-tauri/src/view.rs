@@ -194,6 +194,28 @@ fn update<F: FnOnce(&mut Layout)>(app: &AppHandle, f: F) {
 }
 
 /// Handle `view.*` channels. Returns `None` if not a view channel.
+/// Decide whether entering fullscreen should overwrite the saved windowed size.
+///
+/// Split out and pure so the policy is testable on any platform: the bug it
+/// guards against needs a real window, a real WM transition and a tab switch to
+/// reproduce, none of which a unit test can arrange.
+///
+/// `already_fullscreen` covers a re-sent `on: true` after the WM applied
+/// fullscreen (the tab-switch path); `slot_empty` covers one that arrives before
+/// the WM has. Keeping the original slot is the point of the whole mechanism — a
+/// monitor-sized "restored" window is worse than none.
+/// The fullscreen-save policy, as a pure predicate so it is testable on every
+/// platform (the capture itself is desktop-only, and always has been — Android
+/// has no OS window to take over).
+#[cfg(any(desktop, test))]
+pub(crate) fn should_capture_saved(
+    entering: bool,
+    already_fullscreen: bool,
+    slot_empty: bool,
+) -> bool {
+    entering && !already_fullscreen && slot_empty
+}
+
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     let res: Result<Value, String> = match channel {
         "view.setContentInset" => {
@@ -300,8 +322,22 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
                 static SAVED: OnceLock<Mutex<Option<tauri::PhysicalSize<u32>>>> = OnceLock::new();
                 let saved = SAVED.get_or_init(|| Mutex::new(None));
                 if on {
-                    if let Ok(sz) = window.inner_size() {
-                        *saved.lock().unwrap_or_else(|e| e.into_inner()) = Some(sz);
+                    // Capture ONLY on a genuine windowed -> fullscreen transition.
+                    // The renderer re-sends `on: true` on a tab switch
+                    // (`App.tsx` keys the effect on `[tabs.activeId, fullscreen]`),
+                    // and this arm used to overwrite SAVED with the CURRENT
+                    // fullscreen inner size every time, so Esc restored a
+                    // monitor-sized window — the exact bug the SAVED slot exists
+                    // to prevent. Two independent guards, because either alone
+                    // leaves a hole: `is_fullscreen()` catches the re-send once
+                    // the WM has applied it, and the empty slot catches a
+                    // re-send that arrives before the WM does.
+                    let already_fullscreen = window.is_fullscreen().unwrap_or(false);
+                    let mut slot = saved.lock().unwrap_or_else(|e| e.into_inner());
+                    if should_capture_saved(true, already_fullscreen, slot.is_none()) {
+                        if let Ok(sz) = window.inner_size() {
+                            *slot = Some(sz);
+                        }
                     }
                 }
                 let _ = window.set_fullscreen(on);
@@ -320,7 +356,42 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{content_visible, Layout};
+    use super::{content_visible, should_capture_saved, Layout};
+
+    /// The re-sent `on: true` is what broke it: the renderer keys the fullscreen
+    /// effect on `[tabs.activeId, fullscreen]`, so switching tabs while
+    /// fullscreen re-enters the arm with the window ALREADY fullscreen and
+    /// overwrites the saved windowed size with the monitor size.
+    #[test]
+    fn a_re_enter_while_already_fullscreen_does_not_overwrite_the_saved_size() {
+        assert!(
+            !should_capture_saved(true, true, true),
+            "a re-sent enter must not re-capture, or Esc restores a monitor-sized window"
+        );
+        assert!(
+            !should_capture_saved(true, false, false),
+            "an enter that arrives before the WM applied fullscreen must not \
+             re-capture either — the first enter already filled the slot"
+        );
+    }
+
+    /// The capture must still happen on the real transition, or the mechanism
+    /// silently stops existing and GTK leaves the window monitor-sized on exit.
+    #[test]
+    fn a_genuine_enter_still_captures_the_windowed_size() {
+        assert!(
+            should_capture_saved(true, false, true),
+            "a first enter from a windowed state must capture"
+        );
+    }
+
+    /// Exiting is not a capture at all, whatever the slot and the WM think.
+    #[test]
+    fn an_exit_never_captures() {
+        assert!(!should_capture_saved(false, false, true));
+        assert!(!should_capture_saved(false, true, true));
+        assert!(!should_capture_saved(false, false, false));
+    }
 
     fn lay(overlay: bool, sidebar: bool, fullscreen: bool) -> Layout {
         Layout {

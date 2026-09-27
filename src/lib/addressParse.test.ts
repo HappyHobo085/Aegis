@@ -1,6 +1,6 @@
 // src/lib/addressParse.test.ts
 import { describe, it, expect } from 'vitest';
-import { addressParse, normalizeSavedUrl } from './addressParse';
+import { addressParse, normalizeSavedUrl, isUrlLikeInput } from './addressParse';
 
 const ctx = (overrides: Partial<{ currentUrl: string; searchTemplate: string }> = {}) => ({
   currentUrl: 'https://example.com/',
@@ -147,5 +147,78 @@ describe('normalizeSavedUrl', () => {
   it('rejects a bare term that is not a host', () => {
     const r = normalizeSavedUrl('hello world');
     expect(r.ok).toBe(false);
+  });
+});
+
+// A `host:port` is a host, not a scheme. RFC 3986 allows `.` and digits in a
+// scheme name, so `example.com:8080` matches the scheme regex and `new URL`
+// happily parses it with the protocol `example.com:` — which then fails the
+// http(s) allowlist. Every letter-leading host:port was therefore rejected with
+// "Aegis can only open web (http and https) addresses", a message that is
+// plainly false about a plainly-web address. Loopback additionally needs http:
+// a dev server on `localhost:3000` speaks plain HTTP, and prepending https://
+// to it produces a TLS error rather than a page.
+describe('a host:port is an address, not a scheme', () => {
+  it('navigates a dotted host:port instead of rejecting it', () => {
+    expect(addressParse('example.com:8080', ctx())).toEqual({
+      kind: 'navigate',
+      url: 'https://example.com:8080',
+    });
+  });
+
+  it('navigates a loopback host:port over http', () => {
+    // A dev server on 127.0.0.1:3000 is plain HTTP; prepending https:// gives a
+    // TLS handshake failure, not a page.
+    expect(addressParse('127.0.0.1:3000', ctx())).toEqual({
+      kind: 'navigate',
+      url: 'http://127.0.0.1:3000',
+    });
+  });
+
+  it.each([
+    ['localhost:8080', 'http://localhost:8080'],
+    ['127.0.0.1:8080', 'http://127.0.0.1:8080'],
+    ['127.1.2.3:9', 'http://127.1.2.3:9'],
+    ['[::1]:8080', 'http://[::1]:8080'],
+  ])('routes the loopback address %s to http', (typed, expected) => {
+    expect(addressParse(typed, ctx())).toEqual({ kind: 'navigate', url: expected });
+  });
+
+  it('still refuses a dotless name:port, which is indistinguishable from a scheme', () => {
+    // `wiki:8443` is shape-identical to `javascript:1`, and there is no way to
+    // tell them apart without a registry of every scheme ever registered. Refusal
+    // is the fail-safe answer and is deliberately UNCHANGED by this fix — a
+    // dotless `name:port` is the one case that stays refused. What changed is
+    // the case where the host is actually identifiable (dotted, `localhost`, or a
+    // bracketed IPv6 literal), which used to be refused in exactly the same way.
+    expect(addressParse('wiki:8443', ctx()).kind).toBe('rejected');
+    expect(normalizeSavedUrl('wiki:8443').ok).toBe(false);
+  });
+
+  it('offers a Go-to row for a host:port rather than treating it as a phrase', () => {
+    expect(isUrlLikeInput('localhost:8080')).toBe(true);
+    expect(isUrlLikeInput('example.com:8080')).toBe(true);
+    expect(isUrlLikeInput('[::1]:8080')).toBe(true);
+  });
+
+  it('saves a host:port', () => {
+    expect(normalizeSavedUrl('localhost:8080')).toEqual({ ok: true, url: 'http://localhost:8080' });
+    expect(normalizeSavedUrl('example.com:8080')).toEqual({
+      ok: true,
+      url: 'https://example.com:8080',
+    });
+  });
+
+  it('still refuses a scheme whose tail merely looks numeric', () => {
+    // javascript:1 and a bare `scheme:` are schemes, not host:port pairs.
+    expect(addressParse('javascript:alert(1)', ctx()).kind).toBe('rejected');
+    expect(addressParse('javascript:1', ctx()).kind).toBe('rejected');
+    expect(normalizeSavedUrl('javascript:1').ok).toBe(false);
+  });
+
+  it('still refuses a port that is out of range or not a number', () => {
+    expect(normalizeSavedUrl('localhost:0').ok).toBe(false);
+    expect(normalizeSavedUrl('localhost:99999').ok).toBe(false);
+    expect(normalizeSavedUrl('localhost:80a').ok).toBe(false);
   });
 });

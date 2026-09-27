@@ -38,7 +38,23 @@ dotted event name.
   lifecycle (`create`/`activate`/`close`/`reopen_closed`), pinned/reorder,
   per-tab back/forward history (`record_nav`/`go_back`/`go_forward`),
   time-based idle sweep (`sweep_idle`), session (de)serialization
-  (`to_persisted`/`restore`). 49 unit tests.
+  (`to_persisted`/`restore`). 56 unit tests.
+  **Id allocation can never collide.** `alloc_tab_id` (used by `create_private` and
+  `reopen_closed`) and `alloc_workspace_id` skip occupied ids instead of trusting
+  `next_id += 1` / `max_id + 1`. Four sites overflowed: a hand-edited `tabs.json` with a
+  tab id of `4294967295` wraps to 0 in RELEASE (a debug build panics instead), and
+  `create` then hands out ids already in use — and `idx(id)` returns the FIRST match, so
+  closing tab 1 destroyed tab 3's row. `ws-4294967295` wrapped to `ws-0` the same way.
+  The exhaustion path **panics on purpose** and must not be "fixed" into a silent
+  fallback: a duplicate id silently destroys the wrong tab's row (unrecoverable), whereas
+  a panic at ~4 billion tabs is visible. (Ruled out while auditing: `restore` does not
+  panic on `"tabs": []` — it returns early at `session.tabs.is_empty()`.)
+  **Two struct names for two boundaries, deliberately.** `Workspace` serialises
+  `tab_index` as **`tabIndex`** (the `tabs.state` wire, per `shared/types.ts`); the
+  on-disk `PersistedWorkspace` keeps **`tab_index`** and has a round-trip test. Renaming
+  the persisted one would need a read alias, and because an unknown JSON field is silently
+  IGNORED rather than a hard failure, every workspace in every existing `tabs.json` would
+  come back at `tab_index: 0` — quietly losing the user's saved order.
 - **`tabs.rs`** — Tauri layer over the registry: `tabs.*` IPC dispatch, applies
   spawn/close decisions to child webviews, the idle-sweep background thread
   (`start_idle_sweep`), `tabs.json` session persistence, `open_background`
@@ -47,7 +63,24 @@ dotted event name.
   destination as an ad pop-under; see Ad-block below). **Unit-tested via
   `test_support::with_tmp_app`:** session round-trip, private-tab exclusion,
   title/pinned persistence, reorder, idempotent persist, `managed_registry`
-  well-formedness, `is_private` (10 tests).
+  well-formedness, `is_private`, spawn-failure rollback, the `on_tab_url` scheme
+  gate, `forget_closed_tab` (16 tests).
+  **`on_tab_url` enforces the same scheme policy as its sibling writer.** It runs on
+  every `PageLoadEvent` and writes the url into the registry + `tabs.json`, and it had
+  NO scheme check — so the `tabs.recordNav` arm's claim to be "the last point at which a
+  non-navigable scheme can be caught before it is written to tabs.json" was false, since
+  session restore re-spawns tabs FROM that file. It now refuses via `nav::parse_navigable`
+  (log + return, no persist because nothing changed) rather than growing a second
+  scheme list. **`forget_closed_tab(id)` is one definition for both close paths.** The
+  programmatic `close_tab` and the `tabs.close` IPC arm used to disagree, and the arm is
+  the one users press. It is not tidiness: `nav::tabs_with_content()` and `TABS_LOADING`
+  are suppression sets, and `alloc_tab_id` only skips ids still in the registry, so a
+  hand-edited `tabs.json` or a restored backup can hand back a free id that a stale flag
+  then suppresses. **A failed `spawn_tab` rolls the tab back**
+  (`Registry::mark_spawn_failed` / `tabs::on_spawn_failed`, called from both spawn arms):
+  `spawn()` used to swallow the error while the row was already `live` and already
+  persisted, and `activate` on a live tab is a no-op — so the tab could never be retried
+  and session restore re-spawned it and failed identically every launch.
 - **`nav.rs`** — content webview creation (`spawn_tab(id, url)`, replaces the
   old `spawn_content`), navigation callbacks (malware guard, HTTPS-Only upgrade,
   **ad-block: `on_navigation` cancels loads of blocked ad/tracker destinations** via
@@ -56,6 +89,28 @@ dotted event name.
   `shouldInterceptRequest`), emits `nav.state`/`nav.failed`. Active webview now accessed via
   `active_content_label()`/`active_webview()` (refactored from the old single
   `CONTENT_LABEL` constant).
+  **ONE scheme policy: `is_navigable` (http/https/`about:blank`).** `decide_navigation` now
+  consults it as its FIRST check, before the overlay, malware, ad-block and HTTPS-Only
+  checks — every one of which reads the destination as an ordinary web address. It
+  previously ended in `return true` with no scheme test at all, so a page-initiated
+  `location = 'file:///…'` was not refused by the navigation policy, which is what made
+  the `tabs::on_tab_url` hole below reachable. `require_navigable`/`parse_navigable` are
+  the fallible spellings (they name the refused scheme for the error toast) and the ONLY
+  list — a second list is how `file:` reached `tabs.json` in the first place. Callers:
+  `decide_navigation`, `tabs::on_tab_url`, the `tabs.recordNav` arm,
+  `open_redirect_background`, `nav.home`, `tabs.create` and `safety.proceed`.
+  **`nav.reloadOrStop` actually stops.** The toolbar renders an X with `aria-label="Stop"`
+  when `state.isLoading`, and the core used to `reload()` unconditionally. `TABS_LOADING`
+  (a `OnceLock<Mutex<HashSet<u32>>>` fed by `note_tab_loading` from `on_page_load` right
+  after `emit_state`) is the only place loading state exists — the core produced it and
+  discarded it. **wry 0.55.1, tauri 2.11.3 and tauri-runtime-wry 2.11.3 expose no `stop()`
+  and no `is_loading()` at all** (grepped all three), so the stop is
+  `navigate(about:blank)`, which cancels an in-flight load on all three engines and is
+  already the app's blank-page target. `reload_or_stop<R: Runtime>` is generic over the
+  runtime so a test can reach the branch with no content webview, and the **state half runs
+  before the webview lookup on purpose** — `w.navigate` can fail, and waiting for a
+  `Finished` load edge that will never arrive would leave a tab stuck "loading" forever.
+  The `navigate` call itself is compile-verified only (no webview on the mock).
 - **`view.rs`** — content webview geometry: insets, sidebar, fullscreen, overlay.
   **Desktop fullscreen now drives the OS window.** `view.setFullscreen` calls
   `Window::set_fullscreen(on)` (`#[cfg(desktop)]`) in addition to the content-webview
@@ -63,6 +118,18 @@ dotted event name.
   `linux_layout::exit_fullscreen` (Esc / floating exit button) also calls
   `set_fullscreen(false)` directly. Backend call — no capability change. Android fullscreen
   is the immersive `setFullscreen` bridge (hides the system bars) instead.
+  **The `SAVED` slot is captured exactly once, guarded twice.** `should_capture_saved(entering,
+already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it is testable
+  on any host. `App.tsx`'s effect is keyed on `[tabs.activeId, fullscreen]`, so **a tab
+  switch while fullscreen re-sends `on: true`**; capturing on that re-send stored the
+  CURRENT fullscreen inner size, so Esc restored a monitor-sized window — the exact bug
+  the slot exists to prevent. Both guards are load-bearing: `already_fullscreen` (read from
+  `Window::is_fullscreen()`) catches a re-send arriving after the WM applied fullscreen,
+  `slot_empty` catches one arriving before it does; either alone leaves a hole. The capture
+  is `#[cfg(desktop)]` and always has been, so the predicate is `#[cfg(any(desktop, test))]`
+  — a cfg gate, because having no Android caller is the truth (Android has no OS window
+  to take over). Honest limit: the policy is unit-tested; the real WM transition and a real
+  tab switch are not (no window on the mock runtime).
 - **`data.rs`** — `data.export` / `data.import` (bundles all stores + settings).
   **Unit-tested via `test_support::with_tmp_app`:** export produces a v2 bundle
   with every store present; cross-app import round-trip (export → fresh app →
@@ -259,6 +326,15 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     — the single place that calls `crate::emit_event(app, "find.state", …)` so the
     `find.state` event always goes through the `.`→`:` rewrite. Also exports
     `is_find_channel(channel) -> bool` for unit tests.
+    **Every `find.state` emit must carry the LIVE query.** `useFind`'s `onState` does a
+    whole-state `setState(s)`, so `query` is a REPLACED field: emitting `""` does not mean
+    "no query to report", it means "clear the text the user is typing". Hence
+    `FIND_QUERIES` (`note_query` / `live_query` / `forget_query`, `#[cfg(any(windows, test))]`)
+    — a per-tab store, and `find_win`'s only way to recover the term, because
+    `ICoreWebView2Find` is ONE-WAY (`Stop`/`FindNext`/`MatchCount`/`ActiveMatchIndex` but
+    **no term getter**). It lives in `find.rs`, not in the windows-only module, so a
+    Linux/macOS CI runner can actually test it; `find_linux` reads `search_text()` off the
+    WebKit controller and `find_mac` keeps its own owned query, so neither needs it.
   - `find_linux.rs` — **WebKitFindController** (webkit2gtk): `install(app, label)` wires
     `connect_found_text` + `connect_failed_to_find_text` signals once per tab at spawn
     (called from `nav::spawn_tab`). Real match count via `found-text`; full highlight;
@@ -275,6 +351,16 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     older runtime, all find calls are **silent no-ops** (browsing unaffected). The
     minimum runtime build is not confirmable from Linux; device testing records it.
     Compile-verified via `cargo check --target x86_64-pc-windows-gnu`.
+    **Both change handlers report the live query, via `handler_query(id)`.** They are
+    installed ONCE at spawn, before any query exists, and `MatchCountChanged` fires
+    ~120 ms after a keystroke (matching the FindBar's debounce) — so the handlers used to
+    hardcode `""` and wipe the input the user was typing into, on Windows only. `start`
+    calls `note_query` BEFORE handing off to the webview (a change event can fire the
+    moment `Start()` is called); `close` and the empty-query path call `forget_query`.
+    `handler_query` is a named fn precisely so `find_win`'s own `#[cfg(test)]` module can
+    pin the expression the handlers pass; **that test only runs on the Windows CI leg**
+    (this module does not compile elsewhere) and is compile-verified here via
+    `cargo check --target x86_64-pc-windows-gnu --all-targets`.
   - `find_mac.rs` — a **JS shim** (`find_shim.js`, bundled with `include_str!`), _not_
     the native `findString:withConfiguration:completionHandler:`. That native API returns
     only `matchFound` (a bool) — no match count, no highlight-all, no active index — and
@@ -342,7 +428,15 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
 - **Security** — `safety.rs` (URLhaus malware host set from `resources/`, JNI
   `isMalwareHost`) — **unit-tested via `test_support::with_tmp_app`:** bundle
   non-empty, `is_blocked` true/false, session exception unblock, `proceed`
-  records exception, `remove_exception`, list decisions (5 tests).
+  records exception, `remove_exception`, list decisions, the `safety.proceed`
+  scheme gate (8 tests).
+  **`safety.proceed` is scheme-gated BEFORE it records anything.** It used to
+  `w.navigate(u)` for any scheme, and for a hostless one (`javascript:`) `host_str()` is
+  `None`, so no exception was recorded and the block stayed armed **while the warning was
+  dismissed** — a control that lies, in the opposite direction from the ad-block toggle. It
+  now consults `nav::is_navigable` first, deliberately reusing that ONE definition instead
+  of adding a second scheme list, and an unparseable url returns `Err` rather than
+  silently doing nothing.
   `permissions.rs` (site permission prompts) — **unit-tested via
   `test_support::with_tmp_app`:** list/remove/clear, `origin_of` strip (4
   tests).
@@ -1163,6 +1257,20 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     (same class as the other `setup()` call sites), and `admit` claims a slot only once the tab id
     exists, so N _truly simultaneous_ distinct-key hops can transiently exceed the cap by N-1 —
     bounded by thread count, not by anything the page controls.
+
+    The 30-second auto-close timer is a **`std::thread`**, and it used to call
+    `tabs::close_tab` directly off the main thread. `close_tab` reaches `Webview::close()`,
+    `linux_layout::remove_webview_label` (which touches the native `GtkOverlay`) and
+    `view::apply_inset` — main-thread-only on EVERY platform, and on Linux the WebKitGTK
+    objects behind them are not `Send` at all, so it was undefined behaviour rather than a
+    warning (WebView2 is STA and WKWebView is main-thread-only for the same reason). Only
+    the close now hops via `app.run_on_main_thread`; the registry read
+    (`is_background_tab`/`active_id`) deliberately STAYS on the timer thread, because it is
+    lock-protected plain state and the decision should still be made at wake time.
+    `budget.release(new_id)` stays OUTSIDE the hop so the slot comes back even when the
+    event loop is already gone during shutdown. `decide_navigation`'s pop-under auto-close
+    already did this, so the precedent was in the file. Compile-verified only — there is no
+    real webview reachable from a Linux test.
 
 16. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
     backend). The MSVC "Desktop development with C++" workload bundles CMake; install

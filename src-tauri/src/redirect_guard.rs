@@ -31,7 +31,7 @@
 //! macOS *type* errors, rustc aborted before the late dead-code pass, so the macOS job reported
 //! none of this — fixing those errors is what exposed it.
 #![cfg_attr(target_os = "macos", allow(dead_code))]
-use tauri::{AppHandle, Manager, Url};
+use tauri::{AppHandle, Manager, Runtime, Url};
 
 /// The core cross-origin test, exposed for Android's JNI hook (which has reliable
 /// main-frame + gesture in one place and no redirect chains to track). `scripted`
@@ -257,7 +257,7 @@ pub fn clear_chain(app: &AppHandle, tab: u32) {
 }
 
 /// Record an app-initiated navigation so the guard won't block it (or its redirects).
-pub fn expect(app: &AppHandle, tab: u32, url: &str) {
+pub fn expect<R: Runtime>(app: &AppHandle<R>, tab: u32, url: &str) {
     if let Some(s) = app.try_state::<PendingNavs>() {
         s.expect(tab, url);
     }
@@ -372,6 +372,9 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to
         // Only close if the tab still exists AND hasn't been activated (i.e. the
         // user never switched to it). Once activated, background_creation is cleared
         // and the tab becomes a normal tab the user chose to keep.
+        //
+        // The registry read is safe here: it is lock-protected plain state, no engine
+        // object involved. The CLOSE is not — see below.
         let should_close = {
             let tabs = app.try_state::<crate::tabs::Tabs>();
             match tabs {
@@ -385,8 +388,27 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to
             }
         };
         if should_close {
-            crate::tabs::close_tab(&app, new_id);
+            // `close_tab` reaches `Webview::close()`, the window-layout bookkeeping
+            // (`linux_layout::remove_webview_label`, which touches the native window's
+            // GtkOverlay) and `view::apply_inset` (which sets webview bounds). All of
+            // those are main-thread-only on EVERY platform — on Linux the WebKitGTK
+            // objects behind them are not `Send` at all, so calling them from a worker
+            // thread is undefined behaviour, not merely a warning. WebView2 is STA and
+            // WKWebView is main-thread-only for the same reason.
+            //
+            // So hop to the main thread for the engine work, exactly as
+            // `decide_navigation`'s pop-under auto-close does. The registry read above
+            // deliberately stays on this thread: it is plain state under a mutex, and
+            // keeping it here means the decision is still made at wake time.
+            let app_close = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                crate::tabs::close_tab(&app_close, new_id);
+            });
         }
+        // Released OUTSIDE the hop on purpose: if the event loop is already gone
+        // (shutdown) `run_on_main_thread` refuses the closure and the tab is never
+        // closed — the redirect budget slot must still come back, or a burst of
+        // redirects during teardown would wedge the budget for the next launch.
         budget.release(new_id);
     });
 }

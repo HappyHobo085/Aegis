@@ -136,19 +136,40 @@ pub fn dispatch<R: Runtime>(
 
         "safety.proceed" => {
             let url = payload.get("url").and_then(Value::as_str).unwrap_or("");
-            if let Ok(u) = Url::parse(url) {
-                if let (Some(host), Some(s)) = (u.host_str(), app.try_state::<SafetyState>()) {
-                    s.exceptions
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .insert(host.to_lowercase());
-                    *s.interstitial.lock().unwrap_or_else(|e| e.into_inner()) = Value::Null;
-                }
-                crate::emit_event(app, "safety.interstitial", Value::Null);
-                let label = crate::nav::active_content_label(app);
-                if let Some(w) = app.get_webview(&label) {
-                    let _ = w.navigate(u);
-                }
+            let Ok(u) = Url::parse(url) else {
+                return Some(Err(format!("`{url}` is not a URL")));
+            };
+            // Scheme gate. This arm is the one channel that says "load it anyway", so it is
+            // the LAST place a scheme policy can be applied — and it is the only path here
+            // that both lifts a block and navigates, so a non-web scheme here is a local-file
+            // read or script injection in a webview that can reach the IPC chokepoint. It
+            // reuses `nav::is_navigable` rather than keeping a second scheme list, because
+            // two lists is how `file:` reached tabs.json in the first place (see
+            // `tabs::on_tab_url`).
+            //
+            // The old shape also LIED on refusal: the exception insert and the interstitial
+            // clear were both inside `if let (Some(host), Some(state))`, so a hostless
+            // scheme (`javascript:`, `data:`) recorded nothing — the block stayed armed — yet
+            // the warning was dismissed and the navigation happened anyway. Gate first, so a
+            // refusal leaves the user looking at the block that is still in force.
+            if !crate::nav::is_navigable(&u) {
+                return Some(Err(format!(
+                    "refusing to proceed to a `{}:` URL — Aegis only opens web (http and \
+                     https) pages",
+                    u.scheme()
+                )));
+            }
+            if let (Some(host), Some(s)) = (u.host_str(), app.try_state::<SafetyState>()) {
+                s.exceptions
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(host.to_lowercase());
+                *s.interstitial.lock().unwrap_or_else(|e| e.into_inner()) = Value::Null;
+            }
+            crate::emit_event(app, "safety.interstitial", Value::Null);
+            let label = crate::nav::active_content_label(app);
+            if let Some(w) = app.get_webview(&label) {
+                let _ = w.navigate(u);
             }
             Some(Ok(Value::Null))
         }
@@ -285,6 +306,113 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert!(list.as_array().unwrap().is_empty());
+        });
+    }
+
+    /// The proceed arm is the ONE channel that says "yes, load this anyway", so it is the
+    /// last place a scheme policy belongs. `file://` is the sharpest case: it has a host,
+    /// so the old code recorded a host exception and cleared the interstitial for it —
+    /// handing the user their click back while arming an exception for the very host they
+    /// were warned about, and navigating a webview to a local file.
+    #[test]
+    fn proceeding_to_a_non_web_scheme_records_no_exception_and_keeps_the_warning() {
+        with_tmp_app(|app| {
+            raise(app, &format!("http://{MALWARE_HOST}/"));
+            let armed = dispatch(app, "safety.getState", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(
+                !armed.is_null(),
+                "precondition: the warning must be armed before a proceed attempt"
+            );
+
+            let out = dispatch(
+                app,
+                "safety.proceed",
+                &json!({ "url": format!("file://{MALWARE_HOST}/etc/passwd") }),
+            )
+            .unwrap();
+            assert!(
+                out.is_err(),
+                "proceeding to a file: URL must be refused, not navigated: {out:?}"
+            );
+
+            let list = dispatch(app, "safety.listExceptions", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(
+                list.as_array().unwrap().is_empty(),
+                "a refused proceed must not record a host exception, or it unblocks the \
+                 very host the user was just warned about: {list}"
+            );
+
+            let after = dispatch(app, "safety.getState", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(
+                !after.is_null(),
+                "a refused proceed must leave the warning up; dismissing it hides a block \
+                 that is still armed, which is the same lie as a toggle that does nothing"
+            );
+        });
+    }
+
+    /// The other half of the same gate: a scheme with no host at all records nothing even
+    /// in the old code, so the ONLY thing that changes is the dismissal — the warning
+    /// vanished while the block stayed armed. Pinned so a future refactor cannot pass by
+    /// fixing only the `file:` case.
+    #[test]
+    fn proceeding_to_a_hostless_scheme_still_keeps_the_warning() {
+        with_tmp_app(|app| {
+            raise(app, &format!("http://{MALWARE_HOST}/"));
+            let out = dispatch(
+                app,
+                "safety.proceed",
+                &json!({ "url": "javascript:alert(1)" }),
+            )
+            .unwrap();
+            assert!(
+                out.is_err(),
+                "javascript: must be refused too, not just file:"
+            );
+            let after = dispatch(app, "safety.getState", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(
+                !after.is_null(),
+                "the warning must survive a refused proceed"
+            );
+        });
+    }
+
+    /// An http(s) proceed must still work — the gate is a scheme check, not a blanket
+    /// refusal, and a fix that broke this would strand a user on a malware warning.
+    #[test]
+    fn proceeding_to_an_https_url_still_records_the_exception_and_clears_the_warning() {
+        with_tmp_app(|app| {
+            raise(app, &format!("http://{MALWARE_HOST}/"));
+            let out = dispatch(
+                app,
+                "safety.proceed",
+                &json!({ "url": format!("http://{MALWARE_HOST}/") }),
+            )
+            .unwrap();
+            assert!(out.is_ok(), "an http proceed must succeed: {out:?}");
+            let list = dispatch(app, "safety.listExceptions", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                list.as_array().unwrap(),
+                &vec![json!(MALWARE_HOST)],
+                "an accepted proceed must record the host, or the user is blocked forever"
+            );
+            let after = dispatch(app, "safety.getState", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(
+                after.is_null(),
+                "an accepted proceed must clear the warning"
+            );
         });
     }
 }

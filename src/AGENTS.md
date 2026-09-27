@@ -343,6 +343,22 @@ now?)` (`just now` → `12 min ago` → `3 h ago` → `Yesterday, 14:32` → `Tu
   takes an explicit `now` (defaulting to `Date.now()`)** so the tests pin the clock
   instead of depending on the day the suite runs. Use these in a new list panel rather
   than calling `toLocaleString()` inline.
+- **`lib/addressParse.ts` — a `host:port` pair is a HOST, checked BEFORE the scheme
+  test.** RFC 3986 allows `.` and digits in a scheme name, so `hasScheme('example.com:8080')`
+  is _true_ and `new URL('example.com:8080')` parses with the protocol `example.com:`, which
+  then fails the http(s) allowlist. Every letter-leading `host:port` was therefore rejected
+  with "Aegis can only open web (http and https) addresses" — plainly false about a plainly
+  web address, and the single most common thing a developer types. `looksLikeHostPort` now
+  runs first (strict `PORT` = digits, 1–65535; host part needs a dot, `localhost`, or a
+  bracketed IPv6 literal). **Loopback → `http://`** (`localhost`, `127.0.0.0/8`, `::1` are
+  provably this machine, so no cleartext request can leak off-box, and a dev server speaks
+  plain HTTP); **every other dotless `name:port` → `https://`**, matching the dotted case,
+  because an intranet search-domain name DOES traverse the network and must not be silently
+  downgraded. `hostPortUrl` is shared by `addressParse`, `normalizeSavedUrl` and
+  `isUrlLikeInput` so the three cannot disagree. **One `host:port` shape stays refused and
+  that is deliberate:** a dotless `wiki:8443` is shape-identical to `javascript:1` /
+  `data:0` / `tel:911`, and there is no way to tell them apart without a registry of every
+  registered scheme — so refusal is fail-safe and a test pins it.
 - **List-panel row anatomy (History / Saved / Downloads).** Each row is
   `title` + a **meta line** = `host` + a right-aligned timestamp, and the full URL is
   _never_ printed — it is long, redundant with the title, and eats the width the host

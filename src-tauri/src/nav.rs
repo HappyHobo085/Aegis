@@ -5,7 +5,7 @@ use std::collections::HashSet;
 use std::sync::{Mutex, OnceLock};
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager, Runtime, Url};
+use tauri::{AppHandle, Manager, Runtime, Url, Webview};
 // `WebviewUrl` has exactly one user, `spawn_tab`, which is `#[cfg(desktop)]`. Android
 // builds a single webview in Kotlin instead, so importing it there is an unused import.
 #[cfg(desktop)]
@@ -31,11 +31,125 @@ pub fn mark_tab_has_content(id: u32) {
 }
 
 /// Forget a closed tab's content flag (ids are monotonic, so this is just tidiness).
+///
+/// NOT tidiness, though: the flag's only consumer is the pop-under auto-close in
+/// [`decide_navigation`], which refuses to close a tab that has real content. A
+/// flag left set on a closed id therefore suppresses a security behaviour for
+/// whatever tab is later given that id. Both writers of the flag — the
+/// programmatic [`crate::tabs::close_tab`] and the `tabs.close` IPC arm — must
+/// clear it.
 pub fn forget_tab_content(id: u32) {
     tabs_with_content()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .remove(&id);
+}
+
+/// Test-only reader for the content flag, so the forget paths can be asserted
+/// rather than assumed. `#[cfg(test)]` because production has no reader: the
+/// pop-under check reads the whole set at its single call site.
+#[cfg(test)]
+pub fn tab_has_content(id: u32) -> bool {
+    tabs_with_content()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&id)
+}
+
+/// Tabs with a load in flight, so `nav.reloadOrStop` can honour the Stop half of its
+/// contract. `on_page_load` is the ONLY place that knows this — the engine reports the
+/// load edges and the core forwards them to the renderer, but nothing kept the state,
+/// so the core could not answer "is this tab loading?" when the button was pressed.
+static TABS_LOADING: OnceLock<Mutex<HashSet<u32>>> = OnceLock::new();
+fn tabs_loading() -> &'static Mutex<HashSet<u32>> {
+    TABS_LOADING.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// Record a load edge for tab `id`: `true` when the load started, `false` when it settled.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+pub fn note_tab_loading(id: u32, loading: bool) {
+    let mut set = tabs_loading().lock().unwrap_or_else(|e| e.into_inner());
+    if loading {
+        set.insert(id);
+    } else {
+        set.remove(&id);
+    }
+}
+
+/// Whether tab `id` has a load in flight.
+#[cfg_attr(target_os = "android", allow(dead_code))]
+pub fn tab_is_loading(id: u32) -> bool {
+    tabs_loading()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&id)
+}
+
+/// Forget a closed tab's loading flag (ids are monotonic, so this is just tidiness).
+pub fn forget_tab_loading(id: u32) {
+    tabs_loading()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
+}
+
+/// The blank page a new tab starts on, and the target the Stop button uses to abandon a
+/// load (see [`reload_or_stop`]).
+const ABOUT_BLANK: &str = "about:blank";
+
+/// What the Reload/Stop button should do for a tab in the given state.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) enum ReloadOrStop {
+    Reload,
+    Stop,
+}
+
+/// The decision behind the Reload/Stop button, as a pure function so the branch is
+/// testable: Stop while a load is in flight, Reload once it has settled.
+pub(crate) fn reload_or_stop_action(is_loading: bool) -> ReloadOrStop {
+    if is_loading {
+        ReloadOrStop::Stop
+    } else {
+        ReloadOrStop::Reload
+    }
+}
+
+/// The Reload/Stop button's core action.
+///
+/// Stop is implemented as a navigation to [`ABOUT_BLANK`], NOT a platform stop call:
+/// wry 0.55.1 exposes no `stop()` and no `is_loading()` (nor do tauri 2.11.3 or
+/// tauri-runtime-wry 2.11.3 — `stop_loading` appears nowhere in any of the three), and
+/// `ICoreWebView2Find::Stop` is the WebView2 *find* API, not a page stop. Navigating
+/// away is what all three engines treat as abandoning an in-flight load, and
+/// `about:blank` is already this app's blank-page target. The cost is that the tab
+/// ends up blank rather than frozen mid-load, which is what a user who pressed Stop on
+/// a slow page asked for anyway; a real stop would need a wry upgrade to be exact.
+pub(crate) fn reload_or_stop<R: Runtime>(
+    app: &AppHandle<R>,
+    nav_id: u32,
+    webview: Option<&Webview<R>>,
+) {
+    let action = reload_or_stop_action(tab_is_loading(nav_id));
+    match action {
+        ReloadOrStop::Reload => {
+            if let Some(w) = webview {
+                let _ = w.reload();
+            }
+        }
+        ReloadOrStop::Stop => {
+            // The STATE half comes first and is deliberately independent of the webview:
+            // the load is over by definition once we navigate away, so the flag is
+            // cleared here rather than waiting for a `Finished` edge that will never
+            // arrive, and the guard is told about the navigation. Doing this after (or
+            // inside) a webview call would leave a tab stuck "loading" forever whenever
+            // the handle is missing or `navigate` errors.
+            forget_tab_loading(nav_id);
+            crate::redirect_guard::expect(app, nav_id, ABOUT_BLANK);
+            if let Some(w) = webview {
+                let _ = w.navigate(Url::parse(ABOUT_BLANK).expect("about:blank always parses"));
+            }
+        }
+    }
 }
 
 /// Whether a tab whose ad navigation was just cancelled should be auto-closed as a
@@ -255,6 +369,23 @@ pub(crate) fn emit_nav_crashed(app: &AppHandle, id: u32, reason: &str) {
 /// claims the `decide-policy` signal and our handler never runs.
 #[cfg(desktop)]
 pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
+    // Scheme gate, FIRST, before anything that reasons about the destination.
+    // `is_navigable` is the app's single definition of a browsable scheme
+    // (http/https + about:blank) and it is already consulted by `tabs.create`,
+    // `tabs.recordNav`, `open_redirect_background` and `nav.home` — but NOT
+    // here, which is the gate every PAGE-initiated navigation passes through.
+    // Without it, `location = 'file:///…'` or `javascript:…` from a page was not
+    // refused by the navigation policy at all: the overlay, malware, ad-block
+    // and https-only checks all read the destination as an ordinary web address
+    // and then `return true`. That is what made the per-page-load writer
+    // (`tabs::on_tab_url`) able to persist a `file:` url into `tabs.json`.
+    if !is_navigable(u) {
+        if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
+            eprintln!("[aegis-nav] REFUSE scheme {}: {}", u.scheme(), u.as_str());
+        }
+        return false;
+    }
+
     // While a full-window chrome overlay (Settings/Downloads/shield/…) covers the page, the
     // user isn't driving it — so any navigation the content initiates is a script/ad redirect
     // (malvertising fires top-frame redirects on the resize/blur that opening an overlay
@@ -410,6 +541,7 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
             let u = payload.url();
             let u = u.as_str();
             emit_state(&app_load, load_id, u, "", loading);
+            note_tab_loading(load_id, loading);
             crate::tabs::on_tab_url(&app_load, load_id, u);
             // A real page committed → this tab isn't a blank pop-under shell, so the
             // ad-navigation auto-close (above) must never close it.
@@ -777,9 +909,14 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             Ok(Value::Null)
         }
         "nav.reloadOrStop" => {
-            if let Some(w) = content {
-                let _ = w.reload();
-            }
+            // Same resolution as nav.back/nav.forward: the explicit viewId, else the
+            // active tab (the button acts on whatever the user is looking at).
+            let target_id = id.unwrap_or_else(|| {
+                app.try_state::<crate::tabs::Tabs>()
+                    .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
+                    .unwrap_or(1)
+            });
+            reload_or_stop(app, target_id, content.as_ref());
             Ok(Value::Null)
         }
         "nav.home" => {
@@ -829,10 +966,12 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        forget_tab_content, is_navigable, mark_tab_has_content, parse_navigable, require_navigable,
-        should_autoclose_popunder, tabs_with_content,
+        forget_tab_content, forget_tab_loading, is_navigable, mark_tab_has_content,
+        note_tab_loading, parse_navigable, reload_or_stop, reload_or_stop_action,
+        require_navigable, should_autoclose_popunder, tab_is_loading, tabs_with_content,
+        ReloadOrStop,
     };
-    use tauri::Url;
+    use tauri::{Manager, Url};
 
     #[test]
     fn autoclose_only_nonactive_blank_tabs() {
@@ -939,5 +1078,62 @@ mod tests {
             parse_navigable("https://example.com/x").unwrap().as_str(),
             "https://example.com/x"
         );
+    }
+
+    /// The Stop branch of the Reload/Stop button, driven through the real `reload_or_stop`.
+    ///
+    /// The observable is `redirect_guard::PendingNavs`, which the Stop branch arms via
+    /// `expect` — state work that needs no webview, so the branch is observable on the
+    /// mock (which has none). `reload_or_stop_action` is the pure decision, asserted
+    /// inline so the helper and the pure fn cannot drift apart.
+    ///
+    /// HONEST LIMIT: this pins that the Stop branch is TAKEN and that the tab's loading
+    /// state is settled. The `navigate(about:blank)` call itself is not observable from
+    /// Linux — there is no webview on the mock runtime — so it is compile-verified only.
+    #[test]
+    fn a_settled_tab_reloads_and_a_loading_tab_is_stopped() {
+        use crate::test_support::with_tmp_app;
+        use std::collections::HashMap;
+
+        // The pure decision, both ways: this is the branch the whole fix rests on.
+        assert_eq!(reload_or_stop_action(true), ReloadOrStop::Stop);
+        assert_eq!(reload_or_stop_action(false), ReloadOrStop::Reload);
+
+        let id = 4_240_001u32; // unlikely to collide with other tests sharing the global
+        with_tmp_app(|app| {
+            // A SETTLED tab: no load in flight, so the button reloads and arms nothing.
+            note_tab_loading(id, true);
+            note_tab_loading(id, false);
+            assert!(!tab_is_loading(id), "the load edge must have been recorded");
+            reload_or_stop(app, id, None);
+            let pending = app.state::<crate::redirect_guard::PendingNavs>();
+            let armed: HashMap<u32, String> =
+                pending.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            assert!(
+                armed.is_empty(),
+                "a settled tab reloads in place and must arm no navigation, got {armed:?}"
+            );
+
+            // A LOADING tab: the button abandons the load, which is a navigation to the
+            // blank page, so it DOES arm one — and that is what a test without a webview
+            // can see. Passing `None` for the webview proves the arming happens before the
+            // webview is needed, so the branch is not skipped for want of one.
+            note_tab_loading(id, true);
+            reload_or_stop(app, id, None);
+            let armed: HashMap<u32, String> =
+                pending.0.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            assert_eq!(
+                armed.get(&id).map(String::as_str),
+                Some("about:blank"),
+                "a loading tab must be stopped by abandoning the load for the blank page"
+            );
+            // …and the flag is cleared here rather than waiting for a `Finished` edge
+            // that will never arrive, so the next press reloads instead of re-stopping.
+            assert!(
+                !tab_is_loading(id),
+                "Stop must settle the tab's loading flag, or the next press stops again"
+            );
+            forget_tab_loading(id);
+        });
     }
 }
