@@ -12,8 +12,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **A test-coverage ratchet on both sides of the repo, wired into CI.** This is a gate, not
   a claim: neither the renderer nor the Rust core is at 100%, and the committed numbers say
   so honestly rather than quietly rounding up to a threshold nobody reads.
-  - **Renderer** (`coverage-baseline.json`, 113 files): lines 87.36%, statements 85.59%,
-    functions 82.79%, branches 78.18%. The gate fails if any metric drops below the
+  - **Renderer** (`coverage-baseline.json`, 116 files): lines 85.72%, statements 84.27%,
+    functions 82.22%, branches 77.71%. The gate fails if any metric drops below the
     baseline, if the baseline was _lowered_ in the same commit, or if a file the baseline
     names left the report — the last check is what stops an added `coverage.exclude` from
     buying a green build by shrinking the denominator. Raising the baseline is free.

@@ -3,24 +3,24 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 4758,
-      "covered": 4157,
-      "pct": 87.36
+      "total": 4946,
+      "covered": 4240,
+      "pct": 85.72
     },
     "statements": {
-      "total": 6434,
-      "covered": 5507,
-      "pct": 85.59
+      "total": 6646,
+      "covered": 5601,
+      "pct": 84.27
     },
     "functions": {
-      "total": 1343,
-      "covered": 1112,
-      "pct": 82.79
+      "total": 1367,
+      "covered": 1124,
+      "pct": 82.22
     },
     "branches": {
-      "total": 4158,
-      "covered": 3251,
-      "pct": 78.18
+      "total": 4263,
+      "covered": 3313,
+      "pct": 77.71
     }
   },
   "files": {
@@ -175,6 +175,72 @@
         "total": 55,
         "covered": 49,
         "pct": 89.09
+      }
+    },
+    "scripts/rust-coverage-baseline.mjs": {
+      "lines": {
+        "total": 41,
+        "covered": 0,
+        "pct": 0
+      },
+      "statements": {
+        "total": 43,
+        "covered": 0,
+        "pct": 0
+      },
+      "functions": {
+        "total": 2,
+        "covered": 0,
+        "pct": 0
+      },
+      "branches": {
+        "total": 12,
+        "covered": 0,
+        "pct": 0
+      }
+    },
+    "scripts/rust-coverage-ratchet.mjs": {
+      "lines": {
+        "total": 64,
+        "covered": 0,
+        "pct": 0
+      },
+      "statements": {
+        "total": 72,
+        "covered": 0,
+        "pct": 0
+      },
+      "functions": {
+        "total": 10,
+        "covered": 0,
+        "pct": 0
+      },
+      "branches": {
+        "total": 22,
+        "covered": 0,
+        "pct": 0
+      }
+    },
+    "scripts/rustCoverageCheck.mjs": {
+      "lines": {
+        "total": 83,
+        "covered": 83,
+        "pct": 100
+      },
+      "statements": {
+        "total": 97,
+        "covered": 94,
+        "pct": 96.9
+      },
+      "functions": {
+        "total": 12,
+        "covered": 12,
+        "pct": 100
+      },
+      "branches": {
+        "total": 71,
+        "covered": 62,
+        "pct": 87.32
       }
     },
     "shared/types.ts": {

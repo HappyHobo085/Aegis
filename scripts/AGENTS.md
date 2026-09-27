@@ -213,10 +213,20 @@ same is true in reverse for Rust: `main.rs` and the Kotlin surface are not
 The Rust ratchet prints every excluded file with its real numbers on each run for
 the same reason.
 
-**A percentage can rise while the codebase gets worse.** Deleting a block of
-0%-covered code moves the ratio and not one test, and the ratio is what CI can
-cheaply compare. The absolute `covered` counts in `AGENTS.md` are the honest
-companion number.
+**Regenerate a baseline whenever the measured file list changes, not only when
+coverage goes up.** `vitest.config.ts` measures everything matching `include`, so
+adding a source file — even a 0%-covered CLI shell — lowers every ratio while the
+covered count stays flat or rises. A baseline built from a run that predates new
+files is simply wrong, and the ratchet fails on the first CI run after the commit
+that added them. Land the correction with `COVERAGE_ALLOW_BASELINE_LOWER=1` and say
+in the commit why. (This is not hypothetical: it is exactly how
+`coverage-baseline.json` first went stale, in the commit that added
+`rust-coverage-baseline.mjs` and `rust-coverage-ratchet.mjs`.)
+
+**A percentage can move either way without the codebase following it.** Deleting a
+block of 0%-covered code raises the ratio and moves not one test; adding one lowers
+it and moves none either. The ratio is what CI can cheaply compare, so the
+absolute `covered` counts in `AGENTS.md` are the honest companion number.
 
 ## Build & deploy scripts
 

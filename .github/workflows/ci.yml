@@ -179,12 +179,26 @@ jobs:
       # calls `run()` and launching the app is not a test. The committed exclusion
       # list lives in scripts/rustCoverageCheck.mjs and is printed with each file's
       # real numbers on every run.
+      #
+      # `--manifest-path` is REQUIRED, not stylistic: this step runs from the repo
+      # root, which has no `Cargo.toml` (the crate is `src-tauri/`), and
+      # `cargo llvm-cov` shells out to `cargo locate-project` to find the workspace
+      # — so without it this fails with `could not find Cargo.toml`, which is
+      # exactly how it failed the first time (run 36322944144). Every other cargo
+      # step in this job already passes `--manifest-path` for the same reason.
+      #
+      # The `node` line below deliberately stays at the repo root rather than moving
+      # into `src-tauri/`: `rust-coverage-ratchet.mjs` resolves the repo root from
+      # `import.meta.url`, not the CWD, and the `filename`s in the JSON are ABSOLUTE
+      # paths that it rewrites to repo-relative — so the output is identical either
+      # way. Verified: the `--manifest-path` run produces a byte-identical
+      # `data[0].files[].filename` set to a `cd src-tauri` run.
       - name: Rust coverage ratchet
         if: ${{ !cancelled() }}
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --locked
-          cargo llvm-cov --lib --json > "$RUNNER_TEMP/llvmcov.json"
+          cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib --json > "$RUNNER_TEMP/llvmcov.json"
           node scripts/rust-coverage-ratchet.mjs "$RUNNER_TEMP/llvmcov.json"
       - name: cargo audit (BLOCKING — crypto/keyring/TLS surface)
         if: ${{ !cancelled() }}

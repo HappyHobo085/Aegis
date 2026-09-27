@@ -70,7 +70,7 @@ test that clicks/types the real UI, and/or a unit test in the owning Rust module
 ### Test coverage — a ratchet, not a 100% claim
 
 `@vitest/coverage-v8` measures **every** non-excluded source file (`src/**`, `shared/**`,
-`scripts/**` — 113 files) on every run, and the measured numbers are committed in
+`scripts/**` — 116 files) on every run, and the measured numbers are committed in
 `coverage-baseline.json`. CI enforces them as a **ratchet that may only go up**
 (`scripts/coverage-ratchet.mjs`). It fails if any metric drops below the baseline, if the
 baseline was _lowered_ in the same commit, or if a file the baseline names is missing from
@@ -82,40 +82,53 @@ npm run coverage:baseline  # regenerate coverage-baseline.json — only when cov
 npm run coverage:ratchet   # the CI gate
 ```
 
+**Regenerate the baseline whenever the measured file list or the totals change, not only when
+coverage goes up.** `vitest.config.ts` measures everything matching `include`, so adding a
+source file — even a 0%-covered one — lowers every ratio while leaving the covered count
+alone or higher. A baseline generated from a run that predates new files is simply _wrong_,
+and the ratchet will (correctly) fail on the first CI run after that commit. Use
+`COVERAGE_ALLOW_BASELINE_LOWER=1` to land the correction, then say in the commit why.
+
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
 here is either lying in CI or about to quietly relax the number. The measured gap, as of
 2026-09-27 (`117 test files / 1544 tests`):
 
-| Metric     | Measured               | Gap |
-| ---------- | ---------------------- | --- |
-| lines      | 4157/4758 = **87.36%** | 601 |
-| statements | 5507/6434 = **85.59%** | 927 |
-| functions  | 1112/1343 = **82.79%** | 231 |
-| branches   | 3251/4158 = **78.18%** | 907 |
+| Metric     | Measured               | Gap  |
+| ---------- | ---------------------- | ---- |
+| lines      | 4240/4946 = **85.72%** | 706  |
+| statements | 5601/6646 = **84.27%** | 1045 |
+| functions  | 1124/1367 = **82.22%** | 243  |
+| branches   | 3313/4263 = **77.71%** | 950  |
 
-41 of the 113 files are at 100% statements. The 927 uncovered statements decompose as:
+41 of the 116 files are at 100% statements. The 1045 uncovered statements decompose as:
 
-- **191 statements in 5 CLI scripts that v8 structurally cannot see** — `check-bundle-size`,
-  `check-npm-audit`, `check-android-versioncode`, `coverage-baseline`, `coverage-ratchet`.
+- **301 statements in 7 CLI scripts that v8 structurally cannot see** — `check-bundle-size`
+  (35), `check-npm-audit` (36), `check-android-versioncode` (57), `coverage-baseline` (17),
+  `coverage-ratchet` (41), `rust-coverage-baseline` (43), `rust-coverage-ratchet` (72).
   v8 only instruments the test worker's own V8 runtime, so a **spawned subprocess earns zero
-  coverage credit**. `scripts/cliGates.test.mjs` really does cover the first three (30
-  passing tests) and the report still says 0%. Treat "0% in a report" as _"not measurable
-  here"_, never as _"untested"_, for anything a test spawns. See `scripts/AGENTS.md`.
+  coverage credit**. These are all thin I/O entry points whose logic lives in a pure module
+  that _is_ measured: `scripts/cliGates.test.mjs` really does cover the first three (30
+  passing tests) and the report still says 0%, and `scripts/rustCoverageCheck.mjs` is at
+  **96.9%** because `rustCoverageCheck.test.mjs` imports it. Treat "0% in a report" as
+  _"not measurable here"_, never as _"untested"_, for anything a test spawns. See
+  `scripts/AGENTS.md`.
 - **553 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (49, the
   `createRoot` entry point), `src/testFixtures/aegisMock.ts` (503, a mock), and
   `src/vite-env.d.ts` (1). All three are entry-point-or-mock by design.
-- **736 statements of real, measurable test debt**, concentrated in a handful of files:
-  `App.tsx` 152, `mobile/MobileApp.tsx` 84, `TabStrip.tsx` 60, `SettingsModal.tsx` 34,
-  `Sidebar.tsx` 28. By directory: `src/components/` 479, `src/lib/` 63, `src/hooks/` only
-  42, `src/` (the App root) 152, `shared/` **0**.
+- **744 statements of real, measurable test debt** across 68 files, concentrated in a
+  handful: `App.tsx` 152, `mobile/MobileApp.tsx` 84, `TabStrip.tsx` 60, `SettingsModal.tsx`
+  34, `ipcClient.ts` 29, `Sidebar.tsx` 28, `mobile/MobileMenuSheet.tsx` 25,
+  `PrivacyDashboard.tsx` 21. By directory: `src/` 736, `scripts/` 8, `shared/` **0**.
 
-**A percentage can rise while the codebase gets worse**, so never read the ratio alone.
-Removing split view deleted three fully-covered source files: the percentage went **up** on
-all four metrics while the absolute count of covered statements fell from 5674 to 5507.
-The ratchet guards the ratio (it is what CI can cheaply compare); the absolute totals in
-the table above are the honest companion number.
+**A percentage can move in the opposite direction from the codebase, so never read the ratio
+alone.** Removing split view deleted three fully-covered source files: the percentage went
+**up** on all four metrics while the absolute count of covered statements _fell_ from 5674 to 5507. Adding three new `scripts/` files did the reverse: the percentage **fell** on all four
+while the covered count _rose_ from 5507 to 5601. The ratchet guards the ratio, because that
+is what CI can cheaply compare; the absolute counts in the table above are the honest
+companion number, and the two tables in this repo (`coverage-baseline.json` plus this one)
+are the reason to read both.
 
-**Branches (78.18%, 907 uncovered) is the weakest metric and where the next effort belongs.**
+**Branches (77.71%, 950 uncovered) is the weakest metric and where the next effort belongs.**
 The Rust side has its own measured numbers and its own structural ceiling — see the
 coverage section of `src-tauri/AGENTS.md`.
 
