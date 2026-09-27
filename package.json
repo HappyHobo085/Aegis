@@ -31,6 +31,8 @@
     "test:coverage": "vitest run --coverage",
     "coverage:baseline": "node scripts/coverage-baseline.mjs",
     "coverage:ratchet": "node scripts/coverage-ratchet.mjs",
+    "coverage:rust:baseline": "node scripts/rust-coverage-baseline.mjs",
+    "coverage:rust:ratchet": "node scripts/rust-coverage-ratchet.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.build.json",
     "lint": "eslint . --max-warnings=0",
     "lint:fix": "eslint . --fix",

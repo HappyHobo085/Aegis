@@ -91,6 +91,34 @@ PRs are the currency mechanism for the crypto/keyring/TLS surface.
     fixture-printing `npm` shim first on the spawned `PATH`; the shim's own exit
     code is a variable, because `npm audit` exits non-zero whenever it finds
     anything (the _normal_ path for a report with findings).
+- **`coverageCheck.mjs`** — pure logic, no I/O, shared by **both** coverage gates
+  (TypeScript and Rust). Exports `METRICS`, `coversLess` (exact integer
+  cross-multiplication, so an unchanged tree can never fail on float noise),
+  `pctOf` (returns `undefined` for a 0/0 metric so it is not compared at all),
+  `buildBaseline`, `compareToBaseline` (gates the **file list** too, so a new
+  `coverage.exclude` cannot be used to make the numbers look better), and
+  `detectBaselineLowering`. `coverageCheck.test.mjs` covers it.
+- **`rustCoverageCheck.mjs`** — the Rust-side translation, the one place an llvm
+  measurement could quietly stop meaning what it claims: llvm `regions` become the
+  `statements` slot (a different unit, documented as a deliberate fiction),
+  totals are **re-summed from the kept files** instead of read from llvm's own
+  `totals` (which includes the excluded files, so trusting it would make the
+  exclusion a no-op that still moved the headline), and `EXCLUSIONS` is the
+  committed list of files that cannot execute in a headless runner — each with a
+  mandatory sentence-length reason **and** an `expectOn` platform. A file
+  `expectOn` this host that matches nothing is a hard failure; a file for another
+  platform is reported as inert. `rustCoverageCheck.test.mjs` covers it, including
+  a check that every listed file really exists on disk (a typo would make the
+  exclusion a silent no-op).
+- **`coverage-ratchet.mjs`** / **`coverage-baseline.mjs`** / **`rust-coverage-ratchet.mjs`** /
+  **`rust-coverage-baseline.mjs`** — the four CLIs. The two ratchets are the CI
+  gates; both are three-failure-mode gates (below baseline / baseline lowered vs
+  `git show HEAD:…` / a baseline file dropped out of the report) and both print
+  their excluded files with their **real** numbers on every run.
+  `COVERAGE_ALLOW_BASELINE_LOWER=1` is the documented, deliberately noisy escape
+  hatch for the lowering check. Each ratchet also accepts a path to a saved
+  `llvmcov.json` (or `coverage-summary.json`) so a CI failure can be reproduced
+  from an artifact without re-instrumenting.
 
 ## Allowlist
 
@@ -155,6 +183,40 @@ comment.
 node scripts/check-npm-audit.mjs   # the gate
 npm test                           # includes auditCheck.test.mjs + cliGates.test.mjs
 ```
+
+### Coverage ratchets
+
+```bash
+npm run test:coverage              # the suite + the v8 report (coverage/, gitignored)
+npm run coverage:baseline          # regenerate coverage-baseline.json — ONLY when coverage went UP
+npm run coverage:ratchet           # the CI gate (TypeScript)
+export PATH="$HOME/.cargo/bin:$PATH"   # rustup/cargo are not on PATH by default
+npm run coverage:rust:baseline     # regenerate src-tauri/coverage-baseline.json
+npm run coverage:rust:ratchet      # the CI gate (Rust)
+```
+
+**The Rust side needs `cargo-llvm-cov` and the `llvm-tools-preview` component**,
+neither of which is a `Cargo.toml` change (so `Cargo.lock` and the ~4-minute
+dependency rebuild are untouched):
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov --locked
+```
+
+**"0% in a coverage report" is not the same claim as "untested".** The v8 provider
+instruments only the test worker's own V8 runtime, so a **spawned subprocess earns
+zero coverage credit** — `cliGates.test.mjs` really does cover three of the
+zero-percent CLI scripts with 30 passing tests and the report still says 0%. The
+same is true in reverse for Rust: `main.rs` and the Kotlin surface are not
+`--lib` targets, so they are absent from the report rather than excluded from it.
+The Rust ratchet prints every excluded file with its real numbers on each run for
+the same reason.
+
+**A percentage can rise while the codebase gets worse.** Deleting a block of
+0%-covered code moves the ratio and not one test, and the ratio is what CI can
+cheaply compare. The absolute `covered` counts in `AGENTS.md` are the honest
+companion number.
 
 ## Build & deploy scripts
 

@@ -53,7 +53,23 @@ jobs:
         run: npm run format:check
       - name: Unit tests (node + jsdom)
         if: ${{ !cancelled() }}
-        run: npm test
+        # `--coverage` rides on THIS step rather than a second `vitest run` in the
+        # step below. It is the same suite plus the v8 report, so the job does not
+        # pay to transform and run 1500+ tests twice; the ratchet is a separate
+        # step anyway so a coverage regression is its own log line and a red suite
+        # cannot mask it.
+        run: npm run test:coverage
+      # The renderer half of the coverage gate. This is a RATCHET, not a
+      # threshold — it fails if any metric drops below `coverage-baseline.json`,
+      # if the baseline was LOWERED in the same commit (raise freely; lower only
+      # with COVERAGE_ALLOW_BASELINE_LOWER=1 and an explanation), or if a file the
+      # baseline names stopped being measured — the last one is what stops an
+      # added `coverage.exclude` from buying a green build by shrinking the
+      # denominator. `COVERAGE_ALLOW_BASELINE_LOWER` is deliberately NOT set here:
+      # an owner decision should be visible in the diff.
+      - name: Coverage ratchet
+        if: ${{ !cancelled() }}
+        run: npm run coverage:ratchet
       - name: Build renderer (Vite)
         if: ${{ !cancelled() }}
         run: npm run build:renderer
@@ -139,7 +155,37 @@ jobs:
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
       - name: cargo test
         if: ${{ !cancelled() }}
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+        # Wrapped in `dbus-run-session` + `gnome-keyring-daemon` on purpose, and
+        # NOT because the tests need a desktop. Four `sync_keystore` tests
+        # round-trip a real OS keychain through `keyring_available()`; with no
+        # keyring they early-RETURN, so they pass while covering nothing. A dev
+        # box with a desktop session has a keyring and this runner does not, so
+        # without this the Rust coverage baseline would be measurable only on
+        # some machines — the exact "a threshold satisfiable only on a dev box"
+        # failure the coverage ratchet must not have. `unlock` never happens: the
+        # default collection is unlocked by the daemon itself.
+        run: |
+          sudo apt-get install -y gnome-keyring dbus-x11
+          dbus-run-session -- bash -c '
+            eval "$(gnome-keyring-daemon --start --components=secrets)"
+            cargo test --locked --manifest-path src-tauri/Cargo.toml
+          '
+      # The Rust half of the coverage gate, same ratchet as the `web` job and the
+      # same shared comparison logic. It is a SEPARATE cargo invocation from
+      # `cargo test` because `--json` needs a fresh instrumented build (llvm
+      # `-C instrument-coverage` is a codegen flag, so it cannot be reused from
+      # the plain test artifacts) — which is also why it is a later step, and why
+      # it costs minutes rather than seconds. `--lib` is the only target: `main.rs`
+      # calls `run()` and launching the app is not a test. The committed exclusion
+      # list lives in scripts/rustCoverageCheck.mjs and is printed with each file's
+      # real numbers on every run.
+      - name: Rust coverage ratchet
+        if: ${{ !cancelled() }}
+        run: |
+          rustup component add llvm-tools-preview
+          cargo install cargo-llvm-cov --locked
+          cargo llvm-cov --lib --json > "$RUNNER_TEMP/llvmcov.json"
+          node scripts/rust-coverage-ratchet.mjs "$RUNNER_TEMP/llvmcov.json"
       - name: cargo audit (BLOCKING — crypto/keyring/TLS surface)
         if: ${{ !cancelled() }}
         # Run from src-tauri/, NOT the repo root: cargo-audit resolves its config as

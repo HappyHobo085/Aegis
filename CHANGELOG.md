@@ -7,6 +7,48 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **A test-coverage ratchet on both sides of the repo, wired into CI.** This is a gate, not
+  a claim: neither the renderer nor the Rust core is at 100%, and the committed numbers say
+  so honestly rather than quietly rounding up to a threshold nobody reads.
+  - **Renderer** (`coverage-baseline.json`, 113 files): lines 87.36%, statements 85.59%,
+    functions 82.79%, branches 78.18%. The gate fails if any metric drops below the
+    baseline, if the baseline was _lowered_ in the same commit, or if a file the baseline
+    names left the report — the last check is what stops an added `coverage.exclude` from
+    buying a green build by shrinking the denominator. Raising the baseline is free.
+  - **Rust core** (`src-tauri/coverage-baseline.json`, 43 files): lines 75.76%, statements
+    76.45%, functions 72.13%, measured with `cargo llvm-cov --lib`. Branches are **not**
+    gated: llvm branch coverage needs `-Z coverage-options=branch`, i.e. a nightly
+    compiler, and the repo pins stable 1.98.0. The eight platform-gated modules
+    (`linux_layout.rs` and the `*_win.rs` / `*_mac.rs` pair) are excluded with a
+    committed per-file reason and their real numbers printed on every run, because on a
+    Linux runner they are either 0% or not compiled at all — a threshold that silently
+    depends on the machine is not a threshold.
+  - **CI provisions a keyring** (`gnome-keyring-daemon` under `dbus-run-session`) for the
+    Rust job's `cargo test`, because four `sync_keystore` tests round-trip a real OS
+    keychain and otherwise early-return — passing while covering nothing, and making the
+    Rust baseline satisfiable only on a dev box with a desktop session.
+  - Both gates run in the `web` and `rust` jobs only, never in `msrv` or `cross-target`.
+- **Three drift guards, replacing the ones lost with `src/autopilot/`.**
+  - `shared/ipcCatalog.drift.test.ts` walks the IPC contract in **four directions**:
+    a catalog entry with no Rust behind it, a Rust `match` arm / `emit` / `listen` /
+    `channel ==` with no catalog entry, a declared `evt*` with no renderer subscriber, and
+    a raw dotted event name passed to `emit`. A shape-preserving channel rename passes
+    `shared/types.test.ts`'s naming regex and fails only here — proved by mutating four
+    channel names, which turned **only** these tests red out of 1346 others.
+  - `src/lib/ipcClient.contract.test.ts` (179 tests) pins **every** request channel's
+    `invoke('ipc', {channel, payload})` shape and every event's colon spelling, plus the
+    Android bridge dispatch. Every other spec replaces the whole `aegis` object with
+    `testFixtures/aegisMock.ts`, so before this the channel strings themselves were never
+    executed by any test.
+- **Tests for the three `scripts/` gates that no test previously imported**
+  (`check-bundle-size`, `check-npm-audit`, `check-android-versioncode` — 30 tests, spawned
+  as subprocesses against a sandboxed copy of each script, because all three read their
+  inputs at module load and `process.exit`). They still report **0%** in the coverage
+  report: v8 only instruments the test worker's own V8 runtime, so a spawned subprocess
+  earns no credit. That is now documented as "not measurable here", not "untested".
+
 ### Removed
 
 - **Split view is gone** (`Ctrl+Shift+S`, drag-a-tab-onto-a-tab, the resize handles, and the

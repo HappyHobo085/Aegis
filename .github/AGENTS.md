@@ -11,15 +11,43 @@ GitHub Actions workflows and Dependabot config for Aegis.
     `tsconfig.build.json`, which excludes test files + `src/testFixtures` to skip the
     known test-only type noise) → `npm run lint` (ESLint flat config, errors fail /
     warnings are the migration backlog) → `npm run format:check` (Prettier) →
-    `npm test` (vitest node + jsdom) → `node scripts/check-npm-audit.mjs`.
+    `npm run test:coverage` (vitest node + jsdom, 1544 tests, **with** the v8 report)
+    → `npm run coverage:ratchet` → `node scripts/check-npm-audit.mjs`. The `--coverage`
+    flag rides on the _test_ step rather than buying a second `vitest run`; the ratchet
+    is its own step so a coverage regression is a distinct log line from a test failure
+    and a red suite cannot mask it. The ratchet is a **may-only-go-up** gate — it fails
+    if any of the four metrics drops below `coverage-baseline.json`, if the baseline was
+    _lowered_ in the same commit, or if a file the baseline names left the report (which
+    is what stops an added `coverage.exclude` from buying a green build by shrinking the
+    denominator). `COVERAGE_ALLOW_BASELINE_LOWER` is deliberately **not** set in the
+    workflow. Numbers and the full gap decomposition: the coverage section of the root
+    `AGENTS.md`; the tooling's own contract: `scripts/AGENTS.md`.
   - **`rust`** (the `src-tauri` crate): installs the webkit2gtk build deps, then
     `cargo fmt --check` → `cargo clippy --locked --all-targets -- -D warnings` →
-    `cargo test --locked` (the 418 `src-tauri` unit tests, Linux-cfg paths) →
-    a **BLOCKING** `cargo audit` over the crypto/keyring/TLS surface. The audit runs
-    with `working-directory: src-tauri` on purpose: cargo-audit resolves its config as
-    `./.cargo/audit.toml` relative to the CWD and does not search ancestors, so that is
-    what makes `src-tauri/.cargo/audit.toml` authoritative. There is no
-    `continue-on-error` and no `|| true` — a new advisory fails the job.
+    `cargo test --locked` (the 425 `src-tauri` unit tests, Linux-cfg paths) →
+    `cargo llvm-cov` + `node scripts/rust-coverage-ratchet.mjs` → a **BLOCKING**
+    `cargo audit` over the crypto/keyring/TLS surface. Two things in there are not
+    incidental:
+    - `cargo test` runs inside `dbus-run-session` with a `gnome-keyring-daemon` started
+      first. Four `sync_keystore` tests round-trip a real OS keychain through
+      `keyring_available()`; with no keyring they early-**return**, so they pass while
+      covering nothing. A dev box with a desktop session has a keyring and a headless
+      runner does not, so without this the Rust coverage baseline would be satisfiable
+      only on some machines — exactly the "threshold that quietly depends on the machine"
+      failure a ratchet must not have.
+    - the coverage step is a **separate cargo invocation** from `cargo test`: llvm's
+      `-C instrument-coverage` is a codegen flag, so the instrumented artifacts cannot
+      be reused from the plain test build. That costs minutes, and it is why the step is
+      last. `--lib` only — `main.rs` calls `run()` and launching the app is not a test.
+      The committed exclusion list lives in `scripts/rustCoverageCheck.mjs` and prints
+      each excluded file with its real numbers on every run. It gates **three**
+      metrics, not four: llvm branch coverage needs `-Z coverage-options=branch`, i.e.
+      nightly, and `rust-toolchain.toml` pins stable.
+      The audit runs
+      with `working-directory: src-tauri` on purpose: cargo-audit resolves its config as
+      `./.cargo/audit.toml` relative to the CWD and does not search ancestors, so that is
+      what makes `src-tauri/.cargo/audit.toml` authoritative. There is no
+      `continue-on-error` and no `|| true` — a new advisory fails the job.
   - **`sync-server`**: the same fmt/clippy/test treatment plus its own **blocking**
     `cargo audit` for the standalone crate (the one internet-facing service in the
     project). It is a separate non-workspace crate, so it needs no webkit2gtk and has
@@ -50,7 +78,7 @@ GitHub Actions workflows and Dependabot config for Aegis.
 packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
     `icu*\*`2.2 chain needs 1.86). The floor is **1.88.0** and is owned by the
     dependency graph, not by this repo's own code. Re-derive it with
-   `cargo metadata --format-version 1 --locked | jq '[.packages[].rust_version] | max'`    after any dependency bump, and move`rust-version`in **both** manifests (the job
+    `cargo metadata --format-version 1 --locked | jq '[.packages[].rust_version] | max'` after any dependency bump, and move`rust-version`in **both** manifests (the job
     fails on drift) plus the README's MSRV line. If`msrv` goes red, fix the manifests
     — do not weaken the job.
 

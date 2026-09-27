@@ -84,8 +84,7 @@ npm run coverage:ratchet   # the CI gate
 
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
 here is either lying in CI or about to quietly relax the number. The measured gap, as of
-2026-09-27 (`116 test files / 1507 tests`, working tree includes the in-flight
-`src/autopilot/` purge, so **regenerate the baseline once that lands**):
+2026-09-27 (`117 test files / 1544 tests`):
 
 | Metric     | Measured               | Gap |
 | ---------- | ---------------------- | --- |

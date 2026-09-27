@@ -617,6 +617,115 @@ dispatcher takes `app: AppHandle<R>` (or any generic `<R: Runtime>`):
    `Cargo.toml` (`[dev-dependencies] tauri … features = ["test"]`); no additional
    dep changes are needed.
 
+## Test coverage — a ratchet, not a 100% claim
+
+The Rust half of the coverage gate. Same promise as the TypeScript half
+(`coverage-baseline.json` + `scripts/coverage-ratchet.mjs`): **coverage may rise,
+never fall, and the baseline may never be lowered in the same commit that causes
+the fall.** Both halves call the _same_ comparison logic (`compareToBaseline` and
+`detectBaselineLowering` in `scripts/coverageCheck.mjs`), so "the ratchet" is one
+rule with two front ends, not two rules that can drift apart.
+
+```bash
+export PATH="$HOME/.cargo/bin:$PATH"        # rustup/cargo are not on PATH by default
+npm run coverage:rust:baseline              # regenerate src-tauri/coverage-baseline.json
+npm run coverage:rust:ratchet               # the CI gate
+```
+
+Tooling: `cargo-llvm-cov` + the `llvm-tools-preview` component. Neither is a
+`Cargo.toml` change, so adding them does not touch `Cargo.lock` and does not
+trigger the ~4-minute full dependency rebuild a `rust-toolchain.toml` edit would.
+
+### Measured, 2026-09-27 (Linux, `cargo llvm-cov --lib --json`, stable 1.98.0)
+
+| Metric               | Measured             | Gap  |
+| -------------------- | -------------------- | ---- |
+| lines                | 11175/14750 = 75.76% | 3575 |
+| statements (regions) | 20121/26320 = 76.45% | 6199 |
+| functions            | 1369/1898 = 72.13%   | 529  |
+
+43 of the 44 modules compiled on Linux are gated. Before the exclusion list the
+same run reads 72.78% lines / 73.47% regions / 69.28% functions — the difference
+is entirely `linux_layout.rs`.
+
+**`statements` is llvm `regions`, not an istanbul statement.** A region is a code
+span, not an expression. The label is a deliberate fiction that exists so the
+shared comparison logic has a slot to read; the number is still a monotone
+"how much of this file ran" measure, which is all a ratchet needs.
+
+**`branches` is NOT gated, and the report's `0` is not a bug.** llvm's branch
+coverage needs `-Z coverage-options=branch`, which is **nightly-only** — on
+stable it fails with `error: the option 'Z' is only accepted on the nightly
+compiler`. This repo pins stable 1.98.0 in `rust-toolchain.toml`, and measuring
+branches would mean measuring a _different compiler_, which is not a ratchet.
+`pctOf` returns `undefined` for a 0/0 metric, so the gate skips it instead of
+comparing a fake 100%. The v8 TypeScript gate _does_ gate branches, because v8
+gives them on the same run.
+
+### The exclusion list — 8 files, each with a mandatory reason
+
+`EXCLUSIONS` in `scripts/rustCoverageCheck.mjs`. Every entry is code that cannot
+execute in a headless runner, so its 0% is structural and no test can move it.
+Keeping it in the denominator would mean a fall anywhere else had to fight dead
+bytes forever. Excluding it makes the gate's number a claim about code a test
+_could_ have covered.
+
+An entry without a sentence-length reason fails
+(`assertExclusionsJustified`), and the reasons are copied into the committed
+baseline so the file is self-describing. The list is printed with each file's
+**real** numbers on every ratchet run, so a file can never quietly stop being
+measured.
+
+`expectOn` is the platform where the file is even **compiled** — a different claim
+from "where it runs", and the one that decides whether the entry does any work.
+MEASURED: on Linux exactly **one** of the eight reaches the llvm export
+(`linux_layout.rs`, 0/604 lines); the other seven are `#[cfg]`-gated out of the
+build. An entry expected here that matches nothing is a **hard failure** (the
+file was renamed or deleted and the list is lying); an entry for another platform
+is reported as inert.
+
+| File                | Built on | Why it cannot be covered                                                |
+| ------------------- | -------- | ----------------------------------------------------------------------- |
+| `linux_layout.rs`   | linux    | WebKitGTK windowing — needs a live X/Wayland display and a real webview |
+| `adblock_win.rs`    | windows  | WebView2 `WebResourceRequested` (COM)                                   |
+| `find_win.rs`       | windows  | WebView2 `findString`/`findNext` (COM)                                  |
+| `nav_policy_win.rs` | windows  | runs in the webview2 host process                                       |
+| `nav_url_win.rs`    | windows  | `#[cfg(target_os = "windows")]` helpers                                 |
+| `nav_url_mac.rs`    | macos    | objc2 / `msg_send!`                                                     |
+| `zoom_win.rs`       | windows  | WebView2 `setZoomFactor` (COM)                                          |
+| `zoom_mac.rs`       | macos    | WKWebView `pageZoom` (objc2)                                            |
+
+`main.rs` (6 lines, calls `run()`) and the Android/Kotlin surface have **no
+exclusion entry and no coverage at all** — they are not part of `--lib`, so they
+are not in the report rather than being excluded from it.
+
+### What the number does and does not measure
+
+The gap is not spread evenly. Real, measurable debt concentrates in the modules
+that wrap an `AppHandle`, a real webview, or the network — exactly the code a
+`MockRuntime` cannot reach: `lib.rs` 16.4% (the `ipc()` dispatcher and `setup`),
+`view.rs` 16.1%, `zoom.rs` 18.6%, `find_linux.rs` 20.8% (AT-SPI over a session
+bus), `adblock_webkit.rs` 21.3%, `nav.rs` 23.8%, `tabs.rs` 41.7%,
+`redirect_guard.rs` 49.2%, `permissions.rs` 47.2%, `update.rs` 45.7%,
+`sync.rs` 53.5%. The pure, already-covered end is `sync_envelope.rs` 98.8%,
+`tab_registry.rs` 98.0%, `crypto.rs` 96.9%, `places.rs` 96.6%, `jsonstore.rs`
+96.7%, `customfilters.rs` 97.6%, `data.rs` 97.7%.
+
+**A percentage can rise while the codebase gets worse**, exactly as on the
+TypeScript side: deleting 0%-covered code moves the ratio and not one test.
+The absolute `covered` column above is the honest companion number.
+
+### The keyring asymmetry (why CI provisions a keyring)
+
+Four tests in `sync_keystore.rs` round-trip a real OS keychain via
+`keyring_available()` (`sync_keystore.rs:430`); with no keyring they
+**early-return**, so they pass while covering nothing. A dev box with a desktop
+session has one and a GitHub runner does not — which means a threshold measured
+locally can be unsatisfiable in CI. The `rust` job therefore starts
+`dbus-run-session` with `gnome-keyring-daemon` before `cargo test`, so CI and
+local measure the same thing. **Do not set a Rust coverage baseline from a box
+with a desktop session that CI cannot reproduce.**
+
 ## Android (`gen/android/`)
 
 Hand-written Kotlin under `app/src/main/java/com/aegis/browser/`:
