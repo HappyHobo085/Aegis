@@ -136,60 +136,6 @@ pub fn apply_inset(app: &AppHandle) {
         );
     }
 
-    // Windows: split mode — position each pane's content webview side-by-side,
-    // then return early (the single-content path below does not apply).
-    #[cfg(target_os = "windows")]
-    {
-        let split_state = app.state::<crate::split::SplitState>();
-        let split = split_state.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if !split.panes.is_empty() {
-            let content_w = (logical.width - left - right).max(0.0);
-            let content_h = (logical.height - top).max(0.0);
-            let focused_id = split.focused_pane_id;
-
-            // Collect the set of pane tab ids so we can hide non-split webviews.
-            let split_ids: std::collections::HashSet<u32> =
-                split.panes.iter().map(|p| p.tab_id).collect();
-
-            for pane in &split.panes {
-                let label = crate::nav::content_label(pane.tab_id);
-                if let Some(wv) = app.get_webview(&label) {
-                    // Physical bounds (gotcha 16): logical × scale_factor for
-                    // correct positioning at fractional DPI.
-                    let px = (left + pane.x * content_w) * scale;
-                    let py = (top + pane.y * content_h) * scale;
-                    let pw = pane.width * content_w * scale;
-                    let ph = pane.height * content_h * scale;
-                    let _ = wv.set_bounds(tauri::Rect {
-                        position: tauri::PhysicalPosition::new(
-                            px.round() as i32,
-                            py.round() as i32,
-                        )
-                        .into(),
-                        size: tauri::PhysicalSize::new(pw.round() as u32, ph.round() as u32).into(),
-                    });
-                    let _ = wv.show();
-                    if pane.tab_id == focused_id {
-                        let _ = wv.set_focus();
-                    }
-                }
-            }
-
-            // Hide every content webview NOT in the split.
-            for (lbl, wv) in app.webviews() {
-                if lbl.starts_with("content:") {
-                    if let Ok(id) = lbl.strip_prefix("content:").unwrap_or("").parse::<u32>() {
-                        if !split_ids.contains(&id) {
-                            let _ = wv.hide();
-                        }
-                    }
-                }
-            }
-
-            return; // Split path complete — do not run single-content logic.
-        }
-    }
-
     // Windows: at fractional DPI (e.g. 125%) wry's Logical set_bounds mispositions the
     // WebView2 controller's INPUT region — the content webview renders below the chrome
     // bars but still captures their clicks, so the toolbar/favourites become dead. Pass

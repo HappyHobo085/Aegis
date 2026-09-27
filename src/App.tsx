@@ -9,8 +9,7 @@ import { useChromeHeights } from './hooks/useChromeHeights';
 import { hostOf, originOf } from './lib/url';
 import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChromeSurfaces';
 import { ChromePopoverProvider, useChromePopoverRegistry } from './hooks/useChromePopover';
-import { computeContentLayout, computeSplitLayout, clampResizeDelta } from './lib/contentLayout';
-import type { PaneRect } from './lib/contentLayout';
+import { computeContentLayout } from './lib/contentLayout';
 import { protectionSummary } from './lib/protectionSummary';
 import { useDownloadToasts } from './hooks/useDownloadToasts';
 import { useNav } from './hooks/useNav';
@@ -35,15 +34,12 @@ import { useUpdate } from './hooks/useUpdate';
 import { useSafety } from './hooks/useSafety';
 import { useTabs } from './hooks/useTabs';
 import { useWorkspaces } from './hooks/useWorkspaces';
-import { useSplit } from './hooks/useSplit';
 import { Toolbar } from './components/Toolbar';
 import { BookmarkButton } from './components/BookmarkButton';
 import { DownloadsIndicator } from './components/DownloadsIndicator';
 import { PickerButton } from './components/PickerButton';
 import { UpdateIndicator } from './components/UpdateIndicator';
 import { ZoomIndicator } from './components/ZoomIndicator';
-import { SplitIndicator } from './components/SplitIndicator';
-import { SplitResizeHandle } from './components/SplitResizeHandle';
 import { SafetyInterstitial } from './components/SafetyInterstitial';
 import { FavoritesBar } from './components/FavoritesBar';
 import { FavoritesManager } from './components/FavoritesManager';
@@ -149,7 +145,6 @@ function DesktopApp() {
   const safety = useSafety();
   const fingerprint = useFingerprint();
   const proxy = useProxy();
-  const split = useSplit();
   const find = useFind(tabs.activeId);
   const navUrlRef = useRef(nav.state.url);
   navUrlRef.current = nav.state.url;
@@ -327,31 +322,6 @@ function DesktopApp() {
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [tabs.create]);
-
-  // Ctrl+Shift+S — toggle split view. If not in split, split the active tab with
-  // the next tab in the list. If already in split, exit split.
-  // Collision check: Ctrl+Shift+N is handled above; Ctrl+Shift+Tab/T are Windows-only
-  // and use key === 'Tab'/'t'. 's' is not handled by any other effect.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (!e.ctrlKey || e.altKey || e.metaKey || !e.shiftKey) return;
-      if (e.key.toLowerCase() === 's') {
-        e.preventDefault();
-        if (split.layout) {
-          void split.exitSplit();
-        } else {
-          const ids = tabsRef.current.map((t) => t.id);
-          const i = ids.indexOf(activeIdRef.current);
-          if (ids.length >= 2) {
-            const nextIdx = (i + 1) % ids.length;
-            void split.enterSplit([activeIdRef.current, ids[nextIdx]]);
-          }
-        }
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [split.layout, split.enterSplit, split.exitSplit]);
 
   // Ctrl+1-9 when the chrome/address bar is focused (and as the Win/macOS path,
   // where content-webview digit keys aren't captured by a menu accelerator).
@@ -535,83 +505,6 @@ function DesktopApp() {
     toast.info('Cleared Aegis history and remembered permissions for this site.');
   };
 
-  // Split-view resize handles: compute pixel rects from the fractional layout
-  // and expose drag handlers that convert pixel deltas into fractional IPC calls.
-  const splitPaneRects = useMemo<PaneRect[]>(() => {
-    if (!split.layout) return [];
-    // Content area starts below the chrome and fills the remaining width.
-    // Use measured chrome heights (from useChromeHeights) instead of constants.
-    const contentArea = {
-      x: 0,
-      y: chrome.topInset,
-      width: window.innerWidth || 1200,
-      height: Math.max(1, (window.innerHeight || 800) - chrome.topInset),
-    };
-    return computeSplitLayout(split.layout, contentArea).panes;
-  }, [split.layout, chrome.topInset]);
-
-  const splitHandles = useMemo(() => {
-    if (!split.layout) return [];
-    const contentArea = {
-      x: 0,
-      y: chrome.topInset,
-      width: window.innerWidth || 1200,
-      height: Math.max(1, (window.innerHeight || 800) - chrome.topInset),
-    };
-    return computeSplitLayout(split.layout, contentArea).handles;
-  }, [split.layout, chrome.topInset]);
-
-  const handleSplitDrag = useCallback(
-    (
-      handleOrientation: 'vertical' | 'horizontal',
-      leftPaneId: number,
-      rightPaneId: number,
-      delta: number,
-    ) => {
-      if (!split.layout) return;
-      const contentSize = handleOrientation === 'vertical' ? window.innerWidth : window.innerHeight;
-      const leftPane = split.layout.panes.find((p) => p.tabId === leftPaneId);
-      const rightPane = split.layout.panes.find((p) => p.tabId === rightPaneId);
-      if (!leftPane || !rightPane) return;
-
-      const fractionDelta = delta / contentSize;
-      const clamped = clampResizeDelta(
-        fractionDelta,
-        handleOrientation,
-        splitPaneRects,
-        leftPaneId,
-        rightPaneId,
-        contentSize,
-      );
-      if (clamped === 0) return;
-
-      const newLeftWidth =
-        handleOrientation === 'vertical'
-          ? Math.max(0.05, Math.min(0.95, leftPane.width + clamped))
-          : leftPane.width;
-      const newRightWidth =
-        handleOrientation === 'vertical'
-          ? Math.max(0.05, Math.min(0.95, rightPane.width - clamped))
-          : rightPane.width;
-      const newLeftHeight =
-        handleOrientation === 'horizontal'
-          ? Math.max(0.05, Math.min(1.0, leftPane.height + clamped))
-          : leftPane.height;
-      const newRightHeight =
-        handleOrientation === 'horizontal'
-          ? Math.max(0.05, Math.min(1.0, rightPane.height - clamped))
-          : rightPane.height;
-
-      void split.resizePane(leftPaneId, newLeftWidth, newLeftHeight);
-      void split.resizePane(rightPaneId, newRightWidth, newRightHeight);
-    },
-    [split.layout, split.resizePane, splitPaneRects],
-  );
-
-  const handleSplitDragEnd = useCallback(() => {
-    // No-op for now; layout is already applied via resizePane calls.
-  }, []);
-
   // Fullscreen render: ALL hooks above must run on every render (rule of hooks).
   // In fullscreen the chrome is shrunk to a top-right corner by main; render only
   // the exit affordance there. The component stays mounted, so state persists.
@@ -651,8 +544,6 @@ function DesktopApp() {
         onCreatePrivate={() => void tabs.create(undefined, false, true)}
         onReorder={(ids) => void tabs.reorder(ids)}
         onSetPinned={(id, pinned) => void tabs.setPinned(id, pinned)}
-        splitLayout={split.layout}
-        onEnterSplit={(ids) => void split.enterSplit(ids)}
       />
       <Toolbar
         state={nav.state}
@@ -725,11 +616,6 @@ function DesktopApp() {
             zoomOut={zoom.zoomOut}
             reset={zoom.reset}
           />
-        }
-        splitIndicator={
-          split.layout ? (
-            <SplitIndicator layout={split.layout} onExit={() => void split.exitSplit()} />
-          ) : undefined
         }
         fullscreen={
           <button
@@ -947,22 +833,6 @@ function DesktopApp() {
       <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} />
       <Toaster />
       <ConfirmDialog />
-      {splitHandles.length > 0 && (
-        <div className="split-handles-overlay">
-          {splitHandles.map((h) => (
-            <SplitResizeHandle
-              key={`${h.leftPaneId}-${h.rightPaneId}`}
-              orientation={h.orientation}
-              x={h.x}
-              y={h.y}
-              width={h.width}
-              height={h.height}
-              onDrag={(delta) => handleSplitDrag(h.orientation, h.leftPaneId, h.rightPaneId, delta)}
-              onDragEnd={handleSplitDragEnd}
-            />
-          ))}
-        </div>
-      )}
     </div>
   );
 }

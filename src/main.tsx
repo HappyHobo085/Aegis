@@ -13,7 +13,7 @@ if (!container) {
 }
 
 // A rejected IPC is an EXPECTED outcome, not a crash: the core returns `Err(String)` for
-// ordinary conditions (vault locked, `split.enter` needing 2–4 tabs, an unreachable proxy)
+// ordinary conditions (vault locked, an unreachable proxy)
 // and ~58 call sites are fire-and-forget `void aegis.*` with no `.catch()`. Nothing handled
 // that, so a routine rejection surfaced as an unhandled promise rejection whose only
 // conceivable backstop was the ErrorBoundary above — which replaces the whole chrome.

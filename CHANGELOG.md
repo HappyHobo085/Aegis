@@ -9,6 +9,23 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Removed
 
+- **Split view is gone** (`Ctrl+Shift+S`, drag-a-tab-onto-a-tab, the resize handles, and the
+  toolbar pane-count badge). It was a **user-facing feature on Windows only**: the pane
+  positioning existed solely in `view.rs`'s `#[cfg(target_os = "windows")]` branch, so on
+  Linux and macOS entering a split updated the core state and left the content webviews
+  **overlapping**, and Android had no implementation at all. On top of that the resize clamp
+  was genuinely broken: `App.tsx` passed a **fraction** (`pixelDelta / window.innerWidth`)
+  into `clampResizeDelta`, which compared it against **pixel** bounds, so any split with a
+  pane under ~17% either did nothing (the handle silently died) or slammed to 0.05/0.95 on
+  a 10px drag. The two bounds were also mutually unsatisfiable as written (a 200px minimum
+  and an 80% maximum cannot both hold in a two-pane layout that sums to 1), so the fix was
+  a design change rather than a one-liner. Rather than ship three platforms of a
+  one-platform feature, it was removed. **Removed with it:** `src-tauri/src/split.rs` (473
+  lines, 20 Rust tests), `useSplit`, `SplitIndicator`, `SplitResizeHandle`, the `split.*`
+  pixel-geometry half of `contentLayout.ts`, five IPC channels plus the `split.state` event,
+  the `split` namespace on `AegisApi`, the toolbar's split slot, the TabStrip drag-to-split
+  branch (a drop now always reorders), and 103 lines of CSS. **Behaviour change to
+  remember: shift-dropping a tab onto another tab now reorders instead of opening a split.**
 - **The `src/autopilot/` renderer test harness is gone** (8,536 lines: the feature
   `CATALOG`, the `SCREENS` list, the interaction specs, and the drift guards). Removed at
   the repo owner's request, together with the production seams that existed only to serve
@@ -36,8 +53,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - New coverage for the previously untested `url`, `syncBus`, `tauriInvoke`,
   `protectionSummary`, `useOmnibox`, `useMeasuredHeight`,
   `useNarrowViewport`, `useSafety`, `useDownloadToasts`, `useAutofillSave`,
-  `NavControls`, `OmniboxDropdown`, `SplitResizeHandle`, `SplitIndicator`, `SkipLink`,
-  `PrivacyDashboard` and `WorkspaceSwitcher`, plus the first tests for `customfilters.rs`
+  `NavControls`, `OmniboxDropdown`, `SkipLink`, `PrivacyDashboard` and
+  `WorkspaceSwitcher`, plus the first tests for `customfilters.rs`
   (22, covering its single-record HLC last-writer-wins merge and tombstones).
 - `tauriInvoke.on()`'s unsubscribe is now idempotent, so a double-invoked effect cleanup
   cannot release a backend listener twice.

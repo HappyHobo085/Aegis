@@ -133,7 +133,7 @@ describe('aegis.zoom IPC routing', () => {
 // Rejection boundary
 //
 // The core returns Err(String) for ORDINARY conditions — the vault is locked,
-// split.enter needs 2-4 tabs, the proxy is unreachable. Those used to reach the
+// the proxy is unreachable. Those used to reach the
 // renderer as a bare string thrown from ~58 uncaught `void aegis.*` sites, with
 // nothing catching them: the only handler was the ErrorBoundary, which replaces
 // the WHOLE chrome, so a locked vault could blank the entire window. Every

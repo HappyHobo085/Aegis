@@ -1,6 +1,6 @@
 import { useRef, useState, useCallback, useEffect, useMemo } from 'react';
 import { Plus, X, Globe, EyeOff } from 'lucide-react';
-import type { SplitLayout, TabMeta, ViewId } from '../../shared/types';
+import type { TabMeta, ViewId } from '../../shared/types';
 import { hostOf } from '../lib/url';
 
 // --- Conditional virtualization constants ---
@@ -22,10 +22,6 @@ interface TabStripProps {
   onCreatePrivate(): void;
   onReorder(ids: ViewId[]): void;
   onSetPinned(id: ViewId, pinned: boolean): void;
-  /** Current split layout, or null when split mode is inactive. */
-  splitLayout?: SplitLayout | null;
-  /** Called when the user drag-drops a tab onto another to enter split view. */
-  onEnterSplit?(tabIds: ViewId[]): void;
 }
 
 function labelFor(tab: TabMeta): string {
@@ -44,34 +40,11 @@ export function TabStrip({
   onCreatePrivate,
   onReorder,
   onSetPinned,
-  splitLayout,
-  onEnterSplit,
 }: TabStripProps) {
   const stripRef = useRef<HTMLDivElement | null>(null);
 
-  // --- Drag-to-split state ---
-  // When a tab is dragged over another tab and held for ~500ms, we show the
-  // split-candidate highlight. If the user drops with Shift held (or after the
-  // hold timer fires), we call onEnterSplit instead of reordering.
-  const [splitCandidateId, setSplitCandidateId] = useState<number | null>(null);
-  const splitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Track the dragged tab id for the duration of a drag operation.
   const draggedTabIdRef = useRef<number | null>(null);
-  // Track whether the hold timer fired (distinguishes "hold to split" from "quick reorder").
-  const holdFiredRef = useRef(false);
-
-  // Clear the split-candidate highlight and timer on unmount or when drag ends.
-  useEffect(() => {
-    return () => {
-      if (splitTimerRef.current !== null) clearTimeout(splitTimerRef.current);
-    };
-  }, []);
-
-  // Set of tab ids currently in the split layout (for CSS highlighting).
-  const splitTabIds = useMemo(() => {
-    if (!splitLayout) return new Set<number>();
-    return new Set(splitLayout.panes.map((p) => p.tabId));
-  }, [splitLayout]);
 
   // --- Virtualization state ---
   const isVirtualized = tabs.length > VIRTUALIZATION_THRESHOLD;
@@ -200,8 +173,6 @@ export function TabStrip({
   const renderTabNode = (t: TabMeta, index: number) => {
     const title = labelFor(t);
     const isActive = t.id === activeId;
-    const isInSplit = splitTabIds.has(t.id);
-    const isSplitCandidate = splitCandidateId === t.id;
     return (
       <div
         key={t.id}
@@ -218,8 +189,6 @@ export function TabStrip({
           t.live ? '' : 'tab--asleep',
           t.pinned ? 'tab--pinned' : '',
           t.private ? 'tab--private' : '',
-          isInSplit ? 'tab--split' : '',
-          isSplitCandidate ? 'tab--split-candidate' : '',
         ]
           .filter(Boolean)
           .join(' ')}
@@ -228,64 +197,21 @@ export function TabStrip({
         onKeyDown={(e) => onTabKeyDown(e, t, index)}
         onDragStart={(e) => {
           draggedTabIdRef.current = t.id;
-          holdFiredRef.current = false;
           e.dataTransfer.setData('text/tab-id', String(t.id));
           e.dataTransfer.effectAllowed = 'move';
         }}
         onDragOver={(e) => {
           e.preventDefault();
-          const dragged = draggedTabIdRef.current;
-          if (!dragged || dragged === t.id) return;
-
-          // If already in split and onEnterSplit is available, show candidate immediately
-          // (dropping replaces a pane).
-          if (splitLayout && onEnterSplit) {
-            e.dataTransfer.dropEffect = 'move';
-            if (splitCandidateId !== t.id) setSplitCandidateId(t.id);
-            return;
-          }
-
-          // Normal case: start a hold timer to distinguish reorder from split-enter.
           e.dataTransfer.dropEffect = 'move';
-          if (splitCandidateId !== t.id) {
-            // New target — reset the timer.
-            if (splitTimerRef.current !== null) clearTimeout(splitTimerRef.current);
-            holdFiredRef.current = false;
-            setSplitCandidateId(t.id);
-            splitTimerRef.current = setTimeout(() => {
-              holdFiredRef.current = true;
-            }, 500);
-          }
-        }}
-        onDragLeave={() => {
-          if (splitTimerRef.current !== null) {
-            clearTimeout(splitTimerRef.current);
-            splitTimerRef.current = null;
-          }
-          setSplitCandidateId(null);
         }}
         onDrop={(e) => {
           e.preventDefault();
-          if (splitTimerRef.current !== null) {
-            clearTimeout(splitTimerRef.current);
-            splitTimerRef.current = null;
-          }
-          setSplitCandidateId(null);
 
           const dragged = draggedTabIdRef.current ?? Number(e.dataTransfer.getData('text/tab-id'));
           draggedTabIdRef.current = null;
           if (!dragged || dragged === t.id) return;
 
-          const isShift = e.shiftKey;
-          const shouldSplit = isShift || holdFiredRef.current || !!(splitLayout && onEnterSplit);
-          holdFiredRef.current = false;
-
-          if (shouldSplit && onEnterSplit) {
-            onEnterSplit([dragged, t.id]);
-            return;
-          }
-
-          // Default: reorder tabs.
+          // Reorder: move the dragged tab to just before the drop target.
           const order = tabs.map((x) => x.id).filter((id) => id !== dragged);
           const at = order.indexOf(t.id);
           order.splice(at, 0, dragged);

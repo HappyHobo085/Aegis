@@ -175,14 +175,6 @@ export const IPC = {
   proxyClear: 'proxy.clear',
   proxyTestConnection: 'proxy.testConnection',
   evtProxyState: 'proxy.state',
-  // split view (chrome -> main)
-  splitEnter: 'split.enter',
-  splitExit: 'split.exit',
-  splitResize: 'split.resize',
-  splitFocus: 'split.focus',
-  splitGetState: 'split.getState',
-  // event (main -> chrome): current split layout (null = no split)
-  evtSplitState: 'split.state',
   // workspaces (chrome -> main)
   workspaceList: 'workspace.list',
   workspaceCreate: 'workspace.create',
@@ -325,20 +317,6 @@ export interface ZoomState {
 export interface FingerprintState {
   level: string; // 'off' | 'standard' | 'strict'
   allowlistedHosts: string[];
-}
-
-/** A single pane in a split-view layout. */
-export interface SplitPane {
-  tabId: number;
-  width: number;
-  height: number;
-  x: number;
-  y: number;
-}
-/** The full split-view layout. `null` means split mode is not active. */
-export interface SplitLayout {
-  panes: SplitPane[];
-  focusedPaneId: number;
 }
 
 /** Proxy configuration sent to `proxy.setConfig`. */
@@ -828,26 +806,6 @@ export interface AegisApi {
     remove(id: string): Promise<WorkspaceState>;
     reorder(ids: string[]): Promise<WorkspaceState>;
     onState(cb: (workspaces: WorkspaceState) => void): () => void;
-  };
-  split: {
-    /**
-     * Fetch the current split layout, or null when split mode is inactive.
-     *
-     * A fetch seam, not a convenience: `split.state` is only emitted from the
-     * mutation handlers, so a renderer that remounts would otherwise wait
-     * forever for an event that never comes.
-     */
-    getState(): Promise<SplitLayout | null>;
-    /** Enter split-view mode with the given tab ids (2-4 panes). */
-    enter(tabIds: number[]): Promise<void>;
-    /** Exit split-view mode, returning to single-pane. */
-    exit(): Promise<void>;
-    /** Resize a specific pane. */
-    resize(paneId: number, width: number, height: number): Promise<void>;
-    /** Focus a specific pane. */
-    focus(paneId: number): Promise<void>;
-    /** Subscribe to split-layout state changes. null = no split active. */
-    onState(cb: (layout: SplitLayout | null) => void): () => void;
   };
   /** Form detection for autofill triggering */
   form: {

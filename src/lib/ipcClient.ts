@@ -35,7 +35,6 @@ import {
   FingerprintState,
   ProxyConfig,
   ProxyState,
-  SplitLayout,
   FormLoginDetectedResult,
   FormState,
   FormWillSubmit,
@@ -50,7 +49,7 @@ import { clampZoom } from './zoom';
  * A renderer→core call that the Rust side rejected.
  *
  * The core returns `Err(String)` for a lot of *ordinary* conditions — the vault being
- * locked, `split.enter` needing 2–4 tab ids, an unreachable proxy. Those rejections used
+ * locked, an unreachable proxy. Those rejections used
  * to reach call sites as bare strings from the ~58 `void aegis.*` fire-and-forget
  * invocations with nothing catching them, so the only thing that ever handled a rejected
  * IPC was the `ErrorBoundary` in `main.tsx` — which replaces the ENTIRE chrome with
@@ -798,16 +797,6 @@ export const aegis: AegisApi = {
     reorder: (ids: string[]) => dedupedCall<WorkspaceState>(IPC.workspaceReorder, { ids }),
     onState: (cb: (workspaces: WorkspaceState) => void) =>
       on<WorkspaceState>(IPC.evtWorkspaceState, cb),
-  },
-  split: {
-    getState: () => dedupedCall<SplitLayout | null>(IPC.splitGetState, undefined),
-    enter: (tabIds: number[]) => dedupedCall<void>(IPC.splitEnter, tabIds),
-    exit: () => dedupedCall<void>(IPC.splitExit, undefined),
-    resize: (paneId: number, width: number, height: number) =>
-      dedupedCall<void>(IPC.splitResize, { paneId, width, height }),
-    focus: (paneId: number) => dedupedCall<void>(IPC.splitFocus, { paneId }),
-    onState: (cb: (layout: SplitLayout | null) => void) =>
-      on<SplitLayout | null>(IPC.evtSplitState, cb),
   },
 };
 

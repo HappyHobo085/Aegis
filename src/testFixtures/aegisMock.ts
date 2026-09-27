@@ -360,14 +360,6 @@ export function aegisMockModule() {
           onState: vi.fn().mockReturnValue(() => {}),
         };
       })(),
-      split: {
-        getState: vi.fn().mockResolvedValue(null),
-        enter: vi.fn().mockResolvedValue(undefined),
-        exit: vi.fn().mockResolvedValue(undefined),
-        resize: vi.fn().mockResolvedValue(undefined),
-        focus: vi.fn().mockResolvedValue(undefined),
-        onState: vi.fn().mockReturnValue(() => {}),
-      },
       tabs: {
         list: vi.fn().mockResolvedValue({
           tabs: [

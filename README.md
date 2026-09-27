@@ -56,7 +56,7 @@ destinations, so `window.open()` ad shells do not accumulate as background tabs.
 
 ### Browser basics
 
-Tab strip with **workspaces**, **split view**, find-in-page, a command palette, downloads,
+Tab strip with **workspaces**, find-in-page, a command palette, downloads,
 bookmarks/favourites, history, an omnibox with site-info popover, per-tab private mode,
 and a configurable ad-block shield with a live blocked-count badge.
 

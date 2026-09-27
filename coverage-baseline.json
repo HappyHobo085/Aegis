@@ -3,24 +3,24 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 4939,
-      "covered": 4280,
-      "pct": 86.65
+      "total": 4758,
+      "covered": 4157,
+      "pct": 87.36
     },
     "statements": {
-      "total": 6680,
-      "covered": 5674,
-      "pct": 84.94
+      "total": 6434,
+      "covered": 5507,
+      "pct": 85.59
     },
     "functions": {
-      "total": 1385,
-      "covered": 1142,
-      "pct": 82.45
+      "total": 1343,
+      "covered": 1112,
+      "pct": 82.79
     },
     "branches": {
-      "total": 4326,
-      "covered": 3331,
-      "pct": 76.99
+      "total": 4158,
+      "covered": 3251,
+      "pct": 78.18
     }
   },
   "files": {
@@ -199,24 +199,24 @@
     },
     "src/App.tsx": {
       "lines": {
-        "total": 341,
-        "covered": 194,
-        "pct": 56.89
+        "total": 298,
+        "covered": 180,
+        "pct": 60.4
       },
       "statements": {
-        "total": 400,
-        "covered": 213,
-        "pct": 53.25
+        "total": 347,
+        "covered": 195,
+        "pct": 56.19
       },
       "functions": {
-        "total": 137,
-        "covered": 58,
-        "pct": 42.33
+        "total": 123,
+        "covered": 53,
+        "pct": 43.08
       },
       "branches": {
-        "total": 199,
-        "covered": 84,
-        "pct": 42.21
+        "total": 153,
+        "covered": 73,
+        "pct": 47.71
       }
     },
     "src/components/AdblockShield.tsx": {
@@ -1011,50 +1011,6 @@
         "pct": 100
       }
     },
-    "src/components/SplitIndicator.tsx": {
-      "lines": {
-        "total": 13,
-        "covered": 13,
-        "pct": 100
-      },
-      "statements": {
-        "total": 32,
-        "covered": 27,
-        "pct": 84.37
-      },
-      "functions": {
-        "total": 2,
-        "covered": 2,
-        "pct": 100
-      },
-      "branches": {
-        "total": 23,
-        "covered": 16,
-        "pct": 69.56
-      }
-    },
-    "src/components/SplitResizeHandle.tsx": {
-      "lines": {
-        "total": 25,
-        "covered": 24,
-        "pct": 96
-      },
-      "statements": {
-        "total": 32,
-        "covered": 29,
-        "pct": 90.62
-      },
-      "functions": {
-        "total": 4,
-        "covered": 4,
-        "pct": 100
-      },
-      "branches": {
-        "total": 23,
-        "covered": 12,
-        "pct": 52.17
-      }
-    },
     "src/components/SyncSettingsTab.tsx": {
       "lines": {
         "total": 147,
@@ -1079,24 +1035,24 @@
     },
     "src/components/TabStrip.tsx": {
       "lines": {
-        "total": 151,
-        "covered": 70,
-        "pct": 46.35
+        "total": 113,
+        "covered": 60,
+        "pct": 53.09
       },
       "statements": {
-        "total": 168,
-        "covered": 75,
-        "pct": 44.64
+        "total": 124,
+        "covered": 64,
+        "pct": 51.61
       },
       "functions": {
-        "total": 30,
-        "covered": 15,
+        "total": 24,
+        "covered": 12,
         "pct": 50
       },
       "branches": {
-        "total": 127,
-        "covered": 52,
-        "pct": 40.94
+        "total": 92,
+        "covered": 48,
+        "pct": 52.17
       }
     },
     "src/components/TabsTab.tsx": {
@@ -1189,14 +1145,14 @@
     },
     "src/components/Toolbar.tsx": {
       "lines": {
-        "total": 41,
-        "covered": 39,
-        "pct": 95.12
+        "total": 40,
+        "covered": 38,
+        "pct": 95
       },
       "statements": {
-        "total": 83,
-        "covered": 65,
-        "pct": 78.31
+        "total": 80,
+        "covered": 62,
+        "pct": 77.5
       },
       "functions": {
         "total": 7,
@@ -1204,9 +1160,9 @@
         "pct": 71.42
       },
       "branches": {
-        "total": 90,
-        "covered": 53,
-        "pct": 58.88
+        "total": 87,
+        "covered": 50,
+        "pct": 57.47
       }
     },
     "src/components/UpdateIndicator.tsx": {
@@ -2001,28 +1957,6 @@
         "pct": 78.57
       }
     },
-    "src/hooks/useSplit.ts": {
-      "lines": {
-        "total": 21,
-        "covered": 21,
-        "pct": 100
-      },
-      "statements": {
-        "total": 28,
-        "covered": 28,
-        "pct": 100
-      },
-      "functions": {
-        "total": 5,
-        "covered": 5,
-        "pct": 100
-      },
-      "branches": {
-        "total": 6,
-        "covered": 6,
-        "pct": 100
-      }
-    },
     "src/hooks/useSubscriptions.ts": {
       "lines": {
         "total": 27,
@@ -2223,24 +2157,24 @@
     },
     "src/lib/contentLayout.ts": {
       "lines": {
-        "total": 35,
-        "covered": 35,
+        "total": 1,
+        "covered": 1,
         "pct": 100
       },
       "statements": {
-        "total": 49,
-        "covered": 46,
-        "pct": 93.87
+        "total": 1,
+        "covered": 1,
+        "pct": 100
       },
       "functions": {
-        "total": 6,
-        "covered": 6,
+        "total": 1,
+        "covered": 1,
         "pct": 100
       },
       "branches": {
-        "total": 36,
-        "covered": 32,
-        "pct": 88.88
+        "total": 4,
+        "covered": 4,
+        "pct": 100
       }
     },
     "src/lib/format.ts": {
@@ -2289,19 +2223,19 @@
     },
     "src/lib/ipcClient.ts": {
       "lines": {
-        "total": 302,
-        "covered": 276,
-        "pct": 91.39
+        "total": 296,
+        "covered": 270,
+        "pct": 91.21
       },
       "statements": {
-        "total": 315,
-        "covered": 286,
-        "pct": 90.79
+        "total": 309,
+        "covered": 280,
+        "pct": 90.61
       },
       "functions": {
-        "total": 179,
-        "covered": 172,
-        "pct": 96.08
+        "total": 173,
+        "covered": 166,
+        "pct": 95.95
       },
       "branches": {
         "total": 96,

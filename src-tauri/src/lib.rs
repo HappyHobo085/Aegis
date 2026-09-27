@@ -96,7 +96,6 @@ mod sync_keystore;
 // The merge seam F2b consumes: SYNCABLE stores + read_all/merge_into (HLC last-writer-wins).
 mod sync_stores;
 // The sync ENGINE (F2b): enable/disable, device pairing, the encrypted pull/merge/push loop.
-mod split;
 mod sync;
 // The vault's half of sync: publishes/adopts the account's shared Argon2 salt (so records are
 // portable between paired devices at all) and merges records that authenticate under the local
@@ -242,9 +241,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         return result;
     }
     if let Some(result) = proxy::dispatch(&app, &channel, &payload) {
-        return result;
-    }
-    if let Some(result) = split::dispatch(&app, &channel, &payload) {
         return result;
     }
     match channel.as_str() {
@@ -534,7 +530,6 @@ pub fn run() {
         .manage(vault::VaultState::default())
         .manage(farble::FarbleState::default())
         .manage(proxy::ProxyState::default())
-        .manage(split::SplitState::default())
         .manage(settings::SettingsCache::default())
         .manage(history::HistoryStore::default())
         .manage(downloads::DownloadsStore::default());

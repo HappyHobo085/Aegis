@@ -472,17 +472,21 @@ Proven: adding `nav.bounce` to **both** the catalog and a Rust `match` arm leave
 test green (the channel has a producer) and turns the contract test red. Neither subsumes
 the other.
 
-### `it.fails` is a used convention here
+### `it.fails` — a convention, currently with no users
 
 A test written as `it.fails('…')` **passes while the bug exists and goes red the moment
 someone fixes it** — that is the point, and it is why such a test must assert _behaviour_
-(`toBeCloseTo(…, 9)`), never float bits or an intermediate value. `contentLayout.test.ts`
-carries 3 of them for a **real, unfixed bug**: `App.tsx:578` passes a **fraction** into
-`clampResizeDelta`, which compares it against **pixel** `MIN_PANE_SIZE` / max, so a split
-with a pane under ~17% either does nothing (the handle silently dies) or slams to 0.05/0.95
-on a 10px drag. Note the two bounds are also mutually unsatisfiable as written (200px min +
-80% max), so the eventual fix must derive max from min. Fixing it is a product decision,
-not a one-liner — when you do, the 3 `it.fails` tests are the spec.
+(`toBeCloseTo(…, 9)`), never float bits or an intermediate value.
+
+It had exactly one user: the split-view resize clamp. `App.tsx` passed a **fraction** into
+`clampResizeDelta`, which compared it against **pixel** bounds, so a split with a pane under
+~17% either did nothing (the handle silently died) or slammed to 0.05/0.95 on a 10px drag.
+The three `it.fails` tests made the bug _impossible to fix silently_ — when a coherent fix
+was applied experimentally, exactly those three went red and the other 19 stayed green.
+**Split view was then removed outright at the repo owner's direction rather than fixed**, so
+the convention has no users today. The technique is recorded because it is what made the
+defect visible and safe to delete: a 3-test measured matrix plus a fix-proof beats a prose
+claim that something is broken.
 
 ### Coverage of `src/`
 
@@ -491,6 +495,6 @@ not a one-liner — when you do, the 3 `it.fails` tests are the spec.
 `src/main.tsx` (the `createRoot` entry point), `src/vite-env.d.ts`, and
 `src/testFixtures/**` (a mock). The measured totals, the ratchet and the full gap
 decomposition live in the **root** `AGENTS.md`; they are not restated here. Short version:
-`src/` is at 87.2% statements (815/6385 uncovered) and the debt is almost entirely
-`src/components/` (520) — the hooks and libs are in the low single digits of uncovered
-statements.
+`src/` is at 88.0% statements (736/6139 uncovered) and the debt is concentrated in
+`src/components/` (479) and the `App.tsx` root (152) — the hooks sit at 42 uncovered
+statements out of 1372, and `shared/` is at 0.

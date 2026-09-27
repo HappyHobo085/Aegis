@@ -21,9 +21,10 @@
 // Assertions use `toStrictEqual` on the captured invoke arguments, NOT
 // `toHaveBeenCalledWith`. The latter has `toEqual` semantics, under which
 // `{ opts: undefined }` and `{}` compare EQUAL — and `history.list()` genuinely sends
-// `{ opts: undefined }`, `aegis.zoom.set` genuinely sends a 5-key object, and
-// `split.enter` genuinely sends a BARE ARRAY as its payload. Those exact wire shapes are
-// the contract; a loose comparison would let them drift silently.
+// `{ opts: undefined }` and `aegis.zoom.set` genuinely sends a 5-key object. Those exact
+// wire shapes are the contract; a loose comparison would let them drift silently.
+// (A BARE ARRAY payload used to be the third case, `split.enter`; that channel is gone, so
+// no request channel sends a non-object payload any more.)
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 vi.mock('@tauri-apps/api/core', () => ({
@@ -804,34 +805,6 @@ const REQUESTS: ContractRow[] = [
     channel: IPC.workspaceReorder,
     payload: { ids: ['ws-2', 'ws-1'] },
   },
-
-  // ---- split (5) ----
-  {
-    name: 'split.getState',
-    run: () => aegis.split.getState(),
-    channel: IPC.splitGetState,
-    payload: {},
-  },
-  // A BARE ARRAY as the payload — every other method sends an object. Pin it.
-  {
-    name: 'split.enter (array payload)',
-    run: () => aegis.split.enter([1, 2]),
-    channel: IPC.splitEnter,
-    payload: [1, 2],
-  },
-  { name: 'split.exit', run: () => aegis.split.exit(), channel: IPC.splitExit, payload: {} },
-  {
-    name: 'split.resize',
-    run: () => aegis.split.resize(1, 640, 480),
-    channel: IPC.splitResize,
-    payload: { paneId: 1, width: 640, height: 480 },
-  },
-  {
-    name: 'split.focus',
-    run: () => aegis.split.focus(2),
-    channel: IPC.splitFocus,
-    payload: { paneId: 2 },
-  },
 ];
 
 /**
@@ -880,9 +853,10 @@ describe('the renderer→core channel contract (desktop path)', () => {
   });
 
   it('the table is big enough to be the contract, not a sample', () => {
-    // Guards against someone "simplifying" the table down to the five channels named in
-    // the plan and quietly un-guarding the rest.
-    expect(REQUESTS.length).toBeGreaterThanOrEqual(115);
+    // Guards against someone "simplifying" the table down to the handful of channels
+    // named in the plan and quietly un-guarding the rest. Lowered 115 -> 110 when the
+    // five `split.*` request channels were removed from the catalog.
+    expect(REQUESTS.length).toBeGreaterThanOrEqual(110);
     expect(new Set(REQUESTS.map((r) => r.name)).size).toBe(REQUESTS.length);
   });
 });
@@ -1004,7 +978,6 @@ const EVENTS: { name: string; run: () => () => void; event: string }[] = [
     run: () => aegis.workspace.onState(NOOP),
     event: IPC.evtWorkspaceState,
   },
-  { name: 'split.onState', run: () => aegis.split.onState(NOOP), event: IPC.evtSplitState },
   {
     name: 'form.onLoginFormDetected',
     run: () => aegis.form.onLoginFormDetected(NOOP),

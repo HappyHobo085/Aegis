@@ -70,7 +70,7 @@ test that clicks/types the real UI, and/or a unit test in the owning Rust module
 ### Test coverage — a ratchet, not a 100% claim
 
 `@vitest/coverage-v8` measures **every** non-excluded source file (`src/**`, `shared/**`,
-`scripts/**` — 116 files) on every run, and the measured numbers are committed in
+`scripts/**` — 113 files) on every run, and the measured numbers are committed in
 `coverage-baseline.json`. CI enforces them as a **ratchet that may only go up**
 (`scripts/coverage-ratchet.mjs`). It fails if any metric drops below the baseline, if the
 baseline was _lowered_ in the same commit, or if a file the baseline names is missing from
@@ -84,19 +84,19 @@ npm run coverage:ratchet   # the CI gate
 
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
 here is either lying in CI or about to quietly relax the number. The measured gap, as of
-2026-09-27 (`119 test files / 1570 passing + 3 it.fails`, working tree includes the in-flight
+2026-09-27 (`116 test files / 1507 tests`, working tree includes the in-flight
 `src/autopilot/` purge, so **regenerate the baseline once that lands**):
 
-| Metric     | Measured               | Gap  |
-| ---------- | ---------------------- | ---- |
-| lines      | 4280/4939 = **86.65%** | 659  |
-| statements | 5674/6680 = **84.94%** | 1006 |
-| functions  | 1142/1385 = **82.45%** | 243  |
-| branches   | 3331/4326 = **76.99%** | 995  |
+| Metric     | Measured               | Gap |
+| ---------- | ---------------------- | --- |
+| lines      | 4157/4758 = **87.36%** | 601 |
+| statements | 5507/6434 = **85.59%** | 927 |
+| functions  | 1112/1343 = **82.79%** | 231 |
+| branches   | 3251/4158 = **78.18%** | 907 |
 
-41 of the 116 files are at 100% statements. The 1006 uncovered statements decompose as:
+41 of the 113 files are at 100% statements. The 927 uncovered statements decompose as:
 
-- **186 statements in 5 CLI scripts that v8 structurally cannot see** — `check-bundle-size`,
+- **191 statements in 5 CLI scripts that v8 structurally cannot see** — `check-bundle-size`,
   `check-npm-audit`, `check-android-versioncode`, `coverage-baseline`, `coverage-ratchet`.
   v8 only instruments the test worker's own V8 runtime, so a **spawned subprocess earns zero
   coverage credit**. `scripts/cliGates.test.mjs` really does cover the first three (30
@@ -105,13 +105,18 @@ here is either lying in CI or about to quietly relax the number. The measured ga
 - **553 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (49, the
   `createRoot` entry point), `src/testFixtures/aegisMock.ts` (503, a mock), and
   `src/vite-env.d.ts` (1). All three are entry-point-or-mock by design.
-- **820 statements of real, measurable test debt** (490 lines / 920 branches), concentrated
-  in just 12 files that hold 670 of them: `App.tsx` 187, `TabStrip.tsx` 93,
-  `mobile/MobileApp.tsx` 84, `SettingsModal.tsx` 34, `Sidebar.tsx` 28, and the `scripts/`
-  tail. By directory: `src/components/` 520/3769 uncovered, `src/components/mobile/`
-  158/542, `src/hooks/` only 42/1372, `src/lib/` 66/844, `shared/` 0/4.
+- **736 statements of real, measurable test debt**, concentrated in a handful of files:
+  `App.tsx` 152, `mobile/MobileApp.tsx` 84, `TabStrip.tsx` 60, `SettingsModal.tsx` 34,
+  `Sidebar.tsx` 28. By directory: `src/components/` 479, `src/lib/` 63, `src/hooks/` only
+  42, `src/` (the App root) 152, `shared/` **0**.
 
-**Branches (76.99%, 995 uncovered) is the weakest metric and where the next effort belongs.**
+**A percentage can rise while the codebase gets worse**, so never read the ratio alone.
+Removing split view deleted three fully-covered source files: the percentage went **up** on
+all four metrics while the absolute count of covered statements fell from 5674 to 5507.
+The ratchet guards the ratio (it is what CI can cheaply compare); the absolute totals in
+the table above are the honest companion number.
+
+**Branches (78.18%, 907 uncovered) is the weakest metric and where the next effort belongs.**
 The Rust side has its own measured numbers and its own structural ceiling — see the
 coverage section of `src-tauri/AGENTS.md`.
 

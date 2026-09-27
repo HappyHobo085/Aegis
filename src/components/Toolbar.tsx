@@ -40,8 +40,6 @@ export interface ToolbarProps {
   downloads?: ReactNode;
   /** Optional toolbar slot for the zoom indicator (between gear and menu). */
   zoom?: ReactNode;
-  /** Optional toolbar slot for the split-view indicator. */
-  splitIndicator?: ReactNode;
   /** Optional right-side toolbar slot for the sidebar toggle (restyle). */
   menu?: ReactNode;
   /** When true (narrow window), the secondary slots fold into an overflow menu so
@@ -111,7 +109,6 @@ export function Toolbar({
   fullscreen,
   downloads,
   zoom,
-  splitIndicator,
   menu,
   isNarrow = false,
   isPrivate = false,
@@ -123,7 +120,6 @@ export function Toolbar({
     <>
       <span className="toolbar__cluster toolbar__cluster--page">{bookmark}</span>
       <span className="toolbar__cluster toolbar__cluster--view">{zoom}</span>
-      <span className="toolbar__cluster toolbar__cluster--system">{splitIndicator}</span>
       <span className="toolbar__cluster toolbar__cluster--system">{downloads}</span>
       <span className="toolbar__cluster toolbar__cluster--system">{fullscreen}</span>
       <span className="toolbar__cluster toolbar__cluster--system">{gear}</span>
