@@ -198,8 +198,26 @@ jobs:
         run: |
           rustup component add llvm-tools-preview
           cargo install cargo-llvm-cov --locked
-          cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib --json > "$RUNNER_TEMP/llvmcov.json"
-          node scripts/rust-coverage-ratchet.mjs "$RUNNER_TEMP/llvmcov.json"
+          # The SAME `dbus-run-session` + keyring wrapper the `cargo test` step uses.
+          # It has to be repeated because each `run:` is a fresh shell, so
+          # `DBUS_SESSION_BUS_ADDRESS` cannot be inherited from a previous step.
+          #
+          # This is not belt-and-braces, it is correctness. `cargo llvm-cov` is a
+          # SEPARATE process from `cargo test`, and the three keychain round-trip tests
+          # in `sync_keystore.rs` gate on `keyring_available()` (sync_keystore.rs:430),
+          # which does a real keyring WRITE. Without a D-Bus session they early-return:
+          # passing, covering nothing. Measured on run 36325245069, the unwrapped step
+          # reported 11038/14750 covered lines against a 11175/14750 baseline — the
+          # difference is exactly `sync.rs` 574->498 plus `sync_keystore.rs` 289->228, so
+          # the baseline was measuring a DIFFERENT PROGRAM than the one CI tests.
+          # A committed threshold that depends on whether a keyring happens to be
+          # present is not a threshold; wrapping the coverage run makes it measure the
+          # same program `cargo test` does.
+          dbus-run-session -- bash -c '
+            eval "$(gnome-keyring-daemon --start --components=secrets)"
+            cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib --json > "'"$RUNNER_TEMP"'/llvmcov.json"
+            node scripts/rust-coverage-ratchet.mjs "'"$RUNNER_TEMP"'/llvmcov.json"
+          '
       - name: cargo audit (BLOCKING — crypto/keyring/TLS surface)
         if: ${{ !cancelled() }}
         # Run from src-tauri/, NOT the repo root: cargo-audit resolves its config as

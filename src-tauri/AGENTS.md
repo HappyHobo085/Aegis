@@ -715,16 +715,34 @@ bus), `adblock_webkit.rs` 21.3%, `nav.rs` 23.8%, `tabs.rs` 41.7%,
 TypeScript side: deleting 0%-covered code moves the ratio and not one test.
 The absolute `covered` column above is the honest companion number.
 
-### The keyring asymmetry (why CI provisions a keyring)
+### The keyring asymmetry (why CI provisions a keyring — TWICE)
 
-Four tests in `sync_keystore.rs` round-trip a real OS keychain via
-`keyring_available()` (`sync_keystore.rs:430`); with no keyring they
-**early-return**, so they pass while covering nothing. A dev box with a desktop
-session has one and a GitHub runner does not — which means a threshold measured
-locally can be unsatisfiable in CI. The `rust` job therefore starts
-`dbus-run-session` with `gnome-keyring-daemon` before `cargo test`, so CI and
-local measure the same thing. **Do not set a Rust coverage baseline from a box
-with a desktop session that CI cannot reproduce.**
+Three tests in `sync_keystore.rs` round-trip a real OS keychain via
+`keyring_available()` (`sync_keystore.rs:430`), which does a real keyring **write**; with
+no keyring they **early-return**, so they pass while covering nothing. A dev box with a
+desktop session has one and a bare GitHub runner does not.
+
+**Both cargo invocations in the `rust` job must therefore be wrapped, not just one.**
+`cargo test` and `cargo llvm-cov` are different processes, and each `run:` step in Actions
+is a fresh shell, so `DBUS_SESSION_BUS_ADDRESS` cannot be inherited — the
+`dbus-run-session` + `gnome-keyring-daemon` wrapper genuinely has to appear in both
+steps. I wrapped only `cargo test` at first, and the coverage step then measured a
+**different program than the one CI tests**: 11038/14750 covered lines against a
+11175/14750 baseline, the loss being exactly `sync.rs` 574→498 plus `sync_keystore.rs`
+289→228. Confirmed by reproducing the CI number locally — same toolchain, same
+dependencies, `DBUS_SESSION_BUS_ADDRESS` pointed at nothing — so it is an
+**environment** difference, not a code difference.
+
+Two rules that cost the same investigation:
+
+- **A coverage baseline must be measured under the environment the tests run in.** A
+  threshold that depends on whether a keyring, a D-Bus session, or a network is present
+  is not a threshold. Do not set a Rust coverage baseline from a box that CI cannot
+  reproduce.
+- **An unchanged denominator with a falling numerator means code stopped EXECUTING**, not
+  that it was deleted. `rust-coverage-ratchet.mjs` now prints per-file covered-line deltas
+  on failure for exactly this reason, so the file is named in one run instead of
+  reconstructed by re-running the toolchain locally.
 
 ## Android (`gen/android/`)
 

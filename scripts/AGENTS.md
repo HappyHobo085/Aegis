@@ -119,6 +119,16 @@ PRs are the currency mechanism for the crypto/keyring/TLS surface.
   hatch for the lowering check. Each ratchet also accepts a path to a saved
   `llvmcov.json` (or `coverage-summary.json`) so a CI failure can be reproduced
   from an artifact without re-instrumenting.
+  `rust-coverage-ratchet.mjs` additionally prints **per-file covered-line deltas**
+  on failure (via `perFileDeltas` in `rustCoverageCheck.mjs`). A total cannot be
+  diagnosed on its own, and the specific case it exists for: an **unchanged
+  denominator with a falling numerator means code stopped EXECUTING** — the three
+  keychain round-trips in `sync_keystore.rs` early-return without a keyring, so a
+  `cargo llvm-cov` run outside CI's `dbus-run-session` measured 11038/14750 against
+  a 11175/14750 baseline. Naming `sync.rs` and `sync_keystore.rs` directly is the
+  difference between a one-run diagnosis and re-running the toolchain locally to
+  reconstruct it. `totalDelta` separates "the file shrank" from "the file's code
+  stopped running".
 
 ## Allowlist
 

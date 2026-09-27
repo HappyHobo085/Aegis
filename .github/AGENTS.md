@@ -11,7 +11,7 @@ GitHub Actions workflows and Dependabot config for Aegis.
     `tsconfig.build.json`, which excludes test files + `src/testFixtures` to skip the
     known test-only type noise) → `npm run lint` (ESLint flat config, errors fail /
     warnings are the migration backlog) → `npm run format:check` (Prettier) →
-    `npm run test:coverage` (vitest node + jsdom, 1556 tests, **with** the v8 report)
+    `npm run test:coverage` (vitest node + jsdom, 1566 tests, **with** the v8 report)
     → `npm run coverage:ratchet` → `node scripts/check-npm-audit.mjs`. The `--coverage`
     flag rides on the _test_ step rather than buying a second `vitest run`; the ratchet
     is its own step so a coverage regression is a distinct log line from a test failure
@@ -39,6 +39,18 @@ GitHub Actions workflows and Dependabot config for Aegis.
       `-C instrument-coverage` is a codegen flag, so the instrumented artifacts cannot
       be reused from the plain test build. That costs minutes, and it is why the step is
       last. `--lib` only — `main.rs` calls `run()` and launching the app is not a test.
+      **It is ALSO wrapped in its own `dbus-run-session` + keyring, deliberately
+      duplicated from the `cargo test` step**, because the two are different processes
+      and the three keychain round-trips in `sync_keystore.rs` gate on
+      `keyring_available()` (`sync_keystore.rs:430`), which does a real keyring _write_:
+      with no D-Bus session they early-return — passing while covering nothing. Measured
+      on run 36325245069, the unwrapped step reported 11038/14750 covered lines against a
+      11175/14750 baseline, and the loss was exactly `sync.rs` 574→498 plus
+      `sync_keystore.rs` 289→228. Each `run:` is a fresh shell, so
+      `DBUS_SESSION_BUS_ADDRESS` cannot be inherited and the wrapper genuinely has to
+      appear twice. **A committed threshold that depends on whether a keyring happens to
+      be present is not a threshold** — and the ratchet now prints per-file deltas on
+      failure so that class of problem is named in one run instead of reconstructed.
       The committed exclusion list lives in `scripts/rustCoverageCheck.mjs` and prints
       each excluded file with its real numbers on every run. It gates **three**
       metrics, not four: llvm branch coverage needs `-Z coverage-options=branch`, i.e.

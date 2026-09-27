@@ -293,4 +293,67 @@ export function buildRustBaseline(summary, { toolchain = null, exclusions = EXCL
   };
 }
 
+/**
+ * Per-file covered-line deltas between a baseline and a current measurement, worst first.
+ *
+ * A total cannot be diagnosed on its own. On CI run 36325245069 the Rust ratchet reported
+ * 11038/14750 covered lines against a 11175/14750 baseline; the cause was two files whose
+ * tests had silently stopped executing, and finding them meant running the toolchain twice
+ * locally to reproduce the CI environment. Naming the file is the whole point.
+ *
+ * `totalDelta` distinguishes the two ways a file can move: `delta` alone is code that
+ * stopped EXECUTING (an environment-gated test skipped), whereas a non-zero `totalDelta`
+ * means the file itself grew or shrank. Only files present in BOTH summaries are reported;
+ * a file that appeared or vanished is `compareToBaseline`'s `newFiles`/`removedFiles`, and
+ * reporting it here too would double-count it as a per-file loss.
+ *
+ * Both arguments are always a well-formed summary (`llvmToSummary` /
+ * `buildRustBaseline`), so there are deliberately no `?.` / `??` guards on `files` here:
+ * they cannot fire, and an unreachable guard is just an uncovered branch.
+ *
+ * @returns {{file: string, delta: number, totalDelta: number}[]} worst (most negative) first
+ */
+export function perFileDeltas(baseline, current) {
+  const out = [];
+  for (const [file, base] of Object.entries(baseline.files)) {
+    const now = current.files[file];
+    if (!now) continue;
+    const delta = now.lines.covered - base.lines.covered;
+    const totalDelta = now.lines.total - base.lines.total;
+    if (delta !== 0 || totalDelta !== 0) out.push({ file, delta, totalDelta });
+  }
+  // Ties broken by name so the output is stable run to run.
+  return out.sort((a, b) => a.delta - b.delta || a.file.localeCompare(b.file));
+}
+
+/**
+ * Render `perFileDeltas` output as the ratchet's report lines.
+ *
+ * This lives here, not in the CLI, on purpose. `rust-coverage-ratchet.mjs` is a
+ * top-level script: no test ever imports it, so v8 scores it 0% and every line
+ * added to it dilutes the ratio it is supposed to be reporting. String formatting
+ * is pure logic, so it belongs in the tested module — the same split the repo
+ * already uses for `auditCheck.mjs` / `check-npm-audit.mjs`.
+ */
+export function formatDeltas(deltas, { limit = 15 } = {}) {
+  if (!deltas.length) return [];
+  const lines = ['per-file covered-line deltas (negative = lost coverage, which file to look at):'];
+  for (const d of deltas.slice(0, limit)) {
+    lines.push(
+      `  ${d.delta === 0 ? ' ' : '-'} ${d.file}: ${d.delta} lines` +
+        (d.totalDelta ? ` (and ${d.totalDelta} total)` : ''),
+    );
+  }
+  if (deltas.length > limit) lines.push(`  … and ${deltas.length - limit} more`);
+  lines.push(
+    '',
+    'An UNCHANGED total with a negative delta means code stopped EXECUTING, not that',
+    'it was deleted. Check for environment-gated tests before touching the baseline —',
+    'a threshold that depends on whether a keyring/D-Bus/network is present is not a',
+    'threshold. (That is exactly how the 2026-09-27 `cargo llvm-cov` failure happened:',
+    'the coverage step ran outside the `dbus-run-session` the `cargo test` step used.)',
+  );
+  return lines;
+}
+
 export { METRICS };

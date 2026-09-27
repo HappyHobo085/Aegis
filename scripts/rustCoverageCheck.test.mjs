@@ -19,7 +19,9 @@ import {
   buildRustBaseline,
   hostPlatform,
   isExcluded,
+  formatDeltas,
   llvmToSummary,
+  perFileDeltas,
 } from './rustCoverageCheck.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -413,5 +415,83 @@ describe('the committed baseline is a real measurement of this repo', () => {
       const sum = Object.values(committed.files).reduce((n, f) => n + f[m].covered, 0);
       expect(committed.total[m].covered).toBeGreaterThanOrEqual(sum);
     }
+  });
+});
+
+describe('perFileDeltas', () => {
+  const mk = (files) => ({ total: {}, files });
+  const f = (covered, total) => ({ lines: { covered, total, pct: 0 } });
+
+  it('reports nothing when every file is unchanged', () => {
+    const s = mk({ 'a.rs': f(10, 20), 'b.rs': f(5, 5) });
+    expect(perFileDeltas(s, s)).toEqual([]);
+  });
+
+  it('names the file whose covered count fell, worst first', () => {
+    const base = mk({ 'a.rs': f(10, 20), 'b.rs': f(5, 5), 'c.rs': f(1, 1) });
+    const now = mk({ 'a.rs': f(10, 20), 'b.rs': f(0, 5), 'c.rs': f(0, 1) });
+    expect(perFileDeltas(base, now)).toEqual([
+      { file: 'b.rs', delta: -5, totalDelta: 0 },
+      { file: 'c.rs', delta: -1, totalDelta: 0 },
+    ]);
+  });
+
+  it('separates code that stopped EXECUTING from a file that CHANGED SIZE', () => {
+    // This is the distinction that made the CI failure diagnosable: the totals were
+    // identical and only the covered counts moved, which meant skipped tests rather
+    // than deleted code.
+    const base = mk({ 'a.rs': f(10, 20) });
+    const now = mk({ 'a.rs': f(10, 18) });
+    expect(perFileDeltas(base, now)).toEqual([{ file: 'a.rs', delta: 0, totalDelta: -2 }]);
+  });
+
+  it('ignores a file present in only one side (that is newFiles/removedFiles)', () => {
+    const base = mk({ 'a.rs': f(10, 20) });
+    const now = mk({ 'a.rs': f(10, 20), 'new.rs': f(0, 7) });
+    expect(perFileDeltas(base, now)).toEqual([]);
+  });
+
+  it('breaks ties by name so the output is stable run to run', () => {
+    const base = mk({ 'z.rs': f(5, 5), 'a.rs': f(5, 5) });
+    const now = mk({ 'z.rs': f(4, 5), 'a.rs': f(4, 5) });
+    expect(perFileDeltas(base, now).map((d) => d.file)).toEqual(['a.rs', 'z.rs']);
+  });
+
+  it('reports improvements as well as losses (a positive delta is still a change)', () => {
+    const base = mk({ 'a.rs': f(1, 5) });
+    const now = mk({ 'a.rs': f(4, 5) });
+    expect(perFileDeltas(base, now)).toEqual([{ file: 'a.rs', delta: 3, totalDelta: 0 }]);
+  });
+});
+
+describe('formatDeltas', () => {
+  it('returns nothing to say when there are no deltas', () => {
+    expect(formatDeltas([])).toEqual([]);
+  });
+
+  it('marks a loss with a dash and a pure size change with a space', () => {
+    const lines = formatDeltas([
+      { file: 'a.rs', delta: -5, totalDelta: 0 },
+      { file: 'b.rs', delta: 0, totalDelta: -2 },
+    ]);
+    expect(lines[0]).toMatch(/per-file covered-line deltas/);
+    expect(lines[1]).toBe('  - a.rs: -5 lines');
+    expect(lines[2]).toBe('    b.rs: 0 lines (and -2 total)');
+  });
+
+  it('always ends with the "stopped EXECUTING" guidance', () => {
+    const lines = formatDeltas([{ file: 'a.rs', delta: -1, totalDelta: 0 }]);
+    expect(lines.join('\n')).toMatch(/code stopped EXECUTING/);
+  });
+
+  it('caps the list and says how many were withheld', () => {
+    const many = Array.from({ length: 20 }, (_, i) => ({
+      file: `f${i}.rs`,
+      delta: -i,
+      totalDelta: 0,
+    }));
+    const lines = formatDeltas(many, { limit: 3 });
+    expect(lines.filter((l) => l.includes(' lines'))).toHaveLength(3);
+    expect(lines).toContain('  … and 17 more');
   });
 });

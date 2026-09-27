@@ -91,16 +91,16 @@ and the ratchet will (correctly) fail on the first CI run after that commit. Use
 
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
 here is either lying in CI or about to quietly relax the number. The measured gap, as of
-2026-09-27 (`117 test files / 1556 tests`):
+2026-09-27 (`117 test files / 1566 tests`):
 
 | Metric     | Measured               | Gap  |
 | ---------- | ---------------------- | ---- |
-| lines      | 4248/4954 = **85.74%** | 706  |
-| statements | 5610/6655 = **84.29%** | 1045 |
-| functions  | 1129/1372 = **82.28%** | 243  |
-| branches   | 3311/4259 = **77.74%** | 948  |
+| lines      | 4263/4970 = **85.77%** | 707  |
+| statements | 5629/6675 = **84.32%** | 1046 |
+| functions  | 1132/1375 = **82.32%** | 243  |
+| branches   | 3328/4277 = **77.81%** | 949  |
 
-41 of the 116 files are at 100% statements. The 1045 uncovered statements decompose as:
+41 of the 116 files are at 100% statements. The 1046 uncovered statements decompose as:
 
 - **301 statements in 7 CLI scripts that v8 structurally cannot see** — `check-bundle-size`
   (35), `check-npm-audit` (36), `check-android-versioncode` (57), `coverage-baseline` (17),
@@ -115,10 +115,10 @@ here is either lying in CI or about to quietly relax the number. The measured ga
 - **553 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (49, the
   `createRoot` entry point), `src/testFixtures/aegisMock.ts` (503, a mock), and
   `src/vite-env.d.ts` (1). All three are entry-point-or-mock by design.
-- **744 statements of real, measurable test debt** across 68 files, concentrated in a
+- **745 statements of real, measurable test debt** across 68 files, concentrated in a
   handful: `App.tsx` 152, `mobile/MobileApp.tsx` 84, `TabStrip.tsx` 60, `SettingsModal.tsx`
   34, `ipcClient.ts` 29, `Sidebar.tsx` 28, `mobile/MobileMenuSheet.tsx` 25,
-  `PrivacyDashboard.tsx` 21. By directory: `src/` 736, `scripts/` 8, `shared/` **0**.
+  `PrivacyDashboard.tsx` 21. By directory: `src/` 736, `scripts/` 9, `shared/` **0**.
 
 **A percentage can move in the opposite direction from the codebase, so never read the ratio
 alone.** Removing split view deleted three fully-covered source files: the percentage went
@@ -128,7 +128,7 @@ is what CI can cheaply compare; the absolute counts in the table above are the h
 companion number, and the two tables in this repo (`coverage-baseline.json` plus this one)
 are the reason to read both.
 
-**Branches (77.74%, 948 uncovered) is the weakest metric and where the next effort belongs.**
+**Branches (77.81%, 949 uncovered) is the weakest metric and where the next effort belongs.**
 The Rust side has its own measured numbers and its own structural ceiling — see the
 coverage section of `src-tauri/AGENTS.md`.
 

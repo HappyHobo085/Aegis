@@ -24,6 +24,8 @@ import {
   assertExclusionsJustified,
   buildRustBaseline,
   llvmToSummary,
+  formatDeltas,
+  perFileDeltas,
 } from './rustCoverageCheck.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -146,7 +148,16 @@ if (improvements.length) {
   console.log('rust coverage improvements over baseline:');
   for (const l of improvements) console.log(`  + ${l}`);
 }
-if (regressions.length) fail(regressions);
+if (regressions.length) {
+  // A total alone cannot be diagnosed. On CI run 36325245069 this step reported
+  // 11038/14750 against a 11175/14750 baseline, and the cause was a file-level drop
+  // that had to be reconstructed by hand (a local run with D-Bus unavailability
+  // reproduced it exactly). Name the file in one run instead.
+  // The computation AND the formatting live in the pure module: this file is a
+  // top-level script that no test imports, so v8 scores it 0% and every line added
+  // here would dilute the very ratio it reports.
+  fail([...formatDeltas(perFileDeltas(baseline, current)), ...regressions]);
+}
 
 const lowered = detectBaselineLowering(committedBaseline(), baseline);
 if (lowered.length) {
