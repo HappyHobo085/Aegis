@@ -33,18 +33,10 @@ export interface UseVault {
   update(uuid: string, partial: Partial<VaultRecordInput>): Promise<VaultRecord[]>;
   remove(uuid: string): Promise<VaultRecord[]>;
   search(q: string): Promise<VaultRecord[]>;
-  /**
-   * Dev/autopilot seam: a ref that VaultSettingsTab writes its `setRecords` setter
-   * into on mount.  Autopilot interaction specs can call this directly to seed the
-   * displayed records list without going through the async vault.list() path.
-   * Never written to or read by production code paths.
-   */
-  _setRecordsRef: React.MutableRefObject<Dispatch<SetStateAction<VaultRecord[]>> | null>;
 }
 
 export function useVault(): UseVault {
   const [state, setState] = useState<VaultState>(EMPTY);
-  const _setRecordsRef = useRef<Dispatch<SetStateAction<VaultRecord[]>> | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -83,5 +75,5 @@ export function useVault(): UseVault {
 
   const search = useCallback((q: string) => aegis.vault.search(q), []);
 
-  return { state, create, unlock, lock, list, add, update, remove, search, _setRecordsRef };
+  return { state, create, unlock, lock, list, add, update, remove, search };
 }

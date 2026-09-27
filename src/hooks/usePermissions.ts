@@ -9,8 +9,6 @@ export function usePermissions(): {
   remove(origin: string, permission: string): Promise<void>;
   clear(): Promise<void>;
   resolve(decision: PermissionDecision): Promise<void>;
-  /** Autopilot seeding only — directly sets the permissions list without an IPC round-trip. */
-  _setPermissions(permissions: SitePermission[]): void;
 } {
   const [permissions, setPermissions] = useState<SitePermission[]>([]);
   const [prompt, setPrompt] = useState<PermissionPrompt | null>(null);
@@ -64,5 +62,5 @@ export function usePermissions(): {
     [refresh],
   );
 
-  return { permissions, prompt, remove, clear, resolve, _setPermissions: setPermissions };
+  return { permissions, prompt, remove, clear, resolve };
 }

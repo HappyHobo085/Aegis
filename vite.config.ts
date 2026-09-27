@@ -39,7 +39,7 @@ export default defineConfig(async () => {
       ...analyzePlugins,
     ],
     clearScreen: false,
-    // Port is overridable via VITE_DEV_PORT so the autopilot harness can run on its own
+    // Port is overridable via VITE_DEV_PORT so a second dev server can run on its own
     // port (e.g. 5199) alongside a normal `tauri dev` on 5174 without colliding.
     server: { port: Number(process.env.VITE_DEV_PORT) || 5174, strictPort: true },
     build: {

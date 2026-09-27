@@ -17,8 +17,6 @@ export interface UseSaved {
   update(id: number, partial: { title?: string; tags?: string[] }): Promise<void>;
   renameTag(oldT: string, newT: string): Promise<void>;
   deleteTag(tag: string): Promise<void>;
-  /** Directly set items + tagUnion (autopilot dev-only seeding; bypasses async refresh). */
-  _setSavedItems(items: SavedItem[], tagUnion: string[]): void;
 }
 
 export function useSaved(currentUrl: string): UseSaved {
@@ -171,9 +169,5 @@ export function useSaved(currentUrl: string): UseSaved {
     update,
     renameTag,
     deleteTag,
-    _setSavedItems: (newItems, newTagUnion) => {
-      setItems(newItems);
-      setTagUnion(newTagUnion);
-    },
   };
 }

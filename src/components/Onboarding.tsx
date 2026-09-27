@@ -47,7 +47,7 @@ const FEATURES = [
 
 /** First-run welcome: surfaces the signature features and lets the user pick a default
  *  search engine, instead of the old single-line hint. Shown once (localStorage-gated),
- *  and never during the live autopilot (which runs on a fresh profile). */
+ *  and never again once dismissed. */
 export function Onboarding({
   searchEngines,
   defaultSearchTemplate,
@@ -57,9 +57,8 @@ export function Onboarding({
   onImportData,
   forceOpen = false,
 }: OnboardingProps) {
-  const isAutopilot = Boolean(import.meta.env.VITE_AEGIS_AUTOPILOT);
   const [done, setDone] = useState<boolean>(
-    () => !forceOpen && (isAutopilot || localStorage.getItem(ONBOARDING_STORAGE_KEY) === '1'),
+    () => !forceOpen && localStorage.getItem(ONBOARDING_STORAGE_KEY) === '1',
   );
   const [privacyPreset, setPrivacyPreset] = useState<'balanced' | 'strict'>('balanced');
   const titleId = useRef(`onboarding-title`).current;

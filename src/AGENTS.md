@@ -47,8 +47,8 @@ Channel and event names, and all payload/return types, are defined once in
   in its component — there is no central union to update.** The sidebar is not a
   registry surface either — it insets from the right via `view.setSidebar` and stays
   direct `App` state.
-  The `src/autopilot/compositor.test.tsx` drift guard fails the build if an overlay
-  reachable via the autopilot control does not lower the content.
+  A new overlay must call `useChromeSurface`, and a test should assert it lowers the
+  content (that is what `useChromeSurface` + the `contentLayout` contract mean).
   `useChromeSurface` is a **no-op** outside a `ChromeSurfaceProvider` (so surfaces
   also rendered by the mobile shell, which has no provider, are safe); by contrast
   `useChromeSurfaceRegistry` throws outside a provider — do not call it from a
@@ -133,7 +133,7 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   calling `useSync.getRecoveryPhrase(true)`. The hook used to hardcode `{ confirm: true }`,
   which turned the core's "gated on an explicit confirm" contract into a bypass; the flag now
   has to be the user's own answer, and the hook throws if it is not.
-  Autopilot coverage: the `settings:sync` screen plus the
+  Coverage: the `settings:sync` screen plus the
   `settings.sync.allowInsecure` interaction spec (vitest asserts the `settings.set` wiring;
   live asserts `sync.getState().allowInsecure` flips and restores it) and the
   `syncAllowInsecure` cases in `SyncSettingsTab.test.tsx`, which render the panel under a
@@ -195,17 +195,16 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   `useLoginFormDetector` (whose only job was an unconditional 2 s `form.detectLoginForm`
   poll behind that badge), was deleted as dead, unmounted code. `vault.autofill` and
   `vault.autofillSuggestions` remain declared in `shared/types.ts` and **do** work in Rust —
-  they are covered at the IPC level by the autopilot's `vault.crud` and
-  `vault.autofillSuggestions` catalog entries, which is what keeps the drift guards honest.
+  they are covered by `vault.rs`'s own unit tests (dispatch + search + suggestions).
   **`form.detectLoginForm` is different: it is declared but the core REFUSES it** (`Err`, not
   `Ok`). A content webview has no Tauri capability and `withGlobalTauri` is off, so the page
   cannot `emit` a detection result back, and there is no injected content→core callback to
   replace it — so the old implementation could only ever burn a 5 s main-thread timeout and
   return `hasLoginForm: false`, a value indistinguishable from a real negative. It now fails
   fast and names the missing transport; see the `form.rs` module header for what a real fix
-  needs. The mock rejects to match, and the catalog entry asserts the refusal — do **not**
-  "fix" that entry back to `expect(typeof result.hasLoginForm).toBe('boolean')`, which is
-  exactly what let the broken version pass. `VaultSettingsTab`'s notice therefore says Aegis
+  needs. The mock rejects to match and a test asserts the refusal — do **not** "fix" that
+  assertion back to `expect(typeof result.hasLoginForm).toBe('boolean')`, which is exactly
+  what let the broken version pass. `VaultSettingsTab`'s notice therefore says Aegis
   does **not** fill login forms yet (honest-UI-copy convention, same rule as the Proxy tab
   never saying "VPN"). `useAutofillSave` is likewise unmounted; its `form.willSubmit` producer
   (`vault_inject.rs`) is real, so it is the natural starting point if the feature is ever
@@ -219,12 +218,9 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   - A per-site allowlist manager (desktop only, rendered when `level !== 'off'`): add the
     current browsing host, remove individual hosts, clear all. Allowlisted hosts receive no
     farble shim — the fp-allowlist is separate from the ad-block allowlist.
-  - Autopilot coverage: catalog entry `fingerprint.crud` (`channels: [fingerprint.getState,
-fingerprint.toggleAllowlist, fingerprint.clearAllowlist]`; its `exercise` is a read-only
-    probe, and the mutating channels are in `UNTESTED_CHANNELS` because the mock is
-    stateless); interaction specs in
-    `src/autopilot/interactions/settings.ts` cover the level select and the allowlist
-    toggle/clear controls.
+  - Coverage: `useFingerprint.test.tsx` covers the getState seed, every mutator, and the
+    unmount path; `SecurityTab.test.tsx` drives the level select and the allowlist
+    toggle/clear controls through the real UI.
 - **`hooks/useProxy`** — owns proxy UI state (`ProxyState`: `{ mode, scheme, host, port,
 bypassHosts, active, uri }`). Seeds from `aegis.proxy.getState()` on mount; subscribes
   to `aegis.proxy.onState`. Exposes `setConfig(cfg)` (calls `proxy.setConfig` + re-reads
@@ -241,14 +237,12 @@ bypassHosts, active, uri }`). Seeds from `aegis.proxy.getState()` on mount; subs
     apps) and that DNS/QUIC may still leak outside the proxy path.
   - On Windows: a note warns that proxy changes apply only to new or reloaded tabs
     (spawn-time limitation — see `src-tauri/AGENTS.md` gotcha 22).
-    Autopilot coverage: `proxy.state` catalog entry (`channels: [proxy.getState,
-proxy.setConfig, proxy.clear, proxy.testConnection]`) whose `exercise` is a read-only
-    probe — the set→assert→restore round-trip is **not** automated, because mutating a
-    live proxy config from a stateless mock proves nothing, so those channels are in
-    `UNTESTED_CHANNELS` (`proxy.rs`'s unit tests cover the config validation).
-    Interaction specs in
-    `src/autopilot/interactions/settings.ts` cover the mode select, host/port inputs, bypass
-    add/remove, Apply/Turn-off/Test buttons.
+    Coverage: `useProxy.test.ts` covers the getState seed, the live `proxy.state`
+    subscription, and every mutator; `ProxySettingsTab.test.tsx` drives the mode select,
+    host/port inputs, bypass add/remove, and the Apply/Turn-off/Test buttons through the
+    real UI. The set→assert→restore round-trip is **not** automated, because mutating a
+    live proxy config from a stateless mock proves nothing — `proxy.rs`'s unit tests
+    cover the config validation instead.
 - **`components/FindBar`** — Ctrl+F infobar (purely presentational): text input,
   match-count display, prev/next nav buttons, and a close button. Auto-focuses on mount.
   Rendered inside `DesktopApp` (and `MobileApp`) keyed on the active view id; shown only
@@ -278,8 +272,9 @@ reset, onOpenChange }` from `useZoom`. It **self-registers with the compositor**
   `useMeasuredHeight` and registers `useChromePopoverInset('address-omnibox')`. Both
   desktop (`Toolbar` → `App`) and mobile (`MobileTopBar` → `MobileApp`, which folds it
   into `view.setChromeOverlay`) pass the stores; without the `omnibox` prop the dropdown
-  never opens. Autopilot: the `addressBarSuggestions` screen + three `omnibox.*`
-  interaction specs in `interactions/toolbar.ts`.
+  never opens. Coverage: `useOmnibox.test.ts` (the debounce, the monotonic seq guard, the
+  arrow-key cursor) + `OmniboxDropdown.test.tsx` (the rows, the highlight runs, the
+  mousedown-to-pick contract) + `AddressBar.test.tsx` for the wiring.
 - **`components/TabStrip`** — the top row of the chrome, rendered above the
   toolbar on desktop only (hidden on mobile via `.aegis-mobile`). Shows the tab
   list and drives `tabs.create`/`tabs.activate`/`tabs.close` etc. Private tabs
@@ -287,11 +282,10 @@ reset, onOpenChange }` from `useZoom`. It **self-registers with the compositor**
   dedicated **"New private tab"** button (`tabstrip__new--private`) that calls
   `tabs.create(undefined, false, true)` — the third arg is `isPrivate`. The same
   call is wired to `Ctrl+Shift+N` in `App.tsx`. Mobile: the `MobileTabSwitcher`
-  also exposes a new-private-tab entry. Interaction specs in
-  `src/autopilot/interactions/tabs.ts` cover both the button click and the
-  keyboard shortcut. The catalog's "a private navigation leaves no history row"
-  assertion is **not** automated — it needs a real webview, and `history.remove` is in
-  `UNTESTED_CHANNELS`; `tabs.rs`'s unit tests cover the private-flag propagation instead.
+  also exposes a new-private-tab entry. `TabStrip.test.tsx` covers the button click and
+  `App`-level tests cover the keyboard shortcut. The "a private navigation leaves no
+  history row" assertion is **not** automated — it needs a real webview; `tabs.rs`'s unit
+  tests cover the private-flag propagation and `history.rs`'s the private-tab skip.
 - **`lib/layout.ts`** gained `TABSTRIP_H` (the pixel height reserved for the
   tab strip), used by `useContentInset` to keep the content webview positioned
   below it.
@@ -346,8 +340,8 @@ data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
   (the flattened group order IS `TAB_ORDER`) rendered as a vertical left rail with
   roving arrow-key navigation; on `.aegis-mobile`/`.aegis-narrow` the rail becomes a
   horizontal strip. Adding a settings tab still means: add to `SettingsTab`,
-  `TAB_LABELS`, `TAB_GROUPS`, the `SettingsModalProps`/`panels` wiring, AND the
-  `screens.ts` `settings:<tab>` walk (autopilot drift).
+  `TAB_LABELS`, `TAB_GROUPS`, the `SettingsModalProps`/`panels` wiring, AND a case in
+  `SettingsModal.test.tsx` that walks every tab.
 - **`components/Onboarding`** is the first-run welcome modal (replaced the one-line
   `WelcomeHint`): surfaces the signature features + a default-search-engine picker,
   rendered by both shells. It is localStorage-gated (`ONBOARDING_STORAGE_KEY`) and
@@ -445,166 +439,14 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
   `.mobile-topbar`, `.mobile-bottombar` (`box-sizing: content-box`), `.mobile-sheet`
   (History/Saved/Menu/Tabs), the reused `.settings-modal__content` / `.downloads-modal`
   (`.aegis-mobile`-scoped — this is what keeps Settings/Downloads off the status/nav bars),
-  `.onboarding`, and `.toaster`. The drift guard `src/autopilot/safeArea.test.ts` fails the
-  build if one of these selectors drops an inset var.
+  `.onboarding`, and `.toaster`. A test should assert each of these selectors still carries
+  its inset var — dropping one silently puts the surface under the status/nav bars.
 
 ## Tests
 
 `*.test.tsx` / `*.test.ts` are co-located. They run in the vitest **jsdom** project
 (`include: src/**/*.test.{ts,tsx}`). Tests mock the `aegis` object — no real IPC.
 Run the whole suite with `npm test` from the repo root.
-
-## Autopilot harness (`src/autopilot/`)
-
-A test harness that drives the entire feature surface — IPC layer and UI screens —
-through mocks in vitest. It is **test-only code**: it lives under `src/autopilot/`, is
-imported solely from `*.test.ts(x)` files, and never from `src/main.tsx` or any
-production module, so it is not part of the shipped renderer bundle at all.
-
-### Files
-
-- **`catalog.ts`** — `CATALOG: FeatureCheck[]`. Every IPC feature (nav, tabs, view,
-  favorites, history, saved, settings, adblock, subs, customFilters, downloads,
-  permissions, data, picker, update, safety, sync) has one entry with `id`, `domain`,
-  `title`, `channels[]` (the `IPC.*` constants it exercises), and `exercise(api)` (an
-  async function that calls the real or mocked `AegisApi`).
-  There is deliberately **no** `verify(api)` round-trip field. It used to exist here, and 19
-  entries implemented it, but nothing ever called it: the vitest tour calls only
-  `exercise`, and the "live run" its doc comment pointed at (`run.ts`, gated on
-  `RunDeps.live`) does not exist in this repo. They could not be moved into the tour
-  either — the `find` one waited on an event the mock never fires, and the `sync`/`vault`
-  ones asserted state transitions a stateless mock can only fake — so they were deleted
-  and the coverage they claimed is now attributed to what actually executes: the
-  interaction tour and the Rust unit tests. **Do not reintroduce a "runs live only"
-  coverage claim; there is nowhere for it to run.**
-  Also exports
-  `UNTESTED_CHANNELS` — channels that exist in catalog entries but whose `exercise`
-  bodies intentionally skip calling them (destructive, OS-bound, or
-  fire-and-forget). This set is enforcement documentation, not an escape hatch: the
-  drift guard asserts every member also appears in some catalog entry's `channels`. The
-  set's own doc comment splits them into "covered elsewhere (interaction tour / Rust
-  tests)" and "genuinely unverified" — read that comment rather than assuming a listing
-  means a gap.
-  **Vault coverage (`vault.crud`):** all nine `vault.*` channels are listed in the
-  `vault.crud` entry's `channels[]`, and the `exercise` body calls only the read-only
-  `getState`. `vaultCreate`/`vaultUnlock`/`vaultLock`/`vaultAdd`/`vaultUpdate`/
-  `vaultRemove` are therefore in `UNTESTED_CHANNELS`. They are **not** round-trip tested:
-  they are driven at the UI level by `interactions/vault.ts` (create, unlock, add, update,
-  row delete), and the seal / unlock / merge / tombstone logic is covered by `vault.rs`'s
-  own unit tests. The
-  `settings:vault` screen is registered in `screens.ts` via the standard
-  `settings:<tab>` pattern and is reached by the autopilot's settings-tab walk.
-- **`screens.ts`** — `SCREENS: ScreenSpec[]`. Every reachable UI state: `home`,
-  `sidebar:history`, `sidebar:saved`, `downloads`, `favoritesManager`,
-  `settings:<tab>` (one entry per `SettingsTab` from `TAB_ORDER`), `shieldPopover`,
-  `fullscreen`, `errorOverlay`, `crashOverlay`, `safetyInterstitial`,
-  `permissionPrompt`, `confirmDialog`. Each entry declares how the live harness
-  reaches it (`via: 'overlay' | 'settingsTab' | 'sidebarTab' | 'event' | 'state'`),
-  consumed by `reach.ts`.
-- **`control.ts`** — `AutopilotControl` interface + `installAutopilotControl` /
-  `getAutopilotControl`. `DesktopApp` calls `installAutopilotControl` in a `useEffect`
-  when running in dev, exposing `window.__aegisAutopilot` so the runner can reach every
-  overlay without selector brittleness. The same `setState` handlers the real buttons
-  use. The global is never written in production.
-- **`reach.ts`** — `reachScreen(control, screen, opts)` / `leaveScreen(control, screen)`.
-  Drives `control` (and emits dev events for `'event'`-type screens) to reach a given
-  `ScreenSpec`, then tears it down after the screenshot. Adapts to the `via` field.
-
-### Interaction catalog (`interactions/` + `interactionCtx.ts`)
-
-A third catalog — complementing `catalog.ts` (IPC) and `screens.ts` (UI states) — that
-focuses on **user interaction gestures**: what a user taps or types to trigger a feature,
-and what the resulting DOM / call state should be.
-
-- **`interactions/`** — the catalog, split **per domain** (was one ~3700-line file). A
-  barrel `index.ts` concatenates the per-domain spec arrays into `INTERACTIONS:
-InteractionSpec[]` and re-exports `INTERACTIVE_CONTROLS` + the public types, so
-  importers of `./interactions` resolve unchanged. Layout:
-  - `index.ts` — combines the domain arrays into `INTERACTIONS`; re-exports types +
-    `INTERACTIVE_CONTROLS`. **The single entry point** — keep importing `./interactions`.
-  - `types.ts` — `InteractionLayer`, `CallLog`, `InteractionCtx`, `InteractionSpec`.
-  - `helpers.ts` — shared `emitNavState`, `fireInputChange`, `BASE_NAV`.
-  - `controls.ts` — `INTERACTIVE_CONTROLS` (the canonical control-id registry).
-  - one file per domain group, each exporting a `*_INTERACTIONS: InteractionSpec[]`:
-    `toolbar.ts` (toolbar + shieldPopover), `tabs.ts` (tabs + keyboard),
-    `favorites.ts` (favbar + favManager), `sidebar.ts` (history + saved),
-    `settings.ts` (every settings tab), `overlays.ts` (downloads/confirm/error/
-    crash/safety/permission/redirect), `edge.ts`, `combo.ts`, `mobile.ts`.
-  - **Add a spec to its domain file.** A brand-new domain gets a new file + a one-line
-    spread in `index.ts`. A new control id still goes in `controls.ts` (see below).
-
-  Each `InteractionSpec` has:
-  - `id` — unique dot-namespaced string (e.g. `toolbar.addressBar.navigate`,
-    `mobile.bottomBar.saved`)
-  - `domain` — grouping key (e.g. `toolbar`, `mobile.bottomBar`)
-  - `description` — human-readable label
-  - `screen: ScreenId` — the desktop screen the spec starts from
-  - `layers: InteractionLayer[]` — `'vitest'` | `'live'` | both. All mobile-only
-    specs are `['vitest']` since the live harness drives only the desktop shell.
-  - `mobile?: boolean` — `true` means the spec can (or must) run in the mobile
-    shell. Cross-platform specs (e.g. address-bar, reload) carry `mobile: true` and
-    appear in both tours. Mobile-only specs (domain `mobile.*`) carry `mobile: true`
-    and are EXCLUDED from the desktop tour.
-  - `run(ctx)` — async gesture: fires the interaction (click, type, etc.)
-  - `assert(ctx)` — async assertion: returns a truthy string on success, throws on failure
-    `INTERACTIVE_CONTROLS` is the canonical string array of every interactive control id.
-    The drift-guard test asserts every entry has at least one `InteractionSpec`.
-    **Add a new control to `INTERACTIVE_CONTROLS` in the same commit as its spec.**
-
-- **`interactionCtx.ts`** — `InteractionCtx` interface + `makeVitestCtx(container,
-aegis, reachFn)`. Provides:
-  - `byRole(role, name)` — `container.querySelector([role="…"][aria-label~="…"])` helper
-  - `click(el)` — `userEvent.click(el)` wrapped in `act()`
-  - `reach(screen)` — calls `reachFn` (desktop: `reachScreen`; mobile: no-op)
-  - `calls` — `CallLog` facade over the mocked `aegis` (checked via `.called(channel)`,
-    reset via `.reset()`)
-  - `emitNavState(state)` — fires `flushSync(() => navStateCallback(state))`; the
-    callback is captured from `aegis.nav.onState.mock.calls[0][0]` at creation time
-  - `emitTabsState(state)` — same pattern via `aegis.tabs.onState.mock.calls[0][0]`
-
-  **React 18 Strict Mode + async-mock ordering gotcha** (discovered during Task 10):
-  `useNav` calls `aegis.nav.getState(viewId).then(setState)` on mount. Under Strict
-  Mode this fires twice. The second async `getState().then()` resolves in the microtask
-  queue AFTER the `useEffect` from the second mount runs, which means calling
-  `emitNavState` alone may be immediately overwritten by the pending `getState()`
-  promise. The safe pattern for state-seeding in mobile interaction specs is:
-  - For tab-count state: call `emitNavState` FIRST (flushes pending microtasks), then
-    `emitTabsState` in the same async `act()` body.
-  - For nav-property state (canGoBack/canGoForward): open the interactive sheet FIRST
-    (so it is already mounted), THEN call `emitNavState` to re-render with the new state.
-    This ordering is enforced in all mobile specs that need non-default state.
-
-### Tests in this folder
-
-- **`tour.test.tsx`** — exhaustive vitest desktop tour. Renders the real `<App/>`
-  with the mocked `aegis` API, walks every SCREEN via `reachScreen()` (asserting
-  no crash), and exercises every CATALOG entry. `runAutopilot()`'s end-to-end
-  orchestration (reach → screenshot → leave) is covered by `run.test.ts`.
-- **`tour.mobile.test.tsx`** — same tour for the mobile shell (`MobileApp`).
-- **`interactions.test.tsx`** — **desktop interaction tour**. Renders `<App/>` (desktop
-  shell), reaches each spec's declared screen via `reachScreen()`, runs `spec.run()`, and
-  asserts via `spec.assert()`. Filters `INTERACTIONS` to vitest-layer specs whose domain
-  does NOT start with `mobile.` (mobile-only specs are excluded; cross-platform specs
-  with `mobile: true` on a non-mobile domain ARE included).
-- **`interactions.mobile.test.tsx`** — **mobile interaction tour**. Sets `.aegis-mobile`
-  on `<html>` BEFORE importing `App` so `isMobile=true` and `MobileApp` renders. Runs
-  every spec where `mobile === true && layers.includes('vitest')`. No `reachScreen` call
-  is needed; every mobile spec reaches its sheet via DOM clicks in its `run()` body
-  (MobileApp has no `AutopilotControl` surface).
-- **`interactions.coverage.test.ts`** — **interaction drift guard** (3 assertions):
-  1. All spec ids in `INTERACTIONS` are unique.
-  2. Every spec has a valid `screen` (from `SCREENS`) and at least one `layer`.
-  3. Every string in `INTERACTIVE_CONTROLS` has at least one `InteractionSpec` whose
-     `id` starts with that control string.
-     Fails the build when you add a control to `INTERACTIVE_CONTROLS` without a spec.
-- **`coverage.test.ts`** — **IPC drift guard**. Asserts every `IPC.*` channel exported
-  from `shared/types.ts` appears in `CATALOG[*].channels` (failing the build when a new
-  feature is added without a catalog entry). Also asserts every `UNTESTED_CHANNELS`
-  member appears in some catalog entry's `channels`.
-- **`control.test.ts`**, **`reach.test.ts`**, **`screens.test.ts`**,
-  **`registration.test.tsx`** — unit tests for each individual module.
-  The 1 500 ms delay lets `App` mount and register `window.__aegisAutopilot` before the
-  runner tries to use it.
 
 ### The seam the mock hides, and the test that covers it
 

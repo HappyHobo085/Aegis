@@ -72,7 +72,6 @@ import { TabStrip } from './components/TabStrip';
 import { WorkspaceSwitcher } from './components/WorkspaceSwitcher';
 import { FindBar } from './components/FindBar';
 import { MobileApp } from './components/mobile/MobileApp';
-import { installAutopilotControl } from './autopilot/control';
 
 /** Runtime check for mobile shell — safe against import reordering. */
 function getIsMobile(): boolean {
@@ -221,68 +220,6 @@ function DesktopApp() {
     };
   }, [openSettings]);
 
-  // Dev-only: expose an imperative control surface so the autopilot can reach every
-  // overlay/state deterministically. Gated so it can NEVER run in a production build.
-  useEffect(() => {
-    if (!import.meta.env.DEV || !import.meta.env.VITE_AEGIS_AUTOPILOT) return;
-    return installAutopilotControl({
-      openSettings: () => setSettingsOpen(true),
-      closeSettings: () => setSettingsOpen(false),
-      openDownloads: () => setDownloadsOpen(true),
-      closeDownloads: () => setDownloadsOpen(false),
-      openManager: () => setManagerOpen(true),
-      closeManager: () => setManagerOpen(false),
-      setSidebar: (open) => setSidebarOpen(open),
-      // The shield popover owns its own open state (it registers its measured
-      // height with the popover registry, so App needs no copy). Drive it the way
-      // a user does — through the button — and no-op when it is already in the
-      // requested state, so `setShield(true)`/`setShield(false)` stay idempotent.
-      setShield: (open) => {
-        const button = document.querySelector<HTMLButtonElement>('.adblock-shield__button');
-        if (!button) return;
-        if ((button.getAttribute('aria-expanded') === 'true') !== open) button.click();
-      },
-      // The omnibox owns its open state too (it is `focus && !dismissed && rows`).
-      // Drive it the way a user does — focus the field, which selects the URL and
-      // seeds the list from history.
-      setOmnibox: (open) => {
-        const input = document.querySelector<HTMLInputElement>(
-          '.address-bar__field input[role="combobox"]',
-        );
-        if (!input) return;
-        if (open) {
-          if (document.activeElement !== input) input.focus();
-          return;
-        }
-        if (document.activeElement === input) input.blur();
-      },
-      enterFullscreen: () => setFullscreen(true),
-      exitFullscreen: () => setFullscreen(false),
-      showError: (f) => {
-        setCrashed(null);
-        setFailed(f as NavFailed);
-      },
-      clearError: () => setFailed(null),
-      showCrash: (c) => {
-        setFailed(null);
-        setCrashed(c as NavCrashed);
-      },
-      clearCrash: () => setCrashed(null),
-      openConfirm: (message) => {
-        void confirm(message);
-      },
-      openFind: () => find.show(),
-      closeFind: () => find.close(),
-      setDownloadEntries: (entries) => downloads._setDownloads(entries),
-      setHistoryEntries: (entries) => history._setEntries(entries),
-      setSavedItems: (items, tagUnion) => saved._setSavedItems(items, tagUnion),
-      setSitePermissions: (perms) => permissions._setPermissions(perms),
-      setAllowlistedHosts: (hosts) => adblock._setAllowlistedHosts(hosts),
-      setVaultRecords: (records) => vault._setRecordsRef.current?.(records),
-      setFingerprintState: (s) => fingerprint._setState(s),
-    });
-  }, []);
-
   // The tallest open chrome popover (omnibox / site info / shield / zoom). Each
   // registers its own measured height; the compositor turns the tallest into the
   // extra content-top inset below.
@@ -314,7 +251,6 @@ function DesktopApp() {
   const { openSurfaces } = useChromeSurfaceRegistry();
   // Effect-driven: the content layout is applied one render cycle after an overlay opens
   // (via the registry's useEffect in useChromeSurface) — observably equivalent to the
-  // old synchronous union, as proven by the unchanged autopilot tour.
   const fullOverlayActive = openSurfaces.size > 0;
   useEffect(() => {
     // ONE atomic update from a single derived state. computeContentLayout is the sole

@@ -179,20 +179,13 @@ Convenience wrappers around the release builds (each resolves the repo root via
   NOT the MSVC build that ships — validate on real Windows; use the `.ps1`/CI for the
   canonical artifact. Needs `mingw64-gcc` + the `x86_64-pc-windows-gnu` rust target.
 
-## Autopilot launcher (`scripts/autopilot/`)
+## No automated gate exercises the real Rust core or a real webview
 
-**There is no live autopilot launcher in this repo.** `scripts/autopilot/` — the
-`run-autopilot.sh` entry point, `summarize.mjs`, `fixture-server.mjs` and the `fixture/`
-ad-bait page that earlier revisions of this file documented — does not exist, and neither
-does `src/autopilot/run.ts` / `report.ts` or the `src-tauri/src/autopilot.rs` module.
-
-What actually runs is the vitest-level autopilot under `src/autopilot/`, covered in
-`src/AGENTS.md`: the feature `CATALOG`, the `SCREENS` list, the interaction specs, and the
-`coverage.test.ts` drift guard, all executing against `src/testFixtures/aegisMock.ts`.
-
-Consequence worth stating plainly: **no automated gate here exercises the real Rust core
-or a real webview.** Platform-specific behaviour (the Linux WebKit content-filter tier,
-the Windows `WebView2` network tier, the Android Kotlin `shouldInterceptRequest` tier,
-multi-webview layout, the OS keychain, StrongBox) is covered only by the manual
+Stated plainly because it is the most important caveat in this file: **nothing in CI
+drives the shipped app.** Platform-specific behaviour (the Linux WebKit content-filter
+tier, the Windows `WebView2` network tier, the Android Kotlin `shouldInterceptRequest`
+tier, multi-webview layout, the OS keychain, StrongBox) is covered only by the manual
 verification notes in `src-tauri/AGENTS.md`, and `tauri-build-check.yml` only proves the
-app compiles and bundles per-OS — it runs no tests.
+app compiles and bundles per-OS — it runs no tests. Renderer behaviour is covered by
+co-located vitest tests against the IPC mock; the Rust core by `cargo test` against a
+`MockRuntime` app. Neither is a GUI run or an on-device run.

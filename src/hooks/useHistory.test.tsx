@@ -149,8 +149,8 @@ describe('useHistory', () => {
   it('a slow stale refresh cannot clobber a newer one (out-of-order guard)', async () => {
     // Regression: two history.changed events in quick succession (navigating two pages
     // back to back) spawn concurrent refreshes. If an OLDER list() resolves LAST it must
-    // not overwrite the newer result. (The autopilot's history-row interaction caught
-    // this: a fresh visit never appeared in the panel.)
+    // not overwrite the newer result. (A real user hit this: a fresh visit never
+    // appeared in the panel.)
     let pushed: (() => void) | undefined;
     onChanged.mockImplementation((cb: () => void) => {
       pushed = cb;

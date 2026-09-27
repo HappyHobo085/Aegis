@@ -153,9 +153,10 @@ Every one of these runs in CI on every PR and push to `main`:
 | `cargo fmt --check` / `cargo clippy -D warnings` / `cargo test` | for `src-tauri` **and** `sync-server`                                     |
 | `cargo audit`                                                   | Rust advisories (**blocking**, despite the historical "advisory" label)   |
 
-The `src/autopilot/` harness is a **vitest-level** feature catalog, screen list, and
-interaction-spec tour that runs against the IPC mock. `src/autopilot/coverage.test.ts`
-fails the build if a command channel or screen has no catalog entry.
+Renderer tests are **co-located** vitest files running against the IPC mock
+(`src/testFixtures/aegisMock.ts`); the Rust core is covered by `cargo test` against a
+`MockRuntime` app. Neither gate drives a real webview, a real browser, or real hardware —
+see the platform matrix above for what is verified and what is not.
 
 ---
 

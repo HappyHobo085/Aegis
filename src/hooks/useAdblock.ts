@@ -21,8 +21,6 @@ export function useAdblock(
   toggleAllowlist(): void;
   removeAllowlist(host: string): void;
   clearAllowlist(): void;
-  /** Autopilot seeding only — directly sets the allowlisted hosts without an IPC round-trip. */
-  _setAllowlistedHosts(hosts: string[]): void;
 } {
   const [state, setState] = useState<AdblockState>(emptyState);
   const [page, setPage] = useState<number>(0);
@@ -92,7 +90,5 @@ export function useAdblock(
     toggleAllowlist,
     removeAllowlist,
     clearAllowlist,
-    _setAllowlistedHosts: (hosts: string[]) =>
-      setState((prev) => ({ ...prev, allowlistedHosts: hosts })),
   };
 }

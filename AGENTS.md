@@ -56,23 +56,16 @@ npm run android:build  # release APK (signed with the debug key unless keystore.
 
 Native build deps: a Rust toolchain; on Linux, webkit2gtk/gtk dev packages.
 
-### Autopilot test harness
+### Testing
 
 ```bash
-npm test    # the exhaustive vitest tour + the IPC drift guard
+npm test    # vitest: node project (shared/ + scripts/) + jsdom (src/)
 ```
 
-The autopilot is a **vitest-level** harness: `src/autopilot/` holds the feature `CATALOG`,
-the `SCREENS` list, the interaction specs, and the drift guards, all of which run against
-`src/testFixtures/aegisMock.ts` (a mock of the IPC surface) — not against a real browser.
-`src/autopilot/coverage.test.ts` is the load-bearing guard: it fails the build if an IPC
-channel or a screen has no catalog entry.
-
-There is **no** live/app-level autopilot in this repo. Earlier revisions of this file
-described a `scripts/autopilot/run-autopilot.sh` launcher, `src/autopilot/run.ts`,
-`src/autopilot/report.ts`, `src/lib/devEmit.ts`, a `src-tauri/src/autopilot.rs` module and
-four dev-only Rust commands. None of them exist; the docs that described them have been
-corrected rather than left as aspirational instructions.
+Tests are **co-located** `*.test.ts` / `*.test.tsx` files, and they mock the IPC surface
+(`src/testFixtures/aegisMock.ts`) rather than driving a real browser or a real webview.
+A mutating user flow must be driven somewhere that **actually executes**: a component
+test that clicks/types the real UI, and/or a unit test in the owning Rust module.
 
 ### Test coverage — a ratchet, not a 100% claim
 
@@ -140,28 +133,20 @@ coverage section of `src-tauri/AGENTS.md`.
   fix isn't done when it works on one platform — bring Linux, Windows, macOS, and
   Android to parity (iOS when it exists) before calling it complete. Don't leave a
   capability working on Linux with "Win/Android is a follow-up"; close the gap.
-- **Keep the autopilot catalog current (living docs, enforced).** Every feature is
-  registered once in `src/autopilot/catalog.ts` (IPC features) and `src/autopilot/screens.ts`
-  (UI screens), consumed by both the live autopilot and the vitest tour. When you add a
-  feature — a new IPC channel, a Settings tab, or a full-window overlay — add its catalog/
-  screen entry **in the same commit**. The drift-guard test (`src/autopilot/coverage.test.ts`)
-  fails the build if a command channel has no catalog entry, so this isn't optional.
-- **Always update the autopilot tests BEFORE pushing to `main` (required).** These tests
-  exist to catch any bug a real user might hit, so they must **exhaustively cover
-  everything a user can do**. Before any `git push` to `main`, bring the autopilot up to
-  cover every user-facing change in the push — and verify it:
-  - **New command channel** → catalog entry (`channels` + `exercise`). If it mutates user
-    data, the mutation must be driven somewhere that **actually executes**: an interaction
-    test in `src/autopilot/interactions/` (real UI, runs in `npm test`) and/or a unit test
-    in the owning Rust module. There is no live autopilot in this repo, so a round-trip
-    that "would run live" runs nowhere — see `src/autopilot/catalog.ts`.
-  - **New UI screen / overlay / infobar** → a `screens.ts` entry (+ `reach.ts` wiring).
-  - **New interactive control or user action** → an interaction test that drives the real
-    UI the way a user does (click/type/keyboard) and asserts the effect, in the vitest
-    interaction tour. Add it to `src/autopilot/interactions/` and it runs continuously.
-  - **Gate:** `npm test` green. A push that adds a capability without its autopilot
-    coverage is incomplete. Runtime behaviour on real hardware is **not** covered by any
-    automated gate here — see gotcha 17 in `src-tauri/AGENTS.md` for the known gaps.
+- **Cover every user-facing change with a test before pushing to `main` (required).**
+  Tests exist to catch any bug a real user might hit, so they must cover **everything a
+  user can do**. Before any `git push` to `main`, cover every user-facing change in the
+  push — and verify it:
+  - **New command channel** → a unit test in the owning Rust module. If it mutates user
+    data, the mutation must be driven somewhere that **actually executes**, not asserted
+    only at the IPC boundary. A test that structurally cannot fail proves nothing:
+    reintroduce the bug and watch it go red.
+  - **New hook** → a `renderHook` test covering its IPC wiring, its timing, and its
+    teardown.
+  - **New interactive control or user action** → a test that drives the real UI the way a
+    user does (click/type/keyboard) and asserts the effect.
+  - **Gate:** `npm test` green. Runtime behaviour on real hardware is **not** covered by
+    any automated gate here — see gotcha 17 in `src-tauri/AGENTS.md` for the known gaps.
 
 ## Status (as of the Tauri migration branch)
 
@@ -194,9 +179,9 @@ privateness; Android is a best-effort weaker tier — `LOAD_NO_CACHE` + 3rd-part
 refused + cache/history cleared on close, but first-party cookies linger in Android's
 process-global jar after close, which is documented and accepted). Affordance: **New
 private tab** button in `TabStrip` + `Ctrl+Shift+N` (desktop) + mobile tab switcher.
-Autopilot: interaction specs cover the button + the keyboard shortcut. The "a private
-navigation leaves no history row" assertion is **not** automated — the channel that would
-prove it needs a real webview, and `history.remove` is in `UNTESTED_CHANNELS`. Runtime
+Tests cover the button + the keyboard shortcut. The "a private navigation leaves no
+history row" assertion is **not** automated — proving it needs a real webview, and
+`history::record`'s private-tab skip is covered by `history.rs`'s unit tests instead. Runtime
 verify: Linux live GUI and Win/macOS GUI **PENDING** user sessions; Android device verify **PENDING**.
 The **OS-keychain anchor** is desktop-done / Android hardware-anchored — **sub-project
 J DONE.** Android now PREFERS StrongBox (hardware Secure Element where the device has
@@ -240,11 +225,10 @@ own updater/filter-list fetches). Residual leaks remain: WebRTC is mitigated by 
 WebRTC IP-leak fix (shipped), but DNS/QUIC/UDP egress is outside the proxy path. Use
 for light geo/region testing or pairing an external proxy — not anonymity. Shipped
 `proxy.*` IPC (`proxy.getState` / `proxy.setConfig` / `proxy.clear` /
-`proxy.testConnection`), `ProxySettingsTab` + `useProxy` hook, and autopilot coverage
-(`proxy.state` catalog entry + interaction specs). The set→assert→restore round-trip is
-**not** automated: `proxy.setConfig`/`clear` are destructive to a live config and the mock
-has no state, so they sit in `UNTESTED_CHANNELS`; `proxy.rs`'s unit tests cover the config
-validation. Per-platform parity matrix:
+`proxy.testConnection`), `ProxySettingsTab` + `useProxy` hook, and component tests for
+the tab's controls. The set→assert→restore round-trip is **not** automated:
+`proxy.setConfig`/`clear` are destructive to a live config, so `proxy.rs`'s unit tests
+cover the config validation instead. Per-platform parity matrix:
 
 - **Linux** — live proxy via WebKitGTK `WebsiteDataManagerExt::set_network_proxy_settings`
   (`NetworkProxyMode::Custom` / `Default`). Per-webview fan-out + spawn-inherit. Egress

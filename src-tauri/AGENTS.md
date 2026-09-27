@@ -504,17 +504,23 @@ syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserv
   the overlay natively; Android has no tier and `picker.start` answers `{ok:false}`),
   `update.rs` (tauri-plugin-updater state).
 
-## There are no dev-only autopilot commands
+## There are no dev-only side channels
 
-Earlier revisions of this file documented a `src-tauri/src/autopilot.rs` module with four
-`#[tauri::command]` functions (`autopilot_screenshot`, `autopilot_write_report`,
-`autopilot_done`, `autopilot_emit_event`) registered through a cfg-split
-`invoke_handler`. **That module does not exist.** `lib.rs` has a single
-`generate_handler![ipc]`, and `shared/types.ts`'s `IPC` const has no autopilot channels.
+`lib.rs` has a single `generate_handler![ipc]` and `shared/types.ts`'s `IPC` const is the
+only renderer→core surface. Earlier revisions of this file documented a
+`src-tauri/src/autopilot.rs` module with four `#[tauri::command]` functions
+(`autopilot_screenshot`, `autopilot_write_report`, `autopilot_done`,
+`autopilot_emit_event`) registered through a cfg-split `invoke_handler`; that module
+never existed and has since been removed along with the renderer-side harness.
 
 Do not add such a side channel. Every renderer→core call goes through the one `ipc`
 chokepoint (see the top of this file); a debug-only bypass would be a second, untested
 path through the same boundary.
+
+> **Reading the older "the autopilot caught X" notes below.** Several gotchas in this file
+> record that a regression was found by the now-removed renderer harness (e.g. lines 92,
+> 383, 787). Those are **historical provenance** — how a bug was caught at the time — not a
+> claim that any gate catches it today. Each is marked with what covers it now.
 
 ## Key dependencies (`Cargo.toml`)
 
@@ -1038,7 +1044,7 @@ widget above native WebKit windows.
     **every page was blank by default** on Windows — a total browsing break introduced
     by `196d4a3` (WebRTC backstop), unnoticed because the last hand-verified Windows
     build (`Aegis_x64_portable.exe`, 2026-06-17 18:00) predated that commit (20:13) and
-    the autopilot can't exercise WebView2 env creation. **Fix (`nav::spawn_tab`):** house
+    no test harness can exercise WebView2 env creation. **Fix (`nav::spawn_tab`):** house
     each content webview in its own folder `EBWebView-content-<hash(args)>` (sibling of
     the chrome's `EBWebView`), keyed on the exact arg string (`"default"` when no
     override). So (a) content never clashes with the chrome and (b) only tabs with

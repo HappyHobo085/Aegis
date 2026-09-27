@@ -7,22 +7,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Removed
+
+- **The `src/autopilot/` renderer test harness is gone** (8,536 lines: the feature
+  `CATALOG`, the `SCREENS` list, the interaction specs, and the drift guards). Removed at
+  the repo owner's request, together with the production seams that existed only to serve
+  it — the dev-only `installAutopilotControl` surface in `App.tsx`, the
+  `VITE_AEGIS_AUTOPILOT` branch in `Onboarding`, and the direct-set seeding seams in
+  `useAdblock` / `useDownloads` / `useHistory` / `usePermissions` / `useSaved` / `useVault`.
+  **No user-facing feature changed.** The cost is real and worth stating: five build-gate
+  drift guards went with it (a new IPC channel with no catalog entry, an overlay that does
+  not lower the content webview, a mobile surface that drops a safe-area inset, a
+  duplicate `IPC` constant, a control id with no spec). Channel/screen drift is no longer
+  caught automatically.
+
 ### Fixed
 
-- **Browsing history was never recorded on Android, so the mobile History sheet was
-  permanently blank.** `history::record` had exactly one non-test caller: the
-  `on_page_load` closure inside `nav::spawn_tab`. That is a **wry** callback, and
-  Android's content area is a **native Kotlin `WebView`** (`MainActivity.createTabWebView`),
-  so wry never observes a content load and nothing ever called `record` there. The mobile UI
-  was fine — it was a dead store, not a dead panel. Kotlin now reports each
-  `onPageFinished` through a new `NativeHistory.recordVisit` JNI export into
-  `history::record_page_finished`, which resolves the tab's privateness from the registry
-  itself (Kotlin passes a bare tab id and is never trusted with a privateness flag). This
-  is the first `AppHandle`-backed native entry point, hence `ANDROID_APP` + `set_android_app`.
-  Android also has a real `WebView.title` at page-finished, so **Android history now has
-  titles while Windows/macOS do not** (they record `""`; only Linux has a title-changed
-  signal). Device-verified on a Galaxy S22; the JNI seam itself still has no automated
-  coverage — see gotcha 24 in `src-tauri/AGENTS.md`.
 - **`WorkspaceSwitcher`'s context-menu colour picker could never open.** The "Color" item
   set `showColorPicker` and cleared `ctxMenu` in the same handler, but the picker was
   rendered inside the `{ctxMenu && …}` block, so it unmounted in the commit that created
@@ -31,31 +31,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   colour dot (or a swatch) blurred the name input, and the empty-name `onBlur` cancelled
   the whole form. Both now `preventDefault` on mousedown so the input keeps focus.
 
-### Fixed
-
-- **Browsing history was never recorded on Android, so the mobile History sheet was
-  permanently blank.** `history::record` had exactly one non-test caller: the
-  `on_page_load` closure inside `nav::spawn_tab`. That is a **wry** callback, and
-  Android's content area is a **native Kotlin `WebView`** (`MainActivity.createTabWebView`),
-  so wry never observes a content load and nothing ever called `record` there. The mobile UI
-  was fine — it was a dead store, not a dead panel. Kotlin now reports each
-  `onPageFinished` through a new `NativeHistory.recordVisit` JNI export into
-  `history::record_page_finished`, which resolves the tab's privateness from the registry
-  itself (Kotlin passes a bare tab id and is never trusted with a privateness flag). This
-  is the first `AppHandle`-backed native entry point, hence `ANDROID_APP` + `set_android_app`.
-  Android also has a real `WebView.title` at page-finished, so **Android history now has
-  titles while Windows/macOS do not** (they record `""`; only Linux has a title-changed
-  signal). Device-verified on a Galaxy S22; the JNI seam itself still has no automated
-  coverage — see gotcha 24 in `src-tauri/AGENTS.md`.
-
-Nothing yet.
-
 ### Tests
 
-- New coverage for the previously untested `syncBus`, `protectionSummary`, `useOmnibox`,
-  `useMeasuredHeight`, `useNarrowViewport`, `useSafety`, `useDownloadToasts`,
-  `useAutofillSave`, `NavControls`, `OmniboxDropdown`, `SplitResizeHandle`,
-  `SplitIndicator`, `SkipLink` and `PrivacyDashboard` (2,496 lines, 14 files).
+- New coverage for the previously untested `url`, `syncBus`, `tauriInvoke`,
+  `protectionSummary`, `useOmnibox`, `useMeasuredHeight`,
+  `useNarrowViewport`, `useSafety`, `useDownloadToasts`, `useAutofillSave`,
+  `NavControls`, `OmniboxDropdown`, `SplitResizeHandle`, `SplitIndicator`, `SkipLink`,
+  `PrivacyDashboard` and `WorkspaceSwitcher`, plus the first tests for `customfilters.rs`
+  (22, covering its single-record HLC last-writer-wins merge and tombstones).
+- `tauriInvoke.on()`'s unsubscribe is now idempotent, so a double-invoked effect cleanup
+  cannot release a backend listener twice.
+- `url.originOf` now returns `null` for an opaque origin (`about:`, `data:`) instead of
+  the literal string `"null"`, which had been silently defeating every
+  `origin === null` guard in the app.
 
 ## [0.1.0] — unreleased
 

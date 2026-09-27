@@ -763,8 +763,8 @@ export const aegis: AegisApi = {
     // Phase B — the Rust handlers exist (`vault.rs`), but NO UI surface calls these yet: the
     // chrome-side autofill hook chain (`AutofillBadge` → `useVaultDomainSuggestions` →
     // `useVaultAutofill`) was deleted as dead, unmounted code. The channels stay declared and
-    // stay covered by the autopilot's `vault.crud` / `vault.autofillSuggestions` catalog
-    // entries; deleting them here would break that coverage, not the build.
+    // stay covered by the Rust `vault.rs` unit tests, which exercise the seal/unlock and
+    // suggestion paths directly; deleting them here would break that coverage, not the build.
     autofill: (options: { domain: string; username?: string }) =>
       dedupedCall<VaultRecord[]>(IPC.vaultAutofill, options),
     autofillSuggestions: (domain: string) =>

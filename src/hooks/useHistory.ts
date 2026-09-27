@@ -10,8 +10,6 @@ export function useHistory(): {
   search(): Promise<void>;
   remove(id: number): Promise<void>;
   clear(): Promise<void>;
-  /** Directly set entries (autopilot dev-only seeding; bypasses async refresh). */
-  _setEntries(entries: HistoryEntry[]): void;
 } {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
   const [query, setQueryState] = useState<string>('');
@@ -32,7 +30,7 @@ export function useHistory(): {
   // Two history.changed events in quick succession (e.g. navigating two pages back to
   // back) spawn concurrent refreshes; without this an older list()/search() resolving
   // last clobbers the panel with stale data, dropping the newest visits until the next
-  // change. The autopilot's history-row interaction caught exactly this race.
+  // change. An interaction test drives exactly this race.
   const refreshSeq = useRef(0);
 
   const refresh = useCallback(async (): Promise<void> => {
@@ -70,5 +68,5 @@ export function useHistory(): {
     await refresh();
   }, [refresh]);
 
-  return { entries, query, setQuery, search, remove, clear, _setEntries: setEntries };
+  return { entries, query, setQuery, search, remove, clear };
 }
