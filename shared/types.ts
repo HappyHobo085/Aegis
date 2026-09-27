@@ -65,7 +65,6 @@ export const IPC = {
   evtNavFailed: 'nav.failed',
   evtNavCrashed: 'nav.crashed',
   evtAdblockBlockedCount: 'adblock.blockedCount',
-  evtRedirectBlocked: 'redirect.blocked',
   evtHistoryChanged: 'history.changed',
   // downloads (Phase 5, chrome -> main)
   downloadsList: 'downloads.list',
@@ -438,13 +437,6 @@ export interface BlockedCount {
   page: number; // resets each top-frame, non-same-document navigation
   session: number; // monotonic
 }
-/** A scripted (non-user-gesture) cross-origin top-frame navigation that the
- * redirect guard cancelled. Auto-opens the destination in a new background tab. */
-export interface RedirectBlocked {
-  viewId: ViewId;
-  from: string;
-  to: string;
-}
 export interface ListSourceResult {
   listId: string;
   ok: boolean;
@@ -696,9 +688,6 @@ export interface AegisApi {
     clearAllowlist(): Promise<AdblockState>;
     getState(): Promise<AdblockState>;
     onBlockedCount(cb: (c: BlockedCount) => void): () => void;
-  };
-  redirect: {
-    onBlocked(cb: (r: RedirectBlocked) => void): () => void;
   };
   lists: {
     /**

@@ -96,24 +96,24 @@ const CHANNEL_LITERAL = /^([a-z][A-Za-z0-9]*(?:[.:][A-Za-z0-9]+)+)$/;
 /**
  * Catalog entries with NO Rust implementation of any kind.
  *
- * Currently one. `redirect.blocked` is a genuine orphan: `redirect_guard.rs` contains zero
- * `emit_event` calls, and no Kotlin calls `__aegisRedirectBlocked` (`MainActivity`'s
- * `showRedirectBlocked` calls `__aegisOpenTab` directly). Both platforms really do open the
- * blocked destination in a background tab — natively, via
- * `redirect_guard::on_blocked_redirect_to_new_tab` → `tabs::open_redirect_background`
- * (`linux_layout.rs:434`, `nav_policy_win.rs:74`) — so the renderer's `App.tsx` subscription
- * was dead on every platform, and EMITTING the event would be the bug: the renderer callback
- * also calls `tabs.create(r.to, true)`, so an emit would open two background tabs per blocked
- * redirect. The dead producer is load-bearing in the other direction; the dead CONSUMER is
- * being deleted, along with this entry.
+ * **Currently EMPTY, and that is the goal state.** Every name in the catalog is implemented in
+ * Rust, so a renderer's `invoke` reaches an arm and a renderer's `listen` reaches a relay.
+ *
+ * This inventory used to hold one entry, `redirect.blocked`, and the history is the reason the
+ * guard above exists. Nothing ever emitted it: `redirect_guard.rs` contains zero `emit_event`
+ * calls, and no Kotlin called `__aegisRedirectBlocked` (`MainActivity`'s `showRedirectBlocked`
+ * calls `__aegisOpenTab` directly). The blocked-redirect behaviour is real but opens the
+ * destination NATIVELY — `redirect_guard::on_blocked_redirect_to_new_tab` →
+ * `tabs::open_redirect_background` (`linux_layout.rs:434`, `nav_policy_win.rs:74`) — so the
+ * renderer's `App.tsx` subscription was dead on every platform. Worse, the dead producer was
+ * load-bearing in the OTHER direction: the renderer callback itself called
+ * `tabs.create(r.to, true)`, so adding the Rust emit would have opened TWO background tabs per
+ * blocked redirect. The whole chain (declaration, `ipcClient` wrapper, `App.tsx` subscription,
+ * Android `window` bridge, and the `src-tauri`/`shared` AGENTS.md text that claimed the emit
+ * existed) was deleted together. Add an entry here ONLY for a name you can explain in the value
+ * string; every unexplained orphan fails direction 1.
  */
-const FORWARD_UNPRODUCED: Record<string, string> = {
-  'redirect.blocked':
-    'No Rust emitter (`redirect_guard.rs` has zero `emit_event` calls) and no Kotlin caller of ' +
-    '`__aegisRedirectBlocked`. The renderer subscription is dead on every platform and is ' +
-    'being deleted; emitting the event instead would open TWO background tabs per blocked ' +
-    'redirect, because the native path already opens one (`tabs::open_redirect_background`).',
-};
+const FORWARD_UNPRODUCED: Record<string, string> = {};
 
 /**
  * Names Rust ACTS ON that the catalog does not declare.

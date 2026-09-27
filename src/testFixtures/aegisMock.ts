@@ -104,9 +104,6 @@ export function aegisMockModule() {
           .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
         onBlockedCount: vi.fn().mockReturnValue(() => {}),
       },
-      redirect: {
-        onBlocked: vi.fn().mockReturnValue(() => {}),
-      },
       lists: {
         updateNow: vi.fn().mockResolvedValue(undefined),
         onUpdateResult: vi.fn().mockReturnValue(() => {}),

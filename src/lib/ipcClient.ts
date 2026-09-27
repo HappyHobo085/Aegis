@@ -14,7 +14,6 @@ import {
   Settings,
   AdblockState,
   BlockedCount,
-  RedirectBlocked,
   ListUpdateResult,
   Subscription,
   DownloadEntry,
@@ -491,8 +490,8 @@ export const aegis: AegisApi = {
     getState: () => dedupedCall<AdblockState>(IPC.adblockGetState, undefined),
     onBlockedCount: (cb) => {
       // Android has no Tauri event bus on the content side; MainActivity pushes
-      // BlockedCount via window.__aegisBlockedCount (set up here), mirroring nav state /
-      // redirect.onBlocked. The desktop path uses the Tauri event.
+      // BlockedCount via window.__aegisBlockedCount (set up here), mirroring nav state.
+      // The desktop path uses the Tauri event.
       if (androidBridge()) {
         const w = window as unknown as {
           __aegisBlockedCountCbs?: Set<(c: BlockedCount) => void>;
@@ -508,25 +507,13 @@ export const aegis: AegisApi = {
       return on<BlockedCount>(IPC.evtAdblockBlockedCount, cb);
     },
   },
-  redirect: {
-    onBlocked: (cb: (r: RedirectBlocked) => void) => {
-      // Android has no Tauri event bus on the content side; the Kotlin client pushes
-      // RedirectBlocked via window.__aegisRedirectBlocked (set up here), mirroring nav state.
-      if (androidBridge()) {
-        const w = window as unknown as {
-          __aegisRedirectBlockedCbs?: Set<(r: RedirectBlocked) => void>;
-          __aegisRedirectBlocked?: (r: RedirectBlocked) => void;
-        };
-        const cbs = (w.__aegisRedirectBlockedCbs ??= new Set());
-        cbs.add(cb);
-        w.__aegisRedirectBlocked = (r) => cbs.forEach((f) => f(r));
-        return () => {
-          cbs.delete(cb);
-        };
-      }
-      return on<RedirectBlocked>(IPC.evtRedirectBlocked, cb);
-    },
-  },
+  // There is deliberately no `redirect.*` namespace. A blocked cross-origin redirect is NOT
+  // reported to the chrome: the native guard opens the destination itself —
+  // `redirect_guard::on_blocked_redirect_to_new_tab` → `tabs::open_redirect_background` on
+  // desktop, a Snackbar on Android — so there is no event, no `window` bridge, and nothing to
+  // subscribe to. Do not add one. A second open path would open TWO background tabs per
+  // blocked redirect, and an event with no consumer is the drift this repo now tests for
+  // (`shared/ipcCatalog.drift.test.ts`).
   lists: {
     updateNow: () => dedupedCall<void>(IPC.listsUpdateNow, undefined),
     onUpdateResult: (cb) => on<ListUpdateResult>(IPC.evtListsUpdateResult, cb),

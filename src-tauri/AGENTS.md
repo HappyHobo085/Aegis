@@ -785,10 +785,15 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     full autopilot green (92/0/1, no false blocks). Windows uses `block_at_start` via `NavigationStarting`
     (top-frame only, fires once per hop → resolves app-initiated at the hop and stores it for redirect
     hops to inherit). Allowed navs call `use_()`; non-Response / non-blocked fall through (`false`) so
-    downloads/new-windows keep WebKit's default handling. A block emits `redirect.blocked` →
-    the chrome automatically opens the destination in a new background tab via
-    `tabs.create(url, true)` (with a grace period for chrome-initiated navigations to
-    suppress spurious bg tabs from old-page timer redirects). Other platforms keep
+    downloads/new-windows keep WebKit's default handling. A block is reported to the chrome by
+    NO event: an earlier version of this gotcha claimed it emitted `redirect.blocked`, which the
+    chrome handled by calling `tabs.create(url, true)` behind a 1.5 s grace period for
+    chrome-initiated navigations. **None of that existed** — no Rust ever emitted the event, and
+    the declaration, the `ipcClient` wrapper, the `App.tsx` subscription and the Android
+    `window` bridge are all deleted. The destination is opened NATIVELY, by
+    `redirect_guard::on_blocked_redirect_to_new_tab` → `tabs::open_redirect_background`
+    (`linux_layout.rs:434`, `nav_policy_win.rs:74`), so there is no event to emit, no grace
+    period, and no second open path to double-open. Other platforms keep
     Tauri's `on_navigation` + their own native top-frame hooks (Windows `NavigationStarting`,
     macOS `WKNavigationDelegate`, Android `shouldOverrideUrlLoading`). **The scripted-redirect
     GUARD specifically has no macOS tier** — there is no `nav_policy_mac.rs`, so nothing on

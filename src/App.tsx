@@ -87,7 +87,6 @@ function getIsMobile(): boolean {
 const isWindows = typeof navigator !== 'undefined' && navigator.userAgent.includes('Windows');
 
 const CONTENT_ANCHOR_ID = 'content-anchor';
-const CHROME_NAV_REDIRECT_GRACE_MS = 1500;
 const CHROME_NAV_REASSERT_MS = 250;
 
 function DesktopApp() {
@@ -144,11 +143,6 @@ function DesktopApp() {
   const [sidebarWidth, setSidebarWidth] = useState(320);
   const [downloadsOpen, setDownloadsOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
-  // When the user explicitly navigates from chrome (address bar, saved/history/favorites),
-  // the page being left can still fire a resize/timer redirect before the new navigation
-  // commits. Streamex-style pages do this during sidebar/sheet changes. Suppress only those
-  // old-page redirect events briefly; redirects from the destination page still surface.
-  const pendingChromeNavRef = useRef<{ fromOrigin: string | null; startedAt: number } | null>(null);
   // Monotonic counter for chrome-initiated navigations, so a re-assert timer can tell whether
   // it is still the newest one. See `navigateFromChrome`.
   const chromeNavSeqRef = useRef(0);
@@ -173,10 +167,6 @@ function DesktopApp() {
     // re-navigated to /a, undoing the newer navigation. Each nav takes a ticket; a timer whose
     // ticket has been superseded does nothing.
     const ticket = ++chromeNavSeqRef.current;
-    pendingChromeNavRef.current = {
-      fromOrigin,
-      startedAt: Date.now(),
-    };
     nav.navigate(raw);
     window.setTimeout(() => {
       if (ticket !== chromeNavSeqRef.current) return;
@@ -559,24 +549,6 @@ function DesktopApp() {
       offFailed();
       offCrashed();
     };
-  }, [tabs.activeId]);
-
-  // A scripted cross-origin top-frame redirect was cancelled by the native guard;
-  // automatically open the destination in a new background tab. The grace period
-  // suppresses spurious bg tabs from old-page timer redirects during chrome-initiated
-  // navigations.
-  useEffect(() => {
-    return aegis.redirect.onBlocked((r) => {
-      if (r.viewId !== tabs.activeId) return;
-      const pending = pendingChromeNavRef.current;
-      if (pending) {
-        const fresh = Date.now() - pending.startedAt <= CHROME_NAV_REDIRECT_GRACE_MS;
-        const fromOldPage = pending.fromOrigin !== null && originOf(r.from) === pending.fromOrigin;
-        if (fresh && fromOldPage) return;
-        if (!fresh) pendingChromeNavRef.current = null;
-      }
-      void tabs.create(r.to, true);
-    });
   }, [tabs.activeId]);
 
   // Main owns content hide/show for failures and crashes. When a fresh

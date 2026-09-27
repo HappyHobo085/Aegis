@@ -20,7 +20,7 @@
 //   false for `(Local, Remote)`, which is what keeps untrusted pages off the `ipc` command.
 // - There is **no** injected callback that stands in for it. Grepping the tree for a
 //   content→core shim turns up only `__aegisFind` (a macOS find-in-page shim), `__aegisBlocked`
-//   (a page-local DOM stub) and the Android `__aegisOpenTab` / `__aegisRedirectBlocked` bridges.
+//   (a page-local DOM stub) and the Android `__aegisOpenTab` bridge.
 //   Nothing emits `form:formStateChanged` or `form:detectionResult` from any platform.
 // - The MutationObserver this module documents **is not in the codebase at all** — it was
 //   described in a comment, never written.

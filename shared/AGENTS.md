@@ -16,26 +16,26 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
   - Data models — `NavState`, `Favorite`, `HistoryEntry`, `SavedItem`,
     `DownloadEntry`, `SitePermission`, `Settings` (incl. `tabIdleTimeout`),
     `AdblockState`, `UpdateState`, `SafetyInterstitialPayload`, `Subscription`,
-    `TabMeta`, `TabsState` (the ordered tab list + active id), `RedirectBlocked`, etc.
+    `TabMeta`, `TabsState` (the ordered tab list + active id), etc.
   - `tabs.*` channels: `tabs.create` (optional `background` flag — opens without
     switching the active tab, for mobile `target=_blank`), `tabs.close`, `tabs.activate`,
     `tabs.reorder`, `tabs.setPinned`, `tabs.reopenClosed`, `tabs.list`, `tabs.setTitle`
     (chrome relays the content title into the registry; Android has no native title signal).
   - `tabs.state` event (emitted on every structural change) + `tabs.shortcut`
     event (Ctrl+T/W/Shift+T from native accelerator/GTK hook).
-  - `redirect.blocked` event (`evtRedirectBlocked`, payload `RedirectBlocked { viewId,
-from, to }`) — **DECLARED BUT NOT EMITTED ANYWHERE.** An earlier version of this doc
-    claimed it was "emitted per-platform from the native nav-policy hook"; that was false and
-    `ipcCatalog.drift.test.ts` now fails the build if a doc drifts that way again. The blocked-redirect
-    behaviour really does ship, but through two mechanisms that bypass this event entirely:
-    desktop opens the destination natively in `redirect_guard::on_blocked_redirect_to_new_tab`
-    (→ `tabs::open_redirect_background`), and Android injects `window.__aegisOpenTab(...)` into
-    the chrome from `MainActivity.kt`. The renderer's `aegis.redirect.onBlocked` callback
-    (`App.tsx`) _also_ calls `tabs.create(r.to, true)`, so **emitting this event from Rust would
-    open two background tabs per blocked redirect** — the missing producer is load-bearing, not
-    an oversight. If you ever wire it up, delete one of the two open paths in the same change.
-    `autopilot/channelDrift.test.ts` lists this channel in a `KNOWN_UNPRODUCED` inventory with
-    this reasoning; adding a fourth unexplained orphan still fails the build.
+  - **There is deliberately no `redirect.*` channel or event.** A scripted cross-origin
+    top-frame redirect that the guard cancels is reported to the chrome by NO channel — the
+    native guard opens the destination itself: `redirect_guard::on_blocked_redirect_to_new_tab`
+    → `tabs::open_redirect_background` on desktop, and a Material Snackbar on Android
+    (a chrome-layer toast can't paint over the native content WebView; see
+    `MainActivity.showRedirectBlocked`). An earlier version of this doc claimed a
+    `redirect.blocked` event carried `{viewId, from, to}` to an `aegis.redirect.onBlocked`
+    callback that then called `tabs.create(r.to, true)`. **That was never true, and the whole
+    chain is now deleted** — no Rust ever emitted the event, and the renderer's own open path is
+    precisely why ADDING the emit would have been the bug: both would open TWO background tabs
+    per blocked redirect. If you ever want the chrome to learn about a block, wire ONE open path
+    and delete the other in the same change. `ipcCatalog.drift.test.ts` is what catches the
+    declared-but-unimplemented case, so an orphan cannot quietly reappear.
   - `find.*` channels + `find.state` event:
     - `find.start` (payload `{ query, caseSensitive?, viewId? }`) — begin/update a
       find-in-page session on the active (or specified) tab.
