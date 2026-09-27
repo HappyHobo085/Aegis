@@ -75,7 +75,10 @@ dotted event name.
     saved (6 tests).
   - `history.rs` — **unit-tested via `test_support::with_tmp_app`:** record
     dedup, scheme filter, private-tab skip, list order + pagination, search,
-    remove + clear, unknown-channel dispatch (6 tests).
+    remove + clear, update_title, unknown-channel dispatch, and the Android
+    `record_page_finished` path (12 tests).
+    **Visits are recorded by the PLATFORM, not by the chrome** — see the Android
+    history gotcha below before touching either side.
   - `downloads.rs` — **unit-tested via `test_support::with_tmp_app`:** private-tab
     skip, `on_requested` filename derivation + state, `on_finished` complete/
     interrupted, `remove` tombstone, `clear` keeps in-progress (6 tests).
@@ -612,8 +615,24 @@ dispatcher takes `app: AppHandle<R>` (or any generic `<R: Runtime>`):
 
 Hand-written Kotlin under `app/src/main/java/com/aegis/browser/`:
 `MainActivity.kt` (native content WebView; `shouldInterceptRequest` → ad-block +
-malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt`
-(JNI into the Rust `libapp_lib.so`). `AndroidManifest.xml` grants only `INTERNET`.
+malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt` +
+`NativeHistory.kt` (JNI into the Rust `libapp_lib.so`).
+`AndroidManifest.xml` grants only `INTERNET`.
+
+**⚠ A `--debug` build is a DIFFERENT APP, not an upgrade — and `adb install` will not
+tell you.** `tauri android build --debug` gets Gradle's standard `applicationIdSuffix`,
+so it installs as **`com.aegis.browser.debug`** SIDE-BY-SIDE with the release
+`com.aegis.browser`. `adb install -r <debug.apk>` prints `Success` and leaves the
+release app's `lastUpdateTime` **unchanged** — so a debug APK can install perfectly
+while you go on testing the _release_ binary, see none of your new code, and conclude
+your fix is broken. This cost a long false-negative investigation. Rules:
+
+- launch `com.aegis.browser.debug` (not `com.aegis.browser`) to test a debug build;
+- confirm `dumpsys package <pkg> | grep lastUpdateTime` actually moved;
+- `run-as` does **not** work on either variant (`flags=0x0`, no `DEBUGGABLE`), so the
+  device store cannot be read directly — use logcat or the UI as the positive signal;
+- the debug universal APK is ~280 MB (unstripped) vs ~20 MB release, which is a handy
+  tell for which one a device is actually running.
 
 **Mobile chrome (`MainActivity.kt`), kept in sync with the `MobileApp` shell in `src/`:**
 
@@ -1032,6 +1051,49 @@ widget above native WebKit windows.
     fresh cookie jar for new tabs in the new profile — acceptable (a different
     network/privacy context). **Lesson:** never give one webview different browser args
     than its same-profile siblings; isolate the profile if the args must differ.
+
+24. **A visit is recorded by the PLATFORM that owns the page load — and on Android
+    that is Kotlin, so `on_page_load` silently records NOTHING there.** `history::record`
+    had exactly one non-test caller: the `on_page_load` closure inside
+    `nav::spawn_tab`. That is a **wry** callback, and Android's content area is a
+    **native Kotlin `WebView`** (`MainActivity.createTabWebView`), so wry never sees a
+    content load and nothing ever called `record` on Android. Result: the store stayed
+    empty and the mobile History sheet was permanently blank — while the panel, the
+    `useHistory` hook, the `history.*` channels and 12 Rust unit tests were all fine.
+    **The tell was in the source:** `record`, `should_record_visit`, `apply_visit` and
+    `MAX_ENTRIES` each carried `#[cfg_attr(target_os = "android", allow(dead_code))]`.
+    That attribute was not a harmless lint exemption — it was the bug, suppressed.
+    **Lesson: a `cfg`-scoped `allow(dead_code)` on a FEATURE is a claim that the
+    feature does not exist on that platform. Read it as a parity gap and go verify,
+    never as a cleanup.** Fix: `NativeHistory.recordVisit(tabId, url, title)` (Kotlin
+    `object`, called from `makeContentClient(id).onPageFinished`) → JNI export
+    `Java_com_aegis_browser_NativeHistory_recordVisit` → `record_page_finished`.
+    Three things that path has to get right:
+
+        - **Kotlin is the ONLY side that sees the load**, and Kotlin→Rust is also the only
+          usable direction (Rust cannot up-call into Kotlin). So the core cannot own this
+          step on Android; the dependency is structural, not an oversight.
+        - **Kotlin passes the tab id and NEVER a privateness flag.** `record_page_finished`
+          resolves `is_private` from the registry itself, exactly as `nav.rs` does. A
+          caller-supplied flag is a private-visit leak, and it is covered by
+          `record_page_finished_skips_private_tabs_and_keeps_the_title` (verified
+          non-vacuous: reintroducing `false` fails it).
+        - **It needs an `AppHandle`**, which no other JNI entry point does — they are all
+          pure functions over their arguments. Hence `ANDROID_APP: OnceLock<AppHandle>` +
+          `set_android_app` from `lib.rs` setup. This is the first `AppHandle`-backed
+          native entry point; expect the next native feature to want one too.
+          Also note the asymmetry this exposes: Android records a real `WebView.title`
+          inline, so **Android history has titles while Windows/macOS do not** (they record
+          `""` and only Linux has a title-changed signal — `update_title` is Linux-only).
+          The JNI boundary itself (symbol name, arity, the `onPageFinished` call site) has no
+          automated coverage: `cargo check --target aarch64-linux-android` proves the Rust side
+          and `compileUniversalDebugKotlin` the Kotlin side, but only a real device proves the
+          two agree. **Device-VERIFIED on a Galaxy S22 (2026-09-27):** navigating to
+          `https://example.com` produced `onPageFinished -> recordVisit -> app=SET
+
+    is_private=false should_record=true -> store len=1`, and the mobile History sheet
+    rendered "1 visit / Example Domain / example.com / just now". Only the JNI seam
+    needed proving; the hook itself was always correct.
 
 e. **Size the webviews via `size_allocate`, NOT `set_size_request` — or the window
 can't shrink.** In a `GtkFixed`, `set_size_request(w, h)` sets each child's

@@ -355,6 +355,16 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
 
     override fun onPageFinished(view: WebView, url: String) {
       pushNavState(id, url, false, view)
+      // Record the visit in the Rust core's history store. On desktop this comes from
+      // wry's on_page_load (nav.rs); here the content view is a native WebView, so
+      // Kotlin is the only side that sees the load and has to report it down. The core
+      // resolves the tab's privateness itself from `id` — never pass a flag from here.
+      // Wrapped: a native failure here must not take down a page that loaded fine.
+      try {
+        NativeHistory.recordVisit(id, url, view.title ?: "")
+      } catch (t: Throwable) {
+        Log.w("AegisHistory", "recordVisit failed for $url", t)
+      }
       // Per-TAB, not "the active tab": the pull-to-refresh spinner belongs to the tab the
       // gesture ran on, and this is the only reliable end to it. Filtering on activeTabId
       // left the latch set whenever the user switched tabs mid-load, which killed

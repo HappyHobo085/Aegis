@@ -673,6 +673,13 @@ pub fn run() {
         // Coalesce per-navigation history writes into a periodic background flush (the
         // live history lives in an in-memory cache; see history.rs "Write batching").
         history::start_flush(app.handle());
+        // Android only: publish the handle the `NativeHistory.recordVisit` JNI entry
+        // point needs. On desktop the visit is recorded from wry's `on_page_load`
+        // (nav.rs); Android's content view is a native Kotlin WebView, so Kotlin has to
+        // report the load down to us, and recording needs managed state. Must come after
+        // every `.manage()` above — see the ordering note on `sync::start`.
+        #[cfg(target_os = "android")]
+        history::set_android_app(app.handle());
         // Same batching for downloads (per-event full-file fsync → periodic flush).
         downloads::start_flush(app.handle());
 

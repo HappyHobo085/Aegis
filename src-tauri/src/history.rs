@@ -1,6 +1,8 @@
 //! Browsing history (history.* IPC) backed by the JSON store. Visits are recorded
-//! from the content webview's page-load (see nav.rs). list/search return newest
-//! first; the collection is capped to keep the file bounded.
+//! from the content webview's page-load — on desktop from `nav::spawn_tab`'s
+//! `on_page_load` closure, on Android from `record_page_finished` (below; the
+//! content view there is a native Kotlin WebView, so wry sees no page-load at all).
+//! list/search return newest first; the collection is capped to keep the file bounded.
 //!
 //! History is NOT syncable (product decision) — it stays device-local with plain
 //! hard-delete storage (no sync envelope / tombstones), so `clear` truly removes the URLs
@@ -24,7 +26,6 @@ use tauri::{AppHandle, Manager, Runtime};
 
 use crate::jsonstore;
 
-#[cfg_attr(target_os = "android", allow(dead_code))]
 const MAX_ENTRIES: usize = 5000;
 
 /// In-memory history cache (managed state) — the source of truth while the app runs.
@@ -39,7 +40,6 @@ struct HistInner {
 }
 
 /// Pure predicate: should this (url, owning-tab-privateness) pair be written to history?
-#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn should_record_visit(url: &str, is_private: bool) -> bool {
     if is_private {
         return false;
@@ -49,7 +49,6 @@ pub fn should_record_visit(url: &str, is_private: bool) -> bool {
 
 /// Pure: append a visit to `items` (dedup the immediately-previous URL + cap to MAX_ENTRIES).
 /// Returns true if a row was added (false = a consecutive duplicate, a no-op).
-#[cfg_attr(target_os = "android", allow(dead_code))]
 fn apply_visit(items: &mut Vec<Value>, url: &str, title: &str, now: i64) -> bool {
     if items
         .last()
@@ -180,7 +179,6 @@ pub fn start_flush(app: &AppHandle) {
 /// Record a visit (called on top-frame page load). Skips non-web schemes and
 /// de-dups consecutive visits to the same URL. No-ops for private tabs. Batched in
 /// memory — see the module-level "Write batching" note.
-#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn record<R: Runtime>(app: &AppHandle<R>, url: &str, title: &str, is_private: bool) {
     if !should_record_visit(url, is_private) {
         return;
@@ -188,6 +186,80 @@ pub fn record<R: Runtime>(app: &AppHandle<R>, url: &str, title: &str, is_private
     let now = jsonstore::now_ms();
     if mutate(app, false, |items| apply_visit(items, url, title, now)) {
         crate::emit_event(app, "history.changed", Value::Null);
+    }
+}
+
+/// Record a finished top-level page load for `tab_id` — the ANDROID entry point.
+///
+/// Desktop records from the `on_page_load` closure in `nav::spawn_tab`, which is a
+/// **wry** webview callback. Android's content view is a **native Kotlin `WebView`**
+/// (`MainActivity.createTabWebView`), so wry never observes those loads and
+/// `on_page_load` never fires for a browsed page. Nothing else called `record`
+/// either, so on Android the store was never written and the History sheet was
+/// permanently empty (the mobile UI itself was fine — it was a dead store, not a
+/// dead panel). Kotlin now reports each `onPageFinished` through the
+/// `NativeHistory.recordVisit` JNI export below, which lands here.
+///
+/// Privateness is resolved HERE from the tab registry, exactly as `nav.rs` does for
+/// desktop: Kotlin passes only the tab id and is never trusted to decide it, since
+/// getting it wrong would write a private tab's visits to disk.
+///
+/// Android also has a real `WebView.title` by the time `onPageFinished` fires, so
+/// the title is recorded inline here instead of waiting for a title-changed signal
+/// (which only exists on Linux — see `update_title`).
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn record_page_finished<R: Runtime>(app: &AppHandle<R>, tab_id: u32, url: &str, title: &str) {
+    record(app, url, title, crate::tabs::is_private(app, tab_id));
+}
+
+/// The app handle, for the JNI entry point that needs managed state. Kotlin -> Rust
+/// is the only usable direction on Android (Rust cannot up-call into Kotlin), and
+/// every other native entry point gets away without an `AppHandle` because it is a
+/// pure function over its arguments. Recording a visit cannot: the `HistoryStore`
+/// and the tab registry only exist as managed state behind a handle.
+#[cfg(target_os = "android")]
+static ANDROID_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
+
+/// Publish the app handle to the Android JNI entry point. Called once from `lib.rs`
+/// setup. Idempotent (a second call is ignored, not an error).
+#[cfg(target_os = "android")]
+pub fn set_android_app(app: &AppHandle) {
+    let _ = ANDROID_APP.set(app.clone());
+}
+
+/// JNI bridge for Android's `NativeHistory.recordVisit`, called from each content
+/// WebView's `onPageFinished`. Same pattern (and same `ffi_guard` obligation) as
+/// `safety.rs` / `adblock_engine.rs`; lives in libapp_lib.so.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+// `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+// name means two libraries could export the same symbol, which the linker leaves
+// undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+// by name), so it is allowed here explicitly rather than by the module scope —
+// `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeHistory_recordVisit(
+    mut env: jni::JNIEnv,
+    _this: jni::objects::JObject,
+    tab_id: jni::sys::jint,
+    url: jni::objects::JString,
+    title: jni::objects::JString,
+) {
+    // A tab id is unsigned in the registry, so a negative one is malformed.
+    let Ok(tab_id) = u32::try_from(tab_id) else {
+        return;
+    };
+    // Read the JNI args into owned Strings FIRST: `JNIEnv` is `!UnwindSafe`, so it
+    // must stay outside the `ffi_guard` closure (see lib.rs::ffi_guard).
+    let url: String = env.get_string(&url).map(|s| s.into()).unwrap_or_default();
+    let title: String = env.get_string(&title).map(|s| s.into()).unwrap_or_default();
+    // A page can finish before setup publishes the handle. Dropping one visit is
+    // strictly better than writing into a store that isn't managed yet.
+    let Some(app) = ANDROID_APP.get() else {
+        return;
+    };
+    if crate::ffi_guard(|| record_page_finished(app, tab_id, &url, &title)).is_none() {
+        eprintln!("[aegis-history] recordVisit panicked for tab {tab_id}; visit dropped");
     }
 }
 
@@ -450,6 +522,73 @@ mod tests {
     fn dispatch_ignores_unknown_channel() {
         with_tmp_app(|app| {
             assert!(dispatch(app, "history.nope", &json!({})).is_none());
+        });
+    }
+
+    /// The Android record path (`record_page_finished`) resolves the tab's privateness
+    /// from the registry. That resolution is the load-bearing part of the fix — Kotlin
+    /// passes a bare tab id and never decides privateness itself, so if this lookup were
+    /// wrong a private tab's pages would be written to disk in plain history. Runs on
+    /// every target (the function is platform-agnostic; only its JNI caller is
+    /// Android-only), which is the whole reason it exists as a separate seam.
+    #[test]
+    fn record_page_finished_skips_private_tabs_and_keeps_the_title() {
+        with_tmp_app(|app| {
+            // A normal tab (the boot tab, id 1) records, with the title Android has.
+            record_page_finished(app, 1, "https://normal.test/", "Normal Page");
+            let items = snapshot(app);
+            assert_eq!(items.len(), 1, "a normal tab's visit must be recorded");
+            assert_eq!(
+                items[0].get("url").and_then(Value::as_str),
+                Some("https://normal.test/")
+            );
+            assert_eq!(
+                items[0].get("title").and_then(Value::as_str),
+                Some("Normal Page"),
+                "the title Android supplies must be stored, not dropped"
+            );
+
+            // A private tab's visit must NOT be recorded.
+            let private_id = {
+                let tabs = app.state::<crate::tabs::Tabs>();
+                let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
+                reg.create_private(Some("https://private.test/".into()), false, 0, true);
+                let ts = reg.tabs_state();
+                ts.active_id
+            };
+            assert!(
+                crate::tabs::is_private(app, private_id),
+                "fixture must be private"
+            );
+            record_page_finished(app, private_id, "https://private.test/", "Secret");
+
+            let urls: Vec<String> = snapshot(app)
+                .iter()
+                .filter_map(|i| i.get("url").and_then(Value::as_str).map(String::from))
+                .collect();
+            assert_eq!(
+                urls,
+                vec!["https://normal.test/".to_string()],
+                "a private tab's visit must never reach the history store"
+            );
+        });
+    }
+
+    /// Non-web URLs are filtered on the Android path too — the malware interstitial
+    /// finishes its `loadDataWithBaseURL` warning page through the same
+    /// `onPageFinished`, and recording it would put an Aegis error page in history.
+    #[test]
+    fn record_page_finished_skips_non_web_schemes() {
+        with_tmp_app(|app| {
+            record_page_finished(app, 1, "about:blank", "");
+            record_page_finished(app, 1, "data:text/html,x", "");
+            record_page_finished(app, 1, "", "");
+            assert!(
+                snapshot(app).is_empty(),
+                "about:/data:/empty page-finishes must not be recorded"
+            );
+            record_page_finished(app, 1, "https://real.test/", "Real");
+            assert_eq!(snapshot(app).len(), 1);
         });
     }
 }
