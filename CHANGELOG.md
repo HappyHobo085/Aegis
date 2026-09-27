@@ -7,6 +7,34 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **The element picker's confirmation toast never appeared, on any platform.** The
+  toolbar picker awaits a `rule` off the return value of `picker.start`, but `start`
+  only injects the picking overlay and returns — and none of its four platform arms ever
+  populates a `rule`. The rule is delivered later, as the `picker.picked` event, once the
+  user clicks an element; nothing was subscribed to it, so "Hiding rule added: …" was
+  unreachable. It is now wired end to end (`aegis.picker.onPicked`), and the `rule?` that
+  was mis-shaped onto `start()`'s return type is gone. The button is also no longer
+  disabled while the pick is pending, since that part is asynchronous with the overlay.
+- **A My Filters panel left open across a pick showed the pre-pick text** until the
+  settings modal was reopened. The picker appends to the same store the panel reads, and
+  `customfilters.rs` emits nothing of its own, so `picker.picked` is the only signal there
+  is. It now triggers a targeted refetch.
+- **A background filter-list refresh left the renderer's copy of the metadata stale
+  forever.** `subs.add` and `subs.setEnabled` return the store _before_ their background
+  fetch runs — a brand-new subscription comes back with no "last updated" time by design —
+  and the core emits `subs.changed` when the fetch lands. Nothing was listening. This is
+  the `[LOW]` finding from the long-deleted `docs/CODE_AUDIT.md`, recorded and never
+  actioned. It had no visible symptom until now (`FilterListsTab` never displayed
+  `lastUpdated`/`etag`/`hash`, and subscriptions do not sync between devices), so it was a
+  trap for the next person to add a "last updated" column rather than a live bug.
+- **The IPC drift guard's "known and explained" lists are now empty.** The two real
+  entries in them are the two fixes above, and the guard fails if an excuse outlives the
+  defect it describes. It also now rejects a new subscriber that forgets to unsubscribe,
+  and the contract test's derived ratchet expects **every** catalogued event to have a
+  real subscriber — previously one was allowed to be missing.
+
 ### Added
 
 - **A test-coverage ratchet on both sides of the repo, wired into CI.** This is a gate, not

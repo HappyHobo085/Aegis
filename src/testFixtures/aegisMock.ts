@@ -81,6 +81,7 @@ export function aegisMockModule() {
         setEnabled: vi.fn(async () => []),
         add: vi.fn(async () => []),
         remove: vi.fn(async () => []),
+        onChanged: vi.fn(() => () => undefined),
       },
       customFilters: {
         get: vi.fn(async () => ''),
@@ -188,6 +189,7 @@ export function aegisMockModule() {
       },
       picker: {
         start: vi.fn().mockResolvedValue({ ok: false }),
+        onPicked: vi.fn(() => () => undefined),
       },
       update: {
         getState: vi

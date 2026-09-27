@@ -14,11 +14,22 @@ export function useSubscriptions(): {
 
   useEffect(() => {
     let active = true;
-    void aegis.subs.list().then((items) => {
-      if (active) setSubs(items);
-    });
+    const load = () =>
+      void aegis.subs.list().then((items) => {
+        if (active) setSubs(items);
+      });
+    load();
+    // `subs.add` and `subs.setEnabled` return the store BEFORE their background
+    // fetch runs, so a brand-new row comes back with `lastUpdated: null` and is
+    // stale by the time it is rendered. The core rewrites that row on a spawned
+    // thread (up to 25s) and then emits `subs.changed`; re-read on it. This hook
+    // previously had NO subscription at all, so the metadata stayed stale forever.
+    // `updateNow` deliberately keeps its own explicit re-read — it already awaits
+    // its own event, and a second refetch there would be a redundant round trip.
+    const off = aegis.subs.onChanged(load);
     return () => {
       active = false;
+      off();
     };
   }, []);
 

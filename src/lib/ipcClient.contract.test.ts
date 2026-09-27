@@ -989,15 +989,27 @@ const EVENTS: { name: string; run: () => () => void; event: string }[] = [
     run: () => aegis.form.onWillSubmit(NOOP),
     event: IPC.evtFormWillSubmit,
   },
+  // Both of these were UNSUBSCRIBED until 2026-09-27. `picker.picked` in particular
+  // had a UI that wanted it (`PickerButton`'s confirmation toast) wired to the RETURN
+  // value of `picker.start`, which no platform arm of `start` ever populates with a
+  // `rule` — so the toast was unreachable everywhere. It cannot be a return value at
+  // all: `start` injects the picking overlay and returns, and the pick happens later
+  // when the user clicks an element.
+  {
+    name: 'picker.onPicked',
+    run: () => aegis.picker.onPicked(NOOP),
+    event: IPC.evtPickerPicked,
+  },
+  { name: 'subs.onChanged', run: () => aegis.subs.onChanged(NOOP), event: IPC.evtSubsChanged },
 ];
 
 /** Events with no `aegis` subscriber, each with the reason. Mirrors the inventory in
  * `shared/ipcCatalog.drift.test.ts` — this file proves the ABSENCE at runtime, that one
  * proves it in the source. */
 const UNSUBSCRIBED: Record<string, string> = {
-  [IPC.evtPickerPicked]:
-    'picker.rs:301 emits it, but no UI consumes a picked element rule. Recorded as a real ' +
-    'defect in shared/ipcCatalog.drift.test.ts; adding a subscriber needs a product decision.',
+  // `picker.picked` used to be here. It is not a bridge-only event and not a real
+  // excuse — it is an event with a UI that needed it and had no way to get it, and is
+  // now pinned in EVENTS above as `picker.onPicked`. The rest are bridge-only.
   // Bridge-only events: on Android these are delivered through the `window.__aegis*`
   // callbacks instead of `listen`, so they appear in the Android describe below, not here.
   [IPC.evtNavState]: 'Android: __aegisNavState. Desktop: nav.onState (pinned below).',
@@ -1025,8 +1037,10 @@ describe('the event-name contract', () => {
       .filter(([key]) => key.startsWith('evt'))
       .map(([, value]) => value);
     const unaccounted = catalogEvents.filter((e) => !tauriSubscribed.has(e));
-    // The only event allowed to have no subscriber at all is the recorded defect.
-    expect(unaccounted).toEqual([IPC.evtPickerPicked]);
+    // Empty, and that is the goal: every catalogued event now has a real subscriber.
+    // It was `[IPC.evtPickerPicked]` until 2026-09-27, and a non-empty list here is a
+    // build failure, not a warning — an event nobody listens to is a silent defect.
+    expect(unaccounted).toEqual([]);
     // And every excuse must name an event that really exists and really is unclaimed.
     for (const [event, reason] of Object.entries(UNSUBSCRIBED)) {
       expect(catalogEvents).toContain(event);

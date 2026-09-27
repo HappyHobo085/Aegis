@@ -9,6 +9,7 @@ const add = vi.fn();
 const remove = vi.fn();
 const updateNow = vi.fn();
 const onUpdateResult = vi.fn();
+const onChanged = vi.fn();
 
 vi.mock('../lib/ipcClient', () => ({
   aegis: {
@@ -17,6 +18,7 @@ vi.mock('../lib/ipcClient', () => ({
       setEnabled: (...a: any[]) => setEnabled(...a),
       add: (...a: any[]) => add(...a),
       remove: (...a: any[]) => remove(...a),
+      onChanged: (...a: any[]) => onChanged(...a),
     },
     lists: {
       updateNow: (...a: any[]) => updateNow(...a),
@@ -56,7 +58,15 @@ beforeEach(() => {
   remove.mockResolvedValue(seed);
   updateNow.mockResolvedValue(undefined);
   onUpdateResult.mockReturnValue(() => {});
+  onChanged.mockReturnValue(() => {});
 });
+
+/** Fire `subs.changed` the way `subs.rs:196` does, after the hook subscribed. */
+function emitSubsChanged(): void {
+  const cb = onChanged.mock.calls.at(-1)?.[0] as (() => void) | undefined;
+  if (!cb) throw new Error('useSubscriptions never subscribed to subs.changed');
+  cb();
+}
 
 describe('useSubscriptions', () => {
   it('seeds subs from aegis.subs.list on mount', async () => {
@@ -135,5 +145,72 @@ describe('useSubscriptions', () => {
     });
     expect(list).toHaveBeenCalledTimes(2);
     expect(result.current.subs.every((s) => s.lastUpdated === 9999)).toBe(true);
+  });
+
+  // ---- subs.changed (added 2026-09-27) ----
+  //
+  // Until then this hook had NO `on(...)` subscription at all, which is why the core's
+  // `subs.changed` event reached nobody. `subs.add` and `subs.setEnabled` return the
+  // store as it is BEFORE their background fetch runs (`subs.rs:172` returns
+  // `jsonstore::live(items)` immediately, with `lastUpdated: null` for a new row at
+  // `subs.rs:338-343`); the core then rewrites the row on a spawned thread up to 25s
+  // later and emits at `subs.rs:196`. So the hook's copy was stale by design, forever.
+
+  it('subscribes to subs.changed on mount', () => {
+    renderHook(() => useSubscriptions());
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('re-reads the list when subs.changed fires (a background fetch finished)', async () => {
+    const refreshed = seed.map((s) => sub({ ...s, lastUpdated: 9999, hash: 'abc' }));
+    list.mockResolvedValueOnce(seed).mockResolvedValue(refreshed);
+    const { result } = renderHook(() => useSubscriptions());
+    await waitFor(() => expect(result.current.subs).toHaveLength(2));
+    expect(list).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      emitSubsChanged();
+    });
+
+    await waitFor(() =>
+      expect(result.current.subs.every((s) => s.lastUpdated === 9999)).toBe(true),
+    );
+    expect(list).toHaveBeenCalledTimes(2);
+  });
+
+  it('add() can land a row whose lastUpdated is still null, and subs.changed repairs it', async () => {
+    // `subs.rs:338-343` deliberately returns the PRE-fetch row, so a brand-new
+    // subscription comes back with `lastUpdated: null`. That intermediate state is the
+    // defect; the event is the repair. Both halves are asserted, because a test that only
+    // checked the final state would pass against code that never went stale.
+    const pending = [
+      ...seed,
+      sub({ listId: 'custom', url: 'https://lists.example/custom.txt', lastUpdated: null }),
+    ];
+    add.mockResolvedValue(pending);
+    const { result } = renderHook(() => useSubscriptions());
+    await waitFor(() => expect(result.current.subs).toHaveLength(2));
+    await act(async () => {
+      await result.current.add('https://lists.example/custom.txt');
+    });
+    expect(result.current.subs[2].lastUpdated).toBeNull();
+
+    const repaired = pending.map((s) =>
+      s.listId === 'custom' ? sub({ ...s, lastUpdated: 42 }) : s,
+    );
+    list.mockResolvedValue(repaired);
+    await act(async () => {
+      emitSubsChanged();
+    });
+    await waitFor(() => expect(result.current.subs[2].lastUpdated).toBe(42));
+  });
+
+  it('unsubscribes from subs.changed on unmount', () => {
+    const off = vi.fn();
+    onChanged.mockReturnValueOnce(off);
+    const { unmount } = renderHook(() => useSubscriptions());
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(off).toHaveBeenCalledTimes(1);
   });
 });

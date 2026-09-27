@@ -201,9 +201,16 @@ describe('shared/types — Phase 4 additions', () => {
       setEnabled: true,
       add: true,
       remove: true,
+      onChanged: true,
     };
     const cfShape: Record<keyof CustomFiltersApi, true> = { get: true, set: true };
-    expect(Object.keys(subsShape).sort()).toEqual(['add', 'list', 'remove', 'setEnabled']);
+    expect(Object.keys(subsShape).sort()).toEqual([
+      'add',
+      'list',
+      'onChanged',
+      'remove',
+      'setEnabled',
+    ]);
     expect(Object.keys(cfShape).sort()).toEqual(['get', 'set']);
   });
 });
@@ -305,7 +312,7 @@ describe('shared/types — Phase 5 additions', () => {
       onPrompt: true,
     };
     const dataShape: Record<keyof DataApi, true> = { export: true, import: true };
-    const pickerShape: Record<keyof PickerApi, true> = { start: true };
+    const pickerShape: Record<keyof PickerApi, true> = { start: true, onPicked: true };
     expect(Object.keys(downloadsShape).sort()).toEqual([
       'cancel',
       'clear',
@@ -323,7 +330,7 @@ describe('shared/types — Phase 5 additions', () => {
       'resolve',
     ]);
     expect(Object.keys(dataShape).sort()).toEqual(['export', 'import']);
-    expect(Object.keys(pickerShape)).toEqual(['start']);
+    expect(Object.keys(pickerShape)).toEqual(['start', 'onPicked']);
   });
 });
 

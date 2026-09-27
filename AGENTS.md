@@ -91,14 +91,14 @@ and the ratchet will (correctly) fail on the first CI run after that commit. Use
 
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
 here is either lying in CI or about to quietly relax the number. The measured gap, as of
-2026-09-27 (`117 test files / 1544 tests`):
+2026-09-27 (`117 test files / 1556 tests`):
 
 | Metric     | Measured               | Gap  |
 | ---------- | ---------------------- | ---- |
-| lines      | 4240/4946 = **85.72%** | 706  |
-| statements | 5601/6646 = **84.27%** | 1045 |
-| functions  | 1124/1367 = **82.22%** | 243  |
-| branches   | 3313/4263 = **77.71%** | 950  |
+| lines      | 4248/4954 = **85.74%** | 706  |
+| statements | 5610/6655 = **84.29%** | 1045 |
+| functions  | 1129/1372 = **82.28%** | 243  |
+| branches   | 3311/4259 = **77.74%** | 948  |
 
 41 of the 116 files are at 100% statements. The 1045 uncovered statements decompose as:
 
@@ -128,7 +128,7 @@ is what CI can cheaply compare; the absolute counts in the table above are the h
 companion number, and the two tables in this repo (`coverage-baseline.json` plus this one)
 are the reason to read both.
 
-**Branches (77.71%, 950 uncovered) is the weakest metric and where the next effort belongs.**
+**Branches (77.74%, 948 uncovered) is the weakest metric and where the next effort belongs.**
 The Rust side has its own measured numbers and its own structural ceiling — see the
 coverage section of `src-tauri/AGENTS.md`.
 

@@ -61,7 +61,9 @@ vi.mock('../../lib/ipcClient', () => ({
       setEnabled: vi.fn(async () => []),
       add: vi.fn(async () => []),
       remove: vi.fn(async () => []),
+      onChanged: vi.fn(() => () => undefined),
     },
+    picker: { onPicked: vi.fn(() => () => undefined) },
     customFilters: {
       get: vi.fn(async () => ''),
       set: vi.fn(async () => ''),

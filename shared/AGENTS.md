@@ -163,6 +163,40 @@ sync by default.
 refetch** (the precedent is `useHistory` subscribing `onChanged(() => list())`), never
 a `window.location.reload()`.
 
+**An event with no subscriber is a defect, and the two the drift test found are now
+fixed (2026-09-27).** `shared/ipcCatalog.drift.test.ts` direction 3 asserts that every
+catalogued `evt*` key is referenced from a `src/**` file, and
+`src/lib/ipcClient.contract.test.ts` asserts the same at runtime with a derived ratchet
+that now expects the unaccounted set to be **`[]`**. Both inventories are empty, and each
+has a "no stale entry" test, so fixing a defect obliges deleting its excuse. Two real
+ones were found and fixed:
+
+- **`picker.picked`** was declared, emitted (`picker.rs:302`) and delivered to nobody.
+  Worse, the UI that wanted it was wired to the RETURN value of `picker.start` — which
+  no platform arm of `start` ever populates with a `rule` (all four return `{"ok": true}`
+  at `picker.rs:332/352/385/391`) — so the "Hiding rule added: …" toast was unreachable
+  everywhere. It **cannot** be a return value: `start` injects the picking overlay and
+  returns, and the pick only happens later, when the user clicks an element. Now
+  `aegis.picker.onPicked` exists and `PickerButton` subscribes.
+  **Lesson worth keeping: a test that mocks the value production is missing has
+  manufactured the bug, not found it.** The old `PickerButton` test resolved
+  `{ ok: true, rule: 'example.com##.ad' }` from `start` and then asserted the toast —
+  it could not fail, because nothing in the real core ever returns that shape.
+- **`subs.changed`** was emitted after a background fetch (`subs.rs:196/291/292`) and had
+  no subscriber. `subs.add` and `subs.setEnabled` return the store as it is _before_ their
+  fetch runs, so a new row's reply has `lastUpdated: null` by design
+  (`subs.rs:338-343`); the core rewrites it on a spawned thread and emits. Now
+  `aegis.subs.onChanged` exists and `useSubscriptions` re-reads the list on it.
+  Two corrections to the original audit finding, both from reading the code: it was **not**
+  a visible-staleness bug (`FilterListsTab` renders only `enabled`/`listId`/`url`/`builtin`
+  — never `lastUpdated`/`etag`/`hash`), and `subs` is **not** in
+  `sync_stores::SYNCABLE`, so there was no second device to diverge from either. It was a
+  trap for whoever next adds a "last updated" column.
+- `useCustomFilters` also refetches on `picker.picked`, because the picker appends to the
+  same store the My Filters panel reads and `customfilters.rs` emits **nothing** of its own
+  (0 `emit_event` calls) — a My Filters panel left open across a pick used to show the
+  pre-pick text until the modal was reopened.
+
 ## Tests
 
 Run in the vitest **node** project (`include: shared/**/*.test.ts`). `npm test` from

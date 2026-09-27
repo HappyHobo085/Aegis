@@ -523,6 +523,7 @@ export const aegis: AegisApi = {
       dedupedCall<Subscription[]>(IPC.subsSetEnabled, { listId, enabled }),
     add: (url) => dedupedCall<Subscription[]>(IPC.subsAdd, { url }),
     remove: (listId) => dedupedCall<Subscription[]>(IPC.subsRemove, { listId }),
+    onChanged: (cb) => on(IPC.evtSubsChanged, cb),
   },
   customFilters: {
     get: () => dedupedCall<string>(IPC.customFiltersGet, undefined),
@@ -567,7 +568,8 @@ export const aegis: AegisApi = {
     },
   },
   picker: {
-    start: () => dedupedCall<{ ok: boolean; rule?: string }>(IPC.pickerStart, undefined),
+    start: () => dedupedCall<{ ok: boolean }>(IPC.pickerStart, undefined),
+    onPicked: (cb) => on<{ rule: string }>(IPC.evtPickerPicked, cb),
   },
   update: {
     getState: () => dedupedCall<UpdateState>(IPC.updateGetState, undefined),

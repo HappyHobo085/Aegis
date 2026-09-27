@@ -128,42 +128,48 @@ const FORWARD_UNPRODUCED: Record<string, string> = {};
  *   described in a comment and never written. `form.rs`'s own STATUS block says so. It is kept
  *   deliberately: "This module is the seam, not the mechanism." If the transport is ever built,
  *   add the name to the catalog in the same commit.
- * - `subs.changed` — a real defect, not a seam. `subs.rs:199` and `subs.rs:292` emit it after
- *   a background fetch or auto-refresh, but no renderer code subscribes (no `IPC.` key and no
- *   literal spelling appears anywhere under `src/`), and `git log -S 'subs.changed' -- '*.ts'`
- *   is empty, so no subscriber ever existed. `useSubscriptions` therefore shows a stale
- *   `lastUpdated`/etag/hash after a background refresh. This is a pre-existing audit finding
- *   recorded in the now-deleted `docs/CODE_AUDIT.md` (commit 811fa7f: "Rust `subs.changed`
- *   event is emitted but never subscribed by the renderer") and it was never fixed. The fix is
- *   a product decision — add `evtSubsChanged` + a `subs.onChanged` wrapper and re-fetch, or
- *   delete the two emits — so it is recorded here rather than silently resolved.
+ * - `subs.changed` — WAS a real defect, and was here from 2026-09-27 until the same
+ *   day. `subs.rs:199` and `subs.rs:292` emit it after a background fetch or
+ *   auto-refresh; no renderer code subscribed, and `git log -S 'subs.changed' -- '*.ts'`
+ *   is empty, so no subscriber ever existed. It is the pre-existing audit finding from
+ *   the now-deleted `docs/CODE_AUDIT.md` (commit 811fa7f: "Rust `subs.changed` event is
+ *   emitted but never subscribed by the renderer"). It is FIXED: `evtSubsChanged` is in
+ *   the catalog, `aegis.subs.onChanged` exists, and `useSubscriptions` re-reads
+ *   `aegis.subs.list()` on it. The entry was removed rather than left to rot — which is
+ *   what the "no stale entry" test below is for.
+ *
+ * Two corrections to the original entry, both made by reading the code rather than the
+ * audit's summary, and both worth keeping in mind if this ever regresses:
+ *   - It was NOT a visible-staleness bug. `FilterListsTab` renders only `enabled`,
+ *     `listId`, `url`, `builtin` and a Remove button — never `lastUpdated`/`etag`/`hash`
+ *     — so nothing stale was ever displayed. And `subs` is NOT in
+ *     `sync_stores::SYNCABLE` (`["favorites", "saved", "allowlist"]`), so there was no
+ *     second device to diverge from either. The core re-reads those fields from disk, so
+ *     its own logic was never affected. It was a trap for the next person to add a
+ *     "last updated" column, not a live bug.
  */
 const REVERSE_UNDECLARED: Record<string, string> = {
   'form:formStateChanged':
     'Deliberate inert seam. `form.rs:140` listens for it; nothing can send it (see the ' +
     'STATUS block atop `form.rs`). The core relays it to the chrome as `form.state`, which IS ' +
     'catalogued, so the relay is wired and only the inbound leg is missing.',
-  'subs.changed':
-    'Pre-existing defect, never fixed. `subs.rs:199` and `subs.rs:292` emit it; no renderer ' +
-    'code subscribes and none ever did. A background subscription refresh therefore leaves an ' +
-    'open Filter Lists tab showing stale metadata. Recorded in the deleted ' +
-    '`docs/CODE_AUDIT.md` (811fa7f). Needs a product decision, not a test.',
 };
 
 /**
  * Catalogued EVENTS that no renderer source ever references.
  *
- * One entry, and it is the sibling finding of `subs.changed`: the audit called `picker.picked`
- * "the same dead-emit class". `picker.rs:301` emits it and `shared/types.ts:88` declares
- * `evtPickerPicked`, but `src/lib/ipcClient.ts` never grows an `on…` wrapper for it, so the
- * event is delivered to nobody. The remaining 27 catalog events are all referenced.
+ * Empty, and the emptiness is the goal state. It held exactly one entry until
+ * 2026-09-27: `evtPickerPicked`, the sibling finding the audit called "the same dead-emit
+ * class". `picker.rs:301` emitted `picker.picked` and `shared/types.ts:88` declared it, but
+ * `ipcClient.ts` never grew an `on…` wrapper, so the event went to nobody — and the UI that
+ * wanted it was wired to `picker.start()`'s RETURN value instead, which no platform arm of
+ * `start` ever populates with a `rule`. The confirmation toast was therefore unreachable
+ * everywhere. Fixed: `aegis.picker.onPicked` exists and `PickerButton` subscribes.
+ *
+ * Like `REVERSE_UNDECLARED`, an entry here is an admission that a real defect exists, so the
+ * "no stale entry" test below makes fixing a defect oblige deleting its excuse.
  */
-const UNSUBSCRIBED_EVENTS: Record<string, string> = {
-  evtPickerPicked:
-    '`picker.rs:301` emits `picker.picked` and `shared/types.ts:88` declares `evtPickerPicked`, ' +
-    'but no `src/` file references `IPC.evtPickerPicked` and no `on…` wrapper exists in ' +
-    '`ipcClient.ts`. Add the rule through the picker overlay, or delete the event on both sides.',
-};
+const UNSUBSCRIBED_EVENTS: Record<string, string> = {};
 
 /** Read every `.rs` file in `src-tauri/src`. */
 function readRustSources(): { file: string; src: string }[] {

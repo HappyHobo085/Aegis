@@ -11,7 +11,7 @@ GitHub Actions workflows and Dependabot config for Aegis.
     `tsconfig.build.json`, which excludes test files + `src/testFixtures` to skip the
     known test-only type noise) → `npm run lint` (ESLint flat config, errors fail /
     warnings are the migration backlog) → `npm run format:check` (Prettier) →
-    `npm run test:coverage` (vitest node + jsdom, 1544 tests, **with** the v8 report)
+    `npm run test:coverage` (vitest node + jsdom, 1556 tests, **with** the v8 report)
     → `npm run coverage:ratchet` → `node scripts/check-npm-audit.mjs`. The `--coverage`
     flag rides on the _test_ step rather than buying a second `vitest run`; the ratchet
     is its own step so a coverage regression is a distinct log line from a test failure

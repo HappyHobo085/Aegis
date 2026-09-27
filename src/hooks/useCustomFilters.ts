@@ -18,9 +18,16 @@ export function useCustomFilters(): {
     load();
     // Refetch when sync merges a remote custom-filter change.
     const off = onSyncChange('customFilters', load);
+    // Refetch when the ELEMENT PICKER appends a rule. `customfilters.rs` emits
+    // nothing of its own, so without this a Settings > My Filters panel that is
+    // already open keeps showing the pre-pick text until it is reopened — the
+    // toolbar picker and the settings modal are rendered together, so both can be
+    // open at once. `picker.picked` is the only signal the core sends.
+    const offPicked = aegis.picker.onPicked(load);
     return () => {
       active = false;
       off();
+      offPicked();
     };
   }, []);
 

@@ -85,6 +85,7 @@ export const IPC = {
   pickerStart: 'picker.start',
   // events (Phase 5, main -> chrome renderer)
   evtPickerPicked: 'picker.picked',
+  evtSubsChanged: 'subs.changed',
   evtDownloadsChanged: 'downloads.changed',
   evtPermissionsPrompt: 'permissions.prompt',
   // auto-update (Phase S1, chrome <-> main)
@@ -682,6 +683,13 @@ export interface AegisApi {
     setEnabled(listId: string, enabled: boolean): Promise<Subscription[]>;
     add(url: string): Promise<Subscription[]>;
     remove(listId: string): Promise<Subscription[]>;
+    /**
+     * Fires when a background fetch finished and rewrote a row's `lastUpdated` /
+     * `hash`. `add` and `setEnabled` return the store as it is *before* that fetch,
+     * so their reply has `lastUpdated: null` for a brand-new row and is stale by
+     * design — this is the signal to re-read `list()`.
+     */
+    onChanged(cb: () => void): () => void;
   };
   customFilters: {
     get(): Promise<string>;
@@ -711,7 +719,14 @@ export interface AegisApi {
     ): Promise<{ ok: boolean; counts?: unknown }>;
   };
   picker: {
-    start(): Promise<{ ok: boolean; rule?: string }>;
+    start(): Promise<{ ok: boolean }>;
+    /**
+     * Fires with the rule the user just picked. This CANNOT be the return value of
+     * `start()`: `start` injects the picking overlay and returns immediately, and
+     * the pick only happens later, when the user clicks an element on the page.
+     * `rule` is always present on this event.
+     */
+    onPicked(cb: (picked: { rule: string }) => void): () => void;
   };
   update: {
     getState(): Promise<UpdateState>;
