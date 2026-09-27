@@ -573,6 +573,11 @@ pub fn run() {
 
         // Android: seed the WebRTC document-start shim's policy from settings (its JNI
         // getter has no AppHandle). Kept fresh on settings change in settings.rs.
+        // NOTE: the farble level is an app-free JNI global too, and it is seeded by
+        // `farble::seed_from_disk` further down — which is also where the fp-allowlist is
+        // seeded, so the two farble globals are seeded in one place. If you add a THIRD
+        // app-free global for a JNI getter, seed it here or in its owning module's boot
+        // hook; the getters have no other way to read settings.
         #[cfg(target_os = "android")]
         crate::webrtc_shim::note_policy(&crate::settings::webrtc_policy(app.handle()));
 

@@ -133,13 +133,13 @@ pub fn level<R: Runtime>(app: &AppHandle<R>) -> String {
 /// updated on settings change from the Rust side (the JNI getter has no `AppHandle` to
 /// read settings itself). Off Android this is unused — desktop bakes the level per-tab
 /// from settings directly in `adblock_inject::script`. Mirrors `webrtc_shim::ANDROID_POLICY`.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 static ANDROID_LEVEL: std::sync::RwLock<String> = std::sync::RwLock::new(String::new());
 
 /// Record the current farble level for the Android shim getter. Android-only: the JNI
 /// getter has no `AppHandle`, so the level is pushed here (seeded at boot, updated on
 /// settings change). Desktop reads settings directly. Mirrors `webrtc_shim::note_policy`.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub fn note_level(level: &str) {
     if let Ok(mut g) = ANDROID_LEVEL.write() {
         *g = level.to_string();
@@ -147,7 +147,7 @@ pub fn note_level(level: &str) {
 }
 
 /// Return the current farble level for Android (default `"off"`). Mirrors `webrtc_shim::android_policy`.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub fn android_level() -> String {
     let p = ANDROID_LEVEL.read().map(|g| g.clone()).unwrap_or_default();
     if p.is_empty() {
@@ -162,13 +162,13 @@ pub fn android_level() -> String {
 /// a host is allowlisted without a Tauri runtime call. Seeded at boot from
 /// `seed_from_disk` and updated on every `fingerprint.toggleAllowlist` /
 /// `fingerprint.removeAllowlist` / `fingerprint.clearAllowlist` mutation.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 static ANDROID_FP_ALLOWLIST: std::sync::RwLock<Vec<String>> = std::sync::RwLock::new(Vec::new());
 
 /// Push the current fp-allowlist hosts into the Android JNI global. Called after every
 /// reseed of `FarbleState` (boot + toggle/remove/clear) so new tabs pick up the
 /// change. Desktop reads `FarbleState` directly; the JNI getter reads this global.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub fn note_fp_allowlist(hosts: &[String]) {
     if let Ok(mut g) = ANDROID_FP_ALLOWLIST.write() {
         *g = hosts.to_vec();
@@ -179,7 +179,7 @@ pub fn note_fp_allowlist(hosts: &[String]) {
 /// Allowlisting `example.com` also covers `www.example.com`. Mirrors the logic in
 /// `host_allowlisted` (the Tauri-path version) but reads from the process-global
 /// `ANDROID_FP_ALLOWLIST` instead of Tauri managed state.
-#[cfg(target_os = "android")]
+#[cfg(any(target_os = "android", test))]
 pub fn android_host_allowlisted(host: &str) -> bool {
     if host.is_empty() {
         return false;
@@ -316,8 +316,25 @@ fn reseed_fp_inner<R: Runtime>(app: &AppHandle<R>) {
 
 /// Seed the (already `.manage()`'d) FarbleState from disk at boot. Mirrors
 /// `adblock::seed_from_disk` for the farble allowlist store (`fp-allowlist`).
+///
+/// Also pushes the farble LEVEL into the app-free `ANDROID_LEVEL` global, because that is
+/// a second, independent thing boot has to seed and it is not part of `FarbleState` (the
+/// level lives in settings). `settings.rs` pushes the same global on `settings.set` and on
+/// `apply_synced`, but those only fire on a CHANGE — a launch that touches neither leaves
+/// the global at its `String::new()` default, which `android_level()` reports as "off". The
+/// `NativeFarble` document-start getter runs on a JNI thread with no `AppHandle`, so it has
+/// no other way to learn the level, and farbling would then be off for the whole session
+/// despite the setting reading "strict" in the UI and on disk.
+///
+/// Deliberately in `seed_from_disk` and NOT in `reseed_fp_inner`: reseeding the allowlist
+/// runs on every `fingerprint.*Allowlist` mutation, and an allowlist edit does not change
+/// the level. The push goes through the CLAMPED reader (`level`), not the raw file value, so
+/// it cannot disagree with `apply_synced` — which already pushes `level(app)`; only
+/// `settings.set` pushes the raw value, and the JNI getter clamps again regardless.
 pub fn seed_from_disk<R: Runtime>(app: &AppHandle<R>) {
     reseed_fp_inner(app);
+    #[cfg(any(target_os = "android", test))]
+    note_level(&level(app));
 }
 
 /// Build the JSON state object for `fingerprint.getState` (and after mutations).
@@ -609,9 +626,12 @@ mod tests {
     }
 
     // ── T9: note_level / android_level round-trip (Android-only, cfg'd out elsewhere) ──────
-    #[cfg(target_os = "android")]
     #[test]
     fn note_level_and_android_level_round_trip() {
+        // ANDROID_LEVEL is process-global and this test writes every one of its values, so
+        // it must take the ONE interlock (`test_support::lock()`, the same mutex every
+        // `with_tmp_app` holds) — a second, module-local mutex would not exclude them.
+        let _guard = crate::test_support::lock();
         // Default (empty global) → "off".
         // (This may be non-empty if another test ran first in the same process; clear it.)
         super::note_level("");
@@ -631,9 +651,10 @@ mod tests {
     }
 
     // ── T10: note_fp_allowlist / android_host_allowlisted round-trip (Android-only) ────────
-    #[cfg(target_os = "android")]
     #[test]
     fn note_fp_allowlist_and_android_host_allowlisted_round_trip() {
+        // ANDROID_FP_ALLOWLIST is process-global; same interlock as the test above.
+        let _guard = crate::test_support::lock();
         // Default (empty global) → nothing is allowlisted.
         super::note_fp_allowlist(&[]);
         assert!(!super::android_host_allowlisted("example.com"));
@@ -667,6 +688,78 @@ mod tests {
     }
 
     // ── Fingerprint allowlist tests ───────────────────────────────────────────────────────
+
+    // ── Boot must seed the app-free JNI globals ───────────────────────────────────────────
+    //
+    // `ANDROID_LEVEL` is the ONLY farble-level source the `NativeFarble` document-start
+    // getter can read: that getter runs on a JNI thread with no `AppHandle`, so it cannot
+    // call `farble::level()`. `settings.rs` pushes the global on `settings.set` and on
+    // `apply_synced`, but a boot is a third, separate event — and if nothing pushes there,
+    // the global keeps its `String::new()` default, which `android_level()` reports as
+    // "off". The user-visible result is that farbling works until the app is restarted and
+    // then silently stops for the rest of the session, even though the setting still reads
+    // "strict" in the UI and is still on disk.
+
+    #[test]
+    fn boot_seeds_the_android_level_global_from_settings() {
+        use crate::test_support::with_tmp_app;
+        use serde_json::json;
+        with_tmp_app(|app| {
+            // Write the setting with the LOW-LEVEL writer, which touches only the settings
+            // file and pushes no JNI global. So the only thing that can move the global
+            // afterwards is the farble boot hook itself.
+            crate::settings::write(app, &json!({ "antiFingerprint": "strict" }));
+            assert_eq!(
+                super::level(app),
+                "strict",
+                "precondition: setting is on disk"
+            );
+
+            // Stand in for a fresh process: the global sits at its default.
+            super::note_level("");
+            assert_eq!(super::android_level(), "off", "precondition: cold global");
+
+            // …then run the farble boot hook that lib.rs's setup() calls.
+            super::seed_from_disk(app);
+
+            assert_eq!(
+                super::android_level(),
+                "strict",
+                "an Android boot must push the farble level into the JNI global: the \
+                 NativeFarble getter has no AppHandle and can only read this global, so \
+                 without the boot push it reads \"off\" for the whole session and farbling \
+                 is silently off until the user edits the setting again"
+            );
+        });
+    }
+
+    #[test]
+    fn the_boot_push_uses_the_clamped_level_not_the_raw_setting() {
+        use crate::test_support::with_tmp_app;
+        use serde_json::json;
+        with_tmp_app(|app| {
+            // A corrupt/future stored value (hand-edited file, or a peer-synced record from
+            // a newer build). `settings.set` pushes this value RAW into the global; the boot
+            // hook must instead push the CLAMPED reader, so the two paths cannot disagree
+            // about what a junk value means.
+            crate::settings::write(app, &json!({ "antiFingerprint": "bogus" }));
+            assert_eq!(
+                super::level(app),
+                "off",
+                "precondition: level() clamps to off"
+            );
+
+            super::note_level("");
+            super::seed_from_disk(app);
+
+            assert_eq!(
+                super::android_level(),
+                "off",
+                "the boot push must go through the clamped level() reader, never the raw \
+                 file value"
+            );
+        });
+    }
 
     #[test]
     fn fp_default_state_is_empty_allowlist() {

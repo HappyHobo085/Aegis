@@ -155,11 +155,10 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   Consumed exclusively by `SecuritySettingsTab` (the "Security" tab in Settings).
   The hook never holds raw credentials or sensitive data — only the string level and
   the host allowlist. Re-reads state after every mutation so the UI reflects the Rust
-  source of truth. Android fp-allowlist gap is being addressed — the fix path
-  (an `ANDROID_FP_ALLOWLIST` process-global mirroring the existing `ANDROID_LEVEL`
-  pattern) is described in the `farble.rs` section of `src-tauri/AGENTS.md` — the
-  parity-gaps spec that used to specify it was deleted in commit 58d2c4b and is NOT
-  recoverable from this repo.
+  source of truth. The fp-allowlist is honoured on Android too: `MainActivity` passes the
+  tab's content host to `NativeFarble.farbleScript(host)` and the Rust getter checks it
+  against the `ANDROID_FP_ALLOWLIST` process-global. (This doc previously described the
+  Android side as a gap being addressed; the code had shipped it.)
 - **`hooks/useFind`** — owns find-in-page UI state for the active view. Subscribes to
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.

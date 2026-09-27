@@ -9,6 +9,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Anti-fingerprinting silently turned itself off on Android after a restart.** The
+  `NativeFarble` document-start getter runs on a JNI thread with no `AppHandle`, so it
+  reads the farble level from an `ANDROID_LEVEL` process-global that Rust pushes. That
+  push happened on `settings.set` and on a synced-settings change — but never at boot, so
+  the global kept its empty default, which the getter reports as `"off"`. The result was
+  that farbling worked until the app was restarted and then did nothing for the rest of
+  the session, even though the setting still read "strict" in the Security tab and was
+  still on disk. `farble::seed_from_disk` — the boot hook that already mirrored the
+  fp-allowlist — now also pushes the level, through the clamped reader so it cannot
+  disagree with the synced path.
+
+  Two `#[cfg(target_os = "android")]` unit tests in `farble.rs` (the `note_level` /
+  `android_level` and `note_fp_allowlist` / `android_host_allowlisted` round-trips) had
+  therefore never executed: CI builds and tests on Linux, where they were compiled out.
+  They — and the new boot-seeding test — now run everywhere, via
+  `#[cfg(any(target_os = "android", test))]` on the globals. The two revived tests also
+  take `test_support::lock()` now, since they write process-global state.
+
 - **The ad-block on/off toggle did nothing on the injected-JS tier.** The engine tier
   read the toggle and Linux's declarative filters were reinstalled/removed with it, but
   the document-start injection consulted only the allowlist — so switching ad-blocking

@@ -220,11 +220,11 @@ shim), Android via `NativeFarble` JNI getter + `MainActivity.createTabWebView`
 registration. Per-site fp-allowlist (`fp-allowlist` store — **local-only, it is NOT in
 `sync_stores::SYNCABLE`**, so a restore from backup is the only way to move it;
 `fingerprint.*` IPC
-channels, `useFingerprint` hook + SecurityTab UI) — desktop only in v1 (Android farbles
-all hosts; parity gap documented in the `farble.rs` section of `src-tauri/AGENTS.md`,
-where the intended `ANDROID_FP_ALLOWLIST` process-global fix is described — the
-parity-gaps spec that used to specify it was deleted in commit 58d2c4b and is NOT
-recoverable from this repo). Session salt = CSPRNG `OnceLock<[u8;32]>`, NEVER
+channels, `useFingerprint` hook + SecurityTab UI) — on **all four** platforms: Android's
+JNI getter takes the tab's content host and checks the `ANDROID_FP_ALLOWLIST`
+process-global that `farble::seed_from_disk` mirrors from `FarbleState`, so an allowlisted
+host gets no shim there either. (This doc previously called Android a parity gap; the code
+had shipped it.) Session salt = CSPRNG `OnceLock<[u8;32]>`, NEVER
 persisted; page sees only `public_seed = HKDF-SHA256(salt)` (one-way — not a
 super-cookie). Seed is baked INSIDE the IIFE closure, not a top-level `var`/`window.*`
 (a top-level var leaks to `window` = cross-site super-cookie; shim runtime tests run

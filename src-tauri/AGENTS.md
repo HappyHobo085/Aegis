@@ -422,10 +422,17 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   - **Per-site fp-allowlist** — a separate `fp-allowlist` syncable store (not the ad-block
     allowlist). Managed by `FarbleState` + `host_allowlisted`; dispatched via `fingerprint.*`
     IPC channels (`getState`/`toggleAllowlist`/`removeAllowlist`/`clearAllowlist`);
-    `seed_from_disk` pre-warms it at boot. Desktop only in v1 — the Android JNI getter has
-    no `AppHandle`, so `host_allowlisted` is always `false` on Android. The parity gap and the
-    intended `ANDROID_FP_ALLOWLIST` fix are described in gotcha 22 below; the parity-gaps
-    spec that used to specify it was deleted in commit 58d2c4b and is NOT recoverable.
+    `seed_from_disk` pre-warms it at boot. Shipped on Android too: the JNI getter has no
+    `AppHandle`, so `FarbleState` is mirrored into the `ANDROID_FP_ALLOWLIST` process-global
+    by `note_fp_allowlist` and read by `android_host_allowlisted`. Kotlin passes the tab's
+    content host (`MainActivity.createTabWebView` → `NativeFarble.farbleScript(host)`), so
+    an allowlisted host gets no shim — the same behaviour as desktop. (This doc previously
+    described the global as an unimplemented parity gap; the code had shipped it.)
+  - **Android boot seeds the level too** — `farble::seed_from_disk` pushes the CLAMPED
+    `level(app)` into the `ANDROID_LEVEL` global, not just the allowlist. This is a
+    separate obligation from the allowlist push because the level lives in settings, not in
+    `FarbleState`, and `settings.rs` only re-pushes the global on a CHANGE. See gotcha
+    item (d) below for the whole class.
   - **Per-spawn limitation** — like the WebRTC shim, the farble shim is evaluated once at
     content-webview creation. Toggling level or fp-allowlist applies only to newly
     spawned/reloaded tabs; in-tab SPA navigations to a different host are not re-evaluated.
@@ -1188,14 +1195,22 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     keep the shim (or absence of one) they were born with. This is the same model as the
     WebRTC shim; document it in any UI that toggles these settings.
 
-    d. **Android has no fp-allowlist in v1 (documented parity gap, fix path specified).**
-    The Android JNI getter (`NativeFarble.farbleScript`) has no `AppHandle` and
-    therefore no access to the `FarbleState` managed-state; it hardcodes
-    `host_allowlisted = false`. The fix is to add an `ANDROID_FP_ALLOWLIST` process-global
-    (mirroring the existing `ANDROID_LEVEL` pattern) and update the JNI getter to accept a
-    `host` parameter from Kotlin. The parity-gaps spec AND its implementation plan that
-    used to hold this were both deleted in commit 58d2c4b and are NOT recoverable, so this
-    paragraph is the only surviving record of the intended change.
+    d. **An app-free JNI global is a THIRD thing that must be seeded at boot.** The Android
+    JNI getters (`NativeFarble.farbleScript`, `NativeWebrtc.shimScript`,
+    `NativeAdblock.shouldBlock`) run on a JNI thread with no `AppHandle`, so they cannot call
+    `settings::` readers. Each therefore reads a process-global that Rust pushes:
+    `ANDROID_POLICY` (`webrtc_shim::note_policy`, seeded at `lib.rs` boot),
+    `ANDROID_LEVEL` (`farble::note_level`) and `ANDROID_FP_ALLOWLIST`
+    (`farble::note_fp_allowlist`) — the latter two both pushed by `farble::seed_from_disk`.
+    `settings.rs` re-pushes them on `settings.set` and `apply_synced`, but those only fire on
+    a CHANGE. `ANDROID_LEVEL` used to have no boot push at all, so farbling worked until the
+    app was restarted and then silently read "off" for the rest of the session despite the
+    setting still being "strict" on disk; `farble::seed_from_disk` now pushes it through the
+    CLAMPED reader (`level`). When you add a JNI getter that needs settings, add the global
+    AND its boot push in the same change. Gate a new global on
+    `#[cfg(any(target_os = "android", test))]` rather than `#[cfg(target_os = "android")]`,
+    so a Linux test can read it: an android-only test never runs on the CI runner, which is
+    how the two farble round-trip tests stayed dead for as long as they did.
 
 ### Multi-webview Linux layout (hard-won facts)
 
