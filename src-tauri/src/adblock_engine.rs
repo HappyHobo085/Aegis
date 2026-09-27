@@ -29,6 +29,20 @@ fn allowlist() -> &'static Mutex<Vec<String>> {
     ALLOWLIST.get_or_init(|| Mutex::new(Vec::new()))
 }
 
+/// The mirrored on/off toggle, for callers with no `AppHandle` — Android's
+/// `NativeAdblock.enabled()` JNI getter, which the Kotlin side uses to key its
+/// document-start script cache. Reads the SAME `ENABLED` global `should_block` reads, so
+/// the injected JS tier and the network tier cannot disagree about whether ad-blocking is
+/// on: they are one value with two readers.
+///
+/// Live on Android (the `NativeAdblock.enabled()` getter) and under `test` (which reaches it
+/// through `adblock_inject::android_document_start_layer`). Nothing else has a use for it:
+/// every other tier reads the `AppHandle`-backed `adblock::enabled` instead.
+#[cfg(any(target_os = "android", test))]
+pub fn enabled() -> bool {
+    ENABLED.load(Ordering::Relaxed)
+}
+
 /// Mirror the ad-block on/off + per-host allowlist into the engine's view. Called
 /// from `adblock::dispatch` after every state change.
 pub fn set_policy(enabled: bool, allowlisted_hosts: &[String]) {

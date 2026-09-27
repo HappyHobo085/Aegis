@@ -9,6 +9,24 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The ad-block on/off toggle did nothing on the injected-JS tier.** The engine tier
+  read the toggle and Linux's declarative filters were reinstalled/removed with it, but
+  the document-start injection consulted only the allowlist — so switching ad-blocking
+  off left the `fetch`/`XHR`/`sendBeacon` blocker, the cosmetic element-hiding CSS and
+  the `window.open` pop-under stub live in every tab spawned afterwards. On Windows and
+  macOS that injection is the _primary_ ad-block mechanism, so the toolbar toggle simply
+  did nothing there: ads still did not load and pop-unders were still blocked with
+  ad-blocking switched off. On Android it left the two tiers disagreeing with each other,
+  since the network interceptor honoured the toggle while the script did not.
+  The ad-block layer is now gated on the toggle as well as the allowlist — the two
+  independent ways to say "show me this site's ads". The pop-under guard travels with the
+  heavy body on purpose: it is the ad pop-under defence and there is no second control
+  that would otherwise release it, so a user who turns ad-blocking off gets their
+  pop-unders back. Android's document-start script is cached in Kotlin for the process
+  lifetime, so the cache is now keyed on the toggle as well as the host (a host-only key
+  would have masked a mid-session toggle change for the rest of the process); the toggle
+  is read from native rather than a local field, so the cache cannot drift from what the
+  interceptor believes.
 - **The ad-block allowlist was accepted by the UI and then ignored by every tier that
   actually blocks something.** "Allowlist this site" — which also doubles as the per-site
   WebRTC escape hatch, i.e. "I trust this site" — filtered the site anyway on all four

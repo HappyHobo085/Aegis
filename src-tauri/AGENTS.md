@@ -123,6 +123,10 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     hit with no subdomain case, so an allowlisted site's subdomains stayed filtered
     there while the UI promised otherwise. It is allocation-free deliberately
     (`should_block` runs it per intercepted subresource).
+    Also owns **`enabled(app)`** — the pure read of the on/off toggle for tiers that must
+    not go through `dispatch` (`adblock_inject::script`). It defaults to `true` when the
+    state is absent, matching `AdblockState::default()` and `state_json`'s no-state branch:
+    a tier that cannot read the policy must never decide to stop blocking.
     Also owns the **shield-badge counters**: `note_blocked`/`reset_page` keep a
     monotonic session total + per-tab page count and emit `adblock.blockedCount`;
     `getState` returns the active tab's `pageBlocked` so the chrome recovers the
@@ -160,7 +164,8 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
       `host_allowlisted` but used it only for the WebRTC shim; `adblock_layer` now
       gates the pop-under guard + the fetch/XHR/cosmetic body on it. Farbling is NOT
       gated (separate `fp-allowlist`). Android's JNI getter takes the page host and
-      calls the same seam via `adblock_engine::host_is_allowlisted`.
+      calls the same seam via `adblock_engine::host_is_allowlisted`. The layer is gated
+      on the on/off TOGGLE as well as the allowlist — see the ad-block toggle bug below.
     - **Windows WebView2** (`adblock_win`): `handle` passed an empty source page, so
       the allowlist veto was unreachable (`host_of("")` is `None`) and every request
       looked first-party. It now reads the real page URL from `ICoreWebView2::Source`.
@@ -179,6 +184,11 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     first check doesn't parse the lists on the UI thread. Loads every
     `adblock_lists::ALL` list into the `FilterSet`. Android does the same in
     `MainActivity.onCreateWindow` via `NativeAdblock.shouldBlock`.
+    Also exports **`enabled()`** (`#[cfg(any(target_os = "android", test))]`) — the same
+    `ENABLED` global `should_block` reads, reached on Android through a
+    `NativeAdblock.enabled()` JNI getter so the Kotlin document-start cache is keyed on the
+    toggle, and under `test` through `adblock_inject::android_document_start_layer`. Gated
+    rather than `allow(dead_code)`, because outside those two there is genuinely no caller.
   - `adblock_webkit.rs` (Linux) — declarative WebKit content filters via
     `adblock_convert.rs` (Brave → Safari content-blocker JSON), chunked ~25k
     rules/filter (WebKit caps ~50k), disk-cached by hash **over the lists AND the
@@ -195,14 +205,43 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     a new window to a rotating ad domain no list can track. Same-origin / `about:blank` opens
     pass through (native `on_new_window` vets those). Trade-off: legit cross-origin scripted
     popups (e.g. OAuth) are blocked too; real `<a target=_blank>` links still open.
-    `adblock_layer(allowed)` is the single seam gating the guard + the heavy body on the
-    ad-block allowlist (an allowlisted page gets neither), used by desktop `compose` and
-    by Android's `NativeInject.documentStartScript(host)` JNI getter alike. Kotlin's
-    `documentStartScriptCache` is therefore a `ConcurrentHashMap` **keyed by host**, not a
-    single value — a process-wide one would hand the first tab's script to every later tab.
+    `adblock_layer(block)` is the single seam gating the guard + the heavy body, used by
+    desktop `compose` and by Android's `NativeInject.documentStartScript(host)` JNI getter
+    alike. `block` = **enabled AND not allowlisted** — the two independent ways a user says
+    "show me this site's ads". The guard travels with the body deliberately: it is the ad
+    pop-under defence, there is no second UI control that would release it, and a user who
+    switches ad-blocking off has asked for their pop-unders back.
+    **The on/off toggle did not reach this tier at all before (Wave 1(2)).** The engine
+    tier read `ENABLED` and Linux's WebKit tier was reinstalled/removed on toggle, but
+    `adblock_layer` consulted only the allowlist — so on Windows/macOS, where this
+    injection is the PRIMARY ad-block mechanism, the toolbar toggle simply did nothing:
+    fetch/XHR/beacons were still rejected, ad elements still hidden, `window.open` still
+    stubbed. `adblock::enabled(app)` (new; defaults `true` when the state is absent, so a
+    tier that cannot read policy never decides to stop blocking) supplies the desktop half;
+    Android's has no `AppHandle` at document-start-registration time, so
+    `android_document_start_layer(host)` reads the process-global `adblock_engine::enabled`
+    — the SAME `ENABLED` the interceptor reads, so the two Android tiers cannot disagree.
+    That seam was extracted out of the `#[no_mangle] extern "system"` JNI export
+    specifically so a Linux test can reach it; asserting on a re-typed copy of the export's
+    body would prove nothing about the body.
+    Kotlin's `documentStartScriptCache` is a `ConcurrentHashMap` **keyed by (toggle, host)**,
+    not a single value and not host alone — a process-wide one would hand the first tab's
+    script to every later tab, and a host-only key would mask a mid-session toggle change
+    for the rest of the process. The toggle is read from native via a new
+    `NativeAdblock.enabled()` JNI getter (an `AtomicBool` load), not a local field, so the
+    cache cannot drift from the interceptor's view; it defaults to `true` if native is
+    unreachable, because a key that silently read "off" when it could not ask would pin the
+    process to the wrong script. **There is no Kotlin test source set in this project, so
+    the cache keying is compile-verified (Gradle) only** — the Rust half is unit-tested by
+    `disabled_adblock_injects_no_js_layer` (desktop, via `with_tmp_app`) and
+    `android_js_layer_follows_the_enabled_toggle` (the seam the JNI export actually calls),
+    which is 9 tests in this module.
     **Anti-fingerprinting (farbling) — Task 6:** `script(app, host_allowlisted, host)` now
     also appends `farble::shim_for(level, fp_allowlisted)` after the popup guard (and after
-    the non-Linux ad-block body) via `compose(webrtc, farble, adblock_allowed)`. The farble shim uses the
+    the non-Linux ad-block body) via `compose(webrtc, farble, adblock_block)`. `script` is
+    generic over `R: Runtime` (all three of its callees already were) purely so the
+    `MockRuntime` test harness can reach it — the only production caller, `nav::spawn_tab`,
+    infers `R = Wry` exactly as before. The farble shim uses the
     SEPARATE `fp-allowlist` (`farble::host_allowlisted`), not the ad-block allowlist. `off`
     level or an fp-allowlisted host → `""` → no injection (fail-safe no-op). **Per-spawn
     limitation (same as WebRTC shim):** the shim is evaluated once at content-webview creation;

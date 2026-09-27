@@ -187,6 +187,21 @@ pub fn host_allowlisted<R: Runtime>(app: &AppHandle<R>, host: &str) -> bool {
     }
 }
 
+/// The live ad-block on/off toggle, for tiers that need to read it WITHOUT going through
+/// `dispatch` — chiefly `adblock_inject::script`, which composes the injected JS tier and
+/// previously consulted only the allowlist, so turning ad-blocking off left the whole
+/// fetch/XHR/cosmetic body plus the pop-under guard live in every new tab.
+///
+/// Defaults to `true` when the state is absent, matching both `AdblockState::default()`
+/// and `state_json`'s no-state branch: a tier that cannot read the policy must not decide
+/// to stop blocking.
+pub fn enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
+    match app.try_state::<AdblockState>() {
+        Some(s) => s.0.lock().unwrap_or_else(|e| e.into_inner()).enabled,
+        None => true,
+    }
+}
+
 // --- Persisted allowlist (allowlist.json, a syncable store of {host, uuid, hlc, deleted}) ---
 // Before this the allowlist was in-memory only (lost on restart). It's now a syncable
 // store; the in-memory Inner.allowlist is a fast cache reseeded from it after every change

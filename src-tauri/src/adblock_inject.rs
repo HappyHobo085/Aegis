@@ -27,13 +27,13 @@
 //!
 //! **Per-spawn limitation:** the farble shim (like the WebRTC shim and this ad-block tier)
 //! is evaluated ONCE at content-webview creation (document-start script registered per
-//! webview). Toggling the farbling level, the fp-allowlist, or the ad-block allowlist
-//! applies to newly spawned/reloaded tabs, not already-open ones. The allowlist host is
-//! evaluated from the spawn URL at creation time — an in-tab SPA navigation to a different
-//! host is not re-evaluated until the tab is reloaded/respawned. This is the same model as
-//! the WebRTC shim and other spawn-time injections. (The declarative Linux tier is the
-//! exception: it re-applies on an allowlist change, since it is a per-webview filter set
-//! rather than a one-shot document-start script.)
+//! webview). Toggling the farbling level, the fp-allowlist, the ad-block allowlist, or the
+//! ad-block on/off switch applies to newly spawned/reloaded tabs, not already-open ones. The
+//! allowlist host is evaluated from the spawn URL at creation time — an in-tab SPA
+//! navigation to a different host is not re-evaluated until the tab is reloaded/respawned.
+//! This is the same model as the WebRTC shim and other spawn-time injections. (The
+//! declarative Linux tier is the exception: it re-applies on an allowlist change, since it is
+//! a per-webview filter set rather than a one-shot document-start script.)
 //!
 //! Limitation vs. true network interception: requests the HTML parser makes directly
 //! (`<img>`/`<script>`/`<iframe>` src) still hit the network — but the cosmetic layer
@@ -47,8 +47,8 @@
 static BUILT: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 
 /// Pop-under guard, injected at document-start on every platform (and every frame) —
-/// but NOT for an ad-block-allowlisted page (see `adblock_layer`), because stubbing
-/// `window.open` on a site the user allowlisted breaks legitimate scripted popups there.
+/// but NOT for an ad-block-exempt page: either ad-block-allowlisted, or ad-blocking off
+/// entirely (see `adblock_layer`, which is the one place that decision is made).
 ///
 /// On-click pop-under / pop-up ads on streaming sites open a new window to a rotating
 /// ad-network domain via `window.open` — which no static domain list can keep ahead of.
@@ -97,8 +97,16 @@ const POPUP_GUARD: &str = r#"(function(){
 /// Toggling the level or fp-allowlist applies to newly spawned/reloaded tabs only.
 ///
 /// Android builds its equivalent via the NativeInject + NativeWebrtc JNI getters.
+///
+/// Generic over `R: Runtime` (every callee already was) so the composition is reachable
+/// from the `MockRuntime` test harness in `tests` below; the only production caller,
+/// `nav::spawn_tab`, infers `R = Wry` exactly as before.
 #[cfg_attr(target_os = "android", allow(dead_code))] // Android uses the JNI getters instead
-pub fn script(app: &tauri::AppHandle, host_allowlisted: bool, host: &str) -> String {
+pub fn script<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    host_allowlisted: bool,
+    host: &str,
+) -> String {
     let webrtc_policy = crate::settings::webrtc_policy(app);
     // Fast path: use the pre-computed shim if prewarm() has run; fall back to shim_for.
     let webrtc = if host_allowlisted {
@@ -116,7 +124,11 @@ pub fn script(app: &tauri::AppHandle, host_allowlisted: bool, host: &str) -> Str
         crate::farble::shim_for(&level, fp_allowlisted)
     };
     let vault = crate::vault_inject::script();
-    let mut result = compose(&webrtc, &farble, !host_allowlisted);
+    // The ad-block layer is gated on the on/off toggle AND the allowlist: this tier used
+    // to consult only the allowlist, so switching ad-blocking off left the fetch/XHR/
+    // cosmetic body and the pop-under guard live in every tab spawned afterwards.
+    let adblock_block = crate::adblock::enabled(app) && !host_allowlisted;
+    let mut result = compose(&webrtc, &farble, adblock_block);
     if !vault.is_empty() {
         result.push('\n');
         result.push_str(&vault);
@@ -124,21 +136,26 @@ pub fn script(app: &tauri::AppHandle, host_allowlisted: bool, host: &str) -> Str
     result
 }
 
-/// The ad-block portion of the document-start script for one page.
+/// The ad-block portion of the document-start script for one page. `block` is "should this
+/// page be ad-blocked at the JS tier" = enabled AND not allowlisted — the two independent
+/// ways the user says "show me this site's ads".
 ///
-/// Empty for an ad-block-ALLOWLISTED page — the user asked for that site's ads, so it
-/// gets neither the pop-under guard (which stubs `window.open`, breaking legitimate
-/// scripted popups) nor the heavy fetch/XHR/cosmetic body (which rejects their beacons
-/// and hides their ad slots).
+/// Empty when it is false. That means NEITHER the pop-under guard (which stubs
+/// `window.open`, breaking legitimate scripted popups) NOR the heavy fetch/XHR/cosmetic
+/// body (which rejects beacons and hides ad slots) is injected. The guard travels with
+/// the body deliberately: it is the ad pop-under defence, so a user who switches
+/// ad-blocking off has asked for their pop-unders back, and there is no second UI control
+/// that would otherwise release it.
 ///
-/// This is the one place the decision is made, and both tiers that can honour the
-/// allowlist go through it: desktop [`compose`] and the Android JNI getter. (The engine
-/// tier can't — it answers per request, and vetoes in `adblock_engine::should_block`.)
+/// This is the one place the decision is made, and every tier that can honour the policy
+/// goes through it: desktop [`script`] via [`compose`], and Android via
+/// [`android_document_start_layer`]. (The engine tier can't share this seam — it answers
+/// per request, so it vetoes in `adblock_engine::should_block` instead.)
 /// Linux omits the body because it blocks at the network tier via WebKit content filters,
 /// which carry their own `ignore-previous-rules` exemptions
 /// (`adblock_convert::allowlist_exemptions`).
-fn adblock_layer(allowed: bool) -> String {
-    if !allowed {
+fn adblock_layer(block: bool) -> String {
+    if !block {
         return String::new();
     }
     #[cfg(target_os = "linux")]
@@ -151,22 +168,40 @@ fn adblock_layer(allowed: bool) -> String {
     }
 }
 
+/// The Android document-start script's ad-block layer, for a content WebView on `host`.
+///
+/// Split out of the JNI export so the decision is reachable from a plain unit test: the
+/// `#[no_mangle] extern "system"` entry point cannot be invoked from a Linux test, and
+/// asserting on a re-typed copy of its body would prove nothing about the body. This tier
+/// has no `AppHandle` (the document-start script is registered while the content WebView is
+/// being created), so it reads the process-global mirror in `adblock_engine` — the same
+/// `ENABLED`/`ALLOWLIST` the interceptor reads, so the two Android tiers cannot disagree.
+///
+/// `cfg`'d to Android + test: the JNI export is Android-only, and outside those there is no
+/// caller — desktop `script()` reads the `AppHandle`-backed `adblock::enabled` instead. Gated
+/// rather than `allow(dead_code)`, because here the absence of a caller is the truth.
+#[cfg(any(target_os = "android", test))]
+pub(crate) fn android_document_start_layer(host: &str) -> String {
+    adblock_layer(
+        crate::adblock_engine::enabled() && !crate::adblock_engine::host_is_allowlisted(host),
+    )
+}
+
 /// Compose the document-start script from the (already-built) WebRTC shim prefix + the
 /// ad-block layer (pop-under guard + the cached body) + the farble shim suffix.
 /// Split out so the composition is unit-testable without an AppHandle.
 ///
 /// `farble` is `""` for the `off`/allowlisted case → no farble appended (correct no-op).
 ///
-/// `adblock_allowed` is the ad-block allowlist state for this page — see [`adblock_layer`].
-/// The farble shim is deliberately unaffected: farbling is governed by the SEPARATE
-/// `fp-allowlist`, so "show me this site's ads" must not also mean "stop farbling this
-/// site".
+/// `adblock_block` is the ad-block policy for this page — see [`adblock_layer`]. The farble
+/// shim is deliberately unaffected: farbling is governed by the SEPARATE `fp-allowlist`, so
+/// "show me this site's ads" must not also mean "stop farbling this site".
 ///
-/// Empty parts are dropped rather than joined as blank lines, so an allowlisted page with
-/// farbling off yields a genuinely empty script instead of two newlines.
+/// Empty parts are dropped rather than joined as blank lines, so an ad-block-exempt page
+/// with farbling off yields a genuinely empty script instead of two newlines.
 #[cfg_attr(target_os = "android", allow(dead_code))]
-fn compose(webrtc: &str, farble: &str, adblock_allowed: bool) -> String {
-    let adblock = adblock_layer(adblock_allowed);
+fn compose(webrtc: &str, farble: &str, adblock_block: bool) -> String {
+    let adblock = adblock_layer(adblock_block);
     let parts: Vec<&str> = [webrtc, adblock.as_str(), farble]
         .into_iter()
         .filter(|p| !p.is_empty())
@@ -265,9 +300,11 @@ fn is_procedural(sel: &str) -> bool {
 /// `WebViewCompat.addDocumentStartJavaScript`. Returns a null jstring on failure (Kotlin
 /// then skips injection rather than crashing). Lives in `libapp_lib.so`, loaded at startup.
 ///
-/// `host` is the content WebView's host, so an ad-block-ALLOWLISTED page gets no ad-block
-/// injection at all — the same decision desktop `script()` makes. The allowlist comes from
-/// `adblock_engine`'s process-global mirror because this tier has no `AppHandle`.
+/// `host` is the content WebView's host, so a page the user turned ad-blocking off for —
+/// globally, or via the per-host allowlist — gets no ad-block injection at all. The same
+/// decision desktop `script()` makes, from the same policy, reached through the
+/// process-global mirror because this tier has no `AppHandle` (see
+/// [`android_document_start_layer`], which holds the logic so it is unit-testable).
 #[cfg(target_os = "android")]
 #[allow(unsafe_code)]
 // `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
@@ -282,21 +319,112 @@ pub extern "system" fn Java_com_aegis_browser_NativeInject_documentStartScript<'
     host: jni::objects::JString,
 ) -> jni::sys::jstring {
     let host: String = env.get_string(&host).map(|s| s.into()).unwrap_or_default();
-    // Phase 1 folds the WebRTC shim in via the same InjectConfig seam used by script().
-    // An empty script is the same effective outcome as the null-jstring failure below
-    // (Kotlin registers nothing either way), so a panic degrades to "no injection".
     // Android gets its WebRTC shim and farble shim from their own JNI getters
     // (`NativeWebrtc` / `NativeFarble`), so only the ad-block layer is built here.
-    let s = crate::ffi_guard(|| adblock_layer(!crate::adblock_engine::host_is_allowlisted(&host)))
-        .unwrap_or_default();
+    // An empty script is the same effective outcome as the null-jstring failure below
+    // (Kotlin registers nothing either way), so a panic degrades to "no injection".
+    let s = crate::ffi_guard(|| android_document_start_layer(&host)).unwrap_or_default();
     match env.new_string(s) {
         Ok(js) => js.into_raw(),
         Err(_) => std::ptr::null_mut(),
     }
 }
 
+/// JNI bridge for Android's `NativeAdblock.enabled()` (a Kotlin `object`, so the symbol is
+/// `Java_<pkg>_NativeAdblock_enabled` and the second arg is the singleton instance, ignored).
+///
+/// Kotlin needs this to key its document-start script cache on the on/off toggle as well as
+/// the host. The cache is per-process, so without the toggle in the key a user who turned
+/// ad-blocking off mid-session would keep being handed the script built while it was on —
+/// the same stale-cache class of bug as the original host-only key, one level up.
+///
+/// It reads the same `ENABLED` global that `should_block` reads, so Kotlin's idea of
+/// "ad-blocking is on" is the interceptor's idea by construction.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeAdblock_enabled(
+    _env: jni::JNIEnv,
+    _this: jni::objects::JObject,
+) -> jni::sys::jboolean {
+    crate::adblock_engine::enabled() as jni::sys::jboolean
+}
+
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
+    use crate::test_support::with_tmp_app;
+
+    // ── The enabled toggle must reach the JS tier (Wave 1(2)) ────────────────────
+    //
+    // Before the fix BOTH of these were red: the toggle was read by the engine tier and by
+    // Linux's WebKit tier, but this tier consulted only the allowlist, so switching
+    // ad-blocking off left the pop-under guard and the whole fetch/XHR/cosmetic body
+    // injected into every tab spawned afterwards. On Windows/macOS this injection is the
+    // PRIMARY ad-block mechanism, so the toggle simply did not work there.
+    #[test]
+    fn disabled_adblock_injects_no_js_layer() {
+        with_tmp_app(|app| {
+            crate::adblock::dispatch(app, "adblock.setEnabled", &json!({ "enabled": false }))
+                .unwrap()
+                .unwrap();
+            let s = super::script(app, false, "site.example");
+            assert!(
+                !s.contains("__aegisBlocked"),
+                "with ad-block OFF the pop-under guard must not be injected, \
+                 but window.open is still stubbed: {}",
+                &s[..s.len().min(120)]
+            );
+            assert!(
+                !s.contains("window.fetch="),
+                "with ad-block OFF the fetch/XHR/cosmetic body must not be injected"
+            );
+            // …and back on, it returns. Guards against "fixed" by dropping the tier.
+            crate::adblock::dispatch(app, "adblock.setEnabled", &json!({ "enabled": true }))
+                .unwrap()
+                .unwrap();
+            let s = super::script(app, false, "site.example");
+            assert!(
+                s.contains("__aegisBlocked"),
+                "re-enabling must restore the pop-under guard"
+            );
+        });
+    }
+
+    // The same claim for the ANDROID tier, through the seam the JNI export actually calls
+    // (`android_document_start_layer`) rather than a re-typed copy of its expression.
+    //
+    // The two `set_policy` calls are the only writers of the process-global policy, and the
+    // rest of the crate reaches them through `adblock::dispatch` inside `with_tmp_app` —
+    // which holds `test_support::lock()` for its whole body. Taking that same lock is the
+    // interlock; a lock of our own would exclude nothing.
+    #[test]
+    fn android_js_layer_follows_the_enabled_toggle() {
+        let _guard = crate::test_support::lock();
+        crate::adblock_engine::set_policy(false, &[]);
+        assert!(
+            super::android_document_start_layer("site.example").is_empty(),
+            "with ad-block OFF the Android document-start script must carry no ad-block layer"
+        );
+        crate::adblock_engine::set_policy(true, &[]);
+        assert!(
+            !super::android_document_start_layer("site.example").is_empty(),
+            "re-enabling must restore the Android ad-block layer"
+        );
+        // The allowlist still vetoes per host, independently of the toggle.
+        crate::adblock_engine::set_policy(true, &["site.example".to_string()]);
+        assert!(
+            super::android_document_start_layer("site.example").is_empty(),
+            "an allowlisted page must get no Android ad-block layer even with the toggle on"
+        );
+        assert!(
+            !super::android_document_start_layer("other.example").is_empty(),
+            "the allowlist is per host, so an unrelated page is unaffected"
+        );
+        crate::adblock_engine::set_policy(true, &[]);
+    }
+
     #[test]
     fn builds_a_blocker_script_with_domains_and_cosmetics() {
         // Test build() directly — script() is empty on the Linux test host (native

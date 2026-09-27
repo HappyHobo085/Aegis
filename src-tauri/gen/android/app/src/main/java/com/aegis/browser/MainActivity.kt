@@ -574,11 +574,16 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // adblock_inject module, up to ~1MB — so it is cached rather than rebuilt per tab
   // (re-reading it per tab would copy ~1MB over JNI per tab).
   //
-  // The cache is keyed BY HOST, not a single value: the script depends on the ad-block
-  // allowlist, and an allowlisted page must receive NO ad-block injection. A single
-  // process-wide value would hand whichever tab was created first its script to every
-  // later tab, so the allowlist would apply to the wrong pages (or to none). Keying by host
-  // keeps the ~1MB saving for the overwhelmingly common case of a user browsing one site.
+  // The cache is keyed BY (toggle, host), not a single value: the script depends on BOTH
+  // the ad-block on/off toggle and the per-host allowlist, and a page exempt on either axis
+  // must receive NO ad-block injection. A single process-wide value would hand whichever tab
+  // was created first its script to every later tab, so the policy would apply to the wrong
+  // pages (or to none). Keying by host keeps the ~1MB saving for the overwhelmingly common
+  // case of a user browsing one site; adding the toggle to the key is what stops a
+  // mid-session toggle change from being masked by the cache for the rest of the process.
+  //
+  // The toggle is read from NATIVE, not from a local field, so this cache cannot drift from
+  // the interceptor's view of it. It is a cheap AtomicBool load.
   //
   // A JNI failure returns "" — which disables injection rather than crashing — and is NOT
   // cached, so a later tab retries instead of losing injection for the whole process. Warmed
@@ -587,15 +592,26 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   private val documentStartScriptCache = java.util.concurrent.ConcurrentHashMap<String, String>()
 
   private fun documentStartScript(host: String): String {
-    documentStartScriptCache[host]?.let { return it }
+    // NUL cannot appear in a hostname, so it is an unambiguous key separator.
+    val key = (if (adblockEnabled()) "on" else "off") + "\u0000" + host
+    documentStartScriptCache[key]?.let { return it }
     val script = try {
       NativeInject.documentStartScript(host)
     } catch (t: Throwable) {
       Log.w("AegisInject", "document-start script unavailable; injection disabled", t)
       ""
     }
-    if (script.isNotEmpty()) documentStartScriptCache[host] = script
+    if (script.isNotEmpty()) documentStartScriptCache[key] = script
     return script
+  }
+
+  /** The ad-block toggle as the NATIVE interceptor sees it. Defaults to ON if native is
+   *  unreachable: a key that silently read "off" when it could not ask would pin the whole
+   *  process to the wrong script for every tab created afterwards. */
+  private fun adblockEnabled(): Boolean = try {
+    NativeAdblock.enabled()
+  } catch (_: Throwable) {
+    true
   }
 
   /** Hardening for every CONTENT WebView (a tab, and the popup capture alike): a browsed

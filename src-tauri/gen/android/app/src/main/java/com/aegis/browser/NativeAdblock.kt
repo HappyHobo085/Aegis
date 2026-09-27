@@ -21,4 +21,15 @@ object NativeAdblock {
    * in Rust (adblock_engine.rs); fails open on any error.
    */
   external fun shouldBlock(url: String, sourceUrl: String, requestType: String): Boolean
+
+  /**
+   * The ad-block on/off toggle, as the interceptor sees it. Implemented in Rust
+   * (adblock_engine.rs); reads the SAME process-global that [shouldBlock] reads, so this
+   * and the network tier cannot disagree.
+   *
+   * MainActivity needs it to key the document-start script cache: the injected JS tier
+   * honours the toggle too, so a cache that ignored it would hand a user who switched
+   * ad-blocking off mid-session the script built while it was on.
+   */
+  external fun enabled(): Boolean
 }
