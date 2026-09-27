@@ -767,20 +767,32 @@ impl AppState {
         }
     }
 
-    /// Snapshot the store under its lock, release it, then atomically write to disk under the
-    /// writer lock — so requests never block on fsync. No-op when persistence is disabled.
+    /// Atomically write the current store to disk, holding the writer lock for the whole
+    /// snapshot-then-write so the two steps can never interleave with another persist.
+    /// No-op when persistence is disabled.
     ///
-    /// The snapshot and the write are taken under separate locks, so under heavy concurrent
-    /// writes the on-disk file may lag the in-memory store by one mutation (e.g. snapshot A,
-    /// then B fully persists, then A's older snapshot writes last). The write is always atomic
-    /// (temp→fsync→rename), so the file is never torn — only at worst one mutation stale, and
-    /// the next persist re-writes current state. The in-memory store stays fully serialized by
-    /// the db mutex and is authoritative for all reads. Acceptable at the intended personal
-    /// scale; tightening it (snapshot under the writer lock) would hold up writers on fsync.
+    /// The writer lock is taken FIRST, then the `db` lock for the snapshot, then `db` is
+    /// RELEASED before the actual serialize+fsync+rename. That last part matters and is why this
+    /// does not "hold up writers on fsync" as the previous ordering's doc comment claimed: `db`
+    /// is only ever held for the (in-memory) snapshot clone, so reads and other mutations are
+    /// never blocked by disk I/O. The only thing the ordering serializes is persist against
+    /// persist, which has to be serialized anyway — they share one `.tmp` file.
+    ///
+    /// Taking them the other way round loses data. If the snapshot were taken under `db` and
+    /// the lock released BEFORE the write, two concurrent persists interleave as
+    /// "A snapshots, B applies + fully persists SB, A then writes SA" — and the file ends up
+    /// holding SA, so B is gone from disk. The file is the only thing that survives a restart, so
+    /// a mutation that happened to be the last one is lost permanently; the old comment's
+    /// "the next persist re-writes current state" only holds if another mutation ever arrives,
+    /// which is exactly what a quiet server does not do. `persist_holds_the_writer_lock_before_
+    /// it_snapshots` pins the order.
     fn persist_blocking(&self) -> Result<(), String> {
         let Some(path) = self.data_path.clone() else {
             return Ok(());
         };
+        // Serialize against every other persist BEFORE reading the store, so the snapshot and
+        // the write that follows it are ordered as one unit.
+        let _w = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         let snap = {
             let g = self.db.lock().unwrap_or_else(|e| e.into_inner());
             // COMPACT: drop tombstones past the per-namespace retention window so the on-disk
@@ -788,7 +800,6 @@ impl AppState {
             // currently serving, so this only ever shrinks the file, never what a client sees.
             Snapshot::from_store_compacting(&g)
         };
-        let _w = self.writer.lock().unwrap_or_else(|e| e.into_inner());
         save_snapshot(&path, &snap).map_err(|e| {
             let msg = format!("failed to persist snapshot to {}: {e}", path.display());
             eprintln!("[aegis-sync-server] WARN {msg}");
@@ -939,22 +950,35 @@ fn canonicalize_body(
     out
 }
 
-/// Drop records whose `wall_ms` is further ahead of the server clock than any real device
-/// could legitimately be, so a hostile or broken client cannot poison a namespace's ordering.
+/// Drop records whose stamp would damage a client rather than just lose the LWW comparison.
 ///
-/// The danger is not the rejected record — it is what the record does to every PEER. HLC
-/// receive is an unbounded `max` against the observed remote stamp, so one record carrying
-/// `wall_ms: i64::MAX` pins each peer's process-global clock forever: every later local edit
-/// inherits that wall, can never be overridden by a genuine update, and the namespace is
-/// stuck until the store is deleted by hand. The client now clamps what it *observes*
-/// (`MAX_REMOTE_SKEW_MS` in `src-tauri/src/sync_envelope.rs`), so the damage self-heals there
-/// too — this is the server refusing to host the bad record in the first place.
+/// Two independent bounds, both on the cleartext `hlc` (which the server is allowed to read and
+/// must never rewrite — see below):
 ///
-/// Rejected, never rewritten: `wall_ms` lives inside `hlc`, which is bound into each record's
-/// AEAD associated data. Silently clamping it here would invalidate the tag and turn every
-/// affected record into the undecryptable-forever state this file used to create by bumping
-/// the same field.
-fn reject_far_future(records: Vec<WireRecord>, now_ms: i64) -> Vec<WireRecord> {
+/// **1. `wall_ms` too far in the future.** The danger is not the rejected record — it is what
+/// the record does to every PEER. HLC receive is an unbounded `max` against the observed remote
+/// stamp, so one record carrying `wall_ms: i64::MAX` pins each peer's process-global clock
+/// forever: every later local edit inherits that wall, can never be overridden by a genuine
+/// update, and the namespace is stuck until the store is deleted by hand. The client now clamps
+/// what it *observes* (`MAX_REMOTE_SKEW_MS` in `src-tauri/src/sync_envelope.rs`), so the damage
+/// self-heals there too — this is the server refusing to host the bad record in the first place.
+///
+/// **2. `counter` wider than `u32`.** `hlc_key` reads the counter as a `u64` so it can order
+/// anything, but the client's `Hlc.counter` is a `u32` and `sync_envelope::from_value`
+/// deserializes it with serde, which ERRORS on an out-of-range integer instead of truncating.
+/// Such a record is therefore not merely "a high counter" — `open_wire` bails at `from_value`
+/// before it reaches the AEAD check, so it is unopenable by every client, permanently. It is
+/// also unrecoverable: `counter` lives inside `hlc`, which is AEAD-bound, so the server cannot
+/// rewrite it into range, and the per-uuid LWW gate lets the poisoned record outrank every
+/// legitimate rewrite of that id. One push would brick one uuid on every device, forever.
+///
+/// A stamp in the PAST is harmless (LWW just loses), so only these two bounds are policed.
+///
+/// Rejected, never rewritten: `wall_ms` and `counter` both live inside `hlc`, which is bound
+/// into each record's AEAD associated data. Silently clamping either here would invalidate the
+/// tag and turn every affected record into the undecryptable-forever state this file used to
+/// create by bumping the same field.
+fn reject_client_poisoning_stamps(records: Vec<WireRecord>, now_ms: i64) -> Vec<WireRecord> {
     records
         .into_iter()
         .filter(|rec| {
@@ -967,10 +991,23 @@ fn reject_far_future(records: Vec<WireRecord>, now_ms: i64) -> Vec<WireRecord> {
                      `wall_ms` is AEAD-bound",
                     rec.uuid, wall, MAX_FUTURE_SKEW_MS
                 );
-                false
-            } else {
-                true
+                return false;
             }
+            // `as_u64` is the same widening read `hlc_key` uses, so this bound is exactly the
+            // point past which the server would be storing a stamp no client can deserialize.
+            // A missing/negative counter reads as 0 and passes, matching the wall_ms handling
+            // above: an unparseable field is not treated as an attack.
+            let counter = rec.hlc.get("counter").and_then(Value::as_u64).unwrap_or(0);
+            if counter > u32::MAX as u64 {
+                eprintln!(
+                    "[aegis-sync-server] WARN rejected record {}: counter {counter} exceeds \
+                     u32::MAX — no client could deserialize it, so storing it would make this \
+                     uuid permanently unopenable",
+                    rec.uuid
+                );
+                return false;
+            }
+            true
         })
         .collect()
 }
@@ -1028,6 +1065,80 @@ const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Deserialize)]
 struct RecordsQuery {
     ns: String,
+    cursor: Option<String>,
+    limit: Option<usize>,
+}
+
+/// One page of a namespace's records plus the cursor to resume after it.
+struct Page {
+    records: Vec<WireRecord>,
+    /// `Some(last_uuid_served)` when the namespace has more records after this page; `None`
+    /// when the page reached the end of the namespace.
+    next: Option<String>,
+}
+
+/// Serve one page of `(account, ns)` as `GET /v1/records` does, in uuid order, resuming after
+/// `cursor`.
+///
+/// Split out of the handler so the pagination is unit-testable: the route itself cannot be
+/// driven from a test (there is no `tower` in the dependency tree, so no
+/// `ServiceExt::oneshot`), which is the same seam-extraction reason `admit` exists for the
+/// request-budget middleware.
+///
+/// Ordering is by uuid, which is what makes a cursor meaningful. The records live in a
+/// `HashMap`, so the previous version served them in a **non-deterministic order** — a
+/// `records` array whose contents and order changed between two identical requests.
+///
+/// A record that arrives mid-pagination with a uuid that sorts BEFORE the cursor is not served
+/// by this pass. That is transient, not a loss: the merge is LWW and idempotent, and the record
+/// is still there for the next sync. Holding the whole `db` lock across a 50 000-key sort is
+/// acceptable at that bound and is why the client, not the server, bounds the page count.
+fn page_records(
+    store: &Store,
+    account: &str,
+    ns: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Page {
+    let mut matched: Vec<(&str, &WireRecord)> = store
+        .records
+        .iter()
+        .filter(|((a, n, _), _)| a == account && n == ns)
+        .map(|((_, _, uuid), r)| (uuid.as_str(), r))
+        .collect();
+    matched.sort_unstable_by_key(|(uuid, _)| *uuid);
+    if let Some(c) = cursor {
+        matched.retain(|(uuid, _)| *uuid > c);
+    }
+    // Clamp rather than trust the caller: `limit` is an authenticated but still untrusted query
+    // parameter, and it is the knob that bounds this response. A zero/oversized value must not be
+    // able to defeat `MAX_RESPONSE_RECORDS` or stall the client's loop.
+    let limit = limit.clamp(1, MAX_RESPONSE_RECORDS);
+    let mut records: Vec<WireRecord> = Vec::new();
+    let mut bytes = 0usize;
+    let mut next: Option<String> = None;
+    for (_, r) in &matched {
+        if records.len() >= limit {
+            // The page is full but the namespace is not exhausted: hand back a cursor.
+            next = Some(records.last().map(|w| w.uuid.clone()).unwrap_or_default());
+            break;
+        }
+        // The byte budget is the real bound — a record count alone does not account for
+        // ciphertext size. The FIRST record is always served regardless of budget: refusing it
+        // would hand back a cursor that makes no progress, and the client loop would spin.
+        bytes += r.ct.len() + r.uuid.len() + r.nonce.len() + 128; // + field names / HLC slack
+        if records.is_empty() && bytes > MAX_RESPONSE_BYTES {
+            records.push((*r).clone());
+            next = Some(r.uuid.clone());
+            break;
+        }
+        if bytes > MAX_RESPONSE_BYTES {
+            next = Some(records.last().map(|w| w.uuid.clone()).unwrap_or_default());
+            break;
+        }
+        records.push((*r).clone());
+    }
+    Page { records, next }
 }
 
 async fn get_records(
@@ -1040,41 +1151,39 @@ async fn get_records(
     if q.ns.len() > MAX_FIELD_LEN || q.ns.is_empty() {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
+    if let Some(c) = q.cursor.as_deref() {
+        if c.len() > MAX_FIELD_LEN {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+    }
     // The guard is scoped to a block so it is provably released before the `.await` below —
     // `persist()` takes the same mutex, so holding it across an await would also deadlock.
-    let (records, pruned) = {
+    let (page, pruned) = {
         let mut g = state.db.lock().unwrap_or_else(|e| e.into_inner());
         // Reap before serving, so a pull never ships tombstones that are already past the
         // retention window — they would cost the client bytes and quota to no end, since by
         // definition every device has long since synced past them. Tombstones AT the edge of the
         // window are kept, so a device returning from a long offline stretch still gets them.
         let pruned = prune_tombstones(&mut g);
-        // Clone incrementally against a byte budget so an oversized account can never be
-        // materialized in full. `413` means "your namespace is too big for one response" — the
-        // client should narrow the namespace rather than retry.
-        let mut records: Vec<WireRecord> = Vec::new();
-        let mut bytes = 0usize;
-        for ((a, n, _), r) in g.records.iter() {
-            if a != &account || n != &q.ns {
-                continue;
-            }
-            if records.len() >= MAX_RESPONSE_RECORDS {
-                return Err(StatusCode::PAYLOAD_TOO_LARGE);
-            }
-            bytes += r.ct.len() + r.uuid.len() + r.nonce.len() + 128; // + field names / HLC slack
-            if bytes > MAX_RESPONSE_BYTES {
-                return Err(StatusCode::PAYLOAD_TOO_LARGE);
-            }
-            records.push(r.clone());
-        }
-        (records, pruned)
+        (
+            page_records(
+                &g,
+                &account,
+                &q.ns,
+                q.cursor.as_deref(),
+                q.limit.unwrap_or(MAX_RESPONSE_RECORDS),
+            ),
+            pruned,
+        )
     };
     // Persisting a prune that happened on the READ path is deliberate: a reap that only lived in
     // memory would come straight back on the next restart, loaded from the snapshot.
     if pruned > 0 {
         state.persist().await.map_err(persist_err)?;
     }
-    Ok(Json(json!({ "records": records })))
+    // `next` is additive: a client that ignores it (an older build) still gets a valid page and
+    // stops, exactly as it did before pagination existed.
+    Ok(Json(json!({ "records": page.records, "next": page.next })))
 }
 
 #[derive(Deserialize)]
@@ -1112,7 +1221,7 @@ async fn post_records(
         // records always pass — they don't add a key). Counts the new keys this request adds.
         let current = g.records.keys().filter(|(a, _, _)| a == &account).count();
         let incoming = canonicalize_body(
-            reject_far_future(body.records, now_ms()),
+            reject_client_poisoning_stamps(body.records, now_ms()),
             &body.ns,
             &account,
             &g,
@@ -1580,7 +1689,7 @@ mod tests {
             body_rec("edge", now + MAX_FUTURE_SKEW_MS, 0, "new"),
             body_rec("past", now - 1_000_000, 0, "new"),
         ];
-        let kept = reject_far_future(recs, now);
+        let kept = reject_client_poisoning_stamps(recs, now);
         let ids: Vec<_> = kept.iter().map(|r| r.uuid.as_str()).collect();
         assert_eq!(ids, ["edge", "past"], "only in-window/past records survive");
         // The survivors are byte-identical — proof the filter never rewrites `hlc`.
@@ -1598,7 +1707,7 @@ mod tests {
         let now = 1_700_000_000_000i64;
         let mut r = body_rec("nowall", 0, 0, "new");
         r.hlc = json!({ "counter": 3, "node": "n" });
-        let kept = reject_far_future(vec![r], now);
+        let kept = reject_client_poisoning_stamps(vec![r], now);
         assert_eq!(
             kept.len(),
             1,
@@ -1607,6 +1716,40 @@ mod tests {
     }
 
     use ed25519_dalek::{Signer, SigningKey};
+
+    /// The client's `Hlc.counter` is a `u32`, and `sync_envelope::from_value` deserializes it
+    /// with serde — which **errors** on an out-of-range integer rather than truncating it. So a
+    /// record whose `counter` exceeds `u32::MAX` is not "a high counter": it is a record no
+    /// client can ever open. `open_wire` bails at `from_value` before it even reaches the AEAD
+    /// check, so `ct` is irrelevant.
+    ///
+    /// That makes it a permanent, unrecoverable brick rather than a transient failure. The
+    /// record's `hlc` is AEAD-bound, so the server cannot rewrite the counter to bring it back
+    /// into range, and the per-uuid LWW gate (`hlc_key(&rec.hlc) > hlc_key(&existing.hlc)`)
+    /// means the legitimate record for that id can never displace it either: one push poisons
+    /// that uuid for every device, forever.
+    ///
+    /// `u32::MAX` itself is IN range for the client and must be accepted — the client now
+    /// carries into the wall instead of overflowing on it — so the bound is inclusive.
+    #[test]
+    fn a_counter_wider_than_u32_is_rejected_as_unopenable() {
+        let now = 1_700_000_000_000i64;
+        let recs = vec![
+            body_rec("way-over", now, u32::MAX as u64 + 1, "new"),
+            body_rec("over", now, u32::MAX as u64 + 9_999, "new"),
+            body_rec("max", now, u32::MAX as u64, "new"),
+            body_rec("normal", now, 7, "new"),
+        ];
+        let kept = reject_client_poisoning_stamps(recs, now);
+        let ids: Vec<_> = kept.iter().map(|r| r.uuid.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["max", "normal"],
+            "a counter past u32::MAX makes the record unopenable by every client, so it must \
+             be refused at the door rather than stored; u32::MAX itself is in range and must \
+             survive"
+        );
+    }
 
     fn hex_bytes(b: &[u8]) -> String {
         b.iter().map(|x| format!("{x:02x}")).collect()
@@ -1708,6 +1851,144 @@ mod tests {
         )
         .await
         .is_ok());
+    }
+
+    /// A namespace holding MORE records than one response can carry must still be fully
+    /// pullable. `MAX_RECORDS_PER_ACCOUNT` (50 000) is ten times `MAX_RESPONSE_RECORDS` (5 000),
+    /// so a namespace can legitimately outgrow a single page — and before pagination, hitting
+    /// that ceiling returned `413` with no way to ask for "the rest", so **no client could ever
+    /// pull that namespace again**. A single oversized page was a permanent, silent sync
+    /// dead-end: the data was still stored, and still pushed, but never read back down.
+    ///
+    /// Driven through [`page_records`] rather than the route: the extracted seam is what the
+    /// handler calls, and the route itself cannot be driven from a test (no `tower` in the dep
+    /// tree, so no `ServiceExt::oneshot`).
+    #[test]
+    fn a_namespace_larger_than_one_page_is_fully_pullable() {
+        let total = MAX_RESPONSE_RECORDS + 250;
+        let mut store = Store::default();
+        for i in 0..total {
+            let uuid = format!("uuid-{i:06}");
+            store.records.insert(
+                ("acct".to_string(), "bm".to_string(), uuid.clone()),
+                body_rec(&uuid, 1, 0, "ct"),
+            );
+        }
+        // A record in ANOTHER namespace and one in ANOTHER account must not leak into the pages.
+        store.records.insert(
+            ("acct".into(), "favorites".into(), "other-ns".into()),
+            body_rec("other-ns", 1, 0, "ct"),
+        );
+        store.records.insert(
+            ("someone-else".into(), "bm".into(), "other-acct".into()),
+            body_rec("other-acct", 1, 0, "ct"),
+        );
+
+        // Walk the cursor to exhaustion, exactly as the client does.
+        let mut seen: Vec<String> = Vec::new();
+        let mut cursor: Option<String> = None;
+        let mut pages = 0usize;
+        loop {
+            let page = page_records(
+                &store,
+                "acct",
+                "bm",
+                cursor.as_deref(),
+                MAX_RESPONSE_RECORDS,
+            );
+            pages += 1;
+            assert!(
+                page.records.len() <= MAX_RESPONSE_RECORDS,
+                "a page must never exceed the response cap, got {}",
+                page.records.len()
+            );
+            seen.extend(page.records.iter().map(|r| r.uuid.clone()));
+            match page.next {
+                Some(c) => {
+                    // The cursor must be the LAST record the page just served. Anything else
+                    // would either skip records or re-serve them on the next request.
+                    assert_eq!(
+                        Some(&c),
+                        page.records.last().map(|w| &w.uuid),
+                        "the cursor must be the last record served, not an arbitrary one"
+                    );
+                    cursor = Some(c);
+                }
+                None => break,
+            }
+            assert!(pages < 100, "pagination did not terminate");
+        }
+        assert_eq!(pages, 2, "5000 + 250 records should take two pages");
+        // Strictly increasing across the concatenation of all pages proves three things at once:
+        // the order is stable, no record is served twice, and each page starts after the
+        // previous page's end (so the cursor really does move forward).
+        assert!(
+            seen.windows(2).all(|w| w[0] < w[1]),
+            "the served uuids must be strictly increasing across pages — a repeat or a \
+             backwards step means the cursor is not advancing"
+        );
+        assert_eq!(
+            seen.len(),
+            total,
+            "every record in the namespace must be served exactly once across the pages"
+        );
+        assert!(!seen.iter().any(|u| u == "other-ns" || u == "other-acct"));
+    }
+
+    /// The page size is a QUOTA knob and is authenticated-but-untrusted input, so it is clamped
+    /// rather than obeyed: a client must not be able to ask for more than the cap, and a `limit`
+    /// of 0 must not be able to stall its own loop.
+    #[test]
+    fn the_requested_page_size_is_clamped_to_the_cap() {
+        let mut store = Store::default();
+        for i in 0..50 {
+            store.records.insert(
+                ("acct".into(), "bm".into(), format!("u{i:03}")),
+                body_rec(&format!("u{i:03}"), 1, 0, "ct"),
+            );
+        }
+        assert_eq!(
+            page_records(&store, "acct", "bm", None, usize::MAX)
+                .records
+                .len(),
+            50,
+            "an absurd limit must clamp to the cap, not to something larger"
+        );
+        let zero = page_records(&store, "acct", "bm", None, 0);
+        assert_eq!(
+            zero.records.len(),
+            1,
+            "a zero limit must still serve one record, or the client's cursor loop cannot advance"
+        );
+        // And a small limit pages correctly.
+        let p = page_records(&store, "acct", "bm", None, 10);
+        assert_eq!(p.records.len(), 10);
+        assert!(p.next.is_some());
+    }
+
+    /// Two identical requests with no cursor must return the same records in the same order.
+    /// The records live in a `HashMap`, so iterating it directly made both the contents and the
+    /// order non-deterministic — which is what makes a cursor meaningful at all.
+    #[test]
+    fn pages_are_stable_across_identical_requests() {
+        let mut store = Store::default();
+        for i in 0..200 {
+            store.records.insert(
+                ("acct".into(), "bm".into(), format!("u{i:03}")),
+                body_rec(&format!("u{i:03}"), 1, 0, "ct"),
+            );
+        }
+        let a: Vec<String> = page_records(&store, "acct", "bm", None, 50)
+            .records
+            .iter()
+            .map(|r| r.uuid.clone())
+            .collect();
+        let b: Vec<String> = page_records(&store, "acct", "bm", None, 50)
+            .records
+            .iter()
+            .map(|r| r.uuid.clone())
+            .collect();
+        assert_eq!(a, b, "an identical request must return an identical page");
     }
 
     #[tokio::test]
@@ -2528,6 +2809,69 @@ mod tests {
         // src-tauri/src/sync_auth.rs DEFAULT_TTL_MS. If a client ever mints a longer token this
         // test is the tripwire that tells us to raise MAX_TTL_MS rather than silently 401.
         assert_eq!(MAX_TTL_MS, 300_000);
+    }
+
+    /// A persist must hold the WRITER lock before it takes its snapshot, not after.
+    ///
+    /// The two locks are acquired in the wrong order today: the snapshot is taken under `db` and
+    /// the `db` lock is RELEASED, and only then is the write done under the separate `writer` lock.
+    /// Two concurrent persists can therefore interleave like this:
+    ///
+    /// ```text
+    /// A: snapshot SA ──release db────────────────── write SA ──┐
+    /// B:               apply SB ──snapshot SB ──write SB ──┐   │
+    ///                                                    └───┴── disk = SA; SB is GONE
+    /// ```
+    ///
+    /// and because the on-disk file is the only thing that survives a restart, a mutation that
+    /// happens to be the last one before the process stops is lost PERMANENTLY. The old doc
+    /// comment claimed "the next persist re-writes current state" — true only if another mutation
+    /// ever arrives, which is exactly what a quiet server does not do.
+    ///
+    /// The fix is to take `writer` first, which does **not** hold `db` across the fsync: `db` is
+    /// still released before the write, so reads and other mutations are never blocked by disk
+    /// I/O. What it buys is that every snapshot and every write are ordered against every other
+    /// persist, so the last write always contains at least everything an earlier snapshot did.
+    ///
+    /// Testing the interleaving directly is impossible here: `std::sync::Mutex` is not
+    /// FIFO-guaranteed, so a test cannot choose which of two threads wins `writer` and the
+    /// outcome is a coin flip. This test therefore pins the LOCK ORDER the fix makes
+    /// deterministic — hold `db` so the persist cannot get its snapshot, then assert it is
+    /// ALREADY holding `writer`. Unfixed it is queued on `db` holding nothing, so the probe
+    /// below acquires `writer` at once; fixed it took `writer` on the way in and is now stuck
+    /// behind `db`, so the probe blocks.
+    #[test]
+    fn persist_holds_the_writer_lock_before_it_snapshots() {
+        let dir = std::env::temp_dir().join(format!("aegis-sync-order-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let state = AppState::new(Store::default(), Some(dir.join("data.json")));
+
+        let db = state.db.lock().unwrap();
+        let s = state.clone();
+        let worker = std::thread::spawn(move || s.persist_blocking());
+        // Give it time to reach whichever lock it wants first.
+        std::thread::sleep(std::time::Duration::from_millis(150));
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let s2 = state.clone();
+        std::thread::spawn(move || {
+            let _w = s2.writer.lock().unwrap();
+            let _ = tx.send(());
+        });
+        let probe_got_writer = rx
+            .recv_timeout(std::time::Duration::from_millis(250))
+            .is_ok();
+
+        drop(db);
+        let _ = worker.join();
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert!(
+            !probe_got_writer,
+            "a persist must hold the writer lock BEFORE it snapshots; taking its snapshot first \
+             and the writer lock second lets two concurrent persists roll the later one back \
+             off disk, losing it for good if no further mutation arrives"
+        );
     }
 
     #[tokio::test]

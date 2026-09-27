@@ -594,6 +594,15 @@ pub fn run() {
         // created empty at builder time) — so allowlisted hosts survive a restart.
         crate::farble::seed_from_disk(app.handle());
 
+        // Seed the HLC clock from the stamps already on disk. MUST run before anything can stamp
+        // a record (or any sync pass can observe a remote one). The clock is a process-global
+        // that starts at (0, 0) and is never persisted, so without this the first local edit
+        // after a restart is stamped below any record already holding a later wall — loses
+        // last-writer-wins, is silently reverted by the next merge, and can never be won back.
+        // See `sync_envelope::seed_clock` for the full failure mode. This is a no-op on a device
+        // with nothing stamped, and it never moves the clock backwards.
+        crate::sync_stores::seed_hlc_clock(app.handle());
+
         // Seed the built-in default filter-list subscriptions (EasyList, EasyPrivacy,
         // Peter Lowe's) on first run so they show in the Filter Lists UI and are
         // refreshable. Idempotent + tombstone-aware (never resurrects a default the user

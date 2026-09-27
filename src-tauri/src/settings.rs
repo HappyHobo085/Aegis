@@ -333,6 +333,18 @@ fn load_sync_records<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+/// The per-key projection, read WITHOUT the lazy-migration side effect.
+///
+/// [`sync_records`] calls `ensure_sync_projection`, which WRITES `settings-sync.json` on first
+/// use. That is right for the sync path but wrong for the boot-time HLC-clock seed
+/// (`sync_stores::seed_hlc_clock`): a reader that persists would make "read the highest stamp
+/// this device has" depend on — and perturb — the very state it is trying to read. A projection
+/// file that does not exist yet simply contributes no stamps, which is correct: a key that has
+/// never been synced cannot hold a stamp that beats a local edit.
+pub fn sync_records_readonly<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
+    load_sync_records(app)
+}
+
 fn save_sync_records<R: Runtime>(app: &AppHandle<R>, recs: &[Value]) {
     if let Some(p) = sync_path(app) {
         if let Ok(txt) = serde_json::to_string_pretty(recs) {

@@ -399,6 +399,56 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     ignored). `sync::state_json` publishes `allowInsecure` so the Sync tab reports the
     decision the core is actually enforcing instead of echoing its own checkbox. Covered by
     `settings::tests::sync_allow_insecure_is_local_only`.
+  - **The HLC clock is seeded from disk at boot** (`sync_envelope::seed_clock`, driven by
+    `sync_stores::seed_hlc_clock` from the `setup()` boot block). `CLOCK` is a
+    `OnceLock<Mutex<(i64, u32)>>` initialised to `(0, 0)`, so without this the first stamp after
+    a restart is `(now_ms, 0)` — correct only while `now_ms` exceeds every stamp the device
+    holds, and it usually does not: a peer inside the accepted `MAX_REMOTE_SKEW_MS` window can
+    push this device's clock 60 s into the future and the records it observes on disk inherit
+    that wall; the user's own wall clock can also jump ahead (NTP correction, a VM resuming).
+    Either way the next local edit is stamped BELOW the record it is trying to update, LOSES
+    LWW, and is silently reverted by the following merge — and since the losing stamp is itself
+    persisted, nothing the user does afterwards can win it back. Seeding takes a **max**, never an
+    assignment, so it can only move the clock forward. It scans `sync_stores::HLC_CARRIERS`
+    (a deliberate **superset** of `SYNCABLE`: `history` and `downloads` carry HLCs but are not
+    synced) plus the two sync projections that live outside the array stores —
+    `settings::sync_records_readonly` and `customfilters::sync_record_readonly`. Both exist
+    because the obvious readers have write side effects: `settings::sync_records()` calls
+    `ensure_sync_projection`, which WRITES `settings-sync.json`, and `customfilters::sync_record`
+    calls `sync_envelope::tick` when the sidecar is missing, so calling it during seeding would
+    seed the clock from a stamp it had just invented.
+  - **The counter carries into the wall at its ceiling; it never saturates.** `bump` is the one
+    place a counter is incremented, for all four sites. `saturating_add(1)` is the tempting
+    one-liner and it is wrong: the clock would stop advancing, so every local edit while parked
+    at `u32::MAX` gets an _identical_ stamp, `Ord` falls through to `node` (same device), and two
+    of the user's own records tie with LWW decided by map iteration order. An attacker can hold
+    the wall at the `MAX_REMOTE_SKEW_MS` ceiling for the whole 60 s window, so that tie window is
+    a minute wide, not sub-millisecond. Carrying costs 1 ms of wall, which the wall clamp makes
+    self-healing. Previously `local.1.max(remote.1) + 1` was reachable remotely: in a RELEASE
+    build the overflow **wraps**, regressing the clock, after which no later local edit can
+    outrank the attacker's record.
+  - **The server's `ord` is the one wire field it AUTHORS rather than relays, so it is
+    bounds-checked before adoption** (`sync_envelope::ord_is_adoptable`, used by
+    `sync::open_wire`). `hlc` is AEAD-bound, but `ord` is not, so with `syncAllowInsecure` on a
+    plain on-path attacker can set `ord.wall_ms = i64::MAX` — and every pulled record would then
+    land beyond the reach of any real clock, so the user could never again change a favorite or
+    history row on any device. Adoption now requires the value to deserialize as an `Hlc` (so a
+    malformed or over-wide counter is out) **and** `wall_ms <= now + MAX_REMOTE_SKEW_MS`.
+    Refusal falls back to the AEAD-authenticated wire `hlc`, so the only cost is a lost
+    tie-break. The **exact** window boundary is asserted against the pure function, not through
+    `open_wire` — `open_wire` reads the wall clock itself, so a 1 ms-tight boundary there is
+    decided by how long the test took to get there.
+  - **A pull PAGE-LOOPS** (`sync::MAX_PULL_PAGES`, `pull_url`, `next_cursor`). The server caps
+    one `GET /v1/records` response at `MAX_RESPONSE_RECORDS` and hands back a `next` cursor, so a
+    namespace larger than that cap is only fully pullable by following it. This client issued
+    exactly ONE un-paged GET; it is the mirror of `PUSH_CHUNK` / `push_batches`, which fixed the
+    identical cliff on the POST side. `next_cursor` treats absent, `null`, **and empty string** as
+    the last page — an echoed `""` would otherwise re-request page 1 forever, since the server's
+    own retain is `uuid > cursor` and every uuid sorts after the empty string. The cursor is
+    **server-supplied text** and is percent-encoded via `url::form_urlencoded`, because unlike
+    `ns` (a fixed internal string) a raw `&`/`#`/`+` in it would re-parse the query string.
+    `MAX_PULL_PAGES` (64) is what stops a server that always answers with a cursor from spinning
+    the client; on exhaustion we keep what was pulled, because a partial pull beats none.
 - **Anti-fingerprinting / farbling** — `farble.rs`: opt-in document-start JS shim
   that perturbs fingerprinting surfaces with per-frame-origin, per-session deterministic
   noise. Key design points:

@@ -202,7 +202,18 @@ pub(crate) fn open_wire(data_key: &[u8; 32], ns: &str, w: &Value) -> Result<Valu
     // re-deriving an arbitrary local tie-break. The AAD check above is unaffected: it ran against
     // the wire `hlc`, exactly as sent. Safe to repeat — the next push seals with whatever we
     // adopted, and the server echoes that same value back as `hlc`.
-    if let Some(ord) = w.get("ord").filter(|o| !o.is_null()) {
+    //
+    // BUT `ord` is the one field the server AUTHORS instead of relaying, so the AEAD check does
+    // not cover it and it needs its own bound: adopted blind, `ord.wall_ms = i64::MAX` is a
+    // namespace-wide permanent poison (no later local edit can ever dominate it, on any device).
+    // `ord_is_adoptable` requires a well-formed HLC no further ahead than the same
+    // `MAX_REMOTE_SKEW_MS` window the receive path already trusts; a refused `ord` falls back to
+    // the wire `hlc`, which IS authenticated, so the cost is a lost tie-break and nothing else.
+    if let Some(ord) = w
+        .get("ord")
+        .filter(|o| !o.is_null())
+        .filter(|o| crate::sync_envelope::ord_is_adoptable(o, crate::jsonstore::now_ms()))
+    {
         if Some(ord) != w.get("hlc") {
             if let Some(o) = rec.as_object_mut() {
                 o.insert("hlc".to_string(), ord.clone());
@@ -509,6 +520,10 @@ fn emit_changed<R: Runtime>(app: &AppHandle<R>, ns: &str, changed: &[String]) {
 /// Pull → decrypt → merge → push for ONE namespace. `read_local` is read AFTER the merge so
 /// the push reflects the merged-latest (the server applies HLC-LWW, so a stale push is
 /// ignored). Decrypt/seal failures on a single record are skipped + logged, never aborting.
+///
+/// The pull PAGE-LOOPS (see `MAX_PULL_PAGES`): one `GET` only ever returns the server's
+/// page-sized slice of a namespace, so a namespace larger than that cap is not fully pulled
+/// without following the `next` cursor.
 #[allow(clippy::too_many_arguments)]
 /// Records per `POST /v1/records` request.
 ///
@@ -535,6 +550,49 @@ pub(crate) fn push_batches(wire: &[Value]) -> Vec<&[Value]> {
     wire.chunks(PUSH_CHUNK).collect()
 }
 
+/// Maximum number of `GET /v1/records` pages one `sync_ns` will fetch for a single namespace.
+///
+/// The server caps one response at `MAX_RESPONSE_RECORDS` and hands back a `next` cursor when
+/// there is more, so a namespace larger than that cap is only fully pullable by following the
+/// cursor. This bound is what stops a hostile or buggy server from spinning the client forever
+/// by always returning a cursor: on exhaustion we keep what we pulled (a partial pull beats
+/// none — the next sync run resumes from the start and converges) and warn.
+const MAX_PULL_PAGES: usize = 64;
+
+/// Build the `GET /v1/records` URL for one page of a namespace pull.
+///
+/// `cursor` is the opaque value the SERVER handed back in the previous page's `next`. It is
+/// server-supplied text, so it is percent-encoded as a query value: a raw `&`, `#` or `=` in it
+/// would otherwise truncate or re-parse the query string and silently fetch the wrong page.
+/// `ns` is not encoded because it is a fixed internal string (never user input), matching the
+/// pre-existing call.
+pub(crate) fn pull_url(base: &str, ns: &str, cursor: Option<&str>) -> String {
+    let Some(c) = cursor else {
+        return format!("{base}/v1/records?ns={ns}");
+    };
+    // `form_urlencoded` rather than a hand-rolled `replace('&', "%26")`: a cursor is
+    // server-supplied, so it can contain `&`, `#`, `+` or `%`, and getting any of them wrong
+    // either truncates the query or silently re-encodes to a DIFFERENT cursor value.
+    let enc = url::form_urlencoded::Serializer::new(String::new())
+        .append_pair("cursor", c)
+        .finish();
+    format!("{base}/v1/records?ns={ns}&{enc}")
+}
+
+/// The cursor for the next page, or `None` when this was the last page.
+///
+/// `next` is absent on a server that does not paginate (so this client stays compatible with an
+/// older sync-server), `null` on the final page, and a non-empty string otherwise. An EMPTY
+/// string is treated as the end too: a server that echoed `""` back would otherwise re-request
+/// page 1 forever, since the server's own retain is `uuid > cursor` and every uuid is `> ""`.
+/// A non-string `next` is likewise ignored rather than stringified into a bogus cursor.
+pub(crate) fn next_cursor(page: &Value) -> Option<String> {
+    page.get("next")
+        .and_then(Value::as_str)
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+}
+
 // The nine parameters are genuinely independent (transport base, namespace, its derived
 // key, the two auth inputs, the cancellation generation, and the two store seams) and
 // every one is threaded straight into a helper that takes it alone. Bundling them into
@@ -556,23 +614,41 @@ pub(crate) fn sync_ns<R: Runtime>(
     read_local: impl Fn() -> Vec<Value>,
     merge: impl Fn(&[Value]) -> Vec<String>,
 ) -> Result<Vec<String>, String> {
-    // A fresh token (fresh nonce) per HTTP request: the server enforces single-use nonces for
-    // replay defense (sync-server `verify_auth`), so reusing one token across the GET + POST
-    // below would get the second request rejected. Minting is cheap (one Ed25519 sign).
-    let pulled = http(
-        "GET",
-        format!("{base}/v1/records?ns={ns}"),
-        auth_header(account_id, device_seed)?,
-        None,
-        SYNC_TIMEOUT_SECS,
-    )?;
-    let mut decrypted = Vec::new();
-    if let Some(arr) = pulled.get("records").and_then(Value::as_array) {
-        for w in arr {
-            match open_wire(data_key, ns, w) {
-                Ok(rec) => decrypted.push(rec),
-                Err(e) => eprintln!("[aegis-sync] skip undecryptable {ns} record: {e}"),
+    // Page through the namespace. The server caps one response at MAX_RESPONSE_RECORDS and hands
+    // back a `next` cursor when there is more, so a namespace larger than that cap is only fully
+    // pullable by following it. The bound is what stops a server that always answers with a
+    // cursor from spinning us forever; see MAX_PULL_PAGES.
+    let mut decrypted: Vec<Value> = Vec::new();
+    let mut cursor: Option<String> = None;
+    for page_no in 0..MAX_PULL_PAGES {
+        // A fresh token (fresh nonce) per HTTP request: the server enforces single-use nonces for
+        // replay defense (sync-server `verify_auth`), so reusing one token across the GETs (or
+        // the POSTs) below would get the later request rejected. Minting is cheap (one Ed25519
+        // sign).
+        let pulled = http(
+            "GET",
+            pull_url(base, ns, cursor.as_deref()),
+            auth_header(account_id, device_seed)?,
+            None,
+            SYNC_TIMEOUT_SECS,
+        )?;
+        if let Some(arr) = pulled.get("records").and_then(Value::as_array) {
+            for w in arr {
+                match open_wire(data_key, ns, w) {
+                    Ok(rec) => decrypted.push(rec),
+                    Err(e) => eprintln!("[aegis-sync] skip undecryptable {ns} record: {e}"),
+                }
             }
+        }
+        match next_cursor(&pulled) {
+            Some(next) => cursor = Some(next),
+            None => break,
+        }
+        if page_no + 1 == MAX_PULL_PAGES {
+            eprintln!(
+                "[aegis-sync] {ns}: stopped after {MAX_PULL_PAGES} pages without reaching the \
+                 last one; keeping what was pulled rather than spinning or discarding it"
+            );
         }
     }
     let changed = merge(&decrypted);
@@ -1213,6 +1289,117 @@ mod tests {
         assert_eq!(opened["uuid"], json!("u1"));
     }
 
+    /// `ord` is the ONE field on a wire record the server authors rather than merely relays, and
+    /// `open_wire` adopts it as the record's HLC. That makes it the one place a hostile party can
+    /// write a stamp the client cannot authenticate: `wall_ms: i64::MAX` is a namespace-wide,
+    /// permanent poison — every pulled record lands beyond the reach of any real clock, so no
+    /// later local edit can ever dominate it and the user can never change a favorite, bookmark,
+    /// or history row again on any device. It needs a compromised server, or just an on-path
+    /// attacker, since `syncAllowInsecure` permits a plain `http://` endpoint.
+    ///
+    /// The genuine tie-break `ord` exists for is always a *local* ordering concern: the server
+    /// bumps a counter it owns, on a record whose wall it did not choose. So requiring the stamp
+    /// to be a well-formed HLC and no further ahead than the same `MAX_REMOTE_SKEW_MS` window the
+    /// receive path already trusts keeps every real tie-break working while refusing the poison.
+    #[test]
+    fn open_wire_refuses_a_server_stamp_outside_the_skew_window() {
+        let key = [7u8; 32];
+        let now = crate::jsonstore::now_ms();
+        let hlc = json!({ "wall_ms": now - 1_000, "counter": 4, "node": "n1" });
+        let base = seal_wire(
+            &key,
+            "favorites",
+            &json!({ "uuid": "u1", "name": "Fav", "hlc": hlc.clone() }),
+        )
+        .unwrap();
+        let stamped = |ord: Value| {
+            let mut w = base.clone();
+            w["ord"] = ord;
+            open_wire(&key, "favorites", &w).unwrap()
+        };
+
+        // Far future: the poison. The wire `hlc` is AEAD-authenticated, so it is the only stamp
+        // this record can be trusted to carry — falling back to it is the whole point.
+        let poisoned = stamped(json!({ "wall_ms": i64::MAX, "counter": 0, "node": "srv" }));
+        assert_eq!(
+            poisoned["hlc"], hlc,
+            "a server stamp far beyond the skew window must not be adopted; the record keeps \
+             its authenticated wire hlc"
+        );
+
+        // Not an HLC at all. Adopting this would either fail the later merge or, worse, be
+        // stored verbatim and break the next push's `seal_wire`.
+        let malformed = stamped(json!({ "wall_ms": "soon", "counter": 9, "node": "srv" }));
+        assert_eq!(
+            malformed["hlc"], hlc,
+            "an `ord` that is not a well-formed HLC must be ignored, not adopted"
+        );
+
+        // The genuine article still lands, so a fix that simply refused every `ord` could not
+        // pass this. The reject margin here is deliberately COMFORTABLE rather than 1 ms tight:
+        // `open_wire` reads the wall clock itself, so the `now` captured above and the `now` its
+        // check uses are two different reads, and anything within a millisecond or two of the
+        // boundary is decided by how long the test took to get there. That is a property of the
+        // measurement, not of the code — an earlier version of this test used `+60_001` and
+        // failed roughly one run in six. The exact boundary is asserted in
+        // `the_ord_window_boundary_is_exact` below, against the pure function where `now_ms` is
+        // an argument and therefore cannot drift.
+        for (delta, expect_adopted) in [
+            (30_000i64, true),   // inside the accepted window
+            (-30_000i64, true),  // in the past: LWW just loses, which is harmless
+            (120_000i64, false), // a full minute past the window
+        ] {
+            let ord = json!({ "wall_ms": now + delta, "counter": 9, "node": "srv" });
+            let got = stamped(ord.clone())["hlc"].clone();
+            if expect_adopted {
+                assert_eq!(
+                    got, ord,
+                    "a legitimate tie-break at {delta:+}ms must still be adopted"
+                );
+            } else {
+                assert_eq!(
+                    got, hlc,
+                    "a tie-break {delta:+}ms out is poison, not a tie-break"
+                );
+            }
+        }
+    }
+
+    /// The boundary itself, tested where it is deterministic.
+    ///
+    /// `ord_is_adoptable` takes `now_ms` as an argument, so "exactly at the window edge" is a
+    /// fact about the function rather than a race between two reads of the wall clock. Without
+    /// this test the boundary is only observable through `open_wire`, which cannot express it.
+    #[test]
+    fn the_ord_window_boundary_is_exact() {
+        let now = 1_700_000_000_000i64;
+        let ord = |wall: i64| json!({ "wall_ms": wall, "counter": 1, "node": "srv" });
+        let skew = crate::sync_envelope::MAX_REMOTE_SKEW_MS;
+        assert!(
+            crate::sync_envelope::ord_is_adoptable(&ord(now + skew), now),
+            "exactly at the window edge must be accepted — the window is inclusive, and a record \
+             sitting exactly on it is a legitimate tie-break"
+        );
+        assert!(
+            !crate::sync_envelope::ord_is_adoptable(&ord(now + skew + 1), now),
+            "one millisecond past the window must be refused"
+        );
+        assert!(
+            crate::sync_envelope::ord_is_adoptable(&ord(now - skew - 1), now),
+            "a stamp in the past is harmless (LWW just loses) and must stay adoptable, or a \
+             device whose clock runs slow could never merge anything"
+        );
+        // The counter is bounds-checked by the same serde path: an out-of-range `u32` is
+        // unopenable by the client, so adopting it writes a stamp nothing can ever read back.
+        assert!(
+            !crate::sync_envelope::ord_is_adoptable(
+                &json!({ "wall_ms": now, "counter": u32::MAX as u64 + 1, "node": "srv" }),
+                now
+            ),
+            "a counter past u32::MAX must be refused — the client cannot deserialize it"
+        );
+    }
+
     /// An old server (or a record from before `ord` existed) sends no `ord` at all. The adoption
     /// must be a no-op there, not an error and not a clobber.
     #[test]
@@ -1553,6 +1740,95 @@ mod tests {
         let empty = push_batches(&[]);
         assert_eq!(empty.len(), 1);
         assert!(empty[0].is_empty());
+    }
+
+    /// The mirror of the `push_batches` bug, on the pull side.
+    ///
+    /// The server caps one `GET /v1/records` response at `MAX_RESPONSE_RECORDS` and hands back
+    /// a `next` cursor when a namespace is larger than that. This client issued exactly ONE
+    /// un-paged GET and read `records` off it, so a namespace above the cap could never be
+    /// pulled — and after the server was taught to page, the same client would have silently
+    /// kept only page 1 and reported a successful pull, which is worse than the 413 it
+    /// replaced: the user would see a sync that "works" while their other device's bookmarks
+    /// never arrive.
+    ///
+    /// The two halves are tested separately because they are the two halves of the loop: the
+    /// cursor must reach the wire (`pull_url`), and the server's answer must reach the loop
+    /// (`next_cursor`). Testing only one would let a "fix" that pages forever, or one that
+    /// pages once, pass.
+    #[test]
+    fn a_paged_pull_follows_the_servers_cursor() {
+        // The cursor reaches the request. It is server-supplied text, so it is percent-encoded:
+        // a raw `&`/`#`/`=` would re-parse the query string and fetch the wrong page.
+        let first = pull_url("http://h:8787", "favorites", None);
+        assert_eq!(first, "http://h:8787/v1/records?ns=favorites");
+        let second = pull_url("http://h:8787", "favorites", Some("ab&cd=ef"));
+        assert!(
+            second.contains("cursor="),
+            "page 2 must ask for the next page, but the URL is {second:?} — the client is \
+             re-fetching page 1 forever or stopping after one page"
+        );
+        assert!(
+            !second.contains("cursor=ab&cd=ef"),
+            "the cursor must be percent-encoded, not pasted raw: {second:?}"
+        );
+        // Re-parsing the URL must yield the cursor back verbatim — the property that proves the
+        // encoding is correct rather than merely present.
+        let parsed = url::Url::parse(&second).expect("built URL must parse");
+        assert_eq!(
+            parsed
+                .query_pairs()
+                .find(|(k, _)| k == "cursor")
+                .map(|(_, v)| v.into_owned()),
+            Some("ab&cd=ef".to_string()),
+            "the cursor must survive a URL round-trip unchanged"
+        );
+
+        // The server's answer reaches the loop. `null`/absent/empty all mean "last page" — an
+        // echoed `""` would otherwise re-request page 1 forever, because the server's own
+        // retain is `uuid > cursor` and every uuid sorts after the empty string.
+        assert_eq!(
+            next_cursor(&json!({ "records": [], "next": "zz" })),
+            Some("zz".to_string()),
+            "a cursor in the response must continue the pull"
+        );
+        for last in [
+            json!({ "records": [] }),
+            json!({ "records": [], "next": null }),
+            json!({ "records": [], "next": "" }),
+            json!({ "records": [], "next": 7 }),
+        ] {
+            assert_eq!(
+                next_cursor(&last),
+                None,
+                "no further page is implied by {last} — the pull must stop, not spin"
+            );
+        }
+    }
+
+    /// The loop bound is a real bound, not decoration: it is what stops a server that always
+    /// answers with a cursor from spinning the client forever.
+    ///
+    /// `black_box` on both sides: clippy's `assertions_on_constants` is right that a comparison
+    /// of two literals is decided at compile time, which would make this a build-time check
+    /// dressed up as a test. The point being pinned here is that someone lowering
+    /// `MAX_PULL_PAGES` — to "stop the loop from being slow", say — re-creates the very dead-end
+    /// this wave removed, just at a higher record count.
+    #[test]
+    fn the_pull_page_bound_is_finite_and_bounded() {
+        let pages = std::hint::black_box(MAX_PULL_PAGES);
+        // The server's own ceiling for one account (`MAX_RECORDS_PER_ACCOUNT` in
+        // sync-server/src/main.rs): a bound below ceil(50_000 / 5_000) would make the largest
+        // account a legitimate server will hold unpullable.
+        let per_page = std::hint::black_box(5_000usize);
+        let account_ceiling = std::hint::black_box(50_000usize);
+        assert!(pages > 0, "a zero bound would pull nothing at all");
+        assert!(
+            pages * per_page >= account_ceiling,
+            "the bound must still let a client pull an account at the server's own ceiling of \
+             {account_ceiling} records, or the dead-end just moves from `> 5000` to `> {}`",
+            pages * per_page
+        );
     }
 
     #[test]

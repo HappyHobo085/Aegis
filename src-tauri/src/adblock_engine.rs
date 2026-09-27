@@ -344,6 +344,17 @@ mod tests {
     #[test]
     fn blocks_ads_and_honors_toggle_and_allowlist() {
         let _guard = crate::test_support::lock();
+        // Warm the engine BEFORE asserting anything. The first `should_block` in the process
+        // pays the one-time ~20 MB EasyList parse on the engine thread, and that cost lands
+        // INSIDE the caller's `QUERY_TIMEOUT`, which fails OPEN on expiry. Whichever test
+        // makes that first call is chosen by alphabetical test order, so it is this one — and
+        // adding tests anywhere else in the suite adds load at exactly that moment. Measured
+        // on this box: 1 failure in 20 full-suite runs with extra tests present, 0 in 12
+        // without, always on the assertion below, and never in isolation. A throwaway query
+        // absorbs the build cost; if it does time out, the engine is warm by the time the real
+        // assertions run. (The sibling test above is immune for a different reason: it asserts
+        // the NOT-blocked answer, which is also what a timeout produces.)
+        let _ = should_block("https://example.com/", "https://example.com/", "document");
         // Default: on, empty allowlist. `||adnxs.com^` is an unconditional anchor in
         // the vendored EasyList; example.com is clean.
         assert!(

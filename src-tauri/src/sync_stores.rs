@@ -24,6 +24,74 @@ use tauri::{AppHandle, Runtime};
 /// Downloads are absent too (device-specific savePath; envelope only for delete-hygiene).
 pub const SYNCABLE: &[&str] = &["favorites", "saved", "allowlist"];
 
+/// Every ARRAY store whose records carry an `hlc`, which the boot-time HLC-clock seed reads.
+///
+/// Deliberately a SUPERSET of [`SYNCABLE`]. Only the synced stores can lose data to a peer's
+/// stamp (they are the ones LWW-merged against remote records), but the HLC's own contract —
+/// "never goes backwards even if the wall clock does" — is about every record this device
+/// stamps, synced or not. Including `history`/`downloads`/`subs` costs three small JSON reads
+/// that boot already performs for other reasons, and it means a stamp written to a local-only
+/// store can never be undercut by a later local edit.
+///
+/// `permissions` is NOT here: it uses plain `jsonstore::load`/`save` rather than
+/// `load_synced`, so its records carry no `hlc` at all. `fp-allowlist` is host-keyed with no
+/// HLC either. Both were verified by reading their modules, not assumed.
+///
+/// The two NON-array projections (the per-key settings projection and the single
+/// custom-filter record) are read separately by [`seed_hlc_clock`], because their files do not
+/// live in the `jsonstore` array layout.
+pub const HLC_CARRIERS: &[&str] = &[
+    "favorites",
+    "history",
+    "downloads",
+    "saved",
+    "subs",
+    "allowlist",
+];
+
+/// Seed the process-global HLC clock from what is already on disk. Call ONCE at boot, from
+/// `lib.rs`'s `setup()`, before any tab can be edited and before any sync pass runs.
+///
+/// ## Why
+/// The HLC clock is a process-global that starts at `(0, 0)` on every launch and was never
+/// persisted, so after a restart the first local stamp is `(now_ms, 0)` — which loses
+/// last-writer-wins to any record already on disk that was stamped above `now_ms`, and is then
+/// silently reverted by the next merge. See [`crate::sync_envelope::seed_clock`] for the full
+/// failure mode. This function supplies the missing lower bound.
+///
+/// ## Contract
+/// READ-ONLY. It must not write, and it must not touch the clock except through
+/// [`crate::sync_envelope::seed_clock`] (which only ever moves it forward). Two traps make that
+/// non-obvious and both are why the readers below are the `_readonly` variants:
+///   * `settings::sync_records` lazily PERSISTS `settings-sync.json`;
+///   * `customfilters::sync_record` calls `sync_envelope::tick` when the sidecar is missing,
+///     which would advance the very clock this function is seeding.
+///
+/// Plain `jsonstore::load` (not `load_synced`) is used for the array stores, which skips the
+/// `ensure_sync_meta` migration write. That migration is idempotent and runs on every read
+/// anyway, so skipping it here only means it happens on the first real read instead.
+pub fn seed_hlc_clock<R: Runtime>(app: &AppHandle<R>) {
+    let mut max: Option<(i64, u32)> = None;
+    let mut consider = |records: &[Value]| {
+        if let Some(m) = crate::sync_envelope::max_hlc(records) {
+            max = Some(match max {
+                Some(cur) if cur >= m => cur,
+                _ => m,
+            });
+        }
+    };
+    for name in HLC_CARRIERS {
+        consider(&crate::jsonstore::load(app, name));
+    }
+    consider(&crate::settings::sync_records_readonly(app));
+    if let Some(rec) = crate::customfilters::sync_record_readonly(app) {
+        consider(std::slice::from_ref(&rec));
+    }
+    if let Some(m) = max {
+        crate::sync_envelope::seed_clock(m);
+    }
+}
+
 /// The full local array (incl. tombstones), lazily migrated to carry sync metadata.
 pub fn read_all<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<Value> {
     crate::jsonstore::load_synced(app, name)
@@ -414,6 +482,170 @@ mod tests {
         let (merged, changed) = merge_records(local, &remote, "n", 100);
         assert_eq!(changed, vec!["b".to_string()]);
         assert_eq!(merged.len(), 2);
+    }
+
+    /// THE probe for the never-persisted HLC clock.
+    ///
+    /// `sync_envelope`'s `CLOCK` starts at `(0, 0)` on every launch. With nothing seeding it,
+    /// the first local stamp after a restart is `(now_ms, 0)` — and if any record already on
+    /// disk was stamped ABOVE `now_ms`, the new edit loses last-writer-wins to it, is silently
+    /// reverted by the next merge, and (because the losing stamp is itself persisted) can never
+    /// be won back. The realistic way a record ends up above `now_ms` is a peer within the
+    /// accepted 60 s `MAX_REMOTE_SKEW_MS` window: observing it pushes this device's clock into
+    /// the future, and every record stamped afterwards inherits that wall.
+    ///
+    /// The assertion is on the OBSERVABLE consequence (does a fresh local tick dominate the
+    /// persisted record?) rather than on the clock's internals, so it would still hold if the
+    /// seeding mechanism changed.
+    #[test]
+    fn a_local_edit_after_a_restart_dominates_a_record_already_stamped_ahead() {
+        crate::test_support::with_tmp_app(|app| {
+            let now = crate::jsonstore::now_ms();
+            let ahead = now + 30_000;
+            crate::jsonstore::save(
+                app,
+                "favorites",
+                &[serde_json::json!({
+                    "id": 1,
+                    "url": "https://ahead.test/",
+                    "uuid": "u-ahead",
+                    "hlc": { "wall_ms": ahead, "counter": 4, "node": "peer" },
+                    "deleted": false
+                })],
+            )
+            .expect("the simulated previous session's record must save");
+
+            // Exactly what `lib.rs`'s `setup()` runs at boot.
+            crate::sync_stores::seed_hlc_clock(app);
+
+            let t = crate::sync_envelope::tick("local", now);
+            // Compare the whole (wall, counter) pair: that is what `Hlc: Ord` — and therefore
+            // every LWW merge — orders on. Asserting on `wall_ms` alone would be both weaker
+            // (a tie on the wall decided by counter is a win) and, on a shared global clock
+            // another test already seeded, spuriously strict.
+            let mine = (t.wall_ms, t.counter);
+            let theirs = (ahead, 4u32);
+            assert!(
+                mine > theirs,
+                "a local edit after a restart must dominate a record already on disk stamped \
+                 30s ahead at {theirs:?}, but it got {mine:?} — the HLC clock was never seeded \
+                 from disk, so the edit loses LWW and the next merge silently reverts it"
+            );
+            assert!(
+                t.wall_ms > now,
+                "the seeded clock must not leave the local wall below real time, got {t:?}"
+            );
+        });
+    }
+
+    /// The seed must be READ-ONLY and must never move the clock BACKWARDS.
+    ///
+    /// The "adopts a floor" half is deliberately NOT asserted here. `CLOCK` is process-global
+    /// and already sitting at real time (~1.7e12), so asserting a floor of 5,000 against it
+    /// passes whether or not the seed ran — a vacuous test. That half is covered instead by
+    /// `a_local_edit_after_a_restart_dominates_a_record_already_stamped_ahead` (a floor above
+    /// real time, which the clock cannot already be past) and by the pure `merge_clock` unit
+    /// test in `sync_envelope`.
+    ///
+    /// What is worth asserting HERE is the read-only contract, because both obvious readers are
+    /// in fact writers: a clock seeded through a reader that persists, or that ticks, is seeded
+    /// from a state it just changed.
+    #[test]
+    fn seeding_writes_nothing_to_disk() {
+        use tauri::Manager;
+        crate::test_support::with_tmp_app(|app| {
+            crate::jsonstore::save(
+                app,
+                "favorites",
+                &[serde_json::json!({
+                    "id": 1, "url": "https://a.test/", "uuid": "u1",
+                    "hlc": { "wall_ms": 5_000, "counter": 9, "node": "peer" },
+                    "deleted": false
+                })],
+            )
+            .expect("save");
+            let favorites = app
+                .path()
+                .app_data_dir()
+                .expect("data dir")
+                .join("favorites.json");
+            let before = std::fs::read_to_string(&favorites).expect("favorites.json exists");
+
+            // Far-future stamp, so any seeding path that ticks the clock would be visible.
+            crate::jsonstore::save(
+                app,
+                "subs",
+                &[serde_json::json!({
+                    "id": 1, "url": "https://b.test", "uuid": "u2",
+                    "hlc": { "wall_ms": crate::jsonstore::now_ms() + 30_000, "counter": 0, "node": "peer" },
+                    "deleted": false
+                })],
+            )
+            .expect("save");
+            crate::sync_stores::seed_hlc_clock(app);
+
+            assert_eq!(
+                std::fs::read_to_string(&favorites).expect("favorites.json"),
+                before,
+                "the HLC scan must be read-only: it writes nothing to any store"
+            );
+            // `settings::sync_records` and `customfilters::sync_record` are the two readers that
+            // DO have side effects; assert the projection they would create is still absent, so
+            // the boot seed cannot have gone through either of them.
+            let data = app.path().app_data_dir().expect("data dir");
+            assert!(
+                !data.join("settings-sync.json").exists(),
+                "the HLC scan must not lazily create the settings sync projection — that write \
+                 belongs to the first real sync, not to a clock read"
+            );
+            assert!(
+                !data.join("custom-filters.sync.json").exists(),
+                "the HLC scan must not synthesize the custom-filter sync record: that path calls \
+                 `sync_envelope::tick`, so it would seed the clock from a stamp it just invented"
+            );
+        });
+    }
+
+    /// A record whose `counter` does not fit the client's `u32` must be skipped, not treated as
+    /// the maximum and not allowed to abort the scan. The pure half of this lives in
+    /// `sync_envelope::tests::max_hlc_skips_unreadable_stamps_without_aborting`; this is the
+    /// integration half — a boot scan that hit such a record must still adopt the other stores'
+    /// stamps rather than leaving the clock unseeded.
+    #[test]
+    fn a_record_with_an_unreadable_hlc_does_not_stop_the_boot_scan() {
+        crate::test_support::with_tmp_app(|app| {
+            let now = crate::jsonstore::now_ms();
+            // One poisoned store (a counter no client can deserialize) and one good store.
+            crate::jsonstore::save(
+                app,
+                "history",
+                &[serde_json::json!({
+                    "id": 1, "url": "https://poison.test/", "uuid": "u-poison",
+                    "hlc": { "wall_ms": 1_000i64, "counter": (u32::MAX as u64) + 1, "node": "b" },
+                    "deleted": false
+                })],
+            )
+            .expect("save");
+            crate::jsonstore::save(
+                app,
+                "favorites",
+                &[serde_json::json!({
+                    "id": 1, "url": "https://ok.test/", "uuid": "u-ok",
+                    "hlc": { "wall_ms": now + 30_000, "counter": 3, "node": "peer" },
+                    "deleted": false
+                })],
+            )
+            .expect("save");
+
+            crate::sync_stores::seed_hlc_clock(app);
+
+            let t = crate::sync_envelope::tick("local", now);
+            assert!(
+                (t.wall_ms, t.counter) > (now + 30_000, 3u32),
+                "an unreadable stamp in one store must not stop the scan adopting the others', \
+                 got {t:?}"
+            );
+        });
     }
 
     #[test]

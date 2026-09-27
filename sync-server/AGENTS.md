@@ -52,6 +52,35 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
   → `413`; per-account total records (`MAX_RECORDS_PER_ACCOUNT`) → `507`; plus a coarse
   `DefaultBodyLimit` (`MAX_BODY_BYTES`). A registered-but-malicious paired device can't OOM the
   process or fill disk. Updates to existing records bypass the per-account cap (no growth).
+- **Two record-stamp bounds, enforced by `reject_client_poisoning_stamps` on every push.** A stamp
+  the server HOSTS is a stamp it hands to every peer, so a bad one is a namespace-wide problem,
+  and the damage is permanent rather than a lost LWW comparison:
+  - `wall_ms` more than `MAX_FUTURE_SKEW_MS` ahead of server time → **rejected**. HLC receive is
+    an unbounded `max` against an observed remote stamp, so one `wall_ms: i64::MAX` record would
+    pin every peer's process-global clock permanently and no later edit could ever win.
+  - `counter` wider than **`u32::MAX`** → **rejected**. `hlc_key` reads the counter as `u64` so it
+    can order anything, but the client's `Hlc.counter` is a `u32` and `sync_envelope::from_value`
+    deserializes with serde, which **errors** on an out-of-range integer instead of truncating —
+    so such a record is unopenable by every client, and unrecoverable: the counter lives inside
+    the AEAD-bound `hlc`, so the server cannot rewrite it into range, and the per-uuid LWW gate
+    lets the poison outrank every legitimate rewrite of that id. One push would brick one uuid on
+    every device, forever.
+
+  Both are **rejected, never rewritten** — clamping either field would invalidate the AEAD tag
+  and recreate exactly the undecryptable-forever state. A stamp in the *past* is harmless (LWW
+  just loses), so only the future and the width are policed. `u32::MAX` itself is in range and
+  is accepted: the client now carries into the wall instead of overflowing on it.
+- **Pull pagination: `MAX_RESPONSE_RECORDS` is a PAGE size, not a `413` cliff.** It used to be a
+  hard refusal — `get_records` returned `413` the moment a namespace reached 5,000 records, while
+  `MAX_RECORDS_PER_ACCOUNT` (50,000) means a namespace can legitimately grow past it, so such a
+  namespace could **never be pulled again** by any client. `GET /v1/records` now takes
+  `?limit=&cursor=`, sorts the namespace by `uuid` (the store is a `HashMap`, so the old iteration
+  order was non-deterministic and no cursor could have been meaningful), and returns
+  `{"records": [...], "next": "<uuid>|null"}` where `next` is the **last served uuid** and the
+  client's retain is `uuid > cursor`. The response is **additive**, so a client that ignores
+  `next` still gets a valid page and stops, exactly as before. `limit` is clamped to
+  `1..=MAX_RESPONSE_RECORDS`, and the byte budget always serves at least the FIRST record —
+  refusing it would hand back a non-advancing cursor and spin the client loop forever.
 
 ## Storage
 
@@ -59,6 +88,16 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
 - Set **`AEGIS_SYNC_DATA=<path>`** to persist: the store is mirrored to a single JSON file
   (`Snapshot`), atomic-written (temp → fsync → rename) on each change and loaded on boot.
   Unset → pure in-memory (resets on restart). A corrupt data file fails loud at boot.
+- **`persist_blocking` takes the `writer` lock BEFORE it snapshots.** Snapshotting under `db`,
+  releasing it, and only then taking `writer` lets two concurrent persists interleave as
+  *A snapshots → B fully persists → A writes*, leaving the file holding the OLDER snapshot. The
+  file is the only thing that survives a restart, so if the lost mutation was the last one, it is
+  lost for good — and "the next persist re-writes current state" only holds if another mutation
+  ever arrives, which is exactly what a quiet server does not do. `db` is still released before
+  `save_snapshot`, so reads and other mutations are never blocked by disk I/O; only
+  persist-vs-persist is serialized, which it must be anyway (both share one `.tmp` file).
+  Note the test pins the LOCK ORDER, not the interleaved outcome: a two-thread outcome test for a
+  futex-based mutex cannot be made deterministic without being able to choose which thread wins.
 - **`AEGIS_SYNC_ADDR`** sets the listen address (default `127.0.0.1:8787`).
 
 ## Hard rule

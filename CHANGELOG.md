@@ -9,6 +9,77 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A remote peer could walk the HLC counter off the end of `u32` and rewind this
+  device's clock.** The increment sites did `local.1.max(remote.1) + 1` with no
+  overflow check, and a peer only had to stamp `counter: 4294967295` on a wall inside
+  the accepted 60 s skew window to reach it. In a release build the overflow **wraps**,
+  so the clock went from `(now, u32::MAX)` to `(now, 0)` — backwards. Every later local
+  edit then carried a stamp that lost last-writer-wins to the attacker's record, was
+  silently reverted by the next merge, and could never be won back: the affected records
+  became un-overwritable on every device, with no error anywhere. The counter now
+  **carries into the wall** at its ceiling (one shared `bump`, used at all four sites).
+  `saturating_add(1)` is the obvious one-liner and is wrong here: it makes the clock stop
+  advancing, so every edit made while parked at the ceiling gets an identical stamp and
+  the user's own records tie with the winner decided by map iteration order.
+
+  The server now also **rejects** a pushed `counter` wider than `u32::MAX` instead of
+  storing it. `hlc_key` reads the counter as `u64` so it can order anything, but the
+  client's counter is a `u32` and `from_value` deserializes with serde, which _errors_
+  on an out-of-range integer rather than truncating — so such a record was unopenable by
+  every client and unrecoverable, since the counter lives inside the AEAD-bound `hlc` and
+  the per-uuid LWW gate let the poison outrank any legitimate rewrite. One push would
+  have bricked one uuid on every device, permanently.
+
+- **The HLC clock restarted at zero on every launch, so a local edit could lose to a
+  record that was already on disk.** `CLOCK` is initialised to `(0, 0)` and nothing
+  persisted it, so the first stamp after a restart is `(now_ms, 0)` — correct only while
+  `now_ms` exceeds every stamp the device holds, and it usually does not: a peer inside
+  the accepted 60 s window can push this device's clock 60 s into the future and the
+  records it observes on disk inherit that wall, and the user's own clock can jump ahead
+  (NTP correction, a VM resuming from a suspended host). The next local edit was then
+  stamped below the record it was trying to update, lost LWW, and was silently reverted
+  by the following merge — and because the losing stamp is itself persisted, nothing the
+  user did afterwards could win it back. The clock is now seeded from disk at boot,
+  taking a **max** so it can only ever move forward.
+
+- **The server could poison every pulled record's HLC through a field it authors rather
+  than relays.** `hlc` is AEAD-bound, so the server must not rewrite it — when it breaks
+  a cross-record HLC tie it records the bump in a separate `ord` field. But `ord` is
+  therefore the one wire field the client cannot authenticate, and it was adopted as the
+  record's HLC with no validation at all. With `syncAllowInsecure` on, a plain on-path
+  attacker could set `ord.wall_ms = i64::MAX` and every pulled record would land beyond
+  the reach of any real clock, after which the user could never again change a favorite
+  or a history row on any device. Adoption now requires the value to deserialize as an
+  `Hlc` and to sit inside the skew window; a refused value falls back to the
+  AEAD-authenticated wire `hlc`, so the only cost is a lost tie-break.
+
+- **A namespace larger than 5,000 records could never be pulled again.** `get_records`
+  returned `413` the moment a namespace reached `MAX_RESPONSE_RECORDS`, but
+  `MAX_RECORDS_PER_ACCOUNT` is 50,000 — so a namespace could legitimately grow past the
+  response cap and then become **permanently unpullable** by any client, with nothing but
+  an `HTTP 413` in the sync panel to show for it. The response is now paged
+  (`?limit=&cursor=`, returning a `next` cursor), sorted by `uuid` so the cursor is
+  meaningful against a `HashMap`-backed store, and the client follows it. The response is
+  additive, so an older client that ignores `next` still gets a valid page and stops.
+
+- **A concurrent pair of server persists could drop the last mutation from disk
+  permanently.** The snapshot was taken under the store lock and the write happened under
+  a _separate_ writer lock, so two persists could interleave as _A snapshots → B fully
+  persists → A writes_, leaving the file holding the older snapshot. The file is the only
+  thing that survives a restart, so if the lost mutation was the last one it was gone for
+  good — the old comment's "the next persist re-writes current state" only holds if
+  another mutation ever arrives, which is exactly what a quiet server does not do. The
+  writer lock is now taken **before** the snapshot. Reads and other mutations are still
+  never blocked by disk I/O.
+
+- **A flaky test in the ad-block engine's own suite.** The first `should_block` call in a
+  process pays the one-time ~20 MB EasyList parse on the engine thread, and that cost
+  lands inside the caller's timeout, which fails **open** on expiry. Alphabetical test
+  order made the engine's own blocking test the one that paid it, so adding tests
+  anywhere else in the suite could tip it over: 1 failure in 20 full-suite runs, always on
+  the same assertion, never in isolation. The test now warms the engine with a throwaway
+  query before asserting. (0 failures in 25 runs afterwards.)
+
 - **Anti-fingerprinting silently turned itself off on Android after a restart.** The
   `NativeFarble` document-start getter runs on a JNI thread with no `AppHandle`, so it
   reads the farble level from an `ANDROID_LEVEL` process-global that Rust pushes. That

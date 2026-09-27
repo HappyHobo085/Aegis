@@ -62,6 +62,31 @@ fn clock() -> &'static Mutex<(i64, u32)> {
     CLOCK.get_or_init(|| Mutex::new((0, 0)))
 }
 
+/// Advance an HLC `(wall, counter)` by exactly one tick, carrying into the wall when the
+/// counter is already at its ceiling.
+///
+/// This is the ONLY place a counter is incremented, deliberately. The tempting one-line fix is
+/// `saturating_add(1)`, and it is wrong: it makes the clock stop advancing. Every local edit
+/// while the clock is parked at `u32::MAX` then gets the *identical* stamp, and since `Ord`
+/// falls through to `node` — which is the same device — two of the user's own records tie, and
+/// LWW picks between them by map iteration order. An attacker can hold the wall at the
+/// `MAX_REMOTE_SKEW_MS` ceiling for the whole 60 s window, so that tie window is not a
+/// sub-millisecond theoretical edge; it is a minute of collapsed ordering.
+///
+/// Carrying costs one millisecond of wall clock, which the wall clamp makes harmless (real
+/// time passes it immediately, and every subsequent stamp is still strictly greater). So the
+/// result is always strictly greater than the input, which is the invariant `next_tick` and
+/// `next_observe` are both documented to guarantee.
+fn bump(wall: i64, counter: u32) -> (i64, u32) {
+    match counter.checked_add(1) {
+        Some(c) => (wall, c),
+        // `saturating_add` on the wall: only reachable if the wall is already `i64::MAX`, which
+        // the observe-path clamp rules out, but a panic here would be a worse failure than a
+        // stuck counter.
+        None => (wall.saturating_add(1), 0),
+    }
+}
+
 /// Pure HLC send: given the prior `(wall, counter)`, return the next. The counter
 /// increments within a wall-ms and resets when the wall clock advances past the last
 /// stamp — so the result is strictly greater than the prior even if `now_ms` stalls or
@@ -70,7 +95,7 @@ fn next_tick(prev: (i64, u32), now_ms: i64) -> (i64, u32) {
     if now_ms > prev.0 {
         (now_ms, 0)
     } else {
-        (prev.0, prev.1 + 1)
+        bump(prev.0, prev.1)
     }
 }
 
@@ -86,7 +111,7 @@ fn next_tick(prev: (i64, u32), now_ms: i64) -> (i64, u32) {
 /// the auth path already applies to token timestamps (`MAX_FUTURE_SKEW_MS` in
 /// `sync-server/src/main.rs`) — a device more than a minute ahead is already broken, and its
 /// own records would be rejected by a strict peer regardless.
-const MAX_REMOTE_SKEW_MS: i64 = 60_000;
+pub(crate) const MAX_REMOTE_SKEW_MS: i64 = 60_000;
 
 /// Pure HLC receive: the next local `(wall, counter)` dominating both the prior local
 /// state and the observed remote `(wall, counter)` (standard HLC update).
@@ -103,15 +128,18 @@ fn next_observe(local: (i64, u32), now_ms: i64, remote: (i64, u32)) -> (i64, u32
     );
     let max_wall = now_ms.max(local.0).max(remote.0);
     let counter = if max_wall == local.0 && max_wall == remote.0 {
-        local.1.max(remote.1) + 1
+        Some(local.1.max(remote.1))
     } else if max_wall == local.0 {
-        local.1 + 1
+        Some(local.1)
     } else if max_wall == remote.0 {
-        remote.1 + 1
+        Some(remote.1)
     } else {
-        0
+        None
     };
-    (max_wall, counter)
+    match counter {
+        Some(c) => bump(max_wall, c),
+        None => (max_wall, 0),
+    }
 }
 
 /// Advance the global clock for a LOCAL event and return a strictly-monotonic timestamp.
@@ -135,6 +163,88 @@ pub fn observe(node: &str, now_ms: i64, remote: &Hlc) -> Hlc {
         counter: g.1,
         node: node.to_string(),
     }
+}
+
+/// Whether the server's `ord` stamp may be adopted as a record's HLC. Pure, so the trust rule is
+/// unit-testable without a wire record.
+///
+/// `ord` is the one field on a wire record the server AUTHORS rather than relays, and `open_wire`
+/// adopts it as the record's HLC — so unlike every other field it is not covered by the AEAD
+/// check. A `wall_ms` of `i64::MAX` there is namespace-wide, permanent poison: every pulled record
+/// lands beyond the reach of any real clock, so no later local edit can dominate it and the user
+/// can never change a favorite, bookmark, or history row again, on any device. It needs only a
+/// compromised server or an on-path attacker, and `syncAllowInsecure` permits a plain `http://`
+/// endpoint.
+///
+/// The genuine tie-break `ord` exists for is a LOCAL ordering concern — the server bumps a
+/// counter it owns, on a record whose wall it did not choose — so bounding the wall by the same
+/// `MAX_REMOTE_SKEW_MS` the receive path already trusts keeps every real tie-break working.
+///
+/// Rejection falls back to the wire `hlc`, which IS authenticated (it is bound into the AEAD
+/// associated data), so a refused `ord` costs a tie-break and nothing else.
+pub fn ord_is_adoptable(ord: &serde_json::Value, now_ms: i64) -> bool {
+    // Deserializing into `Hlc` is itself the second check: `counter` is a `u32`, and serde ERRORS
+    // on an out-of-range integer rather than truncating, so a malformed or over-wide stamp simply
+    // does not parse and is refused here.
+    match serde_json::from_value::<Hlc>(ord.clone()) {
+        Ok(h) => h.wall_ms <= now_ms.saturating_add(MAX_REMOTE_SKEW_MS),
+        Err(_) => false,
+    }
+}
+
+/// The largest `(wall_ms, counter)` HLC appearing in `records`, ignoring records whose `hlc`
+/// is absent or unparseable. Pure, so the boot-time scan is unit-testable without a store.
+///
+/// Unparseable stamps are SKIPPED rather than treated as a maximum: `from_value` fails on an
+/// out-of-range `counter` (serde errors rather than truncating), and a record we cannot read is
+/// no reason to believe anything about. A later pass — the sync merge's `observe` — is what
+/// clamps a genuinely hostile stamp, and the server now refuses to store one at all
+/// (`reject_client_poisoning_stamps`).
+pub fn max_hlc(records: &[serde_json::Value]) -> Option<(i64, u32)> {
+    records
+        .iter()
+        .filter_map(from_value)
+        .map(|h| (h.wall_ms, h.counter))
+        .max()
+}
+
+/// Seed the process-global clock forward to `max` — the highest stamp this device has already
+/// persisted — so a local edit can never be stamped BELOW a record that is already on disk.
+///
+/// ## Why this exists
+/// `CLOCK` starts at `(0, 0)` on every launch and nothing persisted it, so the first local stamp
+/// after a restart is `(now_ms, 0)`. That is correct only while `now_ms` exceeds every stamp the
+/// device holds, and it usually does not:
+///   * a peer within the accepted `MAX_REMOTE_SKEW_MS` window can push this device's clock 60 s
+///     into the future, and the records that observe stamps it on disk inherit that wall;
+///   * the user's own wall clock can be ahead of the machine's previous session (NTP correction,
+///     a timezone-free clock change, a VM resuming from a suspended host).
+///
+/// In both cases the next local edit is stamped below the record it is trying to update,
+/// LOSES last-writer-wins, and is silently reverted by the following merge — and because the
+/// losing stamp is itself persisted, nothing the user does afterwards can win it back. This is
+/// silent data loss of the user's most recent edit, with no error anywhere.
+///
+/// ## Why it takes a max and never assigns
+/// The clock is process-global and this is called from boot, but taking the max makes it
+/// correct even if it is ever called after a tick: it can only move the clock FORWARD. That
+/// matters because moving an HLC backwards would break the monotonicity every other stamp in
+/// this module relies on, and a regression here would be far worse than the bug being fixed.
+/// Pure merge of a persisted lower bound into the current clock. Extracted so the
+/// never-move-backwards property is testable deterministically: the real `CLOCK` is
+/// process-global and already sitting at real time, so asserting a floor against it in a test
+/// is vacuous — the clock passes the assertion whether or not the seed ran.
+pub(crate) fn merge_clock(cur: (i64, u32), floor: (i64, u32)) -> (i64, u32) {
+    if floor > cur {
+        floor
+    } else {
+        cur
+    }
+}
+
+pub fn seed_clock(max: (i64, u32)) {
+    let mut g = clock().lock().unwrap_or_else(|e| e.into_inner());
+    *g = merge_clock(*g, max);
 }
 
 #[cfg(test)]
@@ -201,6 +311,127 @@ mod tests {
     /// Test helper: the clamp ceiling `next_observe` would use for a given `now`.
     fn now_future_bound(now: i64) -> i64 {
         now.saturating_add(MAX_REMOTE_SKEW_MS)
+    }
+
+    /// A peer (buggy, or hostile) that stamps `counter = u32::MAX` on a wall inside the
+    /// accepted skew window must not be able to walk the counter off the end of `u32`.
+    ///
+    /// `local.1.max(remote.1) + 1` is the line that overflows. This matters because the app
+    /// ships a RELEASE build, where integer overflow WRAPS rather than panicking: the clock
+    /// goes from `(now, u32::MAX)` to `(now, 0)`, which is a REGRESSION. Every later local edit
+    /// then carries a stamp that loses LWW to the attacker's record, so the edit is silently
+    /// reverted by the next merge — and because the clock no longer dominates, nothing the user
+    /// does can win it back. The whole record becomes un-overwritable, exactly like the
+    /// far-future-wall poisoning this module's other clamp already prevents.
+    #[test]
+    fn a_remote_counter_at_the_u32_ceiling_cannot_regress_the_clock() {
+        let now = 1_000i64;
+        let (wall, counter) = next_observe((now, 7), now, (now, u32::MAX));
+        let produced = Hlc {
+            wall_ms: wall,
+            counter,
+            node: "local".into(),
+        };
+        let hostile = Hlc {
+            wall_ms: now,
+            counter: u32::MAX,
+            node: "evil".into(),
+        };
+        let local = Hlc {
+            wall_ms: now,
+            counter: 7,
+            node: "local".into(),
+        };
+        assert!(
+            produced > hostile,
+            "the observed stamp must still dominate the remote one, but it is {produced:?} \
+             vs {hostile:?} — the counter overflowed and the clock went backwards"
+        );
+        assert!(
+            produced > local,
+            "the observed stamp must still dominate the prior local state, but it is \
+             {produced:?} vs {local:?}"
+        );
+    }
+
+    /// The same ceiling reached through the LOCAL send path, which has no remote to blame.
+    /// `next_tick`'s `prev.1 + 1` overflows identically once the clock is already parked at
+    /// the ceiling, so the fix has to live in the shared increment, not in one call site.
+    #[test]
+    fn a_local_tick_at_the_u32_ceiling_still_advances() {
+        let parked = (1_000i64, u32::MAX);
+        let (wall, counter) = next_tick(parked, 1_000);
+        let produced = (wall, counter);
+        assert!(
+            produced > parked,
+            "a local tick must be strictly greater than the prior state, but it produced \
+             {produced:?} from {parked:?} — the counter overflowed"
+        );
+    }
+
+    /// Carry-into-the-wall is the fix, and it must NOT cost the counter its strict growth
+    /// afterwards: the very next tick after a carry has to land one past the new wall, or the
+    /// ordering would collapse a second time one event later.
+    #[test]
+    fn the_counter_resumes_growing_after_a_carry() {
+        let (w1, c1) = next_tick((1_000, u32::MAX), 1_000); // carries
+        let (w2, c2) = next_tick((w1, c1), 1_000);
+        assert_eq!(
+            (w2, c2),
+            (w1, 1),
+            "the counter must resume from 0 on the carried wall"
+        );
+        assert!((w2, c2) > (w1, c1));
+    }
+
+    /// The pure never-move-backwards property of the boot seed. Deliberately a PURE test: the
+    /// real `CLOCK` is process-global and already at real time, so asserting a floor against it
+    /// would pass whether or not the seed ran.
+    #[test]
+    fn seeding_never_moves_the_clock_backwards() {
+        assert_eq!(
+            merge_clock((5_000, 9), (9_000, 1)),
+            (9_000, 1),
+            "a higher floor wins"
+        );
+        assert_eq!(
+            merge_clock((9_000, 1), (5_000, 9)),
+            (9_000, 1),
+            "a lower floor must leave the clock exactly where it is — an HLC that moves backwards \
+             breaks the monotonicity every stamp in this module relies on"
+        );
+        assert_eq!(
+            merge_clock((5_000, 9), (5_000, 9)),
+            (5_000, 9),
+            "an equal floor is a no-op"
+        );
+    }
+
+    /// `max_hlc` is the pure half of the boot scan. An unreadable stamp — one whose `counter`
+    /// does not fit the client's `u32`, which `from_value` REJECTS (serde errors rather than
+    /// truncating) — must be skipped, not treated as the maximum, and must not abort the scan:
+    /// the server now refuses to store such a record, but a store written before that fix (or by
+    /// an older self-hosted server) can still hold one, and a boot that aborts on it would leave
+    /// the clock unseeded — exactly the bug this scan exists to fix.
+    #[test]
+    fn max_hlc_skips_unreadable_stamps_without_aborting() {
+        let recs = vec![
+            serde_json::json!({ "hlc": { "wall_ms": 9_000i64, "counter": 1u32, "node": "a" } }),
+            serde_json::json!({ "hlc": { "wall_ms": 1_000i64, "counter": (u32::MAX as u64) + 1, "node": "b" } }),
+            serde_json::json!({ "hlc": { "wall_ms": 7_000i64, "counter": 2u32, "node": "c" } }),
+        ];
+        assert_eq!(
+            max_hlc(&recs),
+            Some((9_000, 1)),
+            "the widest counter here is the one we CANNOT read; the two readable stamps must \
+             still produce a maximum, and the unreadable one must not win"
+        );
+        assert_eq!(max_hlc(&[]), None, "no records, no stamps");
+        assert_eq!(
+            max_hlc(&[serde_json::json!({ "url": "https://x.test/" })]),
+            None,
+            "a record with no `hlc` at all contributes nothing"
+        );
     }
 
     #[test]

@@ -74,6 +74,20 @@ pub fn sync_record<R: Runtime>(app: &AppHandle<R>) -> Value {
     })
 }
 
+/// The persisted custom-filter sync record, or `None` if there is no sidecar yet.
+///
+/// [`sync_record`] SYNTHESIZES one when the sidecar is missing — and the fresh-install branch
+/// calls `sync_envelope::tick`, so it ADVANCES the process-global HLC clock. That is correct
+/// for the sync path and fatal for the boot-time HLC-clock seed
+/// (`sync_stores::seed_hlc_clock`): the scan would perturb the clock it is scanning, so a device
+/// with no custom-filter record would seed itself from a stamp invented by the scan itself.
+/// Returning `None` instead is exactly right — no sidecar means no stamp has ever been written.
+pub fn sync_record_readonly<R: Runtime>(app: &AppHandle<R>) -> Option<Value> {
+    sync_path(app)
+        .and_then(|p| crate::jsonstore::read_with_backup(&p))
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
+}
+
 /// Merge a remote custom-filter record (single-record HLC last-writer-wins). On a win, write
 /// the `.txt` to the remote's text (empty if tombstoned), persist the remote record verbatim
 /// (keeping its HLC — do NOT re-stamp), and re-apply ad-block. Returns whether it changed.
