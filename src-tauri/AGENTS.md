@@ -541,6 +541,19 @@ on process-global statics like `sync_identity::NODE_ID` and the adblock
 session/page counters. A poisoned lock (from a panicking test) is recovered via
 `into_inner()` so one failing test doesn't cascade-fail the rest.
 
+**Reading the policy is also a write hazard.** `adblock_engine`'s `ENABLED` /
+`ALLOWLIST` are written through `set_policy` from exactly two non-test places —
+`adblock::sync_engine` and `adblock_refresh::refresh` — and every test that reaches
+either one goes via `with_tmp_app`, so they are covered. What is _not_ covered by
+default is a **non**-AppHandle test that only _reads_ the policy: it never touches
+`LOCK`, so it ran concurrently with every writer. `adblock_engine`'s own tests were
+exactly that case, and CI run 36280528312 flaked on it (the engine test's first
+assertion failed while an `adblock` test held `enabled = false` across a dispatch
+round-trip). Both engine tests now take `test_support::lock()` explicitly — the
+existing lock, not a module-local one, which would not exclude the `with_tmp_app`
+tests at all. When adding a test that calls `should_block` / `is_unwanted_popup`,
+take that lock.
+
 **The pattern — `with_tmp_app`:**
 
 ```rust

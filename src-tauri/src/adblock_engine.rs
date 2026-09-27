@@ -268,10 +268,15 @@ pub extern "system" fn Java_com_aegis_browser_NativeAdblock_shouldBlock(
 mod tests {
     use super::{is_unwanted_popup, reload_lists, set_policy, should_block};
 
-    // Blank/script-scheme shells are dropped without consulting the engine, so this
-    // is policy-independent (won't race the policy-mutating test below).
+    // The blank/script-scheme shells are dropped without consulting the engine, so those
+    // assertions are policy-independent. The last one is not: a real http(s) link IS
+    // decided by the engine, so this test takes the same `test_support::lock()` as the
+    // policy-mutating test below. (The claim that this whole test "won't race" was wrong —
+    // it survives today only because it asserts the NOT-blocked answer, and every race
+    // direction pushes `should_block` toward failing open. Do not rely on that polarity.)
     #[test]
     fn unwanted_popup_drops_blank_and_script_shells() {
+        let _guard = crate::test_support::lock();
         assert!(is_unwanted_popup("about:blank", "https://site.example"));
         assert!(is_unwanted_popup("", "https://site.example"));
         assert!(is_unwanted_popup("  ", "https://site.example"));
@@ -288,8 +293,32 @@ mod tests {
     }
 
     // One test (not several) because it mutates the process-wide policy globals.
+    //
+    // `ENABLED`/`ALLOWLIST` are process-wide, not per-`AppHandle`, and `set_policy` is
+    // written from two directions: `adblock::dispatch`'s `sync_engine`, and
+    // `adblock_refresh::refresh` (reached by the `customfilters`/`subs`/`picker`/
+    // `data`/`sync_stores` tests). Every one of those goes through `with_tmp_app`,
+    // which holds `test_support::lock()` for its whole body — but this test is NOT an
+    // AppHandle test, so without taking that lock itself it ran concurrently with all
+    // of them under `cargo test`'s parallel execution.
+    //
+    // That was a real CI flake, not a theory: run 36280528312 failed this test on its
+    // FIRST assertion ("a known ad/tracker domain must be blocked") while run
+    // 36279563358 passed the identical code. `adblock::tests::set_enabled_flips_the_flag`
+    // is the only writer of `enabled = false` in the crate and holds it across a
+    // `dispatch` round-trip; interleaved into here, `should_block` takes its fail-open
+    // `!ENABLED` early return. `AdblockState::default()` is `enabled: true` so the
+    // other re-mirrors are harmless today — but "harmless today" is precisely how this
+    // broke, which is why the whole test is serialised rather than reasoning about which
+    // hosts each caller happens to use. The allowlist is the same story: it is
+    // currently disjoint from the hosts asserted below, and that is not enforced.
+    //
+    // `test_support::lock()` (not a lock of our own) is the interlock: a second,
+    // module-local mutex would not exclude the `with_tmp_app` tests at all. Its own doc
+    // comment already names `adblock_engine`'s policy statics as a reason it is `pub`.
     #[test]
     fn blocks_ads_and_honors_toggle_and_allowlist() {
+        let _guard = crate::test_support::lock();
         // Default: on, empty allowlist. `||adnxs.com^` is an unconditional anchor in
         // the vendored EasyList; example.com is clean.
         assert!(
