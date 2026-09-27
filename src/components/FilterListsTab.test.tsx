@@ -1,8 +1,17 @@
 // src/components/FilterListsTab.test.tsx
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Subscription, ListUpdateResult } from '../../shared/types';
+
+// The toast is a global store rendered by <Toaster/>, which this tree does not mount, so
+// the module is mocked and the CALL is the observable — the same pattern HomeTab and
+// MyFiltersTab use for their save failures.
+vi.mock('../lib/toast', () => ({
+  toast: { success: vi.fn(), error: vi.fn(), info: vi.fn() },
+}));
+import { toast } from '../lib/toast';
+
 import { FilterListsTab } from './FilterListsTab';
 
 const sub = (over: Partial<Subscription> = {}): Subscription => ({
@@ -159,5 +168,23 @@ describe('FilterListsTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /update all/i }));
     expect(updateNow).toHaveBeenCalledTimes(1);
     expect(await screen.findByText(/easyprivacy.*timeout/i)).toBeInTheDocument();
+  });
+
+  // `updateNow` is a promise that can now REJECT (it used to be able only to resolve or
+  // hang). The tab had no `.catch`, so a rejection became an unhandled promise
+  // rejection while `finally` quietly re-enabled the button — the control recovered with
+  // no explanation of why the refresh produced nothing.
+  it('explains a FAILED force-update and re-enables the button', async () => {
+    const updateNow = vi.fn<() => Promise<ListUpdateResult>>(async () => {
+      throw new Error('The filter-list refresh never reported back.');
+    });
+    render(<FilterListsTab {...props({ updateNow })} />);
+    const button = screen.getByRole('button', { name: /update all/i });
+    await userEvent.click(button);
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith(expect.stringMatching(/never reported back/i)),
+    );
+    // `finally` still has to run, or the button stays disabled with no way to retry.
+    await waitFor(() => expect(button).not.toBeDisabled());
   });
 });

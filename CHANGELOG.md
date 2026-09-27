@@ -9,6 +9,42 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **"Update all" in Filter Lists could wedge for the rest of the session.** The button
+  disabled itself and re-enabled only in `finally`, but the refresh result arrives as a
+  single `lists.updateResult` event emitted as the **last statement of a detached core
+  thread** — after the ad-block engine reinstall. A panic anywhere before that emit kills
+  the thread silently (the caller had already been given `Ok(Null)`), and the renderer then
+  waited on an event that could never arrive: no results, no message, no way to retry.
+  `awaitUpdateResult` now settles on whichever comes first — the event, a failure of the
+  kick-off call, or a 60 s bound that exists to catch a pass which will never report rather
+  than to police a slow one. It releases the one-shot listener on every path and ignores a
+  late result, and the tab now reports the failure instead of silently recovering.
+- **A refused save looked exactly like a dead button.** `settings.set` and the
+  custom-filter save are validated in Rust (~20 rejection messages), and `HomeTab`,
+  `MyFiltersTab` and `SearchTab` each swallowed the rejection: no "Saved" (correct) but
+  also no error, with the rejection escaping a floating async IIFE as an **unhandled
+  promise rejection**. All three now surface the core's own reason, which is written for a
+  human. `SearchTab` additionally clears its draft only once the write is **accepted** —
+  it used to wipe the name and template on dispatch, so a refused engine destroyed the
+  user's typing and the panel gave no hint why.
+  The shared `saveErrorText` helper reads the **string** case first, because
+  `tauriInvoke.call` is a bare `invoke` and a Rust `Err(String)` rejects with that string
+  rather than an `Error` — the usual `instanceof Error` check would have discarded the
+  reason for every real refusal.
+- **A shell effect re-registered four window listeners on every render.** `openSettings`
+  was a plain function and the sole dependency of the effect that registers the
+  `aegis:toggleSidebar` / `aegis:toggleFavoritesBar` / `aegis:openSidebar` /
+  `aegis:openSettings` CustomEvents, so its identity changed every render and the effect
+  tore down and re-added all four listeners every time — and `App` re-renders on every nav
+  state, tab state, zoom, ad-block count and settings change. It is `useCallback`-wrapped
+  now, so the effect mounts once.
+- **A production `console.log` on every launch.** The mount measurement printed
+  `[aegis-perf] React mount: …ms` to the console in a shipped build. The
+  `performance.mark`/`measure` stay — a named entry in the browser's own performance
+  timeline is real instrumentation and costs nothing — but nothing prints it.
+- **Removed a dead test-only escape hatch.** `useFingerprint`'s `_setState` had zero
+  callers once the dev-only seeding seams it served were removed.
+
 - **Seven hooks seeded themselves from the core BEFORE registering their live
   subscription**, so a state event emitted in that window was lost with nothing to
   refetch it. `aegis.X.onY(cb)` reaches the core through an async `listen()`, but the

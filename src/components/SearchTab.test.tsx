@@ -166,4 +166,47 @@ describe('SearchTab', () => {
     await userEvent.click(screen.getByRole('button', { name: /remove engine google/i }));
     expect(update).toHaveBeenCalledWith({ searchEngines: [engines[0]] });
   });
+
+  // ── The draft must survive a REJECTED write ─────────────────────────────────
+  //
+  // `update` rejects with whatever the core sent. `tauriInvoke.call` is a bare
+  // `invoke`, and a Rust `Err(String)` rejects with that STRING — not an Error —
+  // so the reason is a string here (settings.rs answers e.g.
+  // "searchEngines may hold at most 32 entries").
+  it('keeps the draft AND explains when the core rejects the write', async () => {
+    const update = vi.fn(async () => {
+      throw 'searchEngines may hold at most 32 entries';
+    });
+    render(<SearchTab settings={settings()} update={update} />);
+    const form = screen.getByRole('group', { name: /add search engine/i });
+    const name = within(form).getByRole('textbox', { name: /engine name/i });
+    const template = within(form).getByRole('textbox', { name: /engine template/i });
+    await userEvent.type(name, 'Bing');
+    await userEvent.type(template, 'https://www.bing.com/search?q=%s');
+    await userEvent.click(within(form).getByRole('button', { name: /^add engine$/i }));
+
+    expect(update).toHaveBeenCalledTimes(1);
+    // The write was REFUSED, so the draft the user typed must still be on screen to
+    // correct and retry. Wiping it unconditionally destroys work the core rejected.
+    expect(name).toHaveValue('Bing');
+    expect(template).toHaveValue('https://www.bing.com/search?q=%s');
+    // And the refusal must be visible, not a silent no-op.
+    expect(within(form).getByRole('alert')).toHaveTextContent(/32 entries/);
+  });
+
+  it('clears the draft once the core ACCEPTS the write', async () => {
+    // The counterpart guard: the fix must gate the clear on the promise RESOLVING,
+    // not simply stop clearing (which would re-fill the form with a stale draft).
+    const update = vi.fn(async () => {});
+    render(<SearchTab settings={settings()} update={update} />);
+    const form = screen.getByRole('group', { name: /add search engine/i });
+    const name = within(form).getByRole('textbox', { name: /engine name/i });
+    const template = within(form).getByRole('textbox', { name: /engine template/i });
+    await userEvent.type(name, 'Bing');
+    await userEvent.type(template, 'https://www.bing.com/search?q=%s');
+    await userEvent.click(within(form).getByRole('button', { name: /^add engine$/i }));
+    expect(name).toHaveValue('');
+    expect(template).toHaveValue('');
+    expect(within(form).queryByRole('alert')).not.toBeInTheDocument();
+  });
 });

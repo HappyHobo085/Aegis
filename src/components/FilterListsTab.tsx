@@ -2,6 +2,8 @@
 import { useState } from 'react';
 import type { Subscription, ListUpdateResult, ListSourceResult } from '../../shared/types';
 import { normalizeSavedUrl } from '../lib/addressParse';
+import { saveErrorText } from '../lib/saveError';
+import { toast } from '../lib/toast';
 
 export interface FilterListsTabProps {
   subs: Subscription[];
@@ -32,6 +34,12 @@ export function FilterListsTab({ subs, setEnabled, add, remove, updateNow }: Fil
     setUpdating(true);
     void updateNow()
       .then((r) => setResults(r.perSource))
+      // `updateNow` can now REJECT — it used to be a promise that could only resolve or
+      // hang, and its only settlement path was a one-shot event from a detached core
+      // thread. Without a handler here a rejection would surface as an unhandled promise
+      // rejection while `finally` silently re-enabled the button, so the user would see
+      // the control recover with no explanation of why the refresh produced nothing.
+      .catch((e: unknown) => toast.error(saveErrorText(e)))
       .finally(() => setUpdating(false));
   };
 

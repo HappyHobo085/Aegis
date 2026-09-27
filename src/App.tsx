@@ -85,15 +85,15 @@ const CONTENT_ANCHOR_ID = 'content-anchor';
 const CHROME_NAV_REASSERT_MS = 250;
 
 function DesktopApp() {
-  // One-time performance measurement: marks when React mount completes.
+  // One-time performance measurement: marks when React mount completes. The mark and
+  // measure are kept deliberately — a named entry in the browser's own performance
+  // timeline is real instrumentation an engineer can read in devtools, and it costs
+  // nothing. The `console.log` that consumed it did not: it printed to the console on
+  // every launch of a shipped build, which is debug output in production.
   useEffect(() => {
     try {
       performance.mark('aegis-react-end');
       performance.measure('aegis-mount', 'aegis-react-start', 'aegis-react-end');
-      const entries = performance.getEntriesByName('aegis-mount');
-      if (entries.length > 0) {
-        console.log(`[aegis-perf] React mount: ${Math.round(entries[0].duration)}ms`);
-      }
     } catch {
       // In test environments or when the start mark wasn't set, silently ignore.
     }
@@ -170,10 +170,16 @@ function DesktopApp() {
     }, CHROME_NAV_REASSERT_MS);
   };
 
-  const openSettings = (tab: SettingsTab = 'appearance'): void => {
+  // `useCallback` is load-bearing, not decoration: this is the SOLE dep of the effect
+  // below that registers the four `aegis:*` shell CustomEvents. As a plain function it
+  // was a new identity on every render, so that effect tore down and re-registered all
+  // four listeners every render — and App re-renders on every nav state, tab state, zoom,
+  // adblock count and settings change. Both setters are stable, so `[]` is the real dep
+  // list and the effect now mounts exactly once.
+  const openSettings = useCallback((tab: SettingsTab = 'appearance'): void => {
     setSettingsInitialTab(tab);
     setSettingsOpen(true);
-  };
+  }, []);
 
   // Command-palette actions that have no direct React owner.
   //

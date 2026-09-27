@@ -172,7 +172,38 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   source of truth. The fp-allowlist is honoured on Android too: `MainActivity` passes the
   tab's content host to `NativeFarble.farbleScript(host)` and the Rust getter checks it
   against the `ANDROID_FP_ALLOWLIST` process-global. (This doc previously described the
-  Android side as a gap being addressed; the code had shipped it.)
+  Android side as a gap being addressed; the code had shipped it.) It has **no test-only
+  state setter** — a `_setState` escape hatch outlived the dev-only seeding seams it
+  served and had zero callers, so it is gone; drive state through the real IPC in tests.
+- **A save the core REFUSES must say so (`lib/saveError.ts`).** `settings.set` and the
+  custom-filter save go through `settings.rs::validate_setting`, which has ~20 rejection
+  messages ("searchEngines may hold at most 32 entries", "Home URL must be http(s), got
+  Null"). A component that `await`s one of those and then does nothing leaves the user
+  staring at a button that appears dead — and, worse, the rejection escaping a floating
+  `void (async () => …)()` becomes an **unhandled promise rejection** nobody sees. So
+  `HomeTab`, `MyFiltersTab` and `SearchTab` each catch and surface it, and a form clears
+  its draft only once the write is **accepted** (wiping on dispatch destroys typing the
+  core rejected). `SearchTab` shows the reason in its existing inline `role="alert"`
+  region because the draft is right there; the other two use `toast.error`.
+  **`saveErrorText` reads the STRING case first, on purpose:** `lib/tauriInvoke.call` is a
+  bare `invoke` and a Rust `Err(String)` rejects with that string, not an `Error` — so the
+  usual `err instanceof Error ? err.message : …` is false for every real refusal and
+  would silently discard the core's reason. A draft is never cleared by a refusal.
+- **A promise built from a ONE-SHOT event needs a second way to settle
+  (`lib/updateResult.ts`).** `FilterListsTab`'s "Update all" disables itself and only
+  re-enables in `.finally`, and the refresh result arrives as a single
+  `lists.updateResult` event from a **detached core thread** whose last statement is the
+  emit. A panic before that emit kills the thread, silently — the caller already got
+  `Ok(Null)` — and the renderer then waits on an event that can never arrive, so the
+  button stayed dead for the whole session. `awaitUpdateResult` therefore settles on
+  whichever comes first: the event, a rejection of the kick-off call, or
+  `UPDATE_RESULT_TIMEOUT_MS` (60 s — generous, because the bound is there to catch a pass
+  that will NEVER report, not to police a slow one; the real pass is a concurrent fetch
+  with a 25 s per-request timeout plus one engine reinstall). It releases the one-shot
+  listener on **every** path and ignores a late result, so a refresh that finishes after
+  the user gave up cannot re-settle the promise. The consumer needs a `.catch` for the
+  same reason: `.finally` alone re-enables the button with no explanation.
+  `onResult`/`kick` are injected so a test can supply a transport that never answers.
 - **`hooks/useFind`** — owns find-in-page UI state for the active view. Subscribes to
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.

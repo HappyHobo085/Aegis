@@ -1,6 +1,7 @@
 // src/components/SearchTab.tsx
 import { useState } from 'react';
 import type { Settings, SearchEngine } from '../../shared/types';
+import { saveErrorText } from '../lib/saveError';
 
 export interface SearchTabProps {
   settings: Settings;
@@ -54,10 +55,21 @@ export function SearchTab({ settings, update }: SearchTabProps) {
       name,
       engines.map((e) => e.id),
     );
-    void update({ searchEngines: [...engines, { id, name, template }] });
-    setNewName('');
-    setNewTemplate('');
-    setAddError(null);
+    // The draft is the user's work and the core can still REFUSE it (32-engine cap, a
+    // non-http(s) template, a too-long name), so it is cleared only once the write is
+    // accepted — wiping it on dispatch destroyed typing that was never stored, and the
+    // refusal was silent because the promise was floating. `update` rejecting is the
+    // normal outcome of a validator error, not an exceptional one.
+    void (async () => {
+      try {
+        await update({ searchEngines: [...engines, { id, name, template }] });
+        setNewName('');
+        setNewTemplate('');
+        setAddError(null);
+      } catch (e) {
+        setAddError(saveErrorText(e));
+      }
+    })();
   };
 
   return (

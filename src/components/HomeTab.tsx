@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Settings } from '../../shared/types';
 import { toast } from '../lib/toast';
+import { saveErrorText } from '../lib/saveError';
 
 export interface HomeTabProps {
   settings: Settings;
@@ -22,8 +23,16 @@ export function HomeTab({ settings, update }: HomeTabProps) {
 
   const handleSave = (): void => {
     void (async () => {
-      await update({ homeUrl: homeUrl.trim() });
-      toast.success('Saved');
+      try {
+        await update({ homeUrl: homeUrl.trim() });
+        toast.success('Saved');
+      } catch (e) {
+        // The core validates the home URL and REFUSES a bad one. That rejection used to
+        // escape this floating async IIFE as an unhandled promise rejection — invisible
+        // in the UI, so a refused save looked exactly like a Save button that did nothing.
+        // The draft is deliberately left alone so the user can correct and retry.
+        toast.error(saveErrorText(e));
+      }
     })();
   };
 

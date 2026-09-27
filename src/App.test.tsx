@@ -148,6 +148,74 @@ describe('App', () => {
     expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 
+  // `openSettings` was a plain function, and it is the SOLE dep of the effect that
+  // registers the four `aegis:*` shell CustomEvents. A plain function is a new identity on
+  // every render, so the effect tore down and re-registered all four listeners on every
+  // single App render — and App re-renders on every nav state, tab state, zoom, adblock
+  // count and settings change. The dep array was a lie: it claimed to depend on
+  // `openSettings` while in practice re-running constantly.
+  it('registers the four shell CustomEvent listeners ONCE, not on every render', async () => {
+    const addSpy = vi.spyOn(window, 'addEventListener');
+    const removeSpy = vi.spyOn(window, 'removeEventListener');
+    try {
+      render(<App />);
+      await waitFor(() => expect(crashedCb).toBeTypeOf('function'));
+      const aegisAdds = () =>
+        addSpy.mock.calls.map((c) => String(c[0])).filter((n) => n.startsWith('aegis:'));
+      // Sanity: the four ARE registered on mount, or the assertion below is vacuous.
+      expect([...aegisAdds()].sort()).toEqual([
+        'aegis:openSettings',
+        'aegis:openSidebar',
+        'aegis:toggleFavoritesBar',
+        'aegis:toggleSidebar',
+      ]);
+      const onMount = aegisAdds().length;
+      const removesOnMount = removeSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((n) => n.startsWith('aegis:')).length;
+
+      // Three separate re-renders, each from a different live subscription.
+      act(() => stateCb!({ ...baseState, isLoading: true, title: 'One' }));
+      act(() => stateCb!({ ...baseState, isLoading: false, title: 'Two' }));
+      act(() => crashedCb!({ viewId: PRIMARY_VIEW_ID, reason: 'oom' }));
+
+      // The listeners must be the SAME registrations, not churned copies.
+      expect(aegisAdds().length).toBe(onMount);
+      const aegisRemoves = removeSpy.mock.calls
+        .map((c) => String(c[0]))
+        .filter((n) => n.startsWith('aegis:')).length;
+      expect(aegisRemoves).toBe(removesOnMount);
+    } finally {
+      addSpy.mockRestore();
+      removeSpy.mockRestore();
+    }
+  });
+
+  // A production `console.log` on every launch. The performance marks/measure stay — a
+  // named entry in the browser's own performance timeline is real instrumentation and
+  // costs nothing — but printing to the console in a shipped build is debug output.
+  //
+  // The `aegis-react-start` mark has to be planted here: in the app `main.tsx` sets it
+  // before `createRoot`, and this test renders `<App/>` directly. Without it the code
+  // under test takes the `entries.length > 0` early-out and the assertion below would
+  // pass against code that logs on every single launch — a vacuous guard.
+  it('does not console.log on mount', async () => {
+    performance.mark('aegis-react-start');
+    expect(performance.getEntriesByName('aegis-mount')).toHaveLength(0);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      render(<App />);
+      await waitFor(() => expect(crashedCb).toBeTypeOf('function'));
+      // The measure really did run, so the log is reachable — otherwise this proves nothing.
+      expect(performance.getEntriesByName('aegis-mount').length).toBeGreaterThan(0);
+      expect(log).not.toHaveBeenCalled();
+    } finally {
+      log.mockRestore();
+      performance.clearMarks('aegis-react-start');
+      performance.clearMeasures('aegis-mount');
+    }
+  });
+
   it('does NOT call setContentVisible for the error/crash overlay', async () => {
     render(<App />);
     await waitFor(() => expect(failedCb).toBeTypeOf('function'));

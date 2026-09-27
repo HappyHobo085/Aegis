@@ -1,6 +1,7 @@
 // src/components/MyFiltersTab.tsx
 import { useEffect, useRef, useState } from 'react';
 import { toast } from '../lib/toast';
+import { saveErrorText } from '../lib/saveError';
 
 export interface MyFiltersTabProps {
   text: string;
@@ -29,8 +30,16 @@ export function MyFiltersTab({ text, save }: MyFiltersTabProps) {
 
   const handleSave = (): void => {
     void (async () => {
-      await save(draft);
-      toast.success('Saved');
+      try {
+        await save(draft);
+        toast.success('Saved');
+      } catch (e) {
+        // A rejected save used to be swallowed whole: no "Saved" (good) but also no
+        // error, so a refused save was indistinguishable from a dead button, and the
+        // rejection escaped as an unhandled promise rejection. The draft stays put so
+        // the rule that was refused can be corrected and saved again.
+        toast.error(saveErrorText(e));
+      }
     })();
   };
 

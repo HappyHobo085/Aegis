@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { Subscription, ListUpdateResult } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
+import { awaitUpdateResult, UPDATE_RESULT_TIMEOUT_MS } from '../lib/updateResult';
 
 export function useSubscriptions(): {
   subs: Subscription[];
@@ -53,14 +54,13 @@ export function useSubscriptions(): {
     // The core refresh is non-blocking (the up-to-25s fetch must not freeze the UI thread):
     // `updateNow` only kicks it off and the per-source result arrives via `onUpdateResult`.
     // Bridge that one-shot event back into the promise this hook has always returned, so
-    // callers (FilterListsTab) are unchanged.
-    const result = await new Promise<ListUpdateResult>((resolve) => {
-      const off = aegis.lists.onUpdateResult((r) => {
-        off();
-        resolve(r);
-      });
-      void aegis.lists.updateNow();
-    });
+    // callers (FilterListsTab) are unchanged. `awaitUpdateResult` owns the settlement
+    // rules, including what happens when the event never arrives at all.
+    const result = await awaitUpdateResult(
+      aegis.lists.onUpdateResult,
+      aegis.lists.updateNow,
+      UPDATE_RESULT_TIMEOUT_MS,
+    );
     // A force-update mutates last-updated/etag/hash on every fetched row, so
     // re-read the list to reflect the fresh metadata in any open manager.
     setSubs(await aegis.subs.list());
