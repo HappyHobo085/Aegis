@@ -1214,7 +1214,10 @@ widget above native WebKit windows.
     That attribute was not a harmless lint exemption — it was the bug, suppressed.
     **Lesson: a `cfg`-scoped `allow(dead_code)` on a FEATURE is a claim that the
     feature does not exist on that platform. Read it as a parity gap and go verify,
-    never as a cleanup.** Fix: `NativeHistory.recordVisit(tabId, url, title)` (Kotlin
+    never as a cleanup.** (Generalised, with a full audit method, in gotcha 25 — which
+    also records that most `allow(dead_code)` in this crate hide _live_ code, so "remove
+    it and see if it warns" is only sound when you check EVERY target.) Fix:
+    `NativeHistory.recordVisit(tabId, url, title)` (Kotlin
     `object`, called from `makeContentClient(id).onPageFinished`) → JNI export
     `Java_com_aegis_browser_NativeHistory_recordVisit` → `record_page_finished`.
     Three things that path has to get right:
@@ -1258,3 +1261,139 @@ effective insets are published by `layout()` into managed `LayoutInsets`. A sane
 floor is set via Tauri `set_min_size` (now effective — only because the webviews
 no longer pin the minimum). Live-verified: the window resizes to 600×400 and
 clamps at the 420×320 minimum.
+
+25. **Most `#[allow(dead_code)]` in this crate hide LIVE code, not dead code — audit by
+    STRIPPING and re-compiling, never by reading the comment.** (Full audit,
+    2026-09-27: every occurrence, three targets.)
+
+    **Why so many exist at all.** `lib.rs`'s `ipc()` and every `dispatch()` match on
+    **string literals** (`"nav.navigate" => …`), so a `pub fn` sitting behind a channel has
+    **no call edge for rustc to follow**. Deleting its allow does not expose dead code — it
+    exposes a working feature. A grep-based audit concludes the exact opposite of the truth
+    here: `navigate_tab`, `is_find_channel`, `sync_auth::verify` and `emit_will_submit` have
+    **zero** hits in `shared/types.ts` and no renderer caller either, yet the channels that
+    reach them are string-matched. So the comment is not a substitute for the compiler; at
+    best it tells you what the author _believed_.
+
+    **The audit method that is actually sound** (comments lie, in both directions):
+
+        1. Delete every `allow(dead_code)` attribute line under `src-tauri/src`. All of them
+           are standalone single-attribute lines, so a line-delete is a faithful strip — with
+           **one trap: `proxy.rs:5` mentions the attribute in PROSE inside a comment.** Match
+           on `^\s*#\[` rather than the substring, or you will corrupt a comment and then
+           "fix" it by restoring a broken sentence.
+        2. Run `cargo check --locked` **without** `-D warnings`, per target. Deliberately not
+           `-D warnings`, for two reasons: you get the whole warning set instead of the
+           first hard error (remember the one-wave rule), and plain `check` **excludes
+           `#[cfg(test)]`**, so a test-only fn still warns — a strict **superset** of what
+           CI's `--all-targets` run could flag.
+        3. `git checkout -- src-tauri/src` to restore.
+        4. For each newly-warned symbol, collect the **nearest enclosing `#[cfg]` of every
+           reference**. That one fact is what separates an honest exemption from a bug.
+
+        **Zero warnings on a target ⇒ every allow on it suppresses nothing ⇒ provably
+        removable.** Re-verify with a plain `cargo check` again: 0 warnings ⟹ the
+        `-D warnings` CI gate passes, and it reuses the warm cache. Do **not** "re-verify" by
+        flipping `RUSTFLAGS` — that forces the ~4-minute full dependency rebuild noted in
+        the coverage section, on every target.
+
+    **The inventory, and what each shape means.** 73 real attributes (plus the one prose
+    mention): **54 `cfg_attr`-gated** + **19 unconditional**. Among the 19, **5 are
+    module-level** `#![allow(dead_code)]` and 14 are per-item. A grep count will say 74 —
+    that is the `proxy.rs` sentence. They are not interchangeable, and each class has a
+    different verdict:
+
+    | Class                | What the allow is hiding                                    | Verdict                                    |
+    | -------------------- | ----------------------------------------------------------- | ------------------------------------------ |
+    | live-but-untraceable | reached only via a literal-matched `ipc()`/`dispatch()` arm | necessary, and the large majority          |
+    | test-only            | the only caller is `#[cfg(test)]`                           | necessary; the item is not production-live |
+    | platform tiering     | live on a _different_ target                                | necessary; nearly all are honest           |
+    | **truly dead**       | no caller and no test, on **any** target                    | **the allow is the bug**                   |
+    | **parity gap**       | dead precisely where the feature is exposed                 | **the allow is the bug**                   |
+
+    The two conventions in use, so a new one matches something:
+
+    - **Per-item `#[cfg_attr(<plat>, allow(dead_code))]`** — 52, concentrated in
+      `redirect_guard.rs` (22) and `nav.rs` (6), then `adblock.rs` 5, `downloads.rs` 4,
+      `tabs.rs` 3, `adblock_inject.rs`/`safety.rs` 2, and 1 each in `adblock_engine`,
+      `farble`, `find`, `history`, `lib`, `settings`, `tab_registry`, `zoom`.
+      By platform: 42 name `android`, 11 `windows`, 3 `macos` (some name two, via `any(..)`).
+      **Prefer this shape** — it keeps the lint on for every other platform, so the
+      exemption is visible at the item.
+    - **Module-level `#![allow(dead_code)]`** — 5 blanket: `adblock_convert`, `adblock_lists`,
+      `adblock_webkit`, `sync_stores`, `sync_vault`. Two modules instead scope the blanket to
+      a platform: `picker.rs` (`#![cfg_attr(target_os = "android", …)]`) and
+      `redirect_guard.rs` (`… "macos"`, per the no-macOS-redirect-tier note in gotcha 14).
+      Those two are the module-level half of the 54; the other 19 are 5 blanket + 14
+      per-item unconditional.
+
+    **Structural finding: a blanket module allow is usually a missing `#[cfg]` on the `mod`
+    declaration.** `adblock_convert` and `adblock_webkit` are declared **unconditionally** in
+    `lib.rs` (lines 13 and 61) but are Linux-only in practice — `to_content_blocker_chunks` is
+    called from exactly one arm, `lib.rs:306`, under `#[cfg(target_os = "linux")]`. That
+    unconditional compilation is _why_ the module needs a blanket allow, and the blanket is
+    what hides it. `sync_stores`/`sync_vault` are also un-gated but genuinely span platforms,
+    so for those two the blanket is the honest choice. (`adblock_lists` is a data module.)
+
+    **What the audit removed.** 7 attributes whose comments claimed to be _"dead on the
+    Android cdylib until F2b"_ / _"consumed by the F2b sync merge"_. F2b is done and the merge
+    now calls them, so all 7 suppressed nothing (zero hits in all three probe logs):
+    `Hlc::zero`, `Hlc::bytes`, `from_value`, `next_observe`, `observe` in `sync_envelope.rs`,
+    and `sync_records`, `apply_synced` in `settings.rs`. Verified: 0 warnings on linux, android
+    and windows, `cargo fmt --check` clean, `cargo test --lib` 425 passed. **The lesson is the
+    part worth keeping — an allow's justification is a dated claim about the code around it, so
+    it goes stale silently and passes review forever. Re-strip and re-check instead of
+    re-reading it.**
+
+    **What is still dead, each with a doc comment asserting a caller which does not exist.**
+    Left in place deliberately: deleting them is a judgement call, and the false comments are
+    half the bug.
+
+    - `nav::navigate_tab` — its doc claims _"Every programmatic content navigation must go
+      through here."_ **Nothing calls it.** The `nav.navigate` dispatch arm inlines the
+      identical two lines, and 6 other sites call `redirect_guard::expect` directly. Either
+      delete it or rewire those sites through it, as the doc intends.
+    - `find::is_find_channel` — the comment says _"called from platform find modules"_; the
+      only references are `#[cfg(test)]` asserts. `lib.rs` calls `find::dispatch`, which
+      matches channels itself and returns `None` otherwise.
+    - `sync_auth::verify` — test-only, no production caller, no IPC channel. (`sync-server`
+      has its own, separate `verify_auth`.)
+    - `form::emit_will_submit` — **zero references anywhere**, even tests. This one is
+      honestly labelled `TODO(M13)`, so it is a deliberate stub, and the renderer _does_
+      subscribe to `form.willSubmit` — a declared-but-unproduced event, not an oversight.
+
+    **One masked parity gap, and it is narrow.** `settings::https_only` is android-dead, and
+    Android does not honour the setting: `MainActivity.secureUrl()` **hardcodes** the
+    http→https upgrade (its own comment says it "matches the desktop default-on") and never
+    reads the setting, while the only reader of the setting is a `#[cfg(desktop)]` arm in
+    `nav.rs`. No user-visible bug _today_ — the mobile UI only ever writes `httpsOnly: true`
+    and the only toggle is desktop-only — but settings **sync** propagates the key, so a user
+    who turns `httpsOnly` off on desktop and syncs to a phone gets the upgrade anyway. The
+    android allow is what makes this read as deliberate tiering instead of a gap.
+
+    **Four hypotheses the audit raised and DISPROVED — recorded so they are not
+    re-investigated.** Each looked exactly like gotcha 24's Android history bug (a Rust path
+    that is a no-op on that platform), and each is fine:
+
+    - **Find-in-page on Android is NOT broken.** `find::start/next/prev/close` have bodies only
+      for linux/windows/macos, so on Android `find::dispatch` really is a silent no-op. But
+      Kotlin implements find natively (`@JavascriptInterface find/findNext/findPrev/findClose`
+      → `WebView.findAllAsync`/`findNext`), and the renderer's `aegis.find.*` routes to
+      `androidBridge()` **first**, falling back to Tauri IPC. `find::emit_state`'s android allow
+      is honest.
+    - **Android's block counter is NOT missing.** `MainActivity.noteBlocked(id)` is the Android
+      mirror of `adblock::note_blocked`, called from the `shouldInterceptRequest` path; the JNI
+      `shouldBlock` entry deliberately only calls `should_block`.
+    - **`picker` / `zoom` / `downloads` android allows are honest tiering.** The mobile UI is
+      `src/components/mobile/` (7 non-test files) and none of them reference those three. Note
+      the check itself: probing `src/mobile/` finds nothing because that path does not exist,
+      which is a **vacuous pass**, not a clean bill of health.
+    - **`safety::is_blocked`/`raise` android-dead is honest** — Kotlin renders its own block
+      page.
+
+    **Limits of this audit.** Linux, android and windows only. **macOS is CI-verified only**
+    (`objc2` needs a macOS C toolchain), so the 3 macOS-scoped attributes are the only ones
+    whose justification no local run re-confirmed. The question a `cfg_attr` always raises is
+    "does _that_ target's tier call it?", and for macOS nobody has run the probe. Re-run the
+    strip-and-check before adding a new platform tier.×400 and
+    clamps at the 420×320 minimum.

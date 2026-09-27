@@ -19,7 +19,6 @@ pub struct Hlc {
 }
 
 impl Hlc {
-    #[allow(dead_code)] // used by F2b / tests; kept as part of the frozen contract
     pub fn zero(node: &str) -> Self {
         Hlc {
             wall_ms: 0,
@@ -32,7 +31,6 @@ impl Hlc {
     }
     /// Deterministic big-endian encoding for AEAD AAD (F2b) + stable comparisons. Stable
     /// across platforms and independent of serde — do NOT swap for serde_json.
-    #[allow(dead_code)] // consumed by F2b's crypto AAD; part of the frozen contract
     pub fn bytes(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(12 + self.node.len());
         out.extend_from_slice(&self.wall_ms.to_be_bytes());
@@ -54,7 +52,6 @@ impl PartialOrd for Hlc {
 }
 
 /// Read an `Hlc` from a record's `hlc` field, if present and well-formed.
-#[allow(dead_code)] // used by the merge (sync_stores) — dead on the Android cdylib until F2b
 pub fn from_value(v: &serde_json::Value) -> Option<Hlc> {
     serde_json::from_value(v.get("hlc")?.clone()).ok()
 }
@@ -99,7 +96,6 @@ const MAX_REMOTE_SKEW_MS: i64 = 60_000;
 /// monotonicity every other stamp relies on. The consequence is that a clock already
 /// poisoned by a pre-fix build cannot be repaired in-process — which is precisely why the
 /// clamp has to happen at this boundary, on the way IN.
-#[allow(dead_code)] // via observe() — dead on the Android cdylib until F2b's merge runs
 fn next_observe(local: (i64, u32), now_ms: i64, remote: (i64, u32)) -> (i64, u32) {
     let remote = (
         remote.0.min(now_ms.saturating_add(MAX_REMOTE_SKEW_MS)),
@@ -131,7 +127,6 @@ pub fn tick(node: &str, now_ms: i64) -> Hlc {
 
 /// HLC receive: on observing `remote`, return a local stamp that dominates BOTH the prior
 /// global clock and `remote`, advancing the clock accordingly.
-#[allow(dead_code)] // called by the merge (sync_stores) — dead on the Android cdylib until F2b
 pub fn observe(node: &str, now_ms: i64, remote: &Hlc) -> Hlc {
     let mut g = clock().lock().unwrap_or_else(|e| e.into_inner());
     *g = next_observe(*g, now_ms, (remote.wall_ms, remote.counter));

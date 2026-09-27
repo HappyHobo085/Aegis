@@ -472,7 +472,6 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &[Value]) -> Vec<Str
 }
 
 /// The per-key sync records (for the merge seam / export). Migrates lazily on first call.
-#[allow(dead_code)] // consumed by the F2b sync merge — dead on the Android cdylib until then
 pub fn sync_records<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
     ensure_sync_projection(app)
 }
@@ -488,7 +487,6 @@ pub fn rebuild_projection_from_current<R: Runtime>(app: &AppHandle<R>) {
 /// Apply merged per-key records back into the flat settings file: write each live key's
 /// value, or REMOVE a tombstoned key so `load()` falls to its default (= "reset to
 /// default"). Consumed by F2b's merge. (Also rebuilds the projection from `records`.)
-#[allow(dead_code)] // consumed by the F2b sync merge
 pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, records: &[Value]) {
     // Start from the saved flat file (NOT defaults overlay) so we only touch synced keys.
     let mut flat = store_path(app)
