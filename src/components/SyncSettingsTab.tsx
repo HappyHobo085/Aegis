@@ -418,6 +418,24 @@ export function SyncSettingsTab({
         {state.lastError ? ` — ${state.lastError}` : ''}
       </p>
       <p>Key storage: {vaultBackingLabel(state.vaultBacking)}</p>
+      {/*
+        A rejected vault write is the ONLY signal the user gets that a peer tried to write to
+        their vault and the core refused it: the record is quarantined rather than merged, and
+        the sync pass itself still SUCCEEDS, because a forged record is a security outcome and
+        not a sync failure. So it is reported here as its own alert rather than folded into
+        `state.lastError` — folding it in would make a successful pass look like a failed one.
+        `role="alert"` so a screen reader announces it; the count is pluralised so "1 record" is
+        not copy-pasted into "1 records".
+      */}
+      {sync.quarantined && (
+        <p className="sync-tab__error" role="alert">
+          {sync.quarantined.count === 1
+            ? 'A password record from another device failed its integrity check and was rejected. Nothing was changed.'
+            : `${sync.quarantined.count} password records from another device failed their integrity check and were rejected. Nothing was changed.`}{' '}
+          If you did not just add those records on another device, someone may have tried to change
+          your vault — your existing passwords are unaffected.
+        </p>
+      )}
       <button type="button" disabled={busy} onClick={() => void run(() => sync.syncNow())}>
         Sync now
       </button>

@@ -1,6 +1,6 @@
 // src/hooks/useSync.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type { SyncState } from '../../shared/types';
+import type { SyncState, SyncVaultQuarantined } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import { publishSyncChange } from '../lib/syncBus';
 
@@ -31,12 +31,23 @@ export interface UseSync {
    * flag here would turn the gate into a bypass.
    */
   getRecoveryPhrase(confirmed: boolean): Promise<string>;
+  /**
+   * The most recent rejected-write report — a peer tried to write to the vault and the record
+   * was quarantined — or `null` when there is nothing to report. The Sync tab renders this and
+   * nothing else should.
+   */
+  quarantined: SyncVaultQuarantined | null;
   listDevices: typeof aegis.sync.listDevices;
   removeDevice: typeof aegis.sync.removeDevice;
 }
 
 export function useSync(): UseSync {
   const [state, setState] = useState<SyncState>(EMPTY);
+  // Kept OUT of `SyncState` on purpose: that is the CORE's own view of the sync engine, and the
+  // quarantine list is not part of it — it is a peer-supplied fact the renderer observed.
+  // Folding it into `SyncState` would make a renderer-observed value look like core state, and
+  // the core's own `sync.getState` reply would then be missing a field the type promises.
+  const [quarantined, setQuarantined] = useState<SyncVaultQuarantined | null>(null);
 
   // Monotonic sequence for the mutating actions below. Every action takes a ticket BEFORE its
   // await and only writes state if its ticket is still the newest. Without it the actions were
@@ -58,10 +69,25 @@ export function useSync(): UseSync {
     void aegis.sync.getState().then((s) => {
       if (active) setState(s);
     });
+    // A peer that pushes a forged or wrong-keyed vault record has it quarantined: never
+    // written, never merged, the local record of that uuid untouched. The core emits that as an
+    // EVENT and deliberately does NOT fail the pass — a rejected forgery is a security outcome,
+    // not a sync error, so failing the pass would have mislabelled it and reported the user's
+    // other namespaces as failed too. That makes this event the ONLY channel by which the user
+    // can learn somebody tried to write to their vault, and nothing in the renderer subscribed
+    // to it, so the report went nowhere. (Found by `shared/ipcCatalog.drift.test.ts`'s
+    // direction 3, which had been blind because the transport satisfied its own search.)
+    //
+    // An empty payload clears the report rather than being ignored: a security warning that can
+    // only be dismissed by restarting the app is a warning users learn to ignore.
+    const offQuarantine = aegis.sync.onVaultQuarantined((q) => {
+      if (active) setQuarantined(q.count > 0 ? q : null);
+    });
     return () => {
       active = false;
       offState();
       offChanged();
+      offQuarantine();
     };
   }, []);
 
@@ -123,6 +149,7 @@ export function useSync(): UseSync {
 
   return {
     state,
+    quarantined,
     enableNew,
     enableFromPhrase,
     unlock,

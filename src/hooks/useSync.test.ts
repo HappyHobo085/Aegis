@@ -13,8 +13,8 @@
 // `subscribeBeforeFetch.test.tsx` covers the ordering property for every seeding hook; this
 // file covers the hook's own contract.
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { renderHook, act } from '@testing-library/react';
-import type { SyncDevice, SyncState } from '../../shared/types';
+import { renderHook, act, waitFor } from '@testing-library/react';
+import type { SyncDevice, SyncState, SyncVaultQuarantined } from '../../shared/types';
 import { onSyncChange } from '../lib/syncBus';
 
 const DISABLED: SyncState = {
@@ -108,6 +108,11 @@ describe('useSync', () => {
         };
       },
     );
+    // A default so EVERY test gets a well-formed subscriber. Without it `onVaultQuarantined`
+    // returns `undefined` and the hook's cleanup throws `offQuarantine is not a function`,
+    // which fails all 16 unrelated tests the moment the hook starts subscribing. A test that
+    // wants the callbacks simply re-implements it.
+    mockSync.onVaultQuarantined.mockImplementation(() => () => {});
   });
 
   // ── seeding + subscription ────────────────────────────────────────────────
@@ -332,5 +337,61 @@ describe('useSync', () => {
       await result.current.unlock('hunter2');
     });
     expect(result.current.state.enabled).toBe(true);
+  });
+  // ── the quarantine report ──────────────────────────────────────────────────
+  //
+  // A peer that pushes a forged or wrong-keyed vault record has it quarantined: never
+  // written, never merged, the local record untouched. `sync.rs` emits that as an EVENT and
+  // deliberately does NOT fail the pass, because a rejected forgery is a security outcome
+  // rather than a sync error. So the event is the ONLY channel by which the user can learn
+  // that somebody tried to write to their vault — and before this, nothing in the renderer
+  // subscribed to it, so the report went nowhere. `shared/ipcCatalog.drift.test.ts`'s
+  // direction 3 (which used to be blind because the transport satisfied its own search) is
+  // what found it.
+  it('surfaces a quarantined vault record, because the event is the only report of a rejected write', async () => {
+    const quarantineCbs: Array<(q: SyncVaultQuarantined) => void> = [];
+    mockSync.onVaultQuarantined.mockImplementation((cb: (q: SyncVaultQuarantined) => void) => {
+      quarantineCbs.push(cb);
+      return () => {};
+    });
+
+    const { result } = renderHook(() => useSync());
+    await waitFor(() => expect(mockSync.getState).toHaveBeenCalled());
+
+    expect(result.current.quarantined).toBeNull();
+    expect(quarantineCbs.length).toBeGreaterThan(0);
+
+    act(() => {
+      for (const cb of quarantineCbs) cb({ count: 1, uuids: ['forged-1'] });
+    });
+
+    await waitFor(() => {
+      // Wait for the OBSERVABLE first, then assert the mechanism: the mock fires
+      // synchronously but the hook's setState lands a microtask later.
+      expect(result.current.quarantined).toEqual({ count: 1, uuids: ['forged-1'] });
+    });
+  });
+
+  it('clears the quarantine report when a later pass finds nothing, so a stale warning cannot persist', async () => {
+    const quarantineCbs: Array<(q: SyncVaultQuarantined) => void> = [];
+    mockSync.onVaultQuarantined.mockImplementation((cb: (q: SyncVaultQuarantined) => void) => {
+      quarantineCbs.push(cb);
+      return () => {};
+    });
+    const { result } = renderHook(() => useSync());
+    await waitFor(() => expect(mockSync.getState).toHaveBeenCalled());
+
+    act(() => {
+      for (const cb of quarantineCbs) cb({ count: 2, uuids: ['a', 'b'] });
+    });
+    await waitFor(() => expect(result.current.quarantined?.count).toBe(2));
+
+    // A pass that quarantines nothing must not leave yesterday's attack on screen. The core
+    // only emits when the list is non-empty, so the hook also clears on a state transition
+    // that reports no quarantine — which is the `sync.state` path.
+    act(() => {
+      for (const cb of quarantineCbs) cb({ count: 0, uuids: [] });
+    });
+    await waitFor(() => expect(result.current.quarantined).toBeNull());
   });
 });

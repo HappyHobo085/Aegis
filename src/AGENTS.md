@@ -282,6 +282,23 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
     `src/lib/ipcClient.contract.test.ts` — every request channel must have a row there
     pinning its exact channel and payload, and `UNPINNED_REQUEST` is only for channels the
     renderer never emits.
+- **`hooks/useSync`** — owns sync UI state. **`quarantined` is deliberately NOT part of
+  `state`.** `state` is the core's own `sync.getState` view, so folding a peer-supplied,
+  renderer-observed fact into it would make the core's reply look like it is missing a field
+  the type promises. It sits beside `state` as its own `SyncVaultQuarantined | null`, and it
+  is **cleared by an empty payload** — a security warning dismissible only by restarting the
+  app is a warning users learn to ignore. The `sync.vaultQuarantined` subscription lives
+  inside the existing mount effect, so the subscribe-before-seed rule above holds for it, and
+  its unsubscribe is called in that effect's cleanup like the other two. A test that renders
+  this hook must have `onVaultQuarantined` return a **function**, not `undefined` — the hook
+  calls it, so a bare `vi.fn()` throws in the cleanup and takes every other test in the file
+  with it. `SyncSettingsTab` renders the report as its own `role="alert"`
+  (`sync-tab__error`) rather than folding it into `state.lastError`, because a rejected
+  write is a security outcome while the sync pass itself still SUCCEEDS — folding it in would
+  make a successful pass look failed. Its text is pluralised by count and keeps the
+  reassuring half ("Nothing was changed… your existing passwords are unaffected"), since a
+  security warning that does not say the vault is intact reads as "my vault is broken".
+
 - **`hooks/useWebrtcExempt`** — owns the per-site **WebRTC IP-leak** exemption list
   (`WebrtcExemptState`: `{ exemptHosts: string[] }`). Deliberately NOT a second slice of
   the ad-block allowlist: that list is synced, and reading a privacy control off it meant

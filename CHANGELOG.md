@@ -9,6 +9,30 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A peer could try to write to your password vault and you would never be told.**
+  `sync.vaultQuarantined` is emitted by the core when it refuses a peer-supplied vault
+  record — a forgery, or simply a record sealed under a key this device does not hold. It is
+  the **only** channel for that outcome (it is in no `state_json`, so there is no polling
+  fallback), and both the core's own comment and the shared contract describe it as a
+  security outcome worth surfacing, yet **nothing in the UI subscribed to it**. A rejected
+  write was therefore completely silent. The Sync tab now shows it as its own alert:
+  "A password record from another device failed its integrity check and was rejected.
+  Nothing was changed… your existing passwords are unaffected." It is deliberately not shown
+  as a sync error, because the sync pass really does succeed — a forged record is not a sync
+  failure — and it clears itself once a later pass quarantines nothing, so it cannot become
+  a permanent nag.
+
+- **The IPC drift guard's "every event is subscribed" direction could not fail.** It
+  searched the renderer sources for the literal `IPC.evt<Key>`, and `src/lib/ipcClient.ts`
+  is one of those sources and _defines_ that exact literal for every event it wraps — so the
+  transport was satisfying the search on its own behalf. Deleting a real subscription
+  (`useNav`'s `aegis.nav.onState`) still left the guard green. It now derives each event's
+  wrapper surface by parsing the transport, excludes the transport from the subscriber
+  search, and looks for the actual `aegis.<ns>.on<Name>(…)` call. Four new anti-vacuity
+  tests pin that, the decisive one asserting the transport cannot subscribe to itself. The
+  first run of the repaired direction found three real defects — events with a wrapper and
+  no caller — one of which is the vault-quarantine gap above.
+
 - **A closed tab left its anti-malvertising chain behind, on three of four platforms.**
   `redirect_guard::Chains` is written by both the two-phase path (Linux) and the
   single-phase `block_at_start` (Windows/Android), but it was only ever cleared from the

@@ -133,6 +133,11 @@ const heavyData = {
       getRecoveryPhrase: vi.fn(),
       listDevices: vi.fn(),
       removeDevice: vi.fn(),
+      // The rejected-vault-write report. `null` is the common case (the core quarantined
+      // nothing), and it is deliberately a required field rather than an optional one with a
+      // default: a fixture that forgot it should fail the type check, not silently render a
+      // panel that cannot report a rejected write.
+      quarantined: null,
     },
     onSetServerUrl: vi.fn(),
     settings: {} as Settings,

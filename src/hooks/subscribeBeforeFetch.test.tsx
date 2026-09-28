@@ -83,6 +83,11 @@ vi.mock('../lib/ipcClient', () => ({
       getState: () => t.seed(),
       onState: (cb: BackendListener) => t.subscribe('sync.state', cb),
       onChanged: (cb: BackendListener) => t.subscribe('sync.changed', cb),
+      // The rejected-vault-write report. It must be modelled here even though this file
+      // asserts nothing about it: `useSync` now subscribes on mount, so a partial mock that
+      // omits it makes the hook's own cleanup throw `offQuarantine is not a function` and
+      // every case in this file fails for a reason that has nothing to do with what it tests.
+      onVaultQuarantined: (cb: BackendListener) => t.subscribe('sync.vaultQuarantined', cb),
     },
     proxy: {
       getState: () => t.seed(),

@@ -110,14 +110,48 @@ password: string; notes: string }` — decrypted record; returned only by direct
      guard clauses, `emit_event` args, `.listen` args — is in the catalog. Scoped to
      those four sites on purpose; a whole-file scan yields 45 false positives
      (store filenames, test hostnames).
-  3. **catalog event → renderer**: every `evt*` key is referenced by a real `src/`
-     file, so the core never emits into the void.
+  3. **catalog event -> actually subscribed to**: every `evt*` key has a wrapper in
+     PLACE 3 and a real `aegis.<ns>.on<Name>` **call** somewhere in `src/`.
+     **This direction was blind until 2026-09-28, and the blindness was structural.**
+     It searched for the literal `IPC.evt<Key>`, but `src/lib/ipcClient.ts` is one of
+     the scanned files and _defines_ that literal for every event it wraps — so the
+     transport satisfied the search for itself. Proof, not argument: neutralising the
+     real `aegis.nav.onState` subscription in `useNav.ts:42` still left the guard at
+     `12 passed (12)`. It now (a) derives the wrapper surface by parsing the one file
+     where an `evt*` key and its wrapper name are bound together — the binding is NOT
+     mechanically derivable (`evtNavState`→`nav.onState`, `evtPickerPicked`→
+     `picker.onPicked`, `evtSubsChanged`→`subs.onChanged` are all irregular) — and
+     (b) searches for the dotted **call** shape over comment-stripped sources, with
+     `TRANSPORT_FILE` excluded. **Excluding the transport is the load-bearing part**;
+     four `anti-vacuity` tests pin it, the decisive one asserting the transport cannot
+     subscribe to itself. Turning it on immediately found three events with a wrapper
+     and no caller — the same class as `subs.changed` and `picker.picked`. An event
+     with **no wrapper at all** is not this direction's problem (the PLACE-3 contract
+     test in `ipcClient.contract.test.ts` gates that, expecting `[]`), so direction 3
+     does not blame itself for it.
   4. **no raw emit**: no channel-shaped literal reaches a bare `app.emit`; Tauri 2
      rejects dotted event names, so that is a silent no-op, not a shortcut.
      Each direction carries an **inventory** of known-and-explained exceptions, asserted
      as an exact set in _both_ directions — a new orphan fails, and so does a stale
      inventory entry. Adding a key to silence a failure is the antipattern this file
      exists to prevent; fix the code or the contract instead.
+
+     **`UNSUBSCRIBED_EVENTS` currently holds two entries, and neither is an excuse
+     — both are open questions about the contract, recorded rather than guessed.**
+     `vault.changed` (`vault.rs` `emit_changed`, six call sites) exists so "sync and
+     other listeners know the vault data mutated", but `vault.state` is already
+     subscribed and carries the same mutation. `form.state` (`form.rs`
+     `emit_form_state`) is emitted, and the catalog also has a separate
+     `form.detectionResult`. In both cases the open question is **which event is the
+     contract**, not who should subscribe — deleting either on a hunch would remove a
+     live contract. Resolving them needs a decision, not a guard change.
+     **`sync.vaultQuarantined` was in this class and is now FIXED** (2026-09-28): the
+     event is the _only_ channel for a rejected vault write (it is in no `state_json`,
+     so there is no polling fallback), `shared/types.ts` calls it "a security outcome
+     worth surfacing", and nothing subscribed — so a peer pushing a forged record was
+     quarantined and the user was never told. It was never added to this inventory: once
+     the caller existed it dropped off the unexplained list on its own, which is the
+     inventory behaving as designed.
 
 ## Adding a channel
 
@@ -139,9 +173,10 @@ dot-separated and unique, so a malformed/colliding name fails the test):
 `ipcCatalog.drift.test.ts` is the gate that ties the three together, and it is stricter
 than the three-place rule: PLACE 2 with no PLACE 1 fails direction 1, PLACE 1 with no
 PLACE 2 fails direction 1, a PLACE 2 arm for a name PLACE 1 never declares fails
-direction 2, and an `evt*` key with no `on(…)` caller fails direction 3. Renaming a
-channel to a _shape-preserving_ wrong value — `nav.back` → `nav.backk` — passes
-`types.test.ts`'s naming regex and fails only here.
+direction 2, and an `evt*` key with a wrapper but **no `aegis.<ns>.on<Name>` call
+anywhere in `src/`** fails direction 3. Renaming a channel to a _shape-preserving_
+wrong value — `nav.back` → `nav.backk` — passes `types.test.ts`'s naming regex and
+fails only here.
 
 **Settings-field shortcut.** A new _settings field_ needs **no new channel** — add it
 to `settings.rs defaults()` + the `Settings` interface here; `settings.set`
@@ -168,13 +203,15 @@ list's exact membership, so a third key cannot land without a test.
 refetch** (the precedent is `useHistory` subscribing `onChanged(() => list())`), never
 a `window.location.reload()`.
 
-**An event with no subscriber is a defect, and the two the drift test found are now
-fixed (2026-09-27).** `shared/ipcCatalog.drift.test.ts` direction 3 asserts that every
-catalogued `evt*` key is referenced from a `src/**` file, and
-`src/lib/ipcClient.contract.test.ts` asserts the same at runtime with a derived ratchet
-that now expects the unaccounted set to be **`[]`**. Both inventories are empty, and each
-has a "no stale entry" test, so fixing a defect obliges deleting its excuse. Two real
-ones were found and fixed:
+**An event with no subscriber is a defect, and the ones the drift test found are being
+fixed (2026-09-27; see the inventory above for the two still open).**
+`shared/ipcCatalog.drift.test.ts` direction 3 asserts that every catalogued event's
+`aegis.<ns>.on<Name>()` wrapper is actually **called** somewhere in the renderer — not, as it
+used to, merely that the `evt*` key is _referenced_, which the transport satisfied for
+itself — and `src/lib/ipcClient.contract.test.ts` asserts the weaker runtime property with a
+derived ratchet that expects the unaccounted set to be **`[]`**. Each carries a "no stale
+entry" test, so fixing a defect obliges deleting its excuse. Three real ones were found
+(the first two by the blind direction, the third once it worked):
 
 - **`picker.picked`** was declared, emitted (`picker.rs:302`) and delivered to nobody.
   Worse, the UI that wanted it was wired to the RETURN value of `picker.start` — which
@@ -197,6 +234,13 @@ ones were found and fixed:
   — never `lastUpdated`/`etag`/`hash`), and `subs` is **not** in
   `sync_stores::SYNCABLE`, so there was no second device to diverge from either. It was a
   trap for whoever next adds a "last updated" column.
+- **`sync.vaultQuarantined`** was emitted (`sync.rs:562-568`) and delivered to nobody, and
+  it is the **only** channel for it — a grep for `quarantin` across every `src-tauri/src/*.rs`
+  shows it is in no `state_json`, so there is no polling fallback. Both the core's own
+  comment and `shared/types.ts` call it a security outcome worth surfacing, and a forged or
+  wrong-keyed peer write was being rejected in silence. `useSync` now carries it as
+  `quarantined` and the Sync tab renders it as its own `role="alert"`. See `src/AGENTS.md`
+  for why it is deliberately NOT folded into `state.lastError`.
 - `useCustomFilters` also refetches on `picker.picked`, because the picker appends to the
   same store the My Filters panel reads and `customfilters.rs` emits **nothing** of its own
   (0 `emit_event` calls) — a My Filters panel left open across a pick used to show the

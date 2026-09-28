@@ -628,4 +628,46 @@ describe('SyncSettingsTab - the password-vault opt-in', () => {
       expect(onUpdate).toHaveBeenCalledWith({ syncAllowInsecure: false });
     });
   });
+
+  // ── The rejected-write (quarantine) report ──────────────────────────────────
+  // A peer that pushes a forged or wrong-keyed vault record gets its write REJECTED and
+  // the record quarantined. The sync pass itself still SUCCEEDS — a forged record is a
+  // security outcome, not a sync failure — so the sync pass result is the wrong place to
+  // report it, and nothing else tells the user. These cases pin that the tab surfaces it.
+  describe('a rejected vault write', () => {
+    it('tells the user one record failed its integrity check and nothing changed', () => {
+      renderEnabled({}, { quarantined: { count: 1, uuids: ['forged-1'] } });
+      // Scoped by its own text, NOT by `getByRole('alert')`: the panel already renders a
+      // different `role="alert"` for the insecure-transport warning, so the role alone cannot
+      // tell the two security messages apart. A test that matched the wrong one would pass
+      // against code that never rendered this alert at all.
+      const alert = screen.getByText(/nothing was changed/i);
+      // "A password record", not "1 password record" — a count and a word cannot both be
+      // right in one sentence, and getting it wrong here is the sort of small wrongness that
+      // makes a reader doubt the rest of a security message.
+      expect(alert).toHaveTextContent(/^A password record/);
+      expect(alert).toHaveTextContent(/failed its integrity check and was rejected\./);
+      // The reassuring half matters as much as the warning: the user must be told their
+      // existing credentials are untouched, or the natural reading is "my vault was broken".
+      expect(alert).toHaveTextContent(/nothing was changed/i);
+      // A security warning that does not name the possible cause is a warning users dismiss.
+      expect(alert).toHaveTextContent(/tried to change your vault/i);
+    });
+    it('pluralises the count and does not claim a single record when there are several', () => {
+      renderEnabled({}, { quarantined: { count: 4, uuids: ['a', 'b', 'c', 'd'] } });
+      const alert = screen.getByText(/nothing was changed/i);
+      expect(alert).toHaveTextContent(/^4 password records from another device failed/);
+      // A copy-pasted singular here reads as a bug in the very message meant to build trust.
+      expect(alert).not.toHaveTextContent(/\b1 password record\b/);
+    });
+
+    it('shows nothing at all when no write was rejected', () => {
+      // A warning rendered unconditionally is a warning the user learns to ignore, and this
+      // is the common case: `quarantined` is null unless the core actually quarantined a record.
+      renderEnabled();
+      // Scoped by text for the same reason as the cases above, so this asserts the ABSENCE of
+      // THIS alert rather than the absence of every alert (the panel has another one by design).
+      expect(screen.queryByText(/nothing was changed/i)).toBeNull();
+    });
+  });
 });

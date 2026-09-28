@@ -169,7 +169,28 @@ const REVERSE_UNDECLARED: Record<string, string> = {
  * Like `REVERSE_UNDECLARED`, an entry here is an admission that a real defect exists, so the
  * "no stale entry" test below makes fixing a defect oblige deleting its excuse.
  */
-const UNSUBSCRIBED_EVENTS: Record<string, string> = {};
+const UNSUBSCRIBED_EVENTS: Record<string, string> = {
+  // Found by rewriting direction 3 (it searched for a literal `IPC.evt<Key>` that the
+  // TRANSPORT itself defines, so it had no signal for any event with a wrapper — which is
+  // every event by construction). `form.state` was the first thing it caught and is reported,
+  // not fixed: closing it is a product decision, because the core emits BOTH `form.state` and
+  // `form.detectionResult` and only one of them is meant to be the contract.
+  evtFormState:
+    'REPORTED, not fixed. form.rs emits BOTH form.state (emit_form_state, relayed at :152) and ' +
+    'form.detectionResult, and this file has a wrapper for each. Picking one is a product ' +
+    'decision, and guessing here would delete a live contract on a hunch. The wrapper is ' +
+    'deliberate — aegisMock.ts:44 names form.onState as a known member.',
+  // Also caught by the rewritten direction 3. `vault.rs:1047` emit_changed is called from six
+  // sites and its own doc says it exists "so sync and other listeners know the vault data
+  // mutated" — but `aegis.vault.onState` is already subscribed and carries the same mutation,
+  // so this looks like a redundant twin rather than a missing subscriber. Deleting either event
+  // needs the same decision, so it is reported with the evidence rather than resolved by guess.
+  evtVaultChanged:
+    'REPORTED, not fixed. vault.rs:1047 emit_changed has six call sites but no renderer ' +
+    'subscriber, and vault.onState already reports the same mutation — so the open question is ' +
+    'WHICH event is the contract, not who should subscribe. Guessing would either delete a live ' +
+    'event or add a second subscription to a payload a component already receives.',
+};
 
 /** Read every `.rs` file in `src-tauri/src`. */
 function readRustSources(): { file: string; src: string }[] {
@@ -304,6 +325,96 @@ const CATALOG_VALUES = new Set<string>(Object.values(IPC));
 const catalogForm = (name: string): string => name.replace(/:/g, '.');
 const isCatalogued = (name: string): boolean => CATALOG_VALUES.has(catalogForm(name));
 
+/**
+ * The transport itself. Direction 3 must not search it — see `collectSubscribed` for why,
+ * which is the whole point of this constant existing.
+ */
+const TRANSPORT_FILE = 'src/lib/ipcClient.ts';
+
+/**
+ * `evt*` catalog key → the `aegis` surface a renderer must actually CALL, parsed out of the
+ * transport's own wrapper bodies.
+ *
+ * This is the load-bearing half of the rewritten direction 3. The old guard searched for the
+ * literal `IPC.evtNavState` anywhere under `src/`, and `ipcClient.ts` is under `src/` — so the
+ * file that DEFINES the wrapper satisfied the search for itself, and the guard could not
+ * distinguish "some component listens to this" from "the transport offers it". Measured: the
+ * only non-spec renderer file containing `IPC.evt*` at all was `ipcClient.ts` itself (27
+ * distinct keys), so the direction had **no** signal — replacing a real
+ * `aegis.nav.onState(...)` subscription in `useNav.ts` with a no-op stub left all 12 tests
+ * green.
+ *
+ * The binding is not derivable from the key alone (`evtNavState` → `nav.onState`,
+ * `evtPickerPicked` → `picker.onPicked`, `evtSubsChanged` → `subs.onChanged` are all
+ * irregular), so it is parsed from the one place the two are bound together. Parsing the
+ * wrapper also means a wrapper RENAMED without its catalog key updated shows up as a
+ * direction-3 failure rather than silently vanishing from the map.
+ *
+ * Shape-pinned to the file's layout: `aegis` is a top-level object literal, its namespaces
+ * are 2-space-indented, and the `on…` wrappers are 4-space-indented inside them. That is
+ * asserted below, so a reformat that breaks the parse fails loudly instead of quietly
+ * emptying the map.
+ */
+function collectWrapperSurfaces(): Map<string, string> {
+  const src = readFileSync(join(process.cwd(), TRANSPORT_FILE), 'utf8');
+  const out = new Map<string, string>();
+  let namespace: string | null = null;
+  // The active 4-space wrapper key. TWO shapes exist in the file and both must parse:
+  //   onState: (cb) => on<NavState>(IPC.evtNavState, cb),          (4-space, one line)
+  //   onLoaded: (cb) => {                                         (4-space, opens a block)
+  //     return on<TabsState>(IPC.evtTabsState, cb);               (6-space, the binding)
+  //   },
+  // Reading the key from the 4-space line and the event from whichever line carries it handles
+  // both without a brace walk. The first shape alone would have silently dropped every
+  // block-bodied wrapper — including `evtNavState`, the one this whole guard hinges on.
+  let wrapper: string | null = null;
+  for (const line of src.split('\n')) {
+    const ns = /^ {2}([A-Za-z][A-Za-z0-9]*): \{$/.exec(line);
+    if (ns) {
+      namespace = ns[1];
+      wrapper = null;
+      continue;
+    }
+    const start = /^ {4}([A-Za-z][A-Za-z0-9]*):/.exec(line);
+    // Deliberately NOT `continue`d: the single-line wrapper shape carries its own
+    // `IPC.evt…` on the same line, so skipping the rest of the line dropped those events.
+    if (start) wrapper = start[1];
+    const bound = /IPC\.(evt[A-Za-z0-9]+)/.exec(line);
+    if (bound && wrapper && wrapper.startsWith('on') && namespace) {
+      out.set(bound[1], `${namespace}.${wrapper}`);
+    }
+  }
+  return out;
+}
+
+const WRAPPER_SURFACE = collectWrapperSurfaces();
+
+/**
+ * The `aegis.<ns>.<on…>` surfaces a real renderer file CALLS, keyed by catalog event.
+ *
+ * The transport is excluded by path, comments are stripped, and a call must be a real
+ * `aegis.…` reference rather than the `aegis.X.onState` shape that appears in prose — which
+ * is why this cannot be a plain `includes` over the joined sources.
+ */
+function collectSubscribed(sources: { file: string; src: string }[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const { file, src } of sources) {
+    if (file === TRANSPORT_FILE) continue;
+    for (const m of stripComments(src).matchAll(
+      /\baegis\.([A-Za-z][A-Za-z0-9]*)\.(on[A-Za-z0-9]*)/g,
+    )) {
+      const surface = `${m[1]}.${m[2]}`;
+      for (const [key, want] of WRAPPER_SURFACE) {
+        if (want !== surface) continue;
+        const set = out.get(key) ?? new Set<string>();
+        set.add(file);
+        out.set(key, set);
+      }
+    }
+  }
+  return out;
+}
+
 describe('IPC catalog drift', () => {
   const rustSources = readRustSources();
   const mentioned = collectMentioned(rustSources);
@@ -429,15 +540,32 @@ describe('IPC catalog drift', () => {
     });
   });
 
-  describe('direction 3 — every catalog event is subscribed to by the renderer', () => {
+  describe('direction 3 — every catalog event is actually subscribed to', () => {
+    // The name says "actually" for a reason, and the distinction is the whole fix. This used
+    // to read "is subscribed to by the renderer" while searching for the literal `IPC.evtKey`
+    // under `src/` — and `ipcClient.ts`, which is under `src/`, defines that literal for every
+    // event it wraps. So the transport satisfied the search for itself: stubbing out a REAL
+    // `aegis.nav.onState(...)` subscription left all 12 tests green. A name in the catalog that
+    // no component actually listens to is the same defect class as `subs.changed` and
+    // `picker.picked`, and this direction is now the one that can see it.
+    const subscribed = collectSubscribed(rendererSources);
+
     it('has no unsubscribed event', () => {
-      // A name in the catalog that no renderer source mentions is the same class of defect as
-      // `subs.changed` in the other direction: the event fires and nobody hears it.
-      const rendererText = rendererSources.map(({ src }) => src).join('\n');
       const unsubscribed = Object.entries(IPC)
         .filter(([key]) => key.startsWith('evt'))
-        .filter(([key]) => !rendererText.includes(`IPC.${key}`) && !(key in UNSUBSCRIBED_EVENTS))
-        .map(([key, value]) => `${key} => ${value}`)
+        .filter(([key, value]) => {
+          if (key in UNSUBSCRIBED_EVENTS) return false;
+          // An event with no wrapper at all is a DIFFERENT defect, and it is already
+          // gated by `ipcClient.contract.test.ts`'s derived ratchet (which expects the
+          // unaccounted set to be `[]`). Reporting it here too would blame this direction for
+          // a missing wrapper, so say which half is missing instead.
+          const surface = WRAPPER_SURFACE.get(key);
+          if (!surface) return false;
+          return !subscribed.has(key);
+        })
+        .map(
+          ([key, value]) => `${key} => ${value} (wrapper ${WRAPPER_SURFACE.get(key)}, no caller)`,
+        )
         .sort();
 
       expect(
@@ -453,12 +581,54 @@ describe('IPC catalog drift', () => {
     });
 
     it('the UNSUBSCRIBED_EVENTS inventory has no stale entry', () => {
-      const rendererText = rendererSources.map(({ src }) => src).join('\n');
+      // Was `rendererText.includes('IPC.' + key)`, which the transport alone satisfied — the
+      // same blind spot as the direction above, in the test that is supposed to catch a stale
+      // excuse. It now asks the real question.
       const stale = Object.keys(UNSUBSCRIBED_EVENTS)
-        .filter((key) => rendererText.includes(`IPC.${key}`))
-        .map((key) => `${key} (now subscribed)`)
+        .filter((key) => subscribed.has(key))
+        .map((key) => `${key} (now subscribed by ${[...subscribed.get(key)!].join(', ')})`)
         .sort();
       expect(stale, 'UNSUBSCRIBED_EVENTS no longer describes reality.').toEqual([]);
+    });
+
+    describe('anti-vacuity — the two things that could make the above pass for nothing', () => {
+      it('the wrapper map is parsed out of the transport, not empty', () => {
+        // An empty map would make every event "has no wrapper" and therefore exempt.
+        expect(WRAPPER_SURFACE.size).toBeGreaterThan(20);
+        expect(WRAPPER_SURFACE.get('evtNavState')).toBe('nav.onState');
+        expect(WRAPPER_SURFACE.get('evtPickerPicked')).toBe('picker.onPicked');
+        // The irregular names are the point: a mechanical `evtKey -> ns.onKey` derivation
+        // would get both of these wrong, which is why it is parsed.
+        expect(WRAPPER_SURFACE.get('evtSubsChanged')).toBe('subs.onChanged');
+      });
+
+      it('the subscriber search sees files other than the transport', () => {
+        // If `readRendererSources` were narrowed until only the transport remained, every
+        // event would look unsubscribed and the direction would fail loudly — fine. The
+        // dangerous case is the opposite: a search space of ONE file, which is what the old
+        // guard actually had. So assert the space is plural.
+        const searched = rendererSources.filter(({ file }) => file !== TRANSPORT_FILE);
+        expect(searched.length).toBeGreaterThan(50);
+        expect(subscribed.get('evtNavState')?.size ?? 0).toBeGreaterThan(0);
+      });
+
+      it('the transport itself can never satisfy the search', () => {
+        // Pins the actual fix. If `TRANSPORT_FILE` were ever dropped from the exclusion, this
+        // fails before the direction silently stops working again.
+        const viaTransport = collectSubscribed([
+          { file: TRANSPORT_FILE, src: 'aegis.nav.onState(() => {});' },
+        ]);
+        expect(viaTransport.size, 'the transport must not be able to subscribe to itself').toBe(0);
+      });
+
+      it('a comment naming a subscription is not a subscription', () => {
+        // `ipcClient.ts`'s own header contains `aegis.X.onState` in prose, and other files
+        // document their listeners. Stripping comments is what keeps those from passing.
+        const viaComment = collectSubscribed([
+          { file: 'src/components/Commented.tsx', src: '// aegis.nav.onState(() => {})\n' },
+        ]);
+        expect(viaComment.size).toBe(0);
+      });
     });
   });
 

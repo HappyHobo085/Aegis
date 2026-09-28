@@ -109,6 +109,11 @@ vi.mock('../../lib/ipcClient', () => ({
       removeDevice: vi.fn().mockResolvedValue([]),
       onState: vi.fn().mockReturnValue(() => {}),
       onChanged: vi.fn().mockReturnValue(() => {}),
+      // `useSync` subscribes to this on mount, so a partial mock that omits it makes the
+      // hook's cleanup throw and every test in this file fails for an unrelated reason.
+      // `.mockReturnValue(() => {})` is a real unsubscribe, not a bare `vi.fn()` — a bare one
+      // returns `undefined` and the hook calls it as a function.
+      onVaultQuarantined: vi.fn().mockReturnValue(() => {}),
     },
     favorites: {
       list: vi.fn().mockResolvedValue([]),
