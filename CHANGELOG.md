@@ -9,6 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Find in page was unreachable on Android.** The mobile top bar is `position: fixed`,
+  so it sits outside the document flow, and the find bar was laid out at the top of that
+  flow — underneath the top bar's own band, behind its frosted background, unable to
+  receive a tap. Its input focuses on open, so tapping **Find in page** also raised the
+  soft keyboard onto a field nobody could see. The back gesture could not close it
+  either: it dismissed sheets and fullscreen, but not the find bar, so a user who opened
+  it had no way out from the hardware button.
+
 - **First-run setup on Android could be seen or touched.** The mobile content WebView
   is a native view stacked on top of the chrome WebView, so a full-window surface is
   only usable once the shell tells the core to lower it. Surfaces that register through

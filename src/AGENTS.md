@@ -587,13 +587,35 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
   to keep the switcher labels accurate.
 - **Sheets** (incl. the tab switcher) route through `view.setChromeOverlay` so the native
   content webview lowers. The native **Back** button precedence is: close an open sheet →
-  exit fullscreen → page-back (`setBackInterceptActive` + `window.__aegisMobileBack`).
+  exit fullscreen → **close the find bar** → page-back (`setBackInterceptActive` +
+  `window.__aegisMobileBack`). All three of those inputs are in the effect's dependency
+  array: without them the effect does not re-run when a full-window surface opens or
+  closes, so BACK is armed at the wrong times — and arming it with nothing to dismiss
+  swallows the gesture, which is worse than not intercepting.
+- **`index.css`: on mobile the find bar is `position: fixed`, and it must be.** The
+  `.mobile-topbar` is `position: fixed`, so it is out of flow, and `.find-bar` is
+  `position: static` — the bar therefore laid out at y=0, _inside_ the topbar's own band,
+  behind its opaque glass and its `backdrop-filter`, taking no pointer events. The find
+  input autofocuses on mount, so the soft keyboard opened onto an invisible field. Desktop
+  is unaffected (its topbar is in flow and the bar lands below it), which is why only a
+  device check finds it. The rule is scoped `.aegis-mobile` and uses
+  `z-index: 10` — the same value as the topbar and bottom bar, whose bands do not overlap
+  it — while beating `.mobile-favourites` (9), which _does_ share this band and would
+  otherwise paint over it as the later sibling. `top` is
+  `calc(48px + var(--aegis-inset-top, env(safe-area-inset-top)))`, matching
+  `.mobile-favourites`; 48px is `MOBILE_ADDRESS_H` spelled literally, as the sibling rules
+  already do. **jsdom has no layout and vitest does not load `index.css`, so the visual
+  result of this rule is PENDING on-device verification** — the tests pin the BACK
+  behaviour only.
 - **Chrome heights** live in `lib/layout.ts` (`MOBILE_ADDRESS_H` 48 / `MOBILE_FAV_H` 36 /
   `MOBILE_BOTTOMBAR_H` 56; top chrome = 84dp) and **must stay in sync with the
   content-WebView margins in `MainActivity.kt`**. (`MOBILE_FAV_H` was raised 24→36 so the
   favourites chips clear the ~36px touch-target floor.) The mobile `MobileSheet` dismiss is
   a Close (X) button (focus-trapped via `useDialog`), and touch targets in the mobile
-  chrome are ≥44px.
+  chrome are ≥44px. **There are no width media queries in `index.css`** (only
+  `prefers-reduced-motion` and `pointer: coarse`) and `.mobile-topbar` has no `height` of
+  its own — it is padding plus the safe-area inset — so these constants are the only
+  source of mobile vertical geometry.
 - **Touch targets vs. layout heights (the one place they conflict).** Most mobile controls
   are simply sized ≥44px: `.mobile-topbar__reload`/`__toggle` (44×44),
   `.mobile-bottombar__btn` (56), `.mobile-menu__item` (52), `.omnibox__row` (44). The

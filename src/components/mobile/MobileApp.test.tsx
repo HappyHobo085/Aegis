@@ -1,5 +1,5 @@
 // src/components/mobile/MobileApp.test.tsx
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { NavState, Settings } from '../../../shared/types';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
@@ -288,7 +288,7 @@ vi.mock('../../lib/ipcClient', () => ({
   discardTab: vi.fn(),
 }));
 
-import { aegis } from '../../lib/ipcClient';
+import { aegis, setBackInterceptActive } from '../../lib/ipcClient';
 import { MobileApp } from './MobileApp';
 import { subscribeToasts, __resetToasts, type ToastItem } from '../../lib/toast';
 import { ONBOARDING_STORAGE_KEY } from '../Onboarding';
@@ -439,5 +439,75 @@ describe('MobileApp', () => {
     // Let every effect and subscription settle before concluding nothing opened.
     await screen.findByRole('navigation', { name: /browser actions/i });
     expect(aegis.view.setChromeOverlay).not.toHaveBeenCalledWith(PRIMARY_VIEW_ID, true);
+  });
+});
+
+// The mobile find bar sat UNDER the fixed topbar.
+//
+// `.mobile-topbar` is `position: fixed`, so it is out of flow, and `.find-bar` — the
+// next in-flow sibling — laid out at y=0, inside the topbar's own band: behind its
+// glass, blurred by its backdrop-filter, taking no pointer events, while FindBar
+// focuses the input on mount so the soft keyboard opened onto an invisible field.
+//
+// jsdom has no layout, so the CSS half cannot be observed here. What IS observable
+// is the second half of the same defect: the find bar is a full-window surface over
+// the content, and the back gesture did not know about it, so BACK could not close
+// the one thing it was needed for.
+describe('find in page on mobile', () => {
+  // Open the find bar the way a user does: bottom-bar Menu -> "Find in page". The
+  // handler calls `find.show()` and then `setSheet(null)`, so afterwards the only
+  // thing that could justify intercepting BACK is the find bar itself. That is what
+  // makes the assertion about the find bar rather than about the sheet.
+  async function openFindFromTheMenu() {
+    render(<MobileApp />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Menu' }));
+    fireEvent.click(await screen.findByRole('button', { name: /find in page/i }));
+    return screen.findByRole('textbox', { name: /find/i });
+  }
+
+  it('renders the find bar and keeps BACK able to close it', async () => {
+    // Onboarding done, so no surface noise.
+    localStorage.setItem(ONBOARDING_STORAGE_KEY, '1');
+    await openFindFromTheMenu();
+
+    // The bar really is on screen, not merely state that says it is.
+    expect(await screen.findByRole('button', { name: /close find/i })).toBeInTheDocument();
+
+    // BACK must be intercepted, and it must be intercepted for the FIND BAR's sake:
+    // the sheet was already closed by the time the bar opened, so an implementation
+    // that only considered the sheet would pass `false` here.
+    await waitFor(() => expect(setBackInterceptActive).toHaveBeenLastCalledWith(true));
+  });
+
+  it('releases BACK once the find bar is closed', async () => {
+    localStorage.setItem(ONBOARDING_STORAGE_KEY, '1');
+    await openFindFromTheMenu();
+    fireEvent.click(screen.getByRole('button', { name: /close find/i }));
+
+    // Closing it must hand BACK back to the browser, or the user is trapped: the bar
+    // is gone and BACK still does nothing.
+    await waitFor(() => expect(setBackInterceptActive).toHaveBeenLastCalledWith(false));
+    expect(screen.queryByRole('button', { name: /close find/i })).not.toBeInTheDocument();
+  });
+
+  it('closes the find bar when the Android BACK gesture arrives', async () => {
+    // The menu route above can never isolate this: opening find always also changes
+    // `sheet`, so an effect that ignored `find.open` entirely would still re-run. This
+    // drives the NATIVE back handler directly instead, which is the only way to reach
+    // the find branch on its own.
+    localStorage.setItem(ONBOARDING_STORAGE_KEY, '1');
+    await openFindFromTheMenu();
+
+    const back = (window as unknown as { __aegisMobileBack?: () => void }).__aegisMobileBack;
+    expect(typeof back).toBe('function');
+    // `act` because this calls the handler the way the NATIVE side does — a plain
+    // function call, not a dispatched event — and it drives React state.
+    act(() => back!());
+
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: /close find/i })).not.toBeInTheDocument(),
+    );
+    // And the gesture is handed back to the browser, so BACK is not swallowed.
+    await waitFor(() => expect(setBackInterceptActive).toHaveBeenLastCalledWith(false));
   });
 });

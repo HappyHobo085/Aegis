@@ -162,15 +162,23 @@ function MobileShell() {
   }, [overlayOpen, tabs.activeId]);
 
   useEffect(() => {
-    setBackInterceptActive(sheet !== null || fullscreen);
+    setBackInterceptActive(sheet !== null || fullscreen || find.open);
     window.__aegisMobileBack = () => {
       if (sheet !== null) setSheet(null);
       else if (fullscreen) setFullscreen(false);
+      // The find bar is a full-window surface over the content, so BACK has to close
+      // it too — otherwise intercepting BACK here would swallow the gesture without
+      // dismissing anything, which is worse than not intercepting at all.
+      else if (find.open) find.close();
     };
     return () => {
       delete window.__aegisMobileBack;
     };
-  }, [sheet, fullscreen]);
+    // `find.open` and `find.close` are BOTH required. Without `find.open` in the deps
+    // the effect does not re-run when the bar opens or closes, so BACK is armed and
+    // disarmed at the wrong times; `find.close` is a useCallback on `activeViewId`, so
+    // listing it does not re-run this every render.
+  }, [sheet, fullscreen, find.open, find.close]);
 
   // Allow native Android code to open a URL in a new tab (target=_blank / window.open).
   // Open it in the BACKGROUND so the current page keeps focus (matches desktop's

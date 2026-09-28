@@ -5195,6 +5195,28 @@ a:focus-visible {
     calc(8px + var(--aegis-inset-right, env(safe-area-inset-right))) 0
     calc(8px + var(--aegis-inset-left, env(safe-area-inset-left)));
 }
+
+/* Find-in-page on mobile needs the same treatment as `.mobile-favourites` below.
+   `.mobile-topbar` is `position: fixed`, so it is OUT OF FLOW: the find bar, which
+   follows it in the DOM and is `position: static`, laid out at y=0 — inside the
+   topbar's own 48px band, under its opaque glass, blurred by its backdrop-filter and
+   receiving no pointer events, while FindBar focuses the input on mount so the soft
+   keyboard opens onto an invisible field. On desktop none of this shows: the desktop
+   topbar is in flow, so `.find-bar` lands below it on its own. Hence the mobile-only
+   scope (`aegis-mobile` is set on <html> by ipcClient for the Android shell).
+
+   z-index 10 beats `.mobile-favourites`' 9 — the two share this band, and equal
+   z-index would let the later-in-DOM favourites paint over the find bar. It matches
+   `.mobile-topbar` / `.mobile-bottombar`, whose bands do not overlap this one, so the
+   shared value is not a conflict. 48px is MOBILE_ADDRESS_H (lib/layout.ts:31), the
+   same constant `.mobile-favourites` and `.mobile-sheet` already spell out here. */
+.aegis-mobile .find-bar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: calc(48px + var(--aegis-inset-top, env(safe-area-inset-top)));
+  z-index: 10;
+}
 .mobile-topbar__row {
   display: flex;
   align-items: center;
