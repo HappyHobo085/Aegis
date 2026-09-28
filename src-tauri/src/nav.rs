@@ -844,7 +844,23 @@ pub fn spawn_tab(_app: &AppHandle, _id: u32, _url: Url, _private: bool) -> tauri
 }
 
 /// Handle `nav.*` channels. Returns `None` if `channel` is not a nav channel.
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+///
+/// PLACE 2 of the three-place rule: these names also live in `shared/types.ts`
+/// (`IPC.nav*`) and in `src/lib/ipcClient.ts`.
+///
+/// Generic over `R: Runtime` purely so the dispatcher is drivable from a
+/// `MockRuntime` test — the renderer's `useNav` depends on the shape of the
+/// `nav.getState` answer, on `nav.back`/`nav.forward` really walking the tab's
+/// history, and on `nav.navigate` refusing a forbidden scheme *before* a webview is
+/// needed, and none of that was observable while this took a concrete
+/// `&AppHandle`. Every callee it uses was already generic except
+/// `settings::home_url`, which was widened with it. The only production caller is
+/// `lib.rs`'s `ipc()` arm, which infers `R = Wry` unchanged.
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     let id = payload
         .get("viewId")
         .and_then(Value::as_u64)
@@ -968,12 +984,15 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 #[cfg(test)]
 mod tests {
     use super::{
-        forget_tab_content, forget_tab_loading, is_navigable, mark_tab_has_content,
+        dispatch, forget_tab_content, forget_tab_loading, is_navigable, mark_tab_has_content,
         note_tab_loading, parse_navigable, reload_or_stop, reload_or_stop_action,
         require_navigable, should_autoclose_popunder, tab_is_loading, tabs_with_content,
         ReloadOrStop,
     };
-    use tauri::{Manager, Url};
+    use crate::test_support::with_tmp_app;
+    use serde_json::{json, Value};
+    use std::collections::HashMap;
+    use tauri::{AppHandle, Manager, Runtime, Url};
 
     #[test]
     fn autoclose_only_nonactive_blank_tabs() {
@@ -1094,9 +1113,6 @@ mod tests {
     /// Linux — there is no webview on the mock runtime — so it is compile-verified only.
     #[test]
     fn a_settled_tab_reloads_and_a_loading_tab_is_stopped() {
-        use crate::test_support::with_tmp_app;
-        use std::collections::HashMap;
-
         // The pure decision, both ways: this is the branch the whole fix rests on.
         assert_eq!(reload_or_stop_action(true), ReloadOrStop::Stop);
         assert_eq!(reload_or_stop_action(false), ReloadOrStop::Reload);
@@ -1136,6 +1152,302 @@ mod tests {
                 "Stop must settle the tab's loading flag, or the next press stops again"
             );
             forget_tab_loading(id);
+        });
+    }
+
+    // ── nav.* dispatch (PLACE 2 of the three-place rule) ─────────────────
+    //
+    // What is worth pinning here is what the CHROME depends on and what the SCHEME
+    // POLICY depends on, neither of which was reachable while `dispatch` took a
+    // concrete `&AppHandle`: that an unowned channel falls THROUGH (a `Some(..)` here
+    // would swallow the channel in `ipc()` and no later arm would run), that
+    // `nav.navigate` refuses a forbidden scheme, that the `nav.getState` answer is
+    // complete and per-tab, and that the back/forward channels really walk the tab's
+    // history rather than only the webview's.
+    //
+    // HONEST LIMIT: the mock runtime has no webview, so `app.get_webview(..)` is
+    // `None` for every label. That is what makes the scheme refusal observable at all
+    // (it must be decided BEFORE the webview lookup) and it also means the arms that
+    // need one are exercised only through their side effects on state. So the
+    // `navigate` calls themselves — and `nav.home`'s point-of-use
+    // `require_navigable` check, which sits INSIDE `if let Some(w) = content` and is
+    // therefore unreachable here — are compile-verified only.
+
+    /// One `nav.*` call, with the routing already asserted by the caller.
+    fn nav_call<R: Runtime>(
+        app: &AppHandle<R>,
+        channel: &str,
+        payload: Value,
+    ) -> Result<Value, String> {
+        match dispatch(app, channel, &payload) {
+            Some(r) => r,
+            None => panic!("{channel} must be handled by nav::dispatch"),
+        }
+    }
+
+    /// The one-shot expected-navigation table as a plain map. `nav.reloadOrStop`'s
+    /// Stop branch arms it, and arming is state work that needs no webview — which is
+    /// why it is the observable for that channel.
+    fn armed_navs<R: Runtime>(app: &AppHandle<R>) -> HashMap<u32, String> {
+        app.state::<crate::redirect_guard::PendingNavs>()
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Record two navigations on a tab, so it has somewhere to go back to.
+    fn give_history<R: Runtime>(app: &AppHandle<R>, id: u32) {
+        let tabs = app.state::<crate::tabs::Tabs>();
+        let mut reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
+        reg.record_nav(id, "https://first.test/");
+        reg.record_nav(id, "https://second.test/");
+        assert!(
+            reg.can_go_back(id),
+            "fixture must have somewhere to go back to"
+        );
+    }
+
+    #[test]
+    fn nav_dispatch_declines_every_channel_it_does_not_own() {
+        with_tmp_app(|app| {
+            for channel in [
+                "nav",          // the prefix, not a channel
+                "nav.goBack",   // camelCase is a DIFFERENT channel (the real one is `nav.back`)
+                "nav.getstate", // channel names are exact, not case-folded
+                "nav.state",    // an EVENT name, and `emit_event` translates `.`→`:` for it
+                "tabs.list",
+                "settings.get",
+                "view.getState",
+            ] {
+                assert!(
+                    dispatch(app, channel, &json!({})).is_none(),
+                    "{channel:?} is not a nav request channel and must fall through, not be answered"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn nav_navigate_refuses_every_scheme_the_policy_forbids() {
+        with_tmp_app(|app| {
+            for (raw, must_name) in [
+                ("file:///etc/passwd", "file"),
+                ("javascript:alert(1)", "javascript"),
+                ("data:text/html,<b>x</b>", "data"),
+                ("blob:https://example.com/abc", "blob"),
+                ("ftp://example.com/", "ftp"),
+                ("chrome://settings", "chrome"),
+            ] {
+                let err = nav_call(app, "nav.navigate", json!({ "url": raw }))
+                    .expect_err("a forbidden scheme must be refused by the channel itself");
+                assert!(
+                    err.contains(must_name),
+                    "the refusal must name the scheme the renderer's toast shows: got {err}"
+                );
+            }
+            // Not a URL at all → the parse error, not a confusing "empty scheme" refusal.
+            let err = nav_call(app, "nav.navigate", json!({ "url": "not a url" }))
+                .expect_err("garbage must be refused");
+            assert!(err.contains("invalid url"), "got: {err}");
+            // A missing `url` is a refusal too, never a silent success.
+            assert!(
+                nav_call(app, "nav.navigate", json!({})).is_err(),
+                "a nav.navigate with no url must not report success"
+            );
+            // …and the schemes the policy DOES allow go through.
+            for raw in [
+                "https://example.com/x",
+                "http://example.com/",
+                "about:blank",
+            ] {
+                nav_call(app, "nav.navigate", json!({ "url": raw }))
+                    .unwrap_or_else(|e| panic!("{raw} must be navigable, got: {e}"));
+            }
+        });
+    }
+
+    #[test]
+    fn nav_get_state_answers_a_complete_state_for_the_tab_it_was_asked_about() {
+        with_tmp_app(|app| {
+            let tabs = app.state::<crate::tabs::Tabs>();
+            let active = tabs
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .active_id();
+            give_history(app, active);
+            let other = active.wrapping_add(9_001); // a tab id that does not exist
+
+            // No `viewId` → the ACTIVE tab, which is what the toolbar reads on mount.
+            let s = nav_call(app, "nav.getState", json!({})).expect("getState must answer");
+            assert_eq!(s["viewId"].as_u64(), Some(active as u64));
+            assert_eq!(s["canGoBack"], json!(true), "the active tab has history");
+            assert_eq!(s["canGoForward"], json!(false), "…and is at the end of it");
+            // `useNav` reads all of these; a missing or wrongly-typed one is a crash or a
+            // blank address bar in the chrome, and nothing else covers this answer's shape.
+            for k in [
+                "url",
+                "title",
+                "canGoBack",
+                "canGoForward",
+                "isLoading",
+                "crashed",
+            ] {
+                assert!(s.get(k).is_some(), "nav.getState must report {k}: {s}");
+            }
+            // No webview on the mock, so `url` takes its documented fallback rather than
+            // reporting nothing the chrome would have to null-check.
+            assert_eq!(s["url"].as_str(), Some("about:blank"), "got {s}");
+
+            // An EXPLICIT `viewId` is answered for THAT tab: the flags are per-tab, and a
+            // tab with no history of its own must not inherit the active tab's.
+            let s = nav_call(app, "nav.getState", json!({ "viewId": other }))
+                .expect("getState must answer for any tab");
+            assert_eq!(s["viewId"].as_u64(), Some(other as u64));
+            assert_eq!(
+                s["canGoBack"],
+                json!(false),
+                "a tab with no history cannot go back"
+            );
+            assert_eq!(s["canGoForward"], json!(false));
+            // The active tab's own state is untouched by asking about another one.
+            let s = nav_call(app, "nav.getState", json!({ "viewId": active })).expect("answered");
+            assert_eq!(s["canGoBack"], json!(true));
+        });
+    }
+
+    #[test]
+    fn nav_back_and_forward_walk_the_tabs_history() {
+        with_tmp_app(|app| {
+            let tabs = app.state::<crate::tabs::Tabs>();
+            let id = tabs
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .active_id();
+            give_history(app, id);
+
+            // Back once: the forward stack opens up, which is what enables the button.
+            nav_call(app, "nav.back", json!({})).expect("nav.back must answer");
+            let s = nav_call(app, "nav.getState", json!({})).expect("answered");
+            assert_eq!(
+                s["canGoBack"],
+                json!(true),
+                "one step back is still not the start"
+            );
+            assert_eq!(
+                s["canGoForward"],
+                json!(true),
+                "going back must open the forward stack"
+            );
+
+            // Back to the very start, then one more: the ends are no-ops, not errors and
+            // not an underflow. (The webview's own history is what stops the navigation on
+            // a real platform; the registry is the chrome's source of truth for the
+            // button states, so it must settle, not run away.)
+            nav_call(app, "nav.back", json!({})).expect("nav.back must answer");
+            nav_call(app, "nav.back", json!({})).expect("an exhausted back must still answer");
+            let s = nav_call(app, "nav.getState", json!({})).expect("answered");
+            assert_eq!(
+                s["canGoBack"],
+                json!(false),
+                "back must stop at the first entry"
+            );
+            assert_eq!(s["canGoForward"], json!(true));
+
+            // Forward again, and past the end: still a no-op.
+            nav_call(app, "nav.forward", json!({})).expect("nav.forward must answer");
+            nav_call(app, "nav.forward", json!({})).expect("an exhausted forward must answer");
+            nav_call(app, "nav.forward", json!({})).expect("an exhausted forward must answer");
+            let s = nav_call(app, "nav.getState", json!({})).expect("answered");
+            assert_eq!(
+                s["canGoForward"],
+                json!(false),
+                "forward must stop at the last entry"
+            );
+            assert_eq!(
+                s["canGoBack"],
+                json!(true),
+                "and going forward must keep the way back"
+            );
+
+            // A STALE `viewId` — a tab that no longer exists, which is exactly what the
+            // chrome sends if the tab closed between the state it read and the click —
+            // must NOT fall back to the active tab. Falling back would navigate the tab
+            // the user is looking at, out from under them, on a click aimed at nothing.
+            nav_call(app, "nav.back", json!({ "viewId": id.wrapping_add(9_002) }))
+                .expect("answered");
+            let s = nav_call(app, "nav.getState", json!({})).expect("answered");
+            assert_eq!(
+                (s["canGoBack"].clone(), s["canGoForward"].clone()),
+                (json!(true), json!(false)),
+                "a stale viewId must leave the active tab's history alone, got {s}"
+            );
+        });
+    }
+
+    #[test]
+    fn nav_reload_or_stop_acts_on_the_tab_it_was_asked_about() {
+        with_tmp_app(|app| {
+            let tabs = app.state::<crate::tabs::Tabs>();
+            let active = tabs
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .active_id();
+            let other = active.wrapping_add(9_003);
+            note_tab_loading(active, true);
+            note_tab_loading(other, true);
+
+            // No `viewId` → the ACTIVE tab, which is what the toolbar button acts on.
+            nav_call(app, "nav.reloadOrStop", json!({})).expect("must answer");
+            assert!(
+                armed_navs(app).get(&active).map(String::as_str) == Some("about:blank"),
+                "stopping the active tab must abandon THAT tab's load: {:?}",
+                armed_navs(app)
+            );
+            assert!(
+                !tab_is_loading(active),
+                "the stop must settle the tab's loading flag, or the next press stops again"
+            );
+
+            // An EXPLICIT `viewId` acts on THAT tab. Re-arm the active tab's loading edge
+            // first (the call above settled it), so a dispatch that quietly fell back to
+            // the active tab would be caught rather than looking correct.
+            note_tab_loading(active, true);
+            nav_call(app, "nav.reloadOrStop", json!({ "viewId": other })).expect("must answer");
+            let armed = armed_navs(app);
+            assert_eq!(armed.get(&other).map(String::as_str), Some("about:blank"));
+            assert!(
+                !tab_is_loading(other),
+                "the tab that was asked about must have its loading edge settled"
+            );
+            assert!(
+                tab_is_loading(active),
+                "an explicit viewId must not fall back to the active tab"
+            );
+
+            // A SETTLED tab reloads in place and arms no navigation at all. The table is
+            // cleared first: nothing CONSUMES an entry without a real navigation, and the
+            // mock has none, so the two arms above would still be sitting in it.
+            app.state::<crate::redirect_guard::PendingNavs>()
+                .0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clear();
+            note_tab_loading(active, true);
+            note_tab_loading(active, false);
+            nav_call(app, "nav.reloadOrStop", json!({ "viewId": active })).expect("must answer");
+            assert!(
+                !armed_navs(app).contains_key(&active),
+                "a settled tab reloads in place; arming a navigation would make the guard \
+                 treat a later redirect as app-initiated: {:?}",
+                armed_navs(app)
+            );
+
+            forget_tab_loading(active);
+            forget_tab_loading(other);
         });
     }
 }

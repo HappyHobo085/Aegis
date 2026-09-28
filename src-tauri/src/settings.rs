@@ -359,7 +359,11 @@ pub fn aggressive_sweep_threshold(app: &AppHandle) -> usize {
 
 /// The configured home page as a URL (default about:blank). Blank or unparseable
 /// values fall back to about:blank so Home/startup never fail to navigate.
-pub fn home_url(app: &AppHandle) -> Url {
+///
+/// Generic over `R: Runtime` so `nav::dispatch` — the only caller that has to be
+/// drivable from a `MockRuntime` test — can reach it. Both production callers
+/// (`nav.rs`'s `nav.home` arm and `lib.rs`'s boot block) infer `R = Wry` unchanged.
+pub fn home_url<R: Runtime>(app: &AppHandle<R>) -> Url {
     let s = load(app);
     let raw = s
         .get("homeUrl")

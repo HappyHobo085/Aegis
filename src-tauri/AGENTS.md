@@ -111,6 +111,18 @@ dotted event name.
   before the webview lookup on purpose** — `w.navigate` can fail, and waiting for a
   `Finished` load edge that will never arrive would leave a tab stuck "loading" forever.
   The `navigate` call itself is compile-verified only (no webview on the mock).
+  **The `nav.*` dispatcher is generic over `R: Runtime` too, so the mock harness can
+  drive it — and the arms that need a webview are reached through their STATE side
+  effects instead.** `PendingNavs` (`nav.reloadOrStop`'s stop branch) and the per-tab
+  history in the registry (`nav.back`/`nav.forward`) are both plain state, which is what
+  makes the tab-id resolution observable: an explicit `viewId` acts on THAT tab, and a
+  **stale** one (a tab that closed between the state the chrome read and the click) is a
+  no-op rather than a fall-back to the active tab, which would navigate the tab the user
+  is looking at. Two arms stay compile-verified only: the `navigate` calls themselves,
+  and `nav.home`'s point-of-use `require_navigable` check, which sits INSIDE
+  `if let Some(w) = content` and is therefore unreachable from the mock. `nav.navigate`'s
+  scheme refusal IS reachable, because it is decided BEFORE the webview lookup — that
+  ordering is the policy, not an accident, so a fix that moved it would be caught.
 - **`view.rs`** — content webview geometry: insets, sidebar, fullscreen, overlay.
   **Desktop fullscreen now drives the OS window.** `view.setFullscreen` calls
   `Window::set_fullscreen(on)` (`#[cfg(desktop)]`) in addition to the content-webview
