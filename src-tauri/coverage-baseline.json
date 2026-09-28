@@ -37,19 +37,19 @@
   ],
   "total": {
     "lines": {
-      "total": 16776,
-      "covered": 13130,
-      "pct": 78.27
+      "total": 16954,
+      "covered": 13245,
+      "pct": 78.12
     },
     "statements": {
-      "total": 29660,
-      "covered": 23308,
-      "pct": 78.58
+      "total": 29928,
+      "covered": 23422,
+      "pct": 78.26
     },
     "functions": {
-      "total": 2154,
-      "covered": 1598,
-      "pct": 74.19
+      "total": 2185,
+      "covered": 1618,
+      "pct": 74.05
     },
     "branches": {
       "total": 0,
@@ -59,19 +59,19 @@
   "files": {
     "src-tauri/src/adblock.rs": {
       "lines": {
-        "total": 377,
-        "covered": 355,
-        "pct": 94.16
+        "total": 393,
+        "covered": 369,
+        "pct": 93.89
       },
       "statements": {
-        "total": 611,
-        "covered": 568,
-        "pct": 92.96
+        "total": 631,
+        "covered": 584,
+        "pct": 92.55
       },
       "functions": {
-        "total": 53,
-        "covered": 41,
-        "pct": 77.36
+        "total": 57,
+        "covered": 43,
+        "pct": 75.44
       },
       "branches": {
         "total": 0,
@@ -86,8 +86,8 @@
       },
       "statements": {
         "total": 265,
-        "covered": 254,
-        "pct": 95.85
+        "covered": 253,
+        "pct": 95.47
       },
       "functions": {
         "total": 21,
@@ -416,14 +416,14 @@
     },
     "src-tauri/src/lib.rs": {
       "lines": {
-        "total": 398,
+        "total": 401,
         "covered": 66,
-        "pct": 16.58
+        "pct": 16.46
       },
       "statements": {
-        "total": 651,
+        "total": 654,
         "covered": 108,
-        "pct": 16.59
+        "pct": 16.51
       },
       "functions": {
         "total": 31,
@@ -542,19 +542,19 @@
     },
     "src-tauri/src/redirect_guard.rs": {
       "lines": {
-        "total": 434,
-        "covered": 262,
-        "pct": 60.37
+        "total": 440,
+        "covered": 349,
+        "pct": 79.32
       },
       "statements": {
         "total": 688,
-        "covered": 397,
-        "pct": 57.7
+        "covered": 516,
+        "pct": 75
       },
       "functions": {
         "total": 65,
-        "covered": 36,
-        "pct": 55.38
+        "covered": 45,
+        "pct": 69.23
       },
       "branches": {
         "total": 0,
@@ -584,19 +584,19 @@
     },
     "src-tauri/src/settings.rs": {
       "lines": {
-        "total": 768,
-        "covered": 616,
-        "pct": 80.21
+        "total": 839,
+        "covered": 693,
+        "pct": 82.6
       },
       "statements": {
-        "total": 1287,
-        "covered": 1029,
-        "pct": 79.95
+        "total": 1396,
+        "covered": 1144,
+        "pct": 81.95
       },
       "functions": {
-        "total": 94,
-        "covered": 76,
-        "pct": 80.85
+        "total": 105,
+        "covered": 88,
+        "pct": 83.81
       },
       "branches": {
         "total": 0,
@@ -627,18 +627,18 @@
     "src-tauri/src/sync.rs": {
       "lines": {
         "total": 1329,
-        "covered": 785,
-        "pct": 59.07
+        "covered": 703,
+        "pct": 52.9
       },
       "statements": {
         "total": 2297,
-        "covered": 1333,
-        "pct": 58.03
+        "covered": 1204,
+        "pct": 52.42
       },
       "functions": {
         "total": 129,
-        "covered": 75,
-        "pct": 58.14
+        "covered": 70,
+        "pct": 54.26
       },
       "branches": {
         "total": 0,
@@ -711,18 +711,18 @@
     "src-tauri/src/sync_keystore.rs": {
       "lines": {
         "total": 357,
-        "covered": 286,
-        "pct": 80.11
+        "covered": 228,
+        "pct": 63.87
       },
       "statements": {
         "total": 677,
-        "covered": 546,
-        "pct": 80.65
+        "covered": 416,
+        "pct": 61.45
       },
       "functions": {
         "total": 66,
-        "covered": 47,
-        "pct": 71.21
+        "covered": 37,
+        "pct": 56.06
       },
       "branches": {
         "total": 0,
@@ -794,19 +794,19 @@
     },
     "src-tauri/src/tabs.rs": {
       "lines": {
-        "total": 760,
-        "covered": 383,
-        "pct": 50.39
+        "total": 842,
+        "covered": 460,
+        "pct": 54.63
       },
       "statements": {
-        "total": 1315,
-        "covered": 655,
-        "pct": 49.81
+        "total": 1451,
+        "covered": 779,
+        "pct": 53.69
       },
       "functions": {
-        "total": 115,
-        "covered": 57,
-        "pct": 49.57
+        "total": 131,
+        "covered": 69,
+        "pct": 52.67
       },
       "branches": {
         "total": 0,

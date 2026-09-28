@@ -937,7 +937,7 @@ Tooling: `cargo-llvm-cov` + the `llvm-tools-preview` component. Neither is a
 `Cargo.toml` change, so adding them does not touch `Cargo.lock` and does not
 trigger the ~4-minute full dependency rebuild a `rust-toolchain.toml` edit would.
 
-### Measured, 2026-09-27 (Linux, `cargo llvm-cov --lib --json`, stable 1.98.0)
+### Measured, 2026-09-28 (Linux, `cargo llvm-cov --lib --json`, stable 1.98.0)
 
 **The committed floor, taken with NO keyring** (see the floor rule below — these are the
 numbers in `src-tauri/coverage-baseline.json`, and a machine with a working keyring measures
@@ -945,14 +945,18 @@ strictly higher):
 
 | Metric               | Measured (floor)     | Gap  |
 | -------------------- | -------------------- | ---- |
-| lines                | 11038/14750 = 74.83% | 3712 |
-| statements (regions) | 19863/26320 = 75.47% | 6457 |
-| functions            | 1354/1898 = 71.34%   | 544  |
+| lines                | 13245/16954 = 78.12% | 3709 |
+| statements (regions) | 23422/29928 = 78.26% | 6506 |
+| functions            | 1618/2185 = 74.05%   | 567  |
 
-43 of the 44 modules compiled on Linux are gated. Before the exclusion list the
-no-keyring run reads 71.89% lines / 72.53% regions / 68.52% functions — the
-difference is entirely `linux_layout.rs`. With a keyring those figures are
-~1pp higher, which is exactly why the floor is the committed number.
+The report holds 44 files. **7 of them are `cfg`-gated out of the build on
+Linux** (`adblock_win`, `find_win`, `nav_policy_win`, `nav_url_win`, `nav_url_mac`,
+`zoom_win`, `zoom_mac`), so 37 compile here, and a 38th — `linux_layout.rs` —
+compiles but is excluded as unexecutable in a headless session. **36 files are
+in the gate.** Before the exclusion list the no-keyring run reads 75.44% lines /
+75.57% regions / 71.50% functions — the difference is entirely
+`linux_layout.rs`. With a keyring those figures are ~1pp higher, which is exactly
+why the floor is the committed number.
 
 **`statements` is llvm `regions`, not an istanbul statement.** A region is a code
 span, not an expression. The label is a deliberate fiction that exists so the
@@ -1009,13 +1013,13 @@ are not in the report rather than being excluded from it.
 
 The gap is not spread evenly. Real, measurable debt concentrates in the modules
 that wrap an `AppHandle`, a real webview, or the network — exactly the code a
-`MockRuntime` cannot reach: `lib.rs` 16.4% (the `ipc()` dispatcher and `setup`),
-`view.rs` 16.1%, `zoom.rs` 18.6%, `find_linux.rs` 20.8% (AT-SPI over a session
-bus), `adblock_webkit.rs` 21.3%, `nav.rs` 23.8%, `tabs.rs` 41.7%,
-`redirect_guard.rs` 49.2%, `permissions.rs` 47.2%, `update.rs` 45.7%,
-`sync.rs` 53.5%. The pure, already-covered end is `sync_envelope.rs` 98.8%,
-`tab_registry.rs` 98.0%, `crypto.rs` 96.9%, `places.rs` 96.6%, `jsonstore.rs`
-96.7%, `customfilters.rs` 97.6%, `data.rs` 97.7%.
+`MockRuntime` cannot reach: `lib.rs` 16.46% (the `ipc()` dispatcher and `setup`),
+`zoom.rs` 18.57%, `find_linux.rs` 20.79% (AT-SPI over a session bus),
+`adblock_webkit.rs` 21.32%, `view.rs` 24.76%, `nav.rs` 32.4%, `update.rs` 45.74%,
+`permissions.rs` 47.17%, `sync.rs` 52.9%, `tabs.rs` 54.63%, `redirect_guard.rs`
+79.32%. The pure, already-covered end is `sync_envelope.rs` 98.82%, `tab_registry.rs`
+98.05%, `data.rs` 97.75%, `customfilters.rs` 97.38%, `crypto.rs` 97.27%,
+`jsonstore.rs` 96.73%, `places.rs` 96.55%.
 
 **A percentage can rise while the codebase gets worse**, exactly as on the
 TypeScript side: deleting 0%-covered code moves the ratio and not one test.
@@ -1029,7 +1033,46 @@ covered-line footprint depends on credential state left behind by earlier runs. 
 across four runs of the same tree and toolchain: `sync_keystore.rs` covered **286, 289, 300**
 lines with a keyring, and **228** without one; `sync.rs` moves 574 vs 498. CI's
 `cargo llvm-cov` has never had a usable keyring — runs 36325245069 and 36326730887 both
-reported exactly 11038/14750, twice.
+reported exactly 11038/14750, twice. (Those four runs are the pre-2026-09-28 tree; the
+current tree moves `sync.rs` 785 vs 703 and `sync_keystore.rs` 286 vs 228.)
+
+**This bit the tree a second time on 2026-09-28, so the rule has an operational
+half as well as a moral one.** Run 36440444084 failed the ratchet on two per-file
+deltas — `sync.rs` −82 and `sync_keystore.rs` −58 lines — because a bulk
+`rust-coverage-baseline` regeneration had been done on a dev box **with** a
+working keyring, writing 286 and 785 into the baseline. The totals dipped too
+(78.27% → 78.12% lines) purely because the committed target had been raised past
+what CI can measure. Coverage did not fall; the threshold was wrong. Fixing it
+meant deliberately **lowering** the committed baseline, which the ratchet
+otherwise forbids — via `COVERAGE_ALLOW_BASELINE_LOWER=1`, the escape hatch that
+exists for exactly this case, with the reason written into the commit message.
+
+The second lesson is about _how_ a dev box ends up with a keyring when you think
+it has none: `gnome-keyring-daemon` may be absent entirely and the keyring still
+works, because `keyring`'s `linux-native-sync-persistent` feature enables the
+D-Bus secret service too, and any ordinary desktop session bus provides it.
+Unsetting `DBUS_SESSION_BUS_ADDRESS` alone is **not** enough — the `dbus` crate
+falls back to `$XDG_RUNTIME_DIR/bus`, the same socket. Strip both:
+
+```bash
+env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR \
+  cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib --json > cov.json
+```
+
+That reproduces CI **exactly** — measured `sync.rs` 703, `sync_keystore.rs` 228,
+13245 total lines, 1618 functions, every one identical to what run 36440444084
+reported. Four `SKIP keychain tests` lines appear and all 517 tests still pass,
+because the keychain tests early-return rather than fail. `dbus-run-session -- env
+-u XDG_RUNTIME_DIR …` works as a wrapper if you need the D-Bus variable itself
+defined; `unshare -U -r` does **not** isolate the keyring, and neither does an
+`LD_PRELOAD` shim over `add_key`/`keyctl` — the binary issues no such calls, since
+the `keyring` crate takes the D-Bus path and `linux-keyutils` uses raw
+`libc::syscall(SYS_add_key, …)` regardless.
+
+**So: never regenerate this baseline on a box you have not first proven keyring-free
+by the command above.** `rust-coverage-baseline.mjs` takes an existing
+`cargo llvm-cov --json` file as its argument, so the measuring run and the
+generating run can be the same one.
 
 So the committed number is the **least-capable** measurement, and every environment satisfies
 it: a machine with a working keyring covers strictly more and passes, CI without one lands

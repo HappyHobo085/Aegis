@@ -217,6 +217,14 @@ jobs:
           # the keyring usable for the test run, and the number was unstable anyway.
           # The keyring still matters for `cargo test`, where it decides whether those
           # tests run or skip — that is test quality, not the coverage gate.
+          #
+          # Regenerating the baseline? Reproduce this environment FIRST:
+          #   env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR cargo llvm-cov ...
+          # (unsetting only the first is not enough — dbus falls back to
+          # $XDG_RUNTIME_DIR/bus). A box can serve a secret service with no
+          # gnome-keyring-daemon installed at all. Getting this wrong broke run
+          # 36440444084 on `sync.rs` (-82) and `sync_keystore.rs` (-58); see
+          # "The Rust coverage baseline is a FLOOR" in src-tauri/AGENTS.md.
           cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib --json > "$RUNNER_TEMP/llvmcov.json"
           node scripts/rust-coverage-ratchet.mjs "$RUNNER_TEMP/llvmcov.json"
       - name: cargo audit (BLOCKING — crypto/keyring/TLS surface)
