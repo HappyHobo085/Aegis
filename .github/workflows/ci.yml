@@ -43,7 +43,7 @@ jobs:
           node-version: '22.23.3'
           cache: 'npm'
       - run: npm ci
-      - name: Type-check (production source, scoped)
+      - name: Type-check (whole surface, tests included)
         run: npm run typecheck
       - name: ESLint
         if: ${{ !cancelled() }}

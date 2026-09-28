@@ -1,12 +1,16 @@
 {
   // This is the config CI type-checks, so it deliberately covers the WHOLE type surface —
   // tests and test fixtures included. It used to exclude `**/*.test.ts(x)` and
-  // `src/testFixtures`, which meant the gate never saw the ~950 test files or the mock
-  // every one of them runs against. That hid real drift: a `TabMeta` fixture missing the
-  // `workspaceId` the workspaces feature added, an `AutopilotControl` mock missing
-  // `setOmnibox`, and an untyped `aegisMock.ts` that had fallen behind `AegisApi` — all
-  // invisible to CI, all trivially fixable once visible. The exclude list is now only the
-  // build-output directories. Keep it that way: a test-only type error is a real error.
+  // `src/testFixtures`, which meant the gate never saw the ~116 test files it
+  // covers, or the mock every one of them runs against. That hid real drift: a
+  // `TabMeta` fixture missing the `workspaceId` the workspaces feature added, an
+  // `AutopilotControl` mock missing `setOmnibox`, and an untyped `aegisMock.ts`
+  // that had fallen behind `AegisApi` — all invisible to CI, all trivially
+  // fixable once visible. The exclude list is now only the build-output directories.
+  // Keep it that way: a test-only type error is a real error.
+  //
+  // ("~116" is THIS config's own count: `src` 113 + `shared` 3. Vitest reports 120
+  // because it also runs four `scripts/*.test.mjs`, which sit outside `include`.)
   "extends": "./tsconfig.json",
   // The Vite/Vitest configs are typechecked too: they are build tooling, and an
   // invalid plugin option in one is invisible until someone notices the transform is a
@@ -19,7 +23,7 @@
   // `noUncheckedIndexedAccess` is the one that matters and it is NOT cheap: this tree
   // indexes arrays/maps constantly (tab lists, record maps, split paths), so enabling
   // it types every element access as `T | undefined` and lands a large error count
-  // across the app AND the ~950 test files this config now covers. It wants its own
+  // across the app AND the ~116 test files this config now covers. It wants its own
   // pass with the non-null assertions (or `at()`/`??` defaults) chosen deliberately
   // per site, not a flag flip.
   //
