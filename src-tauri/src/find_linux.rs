@@ -21,7 +21,7 @@
 // The `found-text` / `failed-to-find-text` signals are installed once at tab spawn
 // (via `install`) and push live match counts back to the chrome via emit_state.
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use webkit2gtk::{FindControllerExt, FindOptions, WebViewExt};
 
 /// Options bit-helper: returns the `u32` to pass to `search()`.
@@ -80,7 +80,7 @@ pub fn install(app: &AppHandle, label: &str) {
 
 const MAX_MATCHES: u32 = 1000;
 
-pub fn start(app: &AppHandle, id: u32, query: &str, case_sensitive: bool) {
+pub fn start<R: Runtime>(app: &AppHandle<R>, id: u32, query: &str, case_sensitive: bool) {
     let Some(w) = app.get_webview(&crate::nav::content_label(id)) else {
         return;
     };
@@ -100,7 +100,7 @@ pub fn start(app: &AppHandle, id: u32, query: &str, case_sensitive: bool) {
     });
 }
 
-pub fn next(app: &AppHandle, id: u32) {
+pub fn next<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let Some(w) = app.get_webview(&crate::nav::content_label(id)) else {
         return;
     };
@@ -111,7 +111,7 @@ pub fn next(app: &AppHandle, id: u32) {
     });
 }
 
-pub fn prev(app: &AppHandle, id: u32) {
+pub fn prev<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let Some(w) = app.get_webview(&crate::nav::content_label(id)) else {
         return;
     };
@@ -122,7 +122,7 @@ pub fn prev(app: &AppHandle, id: u32) {
     });
 }
 
-pub fn close(app: &AppHandle, id: u32) {
+pub fn close<R: Runtime>(app: &AppHandle<R>, id: u32) {
     // Stop the WebKit find session when the webview is still alive.
     if let Some(w) = app.get_webview(&crate::nav::content_label(id)) {
         let _ = w.with_webview(move |pw| {

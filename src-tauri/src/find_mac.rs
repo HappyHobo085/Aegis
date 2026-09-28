@@ -37,7 +37,7 @@ use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_foundation::{NSError, NSString};
 use objc2_web_kit::WKWebView;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 // ── Bundled JS shim ──────────────────────────────────────────────────────────
 
@@ -92,7 +92,7 @@ fn parse_sentinel(s: &str) -> (u32, u32) {
 
 /// Run a closure with a retained reference to the content WKWebView for `id`.
 /// The closure runs on the main thread (via `with_webview`).
-fn with_content_webview<F>(app: &AppHandle, id: u32, f: F)
+fn with_content_webview<F, R: Runtime>(app: &AppHandle<R>, id: u32, f: F)
 where
     F: FnOnce(&WKWebView) + Send + 'static,
 {
@@ -124,7 +124,7 @@ fn build_js_call(query: &str, case_sensitive: bool, direction: &str, close: bool
 
 /// Execute a JS string on the content WKWebView and call `f` with the parsed
 /// sentinel when the evaluation completes.
-fn eval_find<F>(app: &AppHandle, id: u32, js: String, f: F)
+fn eval_find<F, R: Runtime>(app: &AppHandle<R>, id: u32, js: String, f: F)
 where
     F: FnOnce(u32, u32) + Send + 'static,
 {
@@ -164,8 +164,8 @@ where
 
 /// Run the JS shim find call on the content webview for tab `id` and emit
 /// the parsed result via `find::emit_state`.
-fn run_find(
-    app: &AppHandle,
+fn run_find<R: Runtime>(
+    app: &AppHandle<R>,
     id: u32,
     query: &str,
     case_sensitive: bool,
@@ -206,7 +206,7 @@ pub fn install(pw: &tauri::webview::PlatformWebview, _app: AppHandle, _id: u32) 
 }
 
 /// Start (or restart) a find session with `query`.
-pub fn start(app: &AppHandle, id: u32, query: &str, case_sensitive: bool) {
+pub fn start<R: Runtime>(app: &AppHandle<R>, id: u32, query: &str, case_sensitive: bool) {
     if query.is_empty() {
         clear_last_query(id);
         crate::find::emit_state(app, id, "", 0, 0);
@@ -217,7 +217,7 @@ pub fn start(app: &AppHandle, id: u32, query: &str, case_sensitive: bool) {
 }
 
 /// Move to the next match (re-issue last query forwards).
-pub fn next(app: &AppHandle, id: u32) {
+pub fn next<R: Runtime>(app: &AppHandle<R>, id: u32) {
     if let Some((q, cs)) = get_last_query(id) {
         if !q.is_empty() {
             run_find(app, id, &q, cs, "forward", false);
@@ -226,7 +226,7 @@ pub fn next(app: &AppHandle, id: u32) {
 }
 
 /// Move to the previous match (re-issue last query backwards).
-pub fn prev(app: &AppHandle, id: u32) {
+pub fn prev<R: Runtime>(app: &AppHandle<R>, id: u32) {
     if let Some((q, cs)) = get_last_query(id) {
         if !q.is_empty() {
             run_find(app, id, &q, cs, "backward", false);
@@ -235,7 +235,7 @@ pub fn prev(app: &AppHandle, id: u32) {
 }
 
 /// Close the find session: clear highlights, reset stored query, reset FindBar.
-pub fn close(app: &AppHandle, id: u32) {
+pub fn close<R: Runtime>(app: &AppHandle<R>, id: u32) {
     clear_last_query(id);
     // Tell the shim to clear all highlights.  The sentinel result (0,0) is
     // emitted after the JS completes.  Also emit immediately so the FindBar

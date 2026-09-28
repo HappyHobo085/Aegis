@@ -451,7 +451,17 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     per-platform module. Exports `emit_state(app, view_id, query, match_count, active)`
     — the single place that calls `crate::emit_event(app, "find.state", …)` so the
     `find.state` event always goes through the `.`→`:` rewrite. Also exports
-    `is_find_channel(channel) -> bool` for unit tests.
+    `is_find_channel(channel) -> bool` for unit tests. **`dispatch` and the chain under it are
+    generic over `<R: Runtime`** — `emit_state`, the four private wrappers, and
+    `find_{linux,win,mac}`'s `start`/`next`/`prev`/`close` (those four only; each `install`
+    stays concrete, because its sole caller `nav::spawn_tab` is) — so a `MockRuntime` test can
+    drive the router. The concrete `&AppHandle` it replaced is WHY the target-tab resolution
+    had no test at all: an explicit `viewId` wins, its absence means the ACTIVE tab, and the
+    dispatcher never fabricates a `find.state` of its own (a match count only ever comes from
+    the platform's change signal). **The platform work is still unreachable from a test** — the
+    mock has no content webview, so every module returns at its first `get_webview` — and the
+    `find_win` / `find_mac` arms are compile-verified only, `find_mac` on the macos-latest CI leg
+    alone (objc2 needs a macOS C toolchain).
     **Every `find.state` emit must carry the LIVE query.** `useFind`'s `onState` does a
     whole-state `setState(s)`, so `query` is a REPLACED field: emitting `""` does not mean
     "no query to report", it means "clear the text the user is typing". Hence

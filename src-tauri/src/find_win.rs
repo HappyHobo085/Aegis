@@ -12,7 +12,7 @@
 //! Compile-verified via `cargo check --target x86_64-pc-windows-gnu`.
 //! GUI runtime-verification is the user's Windows 11 device (CI builds it).
 
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use webview2_com::Microsoft::Web::WebView2::Win32::{
     ICoreWebView2Environment15, ICoreWebView2Find, ICoreWebView2_28,
 };
@@ -115,7 +115,7 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
 }
 
 /// Start (or restart) a find session for `query`.  Empty `query` → stop.
-pub fn start(app: &AppHandle, id: u32, query: &str, case_sensitive: bool) {
+pub fn start<R: Runtime>(app: &AppHandle<R>, id: u32, query: &str, case_sensitive: bool) {
     let Some(content) = app.get_webview(&crate::nav::content_label(id)) else {
         return;
     };
@@ -159,21 +159,21 @@ pub fn start(app: &AppHandle, id: u32, query: &str, case_sensitive: bool) {
 }
 
 /// Advance to the next match.
-pub fn next(app: &AppHandle, id: u32) {
+pub fn next<R: Runtime>(app: &AppHandle<R>, id: u32) {
     with_find(app, id, |find| unsafe {
         let _ = find.FindNext();
     });
 }
 
 /// Go back to the previous match.
-pub fn prev(app: &AppHandle, id: u32) {
+pub fn prev<R: Runtime>(app: &AppHandle<R>, id: u32) {
     with_find(app, id, |find| unsafe {
         let _ = find.FindPrevious();
     });
 }
 
 /// Stop the find session and reset the FindBar to zero matches.
-pub fn close(app: &AppHandle, id: u32) {
+pub fn close<R: Runtime>(app: &AppHandle<R>, id: u32) {
     with_find(app, id, |find| unsafe {
         let _ = find.Stop();
     });
@@ -188,7 +188,7 @@ pub fn close(app: &AppHandle, id: u32) {
 
 /// Acquire `ICoreWebView2Find` inside `with_webview` and call `g`.
 /// Silent no-op when the webview is gone or the runtime is too old.
-fn with_find<G>(app: &AppHandle, id: u32, g: G)
+fn with_find<G, R: Runtime>(app: &AppHandle<R>, id: u32, g: G)
 where
     G: FnOnce(&ICoreWebView2Find) + Send + 'static,
 {
