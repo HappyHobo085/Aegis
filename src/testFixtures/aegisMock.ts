@@ -8,6 +8,7 @@ import type {
   NavState,
   Settings,
   FingerprintState,
+  WebrtcExemptState,
   ProxyState,
   WorkspaceState,
 } from '../../shared/types';
@@ -232,6 +233,15 @@ export function aegisMockModule() {
         clearAllowlist: vi
           .fn()
           .mockResolvedValue({ level: 'off', allowlistedHosts: [] } satisfies FingerprintState),
+      },
+      // SEPARATE from `fingerprint` on purpose: these two lists are independent stores, and
+      // mocking one from the other is what let the ad-block allowlist stand in for the
+      // WebRTC exemption for as long as it did.
+      webrtc: {
+        getExemptHosts: vi.fn().mockResolvedValue({ exemptHosts: [] } satisfies WebrtcExemptState),
+        toggleExempt: vi.fn().mockResolvedValue({ exemptHosts: [] } satisfies WebrtcExemptState),
+        removeExempt: vi.fn().mockResolvedValue({ exemptHosts: [] } satisfies WebrtcExemptState),
+        clearExempt: vi.fn().mockResolvedValue({ exemptHosts: [] } satisfies WebrtcExemptState),
       },
       form: {
         // Must REJECT, matching the core. The core refuses this channel because a content

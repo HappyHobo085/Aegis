@@ -184,9 +184,76 @@ pub fn open(
         .map_err(|_| "open failed: authentication error".to_string())
 }
 
+/// A `serde_json` error reduced to WHERE it failed, never WHAT it saw.
+///
+/// # Why this exists
+///
+/// `serde_json`'s `Display` **embeds the offending value** in its message: deserialising
+/// `{"updatedAt": "s3cr3t"}` into a struct whose `updated_at` is an `i64` reports
+/// `invalid type: string "s3cr3t", expected i64`. Every caller that hands us a parse error is
+/// doing so *after* `open` has already authenticated and DECRYPTED the buffer — so the "value"
+/// in that message is recovered user data: a password, a history title, a favorite URL. Using
+/// `Display` therefore writes plaintext into stderr, which lands in the user's terminal, a CI
+/// log, and any bug report they paste from it.
+///
+/// Note `open` above already redacts ITS failures for the same reason and with the same
+/// discipline; this is the matching half on the parse that follows it. The three fields kept
+/// here are the ones that carry a location and a category and no content: `classify` says
+/// which kind of failure it was (data/syntax/eof/io), `line`/`column` say where.
+pub fn redact_json_error(e: &serde_json::Error) -> String {
+    format!(
+        "json error ({:?}) at line {} column {}",
+        e.classify(),
+        e.line(),
+        e.column()
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The whole point of `redact_json_error`: serde's own message for this input QUOTES the
+    /// value, and that value is recovered plaintext at every call site.
+    #[test]
+    fn a_serde_message_quotes_the_value_and_our_redaction_does_not() {
+        // Debug is derived only so `unwrap_err` compiles; the struct holds one integer.
+        #[derive(serde::Deserialize, Debug)]
+        #[allow(dead_code)]
+        struct Cred {
+            #[allow(dead_code)]
+            updated_at: i64,
+        }
+        let raw = r#"{"updated_at":"hunter2-correct-horse-battery-staple"}"#;
+        let e = serde_json::from_str::<Cred>(raw).unwrap_err();
+        assert!(
+            e.to_string()
+                .contains("hunter2-correct-horse-battery-staple"),
+            "premise check: serde really does echo the value, or this whole helper is \\
+             defending against nothing. Display was: {e}"
+        );
+        let safe = redact_json_error(&e);
+        assert!(
+            !safe.contains("hunter2"),
+            "the redacted form must not carry any part of the value: {safe}"
+        );
+        assert!(
+            safe.contains("line") && safe.contains("column") && safe.contains("Data"),
+            "but it must keep the category and position, or a quarantined record is \\
+             undiagnosable: {safe}"
+        );
+    }
+
+    /// A syntax error (as opposed to a type error) must go through the same path, and a
+    /// syntax error's own message never had a value in it — so the redaction must not be
+    /// the only thing making it safe, and must not break it either.
+    #[test]
+    fn redaction_applies_to_syntax_errors_too() {
+        let e = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        let safe = redact_json_error(&e);
+        assert!(!safe.is_empty());
+        assert!(safe.contains("line"), "{safe}");
+    }
 
     #[test]
     fn phrase_round_trips_and_is_24_words() {

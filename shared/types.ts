@@ -170,6 +170,10 @@ export const IPC = {
   fingerprintToggleAllowlist: 'fingerprint.toggleAllowlist',
   fingerprintRemoveAllowlist: 'fingerprint.removeAllowlist',
   fingerprintClearAllowlist: 'fingerprint.clearAllowlist',
+  webrtcGetExemptHosts: 'webrtc.getExemptHosts',
+  webrtcToggleExempt: 'webrtc.toggleExempt',
+  webrtcRemoveExempt: 'webrtc.removeExempt',
+  webrtcClearExempt: 'webrtc.clearExempt',
   // proxy (content-webview proxy: mode/scheme/host/port/bypass)
   proxyGetState: 'proxy.getState',
   proxySetConfig: 'proxy.setConfig',
@@ -318,6 +322,16 @@ export interface ZoomState {
 export interface FingerprintState {
   level: string; // 'off' | 'standard' | 'strict'
   allowlistedHosts: string[];
+}
+
+/** The LOCAL-ONLY list of hosts exempt from the WebRTC IP-leak defence.
+ *
+ * Deliberately a different store from the ad-block allowlist, which IS synced. When they
+ * were the same list, one record written by any device holding the account data key turned
+ * off WebRTC protection for a host on EVERY device — a remote write silently disabling a
+ * privacy control, with no UI anywhere reporting a sync event as the cause. */
+export interface WebrtcExemptState {
+  exemptHosts: string[];
 }
 
 /** Proxy configuration sent to `proxy.setConfig`. */
@@ -798,6 +812,12 @@ export interface AegisApi {
     toggleAllowlist(host: string): Promise<FingerprintState>;
     removeAllowlist(host: string): Promise<FingerprintState>;
     clearAllowlist(): Promise<FingerprintState>;
+  };
+  webrtc: {
+    getExemptHosts(): Promise<WebrtcExemptState>;
+    toggleExempt(host: string): Promise<WebrtcExemptState>;
+    removeExempt(host: string): Promise<WebrtcExemptState>;
+    clearExempt(): Promise<WebrtcExemptState>;
   };
   proxy: {
     getState(): Promise<ProxyState>;

@@ -9,6 +9,48 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A sync record could turn the WebRTC IP-leak defence off, on every device, silently.**
+  The per-site WebRTC escape hatch reused the AD-BLOCK allowlist, and that list is in
+  `sync_stores::SYNCABLE`. Every synced setting/store is writable by any device holding
+  the account's data key — that is what the sync contract grants — so one record on one
+  paired device permanently disabled WebRTC filtering for a host on every device the user
+  owns, and no UI anywhere reported a sync event as the cause. WebRTC is now its own
+  store, `webrtc-allowlist`, deliberately absent from `SYNCABLE`; it mirrors the existing
+  `fp-allowlist` (separate store, separate IPC, separate UI list in Settings > Security >
+  "Sites with WebRTC protection off"). The ad-block allowlist stays synced and keeps its
+  own meaning. Match scope is still `adblock::host_covered`, so the two lists cannot drift
+  in what they match. Known gap, left as a follow-up: the shield badge
+  (`lib/protectionSummary.ts`) still reports the policy, not the per-host exemption.
+- **`syncVault` was synced.** The opt-in that includes the password vault in E2E sync is
+  now local-only, like `syncAllowInsecure`. Same mechanism, same reason: it is a switch
+  whose flipped state moves data off this machine, and while it was synced one record on
+  one paired device turned credential upload on everywhere. It was already not sufficient
+  alone — a vault with its own per-device salt cannot sync until it adopts the account's
+  shared salt — so this costs one tick per device.
+- **A `file:` URL could reach `tabs.json` and persist across launches.** `on_tab_url` runs
+  on every page load and wrote the URL with no scheme check, which made its sibling
+  writer's own comment ("the last point at which a non-navigable scheme can be caught
+  before it is written to tabs.json") false. The navigation policy itself had no scheme
+  check at all, so a page-initiated `location = 'file:///…'` was never refused. Both
+  halves now consult the single `is_navigable` definition.
+- **A URL carrying userinfo was accepted** for `homeUrl`, `syncServerUrl` and
+  `defaultSearchTemplate` — e.g. `https://bank.example@evil.example/`. Browsers strip
+  userinfo from the address bar, so the displayed host is the real one and the disguised
+  one is invisible; `homeUrl` re-loads every launch and `syncServerUrl` is a request the
+  sync client makes, possibly in cleartext.
+- **`Cred` and `UnlockedVault` derived `Debug`.** A `{:#?}` on either printed the vault key
+  and every password in cleartext — and those are exactly the types a developer prints
+  when a vault looks wrong. Both now have a hand-written redacting `Debug` that still
+  distinguishes "empty" from "present but secret".
+- **A serde error could echo decrypted plaintext into stderr.** Deserialising a synced
+  credential into the typed `Cred` reports the offending value
+  (`invalid type: string "…", expected i64`), and that string was written to the user's
+  terminal, a CI log or a bug report by the quarantine log line. Errors over decrypted
+  data are now reported as category + line + column.
+- **Every export overwrote the previous one.** Exports are now named
+  `aegis-export-<epoch-ms>.json`, so a user who exported twice has two bundles; the
+  import-without-paste fallback resolves to the most recently written one. A backup tool
+  that silently destroys the previous backup is worse than one that refuses.
 - **The omnibox rejected every `host:port`.** RFC 3986 allows `.` and digits in a scheme
   name, so the scheme test matched `example.com:8080` and `new URL` parsed it with the
   protocol `example.com:`, which failed the http(s) allowlist. The result was

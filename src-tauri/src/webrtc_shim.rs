@@ -266,12 +266,29 @@ fn android_policy() -> String {
 // `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
 #[no_mangle]
 pub extern "system" fn Java_com_aegis_browser_NativeWebrtc_shimScript<'a>(
-    env: jni::JNIEnv<'a>,
+    mut env: jni::JNIEnv<'a>,
     _this: jni::objects::JObject<'a>,
+    host: jni::objects::JString<'a>,
 ) -> jni::sys::jstring {
     // An empty script is the same effective outcome as the null-jstring failure below,
     // so a panic degrades to "no shim" rather than aborting the process.
-    let s = crate::ffi_guard(|| shim_for(&android_policy(), false)).unwrap_or_default();
+    //
+    // `host` is the tab's content host, and it is why this export takes an argument at all:
+    // the per-site exemption lives in its own local-only store, and on Android the only way
+    // to reach that store is the app-free process global (there is no `AppHandle` on a JNI
+    // thread), exactly as farble's JNI getter does. This used to hardcode `false`, which meant
+    // the exemption silently did not apply on Android — a parity gap the app's own rule
+    // ("a fix isn't done when it works on one platform") forbids. An empty/unreadable host
+    // matches nothing, so it degrades to "not exempt" — protection ON, which is the safe
+    // direction for a leak defence.
+    let host: String = env.get_string(&host).map(|h| h.into()).unwrap_or_default();
+    let s = crate::ffi_guard(|| {
+        shim_for(
+            &android_policy(),
+            crate::webrtc_exempt::android_host_exempt(&host),
+        )
+    })
+    .unwrap_or_default();
     match env.new_string(s) {
         Ok(js) => js.into_raw(),
         Err(_) => std::ptr::null_mut(),

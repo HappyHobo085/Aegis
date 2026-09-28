@@ -662,7 +662,8 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
     // keeps their session ephemeral, but they must still avoid the chrome's folder.
     #[cfg(target_os = "windows")]
     {
-        let webrtc_arg = if host_allowlisted {
+        let webrtc_exempt = crate::webrtc_exempt::host_exempt(app, &host);
+        let webrtc_arg = if webrtc_exempt {
             None
         } else {
             match crate::settings::webrtc_policy(app).as_str() {
@@ -779,8 +780,9 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
         crate::linux_layout::connect_nav_failure_label(app, &label);
         // WebRTC native backstop: WebKitGTK's set_enable_webrtc is all-or-nothing, so it
         // only enforces "disable" (worker-tight); public-only/default rely on the injected
-        // shim. Skipped for allowlisted ("trusted") hosts.
-        if !host_allowlisted {
+        // shim. Skipped for hosts on the LOCAL-ONLY WebRTC exemption list — NOT the
+        // ad-block allowlist, which is synced and must not be able to switch this off.
+        if !crate::webrtc_exempt::host_exempt(app, &host) {
             crate::linux_layout::apply_webrtc_policy_label(
                 app,
                 &label,

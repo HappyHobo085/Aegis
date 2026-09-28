@@ -17,6 +17,7 @@ import { useFind } from './hooks/useFind';
 import { useZoom } from './hooks/useZoom';
 import { useAdblock } from './hooks/useAdblock';
 import { useFingerprint } from './hooks/useFingerprint';
+import { useWebrtcExempt } from './hooks/useWebrtcExempt';
 import { useFavorites } from './hooks/useFavorites';
 import { useHistory } from './hooks/useHistory';
 import { useSaved } from './hooks/useSaved';
@@ -144,6 +145,9 @@ function DesktopApp() {
   const update = useUpdate();
   const safety = useSafety();
   const fingerprint = useFingerprint();
+  // WebRTC exemptions live in their OWN never-synced store (7(2)), so this is a separate hook
+  // from useFingerprint rather than a second slice of the ad-block allowlist.
+  const webrtcExempt = useWebrtcExempt();
   const proxy = useProxy();
   const find = useFind(tabs.activeId);
   const navUrlRef = useRef(nav.state.url);
@@ -792,6 +796,9 @@ function DesktopApp() {
             fingerprintState: fingerprint.state,
             toggleFingerprintAllowlist: fingerprint.toggleAllowlist,
             removeFingerprintAllowlist: fingerprint.removeAllowlist,
+            webrtcExempt: webrtcExempt.state,
+            toggleWebrtcExempt: webrtcExempt.toggleExempt,
+            removeWebrtcExempt: webrtcExempt.removeExempt,
           }}
           proxy={{
             state: proxy.state,

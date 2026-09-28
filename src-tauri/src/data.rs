@@ -30,6 +30,13 @@ const STORES: &[&str] = &[
     // silently was the worst possible outcome.
     "subs",
     "fp-allowlist",
+    // `webrtc-allowlist` (per-site WebRTC IP-leak opt-outs) is the THIRD local-only host
+    // list, and it joins the export for the same reason the other two did: a host list that
+    // never syncs has exactly one other way to reach a new machine, and silently dropping it
+    // would mean a restored backup came back with WebRTC protection ON for sites the user
+    // had deliberately turned it off for. Security-relevant state must never be lost
+    // quietly — so it rides the bundle, and `webrtc_exempt::STORE` is the single name.
+    crate::webrtc_exempt::STORE,
 ];
 
 /// Target file for export/import — always the fixed default backup location.
@@ -50,14 +57,108 @@ const STORES: &[&str] = &[
 /// The fallback is the app data dir rather than `/tmp` — a world-writable shared
 /// directory is the wrong home for a bundle that may contain vault-adjacent metadata,
 /// and a per-app dir keeps concurrent test runs from colliding on one filename.
-fn export_file<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
+/// The filename family every export belongs to. Also the prefix [`latest_export`] matches,
+/// so the import fallback finds an export written by an older build.
+const EXPORT_STEM: &str = "aegis-export-";
+
+/// The directory exports land in and the import fallback reads from.
+///
+/// The fallback is the app data dir rather than `/tmp` — a world-writable shared directory
+/// is the wrong home for a bundle that may contain vault-adjacent metadata, and a per-app dir
+/// keeps concurrent test runs from colliding.
+fn export_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
     app.path()
         .download_dir()
         .or_else(|_| app.path().app_data_dir())
         .unwrap_or_else(|_| std::env::temp_dir())
-        .join("aegis-export.json")
 }
 
+/// A FRESH path for each export, so exporting twice keeps both bundles.
+///
+/// The name is the epoch in milliseconds. A calendar form (`20260928T144512Z`) would read
+/// better, and this crate has no date library to compute one — hand-rolling civil-date
+/// arithmetic to prettify a filename is exactly the kind of unearned complexity that becomes
+/// a bug nobody looks for, so the raw epoch it is. It has two real advantages over the
+/// obvious alternative, a `-2`, `-3` counter: the names sort into time order, so a user
+/// listing the directory can see which export is which without opening any of them, and two
+/// exports in the same millisecond are still distinguished because an existing name is
+/// stepped past rather than reused.
+///
+/// The step-past loop is bounded: it gives up after 64 collisions and uses the timestamped
+/// name as-is. Reaching that needs 64 exports inside one millisecond, at which point
+/// overwriting is no longer the worst outcome.
+fn export_path<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
+    let dir = export_dir(app);
+    let base = format!("{EXPORT_STEM}{}", jsonstore::now_ms());
+    let mut path = dir.join(format!("{base}.json"));
+    let mut n = 1u32;
+    while path.exists() && n < 64 {
+        n += 1;
+        path = dir.join(format!("{base}-{n}.json"));
+    }
+    path
+}
+
+/// The collision counter embedded in an export filename, or 0 when it carries none.
+///
+/// Parsed as a NUMBER, and that matters: the suffix only exists to disambiguate exports
+/// written inside one millisecond, so a higher suffix always means a newer file. Comparing
+/// the names as strings would get this backwards — `-2.json` sorts BELOW `.json`, because
+/// `-` is 0x2D and `.` is 0x2E — so a lexicographic tie-break silently returns the OLDEST
+/// export. My own test caught exactly that.
+fn export_seq(name: &str) -> u32 {
+    let rest = name.strip_prefix(EXPORT_STEM).unwrap_or(name);
+    let rest = rest.strip_suffix(".json").unwrap_or(rest);
+    // Everything after the LAST dash. An epoch in milliseconds never contains a dash, so the
+    // last one is unambiguously the collision counter.
+    rest.rsplit_once('-')
+        .map(|(_, seq)| seq)
+        .unwrap_or("")
+        .parse()
+        .unwrap_or(0)
+}
+
+/// The most recently written export in [`export_dir`], or `None` if there is none.
+///
+/// Newest by MODIFIED time first, then by [`export_seq`]. Both keys are needed and neither
+/// is decoration: "my last backup" means the one I last WROTE, so a copied or restored file
+/// keeps its name while its mtime moves; and back-to-back exports land in the same
+/// millisecond — which is precisely why the numeric suffix exists — so the mtime ties and the
+/// suffix is the only thing left that knows the order.
+fn latest_export<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
+    let dir = export_dir(app);
+    let entries = std::fs::read_dir(&dir).ok()?;
+    entries
+        .flatten()
+        .filter_map(|e| {
+            let name = e.file_name();
+            let name = name.to_str()?;
+            if !name.starts_with(EXPORT_STEM) || !name.ends_with(".json") {
+                return None;
+            }
+            Some((
+                e.metadata().ok()?.modified().ok()?,
+                export_seq(name),
+                name.to_string(),
+            ))
+        })
+        .max_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        })
+        .map(|(_, _, name)| dir.join(name))
+}
+
+/// An earlier version returned a FIXED name, so every export overwrote the one before it and
+/// a user who exported twice had one bundle, not two. A backup tool that silently destroys
+/// the previous backup is worse than one that refuses, because the user believes they have
+/// both and finds out when they need the older one.
+///
+/// The fixed name was also load-bearing for the import fallback in `data.import` (with no
+/// pasted text it read "the export"), so that path now resolves through [`latest_export`]
+/// instead — the fallback got a real meaning ("the most recent export") out of a real
+/// directory listing, instead of guessing one name.
 pub fn dispatch<R: Runtime>(
     app: &AppHandle<R>,
     channel: &str,
@@ -82,7 +183,7 @@ pub fn dispatch<R: Runtime>(
                 json!(crate::customfilters::load(app)),
             );
 
-            let path = export_file(app);
+            let path = export_path(app);
             let txt = serde_json::to_string_pretty(&Value::Object(bundle)).unwrap_or_default();
             // Durable write, but no `.bak` sidecar next to the user's export file.
             match jsonstore::write_atomic_no_backup(&path, txt.as_bytes()) {
@@ -105,7 +206,12 @@ pub fn dispatch<R: Runtime>(
                     Err(_) => return Some(Ok(json!({ "ok": false }))),
                 },
                 None => {
-                    let path = export_file(app);
+                    // No pasted text: read the most recent export. This used to read one
+                    // FIXED filename, which was only ever correct because every export
+                    // overwrote the last one.
+                    let Some(path) = latest_export(app) else {
+                        return Some(Ok(json!({ "ok": false })));
+                    };
                     let Ok(txt) = std::fs::read_to_string(&path) else {
                         return Some(Ok(json!({ "ok": false })));
                     };
@@ -182,6 +288,91 @@ pub fn dispatch<R: Runtime>(
 mod tests {
     use super::*;
     use crate::test_support::with_tmp_app;
+
+    /// The collision suffix is parsed as a NUMBER, and must order NEWEST-last even when the
+    /// filenames say otherwise. A string comparison gets this backwards — `-2.json` sorts
+    /// below `.json` — so this is the assertion that keeps "my last backup" pointing at the
+    /// last one.
+    #[test]
+    fn the_collision_suffix_orders_numerically_not_alphabetically() {
+        assert_eq!(export_seq("aegis-export-1790549438724.json"), 0);
+        assert_eq!(export_seq("aegis-export-1790549438724-2.json"), 2);
+        assert_eq!(export_seq("aegis-export-1790549438724-10.json"), 10);
+        assert!(
+            export_seq("aegis-export-1790549438724-10.json")
+                > export_seq("aegis-export-1790549438724-2.json"),
+            "10 is newer than 2, though it sorts lower as a string"
+        );
+        // A name outside the family must not be read as a sequence at all.
+        assert_eq!(export_seq("notes.json"), 0);
+    }
+
+    /// Exporting twice must not destroy the first export. A backup tool that silently
+    /// overwrites the previous backup is worse than one that refuses: the user believes they
+    /// have two and has one, and finds out when they need the older one.
+    #[test]
+    fn a_second_export_does_not_overwrite_the_first() {
+        with_tmp_app(|app| {
+            let first = export_path(app);
+            assert!(
+                !first.exists(),
+                "precondition: the first export must not already exist — got {first:?}"
+            );
+            std::fs::write(&first, b"{\"first\":true}").expect("write the first export");
+
+            let second = export_path(app);
+            assert_ne!(
+                second, first,
+                "the second export must get its own file, not the first one's name"
+            );
+            std::fs::write(&second, b"{\"second\":true}").expect("write the second export");
+
+            // The first export is still intact and still readable — that is the whole point.
+            assert_eq!(
+                std::fs::read_to_string(&first).unwrap(),
+                "{\"first\":true}",
+                "the earlier export must survive a later one byte for byte"
+            );
+
+            // A third is distinct again, so the property is not a two-file coincidence.
+            let third = export_path(app);
+            assert_ne!(third, first);
+            assert_ne!(third, second);
+
+            // And the import fallback must find the newest, which is what a user who
+            // exports and then immediately imports means.
+            assert_eq!(
+                latest_export(app).as_deref(),
+                Some(second.as_path()),
+                "import-without-paste must resolve to the most recent export"
+            );
+        });
+    }
+
+    /// The import fallback resolves to the newest export, and to nothing at all when there
+    /// is none — rather than inventing a path.
+    #[test]
+    fn the_import_fallback_reads_the_newest_export_and_nothing_when_there_is_none() {
+        with_tmp_app(|app| {
+            assert!(
+                latest_export(app).is_none(),
+                "with no export on disk there is nothing to fall back to"
+            );
+            let dir = export_dir(app);
+            std::fs::create_dir_all(&dir).expect("dir");
+            // An unrelated file must not be mistaken for an export.
+            std::fs::write(dir.join("notes.json"), b"{}").expect("write");
+            assert!(latest_export(app).is_none());
+            let p = export_path(app);
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            assert!(
+                name.starts_with(EXPORT_STEM),
+                "export filenames must stay in the {EXPORT_STEM} family, got {name}"
+            );
+            std::fs::write(&p, b"{\"only\":true}").expect("write");
+            assert_eq!(latest_export(app).as_deref(), Some(p.as_path()));
+        });
+    }
 
     /// Seed one real row in every exported store + a settings change + a custom filter.
     /// Must use the correct call signatures for each module function.

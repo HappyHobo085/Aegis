@@ -204,7 +204,15 @@ pub(crate) fn open_wire(data_key: &[u8; 32], ns: &str, w: &Value) -> Result<Valu
     // left on the freed heap — the sync root path already does this.
     let pt = crypto::open(data_key, &nonce, &ct, ns, uuid, &hlc.bytes())?;
     let pt = zeroize::Zeroizing::new(pt);
-    let mut rec: Value = serde_json::from_slice(&pt).map_err(|e| e.to_string())?;
+    // Defence in depth, and PROVABLY NOT NEEDED TODAY: this parses into a `Value`, not a typed
+    // struct, so a serde *type* error is impossible here — and the only failures left are syntax
+    // errors, whose messages are content-free by design. The vault's `open_kind` is the real
+    // leak (it deserialises into `Cred`), and that is where the `Display` change was
+    // load-bearing. Kept anyway, because the failure it forecloses is a plausible refactor —
+    // parsing this into a typed record — and because the error reaches stderr via the pull
+    // loop's `eprintln!` while the buffer it came from is decrypted user data.
+    let mut rec: Value =
+        serde_json::from_slice(&pt).map_err(|e| crate::crypto::redact_json_error(&e))?;
     // Adopt the server's ORDERING stamp. `hlc` is AEAD-bound (see `crypto::aad_for`), so the
     // server must never rewrite it — when it needs to break a cross-record HLC tie it records
     // the bump in a separate `ord` field and leaves `hlc` byte-identical. We take `ord` as the

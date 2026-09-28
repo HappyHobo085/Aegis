@@ -490,7 +490,20 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     `syncAllowInsecure: true`) turn a remote setting write into a silent transport downgrade.
     Enforced at three points: `record_change` (never recorded), the
     `ensure_sync_projection` migration seed, and `apply_synced` (inbound peer records
-    ignored). `sync::state_json` publishes `allowInsecure` so the Sync tab reports the
+    ignored).
+  - **`syncVault` is LOCAL-ONLY too, and by the same mechanism.** The shared rule is "a
+    switch whose flipped state moves data OFF this machine or makes it less private."
+    `syncVault` is the opt-in that includes the password vault in E2E sync, and **every
+    synced setting is writable by any device holding the account's data key** — that is
+    precisely what the sync contract grants. So while it was synced, one record on one
+    paired device turned credential upload on for every device the user owns, with
+    nothing on screen reporting a sync event as the cause. It was already not sufficient
+    on its own (`shared/types.ts` documents that a vault with its own per-device salt
+    cannot sync until it adopts the account's shared salt, and `VaultState.syncEnabled`
+    is false until then), so making it per-device costs one tick per device and closes
+    the remote-write path. Enforced by the same three points.
+    `the_local_only_list_is_exactly_the_two_credential_and_transport_waivers` asserts the
+    list's exact membership, so a third key cannot be added without a test. `sync::state_json` publishes `allowInsecure` so the Sync tab reports the
     decision the core is actually enforcing instead of echoing its own checkbox. Covered by
     `settings::tests::sync_allow_insecure_is_local_only`.
   - **The HLC clock is seeded from disk at boot** (`sync_envelope::seed_clock`, driven by
@@ -623,8 +636,9 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   `webrtc_shim.public-only.js` / `webrtc_shim.disable.js` (`include_str!`'d) and executed
   by the vitest runtime test `src/lib/webrtcShim.test.ts` (authoritative); the Rust
   `is_local_address`/`keep_candidate`/`filter_sdp` are a parallel unit-tested reference.
-  Baked into the injection by `adblock_inject::script(app, host_allowlisted)`; the
-  per-site escape hatch reuses the ad-block allowlist (`adblock::host_allowlisted`). Native
+  Baked into the injection by `adblock_inject::script(app, host_allowlisted, host)`, which
+  now resolves the per-site escape hatch from its OWN list (`webrtc_exempt::host_exempt`),
+  not from the ad-block allowlist — see the bullet below. Native
   backstops: Linux `set_enable_webrtc(false)` for `disable` only (`linux_layout`); Windows
   `--force-webrtc-ip-handling-policy` via `additional_browser_args` (which **replaces**
   wry's defaults, so it re-includes both `--disable-features=…` and
@@ -636,7 +650,32 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   Worker on spec-compliant engines (WebKit/Chromium), so there's nothing to leak there. The
   native backstops (`disable` worker-tight on Linux/Windows; `public-only` native on Windows)
   remain belt-and-suspenders for engine-wide coverage; macOS/Android are shim-only and rely on
-  the Window-only exposure holding. Per-site hatch is desktop-only in v1.
+  the Window-only exposure holding.
+- **Per-site WebRTC exemption is a SEPARATE, never-synced store** — `webrtc_exempt.rs`.
+  It used to reuse the ad-block allowlist (`adblock::host_allowlisted`), which put a
+  privacy control behind a preference list that **is** in `sync_stores::SYNCABLE`. Any
+  device holding the account data key could then write one record that permanently turned
+  IP-leak protection off for a host on every device the user owns, and no UI anywhere
+  reported a sync event as the cause. `STORE = "webrtc-allowlist"` is deliberately absent
+  from `SYNCABLE` — that absence IS the security property, and
+  `the_exemption_store_is_not_reachable_from_sync` asserts it directly. It is included in
+  `data.export`/`data.import`, because a host list that never syncs has exactly one other
+  way to reach a new machine and silently dropping it would restore a backup with
+  protection ON for sites the user had deliberately turned it off for.
+  **It mirrors `fp-allowlist` exactly** (`jsonstore::live_hosts` + `add_host` /
+  `remove_host` / `clear_hosts`; a `host_of` validator; an app-free `ANDROID_EXEMPT`
+  global for the JNI getter; `seed_from_disk` at boot for the same reason farble's does),
+  which is the point: WebRTC was the LAST privacy control still reading the ad-block
+  allowlist, so decoupling it makes the code match its own stated design. Match scope is
+  still `adblock::host_covered` — the ONE definition of "allowlisted" — so the two lists
+  cannot drift in what they MATCH while remaining separate SETS. `dispatch` deliberately
+  does NOT `sync::nudge`: there is nothing to sync. 10 tests, and the renderer surface
+  (`webrtc.getExemptHosts`/`toggleExempt`/`removeExempt`/`clearExempt`, `useWebrtcExempt`,
+  a "Sites with WebRTC protection off" list in `SecurityTab`) is pinned by
+  `ipcClient.contract.test.ts` and `SecurityTab.test.tsx`.
+  **HONEST GAP: `lib/protectionSummary.ts` was NOT updated**, so the shield badge can
+  still report "WebRTC: public-only" for a host whose protection is actually off — a
+  second control-that-lies instance, left as a follow-up rather than smuggled in here.
 - **Linux** — `linux_layout.rs`: works around **tauri#10420** by reparenting
   webkit2gtk widgets GtkBox → GtkFixed; title-changed signal feeds history +
   routes the element-picker sentinel; Esc-exits-fullscreen; GTK key hook

@@ -262,9 +262,34 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   - A per-site allowlist manager (desktop only, rendered when `level !== 'off'`): add the
     current browsing host, remove individual hosts, clear all. Allowlisted hosts receive no
     farble shim — the fp-allowlist is separate from the ad-block allowlist.
+  - A **"Sites with WebRTC protection off"** list, rendered right after the WebRTC policy
+    `<select>` and before the anti-fingerprinting section. It is a SEPARATE list from the
+    fingerprint allowlist above and from the ad-block allowlist, and it is never synced.
+    The Add button guards against re-adding an already-listed host: the core channel is a
+    TOGGLE, so a second Add would silently REMOVE the entry.
   - Coverage: `useFingerprint.test.tsx` covers the getState seed, every mutator, and the
     unmount path; `SecurityTab.test.tsx` drives the level select and the allowlist
-    toggle/clear controls through the real UI.
+    toggle/clear controls through the real UI, plus five tests for the WebRTC exemption
+    list (lists exactly the core's hosts and NOT the ad-block ones, sends the typed host,
+    refuses an empty host, does not re-add a listed host, and removes exactly the host
+    whose button was pressed). The four `webrtc.*` channels are additionally pinned in
+    `src/lib/ipcClient.contract.test.ts` — every request channel must have a row there
+    pinning its exact channel and payload, and `UNPINNED_REQUEST` is only for channels the
+    renderer never emits.
+- **`hooks/useWebrtcExempt`** — owns the per-site **WebRTC IP-leak** exemption list
+  (`WebrtcExemptState`: `{ exemptHosts: string[] }`). Deliberately NOT a second slice of
+  the ad-block allowlist: that list is synced, and reading a privacy control off it meant
+  one record on any device holding the data key turned WebRTC protection off for a host
+  everywhere. Seeds from `aegis.webrtc.getExemptHosts()` on mount; exposes
+  `toggleExempt(host)` / `removeExempt(host)` / `clearExempt()`. Re-reads state after every
+  mutation. It has **no `syncBus` subscription**, unlike `useFingerprint` — and that
+  absence IS the feature: a peer merge cannot change it, because the store is never
+  synced. Consequently the Wave 4 subscribe-before-seed rule is satisfied trivially (there
+  is no async subscription to order before the seed). Consumed by
+  `SecuritySettingsTab`. Mocked SEPARATELY from `fingerprint` in `aegisMock.ts` **and** in
+  `MobileApp.test.tsx` (which hand-rolls its own partial `ipcClient` mock — extending
+  `aegisMock.ts` does not reach it), because a test that let one stand in for the other is
+  exactly how the two lists came to be conflated in the first place.
 - **`hooks/useProxy`** — owns proxy UI state (`ProxyState`: `{ mode, scheme, host, port,
 bypassHosts, active, uri }`). Seeds from `aegis.proxy.getState()` on mount; subscribes
   to `aegis.proxy.onState`. Exposes `setConfig(cfg)` (calls `proxy.setConfig` + re-reads

@@ -182,17 +182,31 @@ pub fn sync_allow_insecure<R: Runtime>(app: &AppHandle<R>) -> bool {
 /// Settings that must NEVER enter the sync projection, and are ignored when a peer's record
 /// claims them — they are *this device's* decision and no other device may make it for us.
 ///
-/// `syncAllowInsecure` is the motivating case. `syncServerUrl` is an ordinary synced setting,
-/// so a peer that can write it can already point this device at any endpoint it likes. If the
-/// waiver synced alongside it, one poisoned pair of records — a `syncServerUrl` of
-/// `http://evil.example` and a `syncAllowInsecure` of true — would walk this device onto a
-/// plaintext server, turning a remote setting write into a silent transport downgrade.
-/// Keeping the waiver local means the downgrade can only ever be the result of a human
-/// ticking a box on this device.
+/// Every synced setting is writable by any device holding the account's data key, so "a peer
+/// record could set this" is not a hypothetical: it is exactly what the sync contract grants.
+/// Both keys here are therefore switches whose flipped state moves data OFF this machine or
+/// makes it less private, and neither has any UI that would report a sync event as the cause.
+///
+/// `syncAllowInsecure` waives the https-or-loopback rule for the sync transport.
+/// `syncServerUrl` is an ordinary synced setting, so a peer that can write it can already
+/// point this device at any endpoint it likes. If the waiver synced alongside it, one poisoned
+/// pair of records — a `syncServerUrl` of `http://evil.example` and a `syncAllowInsecure` of
+/// true — would walk this device onto a plaintext server, turning a remote setting write into a
+/// silent transport downgrade. Keeping the waiver local means the downgrade can only ever be
+/// the result of a human ticking a box on this device.
+///
+/// `syncVault` decides whether the user's PASSWORDS leave this machine at all, and shares the
+/// mechanism: one record on one paired device would turn on credential upload for every device
+/// the user owns, silently. Its per-device cost is already paid elsewhere and documented —
+/// `shared/types.ts` states that the flag is not sufficient on its own, because a vault created
+/// with its own per-device salt cannot sync until it adopts the account's shared salt, and
+/// until then `VaultState.syncEnabled` is false. A local opt-in is what the design already
+/// required in substance; this makes the switch itself match.
 ///
 /// Enforced at all three write/apply points: `record_change` (local edits), the
-/// `ensure_sync_projection` migration seed, and `apply_synced` (inbound peer records).
-const LOCAL_ONLY_KEYS: &[&str] = &["syncAllowInsecure"];
+/// `ensure_sync_projection` migration seed, and `apply_synced` (inbound peer records). A key
+/// filtered at only some of them still leaks through the others, so all three are asserted.
+const LOCAL_ONLY_KEYS: &[&str] = &["syncAllowInsecure", "syncVault"];
 
 /// True for keys excluded from the sync projection by [`LOCAL_ONLY_KEYS`].
 fn is_local_only(key: &str) -> bool {
@@ -594,6 +608,25 @@ pub(crate) fn validate_setting(key: &str, v: &Value) -> Result<(), String> {
             "about" if what == "homeUrl" => {}
             other => return Err(format!("{what} must be http(s), got {other:?}")),
         }
+        // Refuse `user:password@host`. This is the one URL shape that makes a user read a
+        // trusted name and be somewhere else: every browser strips userinfo from the address
+        // bar, so `https://bank.example@evil.example/` displays as `evil.example/` and the
+        // part the user should be reading is the part they never see. It is not cosmetic
+        // here — `homeUrl` re-loads on every launch, and `syncServerUrl` is a request the
+        // sync client makes, one that `syncAllowInsecure` may send in CLEARTEXT, so the
+        // userinfo is a credential going to a host the setting never named. The authoritative
+        // host is always `u.host_str()` regardless, which is why nothing downstream has to
+        // know this was checked; the check is here so the CONFIGURATION can never hold one.
+        //
+        // Checked against the PARSED url rather than the raw string, so an `@` in a query or
+        // a path (`?to=a@b.com`) is not a false positive — `Url` puts userinfo before the host
+        // and nowhere else.
+        if u.username() != "" || u.password().is_some() {
+            return Err(format!(
+                "{what} must not carry userinfo (`user:password@`) — it makes the address bar \
+                 hide which host you are really going to"
+            ));
+        }
         Ok(t.to_string())
     };
     let bounded_u32 = |v: &Value, lo: i64, hi: i64, what: &str| -> Result<(), String> {
@@ -898,6 +931,125 @@ mod tests {
     fn rec(key: &str, wall: i64, value: Value) -> Value {
         json!({ "key": key, "uuid": key, "value": value,
             "hlc": { "wall_ms": wall, "counter": 0, "node": "remote" }, "deleted": false })
+    }
+
+    /// A URL carrying `user:password@` is the textbook way to make a user read a
+    /// trusted name and be somewhere else. Browsers strip userinfo from the
+    /// address bar, so `https://bank.example@evil.example/login` DISPLAYS as
+    /// `evil.example/login` and every hover, every screenshot and every
+    /// "the padlock is there" check points the other way — the trick only works
+    /// because the user never sees the part they should be reading.
+    ///
+    /// Two concrete harms, both reachable here:
+    ///
+    /// * `homeUrl` re-loads on every launch, so the disguised host is the FIRST
+    ///   page the user ever sees for that session.
+    /// * `syncServerUrl` is a request the sync client makes, and
+    ///   `syncAllowInsecure` may waive the https rule for it — so the userinfo
+    ///   is a credential the user is sending in CLEARTEXT, to a host the setting
+    ///   never named.
+    #[test]
+    fn a_url_carrying_userinfo_is_refused() {
+        for key in ["homeUrl", "syncServerUrl", "defaultSearchTemplate"] {
+            let mut with_user = json!("https://bank.example@evil.example/login");
+            if key == "defaultSearchTemplate" {
+                with_user = json!("https://bank.example@evil.example/s?q=%s");
+            }
+            let err = validate_setting_for_test(key, &with_user)
+                .expect_err("a URL carrying userinfo must be refused");
+            assert!(
+                err.contains("userinfo"),
+                "{key} must say WHY, so the user is not left guessing: {err}"
+            );
+            // A username with no password is still userinfo, and still a disguise.
+            assert!(
+                validate_setting_for_test(key, &with_user).is_err(),
+                "{key} must not accept a bare username either"
+            );
+            // …and the same URL without the userinfo is fine, so the rule is
+            // userinfo and not "URLs with an @" (a query string may contain one).
+            let clean = json!("https://evil.example/s?q=%s@example.com");
+            if key == "homeUrl" {
+                validate_setting_for_test(key, &clean)
+                    .unwrap_or_else(|e| panic!("an @ inside the query is not userinfo: {e}"));
+            }
+        }
+        // A password with no username is the same shape and must be refused too.
+        assert!(validate_setting_for_test("homeUrl", &json!("https://:pw@evil.example/")).is_err());
+    }
+
+    /// `syncVault` is the second local-only key, and the reason is the same one as
+    /// `syncAllowInsecure` but with a worse outcome.
+    ///
+    /// Every synced setting is writable by any device holding the account's data key, so
+    /// "a peer record could set this" is not a hypothetical — it is what the sync contract
+    /// grants. `syncVault` is the switch that decides whether the user's PASSWORDS leave
+    /// this machine. Letting it ride along would mean a single record on a single paired
+    /// device turns on credential upload for every device the user owns, with nothing on
+    /// screen to say so, and there is no UI anywhere that reports "your vault is being
+    /// uploaded" as a consequence of a sync event.
+    ///
+    /// The per-device cost is already paid elsewhere and honestly: `shared/types.ts` documents
+    /// that enabling this is not sufficient on its own, because a vault created with its own
+    /// per-device salt cannot sync until it ADOPTS the account's shared salt, and until then
+    /// `VaultState.syncEnabled` is false. So a local opt-in is what the design already
+    /// required in substance; this makes the switch itself match.
+    ///
+    /// All three enforcement points are asserted, exactly as for the waiver above — a key
+    /// filtered at only one of them would still leak through the other two.
+    #[test]
+    fn sync_vault_is_local_only() {
+        with_tmp_app(|app| {
+            // Default off, and the outbound projection carries no record for it.
+            assert!(!sync_records(app)
+                .iter()
+                .any(|r| r.get("key").and_then(Value::as_str) == Some("syncVault")));
+
+            // The user opts in locally: accepted, persisted, and still not a sync record.
+            validate_setting_for_test("syncVault", &json!(true)).expect("valid boolean");
+            let mut next = load(app);
+            next.as_object_mut()
+                .unwrap()
+                .insert("syncVault".into(), json!(true));
+            write(app, &next);
+            record_change(app, "syncVault", &json!(true));
+            assert_eq!(
+                load(app).get("syncVault"),
+                Some(&json!(true)),
+                "the local opt-in must persist when set"
+            );
+            assert!(
+                !sync_records(app)
+                    .iter()
+                    .any(|r| r.get("key").and_then(Value::as_str) == Some("syncVault")),
+                "the opt-in must not enter the sync projection"
+            );
+
+            // A peer record claiming it is ignored on apply, even with a fresh HLC.
+            let poisoned = rec("syncVault", i64::MAX, json!(true));
+            apply_synced(app, &[poisoned]);
+            assert_eq!(
+                load(app).get("syncVault"),
+                Some(&json!(true)),
+                "a peer's record must not be able to grant or revoke the opt-in"
+            );
+        });
+    }
+
+    /// The list itself, asserted directly. `sync_allow_insecure_is_local_only` and
+    /// `sync_vault_is_local_only` each prove their own key end-to-end, but neither fails if
+    /// someone adds a THIRD key to the list and forgets to write a test for it — and a new
+    /// key with no test is exactly the shape of bug this list exists to prevent. An empty or
+    /// filtered list must not pass either.
+    #[test]
+    fn the_local_only_list_is_exactly_the_two_credential_and_transport_waivers() {
+        assert_eq!(
+            LOCAL_ONLY_KEYS,
+            &["syncAllowInsecure", "syncVault"],
+            "a new LOCAL_ONLY_KEYS entry needs a test of its own here, and any key added \
+             must be a device-local waiver — never a value the user expects to follow them"
+        );
+        assert!(!LOCAL_ONLY_KEYS.is_empty(), "a filtered list must not pass");
     }
 
     /// `syncAllowInsecure` waives the https-or-loopback rule for the sync transport, so it

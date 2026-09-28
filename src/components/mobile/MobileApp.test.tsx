@@ -192,6 +192,16 @@ vi.mock('../../lib/ipcClient', () => ({
       removeAllowlist: vi.fn().mockResolvedValue({ level: 'off', allowlistedHosts: [] }),
       clearAllowlist: vi.fn().mockResolvedValue({ level: 'off', allowlistedHosts: [] }),
     },
+    // A SEPARATE namespace from `fingerprint`, mirroring the real client: the WebRTC
+    // exemption list is its own never-synced store, and a test that let one stand in for
+    // the other is exactly how the ad-block allowlist came to double as the WebRTC escape
+    // hatch in the first place.
+    webrtc: {
+      getExemptHosts: vi.fn().mockResolvedValue({ exemptHosts: [] }),
+      toggleExempt: vi.fn().mockResolvedValue({ exemptHosts: [] }),
+      removeExempt: vi.fn().mockResolvedValue({ exemptHosts: [] }),
+      clearExempt: vi.fn().mockResolvedValue({ exemptHosts: [] }),
+    },
     proxy: {
       getState: vi.fn().mockResolvedValue({
         mode: 'off',

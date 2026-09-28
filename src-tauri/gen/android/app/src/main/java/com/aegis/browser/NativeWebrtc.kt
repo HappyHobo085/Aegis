@@ -16,6 +16,14 @@ object NativeWebrtc {
     }
   }
 
-  /** The WebRTC shim JS for the current policy ("" if no filtering applies). */
-  external fun shimScript(): String
+  /**
+   * The WebRTC shim JS for the current policy ("" if no filtering applies).
+   *
+   * [host] is the tab's content host, and it is required rather than optional: the per-site
+   * WebRTC exemption lives in its own local-only store, and on Android the only way to read
+   * that store is a process global (no `AppHandle` exists on a JNI thread). An empty or
+   * unreadable host matches no exemption, so protection stays ON — the safe direction for a
+   * leak defence.
+   */
+  external fun shimScript(host: String): String
 }

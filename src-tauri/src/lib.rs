@@ -62,6 +62,9 @@ mod adblock_webkit;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod linux_layout;
+/// Per-host WebRTC IP-leak exemptions. LOCAL-ONLY store — see the module doc for why
+/// this is not the ad-block allowlist.
+mod webrtc_exempt;
 #[cfg(any(desktop, target_os = "android", test))]
 mod webrtc_shim;
 // Sync engine (F2b) crypto: key tree + recovery phrase + record seal/open. Ungated — the
@@ -238,6 +241,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         return result;
     }
     if let Some(result) = farble::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = webrtc_exempt::dispatch(&app, &channel, &payload) {
         return result;
     }
     if let Some(result) = proxy::dispatch(&app, &channel, &payload) {
@@ -581,6 +587,12 @@ pub fn run() {
         // hook; the getters have no other way to read settings.
         #[cfg(target_os = "android")]
         crate::webrtc_shim::note_policy(&crate::settings::webrtc_policy(app.handle()));
+
+        // The WebRTC IP-leak exemptions, mirrored into the app-free global the JNI
+        // document-start getter reads — same obligation as the policy line above, and for
+        // the same reason: that getter runs on a JNI thread with no AppHandle. Unconditional
+        // (the fn is a no-op off Android) so the boot path is the one place to look.
+        crate::webrtc_exempt::seed_from_disk(app.handle());
 
         // Anti-fingerprinting: generate the per-session salt from the OS CSPRNG. Idempotent.
         // The salt is NEVER persisted — it resets on every launch (Brave-style farbling seed).

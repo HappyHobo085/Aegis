@@ -151,13 +151,18 @@ shallow-merges it. A Rust reader (mirror `https_only()`) exposes it to the core.
 field may ride the sync projection. A field listed in `LOCAL_ONLY_KEYS`
 (`src-tauri/src/settings.rs`) is persisted by `settings.set` but **never** recorded into
 `settings-sync.json`, is skipped by the migration seed, and is ignored when a peer's
-record claims it. Its current member is `syncAllowInsecure` — the waiver that lets the
-sync server be plaintext `http://` — because `syncServerUrl` IS synced: a waiver that
+record claims it. Its current members are `syncAllowInsecure` — the waiver that lets the
+sync server be plaintext `http://` — and `syncVault`, the opt-in that includes the
+password vault in sync. The shared reason is that **every synced setting is writable by
+any device holding the account's data key**: `syncServerUrl` IS synced, so a waiver that
 travelled with it would let one poisoned record pair walk a device onto a plaintext
-server, i.e. a remote settings write would become a silent transport downgrade. If you add
-a settings field that weakens a _local_ security decision, add it to that list and extend
-`settings::tests::sync_allow_insecure_is_local_only`-style coverage, rather than letting it
-sync by default.
+server; and `syncVault` is the switch that makes credentials leave the machine, so one
+record on one paired device would have turned that on for every device the user owns. If
+you add a settings field that weakens a _local_ security decision, add it to that list and
+extend `sync_allow_insecure_is_local_only` / `sync_vault_is_local_only`-style coverage,
+rather than letting it sync by default.
+`the_local_only_list_is_exactly_the_two_credential_and_transport_waivers` asserts the
+list's exact membership, so a third key cannot land without a test.
 
 **Event-driven refetch.** A `*.changed` event must drive a **targeted per-store
 refetch** (the precedent is `useHistory` subscribing `onChanged(() => list())`), never

@@ -1,6 +1,6 @@
 // src/components/SecurityTab.tsx
 import { useEffect, useState } from 'react';
-import type { FingerprintState, Settings } from '../../shared/types';
+import type { FingerprintState, Settings, WebrtcExemptState } from '../../shared/types';
 
 export function SecurityTab({
   settings,
@@ -10,6 +10,9 @@ export function SecurityTab({
   fingerprintState,
   toggleFingerprintAllowlist,
   removeFingerprintAllowlist,
+  webrtcExempt,
+  toggleWebrtcExempt,
+  removeWebrtcExempt,
 }: {
   settings: Settings;
   update: (partial: Partial<Settings>) => void;
@@ -18,9 +21,13 @@ export function SecurityTab({
   fingerprintState: FingerprintState;
   toggleFingerprintAllowlist: (host: string) => void;
   removeFingerprintAllowlist: (host: string) => void;
+  webrtcExempt: WebrtcExemptState;
+  toggleWebrtcExempt: (host: string) => void;
+  removeWebrtcExempt: (host: string) => void;
 }) {
   const [exceptions, setExceptions] = useState<string[]>([]);
   const [addHost, setAddHost] = useState('');
+  const [exemptHost, setExemptHost] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -88,6 +95,59 @@ export function SecurityTab({
         candidates so video and voice calls still work. &ldquo;Disable&rdquo; turns WebRTC off
         entirely (calls won&apos;t work). Changes apply to new tabs &mdash; reload open tabs to
         apply.
+      </p>
+
+      <h3>Sites with WebRTC protection off</h3>
+      {webrtcExempt.exemptHosts.length === 0 ? (
+        <p>No sites are exempted from WebRTC protection.</p>
+      ) : (
+        <ul>
+          {webrtcExempt.exemptHosts.map((host) => (
+            <li key={host}>
+              <span>{host}</span>
+              <button
+                type="button"
+                aria-label={`Remove ${host} from WebRTC exemptions`}
+                onClick={() => removeWebrtcExempt(host)}
+              >
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="security-tab__add-host">
+        <input
+          type="text"
+          value={exemptHost}
+          onChange={(e) => setExemptHost(e.target.value)}
+          placeholder="example.com"
+          aria-label="Host to exempt from WebRTC protection"
+        />
+        <button
+          type="button"
+          aria-label="Add host to WebRTC exemptions"
+          disabled={exemptHost.trim() === ''}
+          onClick={() => {
+            const h = exemptHost.trim();
+            if (!h) return;
+            // "Add" must only ADD. toggleExempt would REMOVE an already-exempt host, so
+            // guard against the host already being present (idempotent add).
+            if (!webrtcExempt.exemptHosts.includes(h)) {
+              toggleWebrtcExempt(h);
+            }
+            setExemptHost('');
+          }}
+        >
+          Add
+        </button>
+      </div>
+      <p className="security-tab__note">
+        Only add a site here if WebRTC protection genuinely breaks it (a local video-call test
+        harness, typically). This list is <strong>never synced</strong> and never travels with your
+        account, because a record from any device that can sync would otherwise turn WebRTC
+        protection off everywhere without saying so. It is also separate from &ldquo;sites where ads
+        are allowed&rdquo; — allowing a site&apos;s ads must not also leak your IP to it.
       </p>
 
       <h3>Malicious-site protection</h3>

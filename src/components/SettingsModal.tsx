@@ -17,7 +17,7 @@ import type { MyFiltersTabProps } from './MyFiltersTab';
 import type { ProxySettingsTabProps } from './ProxySettingsTab';
 import type { UseVault } from '../hooks/useVault';
 import type { UseSync } from '../hooks/useSync';
-import type { FingerprintState, Settings } from '../../shared/types';
+import type { FingerprintState, Settings, WebrtcExemptState } from '../../shared/types';
 import type { ProtectionSummary } from '../lib/protectionSummary';
 import type { AdblockState } from '../../shared/types';
 
@@ -127,6 +127,11 @@ export interface SecurityPanelProps {
   fingerprintState: FingerprintState;
   toggleFingerprintAllowlist: (host: string) => void;
   removeFingerprintAllowlist: (host: string) => void;
+  // The WebRTC exemption list — a SEPARATE, never-synced store from the ad-block
+  // allowlist, so it needs its own three props rather than a shared list.
+  webrtcExempt: WebrtcExemptState;
+  toggleWebrtcExempt: (host: string) => void;
+  removeWebrtcExempt: (host: string) => void;
 }
 
 /** Data props for the sync panel. */
@@ -331,6 +336,9 @@ export function SettingsModal({
               fingerprintState={security.fingerprintState}
               toggleFingerprintAllowlist={security.toggleFingerprintAllowlist}
               removeFingerprintAllowlist={security.removeFingerprintAllowlist}
+              webrtcExempt={security.webrtcExempt}
+              toggleWebrtcExempt={security.toggleWebrtcExempt}
+              removeWebrtcExempt={security.removeWebrtcExempt}
             />
           </>
         )}

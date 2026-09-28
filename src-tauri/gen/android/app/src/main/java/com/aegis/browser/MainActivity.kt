@@ -693,10 +693,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
     // WebRTC IP-leak shim, document-start, per the user's webrtcPolicy. Read fresh per
     // tab (NOT cached) so a policy change applies to new tabs; "" when no filtering
-    // applies ("default" policy).
+    // applies ("default" policy). `contentHost` (read above) is passed so the per-site
+    // WebRTC exemption applies here too — otherwise the exemption would be desktop-only
+    // while the ad-block allowlist it used to piggy-back on was synced to every device.
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
       val webrtc = try {
-        NativeWebrtc.shimScript()
+        NativeWebrtc.shimScript(contentHost)
       } catch (t: Throwable) {
         Log.w("AegisWebrtc", "webrtc shim unavailable", t)
         ""

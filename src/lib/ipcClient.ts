@@ -33,6 +33,7 @@ import {
   VaultRecord,
   VaultRecordInput,
   FingerprintState,
+  WebrtcExemptState,
   ProxyConfig,
   ProxyState,
   FormLoginDetectedResult,
@@ -713,6 +714,14 @@ export const aegis: AegisApi = {
     removeAllowlist: (host) =>
       dedupedCall<FingerprintState>(IPC.fingerprintRemoveAllowlist, { host }),
     clearAllowlist: () => dedupedCall<FingerprintState>(IPC.fingerprintClearAllowlist, undefined),
+  },
+  // The WebRTC exemption is a LOCAL-ONLY list, so unlike `fingerprint` there is no
+  // `onSyncChange` subscription for it: a peer merge cannot change it, by construction.
+  webrtc: {
+    getExemptHosts: () => dedupedCall<WebrtcExemptState>(IPC.webrtcGetExemptHosts, undefined),
+    toggleExempt: (host) => dedupedCall<WebrtcExemptState>(IPC.webrtcToggleExempt, { host }),
+    removeExempt: (host) => dedupedCall<WebrtcExemptState>(IPC.webrtcRemoveExempt, { host }),
+    clearExempt: () => dedupedCall<WebrtcExemptState>(IPC.webrtcClearExempt, undefined),
   },
   proxy: {
     getState: () => dedupedCall<ProxyState>(IPC.proxyGetState, undefined),

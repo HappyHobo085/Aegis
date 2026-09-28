@@ -3,24 +3,24 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 5026,
-      "covered": 4317,
-      "pct": 85.89
+      "total": 5075,
+      "covered": 4366,
+      "pct": 86.02
     },
     "statements": {
-      "total": 6745,
-      "covered": 5695,
-      "pct": 84.43
+      "total": 6822,
+      "covered": 5771,
+      "pct": 84.59
     },
     "functions": {
-      "total": 1388,
-      "covered": 1145,
-      "pct": 82.49
+      "total": 1404,
+      "covered": 1161,
+      "pct": 82.69
     },
     "branches": {
-      "total": 4330,
-      "covered": 3375,
-      "pct": 77.94
+      "total": 4376,
+      "covered": 3419,
+      "pct": 78.13
     }
   },
   "files": {
@@ -265,14 +265,14 @@
     },
     "src/App.tsx": {
       "lines": {
-        "total": 295,
-        "covered": 178,
-        "pct": 60.33
+        "total": 296,
+        "covered": 179,
+        "pct": 60.47
       },
       "statements": {
-        "total": 344,
-        "covered": 193,
-        "pct": 56.1
+        "total": 345,
+        "covered": 194,
+        "pct": 56.23
       },
       "functions": {
         "total": 123,
@@ -968,24 +968,24 @@
     },
     "src/components/SecurityTab.tsx": {
       "lines": {
-        "total": 69,
-        "covered": 69,
+        "total": 91,
+        "covered": 91,
         "pct": 100
       },
       "statements": {
-        "total": 126,
-        "covered": 124,
-        "pct": 98.41
+        "total": 162,
+        "covered": 159,
+        "pct": 98.14
       },
       "functions": {
-        "total": 15,
-        "covered": 15,
+        "total": 19,
+        "covered": 19,
         "pct": 100
       },
       "branches": {
-        "total": 91,
-        "covered": 88,
-        "pct": 96.7
+        "total": 124,
+        "covered": 120,
+        "pct": 96.77
       }
     },
     "src/components/SettingsModal.tsx": {
@@ -1320,14 +1320,14 @@
     },
     "src/components/mobile/MobileApp.tsx": {
       "lines": {
-        "total": 173,
-        "covered": 113,
-        "pct": 65.31
+        "total": 174,
+        "covered": 114,
+        "pct": 65.51
       },
       "statements": {
-        "total": 262,
-        "covered": 178,
-        "pct": 67.93
+        "total": 263,
+        "covered": 179,
+        "pct": 68.06
       },
       "functions": {
         "total": 67,
@@ -1335,9 +1335,9 @@
         "pct": 23.88
       },
       "branches": {
-        "total": 244,
+        "total": 245,
         "covered": 166,
-        "pct": 68.03
+        "pct": 67.75
       }
     },
     "src/components/mobile/MobileBottomBar.tsx": {
@@ -2132,6 +2132,28 @@
         "pct": 91.66
       }
     },
+    "src/hooks/useWebrtcExempt.ts": {
+      "lines": {
+        "total": 21,
+        "covered": 21,
+        "pct": 100
+      },
+      "statements": {
+        "total": 35,
+        "covered": 35,
+        "pct": 100
+      },
+      "functions": {
+        "total": 8,
+        "covered": 8,
+        "pct": 100
+      },
+      "branches": {
+        "total": 12,
+        "covered": 12,
+        "pct": 100
+      }
+    },
     "src/hooks/useWorkspaces.ts": {
       "lines": {
         "total": 31,
@@ -2288,19 +2310,19 @@
     },
     "src/lib/ipcClient.ts": {
       "lines": {
-        "total": 298,
-        "covered": 272,
-        "pct": 91.27
+        "total": 302,
+        "covered": 276,
+        "pct": 91.39
       },
       "statements": {
-        "total": 311,
-        "covered": 282,
-        "pct": 90.67
+        "total": 315,
+        "covered": 286,
+        "pct": 90.79
       },
       "functions": {
-        "total": 175,
-        "covered": 168,
-        "pct": 96
+        "total": 179,
+        "covered": 172,
+        "pct": 96.08
       },
       "branches": {
         "total": 96,

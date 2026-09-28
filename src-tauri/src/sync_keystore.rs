@@ -18,6 +18,11 @@
 use crate::crypto::{hex, unhex, RootSecret};
 use tauri::{AppHandle, Manager, Runtime};
 use zeroize::Zeroize;
+// Only the DESKTOP keyring paths touch a `Zeroizing` (see `keyring_set`), and that fn is
+// `#[cfg]`-gated to the three desktop targets, so on Android this import would be unused —
+// and `-D warnings` (which CI injects from outside the repo) turns that into a build failure.
+#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+use zeroize::Zeroizing;
 
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 const KEYRING_SERVICE: &str = "com.aegis.browser";
@@ -356,7 +361,14 @@ mod android_keystore {
 // way to override the content type, so hex is the fix: it is pure ASCII, and the extra
 // layer of encoding costs nothing since the value is already a high-entropy secret.
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-fn keyring_set(user: &str, bytes: Vec<u8>) -> Result<(), String> {
+/// Store `bytes` in the OS keychain under `user`.
+///
+/// `bytes` is a [`Zeroizing`] so the caller's copy of the root secret is wiped on drop: the
+/// signature used to take a bare `Vec<u8>`, and the only zeroizing in here was applied to the
+/// hex copy this function makes — so the raw copy it was handed sat in freed heap until it was
+/// reused. Taking the already-wrapped type means a future caller cannot reintroduce that, and
+/// it also means there is no `.to_vec()` at the call site (which would have undone it anyway).
+fn keyring_set(user: &str, bytes: Zeroizing<Vec<u8>>) -> Result<(), String> {
     let mut encoded = hex(&bytes);
     let user = user.to_string();
     std::thread::spawn(move || -> Result<(), String> {
@@ -474,7 +486,7 @@ pub fn store_root<R: Runtime>(
     }
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     {
-        if keyring_set(&keyring_user(app), root.0.to_vec()).is_ok() {
+        if keyring_set(&keyring_user(app), Zeroizing::new(root.0.to_vec())).is_ok() {
             if let Some(pp) = passphrase {
                 let _ = store_passphrase_vault(app, root, pp);
             } else if let Some(p) = vault_path(app) {

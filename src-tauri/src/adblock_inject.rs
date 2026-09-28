@@ -108,13 +108,17 @@ pub fn script<R: tauri::Runtime>(
     host: &str,
 ) -> String {
     let webrtc_policy = crate::settings::webrtc_policy(app);
+    // WebRTC gets its OWN exemption list, not the ad-block one. They used to be the same
+    // switch, which let a synced ad-block allowlist record (any device holding the data key
+    // can write one) turn off IP-leak protection on every device. See `webrtc_exempt.rs`.
+    let webrtc_exempt = crate::webrtc_exempt::host_exempt(app, host);
     // Fast path: use the pre-computed shim if prewarm() has run; fall back to shim_for.
-    let webrtc = if host_allowlisted {
+    let webrtc = if webrtc_exempt {
         String::new()
     } else {
         crate::webrtc_shim::get_precomputed(&webrtc_policy)
             .map(|s| s.to_string())
-            .unwrap_or_else(|| crate::webrtc_shim::shim_for(&webrtc_policy, host_allowlisted))
+            .unwrap_or_else(|| crate::webrtc_shim::shim_for(&webrtc_policy, webrtc_exempt))
     };
     // Farble shim: uses the SEPARATE fp-allowlist (not the ad-block allowlist). Fail-open:
     // a farble computation error (e.g. missing state) yields "" → no-op injection.

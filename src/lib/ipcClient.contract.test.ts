@@ -727,6 +727,32 @@ const REQUESTS: ContractRow[] = [
     payload: {},
   },
 
+  // ---- webrtc exemption (4) ----
+  {
+    name: 'webrtc.getExemptHosts',
+    run: () => aegis.webrtc.getExemptHosts(),
+    channel: IPC.webrtcGetExemptHosts,
+    payload: {},
+  },
+  {
+    name: 'webrtc.toggleExempt',
+    run: () => aegis.webrtc.toggleExempt('wr.test'),
+    channel: IPC.webrtcToggleExempt,
+    payload: { host: 'wr.test' },
+  },
+  {
+    name: 'webrtc.removeExempt',
+    run: () => aegis.webrtc.removeExempt('wr.test'),
+    channel: IPC.webrtcRemoveExempt,
+    payload: { host: 'wr.test' },
+  },
+  {
+    name: 'webrtc.clearExempt',
+    run: () => aegis.webrtc.clearExempt(),
+    channel: IPC.webrtcClearExempt,
+    payload: {},
+  },
+
   // ---- proxy (4) ----
   {
     name: 'proxy.getState',

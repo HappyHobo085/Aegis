@@ -155,7 +155,14 @@ pub fn file_salt(file: &Value) -> Option<Vec<u8>> {
 }
 
 /// One decrypted credential. Zeroized on drop so a dropped vault leaves no plaintext.
-#[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop, PartialEq, Debug)]
+///
+/// `Debug` is hand-written and REDACTED. The derive would print `site`, `username`,
+/// `password` and `notes` in cleartext, and this type is exactly the one a developer reaches
+/// for when something is wrong with a vault — so the derive makes the most likely debugging
+/// line in the file into a credential leak, into a terminal scrollback, a CI log, or a bug
+/// report. `uuid` and `updated_at` are not secrets (`updated_at` is bound as cleartext AAD)
+/// and stay visible, because a redacted-everything `Debug` is one nobody can use.
+#[derive(Clone, Serialize, Deserialize, Zeroize, ZeroizeOnDrop, PartialEq)]
 pub struct Cred {
     pub uuid: String,
     #[zeroize(skip)] // a millisecond timestamp isn't secret and is needed as cleartext AAD
@@ -164,6 +171,30 @@ pub struct Cred {
     pub username: String,
     pub password: String,
     pub notes: String,
+}
+
+impl std::fmt::Debug for Cred {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Cred")
+            .field("uuid", &self.uuid)
+            .field("updated_at", &self.updated_at)
+            .field("site", &self.site)
+            .field("username", &redacted(!self.username.is_empty()))
+            .field("password", &redacted(!self.password.is_empty()))
+            .field("notes", &redacted(!self.notes.is_empty()))
+            .finish()
+    }
+}
+
+/// The redaction marker. Reports WHETHER a field held anything, so a redacted dump still
+/// distinguishes "empty" from "present but secret" — which is usually the question being
+/// asked — without printing any of it.
+fn redacted(present: bool) -> &'static str {
+    if present {
+        "<redacted>"
+    } else {
+        "<empty>"
+    }
 }
 
 /// Argon2id(master_password, salt) -> 256-bit vault key.
@@ -295,9 +326,12 @@ pub(crate) fn open_kind(vk: &[u8; 32], w: &Value) -> Result<Opened, String> {
     if pt.as_slice() == TOMBSTONE_BODY {
         return Ok(Opened::Tombstone);
     }
+    // The parse happens on the DECRYPTED body, so serde's `Display` would describe recovered
+    // user data (see `crypto::redact_json_error`). This string is what the quarantine log and
+    // the IPC error both carry.
     serde_json::from_slice(&pt)
         .map(Opened::Cred)
-        .map_err(|e| e.to_string())
+        .map_err(|e| crate::crypto::redact_json_error(&e))
 }
 
 /// Record a deletion marker, keeping the NEWEST one per uuid.
@@ -336,9 +370,15 @@ fn check_verifier(vk: &[u8; 32], v: &Value) -> Result<(), String> {
         .and_then(Value::as_str)
         .and_then(unhex)
         .ok_or("bad verifier")?;
-    let pt = crate::crypto::open(vk, &nonce, &ct, NS, VERIFIER_UUID, VERIFIER_HLC)
-        .map_err(|_| "wrong master password".to_string())?;
-    if pt == VERIFIER_PLAINTEXT {
+    // `Zeroizing`, matching `open_kind`/`open_tombstone` above: the decrypted verifier is a
+    // copy of a known constant, so it is not itself a secret — but it is a plaintext buffer
+    // on the heap, and the point of zeroizing the other two is that this class of buffer
+    // never survives the function that made it.
+    let pt = Zeroizing::new(
+        crate::crypto::open(vk, &nonce, &ct, NS, VERIFIER_UUID, VERIFIER_HLC)
+            .map_err(|_| "wrong master password".to_string())?,
+    );
+    if pt.as_slice() == VERIFIER_PLAINTEXT {
         Ok(())
     } else {
         Err("wrong master password".into())
@@ -440,7 +480,14 @@ pub fn init_vault(password: &str) -> Result<(Value, Zeroizing<[u8; 32]>), VaultE
 }
 
 /// The decrypted contents of an unlocked vault.
-#[derive(Debug)]
+///
+/// `Debug` is hand-written and REDACTED, and here the stakes are higher than on [`Cred`]:
+/// the derived form would print `key` — the 32-byte vault key that every record is sealed
+/// under — in hex, plus every credential in the vault. A single `{:#?}` of this value is a
+/// complete plaintext password dump and a ready-to-use vault key, and this is the type a
+/// developer prints when a vault looks wrong. Only the counts and the key's PRESENCE are
+/// reported; the key itself is never formatted.
+#[derive(PartialEq)]
 pub struct UnlockedVault {
     pub key: Zeroizing<[u8; 32]>,
     pub records: Vec<Cred>,
@@ -448,6 +495,17 @@ pub struct UnlockedVault {
     /// Deletion markers, newest-wins per uuid. See [`seal_tombstone`] for why these exist and
     /// why they are sealed rather than a cleartext flag.
     pub tombstones: Vec<(String, i64)>,
+}
+
+impl std::fmt::Debug for UnlockedVault {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("UnlockedVault")
+            .field("key", &redacted(!self.key.iter().all(|b| *b == 0)))
+            .field("records", &self.records.len())
+            .field("orphans", &self.orphans.len())
+            .field("tombstones", &self.tombstones.len())
+            .finish()
+    }
 }
 
 /// Unlock an existing vault from its on-disk JSON. Derives the key, verifies it against the
@@ -1013,12 +1071,19 @@ pub fn dispatch<R: Runtime>(
     channel: &str,
     payload: &Value,
 ) -> Option<Result<Value, String>> {
+    // Zeroizing: this is the MASTER PASSWORD, and the closure hands out a fresh copy per call
+    // (3 call sites). A plain `String` left each copy in the heap until it was reused. The type
+    // is the fix rather than a manual `.zeroize()` at each of the three sites, because a new
+    // arm that forgot the wipe would then be a silent leak — with `Zeroizing` the compiler
+    // requires nothing and leaks nothing.
     let pw = || {
-        payload
-            .get("masterPassword")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
+        Zeroizing::new(
+            payload
+                .get("masterPassword")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        )
     };
     match channel {
         "vault.getState" => Some(Ok(state_json(app))),
@@ -2524,5 +2589,136 @@ mod tests {
                 "expected locked error, got: {result}"
             );
         });
+    }
+
+    /// A `Debug` that prints a credential is a credential leak waiting for the first
+    /// `dbg!`, the first panic message, or the first bug report. This asserts the
+    /// redaction property directly rather than trusting the derive list.
+    #[test]
+    fn debug_output_never_carries_plaintext_or_the_vault_key() {
+        let c = Cred {
+            uuid: "u-1".into(),
+            updated_at: 1_700_000_000_000,
+            site: "https://bank.example".into(),
+            username: "alice@example.com".into(),
+            password: "hunter2-correct-horse".into(),
+            notes: "the recovery code is 1234".into(),
+        };
+        let pretty = format!("{c:#?}");
+        for secret in [
+            "hunter2-correct-horse",
+            "alice@example.com",
+            "the recovery code is 1234",
+        ] {
+            assert!(
+                !pretty.contains(secret),
+                "Debug must not print {secret:?}: {pretty}"
+            );
+        }
+        // Non-secret context stays visible, or the dump is useless for debugging.
+        assert!(pretty.contains("u-1"), "uuid should stay visible: {pretty}");
+
+        let v = UnlockedVault {
+            key: Zeroizing::new([0xABu8; 32]),
+            records: vec![c],
+            orphans: vec![],
+            tombstones: vec![],
+        };
+        let pv = format!("{v:#?}");
+        // The vault key is 32 bytes of 0xAB = 64 hex chars; assert on a distinctive run.
+        assert!(
+            !pv.to_lowercase().contains(&"ab".repeat(8)),
+            "Debug must not print the vault key: {pv}"
+        );
+        assert!(!pv.contains("hunter2"), "vault Debug leaks records: {pv}");
+    }
+
+    /// An all-zero key is reported as absent, not as a value — and an empty field as empty
+    /// rather than redacted, so a redacted dump still answers the question usually being asked.
+    #[test]
+    fn debug_distinguishes_absent_from_present() {
+        let empty = Cred {
+            uuid: "u-2".into(),
+            updated_at: 0,
+            site: String::new(),
+            username: String::new(),
+            password: String::new(),
+            notes: String::new(),
+        };
+        let d = format!("{empty:?}");
+        assert!(
+            d.contains("<empty>"),
+            "empty fields should read as empty: {d}"
+        );
+        assert!(!d.contains("<redacted>"), "nothing was present: {d}");
+    }
+
+    /// A parse error raised AFTER `open` has authenticated and decrypted the record is a
+    /// description of recovered user data: serde embeds the offending value in its message.
+    /// The error string is what every caller logs and surfaces, so the canary below is what
+    /// used to reach stderr — the user's terminal, a CI log, any pasted bug report.
+    const DECRYPTED_CANARY: &str = "hunter2-correct-horse-battery-staple";
+
+    /// Build a wire record that AUTHENTICATES but whose plaintext is not a `Cred`, by sealing
+    /// the body directly. The canary sits in `updated_at`, which `Cred` takes as an i64, so
+    /// serde's type error quotes it back. (`Cred` renames nothing, so the wire shape is
+    /// snake_case — a camelCase key yields only "missing field", a message with no value in
+    /// it, and the probe would pass for the wrong reason. I hit exactly that.)
+    fn authentic_but_malformed(vk: &[u8; 32], uuid: &str) -> Value {
+        let body = format!(
+            r#"{{"uuid":"{uuid}","updated_at":"{DECRYPTED_CANARY}","site":"s","username":"u","password":"p","notes":""}}"#
+        );
+        let (nonce, ct) = crate::crypto::seal(vk, NS, uuid, &hlc_bytes(7), body.as_bytes())
+            .expect("seal the malformed body");
+        json!({
+            "uuid": uuid,
+            "updatedAt": 7,
+            "deleted": false,
+            "nonce": crate::crypto::hex(&nonce),
+            "ct": crate::crypto::hex(&ct),
+        })
+    }
+
+    #[test]
+    fn an_undecryptable_record_does_not_echo_its_own_plaintext_into_the_error() {
+        let vk = [9u8; 32];
+        // `Opened` deliberately has no `Debug` (it would print a decrypted credential), so
+        // unwrap the error by hand rather than reaching for `expect_err`.
+        let Err(err) = open_kind(&vk, &authentic_but_malformed(&vk, "u-1")) else {
+            panic!("a record whose plaintext is not a Cred cannot be opened");
+        };
+        assert!(
+            !err.contains(DECRYPTED_CANARY),
+            "the error text is what every caller logs, and it must not carry the \
+             DECRYPTED record's contents: {err}"
+        );
+        // The redaction must not throw away the diagnostic that makes the failure
+        // reportable: which kind of failure, and where in the record.
+        assert!(
+            err.contains("line") && err.contains("column"),
+            "the error must still say WHERE it failed, or a quarantined record is \
+             undiagnosable: {err}"
+        );
+    }
+
+    /// A tombstones-shaped body is not a `Cred` either, and takes a different path; it must
+    /// also produce no content. (Guards against a future refactor reordering the two checks.)
+    #[test]
+    fn a_valid_credential_still_opens_so_the_redaction_cannot_be_vacuous() {
+        let vk = [9u8; 32];
+        let cred = Cred {
+            uuid: "u-2".into(),
+            updated_at: 7,
+            site: "s".into(),
+            username: "u".into(),
+            password: "p".into(),
+            notes: String::new(),
+        };
+        let w = seal_record(&vk, &cred).expect("seal");
+        assert!(
+            matches!(open_kind(&vk, &w), Ok(Opened::Cred(_))),
+            "a well-formed record must still open, or the redaction test above would pass \
+             for the wrong reason"
+        );
     }
 }
