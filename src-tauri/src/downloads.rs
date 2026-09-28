@@ -500,7 +500,8 @@ mod tests {
                 &json!({
                     "downloadDir": dl_dir.to_string_lossy(),
                 }),
-            );
+            )
+            .expect("settings fixture write");
             let inside = dl_dir.join("ok.bin");
             std::fs::write(&inside, b"ok").unwrap();
             let outside = app_dir.join("outside.bin");

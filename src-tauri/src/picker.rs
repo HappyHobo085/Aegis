@@ -297,7 +297,13 @@ pub fn on_picked(app: &AppHandle, payload: &str) {
     }
     text.push_str(&rule);
     text.push('\n');
-    crate::customfilters::write(app, &text);
+    // `write` reports whether the `.txt` landed, because the `picker.picked` event below is
+    // the UI's only signal that the pick was saved. Emitting it for a write that failed told
+    // the user their element was blocked when it is not.
+    if let Err(e) = crate::customfilters::write(app, &text) {
+        eprintln!("[aegis-picker] the rule was NOT saved ({e}); not reporting a pick");
+        return;
+    }
     crate::adblock_refresh::refresh(app);
     crate::emit_event(app, "picker.picked", json!({ "rule": rule }));
     eprintln!("[aegis-picker] added rule: {rule}");

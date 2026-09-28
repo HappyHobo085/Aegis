@@ -1536,7 +1536,7 @@ mod tests {
         next.as_object_mut()
             .expect("settings object")
             .insert("syncVault".into(), json!(true));
-        crate::settings::write(app, &next);
+        crate::settings::write(app, &next).expect("settings fixture write");
         crate::sync::set_enabled_for_test(app, true, 0);
     }
 

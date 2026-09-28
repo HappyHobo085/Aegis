@@ -494,7 +494,7 @@ mod tests {
         next.as_object_mut()
             .expect("settings is an object")
             .insert("syncVault".into(), json!(on));
-        crate::settings::write(app, &next);
+        crate::settings::write(app, &next).expect("settings fixture write");
     }
 
     // ── A real HTTP sync server, on loopback ───────────────────────────────

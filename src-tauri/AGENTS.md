@@ -211,7 +211,29 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     an imported `../outside` row NOT reading a planted file above the cache dir, a
     `../victim` removal NOT unlinking a planted file above it, `https://x.test/..` refused
     on add, and a `../escape` row refused on enable (18 tests).
-  - `customfilters.rs`, `settings.rs`.
+  - `customfilters.rs`, `settings.rs` — **a failed write must NEVER advance the sync
+    projection.** Each keeps a local record of "we have this peer's HLC" beside the file the
+    value actually lands in, and that record is what makes the next merge skip a value it
+    believes is already here. So the two writes are ORDERED and the second is CONDITIONAL:
+    `write` returns `Result<(), String>`, and `save_sync_records` / `stamp_sync_record` run
+    only after it returned `Ok`. Before, `write` only `eprintln!`d, so a write that never
+    happened was recorded as a fresh, winning, local HLC — and since `merge_projection` only
+    re-applies a record whose `rhlc > lh`, the peer's value could never win on that device
+    again. In `customfilters` it was bidirectional: each side advertised text the other did
+    not have. `settings::apply_synced` returns `bool` and `merge_remote` reports no
+    `sync.changed` event when it is false, so a transient failure (full disk, read-only
+    mount) heals on the NEXT pull instead of being lost for good. `apply_imported` returns
+    `Result<Vec<String>, String>` for the same reason: it runs `rebuild_projection_from_current`
+    AFTER the write, and that wipes and re-seeds the projection FROM THE CURRENT FILE — so
+    after a failed write it would stamp the PRE-import values with fresh locally-invented
+    HLCs, and a genuinely newer peer record would lose to a stamp the device invented inside
+    its own failure path. `customFilters.set` reports the error rather than echoing text the
+    file does not hold, `picker::on_picked` emits no `picker.picked` for a rule it could not
+    save, and `data.import` adds `settings` / `customFilters` to the `failed` list above.
+    `Result` is `#[must_use]`, so every test call site of either writer needed an explicit
+    `.expect("… fixture write")`; the production callers are only `apply_synced` and
+    `apply_imported`.
+
   - **Per-store locking (every read-modify-write of a JSON store takes it).**
     `jsonstore::with_store_lock(name, f)` is a `parking_lot::Mutex` keyed by store name and is
     **NOT reentrant** — taking it twice on one thread deadlocks the whole suite. So the rule is

@@ -86,6 +86,37 @@ pub fn ran(
         .map_err(|e| format!("{what}: {e}"))
 }
 
+/// Put a NON-EMPTY DIRECTORY where the named store's file must go, so writing that store
+/// really fails, and return the path that was blocked.
+///
+/// Every store writes atomically: `jsonstore::write_atomic_inner` creates the parent
+/// directory, writes a temp file, then `fs::rename`s it over the target. Renaming a file ONTO
+/// a non-empty directory fails with ENOTEMPTY/EISDIR — for EVERY user, root included, which is
+/// what makes this usable in a container that runs tests as root. `chmod 0500` is a no-op
+/// there, so the obvious alternative silently produces a VACUOUS test.
+///
+/// Callers should still assert the write failed after calling this (as the data-store tests
+/// do), so the test breaks loudly rather than passing for the wrong reason if `write_atomic`
+/// ever changes shape.
+pub fn block_store_file<R: tauri::Runtime>(app: &AppHandle<R>, name: &str) -> PathBuf {
+    let p = app.path().app_data_dir().expect("app data dir").join(name);
+    // The store file usually already exists (a previous write in the same test), and
+    // `create_dir_all` over an existing FILE fails with EEXIST. Remove it first so the
+    // directory lands in its place; the test is about the write failing, not about preserving
+    // the bytes, and every caller asserts the failure it cares about.
+    if p.is_file() {
+        std::fs::remove_file(&p).expect("clear the real store file");
+    }
+    std::fs::create_dir_all(&p).expect("dir in place of the store file");
+    std::fs::write(p.join("occupied"), b"x").expect("make it non-empty");
+    p
+}
+
+/// Undo [`block_store_file`]: remove the blocking directory so the real file can land again.
+pub fn unblock_store_file(p: &std::path::Path) {
+    std::fs::remove_dir_all(p).expect("remove the blocking directory");
+}
+
 fn fresh_tmp() -> PathBuf {
     let d = std::env::temp_dir().join(format!(
         "aegis-test-{}-{}",

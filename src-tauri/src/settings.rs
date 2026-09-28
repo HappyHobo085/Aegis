@@ -137,20 +137,35 @@ pub fn android_https_only() -> bool {
 /// The single low-level writer, so it deliberately does NOT take the store lock: its two
 /// production callers ([`apply_synced`], [`apply_imported`]) already hold it and the lock is
 /// not reentrant.
-pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) {
-    if let Some(p) = store_path(app) {
-        let txt = serde_json::to_string_pretty(value).unwrap_or_default();
-        if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
-            eprintln!("[aegis] failed to persist settings: {e}");
-        }
-    }
+///
+/// Returns whether the file now holds `value`. It USED to return nothing and only
+/// `eprintln!` a failure, and both callers carried on as if it had landed: each one then
+/// ADVANCES the per-key sync projection past a write that never happened. Since
+/// [`merge_projection`] only re-applies a record whose HLC beats the local one, the peer's
+/// value is never re-applied on this device again — permanently, silently, with the only
+/// trace a line on stderr nobody reads. The projection has to be able to see the truth, so
+/// the writer has to report it.
+pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) -> Result<(), String> {
+    let Some(p) = store_path(app) else {
+        return Err("no app data dir".to_string());
+    };
+    // `unwrap_or_default()` here meant a serialization failure wrote an EMPTY settings file
+    // and reported success. `Value` always serializes, so this cannot happen in practice —
+    // which is exactly why the old shape was free to lie.
+    let txt = serde_json::to_string_pretty(value).map_err(|e| e.to_string())?;
+    crate::jsonstore::write_atomic(&p, txt.as_bytes()).map_err(|e| {
+        eprintln!("[aegis] failed to persist settings: {e}");
+        e.to_string()
+    })?;
     // Mirror the policy into the Android JNI global on every write. See the type's doc for
     // why this is the ONE place to hook: `write` is the single low-level writer, so a
     // local edit, an imported bundle and a synced record all refresh the getter.
     #[cfg(any(target_os = "android", test))]
     note_https_only(https_only(app));
-    // The file changed — drop the cache so getters re-read the new values.
+    // The file changed — drop the cache so getters re-read the new values. Only on success:
+    // nothing changed on disk, so the cache is still correct.
     invalidate_cache(app);
+    Ok(())
 }
 
 /// Configured download directory ("" = use the OS Downloads dir).
@@ -669,8 +684,16 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &[Value]) -> Vec<Str
             }
         }
         let (merged, changed) = merge_projection(ensure_sync_projection(app), remote);
-        if !changed.is_empty() {
-            apply_synced(app, &merged); // writes the flat settings + saves the merged projection
+        if changed.is_empty() {
+            return Vec::new();
+        }
+        if !apply_synced(app, &merged) {
+            // The flat write failed, so the projection was deliberately NOT advanced (see
+            // `apply_synced`). Two consequences, both wanted: these keys genuinely did not
+            // change, so no `sync.changed` event is owed; and the peer's record still wins the
+            // next merge, so a transient failure (a full disk, a read-only mount) heals on the
+            // next pass instead of being lost for good.
+            return Vec::new();
         }
         changed
     })
@@ -706,7 +729,14 @@ pub fn rebuild_projection_from_current<R: Runtime>(app: &AppHandle<R>) {
 /// [`merge_remote`], which holds the lock. Do NOT add a lock here — the store lock is not
 /// reentrant and that would deadlock every sync pass. (`merge_remote` is its only caller;
 /// the `#[should_panic]` test below proves the guard rather than the lock.)
-pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, records: &[Value]) {
+///
+/// Returns whether the flat settings file actually changed. The `write` → `save_sync_records`
+/// order is the whole point: `save_sync_records` is what records "this peer's HLC has been
+/// applied here", so running it after a FAILED write tells the next merge that the value is
+/// already present when it is not, and the value is then never re-applied on this device.
+/// Leaving the projection where it was makes the same record win again next pass, which is
+/// the only self-healing direction available.
+pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, records: &[Value]) -> bool {
     assert_holding_settings_lock("apply_synced");
     // Start from the saved flat file (NOT defaults overlay) so we only touch synced keys.
     let mut flat = store_path(app)
@@ -749,7 +779,11 @@ pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, records: &[Value]) {
             }
         }
     }
-    write(app, &flat);
+    if let Err(e) = write(app, &flat) {
+        eprintln!("[aegis] settings did not land, leaving the sync projection untouched: {e}");
+        return false;
+    }
+    // Only now is "this peer's record has been applied here" true.
     save_sync_records(app, records);
     // Android: a synced webrtcPolicy change must update the document-start shim's policy
     // global too (its JNI getter reads the global, not the file) — mirror settings.set so
@@ -760,6 +794,7 @@ pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, records: &[Value]) {
     // NativeFarble JNI getter (no AppHandle available there); re-push on every synced change.
     #[cfg(target_os = "android")]
     crate::farble::note_level(&crate::farble::level(app));
+    true
 }
 
 /// Handle `settings.*` channels. Returns `None` if not a settings channel.
@@ -1054,7 +1089,17 @@ pub extern "system" fn Java_com_aegis_browser_NativeSettings_httpsOnly(
 /// is inside `settings.set`, or while the sync worker is merging, loses whichever write is not
 /// last — with no error anywhere. `write` and `rebuild_projection_from_current` stay UNLOCKED
 /// inner workers, because they are also called from `apply_synced` under a held lock.
-pub(crate) fn apply_imported<R: Runtime>(app: &AppHandle<R>, incoming: &Value) -> Vec<String> {
+///
+/// `Err` means `settings.json` could not be written, and the projection was then left alone
+/// deliberately: `rebuild_projection_from_current` wipes the projection and re-seeds it from
+/// the CURRENT FILE, so running it after a failed write would not merely skip the import — it
+/// would stamp the PRE-import values with FRESH, locally-invented HLCs, and a peer's newer
+/// record would then lose to a stamp this device made up in its own failure path. The caller
+/// (`data.import`) reports the `Err` through the same `failed` list the store writes use.
+pub(crate) fn apply_imported<R: Runtime>(
+    app: &AppHandle<R>,
+    incoming: &Value,
+) -> Result<Vec<String>, String> {
     with_settings_store_lock(|| {
         let mut merged = load(app); // start from the CURRENT values, not defaults
         let mut refused = Vec::new();
@@ -1073,10 +1118,10 @@ pub(crate) fn apply_imported<R: Runtime>(app: &AppHandle<R>, incoming: &Value) -
                 }
             }
         }
-        write(app, &merged);
+        write(app, &merged)?;
         // Rebuild the per-key sync projection from the post-merge flat settings.
         rebuild_projection_from_current(app);
-        refused
+        Ok(refused)
     })
 }
 
@@ -1178,7 +1223,7 @@ mod tests {
             next.as_object_mut()
                 .unwrap()
                 .insert("httpsOnly".into(), json!(false));
-            write(app, &next);
+            write(app, &next).expect("filter/settings fixture write");
             // Must observe the new value, not the primed-cache default.
             assert_eq!(load(app).get("httpsOnly"), Some(&json!(false)));
         });
@@ -1488,7 +1533,8 @@ mod tests {
     #[test]
     fn a_peer_record_cannot_write_a_value_the_allowlist_rejects() {
         with_tmp_app(|app| {
-            write(app, &json!({ "homeUrl": "https://keepme.test/" }));
+            write(app, &json!({ "homeUrl": "https://keepme.test/" }))
+                .expect("filter/settings fixture write");
 
             // A `file:` home page: accepted by `Url::parse`, refused by the allowlist.
             merge_remote(app, &[rec("homeUrl", 9, json!("file:///etc/passwd"))]);
@@ -1545,7 +1591,8 @@ mod tests {
                 " off",
                 "", // empty, which is also what a non-string reads as
             ] {
-                super::write(app, &json!({ "webrtcPolicy": corrupt }));
+                super::write(app, &json!({ "webrtcPolicy": corrupt }))
+                    .expect("settings fixture write");
                 let policy = super::webrtc_policy(app);
                 let shim = crate::webrtc_shim::shim_for(&policy, false);
                 assert!(
@@ -1567,7 +1614,8 @@ mod tests {
             for (stored, expect_differs_from) in
                 [("public-only", "disable"), ("disable", "public-only")]
             {
-                super::write(app, &json!({ "webrtcPolicy": stored }));
+                super::write(app, &json!({ "webrtcPolicy": stored }))
+                    .expect("settings fixture write");
                 let policy = super::webrtc_policy(app);
                 assert_eq!(policy, stored, "a valid policy must not be rewritten");
                 let a = crate::webrtc_shim::shim_for(&policy, false);
@@ -1590,7 +1638,8 @@ mod tests {
     fn the_default_webrtc_policy_still_means_do_not_interfere() {
         use crate::test_support::with_tmp_app;
         with_tmp_app(|app| {
-            super::write(app, &json!({ "webrtcPolicy": "default" }));
+            super::write(app, &json!({ "webrtcPolicy": "default" }))
+                .expect("settings fixture write");
             assert_eq!(
                 super::webrtc_policy(app),
                 "default",
@@ -1618,14 +1667,14 @@ mod tests {
         use crate::test_support::with_tmp_app;
         with_tmp_app(|app| {
             // Off must reach the mirror: this is the case the fix exists for.
-            super::write(app, &json!({ "httpsOnly": false }));
+            super::write(app, &json!({ "httpsOnly": false })).expect("settings fixture write");
             assert!(
                 !android_https_only(),
                 "a user who turned HTTPS-Only OFF must have that reach the Android mirror, or \
                  their plain-HTTP intranet host is rewritten to https and the site breaks"
             );
             // And back on: a one-way latch would be a different bug.
-            super::write(app, &json!({ "httpsOnly": true }));
+            super::write(app, &json!({ "httpsOnly": true })).expect("settings fixture write");
             assert!(
                 android_https_only(),
                 "turning HTTPS-Only back on must reach the mirror too"
@@ -1746,6 +1795,104 @@ mod tests {
             // `rebuild_projection_from_current`) directly again, it would do an unprotected
             // read-modify-write of the same two files. That is the defect this commit removes.
             record_change(app, "themeMode", &json!("dark"));
+        });
+    }
+
+    // ── a write that did not land must not be recorded as having landed ──
+
+    /// The bug this pins: `apply_synced` used to call `save_sync_records` unconditionally, so a
+    /// failed `settings.json` write still recorded the peer's HLC as "applied here".
+    /// `merge_projection` then only re-applies a record whose HLC BEATS the local one, so that
+    /// setting was never re-applied on this device again — permanently, silently, and across
+    /// every later sync pass. `eprintln!` was the only trace.
+    #[test]
+    fn a_settings_write_that_fails_does_not_advance_the_sync_projection() {
+        with_tmp_app(|app| {
+            // A local edit, so the projection is materialized and httpsOnly differs from the
+            // default — a merge that changes nothing would prove nothing.
+            apply_local(app, &json!({ "partial": { "httpsOnly": false } })).expect("local edit");
+            let before = load_sync_records(app);
+            assert!(
+                !before.is_empty(),
+                "precondition: the projection must exist"
+            );
+
+            let blocked = crate::test_support::block_store_file(app, "settings.json");
+            assert!(
+                write(app, &json!({ "httpsOnly": true })).is_err(),
+                "precondition: the flat write must actually fail for this test to test anything"
+            );
+
+            // A peer record that WINS the merge, so `apply_synced` is definitely reached.
+            // Relative to the LOCAL record's own HLC, not an absolute constant: an absolute
+            // wall clock loses to `now_ms()` (~1.8e12) the moment the seed starts ticking, and
+            // the peer would silently stop winning — which would make every assertion below
+            // pass for the wrong reason.
+            let local_hlc = before
+                .iter()
+                .find(|r| r.get("key").and_then(Value::as_str) == Some("httpsOnly"))
+                .and_then(crate::sync_envelope::from_value)
+                .expect("the local edit must have a projection record for httpsOnly");
+            let peer = vec![rec("httpsOnly", local_hlc.wall_ms + 10_000, json!(true))];
+            let changed = merge_remote(app, &peer);
+            assert!(
+                changed.is_empty(),
+                "nothing was written, so no key changed and no sync.changed event is owed — got {changed:?}"
+            );
+            assert_eq!(
+                load_sync_records(app),
+                before,
+                "the projection must NOT record an HLC whose value never reached the file"
+            );
+
+            // The load-bearing consequence: with the projection untouched, the SAME peer record
+            // wins again once the file can be written. Under the old shape it lost forever,
+            // because the local projection claimed a value that was not on disk.
+            crate::test_support::unblock_store_file(&blocked);
+            assert_eq!(
+                merge_remote(app, &peer),
+                vec!["httpsOnly".to_string()],
+                "the same record must still win after a transient write failure"
+            );
+            assert_eq!(
+                load(app).get("httpsOnly"),
+                Some(&json!(true)),
+                "and the peer's value must actually be on disk this time"
+            );
+        });
+    }
+
+    /// `apply_imported` is the same defect with a nastier failure mode, and it is the reason
+    /// `write` had to report at all: it runs `rebuild_projection_from_current` AFTER the write,
+    /// and that wipes the projection and re-seeds it from the CURRENT FILE. Run after a failed
+    /// write it would not merely skip the import — it would stamp the PRE-import values with
+    /// FRESH, locally-invented HLCs, and a peer's genuinely newer record would then lose to a
+    /// stamp this device made up inside its own failure path.
+    #[test]
+    fn a_settings_import_that_fails_leaves_the_projection_on_the_values_that_are_on_disk() {
+        with_tmp_app(|app| {
+            apply_local(app, &json!({ "partial": { "httpsOnly": false } })).expect("local edit");
+            let before = load_sync_records(app);
+
+            let blocked = crate::test_support::block_store_file(app, "settings.json");
+            let outcome = apply_imported(app, &json!({ "httpsOnly": true }));
+            assert!(
+                outcome.is_err(),
+                "a write that did not land must be reported, not returned as a clean import"
+            );
+            assert_eq!(
+                load_sync_records(app),
+                before,
+                "the projection must not be re-seeded with fresh HLCs for values that never landed"
+            );
+
+            crate::test_support::unblock_store_file(&blocked);
+            assert_eq!(
+                apply_imported(app, &json!({ "httpsOnly": true })).expect("now it can land"),
+                Vec::<String>::new(),
+                "no key was refused, so the refusal list is empty"
+            );
+            assert_eq!(load(app).get("httpsOnly"), Some(&json!(true)));
         });
     }
 }

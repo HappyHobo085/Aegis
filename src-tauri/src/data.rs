@@ -321,7 +321,7 @@ pub fn dispatch<R: Runtime>(
                     crate::test_support::import_tick();
                 }
             }
-            let outcome = aggregate_saves(saves);
+            let mut outcome = aggregate_saves(saves);
             // Drop the two batched caches AGAIN, now that the files are written. The
             // pre-loop invalidation above is what stops a flush clobbering the import; this
             // one discards a visit or download event that `record`/`on_requested` captured
@@ -336,10 +336,26 @@ pub fn dispatch<R: Runtime>(
                 // Merges over the current values (not a wholesale replace) and validates each
                 // key through the same allowlist `settings.set` uses — see
                 // `settings::apply_imported` for why both matter.
-                refused_settings = crate::settings::apply_imported(app, settings);
+                //
+                // `settings` is deliberately NOT a `STORES` entry: it is merged rather than
+                // replaced and validated per key, so the loop above cannot see it. A failed
+                // merge is the same silent loss from the user's side of the screen as a failed
+                // store write, so it joins the same `failed` list rather than inventing a
+                // second reporting channel that the renderer would have to learn.
+                match crate::settings::apply_imported(app, settings) {
+                    Ok(refused) => refused_settings = refused,
+                    Err(e) => {
+                        eprintln!("[aegis] settings import did not land: {e}");
+                        outcome.failed.push("settings".to_string());
+                    }
+                }
             }
             if let Some(cf) = bundle.get("customFilters").and_then(Value::as_str) {
-                crate::customfilters::write(app, cf); // stamps the customFilters sync record
+                // Also stamps the customFilters sync record, and reports whether it landed.
+                if let Err(e) = crate::customfilters::write(app, cf) {
+                    eprintln!("[aegis] custom filters import did not land: {e}");
+                    outcome.failed.push("customFilters".to_string());
+                }
             }
             // Re-seed the in-memory allowlist + engine from the imported allowlist store.
             crate::adblock::seed_from_disk(app);
@@ -351,7 +367,11 @@ pub fn dispatch<R: Runtime>(
             // the renderer from reloading the chrome (and wiping the message naming the
             // failures) on the strength of a partial import.
             Some(Ok(json!({
-                "ok": outcome.ok,
+                // Recomputed from `failed` rather than reusing the store loop's own verdict,
+                // because settings and customFilters join that list after the loop ran. Still
+                // exactly equivalent for the loop's own failures — `aggregate_saves` sets `ok`
+                // false iff it pushed a name.
+                "ok": outcome.failed.is_empty(),
                 // Only the stores that landed. A count for a store whose file was never
                 // written is the same kind of lie as the `ok: true` that used to be
                 // unconditional.
@@ -491,6 +511,52 @@ mod tests {
         assert!(out.ok);
         assert!(out.failed.is_empty());
         assert_eq!(out.counts.len(), 2);
+    }
+
+    /// `settings` and `customFilters` are not `STORES` entries — settings is merged rather than
+    /// replaced and validated per key, custom filters are a `.txt` plus a sidecar — so the store
+    /// loop above cannot see a failure in either. Routing them into the SAME `failed` list is
+    /// what stops `data.import` from reporting a complete restore while the user's settings and
+    /// filter list are quietly the old ones.
+    #[test]
+    fn an_unwritable_settings_file_is_named_in_failed_too() {
+        with_tmp_app(|app| {
+            let blocked = crate::test_support::block_store_file(app, "settings.json");
+            assert!(
+                crate::settings::write(app, &json!({ "httpsOnly": false })).is_err(),
+                "precondition: settings.json must actually be unwritable for this to test anything"
+            );
+
+            let bundle = json!({
+                "settings": { "httpsOnly": false, "homeUrl": "https://bundle.test/" },
+                "customFilters": "||bundle.test^\n",
+                "favorites": [{ "name": "F", "url": "https://fav.test/" }],
+            });
+            let res = super::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
+                .expect("data.import is handled")
+                .expect("a partial import is Ok(json), not Err");
+
+            assert_eq!(
+                res.get("ok").and_then(Value::as_bool),
+                Some(false),
+                "an import whose settings could not be written must not report ok — got {res}"
+            );
+            let failed = res.get("failed").and_then(Value::as_array).expect("failed");
+            assert!(
+                failed.contains(&json!("settings")),
+                "the unwritable settings file must be named, got {res}"
+            );
+            // The store that COULD be written still landed, and is still counted — this is a
+            // partial import, not an abandoned one.
+            assert_eq!(
+                res.get("counts")
+                    .and_then(Value::as_object)
+                    .and_then(|c| c.get("favorites"))
+                    .and_then(Value::as_u64),
+                Some(1)
+            );
+            let _ = blocked;
+        });
     }
 
     /// The end-to-end property: a store the process cannot write is reported BY NAME, the
@@ -690,9 +756,10 @@ mod tests {
         crate::settings::write(
             app,
             &json!({ "homeUrl": "https://home.seed/", "primaryColor": "#abcdef", "httpsOnly": false }),
-        );
+        ).expect("settings fixture write");
         // a custom filter
-        crate::customfilters::write(app, "||seed-filter.example^\n");
+        crate::customfilters::write(app, "||seed-filter.example^\n")
+            .expect("seeding the custom-filter fixture must succeed");
         // A filter subscription and a farbling opt-out. These two stores were absent from
         // `STORES` for the life of the export feature, so they are seeded here specifically:
         // both are ordinary envelope-stamped object arrays, so both ride the same path, and
@@ -924,7 +991,8 @@ mod tests {
             // Seeded with `settings::write` rather than the `settings.set` channel:
             // `dispatch` takes a concrete (non-generic) `&AppHandle` and so cannot be driven
             // from a `MockRuntime` test.
-            crate::settings::write(app, &json!({ "homeUrl": "https://keepme.test/" }));
+            crate::settings::write(app, &json!({ "homeUrl": "https://keepme.test/" }))
+                .expect("settings fixture write");
             let bundle = json!({ "settings": { "homeUrl": "file:///etc/passwd" } });
             let res = dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
                 .unwrap()
@@ -965,7 +1033,8 @@ mod tests {
                     "webrtcPolicy": "disable",
                     "downloadDir": "/tmp/aegis-keep",
                 }),
-            );
+            )
+            .expect("settings fixture write");
             // A bundle that mentions exactly one setting.
             let bundle = json!({ "settings": { "homeUrl": "https://imported.test/" } });
             dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))

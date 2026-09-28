@@ -5,10 +5,17 @@ All notable changes to Aegis are recorded here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
 ### Fixed
 
+- **A save that failed could make a change from a paired device never arrive.** Settings and
+  custom filter lists are each written to a file, and each keeps beside it a record of which
+  changes from a paired device it has already applied. That record was updated even when the
+  save itself had failed — a full disk, a read-only folder, a permissions problem — so the
+  app marked a change as applied that was never written. A later change from the other device
+  was then treated as already applied and skipped, and skipped for good. Restoring a backup
+  that could not be written had the same effect, by stamping the values that were still on
+  disk as newly applied. The record is now only updated after the save it describes
+  succeeds, so the change arrives on the next pass instead of being lost without a word.
 - **Two settings you changed at once could lose one of them.** The settings file and the
   record of what has been synced are each rewritten by a read-then-write, and nothing
   serialised those two steps. A save from a settings form, a restore of a backup, and a

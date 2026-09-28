@@ -113,14 +113,25 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &Value) -> bool {
     } else {
         remote.get("text").and_then(Value::as_str).unwrap_or("")
     };
+    // The `.txt` FIRST, and the record only once it landed. The record is what says "we have
+    // this peer's HLC", so persisting it after a failed `.txt` write told the next merge the
+    // text was already here when it is not — and the peer's own text then lost to that stale
+    // HLC on every later pull, in both directions, forever. Order matters as much as checking.
     if let Some(p) = path(app) {
         if let Err(e) = crate::jsonstore::write_atomic(&p, text.as_bytes()) {
-            eprintln!("[aegis] failed to persist custom filters: {e}");
+            eprintln!(
+                "[aegis] custom filters did not land, leaving the sync record where it was: {e}"
+            );
+            return false;
         }
     }
     if let Some(sp) = sync_path(app) {
         if let Ok(t) = serde_json::to_string_pretty(remote) {
             if let Err(e) = crate::jsonstore::write_atomic(&sp, t.as_bytes()) {
+                // The `.txt` DID change, so this must still count as a change (reporting `false`
+                // would tell the sync engine nothing happened when the engine's rules just
+                // changed). The only cost is that the next pull re-applies the same text, which
+                // is idempotent — the self-healing direction again.
                 eprintln!("[aegis] failed to persist custom filter sync record: {e}");
             }
         }
@@ -133,13 +144,21 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &Value) -> bool {
 /// temp→rename + .bak). The single write path for custom filters: the `set` dispatch,
 /// data-import, and the element picker all go through here, so all of them stamp the sync
 /// record.
-pub fn write<R: Runtime>(app: &AppHandle<R>, text: &str) {
+///
+/// Returns whether the `.txt` holds `text`. It USED to return nothing and only `eprintln!` a
+/// failure, then stamp the sync record UNCONDITIONALLY — so a write that never happened was
+/// recorded as a fresh, winning, local HLC. Every later peer record then lost to a stamp for
+/// text this device does not have, in both directions, with no error anywhere. The stamp is
+/// now the second step, not the second half of an unconditional pair.
+pub fn write<R: Runtime>(app: &AppHandle<R>, text: &str) -> Result<(), String> {
     if let Some(p) = path(app) {
-        if let Err(e) = crate::jsonstore::write_atomic(&p, text.as_bytes()) {
+        crate::jsonstore::write_atomic(&p, text.as_bytes()).map_err(|e| {
             eprintln!("[aegis] failed to persist custom filters: {e}");
-        }
+            e.to_string()
+        })?;
     }
     stamp_sync_record(app, text);
+    Ok(())
 }
 
 // Generic over `R: Runtime` so the `MockRuntime` app `test_support::with_tmp_app`
@@ -153,11 +172,18 @@ pub fn dispatch<R: Runtime>(
         "customFilters.get" => Some(Ok(json!(load(app)))),
         "customFilters.set" => {
             let text = payload.get("text").and_then(Value::as_str).unwrap_or("");
-            // write() persists the .txt durably AND stamps the sync record.
-            write(app, text);
-            // Re-apply ad-block so the new rules take effect — on every platform.
-            crate::adblock_refresh::refresh(app);
-            Some(Ok(json!(text)))
+            // write() persists the .txt durably AND stamps the sync record. It reports whether
+            // the `.txt` landed, because this arm echoing the text back as `Ok` is the renderer
+            // saying "saved": returning `Ok(json!(text))` for a file that does not contain it
+            // is a lie the user finds out about only after a restart loses the rules.
+            match write(app, text) {
+                Ok(()) => {
+                    // Re-apply ad-block so the new rules take effect — on every platform.
+                    crate::adblock_refresh::refresh(app);
+                    Some(Ok(json!(text)))
+                }
+                Err(e) => Some(Err(format!("could not save custom filters: {e}"))),
+            }
         }
         _ => None,
     }
@@ -204,7 +230,7 @@ mod tests {
             // A realistic multi-line rule list: cosmetics, hosts, and an exception.
             let text =
                 "||ads.example.com^\n##.ad-banner\nexample.org##.promo\n@@||cdn.example.com^\n";
-            write(app, text);
+            write(app, text).expect("filter/settings fixture write");
             assert_eq!(load(app), text);
         });
     }
@@ -212,8 +238,8 @@ mod tests {
     #[test]
     fn write_overwrites_rather_than_appends() {
         with_tmp_app(|app| {
-            write(app, "||first.test^\n");
-            write(app, "||second.test^\n");
+            write(app, "||first.test^\n").expect("filter/settings fixture write");
+            write(app, "||second.test^\n").expect("filter/settings fixture write");
             assert_eq!(load(app), "||second.test^\n");
         });
     }
@@ -221,8 +247,8 @@ mod tests {
     #[test]
     fn write_with_empty_text_clears_the_list() {
         with_tmp_app(|app| {
-            write(app, "||gone.test^\n");
-            write(app, "");
+            write(app, "||gone.test^\n").expect("filter/settings fixture write");
+            write(app, "").expect("filter/settings fixture write");
             assert_eq!(load(app), "");
         });
     }
@@ -232,7 +258,7 @@ mod tests {
     #[test]
     fn write_stamps_the_sync_record_so_picks_up_the_change() {
         with_tmp_app(|app| {
-            write(app, "||a.test^\n");
+            write(app, "||a.test^\n").expect("filter/settings fixture write");
             let rec = sync_record(app);
             assert_eq!(rec["text"], json!("||a.test^\n"));
             // A deterministic, device-independent id: HLC-LWW must dedup every
@@ -274,7 +300,7 @@ mod tests {
     fn write_bumps_the_hlc_so_a_later_local_edit_wins_over_the_seed() {
         with_tmp_app(|app| {
             let first = hlc_of(app);
-            write(app, "||one.test^\n");
+            write(app, "||one.test^\n").expect("filter/settings fixture write");
             let second = hlc_of(app);
             assert!(
                 second > first,
@@ -288,7 +314,7 @@ mod tests {
     #[test]
     fn merge_remote_applies_a_newer_peer_record() {
         with_tmp_app(|app| {
-            write(app, "||mine.test^\n");
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
             let before = hlc_of(app);
             assert!(merge_remote(
                 app,
@@ -301,7 +327,7 @@ mod tests {
     #[test]
     fn merge_remote_rejects_an_older_peer_record_and_keeps_local_text() {
         with_tmp_app(|app| {
-            write(app, "||mine.test^\n");
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
             let mine = hlc_of(app);
             assert!(
                 !merge_remote(app, &remote(mine.wall_ms - 10_000, "||stale.test^\n")),
@@ -327,7 +353,7 @@ mod tests {
     #[test]
     fn a_tombstoned_peer_record_clears_the_local_rules() {
         with_tmp_app(|app| {
-            write(app, "||mine.test^\n");
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
             let before = hlc_of(app);
             assert!(merge_remote(
                 app,
@@ -344,7 +370,7 @@ mod tests {
     #[test]
     fn a_stale_tombstone_does_not_delete_a_newer_local_edit() {
         with_tmp_app(|app| {
-            write(app, "||mine.test^\n");
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
             let mine = hlc_of(app);
             assert!(!merge_remote(app, &remote_tombstone(mine.wall_ms - 1)));
             assert_eq!(load(app), "||mine.test^\n");
@@ -368,7 +394,7 @@ mod tests {
     #[test]
     fn merge_remote_rejects_a_record_with_no_usable_hlc() {
         with_tmp_app(|app| {
-            write(app, "||mine.test^\n");
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
             // No `hlc` key at all: the record cannot be placed in the order, so it
             // must be ignored rather than applied blindly.
             let broken = json!({ "uuid": CUSTOM_FILTERS_UUID, "text": "||evil.test^\n" });
@@ -382,7 +408,7 @@ mod tests {
     #[test]
     fn a_losing_merge_leaves_the_local_sync_record_untouched() {
         with_tmp_app(|app| {
-            write(app, "||mine.test^\n");
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
             let mine = hlc_of(app);
             let before = sync_record(app);
             assert!(!merge_remote(
@@ -419,7 +445,7 @@ mod tests {
             assert_eq!(load(app), "||theirs.test^\n");
             // The user edits locally; `write` stamps a new HLC, which must dominate the
             // record the peer just won.
-            write(app, "||mine.test^\n");
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
             assert_eq!(load(app), "||mine.test^\n");
             assert!(
                 hlc_of(app).wall_ms >= 1_700_000_000_000,
@@ -433,7 +459,7 @@ mod tests {
     #[test]
     fn dispatch_get_returns_the_current_text() {
         with_tmp_app(|app| {
-            write(app, "||x.test^\n");
+            write(app, "||x.test^\n").expect("filter/settings fixture write");
             let out = dispatch(app, "customFilters.get", &json!({}))
                 .expect("channel is handled")
                 .expect("ok");
@@ -467,6 +493,91 @@ mod tests {
     fn dispatch_ignores_an_unknown_channel() {
         with_tmp_app(|app| {
             assert!(dispatch(app, "customFilters.nope", &json!({})).is_none());
+        });
+    }
+
+    // ── a write that did not land must not be recorded as having landed ──
+
+    /// `write` used to `eprintln!` a failed `.txt` write and stamp the sync record anyway, so
+    /// the record advertised text this device does not have at a FRESH, ticking, winning HLC.
+    /// Every later peer record then lost to that invented stamp — in BOTH directions, forever,
+    /// with no error anywhere. The record must keep describing the file that is on disk.
+    #[test]
+    fn a_filter_write_that_fails_does_not_stamp_the_sync_record() {
+        with_tmp_app(|app| {
+            write(app, "||first.test^\n").expect("seed");
+            let first = hlc_of(app);
+
+            let _blocked = crate::test_support::block_store_file(app, "custom-filters.txt");
+            assert!(
+                write(app, "||second.test^\n").is_err(),
+                "precondition: the .txt write must actually fail for this test to test anything"
+            );
+
+            let rec = sync_record(app);
+            assert_eq!(
+                rec.get("text").and_then(Value::as_str),
+                Some("||first.test^\n"),
+                "the record must still describe the .txt that is on disk, not the one that failed"
+            );
+            assert_eq!(
+                hlc_of(app),
+                first,
+                "a write that did not land must not tick a new winning HLC"
+            );
+        });
+    }
+
+    /// The mirror image on the pull side: a peer's record that WINS the merge but cannot be
+    /// written must not be persisted verbatim either, or the same permanent bidirectional loss
+    /// happens from the other end. Not persisting it is also the self-healing direction — the
+    /// peer's record wins again on the next pass.
+    #[test]
+    fn a_peer_filter_write_that_fails_leaves_the_record_alone_so_the_peer_retries() {
+        with_tmp_app(|app| {
+            write(app, "||mine.test^\n").expect("seed");
+            let mine = hlc_of(app);
+            // Relative to the LOCAL HLC, matching this file's other merge tests. An absolute
+            // wall clock is useless here: `now_ms()` is ~1.8e12, so a small constant like 9e9
+            // is an ANCIENT record, the merge loses before ever reaching the write, and every
+            // assertion below would pass for the wrong reason.
+            let peer = remote(mine.wall_ms + 10_000, "||theirs.test^\n");
+
+            let blocked = crate::test_support::block_store_file(app, "custom-filters.txt");
+            assert!(
+                !merge_remote(app, &peer),
+                "a write that did not land is not a change — reporting true would tell the sync \
+                 engine the rules changed when they did not"
+            );
+            assert_eq!(
+                hlc_of(app),
+                mine,
+                "the peer's HLC must not be recorded as applied when its text never landed"
+            );
+
+            crate::test_support::unblock_store_file(&blocked);
+            assert!(
+                merge_remote(app, &peer),
+                "the same record must win again once the write can land"
+            );
+            assert_eq!(load(app), "||theirs.test^\n");
+        });
+    }
+
+    /// The user-visible half: the `set` arm echoed the text back as `Ok`, which the renderer
+    /// renders as "saved". Returning `Ok` for a file that does not contain the text meant the
+    /// user found out only after a restart lost the rules.
+    #[test]
+    fn the_set_channel_reports_a_write_that_did_not_land() {
+        with_tmp_app(|app| {
+            let _blocked = crate::test_support::block_store_file(app, "custom-filters.txt");
+            let reply = dispatch(app, "customFilters.set", &json!({ "text": "||x.test^\n" }))
+                .expect("customFilters.set is handled")
+                .expect_err("a write that did not land must not read as saved");
+            assert!(
+                reply.contains("custom filters"),
+                "the message must name what failed, so the user is not left guessing — got {reply:?}"
+            );
         });
     }
 }

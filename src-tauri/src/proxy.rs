@@ -360,7 +360,7 @@ pub fn dispatch<R: Runtime>(
                     serde_json::to_value(&cfg).unwrap_or(Value::Null),
                 );
             }
-            crate::settings::write(app, &s);
+            crate::settings::write(app, &s).expect("settings fixture write");
             if let Some(st) = app.try_state::<ProxyState>() {
                 *st.0.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
             }

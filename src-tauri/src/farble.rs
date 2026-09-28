@@ -528,17 +528,20 @@ mod tests {
         });
         // After writing "standard": returns "standard".
         with_tmp_app(|app| {
-            crate::settings::write(app, &json!({"antiFingerprint": "standard"}));
+            crate::settings::write(app, &json!({"antiFingerprint": "standard"}))
+                .expect("settings fixture write");
             assert_eq!(super::level(app), "standard");
         });
         // After writing "strict": returns "strict".
         with_tmp_app(|app| {
-            crate::settings::write(app, &json!({"antiFingerprint": "strict"}));
+            crate::settings::write(app, &json!({"antiFingerprint": "strict"}))
+                .expect("settings fixture write");
             assert_eq!(super::level(app), "strict");
         });
         // Unknown stored value is clamped to "off".
         with_tmp_app(|app| {
-            crate::settings::write(app, &json!({"antiFingerprint": "bogus"}));
+            crate::settings::write(app, &json!({"antiFingerprint": "bogus"}))
+                .expect("settings fixture write");
             assert_eq!(super::level(app), "off");
         });
     }
@@ -708,7 +711,8 @@ mod tests {
             // Write the setting with the LOW-LEVEL writer, which touches only the settings
             // file and pushes no JNI global. So the only thing that can move the global
             // afterwards is the farble boot hook itself.
-            crate::settings::write(app, &json!({ "antiFingerprint": "strict" }));
+            crate::settings::write(app, &json!({ "antiFingerprint": "strict" }))
+                .expect("settings fixture write");
             assert_eq!(
                 super::level(app),
                 "strict",
@@ -742,7 +746,8 @@ mod tests {
             // a newer build). `settings.set` pushes this value RAW into the global; the boot
             // hook must instead push the CLAMPED reader, so the two paths cannot disagree
             // about what a junk value means.
-            crate::settings::write(app, &json!({ "antiFingerprint": "bogus" }));
+            crate::settings::write(app, &json!({ "antiFingerprint": "bogus" }))
+                .expect("settings fixture write");
             assert_eq!(
                 super::level(app),
                 "off",
