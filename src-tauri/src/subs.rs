@@ -175,27 +175,29 @@ const DEFAULTS: &[(&str, &str)] = &[
 /// tombstoned one — so a user who removed a default is never overruled. Pure store
 /// mutation, triggers no network (`seed_defaults` is the boot wrapper; it does NOT fetch).
 fn ensure_default_rows<R: Runtime>(app: &AppHandle<R>) -> Vec<(String, String)> {
-    let mut items = jsonstore::load_synced(app, "subs");
-    let mut added = Vec::new();
-    for (list_id, url) in DEFAULTS {
-        let exists = items
-            .iter()
-            .any(|it| it.get("listId").and_then(Value::as_str) == Some(*list_id));
-        if exists {
-            continue; // present (live or tombstoned) → respect the existing row
+    jsonstore::with_store_lock("subs", || {
+        let mut items = jsonstore::load_synced(app, "subs");
+        let mut added = Vec::new();
+        for (list_id, url) in DEFAULTS {
+            let exists = items
+                .iter()
+                .any(|it| it.get("listId").and_then(Value::as_str) == Some(*list_id));
+            if exists {
+                continue; // present (live or tombstoned) → respect the existing row
+            }
+            let mut item = json!({
+                "listId": list_id, "url": url, "enabled": true, "builtin": true,
+                "lastUpdated": Value::Null, "etag": Value::Null, "hash": Value::Null,
+            });
+            jsonstore::stamp_new(&mut item, app);
+            items.push(item);
+            added.push(((*list_id).to_string(), (*url).to_string()));
         }
-        let mut item = json!({
-            "listId": list_id, "url": url, "enabled": true, "builtin": true,
-            "lastUpdated": Value::Null, "etag": Value::Null, "hash": Value::Null,
-        });
-        jsonstore::stamp_new(&mut item, app);
-        items.push(item);
-        added.push(((*list_id).to_string(), (*url).to_string()));
-    }
-    if !added.is_empty() {
-        let _ = jsonstore::save(app, "subs", &items);
-    }
-    added
+        if !added.is_empty() {
+            let _ = jsonstore::save(app, "subs", &items);
+        }
+        added
+    })
 }
 
 /// Seed the built-in default subscriptions on first run. Called once from `lib.rs`
@@ -391,36 +393,49 @@ pub fn dispatch<R: Runtime>(
             if let Err(e) = safe_list_id(&list_id) {
                 return Some(Err(format!("subscription url {url} is not usable: {e}")));
             }
-            let mut items = jsonstore::load_synced(app, "subs");
-            // Upsert by listId. Revive an existing row IN PLACE (preserving its uuid) —
-            // including a tombstoned one — instead of dropping + re-creating, so a
-            // re-added subscription keeps its sync identity. lastUpdated=null until the
-            // background fetch completes (so the IPC returns without a network wait).
-            match items
-                .iter_mut()
-                .find(|it| it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()))
-            {
-                Some(it) => {
-                    if let Some(o) = it.as_object_mut() {
-                        o.insert("url".into(), json!(url));
-                        o.insert("enabled".into(), json!(true));
-                        o.insert("lastUpdated".into(), Value::Null);
-                        o.insert("deleted".into(), json!(false)); // revive if tombstoned
+            // Keep the ids for the fetch we kick off AFTER releasing the lock.
+            let fetch_id = list_id.clone();
+            let fetch_url = url.clone();
+            // One store lock across the read-modify-write. This runs on the ipc thread
+            // while `fetch_in_background` (per-subscription) and `refresh_all` (bulk)
+            // rewrite the same file under the same lock; unlocked, a `subs.add` landing
+            // between our load and our save was silently overwritten and the successful
+            // save hid the loss.
+            let live = jsonstore::with_store_lock("subs", || {
+                let mut items = jsonstore::load_synced(app, "subs");
+                // Upsert by listId. Revive an existing row IN PLACE (preserving its uuid) —
+                // including a tombstoned one — instead of dropping + re-creating, so a
+                // re-added subscription keeps its sync identity. lastUpdated=null until the
+                // background fetch completes (so the IPC returns without a network wait).
+                match items
+                    .iter_mut()
+                    .find(|it| it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()))
+                {
+                    Some(it) => {
+                        if let Some(o) = it.as_object_mut() {
+                            o.insert("url".into(), json!(url));
+                            o.insert("enabled".into(), json!(true));
+                            o.insert("lastUpdated".into(), Value::Null);
+                            o.insert("deleted".into(), json!(false)); // revive if tombstoned
+                        }
+                        jsonstore::touch(it, app);
                     }
-                    jsonstore::touch(it, app);
+                    None => {
+                        let mut item = json!({
+                            "listId": list_id, "url": url, "enabled": true,
+                            "lastUpdated": Value::Null, "etag": Value::Null, "hash": Value::Null,
+                        });
+                        jsonstore::stamp_new(&mut item, app);
+                        items.push(item);
+                    }
                 }
-                None => {
-                    let mut item = json!({
-                        "listId": list_id, "url": url, "enabled": true,
-                        "lastUpdated": Value::Null, "etag": Value::Null, "hash": Value::Null,
-                    });
-                    jsonstore::stamp_new(&mut item, app);
-                    items.push(item);
-                }
-            }
-            let _ = jsonstore::save(app, "subs", &items);
-            fetch_in_background(app.clone(), list_id, url);
-            Some(Ok(json!(jsonstore::live(items))))
+                let _ = jsonstore::save(app, "subs", &items);
+                jsonstore::live(items)
+            });
+            // Deliberately OUTSIDE the lock: the fetch takes the same lock when it lands,
+            // and holding it across a thread spawn is a needless way to wedge the UI.
+            fetch_in_background(app.clone(), fetch_id, fetch_url);
+            Some(Ok(json!(live)))
         }
 
         "subs.setEnabled" => {
@@ -439,28 +454,34 @@ pub fn dispatch<R: Runtime>(
             if let Err(e) = safe_list_id(&list_id) {
                 return Some(Err(format!("cannot enable that subscription: {e}")));
             }
-            let mut items = jsonstore::load_synced(app, "subs");
-            let mut need_fetch = false;
-            for it in items.iter_mut() {
-                if !jsonstore::is_deleted(it)
-                    && it.get("listId").and_then(Value::as_str) == Some(list_id.as_str())
-                {
-                    it["enabled"] = json!(enabled);
-                    // Enabling a list we've never fetched → fetch it now (but NOT a built-in
-                    // default — it's baked in and refreshes via "Update all"; see
-                    // should_fetch_on_enable).
-                    let never_fetched = it.get("lastUpdated").map(Value::is_null).unwrap_or(true);
-                    let builtin = it.get("builtin").and_then(Value::as_bool).unwrap_or(false);
-                    need_fetch = should_fetch_on_enable(enabled, never_fetched, builtin);
-                    jsonstore::touch(it, app);
+            // One store lock across the read-modify-write — see `subs.add`.
+            let (live, need_fetch, url) = jsonstore::with_store_lock("subs", || {
+                let mut items = jsonstore::load_synced(app, "subs");
+                let mut need_fetch = false;
+                for it in items.iter_mut() {
+                    if !jsonstore::is_deleted(it)
+                        && it.get("listId").and_then(Value::as_str) == Some(list_id.as_str())
+                    {
+                        it["enabled"] = json!(enabled);
+                        // Enabling a list we've never fetched → fetch it now (but NOT a built-in
+                        // default — it's baked in and refreshes via "Update all"; see
+                        // should_fetch_on_enable).
+                        let never_fetched =
+                            it.get("lastUpdated").map(Value::is_null).unwrap_or(true);
+                        let builtin = it.get("builtin").and_then(Value::as_bool).unwrap_or(false);
+                        need_fetch = should_fetch_on_enable(enabled, never_fetched, builtin);
+                        jsonstore::touch(it, app);
+                    }
                 }
-            }
-            let _ = jsonstore::save(app, "subs", &items);
-            match (need_fetch, url_of(&items, &list_id)) {
+                let _ = jsonstore::save(app, "subs", &items);
+                let url = url_of(&items, &list_id);
+                (jsonstore::live(items), need_fetch, url)
+            });
+            match (need_fetch, url) {
                 (true, Some(url)) => fetch_in_background(app.clone(), list_id, url),
                 _ => reinstall_adblock(app),
             }
-            Some(Ok(json!(jsonstore::live(items))))
+            Some(Ok(json!(live)))
         }
 
         "subs.remove" => {
@@ -469,17 +490,23 @@ pub fn dispatch<R: Runtime>(
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string();
-            let mut items = jsonstore::load_synced(app, "subs");
-            jsonstore::tombstone(
-                &mut items,
-                |it| it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()),
-                app,
-            );
-            let _ = jsonstore::save(app, "subs", &items);
+            // One store lock across the read-modify-write — see `subs.add`.
+            let live = jsonstore::with_store_lock("subs", || {
+                let mut items = jsonstore::load_synced(app, "subs");
+                jsonstore::tombstone(
+                    &mut items,
+                    |it| it.get("listId").and_then(Value::as_str) == Some(list_id.as_str()),
+                    app,
+                );
+                let _ = jsonstore::save(app, "subs", &items);
+                jsonstore::live(items)
+            });
             // The row is tombstoned either way, so removal always succeeds and a row
             // planted by data.import is always cleanable. Only the regenerable cache
             // file is conditional — and a row whose id is not a single component never
-            // had one, so there is nothing to unlink.
+            // had one, so there is nothing to unlink. Both of these are OUTSIDE the lock:
+            // they touch the filesystem, not `subs.json`, and `reinstall_adblock` rebuilds
+            // the engine from the rows we just wrote.
             match cache_path(app, &list_id) {
                 Ok(p) => {
                     let _ = std::fs::remove_file(p); // cache is regenerable
@@ -487,7 +514,7 @@ pub fn dispatch<R: Runtime>(
                 Err(e) => eprintln!("[aegis] left a cache file alone for {list_id:?}: {e}"),
             }
             reinstall_adblock(app);
-            Some(Ok(json!(jsonstore::live(items))))
+            Some(Ok(json!(live)))
         }
 
         _ => None,
@@ -498,6 +525,62 @@ pub fn dispatch<R: Runtime>(
 mod tests {
     use super::*;
     use crate::test_support::with_tmp_app;
+
+    /// The `subs.*` dispatch arms must hold the per-store lock across their whole
+    /// `load` -> mutate -> `save`, or concurrent removals resurrect rows.
+    ///
+    /// The per-subscription fetch thread and the bulk "Update all" both already held the
+    /// lock (and their comments say why); the UI's own `subs.add` / `setEnabled` / `remove`
+    /// arms did not, so a fetch landing between a remove's load and its save undid the
+    /// removal — and because the save SUCCEEDED nothing reported it, so the row the user
+    /// just deleted came back. `subs.remove` is used here because it touches no network
+    /// (a fetch would spawn a thread per call and 200 of those is a different test).
+    /// Asserted on the rows that STAY GONE, which is the observable.
+    #[test]
+    fn concurrent_removals_lose_no_row() {
+        const THREADS: i64 = 4;
+        const PER_THREAD: i64 = 10;
+
+        with_tmp_app(|app| {
+            let rows: Vec<Value> = (0..THREADS)
+                .flat_map(|t| (0..PER_THREAD).map(move |i| format!("l{t}-{i}")))
+                .map(|id| {
+                    let mut row =
+                        json!({ "listId": id, "url": "https://x.test/a.txt", "enabled": true });
+                    jsonstore::stamp_new(&mut row, app);
+                    row
+                })
+                .collect();
+            assert_eq!(rows.len(), (THREADS * PER_THREAD) as usize);
+            jsonstore::save(app, "subs", &rows).expect("seed must not fail");
+
+            let mut handles = Vec::new();
+            for t in 0..THREADS {
+                let app = app.clone();
+                handles.push(std::thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        let id = format!("l{t}-{i}");
+                        dispatch(&app, "subs.remove", &json!({ "listId": id }))
+                            .expect("subs.remove is handled")
+                            .expect("subs.remove must not fail");
+                    }
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            let left = dispatch(app, "subs.list", &json!({}))
+                .expect("subs.list is handled")
+                .expect("subs.list must not fail");
+            assert_eq!(
+                left.as_array().map(|a| a.len()),
+                Some(0),
+                "every row must stay removed: a lost update means two callers read the same \
+                 version of subs.json and the second save resurrected the first one's rows"
+            );
+        });
+    }
 
     #[test]
     fn list_id_from_url_strips_txt_and_takes_last_segment() {
