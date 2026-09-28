@@ -9,6 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Un-checking “allow ads on this site” could not un-allow a subdomain, and made the
+  allowlist grow instead.** The allowlist covers a whole site, so a single “allow ads”
+  tick on `example.com` also stops the ads on `www.example.com`. The core stores what you
+  toggle with an exact comparison, so asking to un-allow `www.example.com` while only
+  `example.com` was listed read as “not on the list” and ADDED the address instead of
+  removing anything: the tick snapped straight back on, and because allowlisted sites sync
+  between your devices, the extra address spread to all of them. The tick is now disabled
+  and says which entry is doing the allowing, and tells you to remove that one.
 - **The ad-block shield said ad blocking was active on sites where it was not.** The
   allowlist covers a whole site, so allowing ads on `example.com` also stops the ads on
   `www.example.com`. The shield button in the toolbar did not know that: it only recognised

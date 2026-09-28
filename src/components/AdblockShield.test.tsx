@@ -272,6 +272,89 @@ describe('AdblockShield', () => {
     );
   });
 
+  it('refuses to un-allow a subdomain whose PARENT entry is what allows it, and says why', async () => {
+    // The core WRITES the allowlist by EXACT equality — `adblock::dispatch`'s toggleAllowlist
+    // arm asks `load_allowlist_hosts(app).iter().any(|h| h == &host)` — while this popover
+    // READS it with subdomain scope. So un-checking here used to send `www.example.com`, the
+    // core saw "not listed" and ADDED it, the store ended up holding both entries,
+    // `hostCovered` stayed true, and the checkbox snapped straight back on. `allowlist` is
+    // SYNCABLE, so the redundant entry spread to every paired device as well. Un-checking
+    // genuinely cannot work from here, so the control says so rather than pretending.
+    const p = props({
+      state: { ...baseState, allowlistedHosts: ['example.com'] },
+      host: 'www.example.com',
+    });
+    render(<AdblockShield {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    const dialog = within(screen.getByRole('dialog'));
+    const checkbox = screen.getByRole('checkbox', { name: /allow ads on www\.example\.com/i });
+    // It reads as ON, because it IS on — the parent entry is what is doing it.
+    expect(checkbox).toBeChecked();
+    expect(checkbox).toBeDisabled();
+    expect(
+      dialog.getByText(/because example\.com is in the allowlist\. Remove it to block/i),
+    ).toBeInTheDocument();
+    // The STORE is what matters, not the DOM: no write happened, so there is no redundant
+    // entry left behind for the next sync pass to spread.
+    expect(p.toggleAllowlist).not.toHaveBeenCalled();
+    expect(p.state.allowlistedHosts).toEqual(['example.com']);
+  });
+
+  it('still allows un-checking when the host is not allowlisted at all', async () => {
+    const p = props({
+      state: { ...baseState, allowlistedHosts: ['example.com'] },
+      host: 'other.test',
+    });
+    render(<AdblockShield {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    const dialog = within(screen.getByRole('dialog'));
+    const checkbox = screen.getByRole('checkbox', { name: /allow ads on other\.test/i });
+    expect(checkbox).not.toBeChecked();
+    expect(checkbox).toBeEnabled();
+    expect(dialog.queryByText(/in the allowlist\. Remove/i)).toBeNull();
+    await userEvent.click(checkbox);
+    expect(p.toggleAllowlist).toHaveBeenCalledTimes(1);
+  });
+
+  it('still allows un-checking the exact entry when it is the only one covering the host', async () => {
+    // The control for the control: disabling every checked box would be a worse bug than the
+    // one being fixed. The exact host, listed exactly once, is the case removal CAN handle.
+    const p = props({
+      state: { ...baseState, allowlistedHosts: ['www.example.com'] },
+      host: 'www.example.com',
+    });
+    render(<AdblockShield {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    const dialog = within(screen.getByRole('dialog'));
+    const checkbox = screen.getByRole('checkbox', { name: /allow ads on www\.example\.com/i });
+    expect(checkbox).toBeChecked();
+    expect(checkbox).toBeEnabled();
+    expect(dialog.queryByText(/in the allowlist\. Remove/i)).toBeNull();
+    await userEvent.click(checkbox);
+    expect(p.toggleAllowlist).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses and names BOTH entries when the host and its parent are both listed', async () => {
+    // A store that already holds both — grown by a peer under the old behaviour, or restored
+    // from a backup. Removing the exact entry would leave the parent still covering the host,
+    // so un-checking still could not work; and naming only ONE entry would send the user to
+    // remove the wrong one and watch nothing change.
+    const p = props({
+      state: { ...baseState, allowlistedHosts: ['example.com', 'www.example.com'] },
+      host: 'www.example.com',
+    });
+    render(<AdblockShield {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    const checkbox = screen.getByRole('checkbox', { name: /allow ads on www\.example\.com/i });
+    expect(checkbox).toBeDisabled();
+    expect(
+      within(screen.getByRole('dialog')).getByText(
+        /example\.com and www\.example\.com are in the allowlist\. Remove them to block/i,
+      ),
+    ).toBeInTheDocument();
+    expect(p.toggleAllowlist).not.toHaveBeenCalled();
+  });
+
   it('surfaces an "applies on reload" affordance for next-nav semantics', async () => {
     render(<AdblockShield {...props()} />);
     await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));

@@ -419,12 +419,30 @@ now?)` (`just now` → `12 min ago` → `3 h ago` → `Yesterday, 14:32` → `Tu
   disagreed in one render: the core exempted `www.example.com` from every tier while the
   button's title said "Ad blocking is active". Both now call `hostCovered`, and
   `AdblockShield.test.tsx` covers a SUBDOMAIN host plus the two lookalikes
-  (`notexample.com`, `example.com.evil.test`) that must stay un-exempted. So allowlisting
-  `a.com` exempted `www.a.com`
-  in the core while the badges reported the page as fully protected — a privacy badge
-  disagreeing with the privacy machinery. `url.test.ts` carries a deliberate scope table
-  mirroring the Rust test case for case; **if the core's rule changes, change it here in
-  the same commit and re-derive both tables.**
+  (`notexample.com`, `example.com.evil.test`) that must stay un-exempted. The original
+  drift was that allowlisting `a.com` exempted `www.a.com` in the core while the badges
+  reported the page as fully protected — a privacy badge disagreeing with the privacy
+  machinery. `url.test.ts` carries a deliberate scope table mirroring the Rust test case for
+  case; **if the core's rule changes, change it here in the same commit and re-derive both
+  tables.**
+- **`hostCovered` is a READ rule; the core WRITES the allowlist with EXACT equality, and the
+  two deliberately differ.** `adblock::dispatch`'s `toggleAllowlist` arm asks
+  `load_allowlist_hosts(app).iter().any(|h| h == &host)` — "listed" means that exact string
+  is present — while `hostCovered` means the host OR one of its parents is present. Reading
+  with the wide rule and writing with the narrow one means un-checking a subdomain whose PARENT
+  is what allows it **cannot work**: the core sees "not listed" and ADDS, the store then holds
+  both entries, `hostCovered` is still true, and the checkbox snaps straight back on — and
+  `allowlist` is in `sync_stores::SYNCABLE`, so the redundant entry spreads to every paired
+  device. `AdblockShield` therefore **disables the control and names the covering entries**
+  ("Ads are already allowed on www.example.com because example.com is in the allowlist.
+  Remove it to block ads here again.") whenever the host is covered by anything other than
+  its own exact entry — including the both-listed case a peer or a restored backup can
+  produce, where removing the exact entry would still leave the parent covering the host.
+  **Do NOT "fix" this by making the write use `host_covered`:** that removes the apex parent,
+  which is a different and much broader action than the click asked for.
+  `AdblockShield.test.tsx` drives the real UI for the refused case, for both still-allowed
+  cases, and for the both-listed case. (The `farble.rs:370` / `SecurityTab.tsx:223` pair looks
+  like the same bug and is **not** — it is exact on BOTH sides, so read and write agree.)
 - **The badges must not overstate protection.** `protectionSummary` takes `webrtc:
 WebrtcExemptState` as a **REQUIRED** option (an optional field with a default would fail
   OPEN to "not exempt" for any caller that forgot it — which is exactly the bug class

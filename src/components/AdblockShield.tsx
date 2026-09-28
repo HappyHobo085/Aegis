@@ -140,6 +140,29 @@ function Popover({
   const allowlisted = hostCovered(state.allowlistedHosts, host);
   const allowLabel = host ? `Allow ads on ${host}` : 'Allow ads on this site';
 
+  // Which entries cover THIS host, and does unchecking have any chance of working?
+  //
+  // The core WRITES the allowlist with EXACT equality: `adblock.toggleAllowlist` picks
+  // add-vs-remove with `allowlist_hosts(app).iter().any(|h| h == &host)`, and so do
+  // `add_host` / `remove_host`. A host covered only by a PARENT entry — `example.com`
+  // covering `www.example.com` — is therefore not itself listed, and unchecking this row
+  // used to send `www.example.com`, which the core read as "not listed" and ADDED. The
+  // store then held both entries, `hostCovered` was still true, and the checkbox snapped
+  // straight back on having done nothing but grow the list — which is SYNCABLE, so the
+  // redundant entry spread to every paired device as well.
+  //
+  // So unchecking can only mean "block ads on this site" when this host is NOT allowlisted,
+  // or when its own exact entry is the ONLY thing covering it. Otherwise the request cannot
+  // be expressed through this control at all: removing the parent is a different, broader
+  // action (it un-allows every other address of that site too), so it is not something to
+  // do implicitly behind a checkbox. The control says so instead of silently misfiring.
+  const coveringEntries =
+    host === null || host === ''
+      ? []
+      : state.allowlistedHosts.filter((entry) => entry !== '' && hostCovered([entry], host));
+  const canUnallowHere =
+    !allowlisted || (coveringEntries.length === 1 && coveringEntries[0] === host);
+
   const rows = protection ? protectionRows(protection) : [];
 
   return (
@@ -186,11 +209,19 @@ function Popover({
           type="checkbox"
           aria-label={allowLabel}
           checked={allowlisted}
-          disabled={host === null}
+          disabled={host === null || !canUnallowHere}
           onChange={() => toggleAllowlist()}
         />
         <span>{allowLabel}</span>
       </label>
+      {!canUnallowHere && (
+        <p className="adblock-shield__count">
+          Ads are already allowed on {host} because{' '}
+          {coveringEntries.length === 1 ? coveringEntries[0] : coveringEntries.join(' and ')}{' '}
+          {coveringEntries.length === 1 ? 'is' : 'are'} in the allowlist. Remove{' '}
+          {coveringEntries.length === 1 ? 'it' : 'them'} to block ads here again.
+        </p>
+      )}
       <p className="adblock-shield__count">Ads caught here: {page}</p>
       <p className="adblock-shield__count">Ads caught this session: {state.sessionBlocked}</p>
       {/* The count is NOT "requests we stopped", and on Linux it is provably not.
