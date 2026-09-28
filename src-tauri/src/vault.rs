@@ -1557,7 +1557,7 @@ mod tests {
                 if !is_synced(&owned) {
                     return Err("the vault is still v1, so the read is not exercised".into());
                 }
-                if crate::sync_vault::is_sync_enabled(&owned) != true {
+                if !crate::sync_vault::is_sync_enabled(&owned) {
                     return Err("vault sync is off, so the read is not exercised".into());
                 }
                 if unlocked_key(&owned).is_none() {
