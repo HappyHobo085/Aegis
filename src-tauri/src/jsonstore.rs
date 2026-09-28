@@ -526,46 +526,82 @@ pub fn live_hosts<R: Runtime>(app: &AppHandle<R>, name: &str) -> Vec<String> {
 /// `Ok`, the UI re-rendered as if the change took, but `cache_data` only runs after a
 /// successful `write_atomic`, so neither disk nor the in-memory cache moved and the change was
 /// simply gone by the next launch. An allowlist the user just cleared could silently come back.
+/// The per-store lock spans the whole `load` -> mutate -> `save` (see [`with_host_store_lock`]).
 pub fn add_host<R: Runtime>(app: &AppHandle<R>, name: &str, host: &str) -> Result<(), String> {
-    let mut items = load_synced(app, name);
-    match items
-        .iter_mut()
-        .find(|it| it.get("host").and_then(Value::as_str) == Some(host))
-    {
-        Some(it) => {
-            if is_deleted(it) {
-                if let Some(o) = it.as_object_mut() {
-                    o.insert("deleted".into(), json!(false));
+    with_host_store_lock(name, || {
+        let mut items = load_synced(app, name);
+        match items
+            .iter_mut()
+            .find(|it| it.get("host").and_then(Value::as_str) == Some(host))
+        {
+            Some(it) => {
+                if is_deleted(it) {
+                    if let Some(o) = it.as_object_mut() {
+                        o.insert("deleted".into(), json!(false));
+                    }
+                    touch(it, app);
                 }
-                touch(it, app);
+            }
+            None => {
+                let mut item = json!({ "host": host });
+                stamp_new(&mut item, app);
+                items.push(item);
             }
         }
-        None => {
-            let mut item = json!({ "host": host });
-            stamp_new(&mut item, app);
-            items.push(item);
-        }
-    }
-    save(app, name, &items)
+        save(app, name, &items)
+    })
 }
 
 /// Tombstone `host` in a host-keyed store. Propagates a save failure — see [`add_host`].
 pub fn remove_host<R: Runtime>(app: &AppHandle<R>, name: &str, host: &str) -> Result<(), String> {
-    let mut items = load_synced(app, name);
-    tombstone(
-        &mut items,
-        |it| it.get("host").and_then(Value::as_str) == Some(host),
-        app,
-    );
-    save(app, name, &items)
+    with_host_store_lock(name, || {
+        let mut items = load_synced(app, name);
+        tombstone(
+            &mut items,
+            |it| it.get("host").and_then(Value::as_str) == Some(host),
+            app,
+        );
+        save(app, name, &items)
+    })
 }
 
 /// Tombstone every live host in a host-keyed store (clear all). Propagates a save failure —
 /// this is the one that matters most, since a silently-failed "clear" resurrects every host.
 pub fn clear_hosts<R: Runtime>(app: &AppHandle<R>, name: &str) -> Result<(), String> {
-    let mut items = load_synced(app, name);
-    tombstone(&mut items, |it| !is_deleted(it), app);
-    save(app, name, &items)
+    with_host_store_lock(name, || {
+        let mut items = load_synced(app, name);
+        tombstone(&mut items, |it| !is_deleted(it), app);
+        save(app, name, &items)
+    })
+}
+
+/// Run `f` holding `name`'s per-store write lock, for the host-keyed mutators above.
+///
+/// ## Why these three needed it when `mutate` and the sync merge already had it
+///
+/// Each is a `load_synced` -> mutate -> `save` read-modify-write, and
+/// `jsonstore::write_atomic` only guarantees that no individual WRITE is lost — never that a
+/// read-modify-write is atomic. Two callers that both read version N and both save leave
+/// whichever wrote last as the WHOLE file, and because both saves SUCCEED the file looks
+/// perfectly healthy, so nothing reports the loss.
+/// `a_concurrent_host_keyed_add_loses_nothing` is the proof.
+///
+/// This is reachable, not theoretical: `allowlist` is one of the three names in
+/// `crate::sync_stores::SYNCABLE`, so the background sync thread merges it via `merge_into`
+/// (already locked) WHILE the UI's `adblock.toggleAllowlist` / `removeAllowlist` /
+/// `clearAllowlist` calls one of these. A host the user allowlisted while a peer record landed
+/// simply disappeared, with no error anywhere. `fp-allowlist` and the WebRTC exempt store ride
+/// the same path through `add_host` and friends.
+///
+/// ## Non-reentrant, so the lock is taken at exactly ONE level
+///
+/// `with_store_lock` is a `parking_lot::Mutex`, so taking it twice on one thread DEADLOCKS
+/// rather than recursing. It is therefore taken HERE, in the lowest-level mutators, and NOT in
+/// any of their callers. Audited: every caller is an `adblock` / `farble` / `webrtc_exempt`
+/// dispatch arm, none of which holds a store lock; and the one path that does hold one
+/// (`crate::sync_stores::merge_into`) uses its own `merge_into_locked` body, never these.
+fn with_host_store_lock<T>(name: &str, f: impl FnOnce() -> T) -> T {
+    with_store_lock(name, f)
 }
 
 // Cache management functions
@@ -785,6 +821,51 @@ mod tests {
                 (THREADS * PER_THREAD) as usize,
                 "every append must survive: a lost update means two callers read the same \
                  version and the second save overwrote the first"
+            );
+        });
+    }
+
+    /// The host-keyed mutators must hold the per-store lock across their whole
+    /// `load` -> mutate -> `save`, or two allowlist clicks lose one of the two hosts.
+    ///
+    /// `allowlist` is SYNCABLE, so the background sync thread merges this very file through
+    /// `sync_stores::merge_into` (which does hold the lock) while the UI's
+    /// `adblock.toggleAllowlist` calls `add_host`, which used to run completely unlocked.
+    /// Each `save` still SUCCEEDED, so the file stayed valid and nothing reported the loss —
+    /// the host the user just allowlisted simply was not there afterwards. Asserted on the
+    /// hosts that SURVIVE, not on any internal lock: the observable is "no host is lost".
+    #[test]
+    fn a_concurrent_host_keyed_add_loses_nothing() {
+        use crate::test_support::with_tmp_app;
+        const THREADS: i64 = 8;
+        const PER_THREAD: i64 = 25;
+        let name = "host_race";
+
+        with_tmp_app(|app| {
+            let mut handles = Vec::new();
+            for t in 0..THREADS {
+                let app = app.clone();
+                handles.push(std::thread::spawn(move || {
+                    for i in 0..PER_THREAD {
+                        add_host(&app, name, &format!("h{t}-{i}")).expect("add_host must not fail");
+                    }
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            let mut want: Vec<String> = (0..THREADS)
+                .flat_map(|t| (0..PER_THREAD).map(move |i| format!("h{t}-{i}")))
+                .collect();
+            let got = live_hosts(app, name);
+            want.sort();
+            let mut got_sorted = got.clone();
+            got_sorted.sort();
+            assert_eq!(
+                got_sorted, want,
+                "every host must survive: a lost update means two callers read the same \
+                 version of the file and the second save overwrote the first"
             );
         });
     }
