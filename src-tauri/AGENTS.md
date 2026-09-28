@@ -273,8 +273,12 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
       be `//` not `///` (`///` there is `unused_doc_comments`, i.e. a `-D warnings` build failure).
       `settings.set` was extracted out of the `dispatch` arm into `pub(crate) fn apply_local`
       (generic over `Runtime`) precisely so this region is reachable from a `MockRuntime` test;
-      `dispatch` is bound to Wry, which is why nine test call sites had been hand-rolling the
-      arm's body and now drive `apply_local` / `merge_remote` instead.
+      nine test call sites had been hand-rolling the arm's body and now drive `apply_local` /
+      `merge_remote` instead. **`dispatch` is generic over `Runtime` too** (Wave 7), so the
+      ROUTING is covered as well: a channel that is not `settings.*` must be declined with
+      `None` so `lib.rs`'s `ipc()` falls through to the next module, and a refused
+      `settings.set` must be all-or-nothing on disk (`apply_local` validates every key of
+      `partial` BEFORE the merge and the write, and returns the first error naming it).
 - **Ad-block (layered, platform-gated):**
   - `adblock_lists.rs` — **single source of truth for the bundled filter lists**:
     EasyList (ads) **+ EasyPrivacy (trackers/analytics)** **+ Peter Lowe's** (ad+tracking

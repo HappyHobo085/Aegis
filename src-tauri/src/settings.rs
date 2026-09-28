@@ -375,8 +375,7 @@ pub fn home_url(app: &AppHandle) -> Url {
 /// invalidated on every write via `invalidate_cache`.
 ///
 /// `pub(crate)` so a module test can read-modify-write the store the way `data::import` and the
-/// sync merge do — `dispatch` takes a concrete (non-generic) `&AppHandle`, so it cannot be
-/// driven from a `MockRuntime` test.
+/// sync merge do.
 pub(crate) fn load<R: Runtime>(app: &AppHandle<R>) -> Value {
     let Some(cache) = app.try_state::<SettingsCache>() else {
         return read_from_disk(app);
@@ -1197,7 +1196,21 @@ pub(crate) fn apply_local<R: Runtime>(
     })
 }
 
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+/// The two `settings.*` channels (PLACE 2 of the IPC three-place rule: the names live in
+/// `shared/types.ts`'s `IPC` and the renderer calls them through `ipcClient.settingsGet` /
+/// `settingsSet`).
+///
+/// Generic over `R: Runtime` so the ROUTING is reachable from a `MockRuntime` test. It was
+/// bound to the Wry runtime, which meant `dispatch` had no test at all — not the two arms
+/// (both of which were individually covered once [`apply_local`] was extracted, but never
+/// reached through the dispatcher that the renderer actually calls) and not the `_ => None`
+/// decline that every other module's dispatcher relies on to hand the channel on. Both are
+/// now tested; the sole production caller, `lib.rs`'s `ipc()` arm, infers `R = Wry` unchanged.
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     match channel {
         "settings.get" => Some(Ok(load(app))),
         "settings.set" => Some(apply_local(app, payload)),
@@ -1893,6 +1906,176 @@ mod tests {
                 "no key was refused, so the refusal list is empty"
             );
             assert_eq!(load(app).get("httpsOnly"), Some(&json!(true)));
+        });
+    }
+
+    // ------------------------------------------------------------------
+    // `dispatch` itself — the two channels `shared/types.ts` declares and the
+    // renderer calls (`ipcClient.settingsGet` / `settingsSet`).
+    //
+    // Not the arms: `apply_local` and `load` are each covered directly above. What had NO
+    // test was the ROUTING, because `dispatch` was bound to the Wry runtime and so was
+    // reachable only through a real webview. Three properties are only visible here:
+    //   1. a channel that is not ours must be declined (`None`), so `lib.rs`'s `ipc()`
+    //      falls through to the next module instead of this one answering it;
+    //   2. `settings.get` must answer what was actually STORED, not the defaults;
+    //   3. a rejected `settings.set` must be all-or-nothing on disk.
+    // ------------------------------------------------------------------
+
+    /// Answer the `settings.get` channel the way the renderer does, failing loudly on
+    /// either half of the dispatcher's contract (declined / `Err`).
+    fn settings_get_via_dispatch<R: Runtime>(app: &AppHandle<R>) -> Value {
+        dispatch(app, "settings.get", &json!({}))
+            .expect("settings.get is this module's channel and must be answered, not declined")
+            .expect("settings.get answers Ok: it is a read of a store that always exists")
+    }
+
+    /// The raw bytes of `settings.json`, or `None` when no file has been written yet. Read
+    /// rather than `load()` on purpose: `load()` overlays DEFAULTS, so it cannot tell
+    /// "the stored value is the default" from "nothing was stored".
+    fn settings_json_bytes<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+        store_path(app).and_then(|p| std::fs::read_to_string(p).ok())
+    }
+
+    #[test]
+    fn dispatch_declines_a_channel_it_does_not_own() {
+        with_tmp_app(|app| {
+            // A near-miss on BOTH halves of the name: a channel that merely starts with
+            // `settings.` must not be answered here, or it would be swallowed instead of
+            // reaching the module that owns it.
+            for channel in [
+                "settings",
+                "settings.getAll",
+                "settings.clear",
+                "history.list",
+                "adblock.getState",
+            ] {
+                assert!(
+                    dispatch(app, channel, &json!({})).is_none(),
+                    "{channel:?} is not a settings.* channel, so dispatch must return None and \
+                     let lib.rs's ipc() try the next module"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn a_settings_get_answers_what_a_settings_set_stored() {
+        with_tmp_app(|app| {
+            // Nothing stored yet: `get` must answer the DEFAULTS, i.e. the full object
+            // overlaid from the store, not an empty one and not just the partial.
+            let fresh = settings_get_via_dispatch(app);
+            assert_eq!(fresh.get("httpsOnly"), Some(&json!(true)));
+            assert_eq!(fresh.get("primaryColor"), Some(&json!("#2563eb")));
+            assert!(
+                fresh.get("searchEngines").is_some_and(Value::is_array),
+                "a read with nothing stored must still answer the full default object — the \
+                 chrome renders every field from this one reply"
+            );
+
+            let set = dispatch(
+                app,
+                "settings.set",
+                &json!({ "partial": { "httpsOnly": false, "primaryColor": "#ff0000" } }),
+            )
+            .expect("settings.set is ours")
+            .expect("both values validate");
+            assert_eq!(set.get("httpsOnly"), Some(&json!(false)));
+
+            // The set's OWN reply and a later `get` must agree, and `get` must have read
+            // the file rather than re-answering the defaults.
+            let read_back = settings_get_via_dispatch(app);
+            assert_eq!(read_back.get("httpsOnly"), Some(&json!(false)));
+            assert_eq!(read_back.get("primaryColor"), Some(&json!("#ff0000")));
+            // A key the partial never mentioned still reads its default, so `get` answers
+            // the MERGED store rather than echoing back the partial.
+            assert_eq!(read_back.get("tabIdleTimeout"), Some(&json!(30)));
+        });
+    }
+
+    #[test]
+    fn a_settings_set_with_one_bad_key_writes_nothing_at_all() {
+        with_tmp_app(|app| {
+            // Land one value first so there is a real file to be left untouched.
+            dispatch(
+                app,
+                "settings.set",
+                &json!({ "partial": { "primaryColor": "#00ff00" } }),
+            )
+            .expect("settings.set is ours")
+            .expect("a valid value");
+            let before = settings_json_bytes(app).expect("the first set wrote a file");
+
+            // Two VALID keys and one invalid one, deliberately in a shape where the
+            // iteration order of the payload object is not the thing under test: whichever
+            // key the validator happens to reach first, the OTHER valid one must also be
+            // absent afterwards. A single valid+invalid pair would pass or fail on
+            // `serde_json`'s map ordering rather than on the all-or-nothing rule.
+            let rejected = dispatch(
+                app,
+                "settings.set",
+                &json!({ "partial": {
+                    "antiFingerprint": "strict",
+                    "homeUrl": "file:///etc/passwd",
+                    "primaryColor": "#ff0000",
+                } }),
+            )
+            .expect("settings.set is ours")
+            .expect_err("a `file:` home URL is refused: it re-loads on every launch");
+            assert!(
+                rejected.contains("homeUrl"),
+                "the error must NAME the key that was refused, or the user cannot tell which \
+                 field of a multi-field form save is wrong. Got: {rejected:?}"
+            );
+
+            assert_eq!(
+                settings_json_bytes(app).as_deref(),
+                Some(before.as_str()),
+                "a batch refused by the validator must not write ANY of its keys — a form \
+                 save that half-applied would leave the user with a setting they rejected"
+            );
+            let after = load(app);
+            assert_eq!(
+                after.get("primaryColor"),
+                Some(&json!("#00ff00")),
+                "the pre-existing value must survive a rejected batch"
+            );
+            assert_eq!(
+                after.get("antiFingerprint"),
+                Some(&json!("off")),
+                "a valid key from a REFUSED batch must not land"
+            );
+        });
+    }
+
+    #[test]
+    fn a_settings_set_without_a_partial_object_is_refused_and_writes_nothing() {
+        with_tmp_app(|app| {
+            dispatch(
+                app,
+                "settings.set",
+                &json!({ "partial": { "httpsOnly": false } }),
+            )
+            .expect("settings.set is ours")
+            .expect("fixture write");
+            let before = settings_json_bytes(app).expect("the fixture set wrote a file");
+
+            // `merge` is a no-op for a non-object, so without the explicit refusal a
+            // malformed payload would answer `ok: true` and the chrome would show a
+            // successful save that changed nothing — the same class of lie as an
+            // ignored write error, and reachable by any caller that shapes a payload wrong.
+            for bad in [json!("nope"), json!([]), json!(7), json!(null)] {
+                let err = dispatch(app, "settings.set", &json!({ "partial": bad }))
+                    .expect("settings.set is ours")
+                    .expect_err("a partial that is not an object must be refused, not ignored");
+                assert_eq!(err, "partial must be an object");
+            }
+            assert_eq!(
+                settings_json_bytes(app).as_deref(),
+                Some(before.as_str()),
+                "a refused payload must leave the store byte-identical"
+            );
+            assert_eq!(load(app).get("httpsOnly"), Some(&json!(false)));
         });
     }
 }
