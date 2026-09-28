@@ -625,6 +625,44 @@ the convention has no users today. The technique is recorded because it is what 
 defect visible and safe to delete: a 3-test measured matrix plus a fix-proof beats a prose
 claim that something is broken.
 
+### Cross-boundary platform contracts (`lib/platformContract.drift.test.ts`)
+
+Two contracts that cross a language boundary, where nothing in the renderer suite enforced
+them and a drift is invisible to every other test. Both derive the expected list FROM the
+code that defines it, so a new surface cannot join either class silently. Each carries a
+**mutation recipe** — the guard is proved by breaking the relation, not by reading it.
+
+**A chrome popover that measures itself must reserve its height.** The content webview is
+OPAQUE and on top, so a chrome popover that hangs below the chrome (omnibox, site info,
+ad-block shield, zoom) must make the compositor lower the webview by its own measured height.
+`useChromePopover.tsx:10-19` states the invariant in prose — and names the bug it exists to
+prevent: _"A new popover that forgets to register renders behind the content, which is
+exactly the bug the site-information popover shipped with."_ The registry is well covered
+(`useChromePopover.test.tsx`, 6 tests); the **linkage** was not, so the prose was the only
+enforcement. The guard is: every `src/components/*.tsx` that imports `useMeasuredHeight`
+must also reference `useChromePopoverInset`. Mobile is deliberately out of scope —
+`MobileApp.tsx:133` records that the Android shell is a single webview whose native content
+view is lowered through `view.setChromeOverlay` instead, so a mobile surface has nothing to
+reserve. **Recipe:** add a component that measures a popover without registering it; the
+guard must go red and name the file.
+
+**Every inset the Android shell pushes in must be consumed, and vice versa.**
+`MainActivity.kt:806-809` pushes the REAL system status/nav bar insets in as
+`--aegis-inset-{top,bottom,left,right}`; `index.css` consumes them as
+`var(--aegis-inset-top, env(safe-area-inset-top))` in 6 rules. Drift in **either** direction
+is a real bug and neither was catchable. A surface that forgets to consume an inset renders
+under the status bar. A rule consuming a var the native side never sets silently falls back
+to `env(safe-area-inset-*)`, which `index.css:5181-5183` records as being only the DISPLAY
+CUTOUT on an Android WebView — so it cannot clear the system bars at all. **Recipe:** rename
+one of the four vars in `MainActivity.kt`; a single rename turns on BOTH directions at once
+(the rule still consumes the old name, and nothing consumes the new one), which is the
+cheapest possible demonstration that the guard sees the whole relation.
+
+The failure messages deliberately **name the offending file / rule** rather than just the
+variable, because "expected [] to equal []" tells a reader nothing about which of six rules
+is wrong. Each guard also has an anti-vacuity test asserting the scan actually found
+something (the three popovers; the four insets), so neither can pass by measuring nothing.
+
 ### Tests that could not fail (the vacuous-test inventory)
 
 A test that passes no matter what the code does is worse than no test: it reads as coverage

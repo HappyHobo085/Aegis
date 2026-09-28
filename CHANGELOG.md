@@ -38,6 +38,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   reframed to assert the one thing that is observable (the cleanup tore its subscription
   down) and its comment now says plainly that it is not a witness for the flag.
 
+- **Two cross-boundary platform contracts had no enforcement at all.** A chrome popover that
+  measures its own height must register it so the opaque content webview is lowered beneath
+  it — `useChromePopover.tsx` says so in prose and even names the historical bug, but nothing
+  checked that any popover did it, so a new one that forgot would render _behind the page_ and
+  every test would still pass. Separately, the Android shell pushes the real system bar insets
+  in as `--aegis-inset-{top,bottom,left,right}` and the stylesheet consumes them, but a
+  surface that forgot to consume one renders under the status bar, and a rule consuming a var
+  the native side never sets silently falls back to `env(safe-area-inset-*)`, which on an
+  Android WebView is only the display cutout. Both are now derived guards: the expected list is
+  computed from the code that defines it, so neither class can grow unnoticed.
+
 - **A peer could try to write to your password vault and you would never be told.**
   `sync.vaultQuarantined` is emitted by the core when it refuses a peer-supplied vault
   record — a forgery, or simply a record sealed under a key this device does not hold. It is

@@ -91,7 +91,7 @@ and the ratchet will (correctly) fail on the first CI run after that commit. Use
 
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
 here is either lying in CI or about to quietly relax the number. The measured gap, as of
-2026-09-28 (`119 test files / 1663 tests`):
+2026-09-28 (`120 test files / 1668 tests`):
 
 | Metric     | Measured               | Gap  |
 | ---------- | ---------------------- | ---- |
