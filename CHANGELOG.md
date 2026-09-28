@@ -9,6 +9,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The ad-block shield said ad blocking was active on sites where it was not.** The
+  allowlist covers a whole site, so allowing ads on `example.com` also stops the ads on
+  `www.example.com`. The shield button in the toolbar did not know that: it only recognised
+  the exact address you had allowed, so on any other address of the same site it drew a
+  filled shield labelled "Ad blocking is active" — directly beside its own popover, which
+  correctly said the site was allowlisted. Nothing was actually being blocked. The button now
+  understands a site the way the rest of the app already did.
 - **A save that failed could make a change from a paired device never arrive.** Settings and
   custom filter lists are each written to a file, and each keeps beside it a record of which
   changes from a paired device it has already applied. That record was updated even when the

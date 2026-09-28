@@ -218,6 +218,60 @@ describe('AdblockShield', () => {
     expect(screen.getByRole('checkbox', { name: /allow ads on example\.com/i })).not.toBeChecked();
   });
 
+  it('reports blocking as OFF for a subdomain of an allowlisted host, not just the exact host', async () => {
+    // The core's allowlist scope is exact-OR-subdomain (`adblock::host_covered`), so
+    // `example.com` on the list exempts `www.example.com` from EVERY blocking tier. The
+    // toolbar button and the popover must therefore agree, in the same render. They used to
+    // disagree: the popover said "allowlisted here" while the button's title said "Ad
+    // blocking is active" and drew a filled shield over a page nothing was blocking on.
+    const p = props({
+      state: { ...baseState, allowlistedHosts: ['example.com'] },
+      host: 'www.example.com',
+    });
+    render(<AdblockShield {...p} />);
+    const btn = screen.getByRole('button', { name: /ad blocking/i });
+    expect(btn).toHaveAttribute('title', 'Ad blocking is off or allowlisted');
+    expect(btn.className).toContain('adblock-shield__button--inactive');
+    expect(btn.className).not.toContain('adblock-shield__button--active');
+    await userEvent.click(btn);
+    expect(within(screen.getByRole('dialog')).getByText(/allowlisted here/i)).toBeInTheDocument();
+    // The page count is the core's, untouched: this is a scope question, not a counter one.
+    expect(btn).toHaveTextContent('12');
+  });
+
+  it('still reports blocking as active for hosts the entry only looks like it covers', () => {
+    // The controls around the fix. `example.com.evil.test` has the entry as a PREFIX and
+    // `notexample.com` has it as a raw suffix; neither is a subdomain of it, so both must
+    // still report blocking as active. Without these, widening the check to a suffix match
+    // (or a bare `endsWith`) would pass the test above while exempting real third parties.
+    for (const host of ['example.com.evil.test', 'notexample.com']) {
+      const { unmount } = render(
+        <AdblockShield
+          {...props({ state: { ...baseState, allowlistedHosts: ['example.com'] }, host })}
+        />,
+      );
+      const btn = screen.getByRole('button', { name: /ad blocking/i });
+      expect(btn, host).toHaveAttribute('title', 'Ad blocking is active');
+      expect(btn.className, host).toContain('adblock-shield__button--active');
+      unmount();
+    }
+  });
+
+  it('reports blocking as off for the exact allowlisted host too', () => {
+    render(
+      <AdblockShield
+        {...props({
+          state: { ...baseState, allowlistedHosts: ['example.com'] },
+          host: 'example.com',
+        })}
+      />,
+    );
+    expect(screen.getByRole('button', { name: /ad blocking/i })).toHaveAttribute(
+      'title',
+      'Ad blocking is off or allowlisted',
+    );
+  });
+
   it('surfaces an "applies on reload" affordance for next-nav semantics', async () => {
     render(<AdblockShield {...props()} />);
     await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));

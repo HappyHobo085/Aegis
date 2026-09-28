@@ -414,7 +414,13 @@ now?)` (`just now` → `12 min ago` → `3 h ago` → `Yesterday, 14:32` → `Tu
   `example.com`). **This helper exists because three copies of that rule had already
   drifted**, all three of them EXACT-match `Array.includes`: the ad-block engine's
   `HashSet`, `protectionSummary`'s `fingerprintAllowed`, and `AdblockShield`'s own
-  `state.allowlistedHosts.includes(host)`. So allowlisting `a.com` exempted `www.a.com`
+  `state.allowlistedHosts.includes(host)` — the last of which sat 48 lines below a popover
+  in the SAME file that had already been corrected, so the shield button and its own popover
+  disagreed in one render: the core exempted `www.example.com` from every tier while the
+  button's title said "Ad blocking is active". Both now call `hostCovered`, and
+  `AdblockShield.test.tsx` covers a SUBDOMAIN host plus the two lookalikes
+  (`notexample.com`, `example.com.evil.test`) that must stay un-exempted. So allowlisting
+  `a.com` exempted `www.a.com`
   in the core while the badges reported the page as fully protected — a privacy badge
   disagreeing with the privacy machinery. `url.test.ts` carries a deliberate scope table
   mirroring the Rust test case for case; **if the core's rule changes, change it here in

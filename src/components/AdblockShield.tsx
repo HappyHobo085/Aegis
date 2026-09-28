@@ -243,7 +243,14 @@ export function AdblockShield(props: AdblockShieldProps) {
 
   // Blocking is effectively active for this host only when the global toggle is
   // on AND the host isn't allowlisted.
-  const allowlisted = props.host !== null && props.state.allowlistedHosts.includes(props.host);
+  //
+  // `hostCovered`, not `.includes()` — the SAME correction the popover above already
+  // makes, and for the same reason. The core's allowlist scope is exact-OR-subdomain
+  // (`adblock::host_covered`, which every blocking tier consults), so allowlisting
+  // `example.com` exempts `www.example.com` from blocking entirely. An exact test here
+  // reported the opposite in the same render: the core blocked nothing while this button
+  // claimed "Ad blocking is active" next to a popover that said the site was allowlisted.
+  const allowlisted = hostCovered(props.state.allowlistedHosts, props.host);
   const blockingActive = props.state.enabled && !allowlisted;
   const ShieldIcon = blockingActive ? Shield : ShieldOff;
   const page = props.page;
