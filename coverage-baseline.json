@@ -3,14 +3,14 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 5084,
-      "covered": 4483,
-      "pct": 88.17
+      "total": 5085,
+      "covered": 4485,
+      "pct": 88.2
     },
     "statements": {
-      "total": 6835,
-      "covered": 5928,
-      "pct": 86.73
+      "total": 6836,
+      "covered": 5930,
+      "pct": 86.74
     },
     "functions": {
       "total": 1407,
@@ -18,9 +18,9 @@
       "pct": 85.07
     },
     "branches": {
-      "total": 4400,
-      "covered": 3573,
-      "pct": 81.2
+      "total": 4404,
+      "covered": 3577,
+      "pct": 81.22
     }
   },
   "files": {
@@ -441,14 +441,14 @@
     },
     "src/components/DataTab.tsx": {
       "lines": {
-        "total": 29,
-        "covered": 27,
-        "pct": 93.1
+        "total": 30,
+        "covered": 29,
+        "pct": 96.66
       },
       "statements": {
-        "total": 30,
-        "covered": 28,
-        "pct": 93.33
+        "total": 31,
+        "covered": 30,
+        "pct": 96.77
       },
       "functions": {
         "total": 8,
@@ -456,9 +456,9 @@
         "pct": 87.5
       },
       "branches": {
-        "total": 12,
-        "covered": 10,
-        "pct": 83.33
+        "total": 16,
+        "covered": 14,
+        "pct": 87.5
       }
     },
     "src/components/DownloadsIndicator.tsx": {
