@@ -212,6 +212,37 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     `../victim` removal NOT unlinking a planted file above it, `https://x.test/..` refused
     on add, and a `../escape` row refused on enable (18 tests).
   - `customfilters.rs`, `settings.rs`.
+  - **Per-store locking (every read-modify-write of a JSON store takes it).**
+    `jsonstore::with_store_lock(name, f)` is a `parking_lot::Mutex` keyed by store name and is
+    **NOT reentrant** — taking it twice on one thread deadlocks the whole suite. So the rule is
+    that each region owns the lock at exactly ONE level, and the inner workers stay unlocked:
+    the lock spans `load` -> mutate -> `save` and nothing nested inside it re-takes it.
+    Locked regions and their unlocked inner workers:
+    - `jsonstore::add_host` / `remove_host` / `clear_hosts` via `with_host_store_lock`
+      (reach `fp-allowlist` and the WebRTC exempt store for free; `allowlist` IS in
+      `SYNCABLE`, so the sync thread merges it locked while the UI toggles it).
+    - `subs.rs`: `add`, `setEnabled`, `remove`, `ensure_default_rows`, `fetch_in_background`,
+      `refresh_all`. `fetch_in_background` is spawned AFTER the lock is released; the cache
+      unlink and `reinstall_adblock` in `remove` are outside it.
+    - `settings.rs` via `with_settings_store_lock` (name `"settings"`, deliberately NOT a
+      `SYNCABLE` name — the settings namespace is merged by its own closure in `sync.rs`, not
+      by `sync_stores::merge_into`): `apply_local` (the `settings.set` region), `merge_remote`,
+      `apply_imported`, and `sync_records` — the last looks like a reader but
+      `ensure_sync_projection` PERSISTS `settings-sync.json` on first use. Unlocked inner
+      workers: `ensure_sync_projection`, `record_change`, `apply_synced`,
+      `rebuild_projection_from_current`, and `write` (the single low-level writer).
+    - `places.rs` takes `store_lock` directly and holds it across the whole match.
+      Because "one level only" is hand-maintained, `assert_holding_settings_lock` checks it: a
+      `#[cfg(test)]` thread-local depth counter, a `debug_assert_eq!(0)` on re-entry into
+      `with_settings_store_lock`, and a `debug_assert(>= 1)` inside each inner worker. A future
+      caller reaching an inner worker directly would silently run an unprotected
+      read-modify-write — which is exactly how this defect existed — so it now panics in CI
+      instead. Note the counter lives on a `thread_local!` macro invocation, so its comment must
+      be `//` not `///` (`///` there is `unused_doc_comments`, i.e. a `-D warnings` build failure).
+      `settings.set` was extracted out of the `dispatch` arm into `pub(crate) fn apply_local`
+      (generic over `Runtime`) precisely so this region is reachable from a `MockRuntime` test;
+      `dispatch` is bound to Wry, which is why nine test call sites had been hand-rolling the
+      arm's body and now drive `apply_local` / `merge_remote` instead.
 - **Ad-block (layered, platform-gated):**
   - `adblock_lists.rs` — **single source of truth for the bundled filter lists**:
     EasyList (ads) **+ EasyPrivacy (trackers/analytics)** **+ Peter Lowe's** (ad+tracking

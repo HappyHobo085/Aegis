@@ -9,6 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Two settings you changed at once could lose one of them.** The settings file and the
+  record of what has been synced are each rewritten by a read-then-write, and nothing
+  serialised those two steps. A save from a settings form, a restore of a backup, and a
+  merge arriving from a paired device can all run at once, and whichever finished last
+  simply rewrote the file without the others' change in it. Nothing was reported: both
+  writers succeeded, and the setting you had just changed was quietly gone. Those
+  read-then-write regions are now serialised per store, along with the equivalent ones for
+  the ad-blocking allowlist and the filter-list subscriptions.
 - **A pasted backup could make the app read and delete files outside the subscription
   cache.** Filter-list subscriptions are cached as one text file each, named after the
   list's id. Those ids normally come from a subscription URL, but the app also keeps them in

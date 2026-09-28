@@ -133,6 +133,10 @@ pub fn android_https_only() -> bool {
 }
 
 /// Overwrite the settings file (for data import). Durable (atomic temp→rename + .bak).
+///
+/// The single low-level writer, so it deliberately does NOT take the store lock: its two
+/// production callers ([`apply_synced`], [`apply_imported`]) already hold it and the lock is
+/// not reentrant.
 pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) {
     if let Some(p) = store_path(app) {
         let txt = serde_json::to_string_pretty(value).unwrap_or_default();
@@ -415,6 +419,72 @@ fn merge(base: &mut Value, over: &Value) {
     }
 }
 
+// Depth of the settings store lock held by THIS thread.
+//
+// A `//` comment, not `///`: this sits on a `thread_local!` macro invocation, and rustdoc
+// does not document macro invocations, so `///` here is an `unused_doc_comments` warning —
+// i.e. a build failure under the `-D warnings` CI injects from outside the repo.
+//
+// `jsonstore::with_store_lock` is a `parking_lot::Mutex`, so taking it twice on one thread
+// DEADLOCKS rather than erroring. The locked regions below call each other by design
+// (`merge_remote` -> `apply_synced`, `apply_local` -> `record_change`), so the invariant is
+// "one level only" — and it is a hand-maintained one, because adding a store lock is a
+// routine-looking edit. This counter turns a violation into a clear panic in `cargo test`
+// instead of a suite that hangs and reads like a slow build.
+#[cfg(test)]
+thread_local! {
+    static SETTINGS_LOCK_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Fail if a settings inner worker is called WITHOUT the lock held.
+///
+/// Every function documented as "MUST be called under [`with_settings_store_lock`]" calls
+/// this. Those are unlocked on purpose — they are the inner workers of a locked region, and
+/// the mutex is not reentrant — so the risk is not a hang here but the reverse: a future
+/// caller reaching one of them directly, silently running an unprotected read-modify-write.
+/// That is exactly how this defect existed in the first place, so the invariant is checked
+/// rather than trusted.
+///
+/// `debug_assert` is the right gate (this is about correctness, not memory safety) and every
+/// locked region is exercised by `cargo test`, so a violation is caught in CI.
+#[inline]
+fn assert_holding_settings_lock(what: &str) {
+    #[cfg(test)]
+    SETTINGS_LOCK_DEPTH.with(|d| {
+        debug_assert!(
+            d.get() >= 1,
+            "{what} is an inner worker: it MUST be called INSIDE with_settings_store_lock, or \
+             its read-modify-write runs unprotected. Only {what}'s locked caller may call it."
+        );
+    });
+    #[cfg(not(test))]
+    let _ = what;
+}
+
+/// Run `f` holding the per-store lock for the settings file and the projection file.
+///
+/// Two files are read-modify-written here — `settings.json` (via [`store_path`]) and
+/// `settings-sync.json` (via [`sync_path`]) — and `settings.set` on the main thread, the sync
+/// worker's [`merge_remote`], and a `data.import` can all be in flight at once. Without this,
+/// two writers both read the old state and the second write silently discards the first:
+/// a setting the user just ticked reverts with nothing logged.
+///
+/// The lock name is `"settings"`, which is deliberately NOT one of
+/// `sync_stores::SYNCABLE` (`favorites`, `saved`, `allowlist`) — the settings namespace is
+/// merged by its own closure in `sync.rs`, not by `sync_stores::merge_into`, so the two
+/// never contend on the same name by accident.
+fn with_settings_store_lock<T>(f: impl FnOnce() -> T) -> T {
+    #[cfg(test)]
+    SETTINGS_LOCK_DEPTH.with(|d| {
+        debug_assert_eq!(d.get(), 0, "with_settings_store_lock is not reentrant");
+        d.set(d.get() + 1);
+    });
+    let out = crate::jsonstore::with_store_lock("settings", f);
+    #[cfg(test)]
+    SETTINGS_LOCK_DEPTH.with(|d| d.set(d.get() - 1));
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Per-key sync projection (F2a). settings.json stays FLAT + untouched (all getters and
 // the heavily-tested load/merge path are unchanged), so a deleted key still resurrects to
@@ -468,7 +538,13 @@ fn save_sync_records<R: Runtime>(app: &AppHandle<R>, recs: &[Value]) {
 /// the default value over a peer's deliberate older change (settings merge by key). And
 /// each migration HLC is the FLOOR (`Hlc::zero`): the real edit time is unknown, so any
 /// genuine post-migration edit on ANY device must strictly dominate the migration seed.
+///
+/// MUST be called under [`with_settings_store_lock`]: it WRITES on the first-use path, so it
+/// is a read-modify-write. Every caller ([`merge_remote`], [`apply_local`] via
+/// [`record_change`], [`rebuild_projection_from_current`]) already holds the lock. Do NOT add
+/// a lock here. [`sync_records_readonly`] is the deliberately unwrapped reader.
 fn ensure_sync_projection<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
+    assert_holding_settings_lock("ensure_sync_projection");
     let mut recs = load_sync_records(app);
     if !recs.is_empty() {
         return recs;
@@ -499,7 +575,12 @@ fn ensure_sync_projection<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
 /// Record a per-key change in the projection (upsert + tick HLC), skipping a no-op write
 /// when the value is unchanged. Called per-key from `settings.set`. Generic over `R` so the
 /// `LOCAL_ONLY_KEYS` guard below is reachable from the `MockRuntime` unit tests.
+///
+/// MUST be called under [`with_settings_store_lock`]: the UNLOCKED inner worker of
+/// [`apply_local`], which holds the lock. Do NOT add a lock here — see
+/// [`assert_holding_settings_lock`].
 fn record_change<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
+    assert_holding_settings_lock("record_change");
     // Local-only settings are written to the flat file by `settings.set` but never become
     // sync records — a waiver one device grants must not grant itself on the others.
     if is_local_only(key) {
@@ -574,29 +655,45 @@ fn merge_projection(mut local: Vec<Value>, remote: &[Value]) -> (Vec<Value>, Vec
 /// Merge remote per-key records into the local projection (per-KEY HLC-LWW) and apply the
 /// result to the flat settings. Returns the keys that changed. The sync engine calls this
 /// for the `settings` namespace.
+///
+/// The whole body runs under the store lock, because the projection it reads
+/// ([`ensure_sync_projection`]) and the flat file [`apply_synced`] writes are the same two
+/// files `settings.set` is mid-way through rewriting. `apply_synced` is therefore the
+/// UNLOCKED inner worker called from here — never lock it as well.
 pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &[Value]) -> Vec<String> {
-    let node = crate::sync_identity::node_id(app);
-    for r in remote {
-        if let Some(h) = crate::sync_envelope::from_value(r) {
-            crate::sync_envelope::observe(&node, crate::jsonstore::now_ms(), &h);
+    with_settings_store_lock(|| {
+        let node = crate::sync_identity::node_id(app);
+        for r in remote {
+            if let Some(h) = crate::sync_envelope::from_value(r) {
+                crate::sync_envelope::observe(&node, crate::jsonstore::now_ms(), &h);
+            }
         }
-    }
-    let (merged, changed) = merge_projection(ensure_sync_projection(app), remote);
-    if !changed.is_empty() {
-        apply_synced(app, &merged); // writes the flat settings + saves the merged projection
-    }
-    changed
+        let (merged, changed) = merge_projection(ensure_sync_projection(app), remote);
+        if !changed.is_empty() {
+            apply_synced(app, &merged); // writes the flat settings + saves the merged projection
+        }
+        changed
+    })
 }
 
 /// The per-key sync records (for the merge seam / export). Migrates lazily on first call.
+///
+/// Locked despite the name: this looks like a reader, but `ensure_sync_projection` PERSISTS
+/// `settings-sync.json` on first use, so it is a read-modify-write like every other region.
+/// The sync engine calls it on the PULL side (`sync.rs`) as a closure, on the same thread
+/// that later calls `merge_remote` — sequential, never nested.
 pub fn sync_records<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
-    ensure_sync_projection(app)
+    with_settings_store_lock(|| {
+        assert_holding_settings_lock("ensure_sync_projection");
+        ensure_sync_projection(app)
+    })
 }
 
 /// Wipe + rebuild the per-key projection from the current flat settings — used after a
 /// data import replaces the flat file, so the projection reflects the imported values
 /// (with fresh HLCs) rather than the pre-import keys.
 pub fn rebuild_projection_from_current<R: Runtime>(app: &AppHandle<R>) {
+    assert_holding_settings_lock("rebuild_projection_from_current");
     save_sync_records(app, &[]);
     let _ = ensure_sync_projection(app);
 }
@@ -604,7 +701,13 @@ pub fn rebuild_projection_from_current<R: Runtime>(app: &AppHandle<R>) {
 /// Apply merged per-key records back into the flat settings file: write each live key's
 /// value, or REMOVE a tombstoned key so `load()` falls to its default (= "reset to
 /// default"). Consumed by F2b's merge. (Also rebuilds the projection from `records`.)
+///
+/// MUST be called under [`with_settings_store_lock`]: it is the UNLOCKED inner worker of
+/// [`merge_remote`], which holds the lock. Do NOT add a lock here — the store lock is not
+/// reentrant and that would deadlock every sync pass. (`merge_remote` is its only caller;
+/// the `#[should_panic]` test below proves the guard rather than the lock.)
 pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, records: &[Value]) {
+    assert_holding_settings_lock("apply_synced");
     // Start from the saved flat file (NOT defaults overlay) so we only touch synced keys.
     let mut flat = store_path(app)
         .and_then(|p| crate::jsonstore::read_with_backup(&p))
@@ -946,91 +1049,113 @@ pub extern "system" fn Java_com_aegis_browser_NativeSettings_httpsOnly(
 /// So: merge over the current values, and run each incoming key through the same allowlist
 /// `settings.set` uses. Returns the keys that were refused, so the caller can report them
 /// rather than silently dropping a poisoned or misspelled setting.
+///
+/// Locked for the whole body: a `data.import` rewriting `settings.json` while the main thread
+/// is inside `settings.set`, or while the sync worker is merging, loses whichever write is not
+/// last — with no error anywhere. `write` and `rebuild_projection_from_current` stay UNLOCKED
+/// inner workers, because they are also called from `apply_synced` under a held lock.
 pub(crate) fn apply_imported<R: Runtime>(app: &AppHandle<R>, incoming: &Value) -> Vec<String> {
-    let mut merged = load(app); // start from the CURRENT values, not defaults
-    let mut refused = Vec::new();
-    if let Some(obj) = incoming.as_object() {
-        for (k, v) in obj {
-            match validate_setting(k, v) {
-                Ok(()) => {
-                    if let Some(m) = merged.as_object_mut() {
-                        m.insert(k.clone(), v.clone());
+    with_settings_store_lock(|| {
+        let mut merged = load(app); // start from the CURRENT values, not defaults
+        let mut refused = Vec::new();
+        if let Some(obj) = incoming.as_object() {
+            for (k, v) in obj {
+                match validate_setting(k, v) {
+                    Ok(()) => {
+                        if let Some(m) = merged.as_object_mut() {
+                            m.insert(k.clone(), v.clone());
+                        }
                     }
-                }
-                Err(e) => {
-                    eprintln!("[aegis] refusing imported setting {k:?}: {e}");
-                    refused.push(k.clone());
+                    Err(e) => {
+                        eprintln!("[aegis] refusing imported setting {k:?}: {e}");
+                        refused.push(k.clone());
+                    }
                 }
             }
         }
-    }
-    write(app, &merged);
-    // Rebuild the per-key sync projection from the post-merge flat settings.
-    rebuild_projection_from_current(app);
-    refused
+        write(app, &merged);
+        // Rebuild the per-key sync projection from the post-merge flat settings.
+        rebuild_projection_from_current(app);
+        refused
+    })
+}
+
+/// Apply a renderer `settings.set` payload: the local-edit read-modify-write region.
+///
+/// Extracted from the `dispatch` arm so the region is testable against a `MockRuntime` app
+/// (`dispatch` is bound to the Wry runtime, so the arm could only be reached through a real
+/// webview — which is why the lock this function needs had no direct test at all).
+///
+/// Holds the store lock for the whole region: it reads the projection, rewrites `settings.json`
+/// and then upserts a record per key. The main thread reaches it on every settings form save
+/// while the sync worker can be inside `merge_remote` and a `data.import` inside
+/// [`apply_imported`], and all three rewrite the same two files.
+pub(crate) fn apply_local<R: Runtime>(
+    app: &AppHandle<R>,
+    payload: &Value,
+) -> Result<Value, String> {
+    with_settings_store_lock(|| {
+        // Materialize the projection from the PRE-change on-disk settings FIRST, so a
+        // key's first edit is recorded as a real (ticked) change — not folded into the
+        // migration seed (whose floor HLC would lose to a peer's later default).
+        let _ = ensure_sync_projection(app);
+        let mut current = load(app);
+        if let Some(partial) = payload.get("partial") {
+            // Validate BEFORE merging, and reject the whole batch on the first bad entry so
+            // a multi-field form write is all-or-nothing rather than half-applied.
+            if let Some(obj) = partial.as_object() {
+                for (k, v) in obj {
+                    validate_setting(k, v)?;
+                }
+            } else {
+                return Err("partial must be an object".into());
+            }
+            merge(&mut current, partial);
+        }
+        if let Some(p) = store_path(app) {
+            match serde_json::to_string_pretty(&current) {
+                Ok(txt) => {
+                    if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
+                        return Err(format!("write settings: {e}"));
+                    }
+                }
+                Err(e) => return Err(e.to_string()),
+            }
+        }
+        // The file changed — drop the cache so getters re-read the new values.
+        invalidate_cache(app);
+        // Update the per-key sync projection for each key the renderer set.
+        if let Some(partial) = payload.get("partial").and_then(Value::as_object) {
+            for (k, v) in partial {
+                record_change(app, k, v);
+            }
+        }
+        // Android: keep the WebRTC document-start shim's policy in sync (its JNI getter
+        // has no AppHandle). New tabs pick up the change; desktop reads settings directly.
+        #[cfg(target_os = "android")]
+        crate::webrtc_shim::note_policy(
+            current
+                .get("webrtcPolicy")
+                .and_then(Value::as_str)
+                .unwrap_or("public-only"),
+        );
+        // Android: keep the farble level global in sync — the NativeFarble JNI getter reads
+        // it (no AppHandle). New tabs pick up the change; desktop reads settings directly.
+        #[cfg(target_os = "android")]
+        crate::farble::note_level(
+            current
+                .get("antiFingerprint")
+                .and_then(Value::as_str)
+                .unwrap_or("off"),
+        );
+        Ok(current)
+    })
 }
 
 pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
     match channel {
         "settings.get" => Some(Ok(load(app))),
-        "settings.set" => {
-            // Materialize the projection from the PRE-change on-disk settings FIRST, so a
-            // key's first edit is recorded as a real (ticked) change — not folded into the
-            // migration seed (whose floor HLC would lose to a peer's later default).
-            let _ = ensure_sync_projection(app);
-            let mut current = load(app);
-            if let Some(partial) = payload.get("partial") {
-                // Validate BEFORE merging, and reject the whole batch on the first bad entry so
-                // a multi-field form write is all-or-nothing rather than half-applied.
-                if let Some(obj) = partial.as_object() {
-                    for (k, v) in obj {
-                        if let Err(e) = validate_setting(k, v) {
-                            return Some(Err(e));
-                        }
-                    }
-                } else {
-                    return Some(Err("partial must be an object".into()));
-                }
-                merge(&mut current, partial);
-            }
-            if let Some(p) = store_path(app) {
-                match serde_json::to_string_pretty(&current) {
-                    Ok(txt) => {
-                        if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
-                            return Some(Err(format!("write settings: {e}")));
-                        }
-                    }
-                    Err(e) => return Some(Err(e.to_string())),
-                }
-            }
-            // The file changed — drop the cache so getters re-read the new values.
-            invalidate_cache(app);
-            // Update the per-key sync projection for each key the renderer set.
-            if let Some(partial) = payload.get("partial").and_then(Value::as_object) {
-                for (k, v) in partial {
-                    record_change(app, k, v);
-                }
-            }
-            // Android: keep the WebRTC document-start shim's policy in sync (its JNI getter
-            // has no AppHandle). New tabs pick up the change; desktop reads settings directly.
-            #[cfg(target_os = "android")]
-            crate::webrtc_shim::note_policy(
-                current
-                    .get("webrtcPolicy")
-                    .and_then(Value::as_str)
-                    .unwrap_or("public-only"),
-            );
-            // Android: keep the farble level global in sync — the NativeFarble JNI getter reads
-            // it (no AppHandle). New tabs pick up the change; desktop reads settings directly.
-            #[cfg(target_os = "android")]
-            crate::farble::note_level(
-                current
-                    .get("antiFingerprint")
-                    .and_then(Value::as_str)
-                    .unwrap_or("off"),
-            );
-            Some(Ok(current))
-        }
+        "settings.set" => Some(apply_local(app, payload)),
         _ => None,
     }
 }
@@ -1137,13 +1262,8 @@ mod tests {
                 .any(|r| r.get("key").and_then(Value::as_str) == Some("syncVault")));
 
             // The user opts in locally: accepted, persisted, and still not a sync record.
-            validate_setting_for_test("syncVault", &json!(true)).expect("valid boolean");
-            let mut next = load(app);
-            next.as_object_mut()
-                .unwrap()
-                .insert("syncVault".into(), json!(true));
-            write(app, &next);
-            record_change(app, "syncVault", &json!(true));
+            apply_local(app, &json!({ "partial": { "syncVault": true } }))
+                .expect("a boolean is a valid syncVault");
             assert_eq!(
                 load(app).get("syncVault"),
                 Some(&json!(true)),
@@ -1158,7 +1278,7 @@ mod tests {
 
             // A peer record claiming it is ignored on apply, even with a fresh HLC.
             let poisoned = rec("syncVault", i64::MAX, json!(true));
-            apply_synced(app, &[poisoned]);
+            merge_remote(app, &[poisoned]);
             assert_eq!(
                 load(app).get("syncVault"),
                 Some(&json!(true)),
@@ -1198,15 +1318,10 @@ mod tests {
                 .any(|r| r.get("key").and_then(Value::as_str) == Some("syncAllowInsecure")));
 
             // The user ticks the box: the allowlist accepts it, and it persists locally.
-            // (`settings::dispatch` is bound to the Wry runtime, so this drives the exact
-            // write + record_change pair that `settings.set` performs.)
-            validate_setting_for_test("syncAllowInsecure", &json!(true)).expect("valid boolean");
-            let mut next = load(app);
-            next.as_object_mut()
-                .unwrap()
-                .insert("syncAllowInsecure".into(), json!(true));
-            write(app, &next);
-            record_change(app, "syncAllowInsecure", &json!(true));
+            // This drives the REAL `settings.set` region — the same `write` + `record_change`
+            // pair the arm performs, under the store lock, via `apply_local`.
+            apply_local(app, &json!({ "partial": { "syncAllowInsecure": true } }))
+                .expect("a boolean is a valid syncAllowInsecure");
             assert!(sync_allow_insecure(app), "the waiver must persist when set");
 
             // ...but never becomes a sync record (it would ride out to every other device).
@@ -1219,7 +1334,7 @@ mod tests {
 
             // A peer record claiming the waiver is ignored on apply, even with a fresh HLC.
             let poisoned = rec("syncAllowInsecure", i64::MAX, json!(false));
-            apply_synced(app, &[poisoned]);
+            merge_remote(app, &[poisoned]);
             assert!(
                 sync_allow_insecure(app),
                 "a peer's record must not be able to revoke or grant the waiver"
@@ -1376,7 +1491,7 @@ mod tests {
             write(app, &json!({ "homeUrl": "https://keepme.test/" }));
 
             // A `file:` home page: accepted by `Url::parse`, refused by the allowlist.
-            apply_synced(app, &[rec("homeUrl", 9, json!("file:///etc/passwd"))]);
+            merge_remote(app, &[rec("homeUrl", 9, json!("file:///etc/passwd"))]);
             assert_eq!(
                 all(app).get("homeUrl").and_then(Value::as_str),
                 Some("https://keepme.test/"),
@@ -1386,7 +1501,7 @@ mod tests {
             // A download directory the allowlist accepts only if absolute + NUL-free.
             // Asserted against the default (`load` overlays defaults, so the key is present
             // as "" rather than absent) — what matters is that the peer's value didn't land.
-            apply_synced(app, &[rec("downloadDir", 9, json!("relative/evil"))]);
+            merge_remote(app, &[rec("downloadDir", 9, json!("relative/evil"))]);
             assert_eq!(
                 all(app).get("downloadDir").and_then(Value::as_str),
                 Some(""),
@@ -1394,14 +1509,14 @@ mod tests {
             );
 
             // An unknown key — the allowlist is an ALLOW list, so this is rejected too.
-            apply_synced(app, &[rec("someNewSetting", 9, json!("x"))]);
+            merge_remote(app, &[rec("someNewSetting", 9, json!("x"))]);
             assert!(
                 all(app).get("someNewSetting").is_none(),
                 "a peer's record must not invent a new setting"
             );
 
             // A legitimate peer write still lands — the guard is not simply refusing everything.
-            apply_synced(app, &[rec("homeUrl", 10, json!("https://peer.test/"))]);
+            merge_remote(app, &[rec("homeUrl", 10, json!("https://peer.test/"))]);
             assert_eq!(
                 all(app).get("homeUrl").and_then(Value::as_str),
                 Some("https://peer.test/"),
@@ -1563,5 +1678,74 @@ mod tests {
         assert_eq!(by_key("httpsOnly").get("value"), Some(&json!(false))); // unchanged
         assert_eq!(by_key("primaryColor").get("value"), Some(&json!("#fff"))); // updated
         assert_eq!(by_key("homeUrl").get("value"), Some(&json!("https://x"))); // inserted
+    }
+
+    /// Eight renderer keys, one per thread, must ALL survive. The keys are deliberately
+    /// distinct and none of them is in `LOCAL_ONLY_KEYS`, so every call does the full region:
+    /// read the projection, rewrite `settings.json`, then upsert a sync record. A lost update
+    /// is the whole failure mode here, and it is SILENT — both writers succeed, the second one
+    /// just wrote a version of the file that never saw the first one's key.
+    #[test]
+    fn concurrent_settings_writes_lose_no_key() {
+        const ROUNDS: usize = 3;
+        // (key, value) pairs, all accepted by `validate_setting` and none local-only.
+        let keys: [(&str, Value); 8] = [
+            ("httpsOnly", json!(false)),
+            ("hideChromeByDefault", json!(true)),
+            ("tabIdleTimeout", json!(11)),
+            ("backgroundTabTimeout", json!(22_222)),
+            ("aggressiveSweepThreshold", json!(7)),
+            ("syncIntervalSec", json!(600)),
+            ("themeMode", json!("dark")),
+            ("antiFingerprint", json!("standard")),
+        ];
+
+        with_tmp_app(|app| {
+            let mut handles = Vec::new();
+            for (key, value) in &keys {
+                let app = app.clone();
+                let (key, value) = (*key, value.clone());
+                handles.push(std::thread::spawn(move || {
+                    for _ in 0..ROUNDS {
+                        let mut partial = serde_json::Map::new();
+                        partial.insert(key.to_string(), value.clone());
+                        apply_local(&app, &json!({ "partial": partial }))
+                            .expect("every key in this table is a valid setting");
+                    }
+                }));
+            }
+            for h in handles {
+                h.join().unwrap();
+            }
+
+            let after = load(app);
+            for (key, value) in &keys {
+                assert_eq!(
+                    after.get(*key),
+                    Some(value),
+                    "{key} was lost: two callers read the same settings.json and the second \
+                     write silently discarded the first"
+                );
+            }
+        });
+    }
+
+    /// The settings store lock is a plain non-reentrant `parking_lot` mutex, and the locked
+    /// regions call their inner workers by design. This pins the guard that makes a future
+    /// double-take a clear panic instead of a hung suite — a hung `cargo test` is
+    /// indistinguishable from a slow build, and CI would burn its whole budget on it.
+    ///
+    /// `test_support::lock()` recovers from poisoning (`unwrap_or_else(|p| p.into_inner())`),
+    /// so the unwind through `with_tmp_app` does not cascade-fail the rest of the suite.
+    #[test]
+    #[should_panic(expected = "is an inner worker: it MUST be called INSIDE")]
+    fn an_inner_worker_refuses_to_run_without_the_settings_lock() {
+        with_tmp_app(|app| {
+            // Reachable today only from a test — which is the point: if a future caller reaches
+            // `record_change` (or `apply_synced`, `ensure_sync_projection`,
+            // `rebuild_projection_from_current`) directly again, it would do an unprotected
+            // read-modify-write of the same two files. That is the defect this commit removes.
+            record_change(app, "themeMode", &json!("dark"));
+        });
     }
 }
