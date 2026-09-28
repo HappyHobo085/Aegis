@@ -9,6 +9,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **HTTPS-Only could be walked around with a capital letter on Android.**
+  `MainActivity.secureUrl()` compared the URL's scheme with exact equality while
+  `android.net.Uri` does not normalise its case, so `HTTP://example.com` skipped
+  the upgrade entirely — one character was enough to turn the setting off. The
+  rewrite also sliced the URL with a hardcoded `http://` length, which happened to
+  be the right width for `HTTP://` only by coincidence. The comparison is now
+  case-insensitive and the slice uses the scheme's real length. Compile-verified
+  only (there is no Kotlin test source set); the behaviour is pending on-device.
+
 - **The home page setting was ignored on Android.** All three desktops resolve it in
   the core, and the phone showed it in Settings, but on a phone the Home button
   always went to `about:blank`: the core's `nav.home` drives a Tauri content

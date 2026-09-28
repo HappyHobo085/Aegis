@@ -978,18 +978,26 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
    *  anywhere reporting that Android was stricter than the setting claims. The policy now
    *  comes from the Rust side, which mirrors it into an app-free global at boot and on every
    *  write — this function has no `AppHandle` to read the settings file with. The getter
-   *  fails towards `true`, so a native call that cannot answer keeps upgrading. */
+   *  fails towards `true`, so a native call that cannot answer keeps upgrading.
+   *
+   *  The scheme comparison is case-INSENSITIVE and the rewrite slices by the scheme's real
+   *  length. `Uri` does not normalise the scheme's case, so `HTTP://host` reaches this
+   *  function with a 4-character scheme: an exact `== "http"` test silently declined to
+   *  upgrade it, and a `HTTP://` link was a one-character way around HTTPS-Only. The slice
+   *  length is then derived from the scheme rather than hardcoded, because the two spellings
+   *  are both 7 characters and a hardcoded `http://`.length was right only by coincidence. */
   private fun secureUrl(raw: String): String? {
     val uri = try {
       Uri.parse(raw)
     } catch (_: Throwable) {
       return raw
     }
+    val rawScheme = uri.scheme ?: return raw
     val host = uri.host ?: return raw
     if (isMalwareHost(host)) return null
     val localhost = host == "localhost" || host == "127.0.0.1" || host == "::1"
-    if (uri.scheme == "http" && !localhost && NativeSettings.httpsOnlyOrDefault()) {
-      return "https://" + raw.substring("http://".length)
+    if (rawScheme.equals("http", ignoreCase = true) && !localhost && NativeSettings.httpsOnlyOrDefault()) {
+      return "https://" + raw.substring(rawScheme.length + "://".length)
     }
     return raw
   }

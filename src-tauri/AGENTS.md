@@ -1894,14 +1894,20 @@ clamps at the 420×320 minimum.
       honestly labelled `TODO(M13)`, so it is a deliberate stub, and the renderer _does_
       subscribe to `form.willSubmit` — a declared-but-unproduced event, not an oversight.
 
-    **One masked parity gap, and it is narrow.** `settings::https_only` is android-dead, and
-    Android does not honour the setting: `MainActivity.secureUrl()` **hardcodes** the
-    http→https upgrade (its own comment says it "matches the desktop default-on") and never
-    reads the setting, while the only reader of the setting is a `#[cfg(desktop)]` arm in
-    `nav.rs`. No user-visible bug _today_ — the mobile UI only ever writes `httpsOnly: true`
-    and the only toggle is desktop-only — but settings **sync** propagates the key, so a user
-    who turns `httpsOnly` off on desktop and syncs to a phone gets the upgrade anyway. The
-    android allow is what makes this read as deliberate tiering instead of a gap.
+    **One masked parity gap, and it is narrow.** `settings::https_only` is android-dead
+    (`#[cfg(desktop)]`-only reader in `nav.rs`), and `MainActivity.secureUrl()` is the only
+    Android consumer — it reads the setting through
+    `NativeSettings.httpsOnlyOrDefault()`. An earlier revision of this bullet claimed
+    `secureUrl` HARDCODED the upgrade and never read the setting; that stopped being true
+    when Wave 8 added the `ANDROID_HTTPS_ONLY` JNI global (see gotcha 26), and it was left
+    to rot here. What is still true, and is the real gap: `secureUrl` only ever **upgrades**
+    a URL, so on a **release** APK the setting cannot be honoured in the other direction —
+    `build.gradle.kts` sets `manifestPlaceholders["usesCleartextTraffic"]="false"` for release
+    (`true` for debug), so un-checking `httpsOnly` and loading `http://…` is refused by the
+    platform's network security policy with nothing reporting why. A **debug** session cannot
+    exercise it. The `httpsOnly` checkbox in `SecurityTab.tsx` has no platform gate, so the
+    control is live where it cannot work. Owner decision pending: hide the control on
+    Android, or align the release manifest.
 
     **Four hypotheses the audit raised and DISPROVED — recorded so they are not
     re-investigated.** Each looked exactly like gotcha 24's Android history bug (a Rust path
