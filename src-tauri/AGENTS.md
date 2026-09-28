@@ -142,6 +142,35 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   — a cfg gate, because having no Android caller is the truth (Android has no OS window
   to take over). Honest limit: the policy is unit-tested; the real WM transition and a real
   tab switch are not (no window on the mock runtime).
+  **All six `view.*` arms are now unit-tested, and that needed a widening.** `dispatch`
+  (PLACE 2 of the three-place rule) took a concrete `&AppHandle`, so no `MockRuntime`
+  test could reach it — and neither could the four helpers every arm ends in:
+  `layout_of`, `apply_visibility`, `apply_inset` and `update`. All five are generic over
+  `R: Runtime` now, and so are the six `linux_layout` helpers they reach:
+  `set_content_visible_label` / `set_content_visible` (for `view.setContentVisible`),
+  `layout`, `size_fixed_children`, `fs_exit_button` and `exit_fullscreen`. Every one of
+  those bodies used only runtime-INDEPENDENT Tauri APIs (`try_state`, `get_webview`,
+  `webviews`, `get_window`, `with_webview`) — `linux_layout::apply_proxy_label` was
+  already generic on exactly that evidence — so this was a signature change with no body
+  edit, and the only production caller (`lib.rs`'s `ipc()`) still infers `Wry`.
+  **What the tests can and cannot see.** On a `MockRuntime` the native half is an
+  honest no-op (there is no window and no content webview), so the observable is the
+  managed `ContentInset` layout each arm leaves behind — which is precisely what
+  `linux_layout::layout`, `nav::decide_navigation` and the resize handler read. The
+  tests therefore pin the `unwrap_or` DEFAULTS, since a malformed or partial payload is
+  what actually reaches an arm: a missing `inset.top` is `0.0` and NOT the built-in
+  `DEFAULT_INSET_TOP` (164.0), a missing `active` is `false` and not "open", a missing
+  `width` is `SIDEBAR_WIDTH`, a missing `visible` is `true`, and a missing `on` is an
+  exit. They also pin that the right inset is the panel width only WHILE the panel is
+  open (`setSidebar` and `setLayout` both), that `setLayout` replaces the overlay and
+  sidebar flags together in one `update` (the deliberate atomic update that removed a
+  mid-transition race), and — through `content_visible`, the ONE predicate the
+  consumers read — that a full-window overlay hides the page while a sidebar does not
+  and fullscreen shows it again. The routing arm is pinned too: a foreign channel
+  returns `None` AND leaves the layout byte-identical, so a `_` arm that still ran an
+  `update` could not pass. `view.setContentVisible` is the one arm with no layout effect
+  at all (it only talks to the webview), and its test asserts exactly that — it answers
+  `Ok` and disturbs nothing.
 - **`data.rs`** — `data.export` / `data.import` (bundles all stores + settings).
   **Unit-tested via `test_support::with_tmp_app`:** export produces a v2 bundle
   with every store present; cross-app import round-trip (export → fresh app →

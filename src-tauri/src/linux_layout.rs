@@ -13,7 +13,7 @@ use gtk::prelude::*;
 use glib::error::ErrorDomain;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 use webkit2gtk::{LoadEvent, WebViewExt};
 
 /// Remove a webview from the GTK container by its label.
@@ -449,7 +449,7 @@ pub fn install_nav_policy(app: &AppHandle, label: &str) {
 
 /// Leave fullscreen: clear the flag, re-inset the content, and notify the chrome.
 /// Shared by the Esc key handler and the native floating exit button.
-fn exit_fullscreen(app: &AppHandle) {
+fn exit_fullscreen<R: Runtime>(app: &AppHandle<R>) {
     if let Some(s) = app.try_state::<crate::view::ContentInset>() {
         let mut g = s.0.lock().unwrap_or_else(|e| e.into_inner());
         if g.fullscreen {
@@ -535,7 +535,7 @@ pub fn connect_tab_keys_label(app: &AppHandle, label: &str) {
 /// Show/hide a specific content webview by label at the GTK level (Tauri's hide()
 /// doesn't act on the reparented widget). Used per-tab from nav.rs's on_page_load so
 /// each tab hides/shows its OWN webview.
-pub fn set_content_visible_label(app: &AppHandle, label: &str, visible: bool) {
+pub fn set_content_visible_label<R: Runtime>(app: &AppHandle<R>, label: &str, visible: bool) {
     let Some(w) = app.get_webview(label) else {
         return;
     };
@@ -546,7 +546,7 @@ pub fn set_content_visible_label(app: &AppHandle, label: &str, visible: bool) {
 
 /// Show/hide the active content webview at the GTK level. Used by
 /// view.setChromeOverlay to reveal chrome overlays.
-pub fn set_content_visible(app: &AppHandle, visible: bool) {
+pub fn set_content_visible<R: Runtime>(app: &AppHandle<R>, visible: bool) {
     let label = crate::nav::active_content_label(app);
     set_content_visible_label(app, &label, visible);
 }
@@ -658,7 +658,7 @@ static FIXED_SIZE_HANDLER: std::sync::Once = std::sync::Once::new();
 /// so it runs AFTER GtkFixed's own size-allocate (which sizes children to their 0×0 request);
 /// it does NOT call `move_`/`queue_resize`, so it can't loop. The fullscreen-exit button keeps
 /// its own small request and is positioned by `layout()`.
-fn size_fixed_children(app: &AppHandle, fixed: &gtk::Fixed) {
+fn size_fixed_children<R: Runtime>(app: &AppHandle<R>, fixed: &gtk::Fixed) {
     let (left, top, right) = app
         .try_state::<LayoutInsets>()
         .map(|s| *s.0.lock().unwrap_or_else(|e| e.into_inner()))
@@ -685,7 +685,7 @@ fn size_fixed_children(app: &AppHandle, fixed: &gtk::Fixed) {
 /// over the opaque, edge-to-edge content (a shrunk WebKit chrome wouldn't repaint on
 /// the NVIDIA/X11 path) and needs no transparency/compositing (the GPU path that
 /// crashes the NVIDIA WebKit web process). Styled via the CSS provider in lib.rs.
-fn fs_exit_button(fixed: &gtk::Fixed, app: &AppHandle) -> gtk::Widget {
+fn fs_exit_button<R: Runtime>(fixed: &gtk::Fixed, app: &AppHandle<R>) -> gtk::Widget {
     if let Some(w) = fixed
         .children()
         .into_iter()
@@ -730,8 +730,8 @@ fn fs_exit_button(fixed: &gtk::Fixed, app: &AppHandle) -> gtk::Widget {
 /// size so it can only ever grow, never shrink (the "can't make the window smaller" bug).
 /// Keeping a (0,0) size request removes that pin; the real size is applied by `size_allocate`.
 #[allow(clippy::too_many_arguments)] // mirrors the GtkFixed geometry call shape; a struct wrap would add churn without clarity
-pub fn layout(
-    app: &AppHandle,
+pub fn layout<R: Runtime>(
+    app: &AppHandle<R>,
     left: i32,
     top: i32,
     right: i32,

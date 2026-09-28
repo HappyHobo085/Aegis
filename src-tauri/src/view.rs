@@ -8,7 +8,7 @@
 //   - fullscreen keeps a slim top strip for the exit button; the content fills the rest.
 use serde_json::Value;
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 use crate::nav::DEFAULT_INSET_TOP;
 
@@ -52,7 +52,7 @@ impl Default for ContentInset {
     }
 }
 
-fn layout_of(app: &AppHandle) -> Layout {
+fn layout_of<R: Runtime>(app: &AppHandle<R>) -> Layout {
     app.try_state::<ContentInset>()
         .map(|s| *s.0.lock().unwrap_or_else(|e| e.into_inner()))
         .unwrap_or(Layout {
@@ -81,7 +81,7 @@ pub fn content_visible(lay: &Layout) -> bool {
 // neither — it has no separate content webview to toggle. Same allow as
 // `apply_inset` below, for the same reason.
 #[allow(unused_variables)]
-fn apply_visibility(app: &AppHandle, lay: Layout) {
+fn apply_visibility<R: Runtime>(app: &AppHandle<R>, lay: Layout) {
     let visible = content_visible(&lay);
     #[cfg(target_os = "linux")]
     crate::linux_layout::set_content_visible(app, visible);
@@ -96,7 +96,7 @@ fn apply_visibility(app: &AppHandle, lay: Layout) {
 /// Resize/reposition the content webview to fill the window below the top inset and
 /// left of the right inset (or the whole window in fullscreen).
 #[allow(unused_variables)]
-pub fn apply_inset(app: &AppHandle) {
+pub fn apply_inset<R: Runtime>(app: &AppHandle<R>) {
     let lay = layout_of(app);
     // Fullscreen content geometry differs by platform: Linux fills the window
     // edge-to-edge (a native floating exit button sits on top — see linux_layout),
@@ -185,7 +185,7 @@ pub fn apply_inset(app: &AppHandle) {
 }
 
 /// Mutate the layout state, then re-apply visibility + geometry.
-fn update<F: FnOnce(&mut Layout)>(app: &AppHandle, f: F) {
+fn update<F: FnOnce(&mut Layout), R: Runtime>(app: &AppHandle<R>, f: F) {
     if let Some(state) = app.try_state::<ContentInset>() {
         f(&mut state.0.lock().unwrap_or_else(|e| e.into_inner()));
     }
@@ -193,7 +193,6 @@ fn update<F: FnOnce(&mut Layout)>(app: &AppHandle, f: F) {
     apply_inset(app);
 }
 
-/// Handle `view.*` channels. Returns `None` if not a view channel.
 /// Decide whether entering fullscreen should overwrite the saved windowed size.
 ///
 /// Split out and pure so the policy is testable on any platform: the bug it
@@ -216,7 +215,25 @@ pub(crate) fn should_capture_saved(
     entering && !already_fullscreen && slot_empty
 }
 
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+/// Handle `view.*` channels. Returns `None` if not a view channel.
+///
+/// PLACE 2 of the three-place rule: the channel names live in `shared/types.ts`
+/// and the renderer calls them through `ipcClient`. Every arm here ends in
+/// `update`, which mutates the managed `ContentInset` layout and re-applies
+/// visibility + geometry to the platform's webviews.
+///
+/// Generic over `R: Runtime` so the six arms — their `unwrap_or` defaults in
+/// particular, which are exactly what a malformed or partial payload hits — are
+/// reachable from a `MockRuntime` test. The only production caller is `lib.rs`'s
+/// `ipc()`, which infers `Wry`. On a `MockRuntime` the native half is honestly a
+/// no-op (no window, no content webview), so the observable a test can assert is
+/// the layout state these arms leave behind — which is what
+/// `linux_layout::layout`, `nav::decide_navigation` and the resize handler read.
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     let res: Result<Value, String> = match channel {
         "view.setContentInset" => {
             let top = payload
@@ -356,7 +373,34 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 
 #[cfg(test)]
 mod tests {
-    use super::{content_visible, should_capture_saved, Layout};
+    use super::{
+        content_visible, dispatch, should_capture_saved, ContentInset, Layout, SIDEBAR_WIDTH,
+    };
+    use crate::test_support::with_tmp_app;
+    use serde_json::json;
+    use tauri::{AppHandle, Manager, Runtime};
+
+    /// The layout these arms leave behind, as one comparable tuple. `Layout` has no
+    /// `PartialEq` (it is a plain state struct read by three consumers), and the tuple
+    /// keeps a test's assertions about ONE field from being lost among the others.
+    type Snap = (f64, f64, f64, bool, bool, bool);
+
+    fn layout_now<R: Runtime>(app: &AppHandle<R>) -> Layout {
+        app.try_state::<ContentInset>()
+            .map(|s| *s.0.lock().unwrap_or_else(|e| e.into_inner()))
+            .expect("ContentInset is managed")
+    }
+
+    fn snap<R: Runtime>(app: &AppHandle<R>) -> Snap {
+        let l = layout_now(app);
+        (l.left, l.top, l.right, l.fullscreen, l.overlay, l.sidebar)
+    }
+
+    fn view_call<R: Runtime>(app: &AppHandle<R>, channel: &str, payload: serde_json::Value) {
+        dispatch(app, channel, &payload)
+            .unwrap_or_else(|| panic!("{channel} is a view channel"))
+            .unwrap_or_else(|e| panic!("{channel} failed: {e}"));
+    }
 
     /// The re-sent `on: true` is what broke it: the renderer keys the fullscreen
     /// effect on `[tabs.activeId, fullscreen]`, so switching tabs while
@@ -415,5 +459,226 @@ mod tests {
         assert!(content_visible(&lay(true, true, false)));
         // Fullscreen always shows content, even if an overlay flag lingers.
         assert!(content_visible(&lay(true, false, true)));
+    }
+
+    /// The router is the whole of the contract here: an unrecognised name must be
+    /// declined so `ipc()` keeps looking (and eventually reports "unknown channel"),
+    /// NOT answered as a silent no-op that looks like success to the caller.
+    #[test]
+    fn view_dispatch_declines_every_channel_it_does_not_own() {
+        with_tmp_app(|app| {
+            let before = snap(app);
+            for name in [
+                "view",
+                "view.getState",
+                "view.setlayout",   // case variant
+                "view.setSidebar ", // trailing space
+                "view.set",
+                "view.setContentInsetX",
+                "nav.getState",
+                "settings.get",
+            ] {
+                assert_eq!(
+                    dispatch(app, name, &json!({})),
+                    None,
+                    "{name} is not a view channel and must be declined, not answered"
+                );
+            }
+            // A declined channel must also leave the layout untouched — a `_` arm that
+            // still ran an `update` would pass the loop above while quietly resetting
+            // whatever the user's chrome had just reported.
+            assert_eq!(snap(app), before, "a declined channel changed the layout");
+        });
+    }
+
+    /// `setContentInset` is the ONLY arm that writes the two left/top edges, and it is
+    /// told the chrome's measured DOM height. A payload that carries no numbers (or
+    /// non-numbers) collapses both to zero, which slides the page up under the
+    /// toolbar — so the renderer always reports both, and the default is pinned here
+    /// because it is a real input shape, not a formality.
+    #[test]
+    fn a_content_inset_call_writes_the_two_edges_and_nothing_else() {
+        with_tmp_app(|app| {
+            // Fresh state: no insets but the built-in default top, no flags.
+            assert_eq!(snap(app), (0.0, 164.0, 0.0, false, false, false));
+
+            view_call(
+                app,
+                "view.setContentInset",
+                json!({ "inset": { "top": 96, "left": 8 } }),
+            );
+            assert_eq!(
+                snap(app),
+                (8.0, 96.0, 0.0, false, false, false),
+                "both edges are written and the right inset / flags are left alone"
+            );
+
+            // Half a report: the missing edge becomes 0, NOT \"unchanged\".
+            view_call(
+                app,
+                "view.setContentInset",
+                json!({ "inset": { "left": 4 } }),
+            );
+            assert_eq!(snap(app), (4.0, 0.0, 0.0, false, false, false));
+
+            // Wrong type is the same as absent (`and_then(as_f64)`), not a silent skip.
+            view_call(
+                app,
+                "view.setContentInset",
+                json!({ "inset": { "top": "96", "left": true } }),
+            );
+            assert_eq!(snap(app), (0.0, 0.0, 0.0, false, false, false));
+        });
+    }
+
+    /// The sidebar INSETS the content from the right (the page stays visible beside
+    /// the panel) rather than hiding it, and the inset is the width the chrome
+    /// actually measured. Closing it must give the whole edge back — a right inset
+    /// left behind on close is a page permanently squeezed for a panel nobody sees.
+    #[test]
+    fn the_sidebar_insets_from_the_right_and_gives_the_edge_back_when_it_closes() {
+        with_tmp_app(|app| {
+            view_call(
+                app,
+                "view.setSidebar",
+                json!({ "active": true, "width": 420 }),
+            );
+            assert_eq!(snap(app), (0.0, 164.0, 420.0, false, false, true));
+
+            // The user resized the panel to 420, then closed it: the edge comes back.
+            view_call(
+                app,
+                "view.setSidebar",
+                json!({ "active": false, "width": 420 }),
+            );
+            assert_eq!(
+                snap(app),
+                (0.0, 164.0, 0.0, false, false, false),
+                "closing the sidebar must give the right edge back, not keep the last width"
+            );
+
+            // A panel opened without a measured width falls back to the chrome's own
+            // constant, so the content is never left UN-insetted under an open panel.
+            view_call(app, "view.setSidebar", json!({ "active": true }));
+            assert_eq!(snap(app).2, SIDEBAR_WIDTH);
+            assert!(snap(app).5, "no `active` key is not \"close it\"");
+
+            // `active: false` with no width must not resurrect the constant either.
+            view_call(app, "view.setSidebar", json!({ "active": false }));
+            assert_eq!(snap(app), (0.0, 164.0, 0.0, false, false, false));
+        });
+    }
+
+    /// `setLayout` exists to make the overlay+sidebar pair ATOMIC: the chrome computes
+    /// both and sends one call, so a layout pass can never run between the two and
+    /// paint Settings behind the content. That property is observable: after one call
+    /// the two flags always agree with each other.
+    #[test]
+    fn one_layout_call_sets_the_overlay_and_the_sidebar_together() {
+        with_tmp_app(|app| {
+            view_call(
+                app,
+                "view.setLayout",
+                json!({ "overlay": true, "sidebar": true, "width": 200 }),
+            );
+            assert_eq!(snap(app), (0.0, 164.0, 200.0, false, true, true));
+
+            // The atomic call REPLACES the pair: a payload that omits `sidebar` closes
+            // it (and gives the edge back). This is the deliberate difference from
+            // `setChromeOverlay`, which touches only the overlay flag.
+            view_call(app, "view.setLayout", json!({ "overlay": true }));
+            assert_eq!(
+                snap(app),
+                (0.0, 164.0, 0.0, false, true, false),
+                "setLayout is a full replace, so an omitted flag is false"
+            );
+
+            // …and the two-channel route cannot close the sidebar by accident. Opening
+            // Settings while the History panel is open is the case that motivated
+            // `setLayout`: two separate updates, each triggering its own layout pass.
+            view_call(
+                app,
+                "view.setLayout",
+                json!({ "overlay": false, "sidebar": true, "width": 200 }),
+            );
+            assert_eq!(snap(app), (0.0, 164.0, 200.0, false, false, true));
+            view_call(app, "view.setChromeOverlay", json!({ "active": true }));
+            view_call(app, "view.setChromeOverlay", json!({ "active": false }));
+            assert_eq!(
+                snap(app),
+                (0.0, 164.0, 200.0, false, false, true),
+                "setChromeOverlay must not touch the sidebar or the right inset"
+            );
+        });
+    }
+
+    /// Whether the page is hidden is ONE decision, `content_visible`, and every
+    /// consumer reads it. Asserting through that predicate rather than through the
+    /// flags is what makes this a statement about the user-visible outcome: an overlay
+    /// hides the page, fullscreen shows it again, and the sidebar never hides it.
+    #[test]
+    fn a_full_window_overlay_hides_the_page_and_fullscreen_shows_it_again() {
+        with_tmp_app(|app| {
+            assert!(
+                content_visible(&layout_now(app)),
+                "nothing open shows the page"
+            );
+
+            view_call(app, "view.setChromeOverlay", json!({ "active": true }));
+            assert!(
+                !content_visible(&layout_now(app)),
+                "a full-window overlay must hide the page or the chrome renders behind it"
+            );
+
+            // The sidebar rides `overlay` true in the chrome but still leaves the page
+            // visible beside the panel — the one case where overlay does not hide.
+            view_call(
+                app,
+                "view.setLayout",
+                json!({ "overlay": true, "sidebar": true, "width": 320 }),
+            );
+            assert!(content_visible(&layout_now(app)));
+
+            // Fullscreen shows the content even while an overlay flag lingers.
+            view_call(app, "view.setFullscreen", json!({ "on": true }));
+            assert!(content_visible(&layout_now(app)));
+            assert!(snap(app).3, "the fullscreen flag itself is stored");
+
+            // A payload with no `on` key is an exit, not a no-op.
+            view_call(app, "view.setFullscreen", json!({}));
+            assert!(
+                !snap(app).3,
+                "a fullscreen call that says nothing must leave fullscreen, not keep it"
+            );
+        });
+    }
+
+    /// `setContentVisible` is the one arm with no layout effect — it drives the
+    /// platform's webview directly, which a `MockRuntime` has none of. So the
+    /// observable here is that it answers Ok AND leaves the layout byte-identical:
+    /// implementing it by flipping the overlay flag instead of the webview would
+    /// answer just as successfully and show the wrong thing.
+    #[test]
+    fn a_content_visible_call_answers_without_disturbing_the_layout() {
+        with_tmp_app(|app| {
+            view_call(
+                app,
+                "view.setLayout",
+                json!({ "overlay": true, "sidebar": true, "width": 250 }),
+            );
+            let before = snap(app);
+            for visible in [true, false] {
+                view_call(app, "view.setContentVisible", json!({ "visible": visible }));
+                assert_eq!(
+                    snap(app),
+                    before,
+                    "show/hide of the webview must not be implemented by moving the layout"
+                );
+            }
+            // A payload with no `visible` key asks for the webview to be shown
+            // (visible is the protective default: `unwrap_or(true)`), which on a mock
+            // is unobservable — but the call must still succeed rather than error.
+            view_call(app, "view.setContentVisible", json!({}));
+        });
     }
 }
