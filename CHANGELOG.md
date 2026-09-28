@@ -9,6 +9,20 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Turning on vault sync could never do anything.** Password-vault sync depends on a
+  three-step handshake: a joining device adopts the account's shared key salt, and the very
+  first device — the one nobody can adopt from — becomes the account's vault by publishing
+  its _own_ salt. The third step required already being what it was trying to make you:
+  publishing only ran for a vault that had already adopted, adopting only ran for a vault
+  that had already adopted, and the only way to have an adopted salt was for one to have
+  arrived in a published record that only an adopted vault could publish. A closed circle
+  with no way in, so the toggle in settings did nothing at all on a fresh install, and no
+  error was ever shown. A second, separate circle made joining unreachable in exactly the
+  same way. The first device now publishes its salt when the account has none yet and you
+  have opted in, and its vault is then marked as the account's without needing your master
+  password — the salt did not change, so there is nothing to re-encrypt. Joining devices
+  still re-key for real when you unlock, and still never publish over an account that
+  already has a salt.
 - **The vault panel could freeze the whole window the moment vault sync was working.**
   Reading vault state held the vault's in-memory lock to take a snapshot and then asked
   whether vault sync is enabled — a question whose answer comes from the very same lock. A

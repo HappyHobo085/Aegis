@@ -765,6 +765,81 @@ pub fn is_synced<R: Runtime>(app: &AppHandle<R>) -> bool {
     }
 }
 
+/// Stamp a v1 vault whose salt is ALREADY the account's shared salt as [`KDF_V_SYNCED`].
+///
+/// Returns `Ok(true)` if it stamped, `Ok(false)` if there was nothing to do (no vault, a
+/// salt that is not the account's, or already stamped).
+///
+/// This is deliberately password-free, and that is the entire point. Adoption normally
+/// *changes* the salt, so it has to re-seal every record and therefore needs the master
+/// password (see [`reseal_with_salt`] / `sync_vault::try_adopt`). But when the salt is
+/// already the account's, the key sitting in memory is byte-for-byte the key the password
+/// would derive, so a re-seal would be a cryptographic no-op and the version stamp is the
+/// only thing missing. That is what lets the device which *published* the account's salt
+/// reach a synced vault inside a sync pass — where no master password exists at all —
+/// instead of waiting for a lock/unlock cycle that a user who created the vault a minute
+/// ago has no reason to perform.
+///
+/// The lock is what makes this safe to do from the sync thread: every production writer of
+/// `vault.json` holds it across its write (all of them go through [`persist`]), so the
+/// read-modify-write below cannot interleave with a `vault.add` and revert a credential.
+pub(crate) fn stamp_shared_salt<R: Runtime>(
+    app: &AppHandle<R>,
+    shared: &[u8],
+) -> Result<bool, String> {
+    let st = app
+        .try_state::<VaultState>()
+        .ok_or("vault state unavailable")?;
+    let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(file) = read_file(app) else {
+        return Ok(false); // no vault on this device
+    };
+    if file_salt(&file).as_deref() != Some(shared) {
+        return Ok(false); // our own salt is not the account's; that is adoption's job
+    }
+    if file_version(&file) >= KDF_V_SYNCED {
+        return Ok(false); // already stamped
+    }
+    if g.key.is_some() {
+        // Unlocked, so the live state is authoritative: stamp through `persist` rather than
+        // writing a snapshot of the file back. Refuse if the two disagree about the salt —
+        // stamping a file whose records are sealed under a different key would publish
+        // unopenable records, which is strictly worse than not syncing at all.
+        if g.salt.as_slice() != shared {
+            return Err(format!(
+                "the live vault is sealed under a different salt than its file ({} bytes vs {} \
+                 bytes); refusing to stamp it as account-synced",
+                g.salt.len(),
+                shared.len()
+            ));
+        }
+        g.version = KDF_V_SYNCED;
+        persist(app, &g)?;
+        return Ok(true);
+    }
+    // Locked, so nothing can mutate the file and rewriting the one field in place is safe.
+    // The next `unlock` reads this version into `Inner::version`, which is what the next
+    // `persist` re-stamps from — so the stamp survives the next credential write too.
+    let mut out = file;
+    let Some(o) = out.as_object_mut() else {
+        return Err("vault file is not a JSON object".into());
+    };
+    o.insert("v".into(), json!(KDF_V_SYNCED));
+    let p = vault_path(app).ok_or("no app data dir")?;
+    let txt = serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?;
+    crate::jsonstore::write_atomic(&p, txt.as_bytes()).map_err(|e| e.to_string())?;
+    Ok(true)
+}
+
+/// Re-emit `vault.state` after something outside this module changed the vault file.
+///
+/// Every other emission is driven by a local mutation inside [`dispatch`], so the sync pass
+/// stamping a vault as the account's (see [`stamp_shared_salt`]) had no way to tell the UI —
+/// which would then keep reporting `syncEnabled: false` until the panel was reopened.
+pub(crate) fn emit_state_after_external_change<R: Runtime>(app: &AppHandle<R>) {
+    emit_state(app);
+}
+
 /// Re-seal all records (and the verifier) under `vk`, returning an updated on-disk JSON.
 /// Called when adding/updating/removing a record while the vault is unlocked.
 pub fn seal_vault(salt: &[u8], vk: &[u8; 32], records: &[Cred]) -> Result<Value, VaultError> {

@@ -29,6 +29,15 @@
 // Unlock therefore never touches the network, and — importantly — removing the sync account
 // later can never brick the vault, because the salt it needs is already on local disk.
 //
+// The handshake has a THIRD step, and it is the one that is easy to leave out: the very first
+// device has nobody to adopt from, so it has to become the account's vault by publishing its
+// OWN salt — and publishing used to require already being the account's vault, which made the
+// whole feature unreachable on a cold install (a `syncVault` toggle that could never take
+// effect). `local_meta_record` therefore publishes a v1 vault's salt when the account has none
+// yet and the user has opted in, and `sync_vault_once` then stamps the file through
+// `vault::stamp_shared_salt` — which needs no password precisely because the salt did not
+// change. Joining devices still adopt the published salt at unlock, re-sealing for real.
+//
 // # Integrity
 //
 // A record arriving from a peer is only ever accepted after `vault::open_record` authenticates
@@ -114,11 +123,23 @@ pub fn read_for_sync<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
         .unwrap_or_default()
 }
 
-/// The local `pwvault-meta` record to publish, or `None` if there is no salt to publish yet.
-fn local_meta_record<R: Runtime>(app: &AppHandle<R>) -> Option<Value> {
+/// The local `pwvault-meta` record to publish, or `None` if this pass must not publish one.
+///
+/// `remote_published` is what the pull found already on the server. `sync_ns` merges (pulls)
+/// BEFORE it reads local records, so by the time this runs the answer is known — and it is what
+/// keeps a second opted-in device from hijacking the account: a freshly minted HLC always wins
+/// the server's LWW, so a joiner publishing its own salt would re-key the account out from
+/// under every record already sitting on it.
+fn local_meta_record<R: Runtime>(app: &AppHandle<R>, remote_published: bool) -> Option<Value> {
     let salt = vault::file_salt(&vault::read_file(app)?)?;
-    if !vault::is_synced(app) {
-        return None; // a v1 (device-local) vault has no shared salt to publish
+    if !vault::is_synced(app) && (remote_published || !vault_sync_opted_in(app)) {
+        // A v1 vault is this device's own, and it becomes the account's vault by PUBLISHING its
+        // salt. That step used to be unreachable: this function demanded `is_synced`, `is_synced`
+        // demanded an adopted salt, and a salt could only ever arrive from a published record —
+        // so on a cold install neither could ever happen and `syncVault` was dead on arrival.
+        // Publish only when the account has no salt yet and the user has actually opted the
+        // vault into sync; a joiner adopts, and a local-only vault is not ours to publish.
+        return None;
     }
     // Reuse the stamp we last published under whenever it still describes THIS salt, so a
     // steady-state pass is a no-op on the server rather than a fresh winning write.
@@ -140,8 +161,12 @@ fn local_meta_record<R: Runtime>(app: &AppHandle<R>) -> Option<Value> {
 /// `Ok(())` when there is nothing to do, and `Err(human_readable)` when adoption was refused —
 /// the caller surfaces that as a note and the vault simply stays local-only. It must NEVER
 /// fail the unlock itself: the user's own records stay readable either way.
+///
+/// The guard is [`vault_sync_opted_in`], NOT [`is_sync_enabled`]. The latter also demands
+/// `vault::is_synced` — i.e. that adoption has already happened — so using it here made
+/// adoption unreachable for every device that had not already adopted, which is every device.
 pub(crate) fn try_adopt<R: Runtime>(app: &AppHandle<R>, password: &str) -> Result<(), String> {
-    if !is_sync_enabled(app) {
+    if !vault_sync_opted_in(app) {
         return Ok(());
     }
     let Some(shared) = cached_salt(app) else {
@@ -188,25 +213,34 @@ fn adopt<R: Runtime>(
     Ok(())
 }
 
+/// Whether the user has asked for the vault to be part of this account — the conditions that
+/// are knowable BEFORE anything has been adopted.
+///
+/// Deliberately separate from [`is_sync_enabled`], which adds "has adopted". Anything that
+/// *performs* adoption or publication must ask this question instead: asking the other one is
+/// circular, because adoption is what satisfies it, and a guard that can only be satisfied by
+/// the operation it guards never runs.
+fn vault_sync_opted_in<R: Runtime>(app: &AppHandle<R>) -> bool {
+    crate::settings::sync_vault(app) && crate::sync::is_enabled(app)
+}
+
 /// Whether the vault's records may be uploaded.
 ///
 /// MUST agree with what the UI reports as `syncEnabled`, or a user who turned vault sync off
-/// would still have their (encrypted) vault uploaded with no way to see or stop it. Three
+/// would still have their (encrypted) vault uploaded with no way to see or stop it. Four
 /// conditions, all required:
 ///
 /// 1. the separate `syncVault` opt-in is on (default **off** — the vault is local until the
 ///    user explicitly opts in),
 /// 2. the sync engine itself is enabled,
-/// 3. this device has **adopted** the account's shared salt. Until it has, records sealed here
-///    are unreadable on the account's other devices, so pushing them would only fill the
-///    server with blobs nobody can open.
+/// 3. this device's vault is the account's vault — its salt is the published one. Until that
+///    is true, records sealed here are unreadable on the account's other devices, so pushing
+///    them would only fill the server with blobs nobody can open,
+/// 4. the vault is unlocked, so this device can actually read what it would be publishing.
 ///
-/// A locked vault is not synced either — see `vault::unlocked_key`.
+/// Conditions 1 and 2 are [`vault_sync_opted_in`]; 3 and 4 are the outcome of the handshake.
 pub fn is_sync_enabled<R: Runtime>(app: &AppHandle<R>) -> bool {
-    if !crate::settings::sync_vault(app) {
-        return false;
-    }
-    if !crate::sync::is_enabled(app) {
+    if !vault_sync_opted_in(app) {
         return false;
     }
     if !vault::is_synced(app) {
@@ -236,6 +270,13 @@ pub(crate) fn sync_vault_once<R: Runtime>(
     // Always in flight when the account exists: this is how a device learns the shared salt, so
     // it must work even while the vault is locked or opted out — otherwise a device could never
     // learn it in the first place.
+    //
+    // `remote_published` is written by the merge below and read by the producer, which is safe
+    // only because `sync_ns` merges before it reads local records. `published` carries what THIS
+    // pass pushed when it was the device establishing the account's salt — nobody else will ever
+    // hand that device its own salt back, so it has to be cached from here.
+    let remote_published = Mutex::new(false);
+    let published: Mutex<Option<(Vec<u8>, crate::sync_envelope::Hlc)>> = Mutex::new(None);
     let meta_changed = crate::sync::sync_ns(
         app,
         base,
@@ -244,7 +285,23 @@ pub(crate) fn sync_vault_once<R: Runtime>(
         account_id,
         device_seed,
         gen,
-        || local_meta_record(app).into_iter().collect(),
+        || {
+            let remote = *remote_published.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(rec) = local_meta_record(app, remote) else {
+                return Vec::new();
+            };
+            if let Some((salt, hlc)) = rec
+                .get("salt")
+                .and_then(Value::as_str)
+                .and_then(unhex)
+                .zip(crate::sync_envelope::from_value(&rec))
+            {
+                if let Ok(mut p) = published.lock() {
+                    *p = Some((salt, hlc));
+                }
+            }
+            vec![rec]
+        },
         |remote| {
             let mut ch = Vec::new();
             for r in remote {
@@ -262,6 +319,9 @@ pub(crate) fn sync_vault_once<R: Runtime>(
                     );
                     continue;
                 }
+                if let Ok(mut seen) = remote_published.lock() {
+                    *seen = true;
+                }
                 if cached_salt(app).as_deref() == Some(salt.as_slice()) {
                     continue;
                 }
@@ -277,6 +337,30 @@ pub(crate) fn sync_vault_once<R: Runtime>(
         },
     )?;
     let mut changed = meta_changed;
+
+    // The publisher's half of the handshake. A completed meta pass leaves `cached_salt` holding
+    // the account's salt — from the merge above for a joiner, from the record just pushed for
+    // the device that established it — and when that salt is this vault's OWN, the vault IS the
+    // account's vault and its file version is the only thing left to fix. That is a no-op for a
+    // device whose salt is somebody else's, so it is safe to attempt unconditionally.
+    if let Some((salt, hlc)) = published.into_inner().unwrap_or(None) {
+        if let Err(e) = set_cached_salt(app, &salt, Some(&hlc)) {
+            eprintln!("[aegis-vault] could not cache the published vault salt: {e}");
+        }
+    }
+    if let Some(shared) = cached_salt(app) {
+        match vault::stamp_shared_salt(app, &shared) {
+            Ok(true) => {
+                eprintln!(
+                    "[aegis-vault] this vault is the account's vault now (its records were \
+                     already sealed under the published salt)"
+                );
+                vault::emit_state_after_external_change(app);
+            }
+            Ok(false) => {}
+            Err(e) => eprintln!("[aegis-vault] could not mark the vault account-synced: {e}"),
+        }
+    }
 
     // ── 2. The records themselves ──────────────────────────────────────────
     // Only when the user opted in AND this device can actually read what it would be publishing
@@ -411,6 +495,186 @@ mod tests {
             .expect("settings is an object")
             .insert("syncVault".into(), json!(on));
         crate::settings::write(app, &next);
+    }
+
+    // ── A real HTTP sync server, on loopback ───────────────────────────────
+    //
+    // The salt handshake only exists in `sync_vault_once`, and every half of it is decided by
+    // what the server returns and receives. Asserting on `local_meta_record` or on a
+    // hand-written `vault-sync.json` would test a fiction: production can only reach this state
+    // by pulling an empty account and pushing a record, and both of those used to be impossible
+    // to reach. So these cases speak HTTP to a real socket, through the real `sync_ns`, and
+    // read the wire records back with the production `open_wire`.
+
+    /// What the fake server has seen and what it will serve back.
+    #[derive(Default)]
+    struct ServerState {
+        /// Canned wire records to answer a `GET /v1/records?ns=…` with, keyed by namespace.
+        canned: std::collections::HashMap<String, Vec<Value>>,
+        /// Every `(ns, wire records)` batch the client POSTed, in order.
+        pushed: Vec<(String, Vec<Value>)>,
+    }
+
+    struct FakeServer {
+        base: String,
+        state: std::sync::Arc<Mutex<ServerState>>,
+    }
+
+    impl FakeServer {
+        /// Serve `canned` (namespace → wire records) and record everything pushed.
+        ///
+        /// One request per connection, always answered with `connection: close`, which is what
+        /// lets the single-threaded accept loop read a request, reply, and return. reqwest is
+        /// told the connection is dead, so it opens a fresh one for the next call — the pass
+        /// makes several (a pull and a push per namespace).
+        fn start(canned: &[(&str, Vec<Value>)]) -> Self {
+            use std::io::{BufRead, BufReader, Read, Write};
+            use std::net::TcpListener;
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+            let base = format!("http://{}", listener.local_addr().expect("local addr"));
+            let state = std::sync::Arc::new(Mutex::new(ServerState {
+                canned: canned
+                    .iter()
+                    .map(|(ns, recs)| ((*ns).to_string(), recs.clone()))
+                    .collect(),
+                pushed: Vec::new(),
+            }));
+            let sink = std::sync::Arc::clone(&state);
+            std::thread::spawn(move || {
+                for conn in listener.incoming().flatten() {
+                    let mut reader = BufReader::new(match conn.try_clone() {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    });
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).is_err() {
+                        continue;
+                    }
+                    let mut content_length = 0usize;
+                    loop {
+                        let mut header = String::new();
+                        if reader.read_line(&mut header).is_err() {
+                            break;
+                        }
+                        if header == "\r\n" || header == "\n" {
+                            break;
+                        }
+                        let lower = header.to_ascii_lowercase();
+                        if let Some(v) = lower.strip_prefix("content-length:") {
+                            content_length = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0u8; content_length];
+                    if content_length > 0 && reader.read_exact(&mut body).is_err() {
+                        continue;
+                    }
+                    let body: Value = if body.is_empty() {
+                        Value::Null
+                    } else {
+                        serde_json::from_slice(&body).unwrap_or(Value::Null)
+                    };
+                    let path = request_line
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/")
+                        .to_string();
+                    let response = if path.starts_with("/v1/records?") || path == "/v1/records" {
+                        if request_line.starts_with("GET") {
+                            let ns = path
+                                .split('?')
+                                .nth(1)
+                                .unwrap_or("")
+                                .split('&')
+                                .filter_map(|kv| kv.strip_prefix("ns="))
+                                .find(|v| !v.is_empty())
+                                .unwrap_or("")
+                                .to_string();
+                            let recs = sink
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .canned
+                                .get(&ns)
+                                .cloned()
+                                .unwrap_or_default();
+                            // `next: null` is the documented final page, so the client's
+                            // pagination loop stops after one GET instead of re-requesting.
+                            json!({ "records": recs, "next": Value::Null })
+                        } else {
+                            let ns = body
+                                .get("ns")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            let recs = body
+                                .get("records")
+                                .and_then(Value::as_array)
+                                .cloned()
+                                .unwrap_or_default();
+                            sink.lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .pushed
+                                .push((ns, recs));
+                            json!({})
+                        }
+                    } else {
+                        // `/v1/devices` and anything else the pass may reach: accept and ignore.
+                        json!({})
+                    };
+                    let mut out = conn;
+                    let body = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
+                    let _ = write!(
+                        out,
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: \
+                         {}\r\nconnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    );
+                    let _ = out.flush();
+                }
+            });
+            FakeServer { base, state }
+        }
+
+        /// The wire records pushed into `ns`, in order.
+        fn pushed(&self, ns: &str) -> Vec<Value> {
+            self.state
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pushed
+                .iter()
+                .filter(|(n, _)| n == ns)
+                .flat_map(|(_, recs)| recs.clone())
+                .collect()
+        }
+    }
+
+    /// The root a sync pass runs under, plus the data keys the transport derives from it.
+    fn root() -> crate::crypto::RootSecret {
+        crate::crypto::RootSecret([3u8; 32])
+    }
+
+    /// Open every wire record the fake server received in `ns`, exactly as a peer would.
+    fn opened(ns: &str, wire: &[Value]) -> Vec<Value> {
+        let dk = crate::crypto::data_key(&root(), ns);
+        wire.iter()
+            .map(|w| {
+                crate::sync::open_wire(&dk, ns, w)
+                    .unwrap_or_else(|e| panic!("the pushed {ns} record must open: {e}"))
+            })
+            .collect()
+    }
+
+    /// Run one full vault sync pass the way `sync::sync_once` does.
+    ///
+    /// `gen` must be the generation currently in `SyncState`, or `sync_ns` treats the pass as
+    /// cancelled and does nothing at all.
+    fn pass(app: &AppHandle<impl Runtime>, base: &str, gen: u64) {
+        crate::sync::set_enabled_for_test(app, true, gen);
+        set_flag(app, true);
+        let (changed, quarantined) = sync_vault_once(app, base, "acct-1", &[7u8; 32], &root(), gen)
+            .expect("the sync pass must succeed");
+        assert!(quarantined.is_empty(), "nothing should be quarantined");
+        let _ = changed;
     }
 
     /// A vault that is unlocked in memory AND on disk, holding `records`, so `merge_remote`
@@ -631,23 +895,211 @@ mod tests {
         });
     }
 
-    // ── the salt handshake ──
+    // ── the salt handshake, walked through production ──
+    //
+    // The two cases below used to call `set_cached_salt` by hand and then assert the cache
+    // round-tripped. That is worse than no test: it fabricated the one precondition production
+    // cannot produce (a salt that arrived from a published record, when publishing a record
+    // required already having one), so twenty green tests sat on top of a feature that could
+    // never run. Everything here goes through the real pass instead.
 
+    /// THE headline case. On a cold install — the only install there ever is for the first user
+    /// of an account — `syncVault` must be able to take effect at all.
+    ///
+    /// No helper here calls `set_cached_salt`. A real HTTP server on loopback answers the pull
+    /// with an empty namespace and records what the client pushes, and the salt is read back
+    /// off the wire with the production `open_wire`. Before the fix this could not happen at
+    /// any point: `local_meta_record` demanded `is_synced`, `is_synced` demanded an adopted
+    /// salt, and an adopted salt could only arrive from a published record.
     #[test]
-    fn cached_salt_round_trips_and_tolerates_absence() {
+    fn a_cold_install_publishes_its_own_salt_and_becomes_the_accounts_vault() {
         with_tmp_app(|app| {
-            assert!(cached_salt(app).is_none(), "no cache before first publish");
-            set_cached_salt(app, &salt(0xAB), None).expect("cache write");
-            assert_eq!(cached_salt(app).as_deref(), Some(&salt(0xAB)[..]));
+            vault::dispatch(app, "vault.create", &json!({ "masterPassword": PW }))
+                .expect("create channel")
+                .expect("create");
+            vault::dispatch(
+                app,
+                "vault.add",
+                &json!({ "input": { "site": "https://example.com", "username": "alice",
+                                    "password": "hunter2", "notes": "" }}),
+            )
+            .expect("add channel")
+            .expect("add ok");
+            let own = vault::file_salt(&vault::read_file(app).expect("vault")).expect("own salt");
+            assert!(
+                !vault::is_synced(app),
+                "a fresh vault starts at the local-only version"
+            );
+
+            let server = FakeServer::start(&[]);
+            pass(app, &server.base, 9);
+
+            // 1. This device's salt reached the account.
+            let meta = opened(NS_META, &server.pushed(NS_META));
+            assert_eq!(
+                meta.len(),
+                1,
+                "exactly one meta record is published, got {meta:?}"
+            );
+            assert_eq!(meta[0]["uuid"], META_UUID);
+            assert_eq!(
+                meta[0]["salt"],
+                hex(&own),
+                "the account's salt is this device's OWN, so every device can derive the key"
+            );
+
+            // 2. The stamp it went up under is remembered, so a steady pass is a no-op on the
+            //    server instead of a fresh (and therefore always-winning) write.
+            assert_eq!(cached_salt(app).as_deref(), Some(&own[..]));
+            assert_eq!(
+                cached_hlc(app),
+                crate::sync_envelope::from_value(&meta[0]),
+                "the published HLC is cached, not re-minted next pass"
+            );
+
+            // 3. The vault is now the account's vault — no unlock, no password, one pass.
+            assert!(
+                vault::is_synced(app),
+                "the publisher stamps its own vault without needing a lock/unlock cycle"
+            );
+            assert!(
+                is_sync_enabled(app),
+                "so the UI agrees the records may sync, which is what the toggle promises"
+            );
+
+            // 4. And the credential went up in the SAME pass, not one sync later. The wire
+            //    record is still SEALED, because the transport's key and the vault's key are
+            //    two different layers and the account can open neither — so the check is that
+            //    the vault key opens it, not that a field is readable in the clear.
+            let recs = opened(vault::NS, &server.pushed(vault::NS));
+            assert_eq!(
+                recs.len(),
+                1,
+                "the credential saved with the vault publishes at once"
+            );
+            assert!(
+                recs[0].get("site").is_none(),
+                "nothing readable in the clear on the wire: {recs:?}"
+            );
+            let vk = vault::unlocked_key(app).expect("the vault is still unlocked");
+            let inner = vault::open_record(&vk, &recs[0])
+                .expect("the pushed record must open under THIS device's vault key");
+            assert_eq!(inner.site, "https://example.com");
+            assert_eq!(inner.password, "hunter2");
         });
     }
 
+    /// A steady-state pass must re-push the SAME stamp. A freshly minted HLC always wins the
+    /// server's LWW, so minting one every pass would out-rank every peer copy forever and two
+    /// devices that briefly disagreed would flap the published salt back and forth endlessly.
     #[test]
-    fn cached_hlc_is_remembered_so_a_steady_pass_is_a_no_op() {
+    fn a_steady_pass_re_pushes_the_same_stamp_rather_than_a_fresh_winning_one() {
         with_tmp_app(|app| {
-            let hlc = crate::sync_envelope::tick("peer", 1_700_000_000_000i64);
-            set_cached_salt(app, &salt(0x11), Some(&hlc)).expect("cache write");
-            assert_eq!(cached_hlc(app).as_ref(), Some(&hlc));
+            vault::dispatch(app, "vault.create", &json!({ "masterPassword": PW }))
+                .expect("create channel")
+                .expect("create");
+            let server = FakeServer::start(&[]);
+
+            pass(app, &server.base, 9);
+            let first = opened(NS_META, &server.pushed(NS_META));
+            assert_eq!(first.len(), 1);
+
+            pass(app, &server.base, 9);
+            let second = opened(NS_META, &server.pushed(NS_META));
+            assert_eq!(second.len(), 2, "the second pass publishes once more");
+            assert_eq!(
+                second[1]["hlc"], first[0]["hlc"],
+                "a pass with nothing new to say must not out-rank its own earlier copy"
+            );
+            assert_eq!(second[1]["salt"], first[0]["salt"], "nor change the salt");
+        });
+    }
+
+    /// The other half of the handshake, which had a second, separate circularity of its own:
+    /// `try_adopt` guarded on `is_sync_enabled`, which already demanded adoption.
+    ///
+    /// A joining device must do neither of the two things that would re-key the account out
+    /// from under every record already on it — publish its own salt over a salt that is
+    /// already published, or stamp itself on the strength of somebody else's — and must still
+    /// adopt at unlock, which is the only moment a master password exists.
+    #[test]
+    fn a_joining_device_adopts_the_published_salt_at_unlock_and_never_publishes_its_own() {
+        with_tmp_app(|app| {
+            vault::dispatch(app, "vault.create", &json!({ "masterPassword": PW }))
+                .expect("create channel")
+                .expect("create");
+            vault::dispatch(
+                app,
+                "vault.add",
+                &json!({ "input": { "site": "https://example.com", "username": "alice",
+                                    "password": "hunter2", "notes": "" }}),
+            )
+            .expect("add channel")
+            .expect("add ok");
+            let own = vault::file_salt(&vault::read_file(app).expect("vault")).expect("own salt");
+
+            let theirs = salt(0x5A);
+            let published = json!({
+                "uuid": META_UUID,
+                "hlc": serde_json::to_value(crate::sync_envelope::tick(META_NODE, 1_700_000_000_000i64))
+                    .expect("hlc"),
+                "salt": hex(&theirs),
+                "v": KDF_V_SYNCED,
+            });
+            let canned = vec![crate::sync::seal_wire(
+                &crate::crypto::data_key(&root(), NS_META),
+                NS_META,
+                &published,
+            )
+            .expect("seal the canned record")];
+            let server = FakeServer::start(&[(NS_META, canned)]);
+
+            pass(app, &server.base, 9);
+
+            // The account already had a salt, so this device published NOTHING.
+            assert!(
+                server.pushed(NS_META).is_empty(),
+                "a joiner must never re-publish: a fresh HLC wins the server's LWW and would \
+                 re-key the account out from under every record already on it"
+            );
+            assert!(
+                !vault::is_synced(app),
+                "somebody else's salt cannot stamp this device's vault"
+            );
+            assert!(
+                !is_sync_enabled(app),
+                "so its records stay local until it adopts"
+            );
+            assert_eq!(
+                cached_salt(app).as_deref(),
+                Some(&theirs[..]),
+                "but the account's salt IS cached, because unlock is where the password lives"
+            );
+
+            // Unlock is the only place the master password exists, and it is enough.
+            vault::dispatch(app, "vault.unlock", &json!({ "masterPassword": PW }))
+                .expect("unlock channel")
+                .expect("unlock");
+            assert!(
+                vault::is_synced(app),
+                "unlocking must adopt the cached salt — guarded on is_sync_enabled it could \
+                 never run on the one device that needs it"
+            );
+            let after = vault::read_file(app).expect("vault after adopt");
+            assert_eq!(vault::file_salt(&after).as_deref(), Some(&theirs[..]));
+            assert_ne!(
+                vault::file_salt(&after).as_deref(),
+                Some(&own[..]),
+                "the salt really changed"
+            );
+
+            // Re-sealing must not cost the user anything: the credential is still readable.
+            let listed = vault::dispatch(app, "vault.list", &json!({}))
+                .expect("list")
+                .expect("list");
+            let arr = listed.as_array().expect("array");
+            assert_eq!(arr.len(), 1, "the credential survived the re-seal");
+            assert_eq!(arr[0]["password"], "hunter2");
         });
     }
 

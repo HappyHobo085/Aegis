@@ -756,7 +756,7 @@ records[{uuid, updatedAt, nonce, ct}]}`. The only cleartext fields are the
     `state_json`, ask whether its value can be reached another way — `persist`, `read_file`
     and `adopt_resealed` are all safe to call under the guard; `unlocked_key`,
     `is_sync_enabled` and `state_json` are not.
-  - **The vault DOES sync**, but only under three conditions that must all hold — see
+  - **The vault DOES sync**, but only under four conditions that must all hold — see
     `sync_vault.rs` (its module header is the canonical design note) and `vault.rs`'s
     header. The old bridge was removed because it merged remote records by `updatedAt`
     _without decrypting them_, which let a peer overwrite a real credential with
@@ -772,7 +772,26 @@ records[{uuid, updatedAt, nonce, ct}]}`. The only cleartext fields are the
     The adopted salt is cached in `vault-sync.json` so the sync pass (has the root, no
     password) and `vault.unlock` (has the password, no root) can meet without either
     blocking; **unlock never touches the network, and removing the account can never
-    brick the vault.** - **Integrity.** `vault::merge_remote` authenticates every incoming record with
+    brick the vault.** - **The handshake has THREE steps, and the third is the one that is easy to omit.**
+    A joining device adopts, so for it the salt already exists. The FIRST device has nobody
+    to adopt from: it becomes the account's vault by **publishing its own** salt, and
+    publishing used to require already being the account's vault — `local_meta_record`
+    demanded `is_synced`, `is_synced` demanded an adopted salt, and a salt could only ever
+    arrive from a published record. A circle with no entry point, so the `syncVault` toggle
+    could never take effect on a cold install. It now publishes a v1 vault's salt when the
+    account has none yet **and** the user has opted in (`vault_sync_opted_in`, the two
+    conditions knowable _before_ adoption — deliberately NOT `is_sync_enabled`, which
+    demands the very thing being guarded), and the pass then stamps the file through
+    `vault::stamp_shared_salt`. That stamp is password-free on purpose: the salt did not
+    change, so the key in memory is already the account's key and a re-seal would be a
+    cryptographic no-op — which is what lets the publisher reach a synced vault inside a sync
+    pass, where no master password exists, instead of waiting for a lock/unlock cycle a user
+    who just created the vault has no reason to perform. The same circularity made
+    **adoption** unreachable: `try_adopt` guarded on `is_sync_enabled`, i.e. on adoption
+    already having happened, so no device that had not adopted could. `try_adopt` is
+    therefore guarded on `vault_sync_opted_in`. A joiner still adopts for real at unlock
+    (`reseal_with_salt` under the account's salt) and still publishes nothing, so it cannot
+    re-key the account out from under records already on it. - **Integrity.** `vault::merge_remote` authenticates every incoming record with
     `open_record(&vk, r)` BEFORE it is allowed anywhere near the file. Failures are
     counted as quarantined, never written, and reported via the **`sync.vaultQuarantined`**
     event (`{count, uuids}`) — an _event_, not a sync error, because a rejected forgery
@@ -781,7 +800,8 @@ records[{uuid, updatedAt, nonce, ct}]}`. The only cleartext fields are the
     (it lacks the Argon2id output) and cannot forge an authenticating record. - **Consent.** A separate persisted `syncVault` setting, **default `false`**, gates
     the whole thing — configuring a server must never silently start uploading
     credentials. `VaultState.syncEnabled` is `settings.syncVault && sync enabled &&
-vault unlocked && adopted`; `adoptionNote?` appears only on the `vault.unlock`
+adopted && vault unlocked` (four conditions; the first two are `vault_sync_opted_in`);
+    `adoptionNote?` appears only on the `vault.unlock`
     response when adoption was refused (e.g. undecryptable records block the re-seal),
     and the unlock itself still succeeds. - **Two seal layers, both required.** The wire record is sealed under the SYNC ROOT
     (`seal_wire(data_key(root,"pwvault"), "pwvault", rec)`), wrapping a record layer
