@@ -26,6 +26,82 @@ beforeEach(() => {
 });
 
 // ---------------------------------------------------------------------------
+// Android bridge: nav.home resolves the CONFIGURED home page
+// ---------------------------------------------------------------------------
+describe('aegis.nav.home Android branch', () => {
+  // Android has no Tauri content webview, so the core's `nav.home` arm cannot run
+  // there and the renderer has to resolve the home page itself. These tests pin that
+  // the value it resolved is the one the user configured — and that it applies the
+  // same two gates the core does, because whatever it hands the bridge IS loaded.
+  const bridge = { navigate: vi.fn() };
+
+  beforeEach(() => {
+    (window as unknown as Record<string, unknown>).AegisAndroid = bridge;
+    // The bridge mock is shared by every test in this block, so its call log has to
+    // be cleared here. Without this, `toHaveBeenCalledWith` would pass on a leftover
+    // call from a previous test and stop meaning "this test navigated there".
+    bridge.navigate.mockClear();
+  });
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).AegisAndroid;
+  });
+
+  /**
+   * Prime the client's settings cache the way the shells do on mount, via `settings.get`.
+   *
+   * NOTE `settings.get` is a DEDUPED channel (a 300 ms window in `DEDUP_WINDOWS`), so this
+   * helper is only usable by the FIRST test in this block -- every later `settings.get`
+   * inside the same run is served the first one's cached reply, and a test would silently
+   * assert the previous test's value. The other tests prime through `settings.set`, which
+   * is deliberately NOT deduped (mutations are always issued) and is a real route: the
+   * Home tab edits the setting this way.
+   */
+  const primeViaGet = (homeUrl: string) => {
+    mockInvoke.mockResolvedValue({ homeUrl });
+    return aegis.settings.get();
+  };
+
+  /** Prime through the non-deduped `settings.set`; the core replies with the whole object. */
+  const primeViaSet = (homeUrl: string) => {
+    mockInvoke.mockResolvedValue({ homeUrl });
+    return aegis.settings.set({ homeUrl });
+  };
+
+  it('navigates to the configured home page, not a hardcoded about:blank', async () => {
+    await primeViaGet('https://home.test/');
+    await aegis.nav.home(1);
+    expect(bridge.navigate).toHaveBeenCalledTimes(1);
+    expect(bridge.navigate).toHaveBeenCalledWith('https://home.test/');
+  });
+
+  it('honours a home page that arrived over sync, not just one this device wrote', async () => {
+    // A synced homeUrl used to display in HomeTab and then go unused on a phone. It
+    // reaches the client as the full Settings object, whichever channel delivered it,
+    // so both priming routes must end up in the same place.
+    await primeViaSet('https://paired-device.test/start');
+    await aegis.nav.home(1);
+    expect(bridge.navigate).toHaveBeenCalledTimes(1);
+    expect(bridge.navigate).toHaveBeenCalledWith('https://paired-device.test/start');
+  });
+
+  it('falls back to about:blank when no home page is configured', async () => {
+    await primeViaSet('');
+    await aegis.nav.home(1);
+    expect(bridge.navigate).toHaveBeenCalledWith('about:blank');
+  });
+
+  it('refuses a non-http(s) home page, as the core does', async () => {
+    // `settings::home_url` will parse this, but `nav.home` then calls
+    // `require_navigable`, which allows only http, https and about:blank. A
+    // settings.json written before that allowlist existed can still hold it.
+    await primeViaSet('file:///etc/passwd');
+    await aegis.nav.home(1);
+    expect(bridge.navigate).toHaveBeenCalledWith('about:blank');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Android bridge: adblock.onBlockedCount
 // ---------------------------------------------------------------------------
 describe('aegis.adblock.onBlockedCount Android branch', () => {

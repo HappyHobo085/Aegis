@@ -9,6 +9,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The home page setting was ignored on Android.** All three desktops resolve it in
+  the core, and the phone showed it in Settings, but on a phone the Home button
+  always went to `about:blank`: the core's `nav.home` drives a Tauri content
+  webview, which the single-webview mobile shell does not have, so the renderer
+  has to resolve it itself. It now uses the last settings it loaded, and refuses
+  the same values the core refuses.
+
 - **Find in page was unreachable on Android.** The mobile top bar is `position: fixed`,
   so it sits outside the document flow, and the find bar was laid out at the top of that
   flow — underneath the top bar's own band, behind its frosted background, unable to

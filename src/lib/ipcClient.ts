@@ -357,6 +357,40 @@ if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)) {
 // Module-local cache for Android zoom factors (no return channel from the native bridge).
 const androidZoom = new Map<number, number>();
 
+// The last full `Settings` the core handed us. Android's `nav.home` cannot ask the core to
+// resolve the home page — the core's arm drives a Tauri content webview, which does not exist
+// in the single-webview mobile shell — so the renderer has to resolve it from what it already
+// has. It used to hardcode `about:blank` instead, which meant a home page the user set (and,
+// because settings sync, one that may have arrived from another device) was shown in HomeTab
+// and then never used on a phone, while all three desktops honoured it. Both `settings.get` and
+// `settings.set` already return the whole object, so remembering it costs nothing.
+let lastSettings: Settings | null = null;
+
+/** The home page the core would load, applying the SAME two gates the core applies.
+ *
+ *  `settings::home_url` (settings.rs) falls back to `about:blank` for an empty or unparseable
+ *  value, and `nav.home` (nav.rs) then refuses anything `require_navigable` rejects — http,
+ *  https, or `about:blank` only. Both are reimplemented here rather than assumed, because a
+ *  `settings.json` written before that allowlist existed can still hold a `file:` target, and
+ *  on Android that value is what actually gets loaded. */
+function homeTarget(): string {
+  const raw = (lastSettings?.homeUrl ?? '').trim();
+  if (raw === '') return 'about:blank';
+  try {
+    const scheme = new URL(raw).protocol;
+    if (scheme === 'http:' || scheme === 'https:') return raw;
+  } catch {
+    /* unparseable: fall through to the same safe default the core uses */
+  }
+  return 'about:blank';
+}
+
+/** Remember the full settings the core just returned, for `homeTarget` to read. */
+function remember(s: Settings): Settings {
+  lastSettings = s;
+  return s;
+}
+
 export const aegis: AegisApi = {
   nav: {
     navigate: (viewId, url) => {
@@ -394,7 +428,7 @@ export const aegis: AegisApi = {
     home: (viewId) => {
       const a = androidBridge();
       if (a) {
-        a.navigate('about:blank');
+        a.navigate(homeTarget());
         return Promise.resolve();
       }
       return dedupedCall(IPC.navHome, { viewId });
@@ -481,8 +515,8 @@ export const aegis: AegisApi = {
     tagUnion: () => dedupedCall<string[]>(IPC.savedTagUnion, undefined),
   },
   settings: {
-    get: () => dedupedCall<Settings>(IPC.settingsGet, undefined),
-    set: (partial) => dedupedCall<Settings>(IPC.settingsSet, { partial }),
+    get: () => dedupedCall<Settings>(IPC.settingsGet, undefined).then(remember),
+    set: (partial) => dedupedCall<Settings>(IPC.settingsSet, { partial }).then(remember),
   },
   adblock: {
     setEnabled: (enabled) => dedupedCall<AdblockState>(IPC.adblockSetEnabled, { enabled }),

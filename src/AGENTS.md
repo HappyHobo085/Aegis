@@ -31,6 +31,17 @@ src/
   instead of `invoke`, and sets the `.aegis-mobile` class. On mobile `App` renders
   **`MobileApp`** (a dedicated touch shell) instead of the desktop chrome — see the
   Mobile shell section below.
+  **A bridge branch is a REIMPLEMENTATION, not a shortcut.** Android has no Tauri
+  content webview, so any core arm that drives one is unreachable there — the
+  renderer has to reproduce it. `nav.home` is the worked example: the core arm reads
+  `settings::home_url` and then `require_navigable`, but on Android the bridge got a
+  hardcoded `about:blank`, so a home page shown in `HomeTab` (and synced to the
+  device) was never used. `ipcClient` now caches the last full `Settings` object it
+  saw (`remember`, hung on `settings.get` AND `settings.set` — both return the whole
+  object) and `homeTarget()` re-applies both gates: non-empty, parseable, and
+  `http:`/`https:` only. **If you add a bridge branch, re-derive what the core arm
+  does and check each of its gates individually** — a single hardcoded literal is
+  exactly the shape of bug this bit.
 
 Channel and event names, and all payload/return types, are defined once in
 `shared/types.ts` (`IPC` const + interfaces). Treat it as the contract.
