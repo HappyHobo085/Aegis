@@ -9,6 +9,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A pasted backup could make the app read and delete files outside the subscription
+  cache.** Filter-list subscriptions are cached as one text file each, named after the
+  list's id. Those ids normally come from a subscription URL, but the app also keeps them in
+  its own data — and restoring a backup writes those rows as they were, checking only that
+  they are shaped like rows. A row could therefore name a file anywhere on disk: a relative
+  id walked out of the cache directory, and an absolute one replaced the directory entirely,
+  with the app creating whatever parent directories the path needed before writing.
+  Restoring a backup could then have an enabled subscription quietly pull in text from a
+  file you never chose, and removing that subscription could delete it. Every subscription
+  cache path must now be a single plain file name, checked in one place that all reads,
+  writes and deletions go through; adding or enabling a subscription with an unusable id is
+  refused with a reason, while removing one still always works, so a subscription carried in
+  by a backup can always be cleaned up.
 - **Turning on vault sync could never do anything.** Password-vault sync depends on a
   three-step handshake: a joining device adopts the account's shared key salt, and the very
   first device — the one nobody can adopt from — becomes the account's vault by publishing

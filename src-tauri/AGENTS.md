@@ -194,10 +194,23 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     caught exactly this). Defaults refresh on the user's "Update all" or an off→on toggle.
     The baked-in copies still block day-one/offline (and feed the Win/macOS injector,
     which isn't fed subs), so the defaults exist BOTH baked + as refreshable subscriptions;
-    `abuse-tlds` is baked-only (no upstream URL). **Unit-tested via `test_support::with_tmp_app`:** `list_id_from_url`,
+    `abuse-tlds` is baked-only (no upstream URL). **Every cache read, write and unlink goes
+    through ONE `cache_path`, and a `listId` is only a cache file name if `safe_list_id`
+    accepts it as a SINGLE path component** — a `subs` row's `listId` is attacker-reachable
+    because `data.import` writes `subs` rows verbatim, and `Path::join` on `../…` walks out
+    of the cache dir while an absolute id REPLACES it (and `write_atomic_inner`
+    `create_dir_all`s the parent first, so the write lands; `subs.remove` unlinked the same
+    path). Containment is enforced on the ID, not the joined path: a lexical
+    `Path::starts_with` guard never normalises `..`, and a write target need not exist yet.
+    `subs.add`/`subs.setEnabled` REFUSE a bad id (they are the write paths, so a bad id can
+    never work), while `subs.remove` still tombstones the row and only skips the unlink, so a
+    row planted by an import always stays cleanable. **Unit-tested via `test_support::with_tmp_app`:** `list_id_from_url`,
     `hash_text`, `url_of`, scheme rejection, add/list/remove, `set_enabled`, `enabled_text`,
-    `ensure_default_rows` (seed/idempotent/tombstone-respecting/builtin-survives-toggle)
-    (11 tests).
+    `ensure_default_rows` (seed/idempotent/tombstone-respecting/builtin-survives-toggle),
+    and the cache-path containment set — the id rule, the join-to-a-direct-child property,
+    an imported `../outside` row NOT reading a planted file above the cache dir, a
+    `../victim` removal NOT unlinking a planted file above it, `https://x.test/..` refused
+    on add, and a `../escape` row refused on enable (18 tests).
   - `customfilters.rs`, `settings.rs`.
 - **Ad-block (layered, platform-gated):**
   - `adblock_lists.rs` — **single source of truth for the bundled filter lists**:

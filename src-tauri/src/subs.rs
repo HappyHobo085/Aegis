@@ -28,8 +28,65 @@ fn subs_dir<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
     dir
 }
 
-fn cache_path<R: Runtime>(app: &AppHandle<R>, list_id: &str) -> std::path::PathBuf {
-    subs_dir(app).join(format!("{list_id}.txt"))
+/// Reject a `listId` that is not exactly ONE safe path component, with the reason.
+///
+/// `list_id` reaches the cache path from two very different places: derived from a URL
+/// by `list_id_from_url` (a URL's last non-empty segment, so never a separator — though
+/// it CAN be `.` or `..`), and read VERBATIM off a `subs.json` row. A row is
+/// attacker-reachable: `data.import` writes `subs` rows with only `hlc`/`savedAt`
+/// restamped, so a bundle can plant any `listId` at all. `Path::join` then either walks
+/// out of the cache dir (`../../…`) or REPLACES it outright when the id is absolute, and
+/// `write_atomic_inner` calls `create_dir_all` on the parent first — so the write lands.
+/// `remove_file` reaches the same path, so the traversal also DELETES.
+///
+/// Containment is therefore enforced on the ID, not on the joined path. A lexical
+/// `Path::starts_with` guard would be theatre: it never normalises `..`, and a write
+/// target need not exist to be a write target. Requiring a single component makes the
+/// join provably a child of `subs_dir`, which `cache_path` then asserts structurally.
+fn safe_list_id(list_id: &str) -> Result<(), String> {
+    if list_id.is_empty() {
+        return Err("the subscription list id is empty".into());
+    }
+    if list_id == "." || list_id == ".." {
+        return Err(format!(
+            "{list_id:?} is a directory reference, not a list id"
+        ));
+    }
+    if list_id.contains('/') || list_id.contains('\\') {
+        return Err(format!(
+            "{list_id:?} contains a path separator, so its cache file would land outside the cache dir"
+        ));
+    }
+    if list_id.contains('\0') {
+        return Err(format!("{list_id:?} contains a NUL byte"));
+    }
+    // Redundant with the separator check on POSIX, but `C:evil` is drive-RELATIVE on
+    // Windows and escapes without one. A `:` is illegal in a Windows file name anyway,
+    // so banning it everywhere also stops a list that caches on Linux from silently
+    // failing to cache on Windows.
+    if list_id.contains(':') || std::path::Path::new(list_id).is_absolute() {
+        return Err(format!(
+            "{list_id:?} is an absolute or drive-qualified path, not a list id"
+        ));
+    }
+    Ok(())
+}
+
+/// `<cache>/subs/<listId>.txt`, or `Err` if `list_id` is not a single safe component
+/// (see `safe_list_id`). Every cache read, write and unlink goes through here, so there
+/// is exactly one place to audit for containment.
+fn cache_path<R: Runtime>(app: &AppHandle<R>, list_id: &str) -> Result<std::path::PathBuf, String> {
+    safe_list_id(list_id)?;
+    let dir = subs_dir(app);
+    let p = dir.join(format!("{list_id}.txt"));
+    // Independent structural check on the invariant `safe_list_id` is there to buy.
+    // If this ever fires the id rule has a hole, so assert rather than silently write.
+    debug_assert_eq!(
+        p.parent(),
+        Some(dir.as_path()),
+        "a validated list id must join to a direct child of the cache dir"
+    );
+    Ok(p)
 }
 
 fn hash_text(text: &str) -> String {
@@ -78,9 +135,14 @@ pub fn enabled_text<R: Runtime>(app: &AppHandle<R>) -> String {
             continue;
         }
         if let Some(id) = row.get("listId").and_then(Value::as_str) {
-            if let Ok(text) = std::fs::read_to_string(cache_path(app, id)) {
-                out.push('\n');
-                out.push_str(&text);
+            // A row whose id is not a single component (only reachable through
+            // data.import) has no cache file inside the cache dir, so it contributes
+            // nothing — and must not be read from wherever the id happens to point.
+            if let Ok(p) = cache_path(app, id) {
+                if let Ok(text) = std::fs::read_to_string(p) {
+                    out.push('\n');
+                    out.push_str(&text);
+                }
             }
         }
     }
@@ -174,10 +236,17 @@ fn fetch_in_background<R: Runtime>(app: AppHandle<R>, list_id: String, url: Stri
         Ok(text) => {
             // No .bak: the cache is regenerable from the network, so a recovery copy
             // would just clutter the cache dir (and orphan on subs.remove).
-            if let Err(e) =
-                jsonstore::write_atomic_no_backup(&cache_path(&app, &list_id), text.as_bytes())
-            {
-                eprintln!("[aegis] failed to cache subscription list {list_id}: {e}");
+            // A rejected list id and a failed write are the same class of event here
+            // (this list ends up with no cache), so report both the same way.
+            match cache_path(&app, &list_id) {
+                Ok(p) => {
+                    if let Err(e) = jsonstore::write_atomic_no_backup(&p, text.as_bytes()) {
+                        eprintln!("[aegis] failed to cache subscription list {list_id}: {e}");
+                    }
+                }
+                Err(e) => {
+                    eprintln!("[aegis] refused to cache subscription list {list_id}: {e}")
+                }
             }
             let hash = hash_text(&text);
             // One store lock across the read-modify-write: this runs on a per-subscription
@@ -249,8 +318,9 @@ fn run_update<R: Runtime>(app: &AppHandle<R>) -> Value {
             std::thread::spawn(move || {
                 let res = fetch_text(url).map(|text| {
                     // Regenerable cache → no .bak (see fetch_in_background).
-                    let _ =
-                        jsonstore::write_atomic_no_backup(&cache_path(&app, &id), text.as_bytes());
+                    if let Ok(p) = cache_path(&app, &id) {
+                        let _ = jsonstore::write_atomic_no_backup(&p, text.as_bytes());
+                    }
                     hash_text(&text)
                 });
                 (id, res)
@@ -316,6 +386,11 @@ pub fn dispatch<R: Runtime>(
                 return Some(Err("subscription url must be http(s)".into()));
             }
             let list_id = list_id_from_url(&url);
+            // A URL's last segment cannot hold a separator, but it CAN be `.` or `..`.
+            // Reject here rather than accept a row whose cache file can never exist.
+            if let Err(e) = safe_list_id(&list_id) {
+                return Some(Err(format!("subscription url {url} is not usable: {e}")));
+            }
             let mut items = jsonstore::load_synced(app, "subs");
             // Upsert by listId. Revive an existing row IN PLACE (preserving its uuid) —
             // including a tombstoned one — instead of dropping + re-creating, so a
@@ -358,6 +433,12 @@ pub fn dispatch<R: Runtime>(
                 .get("enabled")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
+            // Enabling a row can trigger a cache WRITE, so a row whose id could not name
+            // a file inside the cache dir is refused here instead of silently doing
+            // nothing. `subs.remove` is the way out of such a row.
+            if let Err(e) = safe_list_id(&list_id) {
+                return Some(Err(format!("cannot enable that subscription: {e}")));
+            }
             let mut items = jsonstore::load_synced(app, "subs");
             let mut need_fetch = false;
             for it in items.iter_mut() {
@@ -395,7 +476,16 @@ pub fn dispatch<R: Runtime>(
                 app,
             );
             let _ = jsonstore::save(app, "subs", &items);
-            let _ = std::fs::remove_file(cache_path(app, &list_id)); // cache is regenerable
+            // The row is tombstoned either way, so removal always succeeds and a row
+            // planted by data.import is always cleanable. Only the regenerable cache
+            // file is conditional — and a row whose id is not a single component never
+            // had one, so there is nothing to unlink.
+            match cache_path(app, &list_id) {
+                Ok(p) => {
+                    let _ = std::fs::remove_file(p); // cache is regenerable
+                }
+                Err(e) => eprintln!("[aegis] left a cache file alone for {list_id:?}: {e}"),
+            }
             reinstall_adblock(app);
             Some(Ok(json!(jsonstore::live(items))))
         }
@@ -644,6 +734,232 @@ mod tests {
                 row.get("builtin").and_then(Value::as_bool),
                 Some(true),
                 "still flagged builtin after a toggle"
+            );
+        });
+    }
+
+    // ---------------------------------------------------------------------
+    // Cache-path containment. `subs.json` rows are attacker-reachable through
+    // data.import (it writes `subs` rows verbatim), and every cache read,
+    // write and unlink derives its path from the row's `listId`, so the id is
+    // the one thing standing between a pasted bundle and the rest of the disk.
+    // ---------------------------------------------------------------------
+
+    #[test]
+    fn a_list_id_that_is_not_a_single_component_is_refused() {
+        // Refused: anything that could walk out of the cache dir, replace it, or is
+        // not a name at all. `..` and `.` are refused even though `format!("{id}.txt")`
+        // would make them harmless single components — the id itself is the thing the
+        // rest of the module compares against, so a directory reference is a bug
+        // everywhere else, not just here.
+        for bad in [
+            "",
+            ".",
+            "..",
+            "../escape",
+            "..\\escape",
+            "a/b",
+            "a\\b",
+            "/etc/cron.d/pwn",
+            "C:evil",
+            "C:\\evil",
+            "has:colon",
+            "has\0nul",
+        ] {
+            assert!(
+                safe_list_id(bad).is_err(),
+                "{bad:?} must be refused as a list id, not joined onto the cache dir"
+            );
+        }
+        // Accepted: everything `list_id_from_url` legitimately produces from a URL
+        // path segment, including the odd ones — a real list id is a URL's last
+        // segment, so it may legally carry punctuation, a query string, or nothing
+        // that looks like a path at all.
+        for ok in [
+            "easyprivacy",
+            "de_AT",
+            "list(1)",
+            "a+b",
+            "a=b",
+            "a,b",
+            "a;b",
+            "a!b",
+            "a$b",
+            "a&b",
+            "a'b",
+            "a@b",
+            "a%20b",
+            "a*b",
+            "a~b",
+            "a=b.txt?x=1",
+            ".hidden",
+            "..leading-dots",
+        ] {
+            assert!(
+                safe_list_id(ok).is_ok(),
+                "{ok:?} is a legal URL path segment and must stay usable"
+            );
+        }
+    }
+
+    #[test]
+    fn a_valid_list_id_joins_to_a_direct_child_of_the_cache_dir() {
+        with_tmp_app(|app| {
+            let p = cache_path(app, "easyprivacy").expect("a normal list id is accepted");
+            assert_eq!(
+                p,
+                subs_dir(app).join("easyprivacy.txt"),
+                "the cache file is <cache>/subs/<listId>.txt"
+            );
+            assert_eq!(p.parent(), Some(subs_dir(app).as_path()));
+        });
+    }
+
+    #[test]
+    fn an_imported_row_cannot_read_a_cache_file_from_outside_the_cache_dir() {
+        with_tmp_app(|app| {
+            // The escape target sits one level ABOVE the subs cache dir, so a joined
+            // `../outside` reaches it. Plant a file with a marker in its text.
+            let outside = subs_dir(app)
+                .parent()
+                .expect("the cache dir has a parent")
+                .join("outside.txt");
+            std::fs::write(&outside, "||marker-from-outside-the-cache-dir^\n").unwrap();
+
+            // Plant the row the way a pasted backup does: through the real import.
+            let bundle = json!({ "subs": [{
+                "listId": "../outside",
+                "url": "https://x.test/outside.txt",
+                "enabled": true,
+            }]});
+            let res =
+                crate::data::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
+                    .expect("data.import is handled")
+                    .expect("a refused import is Ok(json), not Err");
+            assert_eq!(
+                res.get("ok").and_then(Value::as_bool),
+                Some(true),
+                "the import itself succeeds — a poisoned row is inert, not fatal: {res}"
+            );
+
+            let text = enabled_text(app);
+            assert!(
+                !text.contains("marker-from-outside-the-cache-dir"),
+                "an enabled row must not pull filter text in from outside the cache dir \
+                 (read the file at {outside:?})"
+            );
+            assert!(
+                outside.exists(),
+                "and the planted file must still be there — the import is a read, not a write"
+            );
+        });
+    }
+
+    #[test]
+    fn removing_a_subscription_cannot_unlink_a_file_outside_the_cache_dir() {
+        with_tmp_app(|app| {
+            let victim = subs_dir(app)
+                .parent()
+                .expect("the cache dir has a parent")
+                .join("victim.txt");
+            std::fs::write(&victim, "not a filter list").unwrap();
+
+            // A row so the removal has something to tombstone, plus the hostile id.
+            jsonstore::save(
+                app,
+                "subs",
+                &[json!({ "listId": "../victim", "url": "https://x/victim.txt", "enabled": true })],
+            )
+            .unwrap();
+            let listed = dispatch(app, "subs.remove", &json!({ "listId": "../victim" }))
+                .expect("subs.remove is handled")
+                .expect("a bad list id is a refusal, not a crash");
+            assert!(
+                listed.get("ok").is_none() && listed.as_array().is_some(),
+                "removal still succeeds so a planted row stays cleanable: {listed}"
+            );
+            assert!(
+                victim.exists(),
+                "subs.remove must not unlink a file outside the cache dir (looked at {victim:?})"
+            );
+            // A well-formed id in the same breath still unlinks its own cache file.
+            std::fs::write(subs_dir(app).join("ep.txt"), "||x^").unwrap();
+            jsonstore::save(
+                app,
+                "subs",
+                &[json!({ "listId": "ep", "url": "https://x/ep.txt", "enabled": true })],
+            )
+            .unwrap();
+            dispatch(app, "subs.remove", &json!({ "listId": "ep" }))
+                .unwrap()
+                .unwrap();
+            assert!(
+                !subs_dir(app).join("ep.txt").exists(),
+                "a real list's own cache file is still removed"
+            );
+        });
+    }
+
+    #[test]
+    fn adding_a_url_whose_last_segment_is_a_directory_reference_is_refused() {
+        with_tmp_app(|app| {
+            // `list_id_from_url` takes the last non-empty path segment, which for this
+            // URL is `..` — no separator, so the derived id cannot traverse, but it is
+            // still not a name. Refuse it at the door rather than accept a row whose
+            // cache file can never exist.
+            let res = dispatch(app, "subs.add", &json!({ "url": "https://x.test/.." }))
+                .expect("subs.add is handled");
+            let msg = res
+                .expect_err("`https://x.test/..` must be refused")
+                .to_string();
+            assert!(
+                msg.contains("not usable") || msg.contains("directory reference"),
+                "the refusal must say why, got: {msg}"
+            );
+            let rows = jsonstore::load_synced(app, "subs");
+            assert!(
+                !rows
+                    .iter()
+                    .any(|r| r.get("listId").and_then(Value::as_str) == Some("..")),
+                "and no row is created for it"
+            );
+        });
+    }
+
+    #[test]
+    fn enabling_a_row_whose_id_cannot_name_a_cache_file_is_refused() {
+        with_tmp_app(|app| {
+            jsonstore::save(
+                app,
+                "subs",
+                &[json!({
+                    "listId": "../escape", "url": "https://x.test/escape.txt", "enabled": false,
+                })],
+            )
+            .unwrap();
+            // Enabling a never-fetched list triggers a cache write, so this is the arm
+            // that would have written outside the cache dir.
+            let res = dispatch(
+                app,
+                "subs.setEnabled",
+                &json!({ "listId": "../escape", "enabled": true }),
+            )
+            .expect("subs.setEnabled is handled");
+            let msg = res
+                .expect_err("a hostile list id must be refused")
+                .to_string();
+            assert!(
+                msg.contains("path separator"),
+                "the refusal must name the reason, got: {msg}"
+            );
+            let row = jsonstore::load_synced(app, "subs")
+                .into_iter()
+                .find(|r| r.get("listId").and_then(Value::as_str) == Some("../escape"))
+                .expect("the row is still there to be inspected");
+            assert_eq!(
+                row.get("enabled").and_then(Value::as_bool),
+                Some(false),
+                "and it was not flipped either"
             );
         });
     }
