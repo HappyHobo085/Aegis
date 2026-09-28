@@ -37,7 +37,7 @@
 use serde_json::{json, Value};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 /// Sentinel prefix a picked selector's payload is wrapped in (via document.title).
 pub const SENTINEL: &str = "AEGISPICK:";
@@ -263,7 +263,12 @@ fn picker_js(nonce: &str) -> String {
 /// unforgeable by page script, which can set `document.title` but cannot read
 /// the nonce out of the overlay's closure. Everything after the nonce check is
 /// then re-validated ([`build_rule`]) before it reaches the persisted filter file.
-pub fn on_picked(app: &AppHandle, payload: &str) {
+///
+/// Generic over `R: Runtime` so the whole write path is reachable from a
+/// `MockRuntime` test — `customfilters::load`/`write`, `adblock_refresh::refresh`
+/// and `emit_event` are all generic already, and the only production callers
+/// (`linux_layout`, `nav_url_win`, `nav_url_mac`) infer `Wry` exactly as before.
+pub fn on_picked<R: Runtime>(app: &AppHandle<R>, payload: &str) {
     let Some((nonce, json)) = payload.split_once(':') else {
         return;
     };
@@ -311,8 +316,16 @@ pub fn on_picked(app: &AppHandle, payload: &str) {
 
 /// Handle `picker.start`: inject the picking overlay into the content webview.
 /// The JS is engine-agnostic; only the injection mechanism differs per platform.
+///
+/// Generic over `R: Runtime` for the same reason as [`on_picked`]: `nav::active_webview`
+/// is already generic, and `lib.rs`'s dispatch arm is the only production caller, so it
+/// infers `Wry` unchanged.
 #[allow(clippy::needless_return)] // return is needed inside #[cfg] blocks to prevent fallthrough
-pub fn dispatch(app: &AppHandle, channel: &str, _payload: &Value) -> Option<Result<Value, String>> {
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    _payload: &Value,
+) -> Option<Result<Value, String>> {
     if channel != "picker.start" {
         return None;
     }
@@ -502,6 +515,10 @@ mod tests {
 
     #[test]
     fn session_nonce_round_trips_once() {
+        // SESSION is process-global, and the `with_tmp_app` tests below hold the
+        // shared lock for their whole body: without this, cargo test could run a
+        // nonce test concurrently with an `on_picked` test and cross their sessions.
+        let _guard = crate::test_support::lock();
         let n = begin_session().expect("os randomness");
         assert!(consume_session(&n), "fresh nonce must be accepted");
         assert!(
@@ -513,6 +530,10 @@ mod tests {
 
     #[test]
     fn session_rejects_forged_nonce() {
+        // SESSION is process-global, and the `with_tmp_app` tests below hold the
+        // shared lock for their whole body: without this, cargo test could run a
+        // nonce test concurrently with an `on_picked` test and cross their sessions.
+        let _guard = crate::test_support::lock();
         let _real = begin_session().expect("os randomness");
         // This is the attack: a page sets document.title itself, with a nonce it
         // made up. No picker session of ours, so it must not be accepted.
@@ -526,6 +547,10 @@ mod tests {
 
     #[test]
     fn session_rejects_nonce_when_no_picker_running() {
+        // SESSION is process-global, and the `with_tmp_app` tests below hold the
+        // shared lock for their whole body: without this, cargo test could run a
+        // nonce test concurrently with an `on_picked` test and cross their sessions.
+        let _guard = crate::test_support::lock();
         // No begin_session() at all — the common case: a page sets the title on
         // a site the user is merely visiting.
         *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -534,6 +559,10 @@ mod tests {
 
     #[test]
     fn session_mismatch_does_not_cancel_a_live_pick() {
+        // SESSION is process-global, and the `with_tmp_app` tests below hold the
+        // shared lock for their whole body: without this, cargo test could run a
+        // nonce test concurrently with an `on_picked` test and cross their sessions.
+        let _guard = crate::test_support::lock();
         // A page spamming bogus sentinels must not be able to consume the user's
         // session and thereby cancel their in-progress pick.
         let real = begin_session().expect("os randomness");
@@ -546,6 +575,10 @@ mod tests {
 
     #[test]
     fn new_session_invalidates_the_previous_nonce() {
+        // SESSION is process-global, and the `with_tmp_app` tests below hold the
+        // shared lock for their whole body: without this, cargo test could run a
+        // nonce test concurrently with an `on_picked` test and cross their sessions.
+        let _guard = crate::test_support::lock();
         let first = begin_session().expect("os randomness");
         let second = begin_session().expect("os randomness");
         assert_ne!(first, second, "each session must get a fresh nonce");
@@ -555,6 +588,10 @@ mod tests {
 
     #[test]
     fn nonce_is_lowercase_hex_of_expected_width() {
+        // SESSION is process-global, and the `with_tmp_app` tests below hold the
+        // shared lock for their whole body: without this, cargo test could run a
+        // nonce test concurrently with an `on_picked` test and cross their sessions.
+        let _guard = crate::test_support::lock();
         // `picker_js` substitutes the nonce into a JS string literal without
         // escaping; this pins the property that makes that safe.
         let n = begin_session().expect("os randomness");
@@ -586,5 +623,283 @@ mod tests {
     fn picker_js_emits_the_nonce_in_the_sentinel() {
         let js = picker_js("abc123");
         assert!(js.contains("'AEGISPICK:' + NONCE + ':' + JSON.stringify"));
+    }
+
+    // ── on_picked: the ENTIRE security write path, end to end ────────────────
+    //
+    // Everything above is a pure half. These drive the real writer: the real
+    // `customfilters` file, the real cap, the real `picker.picked` event. The
+    // property asserted throughout is the OBSERVABLE one — what is on disk and
+    // what the chrome is told — never "which branch ran".
+
+    use tauri::{Listener, Manager};
+
+    /// Where `customfilters` persists, so a test can seed or read the real file.
+    fn filters_path<R: Runtime>(app: &AppHandle<R>) -> std::path::PathBuf {
+        app.path()
+            .app_data_dir()
+            .expect("app data dir")
+            .join("custom-filters.txt")
+    }
+
+    fn filters_on_disk<R: Runtime>(app: &AppHandle<R>) -> String {
+        std::fs::read_to_string(filters_path(app)).unwrap_or_default()
+    }
+
+    /// Collect `picker.picked` payloads. `emit_event` rewrites `.` to `:`, and
+    /// Tauri invokes a Rust listener callback SYNCHRONOUSLY inside `emit`, so
+    /// `try_recv` immediately after `on_picked` returns is definitive — no
+    /// timeout, and no flake waiting for a race to lose.
+    fn watch_picked<R: Runtime>(app: &AppHandle<R>) -> std::sync::mpsc::Receiver<Value> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        // `Listener::listen` hands back the event id, not a Result: a failed
+        // registration would leave the channel empty, which every assertion here
+        // already treats as "no event", so there is nothing to unwrap.
+        let _id = app.listen("picker:picked", move |e| {
+            let _ = tx.send(serde_json::from_str(e.payload()).unwrap_or(Value::Null));
+        });
+        rx
+    }
+
+    /// The `document.title` the injected overlay sets, for a live session's
+    /// nonce — `AEGISPICK:<nonce>:<json>`, byte for byte what
+    /// `PICKER_JS_TEMPLATE` bakes in.
+    fn sentinel(nonce: &str, host: &str, selector: &str) -> String {
+        format!(
+            "{SENTINEL}{nonce}:{}",
+            json!({ "selector": selector, "host": host })
+        )
+    }
+
+    /// Deliver a page-set `document.title` exactly as the three platform
+    /// title-sentinel handlers do (`linux_layout::connect_title_label`,
+    /// `nav_url_win`'s `DocumentTitleChanged`, `nav_url_mac`'s KVO observer):
+    /// strip `SENTINEL` and hand the rest to `on_picked`. A title without the
+    /// sentinel is not a pick at all, so it must not reach the writer.
+    fn route_title<R: Runtime>(app: &AppHandle<R>, title: &str) {
+        if let Some(payload) = title.strip_prefix(SENTINEL) {
+            on_picked(app, payload);
+        }
+    }
+
+    #[test]
+    fn a_pick_persists_the_rule_and_tells_the_chrome() {
+        crate::test_support::with_tmp_app(|app| {
+            let picked = watch_picked(app);
+            let n = begin_session().expect("os randomness");
+
+            route_title(app, &sentinel(&n, "example.com", "#banner"));
+
+            assert_eq!(filters_on_disk(app), "example.com###banner\n");
+            assert_eq!(
+                picked
+                    .try_recv()
+                    .expect("picker.picked must fire on a saved pick"),
+                json!({ "rule": "example.com###banner" })
+            );
+        });
+    }
+
+    #[test]
+    fn a_page_that_sets_the_title_itself_writes_nothing() {
+        // THE attack: `document.title` is settable by any script on any site, and
+        // the custom-filter file is persistent AND synced. Without a matching
+        // nonce this must write nothing at all — not a rule, not an event.
+        crate::test_support::with_tmp_app(|app| {
+            let picked = watch_picked(app);
+            // A live session exists, so the only thing standing between the page
+            // and the file is the nonce comparison.
+            let _real = begin_session().expect("os randomness");
+
+            for forged in [
+                // A well-formed sentinel carrying a nonce this session never minted.
+                "AEGISPICK:deadbeefdeadbeefdeadbeefdeadbeef:{\"selector\":\"#x\",\"host\":\"evil.test\"}",
+                // The right shape, no nonce at all.
+                "AEGISPICK::{\"selector\":\"#x\",\"host\":\"evil.test\"}",
+                // A page simply setting a title: not a sentinel, so it must not
+                // even reach `on_picked`.
+                "My clever page:{\"selector\":\"#x\",\"host\":\"evil.test\"}",
+            ] {
+                route_title(app, forged);
+            }
+
+            assert!(
+                filters_on_disk(app).is_empty(),
+                "a forged sentinel wrote a filter: {:?}",
+                filters_on_disk(app)
+            );
+            assert!(
+                picked.try_recv().is_err(),
+                "a forged sentinel reported a pick to the chrome"
+            );
+        });
+    }
+
+    #[test]
+    fn a_pick_whose_write_fails_is_reported_as_nothing() {
+        // The control-that-lies case, and the reason `write` was made to return
+        // a Result: `picker.picked` is the UI's ONLY signal that the rule was
+        // saved. Emitting it for a write that failed told the user their element
+        // was blocked when it is not.
+        crate::test_support::with_tmp_app(|app| {
+            let picked = watch_picked(app);
+            let n = begin_session().expect("os randomness");
+            let _blocked = crate::test_support::block_store_file(app, "custom-filters.txt");
+
+            route_title(app, &sentinel(&n, "example.com", "#banner"));
+
+            assert!(
+                picked.try_recv().is_err(),
+                "picker.picked fired for a rule that was never written"
+            );
+        });
+    }
+
+    #[test]
+    fn picking_the_same_element_twice_stores_one_rule() {
+        crate::test_support::with_tmp_app(|app| {
+            let picked = watch_picked(app);
+
+            // A fresh session each round, exactly as a second click on the
+            // picker would mint one.
+            let first = begin_session().expect("os randomness");
+            route_title(app, &sentinel(&first, "example.com", "#banner"));
+            assert_eq!(
+                picked.try_recv().expect("the first pick is reported"),
+                json!({ "rule": CAP_RULE })
+            );
+
+            let second = begin_session().expect("os randomness");
+            route_title(app, &sentinel(&second, "example.com", "#banner"));
+
+            assert_eq!(
+                filters_on_disk(app),
+                format!("{CAP_RULE}\n"),
+                "the second pick must be a no-op, not a duplicate line"
+            );
+            assert!(
+                picked.try_recv().is_err(),
+                "the duplicate pick must not re-report — nothing changed"
+            );
+        });
+    }
+
+    #[test]
+    fn a_pick_is_appended_to_a_filter_file_with_no_trailing_newline() {
+        // Hand-edited and imported `.txt` files routinely lack a final newline.
+        // Appending without inserting one would fuse the new rule onto the last
+        // existing line and silently corrupt it.
+        crate::test_support::with_tmp_app(|app| {
+            crate::jsonstore::write_atomic(&filters_path(app), b"||legacy.test^")
+                .expect("seed a file with no trailing newline");
+            let n = begin_session().expect("os randomness");
+
+            route_title(app, &sentinel(&n, "example.com", "#banner"));
+
+            assert_eq!(
+                filters_on_disk(app),
+                "||legacy.test^\nexample.com###banner\n"
+            );
+        });
+    }
+
+    /// The cap is what stops a pick — or a synced filter file — becoming a ~20 MB
+    /// engine re-parse amplifier. `on_picked` accepts a rule only while
+    /// `existing.len() + rule.len() + 1 <= MAX_FILTER_BYTES`, so pin BOTH sides
+    /// of that boundary: one byte over is refused and changes nothing, and
+    /// exactly at the cap is accepted.
+    const CAP_RULE: &str = "example.com###banner";
+
+    /// Seed the filter file with `len` newlines, so its length is exactly `len`
+    /// and it already ends in one (no inserted newline shifts the boundary).
+    fn seed_len<R: Runtime>(app: &AppHandle<R>, len: usize) {
+        crate::jsonstore::write_atomic(&filters_path(app), "\n".repeat(len).as_bytes())
+            .expect("seed the filter file");
+    }
+
+    #[test]
+    fn a_pick_one_byte_over_the_filter_cap_is_refused_and_changes_nothing() {
+        crate::test_support::with_tmp_app(|app| {
+            let over = MAX_FILTER_BYTES - CAP_RULE.len();
+            seed_len(app, over);
+            let picked = watch_picked(app);
+            let n = begin_session().expect("os randomness");
+
+            route_title(app, &sentinel(&n, "example.com", "#banner"));
+
+            assert!(
+                picked.try_recv().is_err(),
+                "a pick past the cap was reported as saved"
+            );
+            assert_eq!(
+                filters_on_disk(app).len(),
+                over,
+                "the file must be left exactly as it was"
+            );
+        });
+    }
+
+    #[test]
+    fn a_pick_that_fits_exactly_under_the_filter_cap_is_saved() {
+        crate::test_support::with_tmp_app(|app| {
+            let at = MAX_FILTER_BYTES - CAP_RULE.len() - 1;
+            seed_len(app, at);
+            let picked = watch_picked(app);
+            let n = begin_session().expect("os randomness");
+
+            route_title(app, &sentinel(&n, "example.com", "#banner"));
+
+            assert_eq!(
+                picked.try_recv().expect("a rule that fits is saved"),
+                json!({ "rule": CAP_RULE })
+            );
+            let on_disk = filters_on_disk(app);
+            assert_eq!(
+                on_disk.len(),
+                MAX_FILTER_BYTES,
+                "file grows to exactly the cap"
+            );
+            assert!(
+                on_disk.ends_with(&format!("{CAP_RULE}\n")),
+                "the appended rule must be the last line, not fused onto the filler"
+            );
+        });
+    }
+
+    // ── dispatch: channel ownership + session minting ────────────────────────
+
+    #[test]
+    fn dispatch_declines_a_channel_it_does_not_own() {
+        crate::test_support::with_tmp_app(|app| {
+            // `None` is how `lib.rs`'s dispatch chain knows to keep looking; a
+            // `Some` here would make `picker` swallow every other module's
+            // channel that reached it.
+            assert!(dispatch(app, "some.other.channel", &Value::Null).is_none());
+            assert!(dispatch(app, "", &Value::Null).is_none());
+        });
+    }
+
+    #[test]
+    fn dispatch_mints_the_session_even_when_there_is_nothing_to_inject_into() {
+        // The nonce must be minted BEFORE the injection is attempted, so the
+        // overlay we inject is provably the one holding it. There is no content
+        // webview on a MockRuntime, so the desktop branch reports `{ok:false}`
+        // — and the session it minted is still live, which is what makes the
+        // ordering observable rather than merely stated.
+        crate::test_support::with_tmp_app(|app| {
+            *SESSION.lock().unwrap_or_else(|e| e.into_inner()) = None;
+
+            let reply = crate::test_support::ran(
+                dispatch(app, "picker.start", &Value::Null),
+                "picker.start",
+            );
+
+            let reply = reply.expect("picker.start is dispatched to picker::dispatch");
+            assert_eq!(reply["ok"], json!(false), "no webview to inject into");
+            assert!(
+                SESSION.lock().unwrap_or_else(|e| e.into_inner()).is_some(),
+                "the session must be minted before injection is attempted"
+            );
+        });
     }
 }
