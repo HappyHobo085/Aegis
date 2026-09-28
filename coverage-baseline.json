@@ -3,24 +3,24 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 5085,
-      "covered": 4485,
+      "total": 5088,
+      "covered": 4488,
       "pct": 88.2
     },
     "statements": {
-      "total": 6836,
-      "covered": 5930,
-      "pct": 86.74
+      "total": 6839,
+      "covered": 5933,
+      "pct": 86.75
     },
     "functions": {
-      "total": 1407,
-      "covered": 1197,
-      "pct": 85.07
+      "total": 1408,
+      "covered": 1198,
+      "pct": 85.08
     },
     "branches": {
-      "total": 4404,
-      "covered": 3577,
-      "pct": 81.22
+      "total": 4421,
+      "covered": 3594,
+      "pct": 81.29
     }
   },
   "files": {
@@ -287,24 +287,24 @@
     },
     "src/components/AdblockShield.tsx": {
       "lines": {
-        "total": 52,
-        "covered": 52,
+        "total": 55,
+        "covered": 55,
         "pct": 100
       },
       "statements": {
-        "total": 63,
-        "covered": 63,
+        "total": 66,
+        "covered": 66,
         "pct": 100
       },
       "functions": {
-        "total": 14,
-        "covered": 14,
+        "total": 15,
+        "covered": 15,
         "pct": 100
       },
       "branches": {
-        "total": 86,
-        "covered": 78,
-        "pct": 90.69
+        "total": 103,
+        "covered": 95,
+        "pct": 92.23
       }
     },
     "src/components/AddressBar.tsx": {
