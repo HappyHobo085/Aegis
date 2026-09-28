@@ -770,23 +770,34 @@ flip. Three of the four brief labels were wrong or imprecise, as usual:
   The `aegis:*` window CustomEvents at `App.tsx:216-219` are a _different_ mechanism and were
   already covered by the vacuous-test inventory fix above.
 
-**Four jsdom gaps, all silent, each found by a test that failed for a reason I had not
-predicted.** None is a product bug; all four make a real browser behaviour unreachable in a
-test, so they will bite again:
+**jsdom gaps, all silent, each found by a test that failed for a reason I had not predicted.**
+None is a product bug; each makes a real browser behaviour unreachable in a test, so it will
+bite again. **jsdom 25 → 28 (2026-09-28) closed two of the original four**, re-measured in
+this tree. Note _whose_ gap they were: `@testing-library/react` is **16.3.2 in both
+lockfiles**, so it never changed — it was silently falling back to a plain `Event` because
+jsdom lacked the constructor it wanted. The old workarounds are still in the tests and are
+harmless, so none were deleted, but **do not copy them into new tests** — items 3 and 4's
+init half are fixed:
 
-1. `fireEvent.auxClick` **does not exist** in this `@testing-library` build. Dispatch the raw
-   bubbling event instead: `fireEvent(el, new MouseEvent('auxclick', { bubbles: true, … }))`.
-2. jsdom has **no layout**, so `clientWidth` is `0` — and `0 ?? 800` is `0`. A component's own
-   viewport fallback therefore only fires on the _first_ render, when its ref is still null;
-   after any re-render the viewport collapses and a windowed render goes empty.
+1. `fireEvent.auxClick` **does not exist** in this `@testing-library` build. **Still true**
+   (`typeof fireEvent.auxClick === 'undefined'`), and it is testing-library's gap, not
+   jsdom's. Dispatch the raw bubbling event instead:
+   `fireEvent(el, new MouseEvent('auxclick', { bubbles: true, … }))`.
+2. jsdom has **no layout**, so `clientWidth` is `0` — and `0 ?? 800` is `0`. **Still true**
+   (re-measured: `clientWidth` 0, `scrollWidth` 0). A component's own viewport fallback
+   therefore only fires on the _first_ render, when its ref is still null; after any re-render
+   the viewport collapses and a windowed render goes empty.
    `Object.defineProperty(node, 'clientWidth', { value: 800 })`.
-3. `fireEvent.scroll(el, { target: { scrollLeft } })` does **not** write jsdom's
-   `Element.scrollLeft`. Set the property on the node first, then fire.
-4. jsdom has **no `PointerEvent` and none of the pointer-capture API** — `setPointerCapture`,
-   `hasPointerCapture` and `releasePointerCapture` are all `undefined`, and
-   `fireEvent.pointerDown(el, { pointerId: 7 })` silently drops the init so React reads
-   `undefined`. Build a plain `Event` and `Object.defineProperty` each field onto it, and stub
-   the capture trio.
+3. **CLOSED in jsdom 28.** `fireEvent.scroll(el, { target: { scrollLeft } })` used **not** to
+   write jsdom's `Element.scrollLeft`. It now does: a listener fired by that exact call reads
+   `120`. Set the property on the node first only if you must support jsdom 25.
+4. **Half-closed in jsdom 28.** `PointerEvent` now **exists** and is constructible —
+   `new PointerEvent('pointerdown', { pointerId: 7, button: 2 })` carries both fields, and
+   `fireEvent.pointerDown(el, { pointerId: 7, button: 2 })` now delivers them (it used to
+   drop the init silently, so React read `undefined`). **The pointer-CAPTURE trio is still
+   missing**: `setPointerCapture`, `hasPointerCapture` and `releasePointerCapture` are all
+   `undefined` on `Element.prototype`. So build the event normally — no `defineProperty` dance
+   — and still stub the capture trio.
 
 **What is left is honest, and part of it is not reachable at all.** `SettingsModal`'s two
 remaining statements are the `visibleTabOrder.length === 0` early returns in the `Home`/`End`

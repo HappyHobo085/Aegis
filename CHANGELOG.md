@@ -627,6 +627,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Tests
 
+- **jsdom 25 → 28, which removed the last deprecation warning from `npm ci`.**
+  `whatwg-encoding@3.1.1` is deprecated in favour of `@exodus/bytes`, and it is the newest
+  version published, so there was no upgrade of _it_ to make — the module had to leave the
+  tree. It came in through `jsdom` and `html-encoding-sniffer`, and **28 is the lowest jsdom
+  that drops it**; it is also the highest whose `engines` still match this repo's declared
+  Node floor (28: `^20.19.0 || ^22.12.0 || >=24.0.0`; 30 would have silently raised the
+  effective floor to `^22.22.2`). The warning is gone: a real `npm ci` went from one
+  `npm warn deprecated` line to none, confirmed by running it both ways. Two of the four
+  documented jsdom gaps closed as a side effect — `PointerEvent` now exists and
+  `fireEvent.pointerDown(el, { pointerId: 7 })` delivers its init again, and
+  `fireEvent.scroll(el, { target: { scrollLeft } })` writes `scrollLeft` again. Worth
+  recording _whose_ gap those were: `@testing-library/react` is 16.3.2 in both lockfiles and
+  never changed — it was falling back to a plain `Event` because jsdom lacked the
+  constructor. The pointer-**capture** trio is still missing and `fireEvent.auxClick` still
+  does not exist. All 120 test files and 1697 tests pass unchanged, and the renderer
+  coverage ratios are identical to the digit (88.17 / 86.73 / 85.07 / 81.2).
 - New coverage for the previously untested `url`, `syncBus`, `tauriInvoke`,
   `protectionSummary`, `useOmnibox`, `useMeasuredHeight`,
   `useNarrowViewport`, `useSafety`, `useDownloadToasts`, `useAutofillSave`,
