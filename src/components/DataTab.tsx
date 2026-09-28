@@ -5,10 +5,21 @@ import { confirm, toast } from '../lib/toast';
 
 export interface DataTabProps {
   onExport(): Promise<{ ok: boolean; path?: string }>;
-  onImport(
-    mode: ImportMode,
-    source?: { text?: string },
-  ): Promise<{ ok: boolean; counts?: unknown }>;
+  onImport(mode: ImportMode, source?: { text?: string }): Promise<ImportResult>;
+}
+
+/**
+ * The core's `data.import` reply.
+ *
+ * `failed` names the stores whose file could NOT be written. It is empty on success, and
+ * also empty on the refusals where the bundle never parsed (nothing was written, so nothing
+ * is named) — so a non-empty `failed` means "some of this restore did not land" and the
+ * counts beside it belong to the stores that did.
+ */
+export interface ImportResult {
+  ok: boolean;
+  counts?: unknown;
+  failed?: string[];
 }
 
 export function DataTab({ onExport, onImport }: DataTabProps) {
@@ -44,7 +55,14 @@ export function DataTab({ onExport, onImport }: DataTabProps) {
         toast.success('Import complete.');
         setPasteText('');
       } else {
-        toast.error('Import failed — check the pasted JSON or the backup in Downloads.');
+        // The draft is deliberately NOT cleared on a failure: it is the user's only copy of
+        // the backup, and discarding it would strand them with a restore that did not finish.
+        const failed = res.failed ?? [];
+        toast.error(
+          failed.length > 0
+            ? `Import incomplete — could not save: ${failed.join(', ')}. Everything else was imported; your pasted backup has been kept.`
+            : 'Import failed — check the pasted JSON or the backup in Downloads.',
+        );
       }
     } finally {
       setBusy(false);

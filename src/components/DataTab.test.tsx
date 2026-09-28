@@ -70,11 +70,48 @@ describe('DataTab', () => {
     expect(p.onImport).not.toHaveBeenCalled();
   });
 
+  // A bundle that never parsed names no store (nothing was written, so nothing is named), and
+  // the copy must NOT claim a partial import happened.
+  it('reports the generic failure when the import names no failed store', async () => {
+    const p = props({
+      onImport: vi.fn(async () => ({ ok: false, counts: {}, failed: [] })),
+    });
+    render(<DataTab {...p} />);
+    fireEvent.change(screen.getByRole('textbox', { name: /backup json to import/i }), {
+      target: { value: 'not json' },
+    });
+    await userEvent.click(screen.getByRole('button', { name: /^import$/i }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const msg = (toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(msg).toMatch(/check the pasted JSON/i);
+    expect(msg).not.toMatch(/incomplete/i);
+  });
+
   it('reports a success toast after a completed import', async () => {
     const p = props();
     render(<DataTab {...p} />);
     await userEvent.click(screen.getByRole('button', { name: /^import$/i }));
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
+  });
+
+  // A restore whose store could not be written must NAME it. The core used to discard every
+  // save error and return `ok: true`, so the user was told "Import complete." for a backup
+  // whose history was silently lost. The draft is asserted too: it is the user's only copy,
+  // and clearing it on a failure strands them with nothing to retry from.
+  it('names the stores a partial import could not save, and keeps the pasted draft', async () => {
+    const p = props({
+      onImport: vi.fn(async () => ({ ok: false, counts: { favorites: 1 }, failed: ['history'] })),
+    });
+    render(<DataTab {...p} />);
+    const draft = screen.getByRole('textbox', { name: /backup json to import/i });
+    fireEvent.change(draft, { target: { value: '{"history":[]}' } });
+    await userEvent.click(screen.getByRole('button', { name: /^import$/i }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    const msg = (toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0] as string;
+    expect(msg).toMatch(/incomplete/i);
+    expect(msg).toContain('history');
+    expect(toast.success).not.toHaveBeenCalled();
+    expect((draft as HTMLTextAreaElement).value).toBe('{"history":[]}');
   });
 
   it('imports pasted JSON (no native file picker) when the paste field is filled', async () => {

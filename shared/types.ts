@@ -307,6 +307,23 @@ export interface PermissionPrompt {
 }
 export type PermissionDecision = 'allow' | 'allow-once' | 'deny';
 export type ImportMode = 'merge' | 'replace';
+/**
+ * The core's `data.import` reply.
+ *
+ * `ok` is false when ANY store in the bundle could not be written, and `failed` names the
+ * ones that could not — the core used to discard every save error and return `ok: true`
+ * unconditionally, so a restore that lost a whole store looked identical to a complete one.
+ * `counts` therefore covers only the stores that landed.
+ *
+ * `failed` is empty on success, and also empty on the refusals where the bundle never parsed
+ * (nothing was written, so nothing is named). A non-empty `failed` is the one case where the
+ * user has to be told WHICH part of their backup did not make it.
+ */
+export interface DataImportResult {
+  ok: boolean;
+  counts?: unknown;
+  failed?: string[];
+}
 export interface ContentInset {
   top: number;
   left: number;
@@ -727,10 +744,7 @@ export interface AegisApi {
   };
   data: {
     export(): Promise<{ ok: boolean; path?: string }>;
-    import(
-      mode: ImportMode,
-      source?: { text?: string },
-    ): Promise<{ ok: boolean; counts?: unknown }>;
+    import(mode: ImportMode, source?: { text?: string }): Promise<DataImportResult>;
   };
   picker: {
     start(): Promise<{ ok: boolean }>;

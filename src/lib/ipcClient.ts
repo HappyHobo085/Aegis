@@ -19,6 +19,7 @@ import {
   DownloadEntry,
   SitePermission,
   PermissionPrompt,
+  DataImportResult,
   TabsState,
   TabShortcut,
   UpdateState,
@@ -557,11 +558,16 @@ export const aegis: AegisApi = {
     import: async (mode, source) => {
       const text = source?.text?.trim() ?? '';
       const result = text
-        ? await dedupedCall<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode, text })
-        : await dedupedCall<{ ok: boolean; counts?: unknown }>(IPC.dataImport, { mode });
+        ? await dedupedCall<DataImportResult>(IPC.dataImport, { mode, text })
+        : await dedupedCall<DataImportResult>(IPC.dataImport, { mode });
       // Make the import live immediately — favorites/saved/settings hooks only fetch
       // on mount, so reload the chrome to re-read everything (no app restart). Delay
       // briefly so the success toast is visible first.
+      //
+      // Only a COMPLETE import reloads. A partial one (`ok: false` with a non-empty
+      // `failed`) did change the stores that landed, but reloading would destroy the
+      // toast naming the ones that did not, which is the only thing telling the user
+      // their backup is still waiting for them. They can retry from the draft.
       if (result && result.ok) {
         setTimeout(() => window.location.reload(), 700);
       }

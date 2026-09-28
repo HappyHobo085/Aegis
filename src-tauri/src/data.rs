@@ -150,6 +150,52 @@ fn latest_export<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
         .map(|(_, _, name)| dir.join(name))
 }
 
+/// What an import's per-store writes add up to, as reported to the caller.
+///
+/// `ok` is false when ANY store failed to save, `counts` carries only the stores that
+/// actually landed, and `failed` names the ones that did not. Before this existed the arm
+/// ran `let _ = jsonstore::save(app, s, &migrated);` and then reported `"ok": true`
+/// unconditionally — a failed write was indistinguishable from a successful one, so a
+/// restore that silently lost (say) the whole history file still looked complete. That was
+/// the ONLY store-writing path in the crate that dropped its error (contrast
+/// `downloads::on_requested`, `history::record`, `places::*` and `sync_stores`, which all
+/// propagate it), and it was indefensible next to `refusedSettings` a few lines below,
+/// which exists precisely to keep a partial outcome visible.
+#[derive(Debug, PartialEq)]
+struct ImportOutcome {
+    ok: bool,
+    counts: Map<String, Value>,
+    failed: Vec<String>,
+}
+
+/// Fold `(store, row count, save result)` triples into an [`ImportOutcome`].
+///
+/// Pure, and split out from `dispatch` so the aggregation is unit-testable without a
+/// filesystem. `STORES` is a fixed, duplicate-free list, so `failed` cannot repeat a name
+/// and no dedup is needed here.
+fn aggregate_saves(saves: Vec<(&str, usize, Result<(), String>)>) -> ImportOutcome {
+    // An empty vec still means "everything that was asked for was written" — the same
+    // answer a bundle carrying no stores at all gets, and the same answer a refusal gets
+    // via its own explicit `failed: []`.
+    let mut out = ImportOutcome {
+        ok: true,
+        counts: Map::new(),
+        failed: Vec::new(),
+    };
+    for (store, count, res) in saves {
+        match res {
+            Ok(()) => {
+                out.counts.insert(store.to_string(), json!(count));
+            }
+            Err(_) => {
+                out.ok = false;
+                out.failed.push(store.to_string());
+            }
+        }
+    }
+    out
+}
+
 /// An earlier version returned a FIXED name, so every export overwrote the one before it and
 /// a user who exported twice had one bundle, not two. A backup tool that silently destroys
 /// the previous backup is worse than one that refuses, because the user believes they have
@@ -196,6 +242,10 @@ pub fn dispatch<R: Runtime>(
             // Source: pasted JSON text from the in-app field, else the backup file
             // (the path the client passed, or the default in Downloads). No native
             // file picker — that renders in the OS's light theme, clashing with the UI.
+            //
+            // Every refusal below carries the SAME shape as a partial import — `ok: false`
+            // plus an EMPTY `failed` — so a caller can ask "did a write fail?" without
+            // first having to know whether the bundle even parsed.
             let bundle: Value = match payload
                 .get("text")
                 .and_then(Value::as_str)
@@ -203,25 +253,25 @@ pub fn dispatch<R: Runtime>(
             {
                 Some(t) => match serde_json::from_str(t) {
                     Ok(v) => v,
-                    Err(_) => return Some(Ok(json!({ "ok": false }))),
+                    Err(_) => return Some(Ok(json!({ "ok": false, "failed": [] }))),
                 },
                 None => {
                     // No pasted text: read the most recent export. This used to read one
                     // FIXED filename, which was only ever correct because every export
                     // overwrote the last one.
                     let Some(path) = latest_export(app) else {
-                        return Some(Ok(json!({ "ok": false })));
+                        return Some(Ok(json!({ "ok": false, "failed": [] })));
                     };
                     let Ok(txt) = std::fs::read_to_string(&path) else {
-                        return Some(Ok(json!({ "ok": false })));
+                        return Some(Ok(json!({ "ok": false, "failed": [] })));
                     };
                     match serde_json::from_str::<Value>(&txt) {
                         Ok(v) => v,
-                        Err(_) => return Some(Ok(json!({ "ok": false }))),
+                        Err(_) => return Some(Ok(json!({ "ok": false, "failed": [] }))),
                     }
                 }
             };
-            let mut counts = Map::new();
+            let mut saves: Vec<(&str, usize, Result<(), String>)> = Vec::new();
             let node = crate::sync_identity::node_id(app);
             for s in STORES {
                 if let Some(arr) = bundle.get(*s).and_then(Value::as_array) {
@@ -248,10 +298,12 @@ pub fn dispatch<R: Runtime>(
                             }
                         }
                     }
-                    let _ = jsonstore::save(app, s, &migrated);
-                    counts.insert((*s).into(), json!(arr.len()));
+                    // The result is COLLECTED, not discarded: a store that cannot be written
+                    // is reported by name below instead of being reported as imported.
+                    saves.push((*s, arr.len(), jsonstore::save(app, s, &migrated)));
                 }
             }
+            let outcome = aggregate_saves(saves);
             // History's + downloads' files were just overwritten — drop their in-memory caches
             // so the next read reloads the imported rows (see history.rs "Write batching").
             crate::history::invalidate(app);
@@ -270,9 +322,21 @@ pub fn dispatch<R: Runtime>(
             crate::adblock::seed_from_disk(app);
             // Custom filters / subs may have changed → re-apply ad-block everywhere.
             crate::adblock_refresh::refresh(app);
+            // The remaining steps run even when a store write failed: a partial restore that
+            // abandoned the stores which DID land would be worse than the one it replaces, and
+            // the names in `failed` say exactly what is still on disk. `ok: false` is what stops
+            // the renderer from reloading the chrome (and wiping the message naming the
+            // failures) on the strength of a partial import.
             Some(Ok(json!({
-                "ok": true,
-                "counts": Value::Object(counts),
+                "ok": outcome.ok,
+                // Only the stores that landed. A count for a store whose file was never
+                // written is the same kind of lie as the `ok: true` that used to be
+                // unconditional.
+                "counts": Value::Object(outcome.counts),
+                // Empty on success, and empty on the parse/read refusals above too — so a
+                // caller can ask "did a write fail?" without also having to know whether the
+                // bundle parsed.
+                "failed": outcome.failed,
                 // Non-empty only when a setting was refused. Surfaced rather than swallowed so
                 // a poisoned or misspelled key in a bundle is visible to the user instead of
                 // the import looking complete when it wasn't.
@@ -371,6 +435,105 @@ mod tests {
             );
             std::fs::write(&p, b"{\"only\":true}").expect("write");
             assert_eq!(latest_export(app).as_deref(), Some(p.as_path()));
+        });
+    }
+
+    /// The aggregation is the whole of the fix, so it is tested on its own — no app, no
+    /// filesystem. A store that saved is counted; a store that did not is named and makes
+    /// the import not-ok, and its count is ABSENT rather than present-and-wrong (a count for
+    /// rows that were never written is the same lie as the `ok: true` this replaced).
+    #[test]
+    fn a_failed_store_is_named_and_uncounted_while_a_healthy_one_is_counted() {
+        let out = aggregate_saves(vec![
+            ("favorites", 3, Ok(())),
+            ("history", 9, Err("io error: Is a directory".to_string())),
+            ("saved", 0, Ok(())),
+        ]);
+        assert!(!out.ok, "one store failed, so the import is not complete");
+        assert_eq!(out.failed, vec!["history".to_string()]);
+        assert_eq!(out.counts.get("favorites"), Some(&json!(3)));
+        assert_eq!(out.counts.get("saved"), Some(&json!(0)));
+        assert!(
+            !out.counts.contains_key("history"),
+            "an unwritten store must not appear in counts, got {:?}",
+            out.counts
+        );
+    }
+
+    /// All-good is `ok: true` with an empty `failed` — the shape the renderer keys on to
+    /// tell a complete import from a partial one.
+    #[test]
+    fn every_store_saving_is_ok_with_nothing_failed() {
+        let out = aggregate_saves(vec![("favorites", 1, Ok(())), ("subs", 2, Ok(()))]);
+        assert!(out.ok);
+        assert!(out.failed.is_empty());
+        assert_eq!(out.counts.len(), 2);
+    }
+
+    /// The end-to-end property: a store the process cannot write is reported BY NAME, the
+    /// import is not reported as complete, and the stores that did save are still saved.
+    ///
+    /// The failure is provoked with a NON-EMPTY DIRECTORY at the store's path rather than a
+    /// read-only mode: `jsonstore::write_atomic` renames a temp file over the target, and a
+    /// rename onto a non-empty directory fails for every user — including root, where a
+    /// `chmod 0500` "read-only file" is a no-op and would have made this test silently
+    /// vacuous (it would have been measuring the success path).
+    #[test]
+    fn an_unwritable_store_fails_the_import_and_is_reported_by_name() {
+        with_tmp_app(|app| {
+            let blocked = app
+                .path()
+                .app_data_dir()
+                .expect("app data dir")
+                .join("history.json");
+            std::fs::create_dir_all(&blocked).expect("dir in place of the store file");
+            std::fs::write(blocked.join("occupied"), b"x").expect("make it non-empty");
+
+            // Precondition, asserted rather than assumed: this is the part that would
+            // silently stop being true if `write_atomic` ever changed shape.
+            assert!(
+                jsonstore::save(app, "history", &[json!({ "url": "https://pre.test/" })]).is_err(),
+                "precondition: the store must actually be unwritable for this test to test anything"
+            );
+
+            let bundle = json!({
+                "favorites": [{ "name": "F", "url": "https://fav.test/" }],
+                "history": [{ "url": "https://hist.test/", "title": "H" }],
+            });
+            let res = super::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
+                .expect("data.import is handled")
+                .expect("a refused import is Ok(json), not Err");
+
+            assert_eq!(
+                res.get("ok").and_then(Value::as_bool),
+                Some(false),
+                "an import whose store could not be written must not report ok — got {res}"
+            );
+            assert_eq!(
+                res.get("failed").and_then(Value::as_array),
+                Some(&vec![json!("history")]),
+                "the failed store must be named, got {res}"
+            );
+            // The store that COULD be written still landed, and is still counted.
+            let counts = res
+                .get("counts")
+                .and_then(Value::as_object)
+                .expect("counts");
+            assert_eq!(counts.get("favorites").and_then(Value::as_u64), Some(1));
+            assert!(
+                !counts.contains_key("history"),
+                "a store whose file was never written must not be counted as imported"
+            );
+            let favs = app
+                .path()
+                .app_data_dir()
+                .expect("app data dir")
+                .join("favorites.json");
+            let on_disk = std::fs::read_to_string(&favs).expect("favorites.json written");
+            assert!(
+                on_disk.contains("https://fav.test/"),
+                "the healthy store must still be written — got {on_disk}"
+            );
         });
     }
 

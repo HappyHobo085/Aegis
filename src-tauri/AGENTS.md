@@ -135,6 +135,23 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   with every store present; cross-app import round-trip (export → fresh app →
   import) restores favorites, saved, history, downloads, allowlist, settings, and
   customFilters; error cases (garbage input, partial bundle) (4 tests).
+  **A failed store write is REPORTED, and `counts` covers only the stores that
+  landed.** The arm used to run `let _ = jsonstore::save(app, s, &migrated);` and
+  then return `"ok": true` unconditionally, so a restore that silently lost a whole
+  store was indistinguishable from a complete one — and it was the only
+  store-writing path in the crate that dropped its error (`downloads::on_requested`,
+  `history::record`, `places::*` and `sync_stores` all propagate it). The per-store
+  results are now folded by the pure `aggregate_saves` into `ok: false` +
+  `failed: [store…]`. The four parse/read refusals also carry `"failed": []`, so a
+  caller can ask "did a write fail?" without first knowing whether the bundle
+  parsed. The remaining import steps (settings, customFilters, adblock re-seed)
+  still run on a partial import — abandoning the stores that DID land would be
+  worse than the bug — and `ok: false` is what stops `ipcClient` reloading the
+  chrome, which would wipe the toast naming the failures. The failure is provoked
+  in tests with a **non-empty directory at the store's path**, because
+  `write_atomic` renames a temp file over the target and a rename onto a directory
+  fails for every user, whereas a `chmod 0500` "unwritable" file is a no-op under
+  root and would make the test measure the success path.
 - **Data stores** — `jsonstore.rs` (tiny JSON-array helper, unit-tested via
   `test_support::with_tmp_app` in `test_support::tests`) backs:
   - `places.rs` (favorites + saved) — **unit-tested via `test_support::with_tmp_app`:**
