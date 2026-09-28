@@ -401,7 +401,21 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
       the allowlist veto was unreachable (`host_of("")` is `None`) and every request
       looked first-party. It now reads the real page URL from `ICoreWebView2::Source`.
       Compile-verified only — the module is `#[cfg(target_os = "windows")]`, so no
-      test for it can run on a Linux host.
+      test for it can run on a Linux host. **The request TYPE was wrong here too, and it
+      was the bigger half:** `handle` passed the literal `"other"`, so every subresource
+      was typed `Other` and no `$script`/`$image`/`$stylesheet`/`$xhr`/`$font`/`$media`/
+      `$websocket` rule in EasyList/EasyPrivacy could ever match on Windows — the network
+      tier acted only on host-anchored rules and the injected JS tier carried the rest. The
+      mapping is now `adblock::win_resource_type`, a `const fn` over WebView2's
+      `COREWEBVIEW2_WEB_RESOURCE_CONTEXT` (which is an **enum with sequential values, not
+      a bitmask** — `args.ResourceContext()` is an out-parameter getter and a failed
+      getter leaves `ALL` = 0 ⇒ `"other"`, the old behaviour). It is unit-tested on EVERY
+      platform in `adblock.rs` because it is pure data, and `adblock_win`'s own
+      `#[cfg(test)] mod tests` pins each of those integers to the real WebView2 constant so
+      a renumbering cannot pass; that module RUNS on the Windows CI leg and is
+      compile-verified here by the gnu cross-check. A `const _: () = …` compile-time proof
+      of the same table is impossible — `&str` equality is not yet a const trait (E0658).
+      The one line no test can reach is the `should_block` call site itself.
       A non-ASCII or otherwise malformed allowlist host is DROPPED, not passed to WebKit
       (`adblock_convert::usable_if_domain`): a filter WebKit cannot compile is discarded
       wholesale, which would disable ad-blocking for every site. The allowlist is a
@@ -482,7 +496,10 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     on WebKit the UA already lies about the engine. This is the accepted trade-off for the
     farbling tier — it adds noise that stops passive fingerprinting without breaking pages.
   - `adblock_win.rs` (Windows) — hooks WebView2 `WebResourceRequested` on
-    `ICoreWebView2` via unsafe COM for full network interception.
+    `ICoreWebView2` via unsafe COM for full network interception. Supplies the engine with
+    the page URL **and** the request type (the latter via
+    `adblock::win_resource_type` — see the `adblock_win` bullet under Ad-block for what the
+    literal `"other"` used to cost).
 - **Find-in-page** (`find.rs` + `find_{linux,win,mac}.rs`):
   - `find.rs` — dispatcher (PLACE 2 of the IPC three-place rule): matches the four
     `find.*` channels, resolves the target tab id (defaults to active), and routes to the

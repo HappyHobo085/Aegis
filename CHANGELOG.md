@@ -9,6 +9,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **On Windows, ad-block rules carrying a type option (`$script`, `$image`,
+  `$stylesheet`, `$xhr`, `$font`, `$media`, `$websocket`, …) could never match.** The
+  WebView2 network tier passed the literal request type `"other"` to the filter engine, so
+  every subresource was typed `Other` and the tier acted only on host-anchored rules while
+  the injected JS tier silently carried the rest. The tier now maps WebView2's
+  `COREWEBVIEW2_WEB_RESOURCE_CONTEXT` to the engine's type vocabulary; an unreadable
+  context still falls back to `other`.
 - **A closed tab's find-in-page term could reappear in the next tab that reused its
   id.** Windows' find API cannot hand back the term it was given, so the core keeps a
   per-tab copy for the change events to report. Closing a tab never cleared that copy,

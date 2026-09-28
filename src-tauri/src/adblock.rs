@@ -204,6 +204,59 @@ pub fn host_covered(allowlist: &[String], host: &str) -> bool {
     })
 }
 
+/// The WebView2 `COREWEBVIEW2_WEB_RESOURCE_CONTEXT` value -> the ad-block request-type
+/// string that type options (`$script`, `$image`, `$stylesheet`, `$xhr`, …) are matched
+/// against. The Windows tier used to pass the literal `"other"` for EVERY request, which
+/// silently disabled every type option in the bundled lists on Windows while the very same
+/// rules blocked everywhere else.
+///
+/// It lives here, and not in `adblock_win`, for the same reason `host_covered` lives here
+/// rather than in each tier: `adblock_win` is `#[cfg(target_os = "windows")]`, so a test for
+/// it can never run on the runner that gates this crate, and this table is pure data.
+///
+/// `context` is the enum's `i32` value, NOT a bitmask — WebView2 reports exactly ONE context
+/// per request, so this is a `match` and the fallthrough covers both `OTHER` and anything a
+/// future WebView2 release adds. `adblock_win::tests` reads these keys back as the real
+/// `COREWEBVIEW2_WEB_RESOURCE_CONTEXT_*` constants, which is the one check a Linux host cannot
+/// make by itself: the numbers here are plain integers, and a renumbering by WebView2 would
+/// otherwise re-type every request with no signal at all. That test runs on the Windows CI leg
+/// (the module is windows-gated) and is kept compiling everywhere by the
+/// `x86_64-pc-windows-gnu` cross-check. It cannot be a `const _: () = { assert!(…) }` block
+/// instead: comparing `&str` literals is not const-evaluable on the pinned stable toolchain
+/// (E0658, `PartialEq` is not yet a const trait).
+///
+/// Two folds are deliberate. `FETCH` and `XML_HTTP_REQUEST` both become `"xhr"`, because
+/// adblock-rs has no `Fetch` variant and `$xhr`/`$xmlhttprequest` are the type options that
+/// have to cover `fetch()`. `MANIFEST` is spelled out rather than left in the fallthrough
+/// even though adblock-rs folds `"web_manifest"` into `Other`, so a future adblock-rs that
+/// distinguishes it needs no change here.
+///
+/// Gated `any(windows, test)` rather than `allow(dead_code)`: the only production caller is
+/// the Windows tier, and a cfg gate keeps the lint on for every other platform while still
+/// letting a Linux test reach the table. Same shape as `adblock_engine::enabled()`.
+#[cfg(any(target_os = "windows", test))]
+pub const fn win_resource_type(context: i32) -> &'static str {
+    match context {
+        // The names below are the TAIL of each `COREWEBVIEW2_WEB_RESOURCE_CONTEXT_*`
+        // constant, elided to keep the table readable; `adblock_win`'s own `mod tests`
+        // asserts these same pairs against the real constants.
+        1 => "document",      // DOCUMENT
+        2 => "stylesheet",    // STYLESHEET
+        3 => "image",         // IMAGE
+        4 => "media",         // MEDIA
+        5 => "font",          // FONT
+        6 => "script",        // SCRIPT
+        7 | 8 => "xhr",       // XML_HTTP_REQUEST | FETCH
+        11 => "websocket",    // WEBSOCKET
+        12 => "web_manifest", // MANIFEST
+        14 => "ping",         // PING
+        15 => "csp_report",   // CSP_VIOLATION_REPORT
+        // TEXT_TRACK (9), EVENT_SOURCE (10), SIGNED_EXCHANGE (13), OTHER (16),
+        // ALL (0) and any value a future WebView2 adds have no type option of their own.
+        _ => "other",
+    }
+}
+
 /// Whether `host` is covered by the ad-block allowlist. Reused as the WebRTC per-site
 /// escape hatch: an allowlisted site is "trusted", so its WebRTC isn't filtered by the
 /// shim / native backstops.
@@ -678,5 +731,90 @@ mod tests {
         // deltas relative to `before` rather than exact values.
         assert!(sa > before, "sa advanced past before");
         assert!(sb >= before + 2, "sb advanced past sa");
+    }
+    /// The Windows network tier handed the engine the literal `"other"` for every
+    /// intercepted request, so every `$script` / `$image` / `$stylesheet` / `$xhr` type
+    /// option in EasyList and EasyPrivacy was dead on Windows while working on every other
+    /// platform. `win_resource_type` is the fix; this is the table's own half.
+    ///
+    /// The keys here are plain integers, so on their own they mean nothing: it is
+    /// `adblock_win`'s own `mod tests` that pins each integer to the real
+    /// `COREWEBVIEW2_WEB_RESOURCE_CONTEXT_*` constant. That module only RUNS on the
+    /// Windows CI leg, but the gnu cross-check compiles it, and a `const _: () =`
+    /// compile-time proof is impossible here (E0658: `&str` equality is not yet a
+    /// const trait), which is why it is a test rather than an assertion in a
+    /// constant. These asserts are about the value -> adblock-type half; that module
+    /// is about the value -> WebView2-constant half. Neither is redundant.
+    #[test]
+    fn every_webview2_context_maps_to_the_adblock_type_that_can_match_it() {
+        for (context, expected, name) in [
+            (1, "document", "DOCUMENT"),
+            (2, "stylesheet", "STYLESHEET"),
+            (3, "image", "IMAGE"),
+            (4, "media", "MEDIA"),
+            (5, "font", "FONT"),
+            (6, "script", "SCRIPT"),
+            (7, "xhr", "XML_HTTP_REQUEST"),
+            (8, "xhr", "FETCH"),
+            (11, "websocket", "WEBSOCKET"),
+            (12, "web_manifest", "MANIFEST"),
+            (14, "ping", "PING"),
+            (15, "csp_report", "CSP_VIOLATION_REPORT"),
+            // The four WebView2 contexts adblock-rs has no type option for, plus its own
+            // catch-all. These are the ONLY ones allowed to answer "other".
+            (0, "other", "ALL"),
+            (9, "other", "TEXT_TRACK"),
+            (10, "other", "EVENT_SOURCE"),
+            (13, "other", "SIGNED_EXCHANGE"),
+            (16, "other", "OTHER"),
+        ] {
+            assert_eq!(
+                win_resource_type(context),
+                expected,
+                "WebView2 context {context} ({name}) must map to {expected:?}"
+            );
+        }
+    }
+
+    /// The defect in one assertion: a context a rule CAN name must never fall through to
+    /// `"other"`, because adblock-rs only consults a `$type` option when the request's type
+    /// matches it.
+    #[test]
+    fn no_context_a_filter_can_target_collapses_to_other() {
+        for (context, name) in [
+            (1, "DOCUMENT"),
+            (2, "STYLESHEET"),
+            (3, "IMAGE"),
+            (4, "MEDIA"),
+            (5, "FONT"),
+            (6, "SCRIPT"),
+            (7, "XML_HTTP_REQUEST"),
+            (8, "FETCH"),
+            (11, "WEBSOCKET"),
+            (12, "MANIFEST"),
+            (14, "PING"),
+            (15, "CSP_VIOLATION_REPORT"),
+        ] {
+            assert_ne!(
+                win_resource_type(context),
+                "other",
+                "WebView2 context {context} ({name}) stays typed — a `$type` option in the \
+                 bundled lists can only match a typed request"
+            );
+        }
+    }
+
+    /// A future WebView2 that adds a context, or a corrupt value arriving through COM, must
+    /// answer `other` — the string the pre-fix code sent for everything — rather than
+    /// panic or fall into a neighbouring arm.
+    #[test]
+    fn an_unrecognised_context_is_reported_as_other_rather_than_guessed_at() {
+        for context in [17, 18, 99, -1, i32::MAX, i32::MIN] {
+            assert_eq!(
+                win_resource_type(context),
+                "other",
+                "an unknown WebView2 context {context} must not be mapped to a real type"
+            );
+        }
     }
 }
