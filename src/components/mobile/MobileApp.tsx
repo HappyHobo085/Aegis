@@ -28,6 +28,7 @@ import { useDownloads } from '../../hooks/useDownloads';
 import { usePermissions } from '../../hooks/usePermissions';
 import { useFind } from '../../hooks/useFind';
 import { useZoom } from '../../hooks/useZoom';
+import { ChromeSurfaceProvider, useChromeSurfaceCount } from '../../hooks/useChromeSurfaces';
 import { useMobileTabSync } from '../../hooks/useMobileTabSync';
 import { AdblockShield } from '../AdblockShield';
 import { FindBar } from '../FindBar';
@@ -66,7 +67,22 @@ declare global {
 
 type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | 'tabs' | null;
 
+/** The mobile shell, wrapped in the surface registry.
+ *
+ *  `ChromeSurfaceProvider` has to be an ANCESTOR of everything that calls
+ *  `useChromeSurface`, which means it cannot be a wrapper around just the returned
+ *  JSX — `useChromeSurfaceCount` below runs during `MobileShell`'s own render. So
+ *  the exported component is the provider and the body is the inner one. The
+ *  desktop shell makes the same split via `ChromeSurfaceProvider` in `App.tsx`. */
 export function MobileApp() {
+  return (
+    <ChromeSurfaceProvider>
+      <MobileShell />
+    </ChromeSurfaceProvider>
+  );
+}
+
+function MobileShell() {
   const tabs = useTabs();
   const nav = useNav(tabs.activeId);
   const find = useFind(tabs.activeId);
@@ -131,7 +147,16 @@ export function MobileApp() {
   // WebView sits on top of the chrome WebView, so it must be lowered for the
   // dropdown to be visible (the desktop shell insets by the measured height
   // instead — see useChromePopover; a single WebView has nothing to inset).
-  const overlayOpen = sheet !== null || shieldOpen || addressOpen;
+  //
+  // `surfaceCount` covers everything that registers through `useChromeSurface`
+  // rather than through one of the three states above. Without the
+  // `ChromeSurfaceProvider` mounted below, that registration is a silent no-op and
+  // the surface renders INSIDE the chrome WebView, underneath the native content
+  // WebView: first-run onboarding (a full-screen card whose only button writes the
+  // "don't show this again" key), the permission prompt, and the command palette
+  // were all invisible and untappable on Android.
+  const surfaceCount = useChromeSurfaceCount();
+  const overlayOpen = sheet !== null || shieldOpen || addressOpen || surfaceCount > 0;
   useEffect(() => {
     void aegis.view.setChromeOverlay(tabs.activeId, overlayOpen);
   }, [overlayOpen, tabs.activeId]);

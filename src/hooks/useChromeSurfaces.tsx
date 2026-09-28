@@ -67,10 +67,25 @@ const NOOP_REGISTRY: SurfaceRegistry = {
   openSurfaces: EMPTY_SET,
 };
 
+/** How many full-window surfaces are currently registered. A compositor that has
+ *  to lower the content view (the mobile shell, where the native content WebView is
+ *  stacked ON TOP of the chrome WebView rather than composited beside it) reads this
+ *  instead of hand-maintaining a union of "is X open OR Y open" — the very union that
+ *  let first-run onboarding render unseen and untappable on Android.
+ *
+ *  Returns 0 outside a `ChromeSurfaceProvider`, matching `useChromeSurface`. Unlike
+ *  `useChromeSurfaceRegistry` it does not throw, so a shell that forgets the provider
+ *  degrades to the old behaviour instead of a white screen. */
+export function useChromeSurfaceCount(): number {
+  const ctx = useContext(Ctx);
+  return ctx?.openSurfaces.size ?? 0;
+}
+
 /** Register `id` as an open full-window surface while `active` is true; the effect
  *  cleanup unregisters it (on close or unmount). Idempotent per id.
- *  When called outside a `ChromeSurfaceProvider` (unit tests, mobile shell), this
- *  is a safe no-op — it does not throw. */
+ *  When called outside a `ChromeSurfaceProvider` (unit tests), this is a safe no-op —
+ *  it does not throw. A compositor that needs the real registry (so surfaces lower
+ *  the content view at all) must mount the provider itself. */
 export function useChromeSurface(id: string, active: boolean): void {
   const ctx = useContext(Ctx);
   const { register, unregister } = ctx ?? NOOP_REGISTRY;

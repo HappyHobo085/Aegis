@@ -291,6 +291,7 @@ vi.mock('../../lib/ipcClient', () => ({
 import { aegis } from '../../lib/ipcClient';
 import { MobileApp } from './MobileApp';
 import { subscribeToasts, __resetToasts, type ToastItem } from '../../lib/toast';
+import { ONBOARDING_STORAGE_KEY } from '../Onboarding';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -407,5 +408,36 @@ describe('MobileApp', () => {
     } finally {
       unsubscribe();
     }
+  });
+
+  // The mobile content WebView is a NATIVE view stacked ON TOP of the chrome WebView,
+  // so a full-window surface only becomes visible/tappable once the shell tells the
+  // core to lower it. Surfaces that register through `useChromeSurface` (onboarding,
+  // the permission prompt, the command palette) were silently not lowering it,
+  // because the mobile shell mounted no `ChromeSurfaceProvider`: `useChromeSurface`
+  // falls back to a no-op registry outside one. First-run onboarding was therefore
+  // rendered but invisible, and the button that is the only way past it untappable.
+  //
+  // These drive the REAL Onboarding through the REAL provider rather than stubbing
+  // the count, so they cover the registration AND the provider wiring.
+  it('lowers the content view for a full-window surface that registers itself', async () => {
+    localStorage.removeItem(ONBOARDING_STORAGE_KEY);
+    render(<MobileApp />);
+
+    // A fresh install always shows onboarding (its gate is the storage key).
+    expect(await screen.findByRole('dialog', { name: /welcome|get started/i })).toBeInTheDocument();
+    await waitFor(() =>
+      expect(aegis.view.setChromeOverlay).toHaveBeenCalledWith(PRIMARY_VIEW_ID, true),
+    );
+  });
+
+  it('keeps the content view up when no surface is registered', async () => {
+    // Onboarding completed, so nothing registers and the content WebView stays on top.
+    localStorage.setItem(ONBOARDING_STORAGE_KEY, '1');
+    render(<MobileApp />);
+
+    // Let every effect and subscription settle before concluding nothing opened.
+    await screen.findByRole('navigation', { name: /browser actions/i });
+    expect(aegis.view.setChromeOverlay).not.toHaveBeenCalledWith(PRIMARY_VIEW_ID, true);
   });
 });

@@ -49,10 +49,17 @@ Channel and event names, and all payload/return types, are defined once in
   direct `App` state.
   A new overlay must call `useChromeSurface`, and a test should assert it lowers the
   content (that is what `useChromeSurface` + the `contentLayout` contract mean).
-  `useChromeSurface` is a **no-op** outside a `ChromeSurfaceProvider` (so surfaces
-  also rendered by the mobile shell, which has no provider, are safe); by contrast
-  `useChromeSurfaceRegistry` throws outside a provider — do not call it from a
-  component that may render in the mobile shell.
+  `useChromeSurface` is a **silent no-op** outside a `ChromeSurfaceProvider`, so a
+  surface can register and still leave the content view up; by contrast
+  `useChromeSurfaceRegistry` throws outside a provider. **Both shells now mount the
+  provider** (`App.tsx` wraps the desktop tree; `MobileApp` wraps `MobileShell`), so
+  a surface that renders in either shell lowers the content in both. The mobile shell
+  reads `useChromeSurfaceCount()` rather than composing its own `||` union, because a
+  hand-maintained union is what let first-run onboarding render unseen and untappable
+  on Android: on mobile the content is a NATIVE view stacked ON TOP of the chrome
+  webview, so a registered surface that does not lower it is not merely clipped but
+  covered. If you add a shell, mount the provider — a test that asserts a surface
+  lowers the content is what catches its absence.
 - **Sidebar is a right panel,** not an overlay: it calls `view.setSidebar(active,
 width)` so the page insets from the right and stays visible. Width is remembered
   in localStorage.

@@ -9,6 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **First-run setup on Android could be seen or touched.** The mobile content WebView
+  is a native view stacked on top of the chrome WebView, so a full-window surface is
+  only usable once the shell tells the core to lower it. Surfaces that register through
+  the chrome-surface registry — onboarding, the permission prompt, the command palette —
+  were not lowering it, because the mobile shell mounted no provider and registration
+  silently falls back to a no-op. On a fresh install the onboarding card rendered
+  underneath the native view, leaving the one button that dismisses it untappable.
+
 - **“Clear remembered data” for a site left most of that site’s history on disk.** The
   History panel and the padlock both hold only the most recent 200 rows (of up to 5000), so
   clearing a site you had visited more than 200 times removed only what happened to be
