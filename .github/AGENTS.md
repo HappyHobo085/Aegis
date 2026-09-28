@@ -10,9 +10,10 @@ GitHub Actions workflows and Dependabot config for Aegis.
   - **`web`**: `npm ci` → `npm run typecheck` (scoped `tsc --noEmit` via
     `tsconfig.build.json`, which covers `src`, `shared` and the three config files,
     **including every `*.test.ts(x)` and `src/testFixtures`**, because a test-only
-    type error is a real error. The CI step is still _named_ "Type-check (production
-    source, scoped)", which is now a misnomer and a fourth place that stale claim
-    lived) → `npm run lint` (ESLint flat config, errors fail / warnings are the
+    type error is a real error. The CI step is named "Type-check (whole surface,
+    tests included)" — it was previously "Type-check (production source, scoped)",
+    which was a misnomer, and this line was that claim's last remaining home) →
+    `npm run lint` (ESLint flat config, errors fail / warnings are the
     migration backlog) → `npm run format:check` (Prettier) → `npm run test:coverage`
     (vitest, node project and jsdom, 1697 tests, **with** the v8 report) →
     `npm run coverage:ratchet` → `npm run build:renderer` → `npm run sizecheck` →
