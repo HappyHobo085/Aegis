@@ -9,6 +9,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A closed tab's find-in-page term could reappear in the next tab that reused its
+  id.** Windows' find API cannot hand back the term it was given, so the core keeps a
+  per-tab copy for the change events to report. Closing a tab never cleared that copy,
+  and tab ids are reused after a session restore, so a tab could open with a dead tab's
+  search term already sitting in its find bar. Closing a tab now clears it along with
+  the other per-tab tables.
+
 - **HTTPS-Only could be walked around with a capital letter on Android.**
   `MainActivity.secureUrl()` compared the URL's scheme with exact equality while
   `android.net.Uri` does not normalise its case, so `HTTP://example.com` skipped

@@ -524,6 +524,13 @@ fn forget_closed_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
     // reusing tab then starts with the dead tab's count and reports blocks for a page the
     // user never visited.
     crate::adblock::forget_page_blocked(id);
+    // `find::FIND_QUERIES` is the SIXTH process-global keyed by tab, and the only
+    // one this function did not clear — so a closed tab's search term survived it
+    // and, because ids are reused, was reported into the FindBar of whatever tab
+    // was later given that id (Windows' one-way `ICoreWebView2Find` is why the
+    // term is stored at all). The wrapper is called unconditionally on every
+    // platform; only its body is cfg-gated. See `find::forget_query_on_close`.
+    crate::find::forget_query_on_close(id);
 }
 
 pub fn close_tab(app: &AppHandle, id: u32) {
@@ -1154,6 +1161,13 @@ mod tests {
     /// 6(10): one definition of the side-table forget, so the two close paths cannot
     /// disagree again.
     ///
+    /// This is the WIRING half of the find-session teardown: that the one shared
+    /// close helper calls `find::forget_query_on_close`, which nothing did before
+    /// (the sixth tab-keyed process-global was the only one left un-cleared). The
+    /// hook's own BODY is covered by `find::tests::the_tab_close_hook_removes_the_
+    /// recorded_term`; the split is deliberate, so deleting the call below must turn
+    /// THIS test red and leave that one green.
+    ///
     /// HONEST LIMIT — read this before treating the IPC-arm fix as tested. Both close
     /// writers (`close_tab` and `tabs::dispatch`) are concrete `&AppHandle`
     /// (tauri::Wry), so neither can be driven on the mock runtime: driving them would
@@ -1167,6 +1181,9 @@ mod tests {
         crate::test_support::with_tmp_app(|app| {
             crate::nav::mark_tab_has_content(4242);
             crate::nav::note_tab_loading(4242, true);
+            // The find session is a per-tab table too: a reusing id must not
+            // inherit the closed tab's search term.
+            crate::find::note_query(4242, "needle");
             assert!(
                 crate::nav::tab_has_content(4242),
                 "precondition: content flag set"
@@ -1187,6 +1204,12 @@ mod tests {
                 !crate::nav::tab_is_loading(4242),
                 "a closed id left in the loading set makes reloadOrStop answer Stop \
                  forever on whatever tab is later given that id"
+            );
+            assert_eq!(
+                crate::find::live_query(4242),
+                "",
+                "a closed id left in the find store makes the reusing tab report the \
+                 dead tab's search term into its own FindBar"
             );
         });
     }

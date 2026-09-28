@@ -76,7 +76,16 @@ dotted event name.
   the one users press. It is not tidiness: `nav::tabs_with_content()` and `TABS_LOADING`
   are suppression sets, and `alloc_tab_id` only skips ids still in the registry, so a
   hand-edited `tabs.json` or a restored backup can hand back a free id that a stale flag
-  then suppresses. **A failed `spawn_tab` rolls the tab back**
+  then suppresses. It clears SIX process-global tab-keyed tables —
+  `nav::forget_tab_content`, `nav::forget_tab_loading`,
+  `redirect_guard::clear_tab_actions`, `redirect_guard::clear_chain`,
+  `adblock::forget_page_blocked` and `find::forget_query_on_close` — the last being the
+  only one that was missing, because the find-session store's own doc promised that a tab
+  with no recorded session would report an empty query, and nothing tore the session down
+  on close. The find half is split the same way as everything else here: the hook's BODY is
+  `find::tests::the_tab_close_hook_removes_the_recorded_term` and the WIRING is this
+  function's own test, so deleting the call turns the wiring test red and leaves the body
+  test green. **A failed `spawn_tab` rolls the tab back**
   (`Registry::mark_spawn_failed` / `tabs::on_spawn_failed`, called from both spawn arms):
   `spawn()` used to swallow the error while the row was already `live` and already
   persisted, and `activate` on a live tab is a no-op — so the tab could never be retried
@@ -500,6 +509,16 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     **no term getter**). It lives in `find.rs`, not in the windows-only module, so a
     Linux/macOS CI runner can actually test it; `find_linux` reads `search_text()` off the
     WebKit controller and `find_mac` keeps its own owned query, so neither needs it.
+    **`FIND_QUERIES` is torn down by `tabs::forget_closed_tab`, like the other five
+    tab-keyed tables.** The store is a `Mutex<HashMap<u32, String>>` holding one live term
+    per tab, and nothing deleted an entry on close — so a tab id reused after a session
+    restore (a hand-edited `tabs.json`, a restored backup) inherited the dead tab's term,
+    and `find_win`'s one-way `MatchCountChanged` handler reported it into the reusing tab's
+    FindBar ~120 ms later via `useFind`'s whole-state `setState`, which is exactly the bug
+    the store exists to prevent. `forget_query_on_close(id)` is the seam, and it is
+    `#[cfg(any(windows, test))]` in its BODY — so a **Linux** test can observe the clear —
+    while the CALL is unconditional, which is what keeps the seam alive on a Linux release
+    where `forget_query` is compiled out.
   - `find_linux.rs` — **WebKitFindController** (webkit2gtk): `install(app, label)` wires
     `connect_found_text` + `connect_failed_to_find_text` signals once per tab at spawn
     (called from `nav::spawn_tab`). Real match count via `found-text`; full highlight;

@@ -61,6 +61,28 @@ pub(crate) fn forget_query(id: u32) {
     q.remove(&id);
 }
 
+/// `forget_query`, unconditionally callable, for the ONE close path that exists
+/// on every platform: `tabs::forget_closed_tab`.
+///
+/// Until this existed, closing a tab left its recorded query behind, which
+/// contradicts `live_query`'s own doc ("Empty for a tab with no recorded
+/// session ... instead of resurrecting a stale term"). Ids DO get reused —
+/// `alloc_tab_id` only skips ids still in the registry, so a hand-edited
+/// `tabs.json` or a restored backup can hand back a free one — and on Windows
+/// the reusing tab's `find_win` change handlers then report the DEAD tab's term
+/// into the new tab's FindBar via `useFind`'s whole-state `setState`, which is
+/// the exact failure the store was introduced to prevent.
+///
+/// The body is `cfg(any(windows, test))` so a LINUX test can observe the clear;
+/// the CALL is unconditional, and that call is what keeps this function alive on
+/// a Linux release build (where `forget_query` itself is compiled out).
+pub(crate) fn forget_query_on_close(id: u32) {
+    #[cfg(any(windows, test))]
+    forget_query(id);
+    #[cfg(not(any(windows, test)))]
+    let _ = id;
+}
+
 /// Returns true iff `channel` is one of the four find channels.
 /// AppHandle-free so it can be unit-tested directly.
 #[allow(dead_code)] // pub fn called from platform find modules — lib-crate analysis can't trace cross-platform dispatch
@@ -397,6 +419,10 @@ mod tests {
     /// change event must report is the one `find.start` recorded.
     #[test]
     fn a_change_event_reports_the_query_start_recorded_not_an_empty_one() {
+        // `FIND_QUERIES` is a process global, and `tabs::tests` now primes it
+        // from inside `with_tmp_app` (which holds this lock) to pin the close
+        // path, so every test that touches the store must hold it too.
+        let _guard = crate::test_support::lock();
         note_query(7, "needle");
         assert_eq!(live_query(7), "needle", "an emit must carry the live query");
         // Re-starting replaces, never appends — the store is a snapshot, like the
@@ -409,6 +435,7 @@ mod tests {
     /// `find.close` on a background tab must not disturb the active one.
     #[test]
     fn the_recorded_query_is_per_tab() {
+        let _guard = crate::test_support::lock();
         note_query(1, "alpha");
         note_query(2, "beta");
         assert_eq!(live_query(1), "alpha");
@@ -428,6 +455,48 @@ mod tests {
     /// platform used to emit, not to a stale term from a torn-down session.
     #[test]
     fn a_tab_with_no_find_session_reports_an_empty_query() {
+        let _guard = crate::test_support::lock();
         assert_eq!(live_query(4242), "");
+    }
+
+    /// The BODY of the close hook, i.e. the half that can be wrong on any host:
+    /// it must remove exactly the one tab's recorded term and leave every other
+    /// tab's session alone, and doing it twice (a close requested twice) or for
+    /// an id that never had a session must be harmless.
+    ///
+    /// The store's own doc promises "Empty for a tab with no recorded session
+    /// ... instead of resurrecting a stale term", and before this the promise
+    /// was false for the one route a user cannot trigger twice: ids are reused,
+    /// so a restoring tab inherited the closed tab's term and Windows'
+    /// `MatchCountChanged` (fired ~120 ms after any find activity) pushed it
+    /// into the new tab's FindBar.
+    ///
+    /// The OTHER half — that `tabs::forget_closed_tab`, the one definition both
+    /// close paths share, actually calls this hook — is `tabs::tests`' business,
+    /// and the split is deliberate: deleting the call in `forget_closed_tab`
+    /// must leave THIS test green and turn that one red.
+    #[test]
+    fn the_tab_close_hook_removes_the_recorded_term() {
+        let _guard = crate::test_support::lock();
+        note_query(606, "needle");
+        note_query(607, "other tab");
+        assert_eq!(live_query(606), "needle", "precondition");
+
+        super::forget_query_on_close(606);
+
+        assert_eq!(
+            live_query(606),
+            "",
+            "a closed tab's recorded term must not be inherited by whatever tab \
+             is later given that id"
+        );
+        assert_eq!(
+            live_query(607),
+            "other tab",
+            "closing one tab must not tear down another's find session"
+        );
+        forget_query(606); // idempotent: a close can be requested twice
+        forget_query(99); // an unknown id must not panic
+        forget_query(607);
     }
 }
