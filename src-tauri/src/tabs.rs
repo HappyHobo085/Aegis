@@ -292,7 +292,7 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
             }
             // Unconditional, like the programmatic path: the id is gone from the
             // registry either way, and both side tables are keyed by id.
-            forget_closed_tab(id);
+            forget_closed_tab(app, id);
             if let Some((nid, u)) = out.spawn {
                 // Neighbor respawn: read privateness from the registry (private tabs are
                 // exempt from the idle sweep, so any discarded neighbor is always non-private).
@@ -505,9 +505,25 @@ pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Resul
 /// One definition, called by both writers — the programmatic `close_tab` and the
 /// `tabs.close` IPC arm — because the two used to disagree, and the arm is the
 /// one users actually press.
-fn forget_closed_tab(id: u32) {
+fn forget_closed_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
     crate::nav::forget_tab_content(id);
     crate::nav::forget_tab_loading(id);
+    // Process-global tables keyed by tab. Closing a tab is the only cleanup reachable on
+    // EVERY platform, so it is what bounds them. The real defect is `Chains`: it is written
+    // on BOTH the two-phase (`note_nav`) and single-phase (`block_at_start`) paths but
+    // cleared only on Linux, so on Windows, Android and macOS a closed tab's entry survived
+    // for the process lifetime and `chain_origin` could hand a reusing id another tab's
+    // chain. `NavActions` is Linux-only by construction, so clearing it here is a superset
+    // of the fix — free, and it removes within-tab staleness too.
+    crate::redirect_guard::clear_tab_actions(app, id);
+    crate::redirect_guard::clear_chain(app, id);
+    // `adblock::PAGE_BLOCKED` is the last of the process-global tab-keyed tables, and the
+    // only one nothing ever removed an entry from. It is the INPUT to the shield badge, so
+    // the cost is not just a slow leak: `alloc_tab_id` only skips ids still in the registry,
+    // so a hand-edited `tabs.json` or a restored backup can hand back a reused id, and the
+    // reusing tab then starts with the dead tab's count and reports blocks for a page the
+    // user never visited.
+    crate::adblock::forget_page_blocked(id);
 }
 
 pub fn close_tab(app: &AppHandle, id: u32) {
@@ -527,7 +543,7 @@ pub fn close_tab(app: &AppHandle, id: u32) {
         let private = is_private(app, nid);
         spawn(app, nid, &u, private);
     }
-    forget_closed_tab(id);
+    forget_closed_tab(app, id);
     crate::view::apply_inset(app);
     emit_and_persist(app);
 }
@@ -649,6 +665,69 @@ pub fn start_idle_sweep(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+
+    /// `PAGE_BLOCKED` was the one process-global table in the crate that nothing ever removed
+    /// an entry from, and it is the INPUT to the shield badge. The property that matters is
+    /// not "the map shrinks" but "a tab that comes back with a reused id starts from zero",
+    /// because reuse is reachable: `alloc_tab_id` only skips ids still in the registry, so a
+    /// hand-edited `tabs.json` or a restored backup can hand one back (6(8)).
+    ///
+    /// Seeded through `adblock::note_blocked` — the same writer the Linux request path and
+    /// the Windows WebView2 handler use — not by poking the map.
+    #[test]
+    fn a_reused_tab_id_starts_the_shield_badge_at_zero_not_the_dead_tabs_count() {
+        crate::test_support::with_tmp_app(|app| {
+            // `PAGE_BLOCKED` is a process-global `OnceLock`, so start from a known state —
+            // otherwise this test's result depends on which tests ran before it.
+            crate::adblock::forget_page_blocked(1);
+            for _ in 0..5 {
+                crate::adblock::note_blocked(app, 1);
+            }
+            assert_eq!(
+                crate::adblock::test_page_blocked(1),
+                5,
+                "precondition: the closed tab must have accumulated a count"
+            );
+
+            // Close it, the way the product closes a tab.
+            super::forget_closed_tab(app, 1);
+            assert_eq!(
+                crate::adblock::test_page_blocked(1),
+                0,
+                "a closed tab's per-page count must not survive: a later tab reusing the id \
+                 inherits it, so the shield badge reports blocks for a page never visited"
+            );
+
+            // And the reused id must start from zero, not resume from 5.
+            crate::adblock::note_blocked(app, 1);
+            assert_eq!(
+                crate::adblock::test_page_blocked(1),
+                1,
+                "a tab reusing a closed id must start its badge at zero"
+            );
+        });
+    }
+
+    /// Anti-over-fix: forgetting one tab must not disturb another tab's count. The remover
+    /// is a `remove(&id)`, so this guards against a future `clear()`.
+    #[test]
+    fn forgetting_one_tab_leaves_another_tabs_badge_count_alone() {
+        crate::test_support::with_tmp_app(|app| {
+            crate::adblock::forget_page_blocked(1);
+            crate::adblock::forget_page_blocked(2);
+            crate::adblock::note_blocked(app, 1);
+            crate::adblock::note_blocked(app, 2);
+            crate::adblock::note_blocked(app, 2);
+
+            super::forget_closed_tab(app, 1);
+            assert_eq!(crate::adblock::test_page_blocked(1), 0);
+            assert_eq!(
+                crate::adblock::test_page_blocked(2),
+                2,
+                "another live tab's badge count must be untouched"
+            );
+        });
+    }
     use super::*;
     use crate::test_support::with_tmp_app;
 
@@ -1085,39 +1164,122 @@ mod tests {
     /// function, two call sites, both visible in the diff.
     #[test]
     fn forgetting_a_closed_tab_clears_both_side_tables() {
-        crate::nav::mark_tab_has_content(4242);
-        crate::nav::note_tab_loading(4242, true);
-        assert!(
-            crate::nav::tab_has_content(4242),
-            "precondition: content flag set"
-        );
-        assert!(
-            crate::nav::tab_is_loading(4242),
-            "precondition: loading flag set"
-        );
+        crate::test_support::with_tmp_app(|app| {
+            crate::nav::mark_tab_has_content(4242);
+            crate::nav::note_tab_loading(4242, true);
+            assert!(
+                crate::nav::tab_has_content(4242),
+                "precondition: content flag set"
+            );
+            assert!(
+                crate::nav::tab_is_loading(4242),
+                "precondition: loading flag set"
+            );
 
-        super::forget_closed_tab(4242);
+            super::forget_closed_tab(app, 4242);
 
-        assert!(
-            !crate::nav::tab_has_content(4242),
-            "a closed id left in the content set suppresses the pop-under auto-close \
-             for whatever tab is later given that id"
-        );
-        assert!(
-            !crate::nav::tab_is_loading(4242),
-            "a closed id left in the loading set makes reloadOrStop answer Stop \
-             forever on whatever tab is later given that id"
-        );
+            assert!(
+                !crate::nav::tab_has_content(4242),
+                "a closed id left in the content set suppresses the pop-under auto-close \
+                 for whatever tab is later given that id"
+            );
+            assert!(
+                !crate::nav::tab_is_loading(4242),
+                "a closed id left in the loading set makes reloadOrStop answer Stop \
+                 forever on whatever tab is later given that id"
+            );
+        });
     }
 
     /// Idempotent: a close can be requested twice for the same tab (the IPC arm plus a
     /// sweep, or two clicks), and a forget of an absent id must be a no-op.
     #[test]
     fn forgetting_a_tab_twice_is_harmless() {
-        crate::nav::mark_tab_has_content(4243);
-        super::forget_closed_tab(4243);
-        super::forget_closed_tab(4243);
-        super::forget_closed_tab(999_999);
-        assert!(!crate::nav::tab_has_content(4243));
+        crate::test_support::with_tmp_app(|app| {
+            crate::nav::mark_tab_has_content(4243);
+            super::forget_closed_tab(app, 4243);
+            super::forget_closed_tab(app, 4243);
+            super::forget_closed_tab(app, 999_999);
+            assert!(!crate::nav::tab_has_content(4243));
+        });
+    }
+
+    /// 8(1): closing a tab drops the redirect guard's two per-tab records.
+    ///
+    /// The audit claimed the subframe cleanup was unreachable; it is reachable, but only on
+    /// Linux's top-frame Response path. Reading the WRITERS is what settled the real shape,
+    /// and the claim this test makes is deliberately a SUPERSET of the defect:
+    /// * `Chains` is written on BOTH paths — `block_at_start` (what Windows and Android
+    ///   use) and `note_nav` (Linux) — but cleared only on Linux, so a closed tab's entry
+    ///   survived forever on the other three platforms. That is the real defect.
+    /// * `NavActions` is written SOLELY by `note_nav`, so it is Linux-only and needs no
+    ///   cross-platform cleanup — but forgetting it on close is free and removes a whole
+    ///   class of within-tab staleness, so `forget_closed_tab` does both.
+    ///
+    /// Seeding goes through the SAME public writers production uses (`note_nav`,
+    /// `block_at_start`). An earlier version of this probe seeded with
+    /// `redirect_guard::expect`, whose precondition FAILED and exposed that `expect` only
+    /// writes `PendingNavs` — so the probe was rewritten rather than its assertion weakened.
+    #[test]
+    fn closing_a_tab_drops_its_recorded_navigation_actions_and_chain() {
+        use crate::redirect_guard::{block_at_start, note_nav, Chains, NavActions};
+        crate::test_support::with_tmp_app(|app| {
+            for (tab, target) in [(1u32, "https://a.test/1"), (1, "https://a.test/2")] {
+                note_nav(app, tab, "https://start.test/", target, false, false, true);
+            }
+            note_nav(
+                app,
+                2,
+                "https://start.test/",
+                "https://b.test/1",
+                false,
+                false,
+                true,
+            );
+            // The path Windows and Android take: this is the writer that had no cleanup.
+            block_at_start(
+                app,
+                2,
+                "https://start.test/",
+                "https://b.test/2",
+                false,
+                false,
+            );
+
+            let actions = app.state::<NavActions>();
+            let chains = app.state::<Chains>();
+            {
+                let a = actions.0.lock().unwrap_or_else(|e| e.into_inner());
+                let c = chains.0.lock().unwrap_or_else(|e| e.into_inner());
+                assert!(
+                    a.keys().any(|(t, _)| *t == 1) && a.keys().any(|(t, _)| *t == 2),
+                    "precondition: NavActions must hold entries for two tabs before the close, got {:?}",
+                    a.keys().collect::<Vec<_>>()
+                );
+                assert!(
+                    c.contains_key(&1) && c.contains_key(&2),
+                    "precondition: Chains must hold entries for two tabs before the close"
+                );
+            }
+
+            super::forget_closed_tab(app, 1);
+
+            let a = actions.0.lock().unwrap_or_else(|e| e.into_inner());
+            let c = chains.0.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(
+                !a.keys().any(|(t, _)| *t == 1),
+                "a closed tab left in NavActions keeps answering for a navigation target \
+                 that no longer exists, and a later tab reusing the id inherits it"
+            );
+            assert!(
+                !c.contains_key(&1),
+                "a closed tab left in Chains is the real defect: chain_origin would return a \
+                 chain belonging to an already-closed tab, for any tab that reuses the id"
+            );
+            assert!(
+                a.keys().any(|(t, _)| *t == 2) && c.contains_key(&2),
+                "closing one tab must not touch another tab's records"
+            );
+        });
     }
 }

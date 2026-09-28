@@ -258,7 +258,13 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   - A level selector (`off` / `standard` / `strict`) with explanatory copy. The UI copy
     never claims engine-level or Brave-parity farbling — it says "add noise" and notes the
     opt-in / detectable nature. `standard` is described as perturbing canvas/audio/navigator;
-    `strict` adds WebGL.
+    `strict` adds WebGL. **The copy states the PER-TAB seed, not "each session":** the seed
+    is baked in when a tab is created, so a level change only reaches tabs opened or
+    reloaded afterwards and an already-open tab keeps the seed it was given. This is not
+    optional polish — `src-tauri/AGENTS.md` gotcha 21(c) says "document it in any UI that
+    toggles these settings", and the copy previously said the opposite, so a user changing
+    the level mid-session would conclude the setting was broken. A test asserts the
+    per-tab wording is present and that "regenerated each session" is GONE.
   - A per-site allowlist manager (desktop only, rendered when `level !== 'off'`): add the
     current browsing host, remove individual hosts, clear all. Allowlisted hosts receive no
     farble shim — the fp-allowlist is separate from the ad-block allowlist.
@@ -384,6 +390,35 @@ now?)` (`just now` → `12 min ago` → `3 h ago` → `Yesterday, 14:32` → `Tu
   that is deliberate:** a dotless `wiki:8443` is shape-identical to `javascript:1` /
   `data:0` / `tel:911`, and there is no way to tell them apart without a registry of every
   registered scheme — so refusal is fail-safe and a test pins it.
+- **`lib/url.ts` — `hostCovered(allowlist, host)` is the ONE place the renderer decides
+  what an allowlist entry covers, and it mirrors `adblock::host_covered` row for row**
+  (exact match, or the host ends with the entry preceded by a `.`; `notexample.com` is
+  NOT covered by `example.com`, and `example.com.evil.test` is NOT covered by
+  `example.com`). **This helper exists because three copies of that rule had already
+  drifted**, all three of them EXACT-match `Array.includes`: the ad-block engine's
+  `HashSet`, `protectionSummary`'s `fingerprintAllowed`, and `AdblockShield`'s own
+  `state.allowlistedHosts.includes(host)`. So allowlisting `a.com` exempted `www.a.com`
+  in the core while the badges reported the page as fully protected — a privacy badge
+  disagreeing with the privacy machinery. `url.test.ts` carries a deliberate scope table
+  mirroring the Rust test case for case; **if the core's rule changes, change it here in
+  the same commit and re-derive both tables.**
+- **The badges must not overstate protection.** `protectionSummary` takes `webrtc:
+WebrtcExemptState` as a **REQUIRED** option (an optional field with a default would fail
+  OPEN to "not exempt" for any caller that forgot it — which is exactly the bug class
+  being fixed; making it required broke 14 test call sites, and that churn is the point).
+  `AdblockShield`'s WebRTC row checks the exemption FIRST and reads `Off here` / not-good,
+  mirroring the fingerprint row's `Allowed here`. A badge is a claim about what the core
+  did; when the core changes, the badge must change with it, and a test must say so.
+- **Ad-blocking counts say "caught", never "blocked".** The per-platform semantics differ
+  by design: on Windows and Android the number IS requests the tier stopped, but on Linux
+  the count is fed by a signal that fires only for requests the declarative content filter
+  ALLOWED — requests it stops outright are cancelled before that signal — so the Linux
+  number is a **lower bound**. `AdblockShield` therefore says "Ads caught here" / "Ads
+  caught this session" (all three strings: the two popover lines AND the `aria-label`) and
+  explains the per-platform difference in a popover note. Four pre-existing tests asserted
+  the old "blocked" wording, i.e. they encoded the lie; when a fix corrects a user-facing
+  string, expect the tests to be asserting the old string and treat that as evidence about
+  the test, not a reason to weaken the fix.
 - **List-panel row anatomy (History / Saved / Downloads).** Each row is
   `title` + a **meta line** = `host` + a right-aligned timestamp, and the full URL is
   _never_ printed — it is long, redundant with the title, and eats the width the host

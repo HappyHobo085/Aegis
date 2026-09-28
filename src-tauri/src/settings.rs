@@ -2,6 +2,11 @@
 //! a single config object doesn't need a DB. Lists (favorites/history/…) get a
 //! real store in Phase 2; settings staying JSON is fine and keeps this contained.
 use std::path::PathBuf;
+// `AtomicBool` is only used by the Android mirror, so it carries the SAME cfg the global does.
+// Gated rather than `allow(dead_code)`d because the absence of a reader off Android is the
+// truth, and because CI injects `-D warnings` from outside the repo.
+#[cfg(any(target_os = "android", test))]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::RwLock;
 
@@ -83,6 +88,50 @@ pub fn all<R: Runtime>(app: &AppHandle<R>) -> Value {
     load(app)
 }
 
+/// Android-only: the HTTPS-Only policy the JNI getter reads. Mirrors the stored
+/// `httpsOnly` setting so `MainActivity.secureUrl` (which has no `AppHandle`) can honour
+/// the user's choice instead of hardcoding the upgrade.
+///
+/// **`true` is the fail-safe default, deliberately.** The desktop reader
+/// ([`https_only`]) also defaults to `true` when the key is absent, and this global has a
+/// strictly worse failure mode: a missed or failed boot push, or a JNI call that cannot
+/// ask, would leave Android either upgrading plain-HTTP intranet hosts the user explicitly
+/// asked it not to (if `false`) or — far worse — silently downgrading the HTTPS-Only
+/// protection the user relies on (if the default were `false`). A policy check that
+/// cannot be evaluated must keep enforcing.
+///
+/// An `AtomicBool` rather than farble's `RwLock<Vec<String>>`: there is no collection to
+/// guard and no lock to take on a per-navigation path.
+/// The value [`ANDROID_HTTPS_ONLY`] starts at, and the value a failed JNI call falls back to.
+///
+/// Named so it can be ASSERTED rather than being a bare literal twice: a future edit that
+/// flips one and not the other is exactly the kind of drift that quietly turns a
+/// protection off. The test asserts this constant, because a shared-process test binary
+/// cannot observe the live global's initial value — a sibling test may already have pushed
+/// to it.
+#[cfg(any(target_os = "android", test))]
+const HTTPS_ONLY_FAIL_SAFE: bool = true;
+
+#[cfg(any(target_os = "android", test))]
+static ANDROID_HTTPS_ONLY: AtomicBool = AtomicBool::new(HTTPS_ONLY_FAIL_SAFE);
+
+/// Push the stored HTTPS-Only policy into the Android JNI global.
+///
+/// Called from [`write`] — the single low-level writer, which every path funnels through
+/// (`settings.set`, an imported `data.import` bundle, and the synced-apply path) — and once
+/// at boot from `lib.rs` next to `webrtc_shim::note_policy`, because the value can already
+/// be on disk before any process starts.
+#[cfg(any(target_os = "android", test))]
+pub fn note_https_only(on: bool) {
+    ANDROID_HTTPS_ONLY.store(on, Ordering::Relaxed);
+}
+
+/// Whether Android should upgrade `http:` navigations to `https:`, for the JNI getter.
+#[cfg(any(target_os = "android", test))]
+pub fn android_https_only() -> bool {
+    ANDROID_HTTPS_ONLY.load(Ordering::Relaxed)
+}
+
 /// Overwrite the settings file (for data import). Durable (atomic temp→rename + .bak).
 pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) {
     if let Some(p) = store_path(app) {
@@ -91,6 +140,11 @@ pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) {
             eprintln!("[aegis] failed to persist settings: {e}");
         }
     }
+    // Mirror the policy into the Android JNI global on every write. See the type's doc for
+    // why this is the ONE place to hook: `write` is the single low-level writer, so a
+    // local edit, an imported bundle and a synced record all refresh the getter.
+    #[cfg(any(target_os = "android", test))]
+    note_https_only(https_only(app));
     // The file changed — drop the cache so getters re-read the new values.
     invalidate_cache(app);
 }
@@ -105,8 +159,11 @@ pub fn download_dir<R: Runtime>(app: &AppHandle<R>) -> String {
 }
 
 /// Whether HTTPS-Only upgrading is on (default true).
-#[cfg_attr(target_os = "android", allow(dead_code))]
-pub fn https_only(app: &AppHandle) -> bool {
+///
+/// Generic over `R` so the Android mirror in [`write`] can read it on any runtime. It was
+/// concrete-`&AppHandle` before, which is why it carried a cfg-scoped `allow(dead_code)` for
+/// Android while the policy was in fact read on every platform — just never from a test.
+pub fn https_only<R: Runtime>(app: &AppHandle<R>) -> bool {
     load(app)
         .get("httpsOnly")
         .and_then(Value::as_bool)
@@ -128,14 +185,48 @@ pub fn sync_vault<R: Runtime>(app: &AppHandle<R>) -> bool {
         .unwrap_or(false)
 }
 
+/// Every accepted `webrtcPolicy` value, in one place.
+///
+/// Shared by the `settings.set` validator and by [`webrtc_policy`]'s clamp. Two
+/// lists is how `file:` reached `tabs.json` in the first place, and it is why
+/// `LOCAL_ONLY_KEYS` needs a test that asserts its exact membership.
+pub const WEBRTC_POLICIES: &[&str] = &["default", "public-only", "disable"];
+
 /// The WebRTC IP-leak policy: "default" | "public-only" | "disable" (default
 /// "public-only"). Single source for the shim builder + the native backstops.
+///
+/// **Clamped, deliberately, in the fail-safe direction.** `validate_setting`
+/// rejects an unknown value for a local `settings.set`, but a value can also
+/// arrive through an imported `data.import` bundle or a SYNCED settings record,
+/// and either writes the store directly. Every consumer of this function fails
+/// OPEN on a value it does not recognise:
+///
+/// * `webrtc_shim::shim_for_inner` returns `""` — no shim at all, so the page
+///   learns the real local IPs;
+/// * the Windows Chromium `--force-webrtc-ip-handling-policy` arg is omitted,
+///   leaving Chromium's default policy, which also leaks;
+/// * the WebKitGTK backstop only enforces `disable`, so anything else leaves
+///   WebKit's own WebRTC on.
+///
+/// So an unrecognised stored value silently switched the IP-leak defence OFF on
+/// every platform, and a single record on any device holding the account data
+/// key was enough to do it on all of them. `"public-only"` is the clamp target
+/// because it is the app's own default AND the protective tier; `"default"` is a
+/// documented deliberate opt-out, so it must stay distinguishable from "corrupt"
+/// — hence the membership test against [`WEBRTC_POLICIES`] rather than a blanket
+/// "anything not public-only or disable is public-only".
 pub fn webrtc_policy<R: Runtime>(app: &AppHandle<R>) -> String {
-    load(app)
+    let stored = load(app);
+    let raw = stored
         .get("webrtcPolicy")
         .and_then(Value::as_str)
-        .unwrap_or("public-only")
-        .to_string()
+        .unwrap_or("public-only");
+    if WEBRTC_POLICIES.contains(&raw) {
+        raw.to_string()
+    } else {
+        eprintln!("[aegis-settings] unrecognised webrtcPolicy {raw:?}; using \"public-only\"");
+        "public-only".to_string()
+    }
 }
 
 /// The anti-fingerprint level: `"off"` (default, opt-in) | `"standard"` | `"strict"`.
@@ -719,7 +810,7 @@ pub(crate) fn validate_setting(key: &str, v: &Value) -> Result<(), String> {
         }
         "themeMode" => one_of(v, &["system", "dark", "light"], "themeMode")?,
         "antiFingerprint" => one_of(v, &["off", "standard", "strict"], "antiFingerprint")?,
-        "webrtcPolicy" => one_of(v, &["default", "public-only", "disable"], "webrtcPolicy")?,
+        "webrtcPolicy" => one_of(v, WEBRTC_POLICIES, "webrtcPolicy")?,
         "httpsOnly" => boolean(v, "httpsOnly")?,
         "hideChromeByDefault" => boolean(v, "hideChromeByDefault")?,
         "syncVault" => boolean(v, "syncVault")?,
@@ -795,6 +886,46 @@ pub(crate) fn validate_setting(key: &str, v: &Value) -> Result<(), String> {
 #[cfg(test)]
 pub(crate) fn validate_setting_for_test(key: &str, v: &Value) -> Result<(), String> {
     validate_setting(key, v)
+}
+
+/// Android JNI: `NativeSettings.httpsOnly()` — the HTTPS-Only policy for the navigation
+/// chokepoint.
+///
+/// `MainActivity.secureUrl` is the single place every Android navigation decision passes
+/// through, and it has no `AppHandle`, so it reads the [`ANDROID_HTTPS_ONLY`] global rather
+/// than the settings file. Returns `true` (keep upgrading) if anything at all goes wrong:
+/// a JNI getter that cannot answer must not be the reason a plain-HTTP page loads where the
+/// user's policy said it should not.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+// `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol name
+// means two libraries could export the same symbol, which the linker leaves undefined. That
+// is inherent to every JNI entry point (Kotlin resolves the symbol by name), so it is allowed
+// here explicitly rather than by the module scope — `deny(unsafe_code)` in lib.rs would
+// otherwise break every Android build.
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeSettings_httpsOnly(
+    _env: jni::JNIEnv<'_>,
+    _this: jni::objects::JObject<'_>,
+) -> jni::sys::jboolean {
+    // Defensive guard: a panic must not unwind across the FFI boundary into Java, which is UB.
+    // The body reads one atomic, so this cannot panic in practice — the guard is here because
+    // "it cannot panic today" is exactly the claim that stops being true after the next edit,
+    // and an FFI abort is not a recoverable failure mode. Uses the crate's shared `ffi_guard`,
+    // the same one every other JNI export uses.
+    //
+    // On a panic the fallback is the PROTECTIVE value, not `false`: a getter that cannot read
+    // policy must keep upgrading, or it silently drops HTTPS-Only protection for every later
+    // navigation. (The ad-block JNI getters fail OPEN instead — there the protective direction
+    // is to not block. Deliberately opposite, because the two defences protect against
+    // different things.)
+    match crate::ffi_guard(android_https_only) {
+        Some(on) => on as jni::sys::jboolean,
+        None => {
+            eprintln!("[aegis-settings] httpsOnly getter panicked; keeping HTTPS-Only on");
+            HTTPS_ONLY_FAIL_SAFE as jni::sys::jboolean
+        }
+    }
 }
 
 /// Apply a `data.import` bundle's `settings` object.
@@ -1279,7 +1410,133 @@ mod tests {
         });
     }
 
+    /// A stored `webrtcPolicy` the validator would REJECT can still reach the reader: an
+    /// imported `data.import` bundle and a synced settings record both write the store
+    /// directly, and the synced path is reachable by any device holding the account's data
+    /// key. `webrtc_shim::shim_for_inner` answers `""` — no shim at all — for any policy it
+    /// does not recognise, so an unrecognised value silently switches the WebRTC IP-leak
+    /// defence OFF. Asserted on the SHIM rather than on the reader's return value, because
+    /// the shim is the thing the whole defence rests on and the reader is only a means.
     #[test]
+    fn a_corrupt_webrtc_policy_must_still_produce_a_shim() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            for corrupt in [
+                "Public-Only", // case-mangled
+                "PUBLIC-ONLY",
+                "public_only",
+                "strict", // a REAL farble level, not a WebRTC one
+                "none",
+                " off",
+                "", // empty, which is also what a non-string reads as
+            ] {
+                super::write(app, &json!({ "webrtcPolicy": corrupt }));
+                let policy = super::webrtc_policy(app);
+                let shim = crate::webrtc_shim::shim_for(&policy, false);
+                assert!(
+                    !shim.is_empty(),
+                    "a stored webrtcPolicy of {corrupt:?} must not switch the WebRTC \
+                     IP-leak defence off: the reader clamped it to {policy:?} and the shim \
+                     builder returned nothing, so a page would learn the real local IPs"
+                );
+            }
+        });
+    }
+
+    /// The clamp must not flatten a legitimate choice: both protective policies keep their own
+    /// distinct artifact, and a valid stored value reaches the reader verbatim.
+    #[test]
+    fn a_valid_webrtc_policy_still_reaches_the_shim_unchanged() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            for (stored, expect_differs_from) in
+                [("public-only", "disable"), ("disable", "public-only")]
+            {
+                super::write(app, &json!({ "webrtcPolicy": stored }));
+                let policy = super::webrtc_policy(app);
+                assert_eq!(policy, stored, "a valid policy must not be rewritten");
+                let a = crate::webrtc_shim::shim_for(&policy, false);
+                assert!(!a.is_empty(), "{stored} must produce its shim");
+                let b = crate::webrtc_shim::shim_for(expect_differs_from, false);
+                assert_ne!(
+                    a, b,
+                    "{stored} and {expect_differs_from} must stay distinct"
+                );
+            }
+        });
+    }
+
+    /// `"default"` is a documented, deliberate opt-out ("do not interfere"), and the shim
+    /// builder deliberately answers `""` for it. The clamp must keep that meaning: a clamp
+    /// that mapped everything unrecognised to `"public-only"` would be correct, but one that
+    /// simply forced every value to a protection level would quietly remove the user's only
+    /// way to opt out. This is the test that stops the fix from over-reaching.
+    #[test]
+    fn the_default_webrtc_policy_still_means_do_not_interfere() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            super::write(app, &json!({ "webrtcPolicy": "default" }));
+            assert_eq!(
+                super::webrtc_policy(app),
+                "default",
+                "the explicit opt-out must survive the clamp"
+            );
+            assert!(
+                crate::webrtc_shim::shim_for("default", false).is_empty(),
+                "\"default\" means Aegic does not touch WebRTC, so no shim is correct — and \
+                 this must stay true, or the clamp has quietly removed the opt-out"
+            );
+        });
+    }
+
+    /// 8(7): the Rust half of the Android `httpsOnly` parity fix.
+    ///
+    /// `MainActivity.secureUrl` has no `AppHandle`, so the policy is mirrored into
+    /// `ANDROID_HTTPS_ONLY` and read by a JNI getter. The observable property that matters is
+    /// the FAIL-SAFE one: if the mirror is never seeded, or a JNI call cannot ask, HTTPS-Only
+    /// must still be ON. Before the fix the Android upgrade was unconditional
+    /// (`if (uri.scheme == "http" && !localhost)`), so a user who turned the setting OFF
+    /// because they have a plain-HTTP intranet host had that host rewritten to https and the
+    /// site simply broke.
+    #[test]
+    fn the_android_mirror_follows_the_stored_setting_in_both_directions() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            // Off must reach the mirror: this is the case the fix exists for.
+            super::write(app, &json!({ "httpsOnly": false }));
+            assert!(
+                !android_https_only(),
+                "a user who turned HTTPS-Only OFF must have that reach the Android mirror, or \
+                 their plain-HTTP intranet host is rewritten to https and the site breaks"
+            );
+            // And back on: a one-way latch would be a different bug.
+            super::write(app, &json!({ "httpsOnly": true }));
+            assert!(
+                android_https_only(),
+                "turning HTTPS-Only back on must reach the mirror too"
+            );
+        });
+    }
+
+    /// The fail-safe default is asserted as a CONSTANT, not as the live global, and that is a
+    /// deliberate limitation rather than laziness: a test binary shares one process, so any
+    /// sibling test that has already pushed to the global makes the live initial value
+    /// unobservable. Asserting the named initialiser is what the JNI getter's failure path
+    /// reads, so it is the value that is actually load-bearing.
+    #[test]
+    fn a_lost_push_or_a_failed_jni_call_leaves_https_only_on() {
+        assert!(
+            std::hint::black_box(HTTPS_ONLY_FAIL_SAFE),
+            "the fail-safe must be ON: a missed boot push or a JNI call that cannot ask must \
+             never silently drop HTTPS-Only protection"
+        );
+        // The same default is what `note_https_only`/`android_https_only` round-trip, so a
+        // push of the fail-safe value is observably the fail-safe value.
+        note_https_only(HTTPS_ONLY_FAIL_SAFE);
+        assert!(android_https_only());
+    }
+    #[test]
+
     fn merge_projection_is_per_key_lww() {
         let local = vec![
             rec("httpsOnly", 5, json!(false)),

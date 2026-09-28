@@ -9,6 +9,56 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A closed tab left its anti-malvertising chain behind, on three of four platforms.**
+  `redirect_guard::Chains` is written by both the two-phase path (Linux) and the
+  single-phase `block_at_start` (Windows/Android), but it was only ever cleared from the
+  Linux top-frame Response handler. So a closed tab's entry survived — a small leak with
+  one real consequence, because a hand-edited `tabs.json` or a restored backup can hand
+  back a reused tab id, and the reusing tab then inherited a chain belonging to a tab that
+  no longer exists. `tabs::forget_closed_tab` now drops both per-tab redirect-guard
+  records on every platform, and the two `allow(dead_code)` attributes that were
+  suppressing the cleanup on Android and Windows are gone.
+- **A reusing tab id inherited the dead tab's block count, so the shield badge reported
+  blocks for a page the user never visited.** `adblock::PAGE_BLOCKED` had no remover at
+  all: unlike every other tab-keyed process-global table, nothing ever dropped an entry
+  for a closed tab. It is now cleared on close, which also matters because id allocation
+  only skips ids still in the registry, so a restored backup can legitimately reuse one.
+- **A corrupt `webrtcPolicy` silently switched the WebRTC IP-leak defence OFF.** The
+  setting reader defaulted only when the value was _absent_ and otherwise returned the
+  stored string verbatim, and every consumer fails OPEN on an unrecognised value: the shim
+  builder returns nothing at all, the Windows `--force-webrtc-ip-handling-policy` argument
+  is omitted (leaving Chromium's default policy, which leaks local IPs), and the WebKitGTK
+  backstop only enforces `disable`. A corrupt value could arrive through an imported
+  bundle or a synced settings record. The reader now clamps anything unrecognised to
+  `public-only` — the app's own default AND the protective tier — and shares one list with
+  the validator so the two cannot drift. `default` stays a distinguishable opt-out.
+- **HTTPS-Only was hardcoded ON on Android, breaking the plain-HTTP intranet hosts the
+  setting exists to allow.** A user who turned `httpsOnly` off had their intranet host
+  rewritten to `https://` on Android and the site simply stopped loading, with nothing in
+  the UI saying Android was stricter — the Kotlin comment even read "matches the desktop
+  default-on", as if the default were the policy. Android now reads the setting through a
+  Rust mirror that is seeded at boot and refreshed on every settings write, and the
+  getter fails TOWARDS upgrading if it cannot ask.
+- **The shield badge said "Blocked here" for a number that is not requests we blocked.**
+  On Linux the count is fed by a signal that fires only for requests the declarative
+  content filter ALLOWED; the requests the filter stops outright are cancelled before
+  that signal and are never counted, so the number is a lower bound. It is now "Ads
+  caught here", the one word true on all three platforms, with the per-platform
+  difference explained in the popover.
+- **The farbling UI told the user a reload was unnecessary when a reload is exactly what
+  is needed.** The anti-fingerprinting copy said the noise was "regenerated each
+  session"; the seed is in fact baked in per tab, so a level change only reaches newly
+  opened or reloaded tabs and an open tab keeps the seed it was born with. A user
+  changing the level mid-session would conclude the setting was broken.
+- **The privacy badges disagreed with the privacy machinery.** The shield badge reported
+  the WebRTC policy but not the per-host exemption, so a site the user had exempted —
+  exactly the site a script can read real local IPs from — showed "WebRTC IP protection:
+  Public only" in green. Both badges also re-implemented the allowlist scope rule with an
+  exact `Array.includes`, while the core treats a listed host as covering its subdomains,
+  so allowlisting a domain reported its subdomains as fully protected. One
+  `hostCovered` helper in `lib/url.ts` now mirrors `adblock::host_covered`, and the
+  exemption is required rather than defaulted so a caller cannot forget it and silently
+  report "not exempt".
 - **A sync record could turn the WebRTC IP-leak defence off, on every device, silently.**
   The per-site WebRTC escape hatch reused the AD-BLOCK allowlist, and that list is in
   `sync_stores::SYNCABLE`. Every synced setting/store is writable by any device holding

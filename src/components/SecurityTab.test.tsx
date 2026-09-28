@@ -85,6 +85,19 @@ describe('SecurityTab', () => {
     expect(removeException).toHaveBeenCalledWith('neverssl.com');
   });
 
+  /**
+   * The farbling seed is generated per TAB SPAWN, not per session: the Rust side
+   * bakes a fresh seed into the document-start script for each newly created or
+   * reloaded tab. So changing the level mid-session leaves every already-open tab
+   * on its old seed — and the UI used to claim "regenerated each session", which
+   * tells the user a reload is unnecessary when a reload is exactly what is needed.
+   */
+  it('states the per-spawn limit, not a per-session one', () => {
+    renderSecurityTab();
+    expect(screen.getByText(/only (takes effect|applies) (on|in)/i)).toBeInTheDocument();
+    expect(screen.queryByText(/regenerated each session/i)).toBeNull();
+  });
+
   // Anti-fingerprinting section
 
   it('renders anti-fingerprinting level select with value from settings', () => {
@@ -179,7 +192,13 @@ describe('SecurityTab', () => {
     expect(screen.queryByText(/per frame origin/i)).not.toBeInTheDocument();
     // Plain-language explanation present.
     expect(screen.getByText(/randomized noise/i)).toBeInTheDocument();
-    expect(screen.getByText(/regenerated each session/i)).toBeInTheDocument();
+    // The seed is per-SPAWN (per tab), not per session. This assertion was
+    // `getByText(/regenerated each session/i)`, which asserted the copy was TRUE when
+    // it was false: the seed is baked in when a tab is created, so a level change does
+    // not reach already-open tabs. It told the user no reload was needed when a reload
+    // is exactly what is needed. It is now the drift guard for the honest wording.
+    expect(screen.getByText(/only takes effect in tabs/i)).toBeInTheDocument();
+    expect(screen.queryByText(/regenerated each session/i)).toBeNull();
   });
 });
 

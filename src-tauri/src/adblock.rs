@@ -55,6 +55,40 @@ fn active_page_blocked<R: Runtime>(app: &AppHandle<R>) -> u32 {
         .unwrap_or(0)
 }
 
+/// Test-only reader for one tab's per-page count, so the close path can be asserted
+/// rather than assumed. `#[cfg(test)]` because production reads it through
+/// `active_page_blocked` (the active tab only) — the same shape as
+/// `nav::tab_has_content`, added for the same reason.
+#[cfg(test)]
+pub fn test_page_blocked(id: u32) -> u32 {
+    page_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Drop tab `id`'s per-page count entirely, rather than zeroing it.
+///
+/// `zero_page` is a RESET (the same tab navigated again); this is a REMOVAL, because the
+/// tab is gone. Without it `PAGE_BLOCKED` is the one process-global table in the crate that
+/// nothing ever removes an entry from, so it grows for the process lifetime — and, worse, a
+/// REUSED id inherits the dead tab's count. Reuse is reachable: 6(8) established that a
+/// hand-edited `tabs.json` or a restored backup can hand back an id that is not in the
+/// registry, because allocation only skips ids still present. The shield badge reads
+/// `active_page_blocked`, so a new tab would report blocks for a page the user never
+/// visited — the badge reporting something untrue.
+///
+/// Called from `tabs::forget_closed_tab`, the single definition both close paths already
+/// use, so this is cleaned on every platform by construction.
+pub fn forget_page_blocked(id: u32) {
+    page_map()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id);
+}
+
 /// Pure counter update for one blocked subresource on tab `id`: bumps the monotonic
 /// session total and the tab's per-page count, returning `(session, page)`. Split out
 /// from `note_blocked` so the accumulation logic is unit-testable without a Tauri

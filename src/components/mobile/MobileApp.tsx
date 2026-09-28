@@ -178,6 +178,7 @@ export function MobileApp() {
     activeTab,
     settings: settings.settings,
     fingerprint: fingerprint.state,
+    webrtc: webrtcExempt.state,
     proxy: proxy.state,
     host,
   });

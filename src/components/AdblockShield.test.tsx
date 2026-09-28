@@ -3,6 +3,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { AdblockState } from '../../shared/types';
+import type { ProtectionSummary } from '../lib/protectionSummary';
 import { AdblockShield } from './AdblockShield';
 
 const baseState: AdblockState = {
@@ -30,7 +31,7 @@ describe('AdblockShield', () => {
   it('folds the page count into the button accessible name when > 0', () => {
     render(<AdblockShield {...props({ page: 12 })} />);
     expect(
-      screen.getByRole('button', { name: /ad blocking, 12 blocked on this page/i }),
+      screen.getByRole('button', { name: /ad blocking, 12 ads caught on this page/i }),
     ).toBeInTheDocument();
   });
 
@@ -67,7 +68,7 @@ describe('AdblockShield', () => {
     render(<AdblockShield {...props()} />);
     await userEvent.click(screen.getByRole('button', { name: /^ad blocking/i }));
     const dialog = screen.getByRole('dialog');
-    await userEvent.click(within(dialog).getByText(/blocked here/i));
+    await userEvent.click(within(dialog).getByText(/ads caught here:/i));
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
@@ -102,11 +103,82 @@ describe('AdblockShield', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
   });
 
+  // The WebRTC row used to report the page's POLICY and nothing about whether that
+  // policy actually applied. For a host on the per-site WebRTC exemption list no shim
+  // is injected and the native backstops are skipped, so the row showed
+  // "WebRTC IP protection: Public only" in GREEN for exactly the page a script can
+  // read the machine's real local IPs from. The badge is the one place the user looks
+  // to answer "am I protected here?", so it has to know about the exemption.
+  describe('WebRTC row', () => {
+    const protection = (over: Partial<ProtectionSummary> = {}): ProtectionSummary =>
+      ({
+        privateMode: false,
+        httpsOnly: true,
+        webrtcPolicy: 'public-only',
+        webrtcExempt: false,
+        fingerprintLevel: 'standard',
+        fingerprintAllowed: false,
+        proxyActive: false,
+        proxyUri: null,
+        ...over,
+      }) as ProtectionSummary;
+
+    // The row is `div.adblock-shield__protection-row` holding an icon span (which
+    // carries the `--good` class), a label span and a value span. So the VALUE is a
+    // SIBLING of the label, not the label's own text — reading `label.textContent`
+    // would only ever yield "WebRTC IP protection" and pass vacuously.
+    const openWebrtcRow = async (
+      p: ProtectionSummary,
+    ): Promise<{ value: string; row: HTMLElement }> => {
+      render(<AdblockShield {...props({ protection: p })} />);
+      await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+      const label = within(screen.getByRole('dialog')).getByText(/webrtc ip protection/i);
+      const row = label.parentElement as HTMLElement;
+      const value = row.querySelector('.adblock-shield__protection-value')?.textContent ?? '';
+      return { value, row };
+    };
+
+    it('reports an exempt host as unprotected, not as the policy says', async () => {
+      const { value } = await openWebrtcRow(protection({ webrtcExempt: true }));
+      expect(value).toBe('Off here');
+    });
+
+    // The anti-over-fix halves, each in its OWN `it`: `openWebrtcRow` calls `render`,
+    // so calling it twice in one test leaves two shields mounted and every
+    // `getByText` after the first becomes an ambiguous match. (This is the second
+    // time this session that mistake produced a failure I had to diagnose as my own
+    // rather than as a defect.)
+    it('still reports the real policy for a host that is NOT exempt', async () => {
+      // The exemption must not swallow the policy display, or every page would read
+      // "Off here".
+      const { value } = await openWebrtcRow(protection({ webrtcExempt: false }));
+      expect(value).toBe('Public only');
+    });
+
+    it('still reports "Blocked" for the disable policy on a non-exempt host', async () => {
+      const { value } = await openWebrtcRow(
+        protection({ webrtcPolicy: 'disable', webrtcExempt: false }),
+      );
+      expect(value).toBe('Blocked');
+    });
+
+    it('marks an exempt host as NOT good, so the shield shows no green tick', async () => {
+      const { row } = await openWebrtcRow(protection({ webrtcExempt: true }));
+      expect(row.querySelector('.adblock-shield__protection-icon--good')).toBeNull();
+    });
+
+    it('still marks a non-exempt protected host as good', async () => {
+      // The other anti-over-fix half: without it, a blanket removal of the tick passes.
+      const { row } = await openWebrtcRow(protection({ webrtcExempt: false }));
+      expect(row.querySelector('.adblock-shield__protection-icon--good')).not.toBeNull();
+    });
+  });
+
   it('shows page and session counts in the popover', async () => {
     render(<AdblockShield {...props()} />);
     await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
     const dialog = screen.getByRole('dialog');
-    expect(within(dialog).getByText(/blocked here/i)).toHaveTextContent('12');
+    expect(within(dialog).getByText(/ads caught here:/i)).toHaveTextContent('12');
     expect(within(dialog).getByText(/this session/i)).toHaveTextContent('487');
   });
 
@@ -166,5 +238,45 @@ describe('AdblockShield', () => {
     render(<AdblockShield {...props({ host: null })} />);
     await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
     expect(screen.getByRole('checkbox', { name: /allow ads on this site/i })).toBeDisabled();
+  });
+});
+
+/**
+ * The count this badge shows is NOT "requests we stopped", and on Linux it is
+ * provably the opposite for the requests it does count.
+ *
+ * `linux_layout::block_counter_tx` is fed by a `resource-load-started` signal
+ * that fires only for requests the CAPPED declarative content filter ALLOWED;
+ * the thread then asks the full engine, and counts the ones it flags. So the
+ * requests Linux counts got through the filter. The vast majority of real
+ * blocks on Linux are filter-cancelled BEFORE that signal and are never counted
+ * at all — the number is a LOWER BOUND, and on Windows/Android the same number
+ * is a genuine "we stopped these". One string cannot be true for all three
+ * without saying "caught" rather than "blocked".
+ */
+describe('AdblockShield count honesty', () => {
+  it('does not claim the page count is a number of blocked requests', () => {
+    render(<AdblockShield {...props({ page: 12 })} />);
+    const btn = screen.getByRole('button', { name: /ad blocking/i });
+    expect(btn).not.toHaveAccessibleName(/blocked/i);
+    expect(btn).toHaveAccessibleName(/caught/i);
+  });
+
+  it('does not claim the session count is a number of blocked requests', async () => {
+    render(<AdblockShield {...props({ page: 12 })} />);
+    await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    const popover = within(screen.getByRole('dialog'));
+    // The per-page AND per-session lines both assert "blocked" today.
+    expect(popover.getByText(/^ads caught here:/i)).toBeInTheDocument();
+    expect(popover.getByText(/^ads caught this session:/i)).toBeInTheDocument();
+    expect(popover.queryByText(/blocked here/i)).toBeNull();
+    expect(popover.queryByText(/blocked this session/i)).toBeNull();
+  });
+
+  it('explains the per-platform counting difference in the popover', async () => {
+    render(<AdblockShield {...props({ page: 12 })} />);
+    await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    const note = within(screen.getByRole('dialog')).getByText(/lower bound/i);
+    expect(note).toBeInTheDocument();
   });
 });

@@ -52,9 +52,20 @@ describe('useWebrtcExempt', () => {
     await waitFor(() => expect(result.current.state.exemptHosts).toEqual(['b.test']));
     expect(toggleExempt).toHaveBeenCalledWith('b.test');
 
+    // Wait for the OBSERVABLE, then assert the mechanism. The reverse order — which
+    // this test originally used for the two mutators below — is a FLAKE, not a
+    // stronger test: `removeExempt` is called synchronously, so
+    // `waitFor(...toHaveBeenCalledWith(...))` returns on the very first poll, while
+    // the state only changes when the hook's `.then(setState)` runs a microtask
+    // later. Whether the following `expect` sees the update therefore depends on how
+    // many microtask ticks `waitFor`'s polling loop happens to burn — which is a
+    // function of machine load. Measured: this exact race failed 2 runs in 3 under
+    // full-suite load and never in isolation, which is why it read as an
+    // "unidentified flake" for a whole wave. One `waitFor` on the state removes the
+    // dependency on tick counts entirely.
     result.current.removeExempt('b.test');
-    await waitFor(() => expect(removeExempt).toHaveBeenCalledWith('b.test'));
-    expect(result.current.state.exemptHosts).toEqual([]);
+    await waitFor(() => expect(result.current.state.exemptHosts).toEqual([]));
+    expect(removeExempt).toHaveBeenCalledWith('b.test');
 
     result.current.clearExempt();
     await waitFor(() => expect(clearExempt).toHaveBeenCalled());

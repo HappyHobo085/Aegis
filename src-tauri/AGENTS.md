@@ -1741,5 +1741,90 @@ clamps at the 420×320 minimum.
     (`objc2` needs a macOS C toolchain), so the 3 macOS-scoped attributes are the only ones
     whose justification no local run re-confirmed. The question a `cfg_attr` always raises is
     "does _that_ target's tier call it?", and for macOS nobody has run the probe. Re-run the
-    strip-and-check before adding a new platform tier.×400 and
-    clamps at the 420×320 minimum.
+
+## Gotcha 26 — a privacy setting the platform IGNORES, and a counter that counts the wrong thing
+
+Wave 8's findings, and the shape they share: **a control that is present in the
+contract and absent from the code, or present in the code and wrong in the label.**
+
+- **`httpsOnly` was hardcoded ON on Android.** `settings::https_only` carried
+  `#[cfg_attr(target_os = "android", allow(dead_code))]` — an ACCURATE claim — while
+  `MainActivity.kt`'s `secureUrl` upgraded `http`→`https` UNCONDITIONALLY, with a comment
+  that hardcoded the setting's _default_ as if it were the _policy_. A user who turned
+  HTTPS-Only OFF (because they have a plain-HTTP intranet host, which is the whole reason
+  the setting exists) had that host rewritten to `https` on Android and the site simply
+  broke, with nothing reporting that Android was stricter. Fixed with
+  `settings::ANDROID_HTTPS_ONLY: AtomicBool` (`note_https_only` / `android_https_only`),
+  pushed from `settings::write` — the single low-level writer every path funnels through —
+  and at boot in `lib.rs` beside the other app-free JNI globals, and read by a new
+  `NativeSettings.httpsOnlyOrDefault()`. **The default is `true`
+  (`HTTPS_ONLY_FAIL_SAFE`) and the JNI failure path returns it**, because a getter that
+  cannot ask must fail TOWARDS the protective value here — the _opposite_ of the ad-block
+  JNI getters, which fail open because not blocking is protective over there.
+  `https_only` itself is now generic over `R: Runtime` (it was concrete-`&AppHandle`, which
+  is why the mirror inside the generic `write` could not call it) and its `allow(dead_code)`
+  is gone.
+
+- **`webrtcPolicy` failed OPEN through THREE consumers, not one.** `settings::webrtc_policy`
+  defaulted only when ABSENT and returned any stored string verbatim, so a corrupt value
+  meant: `webrtc_shim::shim_for_inner` returned `""` (no shim at all); `nav.rs`'s
+  `webrtc_arg` match hit `_ => None` (no Chromium `--force-webrtc-ip-handling-policy`, so
+  the default policy leaked real local IPs); and `linux_layout::apply_webrtc_policy_label`
+  enforces only `disable`, leaving WebKit's own WebRTC on. Reachable through an imported
+  `data.import` bundle or a **synced** settings record — any device holding the account data
+  key can write one. Fixed by clamping in the reader against ONE new
+  `pub const WEBRTC_POLICIES: &[&str] = &["default", "public-only", "disable"]`, which the
+  validator also uses, so the two cannot drift. The clamp target is `"public-only"` (both
+  the default and the protective tier); `"default"` stays a distinguishable deliberate
+  opt-out. **The tell that this was an oversight rather than a choice:** the very next
+  function, `anti_fingerprint`, is documented "Raw read — callers (e.g. `farble::level`)
+  validate/clamp the value", and `farble::level` does clamp.
+
+- **A closed tab's redirect chain survived on three of four platforms.** `Chains` is
+  written by BOTH guard paths (`block_at_start` for the single-phase Windows/Android path,
+  `note_nav` for the two-phase Linux path) but cleared only on Linux, from
+  `linux_layout.rs`. `NavActions` is Linux-only (`note_nav` is its only writer), so its
+  `allow(dead_code)` attributes are ACCURATE — it was `Chains` that leaked. Both clears are
+  now `pub(crate) fn …<R: Runtime>` and are called from `tabs::forget_closed_tab`, which
+  both close paths already share. Not unbounded growth (one entry per tab id, overwritten,
+  ids monotonic within a session) but a real correctness edge: a hand-edited `tabs.json` or
+  a restored backup can hand back a reused id, and a stale `ChainStart` then answers for a
+  tab that no longer exists. **`note_nav`/`block_at_start`/`chain_origin`/`record_action`
+  became generic as a side effect, which is what made the two-phase and single-phase paths
+  testable at all — and it was cheap because they only use `try_state`.**
+
+- **`adblock::PAGE_BLOCKED` had no remover at all** — the only genuinely unbounded
+  tab-keyed table left (`nav::TABS_WITH_CONTENT` and `nav::TABS_LOADING` are cleaned, and
+  the two `find` query stores are cleared on `find.close`). `forget_page_blocked(id)` is now
+  called from `forget_closed_tab`, so a tab that comes back with a reused id starts its
+  shield badge at zero instead of inheriting a dead tab's count. **Note the distinction:**
+  `zero_page`/`reset_page` is a per-tab RESET for a tab that navigated again;
+  `forget_page_blocked` is a REMOVAL for a tab that is gone.
+
+- **The shield badge said "Blocked", and on Linux the requests it counted were ALLOWED.**
+  `linux_layout::block_counter_tx` is fed by `resource-load-started`, which fires only for
+  requests the capped declarative filter let through; the thread then asks the full engine
+  and counts the ones it flags. Content-filter-blocked requests are cancelled BEFORE that
+  signal and never counted, so the number is a **lower bound** on Linux — while on Windows
+  (`adblock_win`) and Android (`shouldInterceptRequest`) it genuinely is "requests we
+  stopped". The core has always documented this honestly; the renderer said "Blocked here"
+  and "N blocked on this page", which is false on one platform. Both visible strings and
+  the `aria-label` now say "caught", and the popover states the per-platform difference.
+  **Four pre-existing tests asserted the old lying strings, so they had encoded the bug.**
+
+- **Reported, not fixed, each for a stated reason.** (a) There is **no macOS
+  anti-malvertising guard** — no `nav_policy_mac.rs` — but `redirect_guard.rs`'s module doc
+  already names that in plain words, so it was never hidden by the `cfg_attr`; closing it
+  needs WKWebView `decidePolicyForNavigationAction:` via objc2, which cannot be compiled or
+  verified from Linux. (b) `navigator.plugins` seeded from `location.origin` **does not
+  exist in this codebase** — neither string appears anywhere in `farble.rs`. (c)
+  `hardwareConcurrency` IS a deliberate deterministic clamp to `{2,4,8}` in the JS artifacts
+  (`src/farble.standard.js`, `src/farble.strict.js`), not noise; the genuine tell is that
+  every OTHER perturbation is jittered per session while this one is byte-identical, which
+  identifies the shim — but varying it changes behaviour, so it is the owner's call, not a
+  silent fix. (d) **On Android the per-page ad count is never reset on navigation:**
+  `adblock::reset_page` has exactly one caller, `nav.rs:556` on the desktop path, so
+  Android's count accumulates for the tab's whole lifetime and is mislabelled "here" since
+  the relabel above. The fix is a Kotlin→Rust call on top-frame navigation; this project has
+  **no Kotlin test source set**, so a change there could not be proven with a failing test,
+  which is a hard stop under the project's own rules.

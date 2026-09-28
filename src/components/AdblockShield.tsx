@@ -8,6 +8,7 @@ import { useDialog } from '../hooks/useDialog';
 import { useChromePopoverInset } from '../hooks/useChromePopover';
 import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
 import type { ProtectionSummary } from '../lib/protectionSummary';
+import { hostCovered } from '../lib/url';
 
 export interface AdblockShieldProps {
   state: AdblockState;
@@ -50,15 +51,22 @@ function protectionRows(protection: ProtectionSummary): Array<{
       Icon: Lock,
     },
     {
+      // The exemption is checked FIRST because it overrides the policy: for an
+      // exempt host no shim is injected AND the native backstops are skipped, so
+      // the policy that follows is not in force. Reporting the policy here is the
+      // "control that lies" case — the badge would show "Public only" in green
+      // for exactly the page a script can read local IPs from. Mirrors the
+      // fingerprint row's shape ("Allowed here", good: false) for consistency.
       key: 'webrtc',
       label: 'WebRTC IP protection',
-      value:
-        protection.webrtcPolicy === 'disable'
+      value: protection.webrtcExempt
+        ? 'Off here'
+        : protection.webrtcPolicy === 'disable'
           ? 'Blocked'
           : protection.webrtcPolicy === 'public-only'
             ? 'Public only'
             : 'Default',
-      good: protection.webrtcPolicy !== 'default',
+      good: !protection.webrtcExempt && protection.webrtcPolicy !== 'default',
       Icon: Video,
     },
     {
@@ -124,7 +132,12 @@ function Popover({
       document.removeEventListener('pointerdown', handlePointerDown);
     };
   }, [wrapperRef]);
-  const allowlisted = host !== null && state.allowlistedHosts.includes(host);
+  // `hostCovered`, not `.includes()`: the core's allowlist scope is exact-OR-subdomain
+  // (`adblock::host_covered`), so allowlisting `example.com` exempts `www.example.com`
+  // from EVERY blocking tier. An exact test here made this row's checkbox show
+  // "not allowlisted" for a subdomain the core is already exempting — the same
+  // disagreement the `hostCovered` helper was extracted to end.
+  const allowlisted = hostCovered(state.allowlistedHosts, host);
   const allowLabel = host ? `Allow ads on ${host}` : 'Allow ads on this site';
 
   const rows = protection ? protectionRows(protection) : [];
@@ -178,8 +191,19 @@ function Popover({
         />
         <span>{allowLabel}</span>
       </label>
-      <p className="adblock-shield__count">Blocked here: {page}</p>
-      <p className="adblock-shield__count">Blocked this session: {state.sessionBlocked}</p>
+      <p className="adblock-shield__count">Ads caught here: {page}</p>
+      <p className="adblock-shield__count">Ads caught this session: {state.sessionBlocked}</p>
+      {/* The count is NOT "requests we stopped", and on Linux it is provably not.
+          The counter is fed by a `resource-load-started` signal that only fires for
+          requests the capped declarative filter ALLOWED; the vast majority of real
+          Linux blocks are filter-cancelled before that signal and never counted, so
+          the number is a lower bound there — while on Windows and Android the same
+          number IS a count of stopped requests. "Caught" is the one word true for
+          all three. See `linux_layout.rs`'s block-counter module doc. */}
+      <p className="adblock-shield__note">
+        Ad requests caught as they load. Requests your content filter stops outright are not in this
+        number, so it is a lower bound on Linux.
+      </p>
       {rows.length > 0 && (
         <>
           <hr className="adblock-shield__divider" />
@@ -231,7 +255,7 @@ export function AdblockShield(props: AdblockShieldProps) {
         className={`adblock-shield__button${
           blockingActive ? ' adblock-shield__button--active' : ' adblock-shield__button--inactive'
         }`}
-        aria-label={page > 0 ? `Ad blocking, ${page} blocked on this page` : 'Ad blocking'}
+        aria-label={page > 0 ? `Ad blocking, ${page} ads caught on this page` : 'Ad blocking'}
         title={blockingActive ? 'Ad blocking is active' : 'Ad blocking is off or allowlisted'}
         aria-haspopup="dialog"
         aria-expanded={open}

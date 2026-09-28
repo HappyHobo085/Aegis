@@ -970,7 +970,15 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
 
   /** Security policy for a main-frame navigation target: returns the URL to actually
    *  load, the same URL if it's fine, or null to BLOCK it as known malware. Upgrades
-   *  http→https (HTTPS-Only; localhost exempt — matches the desktop default-on). */
+   *  http→https when the `httpsOnly` setting says to (localhost always exempt).
+   *
+   *  The upgrade used to be unconditional, which hardcoded the setting's *default* as if it
+   *  were the *policy*: a user who turned HTTPS-Only OFF because they have a plain-HTTP
+   *  intranet host got that host rewritten to https and the site simply broke, with no UI
+   *  anywhere reporting that Android was stricter than the setting claims. The policy now
+   *  comes from the Rust side, which mirrors it into an app-free global at boot and on every
+   *  write — this function has no `AppHandle` to read the settings file with. The getter
+   *  fails towards `true`, so a native call that cannot answer keeps upgrading. */
   private fun secureUrl(raw: String): String? {
     val uri = try {
       Uri.parse(raw)
@@ -980,7 +988,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     val host = uri.host ?: return raw
     if (isMalwareHost(host)) return null
     val localhost = host == "localhost" || host == "127.0.0.1" || host == "::1"
-    if (uri.scheme == "http" && !localhost) {
+    if (uri.scheme == "http" && !localhost && NativeSettings.httpsOnlyOrDefault()) {
       return "https://" + raw.substring("http://".length)
     }
     return raw

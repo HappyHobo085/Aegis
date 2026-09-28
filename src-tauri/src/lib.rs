@@ -588,6 +588,19 @@ pub fn run() {
         #[cfg(target_os = "android")]
         crate::webrtc_shim::note_policy(&crate::settings::webrtc_policy(app.handle()));
 
+        // The HTTPS-Only policy, mirrored into the app-free global `MainActivity.secureUrl`
+        // reads so Android honours the setting instead of hardcoding the upgrade. Same
+        // obligation as the two lines above, and the same reason: `secureUrl` is the single
+        // chokepoint for every Android navigation decision and has no `AppHandle` to read
+        // the store with. `settings::write` keeps it current on every change.
+        //
+        // The cfg matches `ANDROID_HTTPS_ONLY`'s own exactly, so the global and the only
+        // thing that seeds it can never disagree about which platforms have it.
+        #[cfg(any(target_os = "android", test))]
+        {
+            crate::settings::note_https_only(crate::settings::https_only(app.handle()));
+        }
+
         // The WebRTC IP-leak exemptions, mirrored into the app-free global the JNI
         // document-start getter reads — same obligation as the policy line above, and for
         // the same reason: that getter runs on a JNI thread with no AppHandle. Unconditional

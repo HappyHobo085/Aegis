@@ -13,6 +13,7 @@ import type {
   ProxyState,
   Settings,
   TabMeta,
+  WebrtcExemptState,
 } from '../../shared/types';
 import { protectionSummary } from '../lib/protectionSummary';
 import { PrivacyDashboard } from './PrivacyDashboard';
@@ -28,6 +29,13 @@ const fingerprint = (over: Partial<FingerprintState> = {}): FingerprintState => 
 
 const proxy = (over: Partial<ProxyState> = {}): ProxyState =>
   ({ active: false, uri: null, ...over }) as ProxyState;
+
+// Empty by DEFAULT so the dashboard's existing cases keep asserting the
+// non-exempt WebRTC row; a test that cares passes `webrtc: { exemptHosts: [host] }`.
+const webrtc = (over: Partial<WebrtcExemptState> = {}): WebrtcExemptState => ({
+  exemptHosts: [],
+  ...over,
+});
 
 const adblock = (over: Partial<AdblockState> = {}): AdblockState => ({
   enabled: true,
@@ -50,6 +58,7 @@ function renderDashboard(
     activeTab?: TabMeta;
     host?: string | null;
     blockedHere?: number;
+    webrtc?: WebrtcExemptState;
   } = {},
 ) {
   const handlers = { onHarden: vi.fn(), onOpenProxy: vi.fn() };
@@ -57,6 +66,7 @@ function renderDashboard(
     activeTab: over.activeTab,
     settings: over.settings ?? settings(),
     fingerprint: over.fingerprint ?? fingerprint(),
+    webrtc: over.webrtc ?? webrtc(),
     proxy: over.proxy ?? proxy(),
     host: over.host === undefined ? 'example.com' : over.host,
   });

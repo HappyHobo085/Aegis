@@ -141,8 +141,8 @@ pub fn should_block_pred(scripted: bool, from: &str, target: &str, app_initiated
 /// PendingNavs match is one-shot. Used by Linux's two-phase hook (`decide_at_response` decides).
 #[cfg_attr(target_os = "android", allow(dead_code))]
 #[cfg_attr(target_os = "windows", allow(dead_code))] // Linux-only phase; Windows uses `block_at_start`.
-pub fn note_nav(
-    app: &AppHandle,
+pub fn note_nav<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     tab: u32,
     from: &str,
     target: &str,
@@ -194,8 +194,8 @@ pub fn decide_at_response(app: &AppHandle, tab: u32, final_url: &str) -> Option<
 /// hop (consuming the PendingNavs match) and stores the verdict so a following redirect hop
 /// inherits it.
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-pub fn block_at_start(
-    app: &AppHandle,
+pub fn block_at_start<R: tauri::Runtime>(
+    app: &AppHandle<R>,
     tab: u32,
     from: &str,
     target: &str,
@@ -236,7 +236,7 @@ pub fn block_at_start(
 }
 
 /// The in-flight chain origin for a redirect hop, if one was recorded for this tab.
-pub fn chain_origin(app: &AppHandle, tab: u32) -> Option<ChainStart> {
+pub fn chain_origin<R: tauri::Runtime>(app: &AppHandle<R>, tab: u32) -> Option<ChainStart> {
     Some(
         app.try_state::<Chains>()?
             .0
@@ -250,7 +250,7 @@ pub fn chain_origin(app: &AppHandle, tab: u32) -> Option<ChainStart> {
 /// Drop a tab's in-flight chain once its top-frame load resolves.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 #[cfg_attr(target_os = "windows", allow(dead_code))] // Linux clears the chain at its Response; Windows never seeds one it must clear.
-pub fn clear_chain(app: &AppHandle, tab: u32) {
+pub fn clear_chain<R: Runtime>(app: &AppHandle<R>, tab: u32) {
     if let Some(s) = app.try_state::<Chains>() {
         s.0.lock().unwrap_or_else(|e| e.into_inner()).remove(&tab);
     }
@@ -456,7 +456,13 @@ fn norm_key(url: &str) -> String {
 /// `main_frame` is the recording `NavigationAction`'s frame flag.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 #[cfg_attr(target_os = "windows", allow(dead_code))] // Linux-only; only `note_nav` (Linux) records.
-pub fn record_action(app: &AppHandle, tab: u32, target: &str, chain: ChainStart, main_frame: bool) {
+pub fn record_action<R: tauri::Runtime>(
+    app: &AppHandle<R>,
+    tab: u32,
+    target: &str,
+    chain: ChainStart,
+    main_frame: bool,
+) {
     if let Some(s) = app.try_state::<NavActions>() {
         let key = (tab, norm_key(target));
         let mut m = s.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -485,11 +491,48 @@ pub fn take_action(app: &AppHandle, tab: u32, target: &str) -> Option<ChainStart
     }
 }
 
-/// Drop a tab's recorded NavigationActions once its top-frame load resolves, so subframe
-/// entries that never matched a main-frame Response don't accumulate.
-#[cfg_attr(target_os = "android", allow(dead_code))]
-#[cfg_attr(target_os = "windows", allow(dead_code))] // Linux-only subframe-entry cleanup; Windows records no actions.
-pub fn clear_tab_actions(app: &AppHandle, tab: u32) {
+/// Drop a tab's recorded NavigationActions, so subframe entries that never matched a
+/// main-frame Response don't accumulate.
+///
+/// Called from TWO places, because neither alone bounds the map on every platform:
+///
+/// * `linux_layout`'s top-frame main-resource Response path — the subframe case this was
+///   written for. It fires far more often and also clears cross-navigation staleness within
+///   a still-open tab.
+/// * `tabs::forget_closed_tab`, on tab close, which is the ONLY cleanup reachable on
+///   Windows, Android and macOS.
+///
+/// **The two former `#[cfg_attr(…, allow(dead_code))]` attributes on this function were false
+/// claims and are removed** — but the reason they were false is NOT the one a grep suggests,
+/// and getting this wrong cost three revisions of this comment.
+///
+/// A grep for `record_action`'s callers looks damning: it is reached from `expect()`, and
+/// `expect()` is called from the `#[cfg(desktop)]` `navigate_tab` / `decide_navigation` /
+/// `spawn_tab` and four `#[cfg(mobile)]` dispatch arms, so Windows and Android *appear* to
+/// record NavigationActions with nothing ever removing them. They do not. The audit
+/// recorded that conclusion, and so did I, before the probe's own PRECONDITION failed and
+/// forced a read of the writers:
+///
+/// * `NavActions` is written by `record_action` alone, and `record_action` is called by
+///   `note_nav` alone — and `note_nav` is Linux-only (it carries
+///   `#[cfg_attr(…, allow(dead_code))]` with the accurate comment "Linux-only phase; Windows
+///   uses `block_at_start`"). Those attributes on `note_nav` and `record_action` are TRUE
+///   and are still in place.
+/// * `block_at_start`, the single-phase path Windows and Android actually use, never calls
+///   `record_action` at all.
+///
+/// So on those three platforms `NavActions` stays empty and the `allow` attributes on THIS
+/// function were only ever *vacuous*, not load-bearing. What the audit's grep did find, by
+/// accident, is the real defect one function over: `Chains` is written on BOTH paths — by
+/// `block_at_start` and by `note_nav` — but cleared only on Linux, so a closed tab's
+/// `Chains` entry survived forever on Windows, Android and macOS, and `chain_origin` would
+/// hand a later tab that reused the id a chain belonging to an already-closed tab. That is
+/// `clear_chain`, and [`crate::tabs::forget_closed_tab`] now calls both on close.
+///
+/// The second call site is kept deliberately: it costs one `retain` and removes a whole
+/// class of within-tab staleness that the Linux top-frame path only clears when a top-frame
+/// load actually resolves.
+pub fn clear_tab_actions<R: Runtime>(app: &AppHandle<R>, tab: u32) {
     if let Some(s) = app.try_state::<NavActions>() {
         s.0.lock()
             .unwrap_or_else(|e| e.into_inner())

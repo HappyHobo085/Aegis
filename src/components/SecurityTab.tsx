@@ -173,12 +173,15 @@ export function SecurityTab({
       </label>
       <p>
         <strong>Opt-in.</strong> This adds randomized noise to the fingerprinting signals websites
-        read, regenerated each session — so each site sees a stable-but-unique fingerprint within a
-        session rather than your real value. <strong>Standard</strong> covers canvas, audio, and
-        device details (such as your reported CPU cores and memory). <strong>Strict</strong> adds
-        WebGL surfaces and reduces timer precision. Limit: this kind of protection is detectable by
-        anti-bot vendors and may break sites that rely on canvas for rendering. Each website&apos;s
-        embedded frames are noised independently.
+        read, regenerated for each tab that is opened or reloaded — so each site sees a
+        stable-but-unique fingerprint within that tab rather than your real value. Because the seed
+        is baked in when a tab is created, a level change only takes effect in tabs opened or
+        reloaded afterwards; an already-open tab keeps the seed it was given, so reload it to pick
+        the new level up. <strong>Standard</strong> covers canvas, audio, and device details (such
+        as your reported CPU cores and memory). <strong>Strict</strong> adds WebGL surfaces and
+        reduces timer precision. Limit: this kind of protection is detectable by anti-bot vendors
+        and may break sites that rely on canvas for rendering. Each website&apos;s embedded frames
+        are noised independently.
       </p>
 
       <h3>Sites with fingerprint protection off</h3>
