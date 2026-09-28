@@ -570,7 +570,7 @@ pub fn apply_webrtc_policy_label(app: &AppHandle, label: &str, policy: &str) {
 }
 
 /// Set a content webview's WebKitGTK page-zoom level (1.0 == 100%). Per-tab.
-pub fn set_zoom_level_label(app: &AppHandle, label: &str, factor: f64) {
+pub fn set_zoom_level_label<R: tauri::Runtime>(app: &AppHandle<R>, label: &str, factor: f64) {
     let Some(w) = app.get_webview(label) else {
         return;
     };

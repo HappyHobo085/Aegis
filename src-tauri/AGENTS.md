@@ -559,6 +559,16 @@ ordinal+1)` → `window.__aegisFindState(…)` in the chrome (mirroring `pushNav
     in-memory per-tab `ZoomStore` (`Mutex<HashMap<u32, f64>>`), `clamp(f)` (pure, unit-tested),
     `factor_of`, `apply_to_tab` (replays at spawn), and `apply_native` (per-platform fan-out).
     The `put` helper stores + applies + emits `zoom.changed`.
+    **`zoom.get` answers the ACTIVE tab unless the payload names a `viewId`.** The router
+    resolves the target from `tabs::Tabs`'s `active_id` (falling back to tab 1 when the registry
+    is not managed), and `zoom.set` / `zoom.reset` act on that same id, so one call never
+    re-zooms the tab the user is no longer looking at. **The value is clamped BEFORE it is
+    stored**, so the store, the `zoom.changed` payload and the `zoom.get` answer can never
+    disagree about what the tab is actually zoomed to. `dispatch`, `put`, `factor_of`,
+    `apply_to_tab` and `apply_native` are generic over `Runtime` (and so is
+    `linux_layout::set_zoom_level_label`) purely so a `MockRuntime` test can reach them; the
+    native half is unreachable there — no content webview exists on a mock — so what the tests
+    pin is the STORE plus the `zoom.changed` event, never the applied WebKit/WebView2 factor.
     **Session-only** (not persisted, not per-origin): the core is the source of truth so a
     discarded→reloaded tab keeps its zoom (see `apply_to_tab` called from `nav::spawn_tab`).
     Per-origin persistence is a forward-compatible v2 that won't change this IPC surface.

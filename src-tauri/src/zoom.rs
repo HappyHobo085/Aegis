@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, Runtime};
 
 pub const ZOOM_MIN: f64 = 0.5;
 pub const ZOOM_MAX: f64 = 3.0;
@@ -31,7 +31,7 @@ pub fn clamp(f: f64) -> f64 {
 }
 
 /// The stored factor for tab `id`, or 1.0 if unset.
-pub fn factor_of(app: &AppHandle, id: u32) -> f64 {
+pub fn factor_of<R: Runtime>(app: &AppHandle<R>, id: u32) -> f64 {
     app.try_state::<ZoomStore>()
         .map(|s| {
             *s.0.lock()
@@ -43,7 +43,7 @@ pub fn factor_of(app: &AppHandle, id: u32) -> f64 {
 }
 
 /// Store + apply a factor to a tab, then emit zoom.changed. Shared by set/reset.
-fn put(app: &AppHandle, id: u32, factor: f64) -> Value {
+fn put<R: Runtime>(app: &AppHandle<R>, id: u32, factor: f64) -> Value {
     let f = clamp(factor);
     if let Some(s) = app.try_state::<ZoomStore>() {
         s.0.lock().unwrap_or_else(|e| e.into_inner()).insert(id, f);
@@ -59,7 +59,7 @@ fn put(app: &AppHandle, id: u32, factor: f64) -> Value {
 // On Android the native Kotlin WebView is not reached via spawn_tab (Android uses
 // its own bridge); suppress the dead_code lint only for that target.
 #[cfg_attr(target_os = "android", allow(dead_code))]
-pub fn apply_to_tab(app: &AppHandle, id: u32) {
+pub fn apply_to_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
     let f = factor_of(app, id);
     if (f - 1.0).abs() > f64::EPSILON {
         apply_native(app, id, f);
@@ -69,7 +69,7 @@ pub fn apply_to_tab(app: &AppHandle, id: u32) {
 /// Per-platform fan-out to the live webview. Each engine's setter is gated; the
 /// non-matching arms are no-ops so the lib compiles for every target.
 #[allow(unused_variables)]
-fn apply_native(app: &AppHandle, id: u32, factor: f64) {
+fn apply_native<R: Runtime>(app: &AppHandle<R>, id: u32, factor: f64) {
     let _ = (app, id, factor); // silence unused on platforms with no setter (none today)
     let label = crate::nav::content_label(id);
 
@@ -90,7 +90,24 @@ fn apply_native(app: &AppHandle, id: u32, factor: f64) {
 }
 
 /// Handle `zoom.*` channels. Returns `None` if not a zoom channel.
-pub fn dispatch(app: &AppHandle, channel: &str, payload: &Value) -> Option<Result<Value, String>> {
+///
+/// PLACE 2 of the three-place rule: the channel names live in `shared/types.ts`
+/// and the renderer calls them through `ipcClient`. The target tab is the
+/// payload's `viewId`, defaulting to the ACTIVE tab, so `zoom.get`/`set`/`reset`
+/// are per-tab and a `view.setFullscreen`-style tab switch keeps each tab's own level.
+///
+/// Generic over `R: Runtime` so all three arms — the `viewId` defaulting, the
+/// `factor` default, and the clamp the chrome relies on — are reachable from a
+/// `MockRuntime` test. The only production caller is `lib.rs`'s `ipc()`, which
+/// infers `Wry`. The native half (`apply_native`) is honestly unreachable from a
+/// test: every platform's setter needs a real content webview, which a mock app
+/// does not have, so the observables asserted here are the STORE and the
+/// `zoom.changed` event the chrome re-renders from.
+pub fn dispatch<R: Runtime>(
+    app: &AppHandle<R>,
+    channel: &str,
+    payload: &Value,
+) -> Option<Result<Value, String>> {
     let active = || {
         app.try_state::<crate::tabs::Tabs>()
             .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
@@ -122,5 +139,195 @@ mod tests {
         assert_eq!(clamp(1.25), 1.25);
         assert_eq!(clamp(f64::NAN), 1.0);
         assert_eq!(clamp(f64::INFINITY), 1.0);
+    }
+
+    use crate::test_support::with_tmp_app;
+    use serde_json::json;
+    use tauri::{Listener, Manager};
+
+    /// Route a channel through the dispatcher. Panics naming the channel if the
+    /// module DECLINES it, so a test can never quietly pass by getting `None`
+    /// for a channel `zoom` owns.
+    fn zoom_call<R: Runtime>(app: &AppHandle<R>, channel: &str, payload: &Value) -> Value {
+        dispatch(app, channel, payload)
+            .unwrap_or_else(|| panic!("zoom::dispatch declined the channel it owns: {channel}"))
+            .expect("the arm answers Ok")
+    }
+
+    /// The value actually sitting in the per-tab store — read past `factor_of`,
+    /// so a test can tell "stored" from "fell back to the 1.0 default".
+    fn stored<R: Runtime>(app: &AppHandle<R>, id: u32) -> Option<f64> {
+        app.try_state::<ZoomStore>()
+            .expect("ZoomStore is managed")
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .get(&id)
+            .copied()
+    }
+
+    /// The id the chrome would be talking about: the ACTIVE tab.
+    fn active_id<R: Runtime>(app: &AppHandle<R>) -> u32 {
+        app.try_state::<crate::tabs::Tabs>()
+            .expect("tabs::Tabs is managed")
+            .reg
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .active_id()
+    }
+
+    #[test]
+    fn dispatch_declines_every_channel_it_does_not_own() {
+        with_tmp_app(|app| {
+            for name in [
+                "zoom",
+                "zoom.Get", // case matters
+                "zoom.getState",
+                "zoom.changed", // the EVENT name, not a channel
+                "zoom.setAll",
+                "view.getState",
+                "nav.getState",
+                "tabs.list",
+            ] {
+                assert!(
+                    dispatch(app, name, &json!({ "factor": 2.0 })).is_none(),
+                    "{name} is not a zoom channel and must be declined so the next \
+                     dispatch arm can claim it"
+                );
+            }
+            // A declined channel must not have touched the store on its way out.
+            assert_eq!(stored(app, active_id(app)), None);
+        });
+    }
+
+    #[test]
+    fn a_zoom_call_acts_on_the_tab_it_names_and_on_the_active_tab_by_default() {
+        with_tmp_app(|app| {
+            let active = active_id(app);
+            assert_eq!(
+                zoom_call(app, "zoom.get", &json!({}))
+                    .pointer("/viewId")
+                    .and_then(Value::as_u64),
+                Some(active as u64),
+                "with no viewId the call must answer for the ACTIVE tab"
+            );
+            // A tab that has never been zoomed reads 100%, which is what `factor_of`
+            // promises for an id with no stored row.
+            assert_eq!(
+                zoom_call(app, "zoom.get", &json!({ "viewId": 4242 }))
+                    .pointer("/factor")
+                    .and_then(Value::as_f64),
+                Some(1.0)
+            );
+            // Naming another tab must not touch the active one: zoom is PER-TAB, and a
+            // router that ignored `viewId` would zoom the tab the user is looking at.
+            zoom_call(app, "zoom.set", &json!({ "viewId": 4242, "factor": 1.5 }));
+            assert_eq!(stored(app, 4242), Some(1.5));
+            assert_eq!(stored(app, active), None);
+            assert_eq!(
+                zoom_call(app, "zoom.get", &json!({}))
+                    .pointer("/factor")
+                    .and_then(Value::as_f64),
+                Some(1.0),
+                "the active tab kept 100% while another tab was zoomed"
+            );
+        });
+    }
+
+    /// Collect the `zoom.changed` events. The wire name carries no dots, and the
+    /// `Listener` callback runs synchronously inside `emit`, so a collector
+    /// registered before the call is already filled when it returns.
+    fn watch_changed<R: Runtime>(app: &AppHandle<R>) -> std::sync::mpsc::Receiver<Value> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _id = app.listen("zoom:changed", move |e| {
+            let _ = tx.send(serde_json::from_str(e.payload()).expect("event payload is JSON"));
+        });
+        rx
+    }
+
+    #[test]
+    fn a_zoom_set_is_clamped_before_it_is_stored() {
+        with_tmp_app(|app| {
+            let id = active_id(app);
+            for (asked, stored_f) in [(0.1, ZOOM_MIN), (9.0, ZOOM_MAX), (1.25, 1.25)] {
+                let answered = zoom_call(app, "zoom.set", &json!({ "factor": asked }));
+                assert_eq!(
+                    answered.pointer("/factor").and_then(Value::as_f64),
+                    Some(stored_f),
+                    "{asked} must be clamped to {stored_f} in the ANSWER"
+                );
+                assert_eq!(
+                    stored(app, id),
+                    Some(stored_f),
+                    "{asked} must be clamped in the STORE, not only in the reply"
+                );
+            }
+            // A missing or non-numeric factor is the renderer's default, not a
+            // refusal: the tab must end at 100%, not at NaN or its previous level.
+            for payload in [json!({}), json!({ "factor": "big" })] {
+                zoom_call(app, "zoom.set", &payload);
+                assert_eq!(stored(app, id), Some(1.0), "{payload} must land on 100%");
+            }
+        });
+    }
+
+    #[test]
+    fn a_zoom_change_is_told_to_the_chrome_with_the_value_that_was_stored() {
+        with_tmp_app(|app| {
+            let id = active_id(app);
+            let rx = watch_changed(app);
+            for asked in [0.1, 2.0, 1.0] {
+                zoom_call(app, "zoom.set", &json!({ "factor": asked }));
+            }
+            // One event per set, each carrying the CLAMPED value and the tab it was for.
+            for asked in [0.1, 2.0, 1.0] {
+                let ev = rx
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("zoom.set emits zoom.changed");
+                let f = ev
+                    .pointer("/factor")
+                    .and_then(Value::as_f64)
+                    .expect("factor");
+                assert_eq!(f, clamp(asked), "the event must report the STORED value");
+                assert_eq!(
+                    ev.pointer("/viewId").and_then(Value::as_u64),
+                    Some(id as u64)
+                );
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "exactly one event per set, not one per layout pass"
+            );
+            // reset is the same writer, so it must be announced too — the chrome's
+            // indicator has to come back to 100% without a page reload.
+            zoom_call(app, "zoom.reset", &json!({}));
+            let ev = rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("zoom.reset emits zoom.changed");
+            assert_eq!(ev.pointer("/factor").and_then(Value::as_f64), Some(1.0));
+        });
+    }
+
+    #[test]
+    fn a_zoom_reset_returns_the_tab_to_100_percent() {
+        with_tmp_app(|app| {
+            let id = active_id(app);
+            zoom_call(app, "zoom.set", &json!({ "factor": 2.0 }));
+            assert_eq!(stored(app, id), Some(2.0));
+            let answered = zoom_call(app, "zoom.reset", &json!({}));
+            assert_eq!(
+                answered.pointer("/factor").and_then(Value::as_f64),
+                Some(1.0)
+            );
+            assert_eq!(
+                stored(app, id),
+                Some(1.0),
+                "reset must write 100% into the store, not just answer it"
+            );
+            // Idempotent, and still scoped to the tab it was aimed at.
+            zoom_call(app, "zoom.reset", &json!({ "viewId": 4242 }));
+            zoom_call(app, "zoom.reset", &json!({ "viewId": 4242 }));
+            assert_eq!(stored(app, 4242), Some(1.0));
+        });
     }
 }
