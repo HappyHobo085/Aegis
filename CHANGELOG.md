@@ -46,6 +46,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   now dropped **before** any file is written (so a concurrent flush finds nothing to write)
   and again afterwards (discarding a visit captured in the meantime), and a test runs a real
   background flush from inside the import to keep it that way.
+- **A restored backup could report "Import complete." with nothing restored.** Importing
+  a bundle wrote each store's file and threw away whether the write had worked, then reported
+  success unconditionally — the one store-writing path in the app that discarded its error.
+  A backup whose entire history had been lost therefore looked exactly like a complete
+  restore, and the per-store row counts, which were tallied from the bundle rather than from
+  what landed, said otherwise. The import now names the stores it could not save, counts only
+  the ones that landed, and keeps your pasted backup text on screen instead of clearing it —
+  the draft is your only copy of what you were restoring.
 - **The onboarding privacy preset was a security control nothing exercised.** Choosing
   "Strict" or "Balanced" on first run is the one moment a user is asked how much protection
   they want, and no test had ever picked a radio or pressed "Start fresh" — so the wiring
