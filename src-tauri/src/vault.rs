@@ -1022,16 +1022,33 @@ fn now_ms() -> i64 {
     crate::jsonstore::now_ms()
 }
 
+/// The snapshot behind `vault.getState` and every `vault.state` event.
+///
+/// `syncEnabled` is computed with the lock RELEASED, and that is load-bearing rather than
+/// stylistic. `is_sync_enabled` ends in `unlocked_key`, which locks this same
+/// `std::sync::Mutex` — and a std mutex is NOT reentrant, so asking it from inside the guard
+/// self-deadlocks instead of merely being slow. Every gate inside `is_sync_enabled` short
+/// circuits before that last `unlocked_key` in the three states the test suite lives in
+/// (`syncVault` defaults off, the engine is off in a mock app, and a fresh vault is v1), which
+/// is exactly how twenty tests sat on top of the freeze. All three flipped — a created vault,
+/// the opt-in, and one sync pass — and the ask never returns; because `ipc` is a synchronous
+/// Tauri command, in the app that is the GUI thread dead for good.
+///
+/// So the four fields the guard owns are copied out and dropped before the ask, which reads
+/// the same state a moment later on its own lock.
 fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
     let g = app.state::<VaultState>();
-    let g = g.0.lock().unwrap_or_else(|e| e.into_inner());
+    let (created, unlocked, count, undecryptable) = {
+        let g = g.0.lock().unwrap_or_else(|e| e.into_inner());
+        (g.created, g.key.is_some(), g.records.len(), g.orphans.len())
+    }; // guard dropped here — see the doc comment
     json!({
-        "exists": g.created || vault_exists(app),
-        "unlocked": g.key.is_some(),
-        "count": g.records.len(),
+        "exists": created || vault_exists(app),
+        "unlocked": unlocked,
+        "count": count,
         // Records present on disk that couldn't be decrypted (corrupt/truncated). Preserved,
         // not dropped — the UI warns the user instead of silently losing credentials.
-        "undecryptable": g.orphans.len(),
+        "undecryptable": undecryptable,
         // The vault is part of E2E sync, but only when BOTH the separate `syncVault` opt-in is
         // on AND this device has adopted the account's shared salt. Until adoption happens the
         // honest answer is false: records sealed here are unreadable on the account's other
@@ -1410,6 +1427,87 @@ pub fn dispatch<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::with_tmp_app;
+
+    // ── Reading state in the configuration where vault sync works ──────────────
+    //
+    // `state_json` holds this module's `VaultState.0` to take its snapshot and then asks
+    // `sync_vault::is_sync_enabled`, which ends in `unlocked_key` and locks the SAME
+    // non-reentrant `std::sync::Mutex`. Every gate inside `is_sync_enabled` short-circuits
+    // before that final lock in the three states a test usually lives in — `syncVault`
+    // defaults off, a mock app's sync engine is off, and a fresh vault is v1 — so the read
+    // always returned and the freeze was invisible. This case sets all three.
+
+    /// A v2 vault, unlocked, opted in, with the engine on: the one state in which
+    /// `is_sync_enabled` actually reaches `unlocked_key`.
+    ///
+    /// Built the way the product builds it, but skipping the network: a salt in the sync cache
+    /// is what makes `vault.create` mint a vault under the ACCOUNT's salt and stamp it v2 — the
+    /// "new phone joins an existing account" path. That is a genuinely reachable state, not a
+    /// fabricated one; the route that gets there over HTTP is `sync_vault`'s own test, and this
+    /// one only needs the state to exist.
+    fn vault_in_the_working_sync_state<R: Runtime>(app: &AppHandle<R>) {
+        crate::sync_vault::set_cached_salt(app, &[0x5Au8; 32], None).expect("cache the salt");
+        crate::test_support::ran(
+            dispatch(
+                app,
+                "vault.create",
+                &json!({ "masterPassword": "correct horse" }),
+            ),
+            "vault.create",
+        )
+        .expect("create");
+        let mut next = crate::settings::load(app);
+        next.as_object_mut()
+            .expect("settings object")
+            .insert("syncVault".into(), json!(true));
+        crate::settings::write(app, &next);
+        crate::sync::set_enabled_for_test(app, true, 0);
+    }
+
+    /// The regression: `vault.getState` never returned in the configuration where vault sync
+    /// actually works. Because `ipc` is a synchronous Tauri command, in the app that is the
+    /// GUI thread frozen for good — the vault panel simply stops responding.
+    ///
+    /// The walk runs on a worker thread, so the regression is a bounded FAILURE rather than a
+    /// stalled suite; see `test_support::assert_returns_within`.
+    #[test]
+    fn vault_get_state_answers_in_the_configuration_where_vault_sync_works() {
+        with_tmp_app(|app| {
+            let owned = app.clone();
+            crate::test_support::assert_returns_within(20, move || {
+                vault_in_the_working_sync_state(&owned);
+                // Preconditions, so a failure names the gate that stopped short rather than
+                // blaming the lock for a state that never got there.
+                if !is_synced(&owned) {
+                    return Err("the vault is still v1, so the read is not exercised".into());
+                }
+                if crate::sync_vault::is_sync_enabled(&owned) != true {
+                    return Err("vault sync is off, so the read is not exercised".into());
+                }
+                if unlocked_key(&owned).is_none() {
+                    return Err("the vault is locked, so the last gate short-circuits".into());
+                }
+                let st = crate::test_support::ran(
+                    dispatch(&owned, "vault.getState", &json!({})),
+                    "vault.getState",
+                )?;
+                // Not merely "it returned" — it returned the truth. A read that answered
+                // `false` would report a synced, unlocked vault as local, which is the same
+                // freeze's other face: a lie the panel would show.
+                if st.get("syncEnabled") != Some(&json!(true)) {
+                    return Err(format!("syncEnabled must be true here, got {st}"));
+                }
+                if st.get("unlocked") != Some(&json!(true)) {
+                    return Err(format!("unlocked must be true here, got {st}"));
+                }
+                if st.get("exists") != Some(&json!(true)) {
+                    return Err(format!("exists must be true here, got {st}"));
+                }
+                Ok(())
+            });
+        });
+    }
 
     // ── Unlock rate limiter (the anti-guessing backoff) ───────────────────────
     //

@@ -1379,6 +1379,23 @@ pub fn dispatch<R: Runtime>(
     }
 }
 
+/// Put the engine into the "enabled, not cancelled" state a real pass runs in.
+///
+/// `#[cfg(test)]` because production has no reader: `enabled` is only ever set by
+/// `enable_with_root`, which needs a stored root in the OS keychain — a thing a unit test
+/// cannot rely on being present. It exists so a test can drive the *production* sync pass
+/// (`sync_vault_once`) rather than calling that function's inner helpers and assuming the
+/// gate it guards is open. `gen` is recorded as the live generation so [`cancelled`] — which
+/// compares the two — agrees that this pass may still touch the network.
+#[cfg(test)]
+pub(crate) fn set_enabled_for_test<R: Runtime>(app: &AppHandle<R>, enabled: bool, gen: u64) {
+    if let Some(st) = app.try_state::<SyncState>() {
+        let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.enabled = enabled;
+        g.generation = gen;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

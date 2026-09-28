@@ -743,6 +743,19 @@ records[{uuid, updatedAt, nonce, ct}]}`. The only cleartext fields are the
     empty) by default and at every boot — never auto-unlocked from a keychain in Phase A.
     On `vault.lock`, `Zeroizing` wipes the DEK on drop; `Cred` is `Zeroize+ZeroizeOnDrop`.
     Every read/mutate channel returns `Err("vault is locked")` when `key` is `None`.
+    That `Mutex` is `std::sync::Mutex` and is **NOT reentrant**, and `ipc` is a
+    synchronous Tauri command, so a nested `lock()` does not merely slow a vault read down —
+    it wedges the GUI thread permanently. `state_json` is the trap: it wants a snapshot of
+    `Inner` _and_ `sync_vault::is_sync_enabled`, and the latter ends in `unlocked_key`,
+    which locks the same mutex. It therefore copies the four fields it owns out and
+    **releases the guard before asking**. This was not theoretical: it froze
+    `vault.getState` in the one configuration where vault sync works (created vault +
+    opt-in + sync engine on + v2 + unlocked), which is exactly the state the tests never
+    built, because every gate inside `is_sync_enabled` short-circuits before `unlocked_key`
+    when `syncVault` is off, the engine is off, or the vault is v1. If you add a field to
+    `state_json`, ask whether its value can be reached another way — `persist`, `read_file`
+    and `adopt_resealed` are all safe to call under the guard; `unlocked_key`,
+    `is_sync_enabled` and `state_json` are not.
   - **The vault DOES sync**, but only under three conditions that must all hold — see
     `sync_vault.rs` (its module header is the canonical design note) and `vault.rs`'s
     header. The old bridge was removed because it merged remote records by `updatedAt`

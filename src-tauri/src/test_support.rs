@@ -36,6 +36,56 @@ pub fn lock() -> std::sync::MutexGuard<'static, ()> {
         .unwrap_or_else(|p| p.into_inner())
 }
 
+/// Put a rustls crypto provider in the process-global slot, so tests can make real HTTP calls.
+///
+/// The app does this in `run()` (see `lib.rs`) because reqwest is built with
+/// `rustls-no-provider` (via the updater plugin) and every TLS client panics with "No rustls
+/// crypto provider is configured" if it builds before the slot is filled. `run()` is not part
+/// of a unit test, so a test that drives a real request — the vault salt handshake speaks HTTP
+/// to a loopback server — hits that panic and reports it as the feature being broken. Idempotent:
+/// `install_default` is internally guarded and reports "already installed" as an `Err` we
+/// deliberately ignore.
+pub fn ensure_crypto_provider() {
+    static ONCE: OnceLock<()> = OnceLock::new();
+    ONCE.get_or_init(|| {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    });
+}
+
+/// Run `f` on a worker thread and require it to return within `secs`, or fail the test.
+///
+/// A self-deadlock on a non-reentrant mutex has exactly ONE symptom: the call does not come
+/// back. Asserted inline, that symptom is a hung test binary — a bad way to find a bug and a
+/// much worse way to stop one returning. Bounding the wait turns the regression into an
+/// ordinary failure whose message names the cause, and the leaked worker thread is harmless:
+/// it is already wedged, and it holds none of the locks `with_tmp_app` guards.
+///
+/// `f` returns `Result<(), String>` so the caller can report which precondition or assertion
+/// it reached; `Err` is surfaced as the failure message rather than being swallowed.
+pub fn assert_returns_within(secs: u64, f: impl FnOnce() -> Result<(), String> + Send + 'static) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(f());
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(secs)) {
+        Ok(Ok(())) => {}
+        Ok(Err(why)) => panic!("{why}"),
+        Err(_) => {
+            panic!("the call never returned — it is deadlocked on its own lock (waited {secs}s)")
+        }
+    }
+}
+
+/// `dispatch`'s `Option<Result<..>>` flattened, so a closure that wants to propagate either
+/// layer can do it as a `String` instead of unwrapping.
+pub fn ran(
+    r: Option<Result<serde_json::Value, String>>,
+    what: &str,
+) -> Result<serde_json::Value, String> {
+    r.ok_or_else(|| format!("no dispatch arm for {what}"))?
+        .map_err(|e| format!("{what}: {e}"))
+}
+
 fn fresh_tmp() -> PathBuf {
     let d = std::env::temp_dir().join(format!(
         "aegis-test-{}-{}",
@@ -70,6 +120,7 @@ fn fresh_tmp() -> PathBuf {
 // native webview handles will skip or no-op in tests — that is expected and safe.
 pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
     let _guard = lock();
+    ensure_crypto_provider();
     let tmp = fresh_tmp();
     // Clear process-global jsonstore caches so each test starts clean.
     // (CACHE and NEXT_ID_CACHE are statics that survive across with_tmp_app calls.)

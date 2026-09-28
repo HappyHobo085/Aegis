@@ -9,6 +9,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The vault panel could freeze the whole window the moment vault sync was working.**
+  Reading vault state held the vault's in-memory lock to take a snapshot and then asked
+  whether vault sync is enabled — a question whose answer comes from the very same lock. A
+  standard mutex is not reentrant, so asking while holding it waits for itself. It is a
+  self-deadlock, not a slow read, and because every renderer call is a synchronous IPC
+  command it happens on the UI thread: the window stops responding, permanently, the next
+  time the panel is opened on a device where vault sync is actually enabled and the vault is
+  unlocked. Nothing warned you — it simply hung. It went unnoticed because each of the
+  conditions that triggers it is off in a fresh test: the opt-in defaults to off, a test app
+  has no sync engine running, and a new vault is the local-only version. The state read now
+  finishes before the question is asked, and a test builds that exact configuration and
+  fails if the read does not come back — on a timer, because a deadlock's only symptom is
+  silence, and a hung test suite is a poor way to catch one.
 - **A restored backup could be silently undone by a background history flush.**
   Browsing history and the downloads list are batched: their live rows live in memory and a
   timer rewrites the file from that cache every three seconds. `data.import` wrote the
