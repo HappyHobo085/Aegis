@@ -284,18 +284,85 @@ describe('farble shim (standard) — shipped JS, runtime', () => {
     expect([2, 4, 8]).toContain(hc);
   });
 
-  it('navigator.userAgentData.brands is normalized to Chrome-148 set (when present)', () => {
-    // jsdom does not expose navigator.userAgentData; test that the shim does not throw when absent.
+  it('FAIL-OPEN: no navigator.userAgentData on the host is left alone, not patched', () => {
+    // The other half of the brands test, and the half that actually needed proving: the shim
+    // guards on `navigator.userAgentData` existing, so on a host without it (every non-Chromium
+    // engine, and jsdom) the shim must be a no-op rather than inventing the property. A page
+    // that gained a `userAgentData` that the real engine does not have would be MORE
+    // fingerprintable, not less.
+    delete (navigator as Navigator & { userAgentData?: unknown }).userAgentData;
+    expect((navigator as Navigator & { userAgentData?: unknown }).userAgentData).toBeUndefined();
     run(STANDARD, SEED_A);
-    const uad = (navigator as Navigator & { userAgentData?: { brands?: unknown } }).userAgentData;
-    if (uad) {
-      const brands = uad.brands as Array<{ brand: string; version: string }> | undefined;
+    expect((navigator as Navigator & { userAgentData?: unknown }).userAgentData).toBeUndefined();
+  });
+
+  it('navigator.userAgentData.brands is normalized to the Chrome-148 set', () => {
+    // jsdom does not expose `navigator.userAgentData`, so this test INSTALLS one before running
+    // the shim. It used to be `if (uad) { …assert… } else { expect(true).toBe(true) }`, and the
+    // else branch is the one that ran here — so the normalisation was never asserted at all and
+    // the test could not fail. The condition was true about the SHIM (its try/catch makes an
+    // absent `userAgentData` a safe no-op, which the sibling case above now proves) and false
+    // about the TEST.
+    const n = navigator as Navigator & {
+      userAgentData?: { brands?: unknown; getHighEntropyValues?: unknown };
+    };
+    delete n.userAgentData;
+    // Read through a FRESH cast on every lookup rather than through `n`. TypeScript's
+    // control-flow analysis narrows a property to `never` after a `delete`, so the three
+    // reads below would not type-check against the binding — and re-casting is also the more
+    // faithful thing to assert on: a page re-reads `navigator.userAgentData` on every access,
+    // which is precisely what the "stable across reads" check below depends on.
+    const uad = (): { brands?: unknown } | undefined =>
+      (navigator as Navigator & { userAgentData?: { brands?: unknown } }).userAgentData;
+    // A plausible pre-shim value that is NOT the Chrome-148 set: a Firefox-flavoured brand
+    // list with a different Chromium version. If the shim does nothing, this is what the
+    // post-shim assertions see, and they fail — which is the point.
+    const preShimBrands = [
+      { brand: 'Not/A)Brand', version: '99' },
+      { brand: 'Chromium', version: '120' },
+      { brand: 'Gecko', version: '20100101' },
+    ];
+    Object.defineProperty(n, 'userAgentData', {
+      value: {
+        brands: preShimBrands,
+        getHighEntropyValues: (hints: string[]) =>
+          Promise.resolve({
+            brands: preShimBrands,
+            fullVersionList: preShimBrands,
+            mobile: false,
+            platform: 'Linux',
+            requested: hints,
+          }),
+      },
+      configurable: true,
+    });
+    try {
+      // Precondition, asserted so this test cannot pass for the wrong reason: the value the
+      // shim will overwrite must be observable and must differ from the target.
+      expect(uad()?.brands).toEqual(preShimBrands);
+      expect(preShimBrands.map((b) => b.brand)).not.toContain('Google Chrome');
+
+      run(STANDARD, SEED_A);
+
+      const brands = uad()?.brands as Array<{ brand: string; version: string }>;
       expect(brands).toBeDefined();
-      const brandNames = (brands ?? []).map((b) => b.brand);
+      // The whole point: the shim replaced the host's own list, so the engine version the host
+      // leaked (120) and the non-Chromium brand (Gecko) are both gone.
+      expect(brands).toEqual([
+        { brand: 'Not/A)Brand', version: '8' },
+        { brand: 'Chromium', version: '148' },
+        { brand: 'Google Chrome', version: '148' },
+      ]);
+      const brandNames = brands.map((b) => b.brand);
       expect(brandNames).toContain('Chromium');
-    } else {
-      // No userAgentData on jsdom — the shim's try/catch makes this a safe no-op.
-      expect(true).toBe(true);
+      expect(brandNames).not.toContain('Gecko');
+      // The list must be stable across reads, or a page could fingerprint the shim by reading
+      // the property twice and getting different orderings.
+      expect(uad()?.brands).toEqual(brands);
+    } finally {
+      // jsdom's navigator has no userAgentData of its own, so deleting restores the original
+      // absence. Matches the `origAB` save/restore pattern the AudioBuffer case above uses.
+      delete n.userAgentData;
     }
   });
 

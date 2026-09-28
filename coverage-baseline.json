@@ -3,24 +3,24 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 5075,
-      "covered": 4366,
-      "pct": 86.02
+      "total": 5084,
+      "covered": 4379,
+      "pct": 86.13
     },
     "statements": {
-      "total": 6822,
-      "covered": 5771,
-      "pct": 84.59
+      "total": 6835,
+      "covered": 5796,
+      "pct": 84.79
     },
     "functions": {
-      "total": 1404,
-      "covered": 1161,
-      "pct": 82.69
+      "total": 1407,
+      "covered": 1171,
+      "pct": 83.22
     },
     "branches": {
-      "total": 4376,
-      "covered": 3419,
-      "pct": 78.13
+      "total": 4400,
+      "covered": 3464,
+      "pct": 78.72
     }
   },
   "files": {
@@ -266,45 +266,45 @@
     "src/App.tsx": {
       "lines": {
         "total": 296,
-        "covered": 179,
-        "pct": 60.47
+        "covered": 181,
+        "pct": 61.14
       },
       "statements": {
         "total": 345,
-        "covered": 194,
-        "pct": 56.23
+        "covered": 200,
+        "pct": 57.97
       },
       "functions": {
         "total": 123,
-        "covered": 53,
-        "pct": 43.08
+        "covered": 58,
+        "pct": 47.15
       },
       "branches": {
         "total": 151,
-        "covered": 72,
-        "pct": 47.68
+        "covered": 74,
+        "pct": 49
       }
     },
     "src/components/AdblockShield.tsx": {
       "lines": {
         "total": 52,
-        "covered": 50,
-        "pct": 96.15
+        "covered": 52,
+        "pct": 100
       },
       "statements": {
         "total": 63,
-        "covered": 61,
-        "pct": 96.82
+        "covered": 63,
+        "pct": 100
       },
       "functions": {
         "total": 14,
-        "covered": 12,
-        "pct": 85.71
+        "covered": 14,
+        "pct": 100
       },
       "branches": {
-        "total": 84,
-        "covered": 62,
-        "pct": 73.8
+        "total": 86,
+        "covered": 78,
+        "pct": 90.69
       }
     },
     "src/components/AddressBar.tsx": {
@@ -535,8 +535,8 @@
       },
       "statements": {
         "total": 46,
-        "covered": 42,
-        "pct": 91.3
+        "covered": 46,
+        "pct": 100
       },
       "functions": {
         "total": 7,
@@ -545,8 +545,8 @@
       },
       "branches": {
         "total": 28,
-        "covered": 20,
-        "pct": 71.42
+        "covered": 28,
+        "pct": 100
       }
     },
     "src/components/ErrorBoundary.tsx": {
@@ -1093,9 +1093,9 @@
         "pct": 90.74
       },
       "branches": {
-        "total": 117,
-        "covered": 106,
-        "pct": 90.59
+        "total": 121,
+        "covered": 110,
+        "pct": 90.9
       }
     },
     "src/components/TabStrip.tsx": {
@@ -1335,9 +1335,9 @@
         "pct": 23.88
       },
       "branches": {
-        "total": 245,
-        "covered": 166,
-        "pct": 67.75
+        "total": 248,
+        "covered": 167,
+        "pct": 67.33
       }
     },
     "src/components/mobile/MobileBottomBar.tsx": {
@@ -2046,24 +2046,24 @@
     },
     "src/hooks/useSync.ts": {
       "lines": {
-        "total": 53,
-        "covered": 53,
+        "total": 57,
+        "covered": 57,
         "pct": 100
       },
       "statements": {
-        "total": 88,
-        "covered": 86,
-        "pct": 97.72
+        "total": 93,
+        "covered": 91,
+        "pct": 97.84
       },
       "functions": {
-        "total": 12,
-        "covered": 12,
+        "total": 13,
+        "covered": 13,
         "pct": 100
       },
       "branches": {
-        "total": 34,
-        "covered": 29,
-        "pct": 85.29
+        "total": 40,
+        "covered": 34,
+        "pct": 85
       }
     },
     "src/hooks/useTabs.ts": {
@@ -2389,8 +2389,8 @@
         "pct": 100
       },
       "branches": {
-        "total": 4,
-        "covered": 4,
+        "total": 2,
+        "covered": 2,
         "pct": 100
       }
     },
@@ -2593,23 +2593,23 @@
     },
     "src/lib/url.ts": {
       "lines": {
-        "total": 8,
-        "covered": 8,
+        "total": 13,
+        "covered": 13,
         "pct": 100
       },
       "statements": {
-        "total": 8,
-        "covered": 8,
+        "total": 16,
+        "covered": 16,
         "pct": 100
       },
       "functions": {
-        "total": 2,
-        "covered": 2,
+        "total": 4,
+        "covered": 4,
         "pct": 100
       },
       "branches": {
-        "total": 4,
-        "covered": 4,
+        "total": 15,
+        "covered": 15,
         "pct": 100
       }
     },

@@ -625,6 +625,89 @@ the convention has no users today. The technique is recorded because it is what 
 defect visible and safe to delete: a 3-test measured matrix plus a fix-proof beats a prose
 claim that something is broken.
 
+### Tests that could not fail (the vacuous-test inventory)
+
+A test that passes no matter what the code does is worse than no test: it reads as coverage
+in a coverage report and in a review, and it puts a **false claim** in the reader's head
+about what is guarded. The worst form is the one whose **name is its assertion** — it reads
+as documentation of the guarantee and proves nothing. Four were found and dealt with; the
+verdicts differ per case, which is the point of writing them down.
+
+**1. A conditional test whose real branch the host never takes.**
+`lib/farbleShim.test.ts` read `if (navigator.userAgentData) { …assert the brands are
+normalised… } else { expect(true).toBe(true) }`. jsdom has no `userAgentData`, so the `else`
+was the branch that ran on every CI run and the shim's whole UA-CH brand normalisation was
+untested. The comment inside it was **true about the shim** (its `try/catch` makes an absent
+`userAgentData` a safe no-op) and **false about the test**. The fix installs a plausible
+pre-shim `userAgentData` with `Object.defineProperty(…, { configurable: true })`, asserts a
+precondition that the value is the one installed and does NOT already contain the target
+brand, and restores jsdom's original absence in a `finally`. The fail-open half was split
+into its own test (an absent `userAgentData` must be left absent) because that is what the
+original comment was actually claiming. **A test's guard condition can be correct about the
+code and still make the test vacuous — check which branch your host takes.**
+
+**2. An assertion-free race test, in two shapes with two different verdicts.** Both
+`hooks/useOmnibox.test.ts` and `hooks/useSafety.test.tsx` unmounted a hook, released a
+pending promise, and carried only a comment saying it "would warn/throw … if the guard were
+absent". **No spy, no `expect` — the suite stayed green with the guard deleted.** They are
+not the same problem:
+
+- `useOmnibox` was **fixable**, because its guard is a monotonic `seq` token
+  (`useOmnibox.ts:57`, checked at `:62`/`:69`, invalidated in the cleanup at `:76`) rather
+  than an `active` flag. The observable is the token's **consequence** — a result that lands
+  after the effect is torn down must not reach state — and it is testable **without
+  unmounting** by rerendering `active: false`, which runs the previous cleanup (bumping
+  `seq`) before the new effect early-returns, and unlike unmount leaves the state readable.
+  It carries a precondition `expect(historySearch).toHaveBeenCalled()` so the "not present"
+  cannot be vacuously true because no request was ever issued. **Non-vacuity was proven by
+  `cp`-ing the hook aside and deleting the cleanup's `seq` bump: exactly the one new test
+  flipped.**
+- `useSafety` was **not fixable, and is reported rather than dressed up.** With the
+  `if (active)` guard **removed**, a `console.error` spy still recorded nothing
+  (`9 passed (9)`). **React 18 removed the "can't perform a state update on an unmounted
+  component" warning outright**, so any assertion on it cannot fail; and the effect's deps
+  are `[]`, so there is no teardown-without-unmount path that would leave the state readable.
+  The `active` flag therefore has **no observable from outside the process**, and the only
+  thing that could witness it is a white-box refactor of a two-line guard. The test was
+  renamed to what it does and given the one observable that does exist — `expect(off)` proves
+  the cleanup tore the subscription down — and its comment now says explicitly that it is
+  **not** a witness for the flag. **A `console.error` spy is a legitimate post-unmount
+  assertion in this repo (see `hooks/useWebrtcExempt.test.ts`) and it is the right tool here
+  — but only because that hook's `setState` also reaches a `console.error` path. Never carry
+  it across on the strength of one case working.**
+
+**3. Registered-but-never-dispatched listeners.** `App.tsx` registers four `aegis:*` shell
+`CustomEvent` listeners in one effect; only `aegis:openSidebar` had a test that actually
+dispatched one. The other three (`toggleSidebar`, `toggleFavoritesBar`, `openSettings`) were
+covered by a test that asserted only that they are **registered** — so the fix that
+`App.tsx:190-195` records as un-breaking both toggles and all fifteen "open settings…"
+palette entries shipped without ever being shown to work, and emptying a handler body left
+the suite green. **Asserting that a listener is wired is not asserting that it does
+something: dispatch the event.** Non-vacuity was proven by emptying all three handler bodies
+at once — exactly those three tests flipped and the other 33 passed. Each toggle test
+dispatches **twice** (open, then close), because a handler wired straight to `true` satisfies
+"it opened" and fails the second half. One precondition of mine was wrong and was re-derived
+rather than relaxed: the bookmarks bar starts **open** (`useState(true)`), so the first
+dispatch closes it.
+
+**How to find these.** A python scan over every `src/**`, `shared/**` and `scripts/**` test
+file for `it(`/`test(` blocks whose body contains no `expect(`, plus tautological
+`expect(x).toBe(x)`, returned 4 hits and **zero** tautological pairs. Two of the four were
+**detector artifacts** — `it.each([` puts the body on later lines, so the scanner must either
+skip `it.each` or scan to the matching brace. The other two were the real defects above.
+The scan is a _completeness trigger_, not an assertion; the assertion is always
+`cp`-the-mechanism-first, neutralise it, and check that **exactly** the intended tests flip.
+
+**Three audit findings that were wrong, recorded so they are not re-raised.** (a) "delete
+`hooks/useFingerprint.test.tsx`" — it is **not** a duplicate of
+`hooks/useWebrtcExempt.test.ts`: its `refetches when a synced fp-allowlist change is
+published` drives `publishSyncChange` and asserts `getState` ran **twice**, and
+`useWebrtcExempt` has **no** `syncBus` subscription **by design** (the store is never
+synced — that absence is the feature). (b) "align the two shim runtime tests on indirect
+eval" — they already do: `run` and `runStrict` both use `(0, eval)(…)`, and a plain
+`grep 'eval('` returns nothing because of the `0,` de-reference. (c) The bare
+`expect(true).toBe(true)` is at `farbleShim.test.ts:298`, not in a 287-300 range.
+
 ### Coverage of `src/`
 
 `npm run test:coverage` measures every `src/` file except three, excluded by

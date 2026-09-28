@@ -273,16 +273,40 @@ describe('useOmnibox — the monotonic seq guard', () => {
     expect(historySearch).not.toHaveBeenCalled();
   });
 
-  it('a result that lands after unmount does not setState on a dead hook', async () => {
+  it('discards an in-flight result that lands after the effect is torn down', async () => {
+    // This REPLACED a test that could not fail: it called `unmount()` and resolved the
+    // promise, with only a comment saying it "would warn/throw if the guard were absent"
+    // and NO assertion of any kind. It passed identically whether or not the hook guarded
+    // anything.
+    //
+    // Two things make a real assertion possible here. First, the observable is the
+    // sequence token's CONSEQUENCE — a result that lands after the effect stopped owning it
+    // must not reach state — rather than a post-unmount warning: React 18 REMOVED the
+    // "can't perform a state update on an unmounted component" warning entirely, so
+    // spying `console.error` would see nothing even against a hook with no guard at all.
+    // Second, `active: false` tears the effect down the same way `unmount` does (React runs
+    // the previous cleanup, which invalidates the token, before the new effect body
+    // early-returns) — and unlike unmount, it leaves the hook's state READABLE.
+    //
+    // This is the missing half of the two cases above it: `does not invalidate an
+    // in-flight request when the query is unchanged` proves a token survives a re-run that
+    // should NOT invalidate it, and `cancels the pending debounce when the input loses
+    // focus mid-type` proves no NEW request is issued. Neither shows what happens to a
+    // result already in flight when the owner is torn down.
     const d = deferred<HistoryEntry[]>();
     historySearch.mockReset().mockReturnValue(d.promise);
-    const { unmount } = renderHook(() => useOmnibox(args()));
-    await settle();
-    unmount();
-    // Would warn/throw on a state update after unmount if the guard were absent.
-    await act(async () => {
-      d.resolve([entry()]);
+    const { result, rerender } = renderHook(({ active }) => useOmnibox(args({ active })), {
+      initialProps: { active: true },
     });
+    await settle();
+    // Precondition: the request really is in flight, so a later "not present" cannot be
+    // vacuously true because nothing was ever issued.
+    expect(historySearch).toHaveBeenCalled();
+    rerender({ active: false });
+    await act(async () => {
+      d.resolve([entry({ title: 'Landed after teardown' })]);
+    });
+    expect(titles(result)).not.toContain('Landed after teardown');
   });
 });
 

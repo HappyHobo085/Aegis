@@ -109,11 +109,21 @@ describe('useSafety', () => {
         release = res;
       }),
     );
-    const { unmount } = renderHook(() => useSafety());
-    unmount();
-    // Would warn/throw on a state update after unmount if the flag were absent.
-    await act(async () => {
-      release(payload({ url: 'https://late.test/' }));
+    // EXPERIMENT: does React still warn on a post-unmount setState? Spy and find out rather
+    // than assume, because if it does not, a console.error assertion is itself vacuous.
+    const errors: unknown[][] = [];
+    const spy = vi.spyOn(console, 'error').mockImplementation((...a) => {
+      errors.push(a);
     });
+    try {
+      const { unmount } = renderHook(() => useSafety());
+      unmount();
+      await act(async () => {
+        release(payload({ url: 'https://late.test/' }));
+      });
+      expect(errors).toEqual([]);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

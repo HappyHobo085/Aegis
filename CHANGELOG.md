@@ -9,6 +9,35 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Three of the app's shell `CustomEvent` listeners were never actually dispatched by any
+  test.** `aegis:toggleSidebar`, `aegis:toggleFavoritesBar` and `aegis:openSettings` had a
+  test that asserted only that they are _registered_, so the fix that un-broke both toggles
+  and all fifteen "open settings..." palette entries shipped without ever being shown to
+  work — emptying a handler's body left the whole suite green. Each is now exercised by
+  dispatching the real event and asserting the UI moved, and each toggle test dispatches
+  **twice**, because a handler wired straight to `true` satisfies "it opened" and fails the
+  close.
+
+- **The farbling shim's UA-CH brand normalisation was not tested at all.** The test guarded
+  its real assertions behind `if (navigator.userAgentData)` and fell through to
+  `expect(true).toBe(true)` otherwise, and jsdom has no `userAgentData` — so the branch that
+  always ran asserted nothing. The shim is covered now by a test that installs a plausible
+  pre-shim value, proves the host's own brands differ from the shim's, and checks the
+  normalised set twice (a page could otherwise fingerprint the shim by reading the property
+  two times). The fail-open half — an absent `userAgentData` must be left absent — became a
+  test of its own.
+
+- **Two race tests asserted nothing at all, and passed with their guards deleted.**
+  `useOmnibox`'s test unmounted, released a pending history result, and carried only a
+  comment saying it "would warn/throw if the guard were absent". It is now a real test of the
+  guard's consequence — a result that lands after the omnibox effect is torn down must never
+  reach state — proven non-vacuous by deleting the token invalidation and watching exactly
+  that one test fail. `useSafety`'s equivalent **cannot** be made non-vacuous through the
+  public surface: with its `active` guard removed, a `console.error` spy still records
+  nothing, because React 18 removed the post-unmount setState warning outright. It is
+  reframed to assert the one thing that is observable (the cleanup tore its subscription
+  down) and its comment now says plainly that it is not a witness for the flag.
+
 - **A peer could try to write to your password vault and you would never be told.**
   `sync.vaultQuarantined` is emitted by the core when it refuses a peer-supplied vault
   record — a forgery, or simply a record sealed under a key this device does not hold. It is

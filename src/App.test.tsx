@@ -1,6 +1,6 @@
 // src/App.test.tsx
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
-import { fireEvent, render, screen, act, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, act, waitFor, within } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../shared/types';
 import type { NavState, NavFailed, NavCrashed, SavedItem } from '../shared/types';
 
@@ -614,6 +614,74 @@ describe('App', () => {
       });
       expect(nav).toHaveBeenCalledTimes(2);
       expect(nav).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID, only.url);
+    });
+  });
+
+  // ── The three shell CustomEvents whose LISTENERS were the fix but whose BEHAVIOUR was never tested ──
+  // `App.tsx`'s own comment above the effect names the defect this registration fixed: those
+  // three events "were dispatched and dropped on the floor, which silently no-op'd both toggles
+  // and ALL FIFTEEN 'open settings…' palette entries". The only test that mentions them
+  // (see "registers the four shell CustomEvent listeners ONCE") asserts they are REGISTERED —
+  // it dispatches none of them. So emptying any of the three handler bodies left the suite
+  // green, which is the same blindness that made the original defect invisible.
+  // `aegis:openSidebar` is excluded here: it has two dispatch tests of its own.
+  describe('the three untested shell CustomEvents', () => {
+    it('aegis:toggleSidebar opens the sidebar and a second dispatch closes it', async () => {
+      render(<App />);
+      // Precondition: it starts CLOSED, or "it opened" below is vacuous.
+      expect(screen.queryByRole('complementary', { name: /sidebar/i })).not.toBeInTheDocument();
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('aegis:toggleSidebar'));
+      });
+      expect(screen.getByRole('complementary', { name: /sidebar/i })).toBeInTheDocument();
+
+      // The second dispatch is the half that matters: a handler that only ever opened (or one
+      // wired straight to `true`) would satisfy the assertion above and fail here.
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('aegis:toggleSidebar'));
+      });
+      expect(screen.queryByRole('complementary', { name: /sidebar/i })).not.toBeInTheDocument();
+    });
+
+    it('aegis:toggleFavoritesBar toggles the bookmarks bar', async () => {
+      render(<App />);
+      // It starts OPEN — `favBarOpen` is `useState(true)` — so the first dispatch CLOSES it.
+      // I originally asserted the opposite and the precondition failed, which is how the
+      // default is established rather than assumed.
+      expect(screen.getByRole('navigation', { name: 'Bookmarks' })).toBeInTheDocument();
+
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('aegis:toggleFavoritesBar'));
+      });
+      expect(screen.queryByRole('navigation', { name: 'Bookmarks' })).not.toBeInTheDocument();
+
+      // …and the second dispatch brings it back, so this is a TOGGLE and not a one-way close.
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('aegis:toggleFavoritesBar'));
+      });
+      expect(screen.getByRole('navigation', { name: 'Bookmarks' })).toBeInTheDocument();
+    });
+
+    it('aegis:openSettings opens the settings dialog', async () => {
+      render(<App />);
+      // Precondition: settings starts CLOSED, so "it opened" below is not vacuous.
+      expect(screen.queryByRole('dialog', { name: /settings/i })).not.toBeInTheDocument();
+
+      // The named-tab form, which is what the command palette's entries all dispatch.
+      await act(async () => {
+        window.dispatchEvent(
+          new CustomEvent('aegis:openSettings', { detail: { tab: 'downloads' } }),
+        );
+      });
+      expect(screen.getByRole('dialog', { name: /settings/i })).toBeInTheDocument();
+
+      // And the no-detail form. `App.tsx` maps that to `appearance`; a handler that threw on
+      // a missing `detail` would pass the case above and fail here, which is the point.
+      await act(async () => {
+        window.dispatchEvent(new CustomEvent('aegis:openSettings'));
+      });
+      expect(screen.getByRole('dialog', { name: /settings/i })).toBeInTheDocument();
     });
   });
 });
