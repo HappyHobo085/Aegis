@@ -9,17 +9,21 @@ GitHub Actions workflows in `.github/workflows/`:
 
 - **`ci.yml`** (CI) — the always-on gate. Runs on every PR, on every push to `main`
   (so a direct push is gated too, not just PRs), weekly (Mon 06:17 UTC), and on
-  demand. Ubuntu only; three parallel jobs:
+  demand. Five job groups — four on `ubuntu-latest`, the `cross-target` matrix on
+  `macos-15` as well (objc2 needs a macOS C toolchain):
   - **`web`**: `npm ci` → `npm run typecheck` (`tsc --noEmit` via
     `tsconfig.build.json`, which now typechecks test files and `src/testFixtures`
     too — a test-only type error is a real error) → `npm run lint` (ESLint flat
     config, errors fail / warnings are the migration backlog) →
-    `npm run format:check` (Prettier) → `npm test` (vitest node + jsdom) →
-    `node scripts/check-npm-audit.mjs`.
+    `npm run format:check` (Prettier) → `npm run test:coverage` (vitest node +
+    jsdom, **with** the v8 report) → `npm run coverage:ratchet` →
+    `npm run build:renderer` → `npm run sizecheck` →
+    `node scripts/check-npm-audit.mjs` → `node scripts/check-android-versioncode.mjs`.
   - **`rust`**: installs the webkit2gtk build deps, then
-    `cargo fmt --check` → `cargo clippy -- -D warnings` → `cargo test` (the
-    `src-tauri` unit tests, Linux-cfg paths) for `src-tauri/Cargo.toml`, plus
-    `cargo audit` over the crypto/keyring/TLS deps. That audit is **blocking**
+    `cargo fmt --check` → `cargo clippy --locked --all-targets -- -D warnings` →
+    `cargo test` (the 517 `src-tauri` unit tests, Linux-cfg paths) → the Rust
+    coverage ratchet (`cargo llvm-cov` + `node scripts/rust-coverage-ratchet.mjs`),
+    plus `cargo audit` over the crypto/keyring/TLS deps. That audit is **blocking**
     despite the historical "advisory" label — it has no `continue-on-error`, so any
     new advisory fails the job. Ten known findings are accepted in
     `src-tauri/.cargo/audit.toml` — an `[advisories] ignore` list, not `--ignore`
@@ -33,6 +37,20 @@ GitHub Actions workflows in `.github/workflows/`:
     `sync-server/Cargo.toml`. It is the only internet-facing service, and it had no
     CI at all before — a `sync-server` lockfile with a vulnerable dependency would
     not have been caught.
+  - **`cross-target`** (`cargo check (${{ matrix.target }})`): `cargo check --locked`
+    — **check only, no link**, so no NASM/CMake (aws-lc-sys) is needed — for three
+    triples: `x86_64-pc-windows-gnu` and `aarch64-linux-android` on `ubuntu-latest`,
+    and `x86_64-apple-darwin` on **`macos-15`**. That last one cannot be moved: objc2's
+    build script needs a macOS C toolchain, so it is not cross-compilable from Linux at
+    all. This is the only leg that compiles `find_win.rs`, so it is the only thing that
+    can catch a Windows-only build break.
+  - **`msrv`**: reads the declared `rust-version` and `cargo +<that> check --locked`s
+    **both** manifests. It is the one job that deliberately ignores the repo-root
+    `rust-toolchain.toml`, because a directory override outranks a rustup default —
+    without the `+` form this job would compile whatever the default is and never test
+    the floor it exists to test. Six crate families sit at exactly the declared
+    1.88.0, so the job has **zero headroom**: one dependency bump makes it red, and
+    that is the gate working, not a reason to weaken it.
 
 - **`tauri-build-check.yml`** (Tauri Build Check) — proves the app compiles, links,
   and bundles on real OSes and produces downloadable artifacts for on-device testing.
@@ -206,7 +224,10 @@ npm test                           # includes auditCheck.test.mjs + cliGates.tes
 
 ```bash
 npm run test:coverage              # the suite + the v8 report (coverage/, gitignored)
-npm run coverage:baseline          # regenerate coverage-baseline.json — ONLY when coverage went UP
+npm run coverage:baseline          # regenerate coverage-baseline.json — whenever the
+                                    # measured FILE LIST changes, not only when coverage
+                                    # went UP (a new 0%-covered source file lowers every
+                                    # ratio while the covered count may rise; see below)
 npm run coverage:ratchet           # the CI gate (TypeScript)
 export PATH="$HOME/.cargo/bin:$PATH"   # rustup/cargo are not on PATH by default
 npm run coverage:rust:baseline     # regenerate src-tauri/coverage-baseline.json

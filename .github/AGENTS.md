@@ -8,23 +8,28 @@ GitHub Actions workflows and Dependabot config for Aegis.
   (so a direct push is gated too, not just PRs), weekly (Mon 06:17 UTC), and on
   demand. Five job groups, all on `ubuntu-latest` except the macOS cross-check:
   - **`web`**: `npm ci` → `npm run typecheck` (scoped `tsc --noEmit` via
-    `tsconfig.build.json`, which excludes test files + `src/testFixtures` to skip the
-    known test-only type noise) → `npm run lint` (ESLint flat config, errors fail /
-    warnings are the migration backlog) → `npm run format:check` (Prettier) →
-    `npm run test:coverage` (vitest node + jsdom, 1566 tests, **with** the v8 report)
-    → `npm run coverage:ratchet` → `node scripts/check-npm-audit.mjs`. The `--coverage`
-    flag rides on the _test_ step rather than buying a second `vitest run`; the ratchet
-    is its own step so a coverage regression is a distinct log line from a test failure
-    and a red suite cannot mask it. The ratchet is a **may-only-go-up** gate — it fails
-    if any of the four metrics drops below `coverage-baseline.json`, if the baseline was
-    _lowered_ in the same commit, or if a file the baseline names left the report (which
-    is what stops an added `coverage.exclude` from buying a green build by shrinking the
-    denominator). `COVERAGE_ALLOW_BASELINE_LOWER` is deliberately **not** set in the
-    workflow. Numbers and the full gap decomposition: the coverage section of the root
+    `tsconfig.build.json`, which covers `src`, `shared` and the three config files,
+    **including every `*.test.ts(x)` and `src/testFixtures`**, because a test-only
+    type error is a real error. The CI step is still _named_ "Type-check (production
+    source, scoped)", which is now a misnomer and a fourth place that stale claim
+    lived) → `npm run lint` (ESLint flat config, errors fail / warnings are the
+    migration backlog) → `npm run format:check` (Prettier) → `npm run test:coverage`
+    (vitest, node project and jsdom, 1697 tests, **with** the v8 report) →
+    `npm run coverage:ratchet` → `npm run build:renderer` → `npm run sizecheck` →
+    `node scripts/check-npm-audit.mjs` → `node scripts/check-android-versioncode.mjs`.
+    The `--coverage` flag rides on the _test_ step rather than buying a second
+    `vitest run`; the ratchet is its own step so a coverage regression is a distinct
+    log line from a test failure and a red suite cannot mask it. The ratchet is a
+    **may-only-go-up** gate — it fails if any of the four metrics drops below
+    `coverage-baseline.json`, if the baseline was _lowered_ in the same commit, or if
+    a file the baseline names left the report (which is what stops an added
+    `coverage.exclude` from buying a green build by shrinking the denominator).
+    `COVERAGE_ALLOW_BASELINE_LOWER` is deliberately **not** set in the workflow.
+    Numbers and the full gap decomposition: the coverage section of the root
     `AGENTS.md`; the tooling's own contract: `scripts/AGENTS.md`.
   - **`rust`** (the `src-tauri` crate): installs the webkit2gtk build deps, then
     `cargo fmt --check` → `cargo clippy --locked --all-targets -- -D warnings` →
-    `cargo test --locked` (the 425 `src-tauri` unit tests, Linux-cfg paths) →
+    `cargo test --locked` (the 517 `src-tauri` unit tests, Linux-cfg paths) →
     `cargo llvm-cov` + `node scripts/rust-coverage-ratchet.mjs` → a **BLOCKING**
     `cargo audit` over the crypto/keyring/TLS surface. Two things in there are not
     incidental:
