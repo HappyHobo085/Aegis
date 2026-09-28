@@ -1001,6 +1001,20 @@ syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserv
     (the canonical key lesson — see gotcha 21 below).
 - **Misc** — `picker.rs` (element picker, **desktop-only**: Linux/Windows/macOS each inject
   the overlay natively; Android has no tier and `picker.start` answers `{ok:false}`),
+  `form.rs` (**a seam, not a mechanism — NEITHER detection mode works, and the module
+  header says so**; `form.detectLoginForm` used to eval a script and block a
+  SYNCHRONOUS `ipc` on a 5 s oneshot, answering a `{hasLoginForm:false}` the renderer
+  could not tell from a real negative, and now answers `Err(DETECT_UNSUPPORTED)` from a
+  function that takes no app handle and reads no state; `form.state` has no producer on
+  any platform and the MutationObserver the header describes is not in the codebase).
+  `dispatch`, `install_listener`, `emit_form_state` and `emit_will_submit` are all
+  generic over `R: Runtime` purely so a `MockRuntime` test can reach the routing and the
+  pending-request map; that is what `a_refused_detection_arms_no_pending_request` pins
+  (the refusal must arm nothing, which is the direct observable of the removed blocking
+  impl) and what `a_detection_result_answers_only_the_request_that_asked_for_it` pins
+  (a lookup that ignored the `requestId` would bleed one tab's form state into another's
+  pending answer). `emit_will_submit` is still a `TODO(M13)` stub with zero references
+  while the renderer subscribes to `form.willSubmit` — see gotcha 25,
   `update.rs` (tauri-plugin-updater state).
 
 ## There are no dev-only side channels

@@ -52,7 +52,7 @@ use std::sync::mpsc;
 use std::sync::OnceLock;
 
 use parking_lot::Mutex;
-use tauri::{AppHandle, Listener};
+use tauri::{AppHandle, Listener, Runtime};
 
 /// Pending detection requests: request_id → oneshot sender.
 static PENDING_REQUESTS: OnceLock<Mutex<HashMap<String, mpsc::SyncSender<FormDetectionResult>>>> =
@@ -74,7 +74,12 @@ pub struct FormStateEvent {
 }
 
 /// Emit a `form.state` event to the chrome so the UI can react to form detection.
-pub fn emit_form_state(app: &AppHandle, has_login_form: bool, domain: Option<String>, tab_id: u32) {
+pub fn emit_form_state<R: Runtime>(
+    app: &AppHandle<R>,
+    has_login_form: bool,
+    domain: Option<String>,
+    tab_id: u32,
+) {
     let payload = FormStateEvent {
         has_login_form,
         domain,
@@ -86,7 +91,12 @@ pub fn emit_form_state(app: &AppHandle, has_login_form: bool, domain: Option<Str
 /// Emit a `form.willSubmit` event before a login form is submitted, so the vault
 /// save-prompt can intercept. Called from the content-webview JS bridge.
 #[allow(dead_code)] // TODO(M13): wired when the content-webview submit interceptor is added
-pub fn emit_will_submit(app: &AppHandle, domain: &str, username: &str, password: &str) {
+pub fn emit_will_submit<R: Runtime>(
+    app: &AppHandle<R>,
+    domain: &str,
+    username: &str,
+    password: &str,
+) {
     crate::emit_event(
         app,
         "form.willSubmit",
@@ -110,7 +120,7 @@ pub fn emit_will_submit(app: &AppHandle, domain: &str, username: &str, password:
 // from the content JS is the natural path (same as `form:detectionResult`).
 
 /// Start the event listeners (called once at app setup).
-pub fn install_listener(app: &AppHandle) {
+pub fn install_listener<R: Runtime>(app: &AppHandle<R>) {
     // One-shot detection result (for explicit IPC queries via `form.detectLoginForm`).
     app.listen("form:detectionResult", move |event| {
         if let Ok(payload) = serde_json::from_str::<serde_json::Value>(event.payload()) {
@@ -155,8 +165,17 @@ pub fn install_listener(app: &AppHandle) {
 }
 
 /// Handle form detection IPC calls.
-pub fn dispatch(
-    _app: &AppHandle,
+///
+/// PLACE 2 of the three-place rule: the channel name lives in `shared/types.ts`
+/// and the renderer calls it through `ipcClient`.
+///
+/// Generic over `R: Runtime` so the routing and the refusal are reachable from a
+/// `MockRuntime` test. The app handle is deliberately unused — the one arm refuses
+/// without touching state, because the transport it needs does not exist (see the
+/// module header) — so widening it changes no behaviour, only what a test can ask.
+/// The only production caller is `lib.rs`'s `ipc()`, which infers `Wry`.
+pub fn dispatch<R: Runtime>(
+    _app: &AppHandle<R>,
     channel: &str,
     _payload: &serde_json::Value,
 ) -> Option<Result<serde_json::Value, String>> {
@@ -274,5 +293,172 @@ mod tests {
         // Old snake_case keys must not be present.
         assert!(json.get("has_login_form").is_none());
         assert!(json.get("tab_id").is_none());
+    }
+
+    // ─── dispatch / install_listener ─────────────────────────────────────────
+
+    use crate::test_support::with_tmp_app;
+    use tauri::Emitter;
+
+    /// Call the dispatcher and unwrap the routing `Option`, so a test that is about an
+    /// arm's ANSWER cannot silently pass because the channel was never routed.
+    fn form_call<R: Runtime>(
+        app: &AppHandle<R>,
+        channel: &str,
+        payload: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        dispatch(app, channel, payload)
+            .unwrap_or_else(|| panic!("`{channel}` must be dispatched by the form router"))
+    }
+
+    #[test]
+    fn dispatch_declines_every_channel_it_does_not_own() {
+        with_tmp_app(|app| {
+            for channel in [
+                "form",
+                "form.state",
+                "form.getState",
+                // Case variants: the router matches exact strings.
+                "form.detectloginform",
+                "form.DetectLoginForm",
+                "detectLoginForm",
+                // Events the module EMITS are not channels it ANSWERS.
+                "form.willSubmit",
+                "form:detectionResult",
+                // Real channels owned by other modules.
+                "vault.getState",
+                "find.start",
+            ] {
+                assert!(
+                    dispatch(app, channel, &serde_json::json!({})).is_none(),
+                    "`{channel}` is not a form channel, so this router must decline it"
+                );
+            }
+        });
+    }
+
+    /// The arm must be wired to the REFUSAL, not to a plausible negative.
+    ///
+    /// The existing test calls `detect_login_form` directly, so it cannot see the arm: a
+    /// rewire to `Some(Ok(json!({"hasLoginForm": false})))` would leave it green while
+    /// the channel told the renderer it had inspected a page it never looked at.
+    #[test]
+    fn a_detect_login_form_call_through_the_dispatcher_refuses() {
+        with_tmp_app(|app| {
+            assert_eq!(
+                form_call(app, "form.detectLoginForm", &serde_json::json!({})).unwrap_err(),
+                DETECT_UNSUPPORTED,
+            );
+            // The refusal is about the missing transport, not the payload: a caller that
+            // supplies a domain and a request id must get the same answer, not a
+            // different one.
+            assert_eq!(
+                form_call(
+                    app,
+                    "form.detectLoginForm",
+                    &serde_json::json!({"domain": "example.com", "requestId": "r1"})
+                )
+                .unwrap_err(),
+                DETECT_UNSUPPORTED,
+            );
+        });
+    }
+
+    /// A refusal that armed a pending request would leave the map growing once per
+    /// call, with nothing ever able to answer it.
+    ///
+    /// This is the direct observable of the removed implementation, which registered a
+    /// oneshot sender and then waited 5 s for a page that could not reply. The map is
+    /// cleared first so the assertion is about what THIS call armed, not about
+    /// leftovers from another test.
+    #[test]
+    fn a_refused_detection_arms_no_pending_request() {
+        with_tmp_app(|app| {
+            get_pending_requests().lock().clear();
+            let _ = form_call(
+                app,
+                "form.detectLoginForm",
+                &serde_json::json!({"requestId": "r1"}),
+            );
+            assert!(
+                get_pending_requests().lock().is_empty(),
+                "a refused detection must not arm a pending request: the removed \
+                 implementation armed one and then blocked the main thread waiting for \
+                 an answer that could never arrive"
+            );
+        });
+    }
+
+    /// The `form.state` relay is the mode-2 half of this module: a page-side
+    /// `form:formStateChanged` must surface to the chrome as `form.state`, in the
+    /// camelCase shape the TS `FormState` interface declares.
+    ///
+    /// The producer does not exist yet on any platform (module header), so this is the
+    /// only automated proof that the seam is wired to the right names and the right
+    /// fields rather than being decorative.
+    #[test]
+    fn the_page_state_listener_relays_a_form_state_change_to_the_chrome() {
+        with_tmp_app(|app| {
+            install_listener(app);
+            let (tx, rx) = mpsc::channel::<serde_json::Value>();
+            let _id = app.listen("form:state", move |event| {
+                let _ = tx
+                    .send(serde_json::from_str(event.payload()).unwrap_or(serde_json::Value::Null));
+            });
+            let _ = app.emit(
+                "form:formStateChanged",
+                serde_json::json!({"hasLoginForm": true, "domain": "example.com", "tabId": 7}),
+            );
+            let got = rx
+                .try_recv()
+                .expect("a page form-state change must reach the chrome as form:state");
+            assert_eq!(
+                got.get("hasLoginForm").and_then(serde_json::Value::as_bool),
+                Some(true)
+            );
+            assert_eq!(
+                got.get("domain").and_then(serde_json::Value::as_str),
+                Some("example.com")
+            );
+            assert_eq!(
+                got.get("tabId").and_then(serde_json::Value::as_u64),
+                Some(7)
+            );
+        });
+    }
+
+    /// A result must reach the request that asked for it, and only that one.
+    ///
+    /// The map is keyed by a page-supplied `requestId`, so a lookup that ignored the
+    /// key would hand one tab's answer to another tab — the credential-adjacent version
+    /// of the cross-tab bleed the `FIND_QUERIES` store exists to prevent.
+    #[test]
+    fn a_detection_result_answers_only_the_request_that_asked_for_it() {
+        with_tmp_app(|app| {
+            install_listener(app);
+            get_pending_requests().lock().clear();
+            let (tx_a, rx_a) = mpsc::sync_channel::<FormDetectionResult>(1);
+            let (tx_b, rx_b) = mpsc::sync_channel::<FormDetectionResult>(1);
+            {
+                let mut pending = get_pending_requests().lock();
+                pending.insert("a".to_string(), tx_a);
+                pending.insert("b".to_string(), tx_b);
+            }
+            let _ = app.emit(
+                "form:detectionResult",
+                serde_json::json!({"requestId": "b", "hasLoginForm": true, "domain": "example.com"}),
+            );
+            let answered = rx_b
+                .try_recv()
+                .expect("the request that asked must be answered");
+            assert!(answered.has_login_form);
+            assert_eq!(answered.domain.as_deref(), Some("example.com"));
+            assert!(
+                rx_a.try_recv().is_err(),
+                "a result must go only to the request id that asked for it — handing it \
+                 to another tab would be a credential-adjacent cross-tab bleed"
+            );
+            get_pending_requests().lock().clear();
+        });
     }
 }
