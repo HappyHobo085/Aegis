@@ -1,6 +1,6 @@
 // src/components/SettingsModal.test.tsx
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Settings } from '../../shared/types';
 import { SettingsModal } from './SettingsModal';
@@ -232,5 +232,107 @@ describe('SettingsModal', () => {
     (p.onClose as ReturnType<typeof vi.fn>).mockClear();
     await userEvent.keyboard('{Escape}');
     expect(p.onClose).toHaveBeenCalledTimes(1);
+  });
+});
+
+// The tab rail is a `role="tablist"` with a roving tabindex — exactly one tab is
+// `tabIndex={0}`, the rest `-1`, and the arrow keys move the selection AND the focus
+// together. None of that was exercised before this block: no test pressed an arrow
+// key in the rail, and none typed in the settings search, so the whole keyboard
+// navigation and the query that reorders the rail were untested.
+describe('SettingsModal roving tabindex and search', () => {
+  const tab = (name: RegExp): HTMLElement => screen.getByRole('tab', { name });
+  const searchBox = (): HTMLElement => screen.getByPlaceholderText(/search settings/i);
+
+  it('moves the selection and the focus with the arrow keys, wrapping at both ends', () => {
+    render(<SettingsModal {...props()} />);
+    const appearance = tab(/^appearance$/i);
+    appearance.focus();
+    // The rail is GROUPED, not flat: `TAB_ORDER` is the flattened group order, so the
+    // tab after Appearance is Home — not Search.
+    fireEvent.keyDown(appearance, { key: 'ArrowRight' });
+    const home = tab(/^home$/i);
+    expect(home).toHaveAttribute('aria-selected', 'true');
+    expect(home).toHaveFocus();
+    expect(appearance).toHaveAttribute('aria-selected', 'false');
+    expect(appearance).toHaveAttribute('tabindex', '-1');
+    expect(home).toHaveAttribute('tabindex', '0');
+    fireEvent.keyDown(home, { key: 'ArrowDown' });
+    expect(tab(/^search$/i)).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(tab(/^search$/i), { key: 'ArrowUp' });
+    expect(home).toHaveAttribute('aria-selected', 'true');
+    // Step back once more to reach the first tab, then check the wrap: Up from there
+    // must land on the LAST tab rather than moving nowhere.
+    fireEvent.keyDown(home, { key: 'ArrowLeft' });
+    expect(appearance).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getAllByRole('tab')[0]).toBe(appearance); // precondition: it is the first
+    fireEvent.keyDown(appearance, { key: 'ArrowUp' });
+    expect(tab(/^data$/i)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/^data$/i)).toHaveFocus();
+  });
+
+  it('jumps to the ends with Home and End', () => {
+    render(<SettingsModal {...props()} />);
+    const appearance = tab(/^appearance$/i);
+    appearance.focus();
+    fireEvent.keyDown(appearance, { key: 'End' });
+    expect(tab(/^data$/i)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/^data$/i)).toHaveFocus();
+    fireEvent.keyDown(tab(/^data$/i), { key: 'Home' });
+    expect(appearance).toHaveAttribute('aria-selected', 'true');
+    expect(appearance).toHaveFocus();
+  });
+
+  it('cancels the default action for every key it claims, so the page does not scroll too', () => {
+    render(<SettingsModal {...props()} />);
+    const appearance = tab(/^appearance$/i);
+    appearance.focus();
+    // `fireEvent` returns the event's dispatch result, which is `false` exactly when a
+    // handler called `preventDefault()`. Each of these keys is one the rail claims, and
+    // a key the rail claims but does not cancel both scrolls the page and moves the tab.
+    for (const key of ['ArrowDown', 'ArrowRight', 'ArrowUp', 'ArrowLeft', 'Home', 'End']) {
+      expect(fireEvent.keyDown(document.activeElement ?? appearance, { key })).toBe(false);
+    }
+  });
+
+  it('moves within the FILTERED rail, so Up from the first match wraps to the last match', async () => {
+    render(<SettingsModal {...props()} />);
+    await userEvent.type(searchBox(), 'block');
+    // "block" matches exactly the three Blocking tabs — two by summary, one by label.
+    expect(screen.getAllByRole('tab')).toHaveLength(3);
+    expect(screen.queryByRole('tab', { name: /^appearance$/i })).toBeNull();
+    tab(/filter lists/i).focus();
+    fireEvent.keyDown(tab(/filter lists/i), { key: 'Home' });
+    expect(tab(/filter lists/i)).toHaveAttribute('aria-selected', 'true');
+    // Up from the first MATCH must wrap to the last MATCH. Stepping through the
+    // unfiltered TAB_ORDER here would land on Passwords, which is not in the rail at
+    // all — the panel would render with no controlling tab on screen.
+    fireEvent.keyDown(tab(/filter lists/i), { key: 'ArrowUp' });
+    expect(tab(/allowlist/i)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/allowlist/i)).toHaveFocus();
+  });
+
+  it('moves the selection to the first visible tab when the query hides the selected one', async () => {
+    render(<SettingsModal {...props()} />);
+    await userEvent.click(tab(/^data$/i));
+    expect(screen.getByTestId('panel-data')).toBeInTheDocument();
+    await userEvent.type(searchBox(), 'block');
+    expect(screen.queryByRole('tab', { name: /^data$/i })).toBeNull();
+    // Leaving Data selected would render its panel while the tab that controls it is
+    // not on screen, so the selection falls to the first tab still in the rail.
+    expect(tab(/filter lists/i)).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => {
+      expect(screen.getByTestId('panel-filterLists')).toBeInTheDocument();
+    });
+  });
+
+  it('shows the search hint instead of a panel when the query matches nothing', async () => {
+    render(<SettingsModal {...props()} />);
+    await userEvent.type(searchBox(), 'zzzz');
+    expect(screen.queryAllByRole('tab')).toHaveLength(0);
+    expect(screen.getByText(/no settings match/i)).toBeInTheDocument();
+    expect(
+      screen.getByText(/try searching for privacy, downloads, proxy, sync, or tabs/i),
+    ).toBeInTheDocument();
   });
 });

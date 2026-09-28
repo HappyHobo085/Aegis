@@ -685,3 +685,218 @@ describe('App', () => {
     });
   });
 });
+
+// The privacy preset is a SECURITY control and its wiring was never exercised. The
+// onboarding renders in every test above, but nothing ever chose a preset or pressed
+// "Start fresh", so the exact settings each preset writes were unverified. The string
+// literals are covered by tsc (`Settings.webrtcPolicy` and `antiFingerprint` are both
+// TS unions), so a typo cannot survive — but the PAIRING is semantic and unguarded:
+// nothing stopped "Strict" being wired to the mild values while the UI promises it
+// "blocks WebRTC construction". Getting it wrong is silent, because the core validates
+// and rejects a bad value, so the user who asked for maximum protection gets defaults.
+describe('App onboarding privacy preset', () => {
+  const ONBOARDING_KEY = 'aegis.onboarding.completed.v1';
+
+  beforeEach(() => {
+    // `complete()` sets this, and it is what makes the onboarding show at all, so it has
+    // to be cleared per test or only the first one sees the dialog.
+    localStorage.removeItem(ONBOARDING_KEY);
+  });
+
+  /**
+   * Render the onboarding, pick a preset, finish, and return the settings writer.
+   *
+   * The flag is cleared HERE and not only in `beforeEach` because `complete()` writes
+   * it, and a test that applies both presets renders twice in one test — the second
+   * render would otherwise find the onboarding already dismissed and render nothing.
+   * Clearing it is not relaxing anything: it is what a first run on a new machine
+   * actually looks like, and it is the precondition the control is only reachable
+   * behind.
+   */
+  const applyPreset = async (preset: 'balanced' | 'strict') => {
+    const { default: userEvent } = await import('@testing-library/user-event');
+    const { aegis } = await import('./lib/ipcClient');
+    localStorage.removeItem(ONBOARDING_KEY);
+    render(<App />);
+    const dialog = await screen.findByRole('dialog', { name: /welcome to aegis/i });
+    await userEvent.click(
+      within(dialog).getByRole('radio', { name: new RegExp(`^${preset}`, 'i') }),
+    );
+    await userEvent.click(within(dialog).getByRole('button', { name: /start fresh/i }));
+    await waitFor(() => {
+      expect(aegis.settings.set).toHaveBeenCalled();
+    });
+    return aegis.settings.set as ReturnType<typeof vi.fn>;
+  };
+
+  it('the strict preset turns WebRTC off and fingerprint protection up', async () => {
+    const set = await applyPreset('strict');
+    // The UI promises "Blocks WebRTC construction" — `disable` is the only policy that
+    // does that. `public-only` would leave the page able to read real local IPs.
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({ webrtcPolicy: 'disable', antiFingerprint: 'strict' }),
+    );
+  });
+
+  it('the balanced preset keeps WebRTC on the public-only policy', async () => {
+    const set = await applyPreset('balanced');
+    expect(set).toHaveBeenCalledWith(
+      expect.objectContaining({ webrtcPolicy: 'public-only', antiFingerprint: 'standard' }),
+    );
+  });
+
+  it('both presets upgrade http, and neither leaves httpsOnly off', async () => {
+    const strict = await applyPreset('strict');
+    expect(strict).toHaveBeenCalledWith(expect.objectContaining({ httpsOnly: true }));
+    strict.mockClear();
+    const balanced = await applyPreset('balanced');
+    expect(balanced).toHaveBeenCalledWith(expect.objectContaining({ httpsOnly: true }));
+  });
+
+  it('the two presets differ, so a copy-paste that sends one for both cannot pass', async () => {
+    const strict = await applyPreset('strict');
+    const strictArgs = strict.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    strict.mockClear();
+    const balanced = await applyPreset('balanced');
+    const balancedArgs = balanced.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    // The whole point of the control is that the two choices are not equivalent, so the
+    // weaker one must not be handed the stronger one's settings by accident.
+    expect(strictArgs.webrtcPolicy).not.toBe(balancedArgs.webrtcPolicy);
+    expect(strictArgs.antiFingerprint).not.toBe(balancedArgs.antiFingerprint);
+  });
+});
+
+describe('App native tab shortcuts', () => {
+  type TabRow = {
+    id: number;
+    pinned: boolean;
+    live: boolean;
+    title: string;
+    url: string;
+    private: boolean;
+    workspaceId: string;
+  };
+
+  let shortcutCb: ((s: string) => void) | null = null;
+
+  const row = (id: number): TabRow => ({
+    id,
+    pinned: false,
+    live: true,
+    title: `Tab ${id}`,
+    url: 'about:blank',
+    private: false,
+    workspaceId: 'default',
+  });
+
+  /**
+   * Seed the tab list and capture the `tabs.shortcut` subscriber. The handler reads
+   * `tabsRef` / `activeIdRef`, which the component re-assigns on every render from
+   * the hook state — and the hook state comes from `getState`, so a shortcut fired
+   * before the seed resolves would be handled against an EMPTY list and pass for
+   * the wrong reason. Hence the `waitFor`.
+   */
+  const start = async (ids: number[], activeId: number) => {
+    const { aegis } = await import('./lib/ipcClient');
+    const tabsApi = aegis.tabs as unknown as {
+      list: ReturnType<typeof vi.fn>;
+      create: ReturnType<typeof vi.fn>;
+      close: ReturnType<typeof vi.fn>;
+      activate: ReturnType<typeof vi.fn>;
+      reopenClosed: ReturnType<typeof vi.fn>;
+    };
+    tabsApi.list.mockReset();
+    tabsApi.list.mockResolvedValue({ tabs: ids.map(row), activeId });
+    for (const m of ['create', 'close', 'activate', 'reopenClosed'] as const) {
+      tabsApi[m].mockReset();
+      tabsApi[m].mockResolvedValue({ tabs: ids.map(row), activeId });
+    }
+    const onShortcut = aegis.tabs.onShortcut as unknown as ReturnType<typeof vi.fn>;
+    onShortcut.mockReset();
+    shortcutCb = null;
+    onShortcut.mockImplementation((cb: (s: string) => void) => {
+      shortcutCb = cb;
+      return () => {};
+    });
+    render(<App />);
+    // The seed is what the handler reads through `tabsRef`. `getAllByRole` THROWS on
+    // an empty match, so the tab count is only a usable precondition when there are
+    // tabs; with none, waiting for the seed to have been ISSUED is the check, and
+    // `tabs` is `[]` either way so the no-tabs case is unambiguous.
+    await waitFor(() => {
+      expect(tabsApi.list).toHaveBeenCalled();
+    });
+    if (ids.length > 0) {
+      await waitFor(() => {
+        expect(screen.getAllByRole('tab')).toHaveLength(ids.length);
+      });
+    }
+    if (!shortcutCb) throw new Error('the tab-shortcut subscriber was never registered');
+    return tabsApi;
+  };
+
+  const fire = (s: string) => {
+    (shortcutCb as unknown as (v: string) => void)(s);
+  };
+
+  beforeEach(() => {
+    shortcutCb = null;
+  });
+
+  it('Ctrl+T opens a tab, Ctrl+Shift+T reopens the closed one', async () => {
+    const api = await start([1], 1);
+    fire('new');
+    expect(api.create).toHaveBeenCalledTimes(1);
+    fire('reopen');
+    expect(api.reopenClosed).toHaveBeenCalledTimes(1);
+  });
+
+  it('Ctrl+W closes the ACTIVE tab, not the first one', async () => {
+    const api = await start([1, 2, 3], 2);
+    fire('close');
+    expect(api.close).toHaveBeenCalledWith(2);
+  });
+
+  it('Ctrl+Tab and Ctrl+Shift+Tab step to the next and previous tab', async () => {
+    const api = await start([1, 2, 3, 4], 2);
+    fire('next');
+    expect(api.activate).toHaveBeenLastCalledWith(3);
+    api.activate.mockClear();
+    fire('prev');
+    expect(api.activate).toHaveBeenLastCalledWith(1);
+  });
+
+  // One render per test: two `start()` calls in one test leave two Apps mounted and
+  // every `getAllByRole` then counts both tab strips.
+  it('stepping past the last tab wraps round to the first', async () => {
+    const api = await start([1, 2, 3], 3);
+    fire('next');
+    expect(api.activate).toHaveBeenLastCalledWith(1);
+  });
+
+  it('stepping back past the first tab wraps round to the last', async () => {
+    const api = await start([1, 2, 3], 1);
+    fire('prev');
+    expect(api.activate).toHaveBeenLastCalledWith(3);
+  });
+
+  it('Ctrl+1..8 and Ctrl+9 jump to that tab or the last one', async () => {
+    const api = await start([1, 2, 3, 4], 1);
+    fire('jump3');
+    expect(api.activate).toHaveBeenLastCalledWith(3);
+    fire('jumpLast');
+    expect(api.activate).toHaveBeenLastCalledWith(4);
+  });
+
+  it('a jump past the last tab is ignored rather than activating nothing', async () => {
+    const api = await start([1, 2], 1);
+    fire('jump9');
+    expect(api.activate).not.toHaveBeenCalled();
+  });
+
+  it('stepping and jumping with no tabs open is a no-op, not a crash', async () => {
+    const api = await start([], 0);
+    for (const s of ['next', 'prev', 'jump1', 'jumpLast']) fire(s);
+    expect(api.activate).not.toHaveBeenCalled();
+  });
+});

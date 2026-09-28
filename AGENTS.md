@@ -91,16 +91,16 @@ and the ratchet will (correctly) fail on the first CI run after that commit. Use
 
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
 here is either lying in CI or about to quietly relax the number. The measured gap, as of
-2026-09-28 (`120 test files / 1668 tests`):
+2026-09-28 (`120 test files / 1697 tests`):
 
-| Metric     | Measured               | Gap  |
-| ---------- | ---------------------- | ---- |
-| lines      | 4379/5084 = **86.13%** | 705  |
-| statements | 5796/6835 = **84.79%** | 1039 |
-| functions  | 1171/1407 = **83.22%** | 236  |
-| branches   | 3464/4400 = **78.72%** | 936  |
+| Metric     | Measured               | Gap |
+| ---------- | ---------------------- | --- |
+| lines      | 4483/5084 = **88.17%** | 601 |
+| statements | 5928/6835 = **86.73%** | 907 |
+| functions  | 1197/1407 = **85.07%** | 210 |
+| branches   | 3573/4400 = **81.2%**  | 827 |
 
-45 of the 119 files are at 100% statements. The 1039 uncovered statements decompose as:
+45 of the 119 files are at 100% statements. The 907 uncovered statements decompose as:
 
 - **301 statements in 7 CLI scripts that v8 structurally cannot see** — `check-bundle-size`
   (35), `check-npm-audit` (36), `check-android-versioncode` (57), `coverage-baseline` (17),
@@ -115,10 +115,10 @@ here is either lying in CI or about to quietly relax the number. The measured ga
 - **553 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (49, the
   `createRoot` entry point), `src/testFixtures/aegisMock.ts` (503, a mock), and
   `src/vite-env.d.ts` (1). All three are entry-point-or-mock by design.
-- **738 statements of real, measurable test debt** spread across 74 of the 119 files,
-  concentrated in a handful: `App.tsx` 145, `mobile/MobileApp.tsx` 84, `TabStrip.tsx` 60,
-  `SettingsModal.tsx` 34, `ipcClient.ts` 29, `Sidebar.tsx` 28, `mobile/MobileMenuSheet.tsx`
-  25, `PrivacyDashboard.tsx` 21. By directory: `src/` 729, `scripts/` 9, `shared/` **0**.
+- **606 statements of real, measurable test debt** spread across 74 of the 119 files,
+  concentrated in a handful: `App.tsx` 123, `mobile/MobileApp.tsx` 84, `TabStrip.tsx` 13,
+  `SettingsModal.tsx` 2, `ipcClient.ts` 29, `Sidebar.tsx` 1, `mobile/MobileMenuSheet.tsx`
+  25, `PrivacyDashboard.tsx` 21. By directory: `src/` 597, `scripts/` 9, `shared/` **0**.
   The file count is _files with at least one uncovered statement_, recomputed from
   `coverage/coverage-summary.json` rather than carried forward: an earlier revision of this
   line said "68 files", which is not what the report yields.
@@ -131,7 +131,7 @@ is what CI can cheaply compare; the absolute counts in the table above are the h
 companion number, and the two tables in this repo (`coverage-baseline.json` plus this one)
 are the reason to read both.
 
-**Branches (78.72%, 936 uncovered) is the weakest metric and where the next effort belongs.**
+**Branches (81.2%, 827 uncovered) is the weakest metric and where the next effort belongs.**
 The Rust side has its own measured numbers and its own structural ceiling — see the
 coverage section of `src-tauri/AGENTS.md`.
 

@@ -746,13 +746,77 @@ eval" — they already do: `run` and `runStrict` both use `(0, eval)(…)`, and 
 `grep 'eval('` returns nothing because of the `0,` de-reference. (c) The bare
 `expect(true).toBe(true)` is at `farbleShim.test.ts:298`, not in a 287-300 range.
 
+### The four biggest coverage gaps, and what closing them cost (2026-09-28)
+
+Uncovered statements before and after, measured from `coverage/coverage-summary.json`:
+`App.tsx` 145 → **123**, `TabStrip.tsx` 60 → **13**, `SettingsModal.tsx` 34 → **2**,
+`Sidebar.tsx` 28 → **1**. Every one of these four files' own source files came out
+**byte-identical to HEAD** — the whole change is tests, and each new test was proved
+non-vacuous by neutralising the mechanism it covers and watching exactly the right tests
+flip. Three of the four brief labels were wrong or imprecise, as usual:
+
+- **`TabStrip` virtualization was real, but the drag-and-drop block was equally untested**
+  and nobody had noticed, because the window was only unreachable _by accident_ — no test
+  had ever opened more than `VIRTUALIZATION_THRESHOLD` (50) tabs. Both are covered now, plus
+  the middle-click-close and right-click-pin handlers that sit in the same block.
+- **The `Sidebar` label said "rAF" but `ArrowLeft`/`ArrowRight` and the clamp were already
+  tested.** The rAF _coalescing_ was genuinely uncovered, and it is only reachable **while a
+  pointer drag is in flight** — no test had ever dragged. The `Home`/`End` clamps and the
+  localStorage-unavailable fallback were the other real gaps.
+- **The `App.tsx` label said "keyboard shortcuts" and pointed at modal wiring.** The modal
+  wiring is one-liner props; the real find was two blocks nobody had touched: the **onboarding
+  privacy preset** (a security control whose whole pairing was unexercised) and the
+  **`tabs.shortcut` native mapping** (Ctrl+T / Ctrl+W / Ctrl+Shift+T / Ctrl+Tab / Ctrl+1..9).
+  The `aegis:*` window CustomEvents at `App.tsx:216-219` are a _different_ mechanism and were
+  already covered by the vacuous-test inventory fix above.
+
+**Four jsdom gaps, all silent, each found by a test that failed for a reason I had not
+predicted.** None is a product bug; all four make a real browser behaviour unreachable in a
+test, so they will bite again:
+
+1. `fireEvent.auxClick` **does not exist** in this `@testing-library` build. Dispatch the raw
+   bubbling event instead: `fireEvent(el, new MouseEvent('auxclick', { bubbles: true, … }))`.
+2. jsdom has **no layout**, so `clientWidth` is `0` — and `0 ?? 800` is `0`. A component's own
+   viewport fallback therefore only fires on the _first_ render, when its ref is still null;
+   after any re-render the viewport collapses and a windowed render goes empty.
+   `Object.defineProperty(node, 'clientWidth', { value: 800 })`.
+3. `fireEvent.scroll(el, { target: { scrollLeft } })` does **not** write jsdom's
+   `Element.scrollLeft`. Set the property on the node first, then fire.
+4. jsdom has **no `PointerEvent` and none of the pointer-capture API** — `setPointerCapture`,
+   `hasPointerCapture` and `releasePointerCapture` are all `undefined`, and
+   `fireEvent.pointerDown(el, { pointerId: 7 })` silently drops the init so React reads
+   `undefined`. Build a plain `Event` and `Object.defineProperty` each field onto it, and stub
+   the capture trio.
+
+**What is left is honest, and part of it is not reachable at all.** `SettingsModal`'s two
+remaining statements are the `visibleTabOrder.length === 0` early returns in the `Home`/`End`
+cases: when the search matches nothing the rail renders no buttons, so no keydown can reach
+the tablist handler — structurally unreachable, not untested. `Sidebar`'s single remaining
+statement is `if (typeof window === 'undefined') return 900;`, an SSR guard jsdom can never
+hit. `TabStrip`'s 13 are a **genuine** remaining gap, not an excuse: its own `focusTabAt`
+keyboard navigation (the Enter/Space/Arrow/Home/End arms and the scroll-a-missed-tab-into-view
+branch) is still untested. `App.tsx`'s remaining 123 are mostly the conditionally-rendered
+modals and their callback props.
+
+**Two method notes worth more than the code.** _A hand-derived index is a liability_ — three
+times this session I computed an expected index or an off-by-one wrap by hand and was wrong
+(once in each of the three files here); every time the fix was to restate the assertion as the
+**property** ("the window moved, the first tab is gone, a later one is present, the count is
+still under the total") rather than the arithmetic. _`getAllByRole` throws on an empty
+match_, so `expect(queryAllByRole('tab')).toHaveLength(0)` is a precondition that can never
+hold — and a test that renders `<App />` twice leaves two copies mounted, so every role query
+then counts both. One render per test.
+
 ### Coverage of `src/`
 
 `npm run test:coverage` measures every `src/` file except three, excluded by
 `coverage.exclude` in `vitest.config.ts` because measuring them is meaningless:
 `src/main.tsx` (the `createRoot` entry point), `src/vite-env.d.ts`, and
 `src/testFixtures/**` (a mock). The measured totals, the ratchet and the full gap
-decomposition live in the **root** `AGENTS.md`; they are not restated here. Short version:
-`src/` is at 88.0% statements (736/6148 uncovered) and the debt is concentrated in
-`src/components/` (479) and the `App.tsx` root (152) — the hooks sit at 42 uncovered
-statements out of 1350, and `shared/` is at 0.
+decomposition live in the **root** `AGENTS.md`. The `src/`-only view, for when you want it
+without opening the other file: `src/` is at **90.5%** statements (5711/6308, 597 uncovered)
+and the debt is concentrated in `src/components/` (368) and the `App.tsx` root (123); the
+hooks sit at 38 uncovered statements out of 1386, and `shared/` is at 0. Every figure here
+is recomputed from `coverage/coverage-summary.json` when it is touched — the previous
+revision of this paragraph said 88.0% / 736 uncovered / 479 / 152 / 42-of-1350, none of
+which the report yields any more.

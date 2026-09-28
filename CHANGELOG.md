@@ -9,6 +9,34 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The onboarding privacy preset was a security control nothing exercised.** Choosing
+  "Strict" or "Balanced" on first run is the one moment a user is asked how much protection
+  they want, and no test had ever picked a radio or pressed "Start fresh" — so the wiring
+  between the two presets and `settings.set` was entirely unverified. The string literals are
+  type-checked, but the **pairing** is semantic and unguarded: nothing stopped "Strict" being
+  wired to the mild values while the UI promised it blocks WebRTC construction, and the
+  failure is silent because the core simply rejects a bad value, so a user asking for maximum
+  protection ends up with the defaults. Both presets are now driven through the real UI, and
+  a test asserts they **differ**, so a copy-paste that sends one for both cannot pass.
+- **The native tab shortcuts (Ctrl+T / Ctrl+W / Ctrl+Shift+T / Ctrl+Tab / Ctrl+1..9) had
+  zero coverage.** These arrive from the core as a `tabs.shortcut` event and are mapped to tab
+  actions in the chrome; the mapping — including the wrap at both ends of the list and the
+  guard against a jump past the last tab — was untested. Six cases now cover it, each proved by
+  removing the whole mapping and watching exactly those six fail; the two negative guards (a
+  jump past the end, and no tabs open) pass in both states by design, since they assert that
+  nothing happens.
+- **`TabStrip`'s virtualization and drag-and-drop were both untested.** The windowed render
+  had never been reached because no test opened more than the 50-tab threshold, and the
+  whole drag block — drop-to-reorder, middle-click-close, right-click-pin — had no test at
+  all. Both are now covered.
+- **`SettingsModal`'s roving tabindex was untested**, so keyboard navigation of the settings
+  rail was unverified: the arrow-key wrap, `Home`/`End`, the focus moving with the selection,
+  and the filtered rail (which is a different list from the unfiltered one) are all now
+  driven by real key events.
+- **`Sidebar`'s pointer resize and the frame-coalesced width report were untested.** Dragging
+  a panel edge had no test, and the `requestAnimationFrame` coalescing is only reachable
+  _while a drag is in flight_, so the arrow-key and clamp tests never reached it.
+
 - **Three of the app's shell `CustomEvent` listeners were never actually dispatched by any
   test.** `aegis:toggleSidebar`, `aegis:toggleFavoritesBar` and `aegis:openSettings` had a
   test that asserted only that they are _registered_, so the fix that un-broke both toggles
