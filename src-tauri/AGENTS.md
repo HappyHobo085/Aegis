@@ -1015,7 +1015,23 @@ syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserv
   (a lookup that ignored the `requestId` would bleed one tab's form state into another's
   pending answer). `emit_will_submit` is still a `TODO(M13)` stub with zero references
   while the renderer subscribes to `form.willSubmit` — see gotcha 25,
-  `update.rs` (tauri-plugin-updater state).
+  `update.rs` (tauri-plugin-updater state). **`update.getState` answers the
+  MANAGED `UpdateState`, not a freshly-minted default**, so a `set` that ran
+  first is observable through the same channel; the `idle()` shape is the
+  fallback for an app that has not registered the state at all, and it is what
+  a fresh install renders.
+  `dispatch` and `set` are generic over `R: Runtime` so a `MockRuntime` test can
+  reach both, which is what pins that `set` writes the store **and** emits
+  `update.state` — the two halves the chrome depends on separately, since a
+  `set` that only stored would leave a live install's badge frozen.
+  **The two spawn arms (`update.checkNow`, `update.restartToInstall`) are
+  deliberately NOT asserted on.** `with_tmp_app` registers no tauri plugins, so
+  `app.updater()` fails on a `MockRuntime` and the spawned task would `set` an
+  `error` state — and waiting for an async `set` in a unit test is a race, which
+  is worse than an honest gap. What IS asserted is the part that is a genuine
+  contract: both answer `Value::Null` immediately, because answering a state
+  would mean doing the network round-trip on the SYNCHRONOUS `ipc` command —
+  the same defect class `form.detectLoginForm` had.
 
 ## There are no dev-only side channels
 
