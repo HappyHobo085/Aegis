@@ -11,6 +11,7 @@
 //! AppHandle test must hold `LOCK` for its whole body — `with_tmp_app` does this.
 #![cfg(test)]
 
+use std::cell::RefCell;
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -129,6 +130,52 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
     drop(app);
     let _ = std::fs::remove_dir_all(&tmp);
     out
+}
+
+// --- import/flush interleave hook -------------------------------------------------
+//
+// `data.import` overwrites the `history` and `downloads` FILES while those two stores keep
+// their rows in an in-memory cache, and a background thread flushes that cache to disk every
+// three seconds. Whether a flush can land between the file write and the cache being dropped
+// is a genuine race, and it is not observable from outside the import — a flush that runs
+// *after* `data.import` returns is a no-op both before and after the fix, so a test that
+// only calls the importer and then flushes proves nothing.
+//
+// `import_tick` is the seam: `data.import` calls it (under `#[cfg(test)]`) after every store
+// write, so a test can run a REAL `history::flush`/`downloads::flush` — the same functions
+// the background thread calls — at the exact point where the race lives, and assert on the
+// file afterwards. It does not exist in a release build, and it is a no-op in any test that
+// has not registered a hook.
+thread_local! {
+    static IMPORT_HOOK: RefCell<Option<Box<dyn Fn()>>> = RefCell::new(None);
+}
+
+/// Register `f` to run after each store write inside `data.import`. Replaces any previous
+/// hook. The returned guard clears the hook when dropped, so a panicking test cannot leave a
+/// stale closure installed for the next one on this thread.
+pub fn set_import_hook(f: impl Fn() + 'static) -> ImportHookGuard {
+    IMPORT_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+    ImportHookGuard
+}
+
+/// Clears the hook on drop — see [`set_import_hook`].
+pub struct ImportHookGuard;
+
+impl Drop for ImportHookGuard {
+    fn drop(&mut self) {
+        IMPORT_HOOK.with(|h| *h.borrow_mut() = None);
+    }
+}
+
+/// Run the registered hook, if any. Thread-local, so the hook needs no `Send`/`'static`
+/// AppHandle dance — and `with_tmp_app` serialises every AppHandle test on one lock, so the
+/// import that triggers the tick and the test that installed the hook are the same thread.
+pub fn import_tick() {
+    IMPORT_HOOK.with(|h| {
+        if let Some(f) = h.borrow().as_ref() {
+            f();
+        }
+    });
 }
 
 #[cfg(test)]

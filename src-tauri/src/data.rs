@@ -271,6 +271,18 @@ pub fn dispatch<R: Runtime>(
                     }
                 }
             };
+            // `history` and `downloads` are BATCHED: their live rows sit in an in-memory
+            // cache and a background thread rewrites the file from that cache every three
+            // seconds (see history.rs "Write batching"). Drop both caches BEFORE writing
+            // anything, not after.
+            //
+            // Writing the file first left a window in which the cache still held the
+            // pre-import rows AND was still marked dirty, so a flush tick landing in that
+            // window wrote the OLD rows straight back over the just-imported file — and the
+            // import reported success. Invalidate first and a concurrent flush finds nothing
+            // loaded and nothing dirty, so it cannot write anything at all.
+            crate::history::invalidate(app);
+            crate::downloads::invalidate(app);
             let mut saves: Vec<(&str, usize, Result<(), String>)> = Vec::new();
             let node = crate::sync_identity::node_id(app);
             for s in STORES {
@@ -301,11 +313,22 @@ pub fn dispatch<R: Runtime>(
                     // The result is COLLECTED, not discarded: a store that cannot be written
                     // is reported by name below instead of being reported as imported.
                     saves.push((*s, arr.len(), jsonstore::save(app, s, &migrated)));
+                    // Test seam: a test can run a real background flush HERE, between this
+                    // store's write and the end of the import. See `test_support`'s
+                    // import/flush interleave hook for why that is the only place a flush
+                    // race is observable.
+                    #[cfg(test)]
+                    crate::test_support::import_tick();
                 }
             }
             let outcome = aggregate_saves(saves);
-            // History's + downloads' files were just overwritten — drop their in-memory caches
-            // so the next read reloads the imported rows (see history.rs "Write batching").
+            // Drop the two batched caches AGAIN, now that the files are written. The
+            // pre-loop invalidation above is what stops a flush clobbering the import; this
+            // one discards a visit or download event that `record`/`on_requested` captured
+            // from the file in the meantime, which would otherwise leave a DIRTY cache
+            // holding the pre-import rows and put the clobber back one flush later. In
+            // replace-mode the in-flight row is lost either way — the import says "history is
+            // this bundle now" — and the alternative is silently restoring the old rows.
             crate::history::invalidate(app);
             crate::downloads::invalidate(app);
             let mut refused_settings: Vec<String> = Vec::new();
@@ -533,6 +556,102 @@ mod tests {
             assert!(
                 on_disk.contains("https://fav.test/"),
                 "the healthy store must still be written — got {on_disk}"
+            );
+        });
+    }
+
+    /// The two stores whose rows are BATCHED in memory must survive an import that a
+    /// background flush runs into the middle of.
+    ///
+    /// `history` and `downloads` are not written per event: their live rows sit in an
+    /// in-memory cache and `start_flush` rewrites the file from that cache every three
+    /// seconds. So "the import succeeded" and "the import is still on disk three seconds
+    /// later" are two different claims, and a flush landing in between used to decide the
+    /// second one — by writing the PRE-import rows back over the file the import had just
+    /// written, while the import reported success. The old code invalidated the caches
+    /// *after* the store loop, so the whole loop was the window.
+    ///
+    /// Flushing after the import returns would prove nothing: that flush is a no-op both
+    /// before and after the fix, because the cache was dropped either way. So this runs the
+    /// REAL `history::flush`/`downloads::flush` from inside the import, via the
+    /// `test_support` interleave hook, and then asserts on the FILES.
+    #[test]
+    fn a_flush_during_an_import_cannot_write_the_pre_import_rows_back() {
+        with_tmp_app(|app| {
+            // Live rows, in the batched caches, both LONGER than the bundle below (3 vs 1).
+            for n in 0..3 {
+                crate::history::record(app, &format!("https://live{n}.test/"), "live", false);
+                let mut dest = PathBuf::new();
+                crate::downloads::on_requested(
+                    app,
+                    &format!("https://live{n}.test/file.bin"),
+                    &mut dest,
+                    false,
+                );
+            }
+            // Precondition: the caches really do hold the live rows, because `record` /
+            // `on_requested` write to memory and only a flush puts them on disk. If that ever
+            // stopped being true this test would pass for the wrong reason, so assert it.
+            assert!(
+                !app.path()
+                    .app_data_dir()
+                    .expect("app data dir")
+                    .join("history.json")
+                    .exists(),
+                "precondition: the live visits must still be batched in memory, not on disk"
+            );
+
+            let owned = app.clone();
+            let _hook = crate::test_support::set_import_hook(move || {
+                // Exactly what the 3-second background thread calls, at exactly the moment
+                // it could have called it.
+                crate::history::flush(&owned);
+                crate::downloads::flush(&owned);
+            });
+
+            let bundle = json!({
+                "history": [{ "url": "https://bundled.test/", "title": "B" }],
+                "downloads": [{
+                    "url": "https://bundled.test/bundle.bin",
+                    "filename": "bundle.bin",
+                    "savePath": "/tmp/bundle.bin",
+                    "state": "complete",
+                }],
+            });
+            let res = super::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
+                .expect("data.import is handled")
+                .expect("an import is Ok(json), not Err");
+            assert_eq!(
+                res.get("ok").and_then(Value::as_bool),
+                Some(true),
+                "every store saved, so the import itself is complete — got {res}"
+            );
+
+            // Assert the FILES, read past `jsonstore`'s 5s cache — the flush that would
+            // clobber them has run already, so nothing here can be re-flushed into place.
+            let dir = app.path().app_data_dir().expect("app data dir");
+            let on_disk = std::fs::read_to_string(dir.join("history.json"))
+                .expect("history.json is readable straight after the import");
+            assert_eq!(
+                on_disk.matches("https://live").count(),
+                0,
+                "a background flush wrote the pre-import visits back over the imported file \
+                 — the user restored a backup and got their old history instead: {on_disk}"
+            );
+            assert!(
+                on_disk.contains("https://bundled.test/"),
+                "the imported row must be what is on disk — got {on_disk}"
+            );
+            let dl_on_disk = std::fs::read_to_string(dir.join("downloads.json"))
+                .expect("downloads.json is readable straight after the import");
+            assert_eq!(
+                dl_on_disk.matches("https://live").count(),
+                0,
+                "same race for the downloads store — got {dl_on_disk}"
+            );
+            assert!(
+                dl_on_disk.contains("https://bundled.test/bundle.bin"),
+                "the imported download must be what is on disk — got {dl_on_disk}"
             );
         });
     }

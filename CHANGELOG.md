@@ -9,6 +9,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A restored backup could be silently undone by a background history flush.**
+  Browsing history and the downloads list are batched: their live rows live in memory and a
+  timer rewrites the file from that cache every three seconds. `data.import` wrote the
+  imported file first and dropped the in-memory cache _afterwards_, so the whole store loop
+  was a window in which a flush tick wrote the pre-import rows straight back over the file the
+  import had just written — and the import reported success. Restoring a backup could
+  therefore leave you with your old history, with nothing on screen saying so. The caches are
+  now dropped **before** any file is written (so a concurrent flush finds nothing to write)
+  and again afterwards (discarding a visit captured in the meantime), and a test runs a real
+  background flush from inside the import to keep it that way.
 - **The onboarding privacy preset was a security control nothing exercised.** Choosing
   "Strict" or "Balanced" on first run is the one moment a user is asked how much protection
   they want, and no test had ever picked a radio or pressed "Start fresh" — so the wiring

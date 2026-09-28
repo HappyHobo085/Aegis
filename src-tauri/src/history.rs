@@ -16,7 +16,9 @@
 //! started in lib.rs setup) coalesces those into one write every few seconds. User-initiated
 //! deletions (`remove`/`clear`) flush synchronously so a "cleared" history is gone from disk
 //! immediately (privacy), and `data.export` calls `flush` first so a backup is never stale.
-//! `data.import` calls `invalidate` after overwriting the file so the next read reloads it.
+//! `data.import` calls `invalidate` BEFORE overwriting the file (and again after), so a
+//! background flush can never write the pre-import rows back over the imported ones — see
+//! `data.rs`'s import arm.
 //! Reads (`list`/`search`) serve from the cache. Crash within the flush window loses at most
 //! the last few seconds of visits — acceptable for history (mirrors Chrome/Firefox batching).
 use std::sync::Mutex;
@@ -154,8 +156,9 @@ pub fn flush<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Drop the in-memory cache so the next read reloads from disk — used after `data.import`
-/// overwrites the history file.
+/// Drop the in-memory cache so the next read reloads from disk — used by `data.import` both
+/// before it writes the history file (so a background flush cannot write the pre-import rows
+/// back over it) and after.
 pub fn invalidate<R: Runtime>(app: &AppHandle<R>) {
     if let Some(store) = app.try_state::<HistoryStore>() {
         let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());

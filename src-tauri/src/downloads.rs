@@ -10,7 +10,9 @@
 //! instead of a full read-modify-serialize-double-fsync of the whole file per event. Reads
 //! (`list`, and the `openFile`/`showInFolder` path lookup) serve from the cache; user-initiated
 //! `remove`/`clear` flush synchronously; `data.export` flushes first so a backup is never stale
-//! and `data.import` invalidates so the next read reloads. Downloads is NOT synced, so the
+//! and `data.import` invalidates both BEFORE writing the file and again after, so the next read
+//! reloads the imported rows and a background flush can never write the pre-import rows back
+//! over them (see `data.rs`'s import arm). Downloads is NOT synced, so the
 //! cache is self-contained (unlike favorites/saved, which the sync engine reads from disk).
 //! Crash within the flush window loses at most the last few seconds of download-state updates.
 use std::path::{Path, PathBuf};
@@ -107,8 +109,9 @@ pub fn flush<R: Runtime>(app: &AppHandle<R>) {
     }
 }
 
-/// Drop the cache so the next read reloads from disk — used after `data.import` overwrites the
-/// downloads file.
+/// Drop the cache so the next read reloads from disk — used by `data.import` both before it
+/// writes the downloads file (so a background flush cannot write the pre-import rows back over
+/// it) and after.
 pub fn invalidate<R: Runtime>(app: &AppHandle<R>) {
     if let Some(store) = app.try_state::<DownloadsStore>() {
         let mut inner = store.0.lock().unwrap_or_else(|e| e.into_inner());

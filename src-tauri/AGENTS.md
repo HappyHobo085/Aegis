@@ -152,6 +152,23 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   `write_atomic` renames a temp file over the target and a rename onto a directory
   fails for every user, whereas a `chmod 0500` "unwritable" file is a no-op under
   root and would make the test measure the success path.
+  **The two BATCHED stores are invalidated BEFORE the loop writes them.**
+  `history` and `downloads` hold their live rows in an in-memory cache that a
+  timer flushes to disk every three seconds (`start_flush`), so writing the file
+  and dropping the cache _afterwards_ left the entire store loop as a window: a
+  flush tick landing in it wrote the pre-import rows straight back over the file
+  the import had just written, and the import reported success. Restoring a
+  backup could therefore leave the user with their old history and nothing on
+  screen saying so. The arm now calls `history::invalidate` +
+  `downloads::invalidate` before the loop (a concurrent flush finds nothing
+  loaded and nothing dirty, so it cannot write anything) and again after it
+  (discarding a visit captured from the file in between, which would otherwise
+  leave a dirty cache and put the clobber back one flush later). Testing it
+  needed a seam: a flush run AFTER the import returns is a no-op both before and
+  after the fix, so `test_support::import_tick` — a `#[cfg(test)]` hook
+  `data.import` calls after each store write — lets the test run the REAL
+  `history::flush`/`downloads::flush` from inside the import and then assert on
+  the files.
 - **Data stores** — `jsonstore.rs` (tiny JSON-array helper, unit-tested via
   `test_support::with_tmp_app` in `test_support::tests`) backs:
   - `places.rs` (favorites + saved) — **unit-tested via `test_support::with_tmp_app`:**
