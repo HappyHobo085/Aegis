@@ -38,6 +38,7 @@ export const IPC = {
   historyList: 'history.list',
   historySearch: 'history.search',
   historyRemove: 'history.remove',
+  historyRemoveForOrigin: 'history.removeForOrigin',
   historyClear: 'history.clear',
   // saved list + tags (chrome -> main)
   savedList: 'saved.list',
@@ -459,13 +460,7 @@ export interface ListUpdateResult {
 
 export interface UpdateState {
   status:
-    | 'idle'
-    | 'checking'
-    | 'available'
-    | 'not-available'
-    | 'downloading'
-    | 'downloaded'
-    | 'error';
+    'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
   version: string | null; // available/downloaded version, else null
   percent: number; // download progress 0..100
   error: string | null; // last error message, else null
@@ -674,6 +669,12 @@ export interface AegisApi {
     list(opts?: { limit?: number; offset?: number }): Promise<HistoryEntry[]>;
     search(q: string): Promise<HistoryEntry[]>;
     remove(id: number): Promise<void>;
+    /**
+     * Delete every history row for `origin` and return how many were removed. Core-side
+     * because the renderer holds only the last `list()` page (200 of up to 5000 rows), so a
+     * renderer-side loop silently leaves most of the site's history on disk.
+     */
+    removeForOrigin(origin: string): Promise<number>;
     clear(): Promise<void>;
     onChanged(cb: () => void): () => void;
   };

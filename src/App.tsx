@@ -510,9 +510,11 @@ function DesktopApp() {
 
   const clearRememberedSiteData = (origin: string): void => {
     forgetSitePermissions(origin);
-    for (const entry of history.entries.filter((entry) => originOf(entry.url) === origin)) {
-      void history.remove(entry.id);
-    }
+    // Core-side, over the WHOLE store: `history.entries` is only the last `list()` page
+    // (200 of up to 5000 rows), so looping over it claimed to clear a site while most of
+    // its history stayed on disk — and `history.search` filters the full snapshot, so the
+    // user could search the "erased" rows straight back up.
+    void history.removeForOrigin(origin);
     toast.info('Cleared Aegis history and remembered permissions for this site.');
   };
 

@@ -208,6 +208,14 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.
   Returns `{ open, state, show, setQuery, next, prev, close }` consumed by `FindBar`.
+- **`hooks/useHistory`** — the renderer's history list is a **PAGE, not the store**:
+  `aegis.history.list()` is called with no options, so the core returns the newest 200
+  rows of up to 5000. Anything that must touch "all of it" therefore has to be a core
+  call, not a loop over `entries`. `removeForOrigin(origin)` is the model: the padlock
+  menu's "Clear remembered data" (in `AddressBar`, driven from `App.tsx` and
+  `MobileApp.tsx`) deletes every row for one origin and returns how many it removed.
+  The permissions half of that same menu is deliberately STILL a renderer loop
+  (`permissions.list` is uncapped), so the two halves differ on purpose.
 - **`hooks/useZoom`** — owns page-zoom state for the active view. Seeds from
   `aegis.zoom.get(activeId)` on mount and on every tab switch; subscribes to
   `aegis.zoom.onChanged` (filtered by `viewId`). `zoomIn`/`zoomOut` step along the

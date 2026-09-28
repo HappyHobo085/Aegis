@@ -252,6 +252,15 @@ const REQUESTS: ContractRow[] = [
     payload: { q: 'needle' },
   },
   {
+    // Pinned rather than excused: this is the channel the "clear this site" menu
+    // depends on, and its payload is the whole contract (an origin string, not an
+    // entry id) — a renderer loop over `history.list` was the bug it replaced.
+    name: 'history.removeForOrigin',
+    run: () => aegis.history.removeForOrigin('https://example.com'),
+    channel: IPC.historyRemoveForOrigin,
+    payload: { origin: 'https://example.com' },
+  },
+  {
     name: 'history.remove',
     run: () => aegis.history.remove(5),
     channel: IPC.historyRemove,

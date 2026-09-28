@@ -155,6 +155,7 @@ export function aegisMockModule() {
         list: vi.fn().mockResolvedValue([]),
         search: vi.fn().mockResolvedValue([]),
         remove: vi.fn().mockResolvedValue(undefined),
+        removeForOrigin: vi.fn().mockResolvedValue(0),
         clear: vi.fn().mockResolvedValue(undefined),
         onChanged: vi.fn().mockReturnValue(() => {}),
       },

@@ -466,6 +466,7 @@ export const aegis: AegisApi = {
     list: (opts) => dedupedCall<HistoryEntry[]>(IPC.historyList, { opts }),
     search: (q) => dedupedCall<HistoryEntry[]>(IPC.historySearch, { q }),
     remove: (id) => dedupedCall(IPC.historyRemove, { id }),
+    removeForOrigin: (origin) => dedupedCall<number>(IPC.historyRemoveForOrigin, { origin }),
     clear: () => dedupedCall(IPC.historyClear, undefined),
     onChanged: (cb) => on<void>(IPC.evtHistoryChanged, cb),
   },

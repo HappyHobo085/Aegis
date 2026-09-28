@@ -180,7 +180,17 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
     `record_page_finished` path (12 tests).
     **Visits are recorded by the PLATFORM, not by the chrome** — see the Android
     history gotcha below before touching either side.
-  - `downloads.rs` — **unit-tested via `test_support::with_tmp_app`:** private-tab
+    `history.removeForOrigin` (added 2026-09-28) deletes EVERY row for one
+    origin by filtering the full store, and is the ONLY way to clear a site's
+    history: `list()` returns the newest 200 of up to 5000, so a renderer loop
+    over those entries clears a page and calls it a clean slate — while
+    `search` filters the whole store, so the user can search the "erased" rows
+    straight back up. It returns the number removed and emits `history.changed`
+    only when that is non-zero. Its `origin_of` is deliberately NOT
+    `permissions::origin_of`: that one is `#[cfg(target_os = "linux")]` and falls
+    back to the RAW URI string for opaque input, so a clear-this-site built on it
+    would match rows the renderer never showed (and `data.import` really can
+    plant `about:`/`data:` URLs in the store).  - `downloads.rs` — **unit-tested via `test_support::with_tmp_app`:** private-tab
     skip, `on_requested` filename derivation + state, `on_finished` complete/
     interrupted, `remove` tombstone, `clear` keeps in-progress (6 tests).
   - `subs.rs` (filter subscriptions + fetch) — also **seeds the built-in default

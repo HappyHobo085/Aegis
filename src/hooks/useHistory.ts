@@ -9,6 +9,7 @@ export function useHistory(): {
   setQuery(q: string): void;
   search(): Promise<void>;
   remove(id: number): Promise<void>;
+  removeForOrigin(origin: string): Promise<number>;
   clear(): Promise<void>;
 } {
   const [entries, setEntries] = useState<HistoryEntry[]>([]);
@@ -72,5 +73,18 @@ export function useHistory(): {
     await refresh();
   }, [refresh]);
 
-  return { entries, query, setQuery, search, remove, clear };
+  // Deletes every row for one origin INSIDE the core. Do not implement this as a loop over
+  // `entries` above: that array is one `list()` page (the core default cap is 200, against
+  // 5000 stored rows), so a loop would clear at most that many and report success — while
+  // `history.search` filters the full store, so the user could still find the rest.
+  const removeForOrigin = useCallback(
+    async (origin: string): Promise<number> => {
+      const removed = await aegis.history.removeForOrigin(origin);
+      await refresh();
+      return removed;
+    },
+    [refresh],
+  );
+
+  return { entries, query, setQuery, search, remove, removeForOrigin, clear };
 }

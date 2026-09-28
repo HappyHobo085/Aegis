@@ -68,6 +68,35 @@ fn apply_visit(items: &mut Vec<Value>, url: &str, title: &str, now: i64) -> bool
     true
 }
 
+/// Schemes the WHATWG URL spec gives a TUPLE (non-opaque) origin. Every other scheme --
+/// `about:`, `data:`, `file:` (special but always opaque), `chrome:`, and any custom
+/// scheme -- has origin the literal string `"null"`, which the renderer's `originOf`
+/// normalises to `null`. An origin string can therefore never equal one of those.
+fn has_tuple_origin(scheme: &str) -> bool {
+    matches!(scheme, "http" | "https" | "ws" | "wss" | "ftp")
+}
+
+/// The origin of `url` in EXACTLY the form the renderer produces -- the string
+/// `new URL(url).origin` returns, with an opaque origin normalised to `None`.
+///
+/// Deliberately NOT `permissions::origin_of`. That one is `#[cfg(target_os = "linux")]`
+/// and FALLS BACK to the raw URI string when parsing fails or there is no host, which is
+/// a different contract from the renderer's `null`. The origin string handed to
+/// `history.removeForOrigin` comes from `originOf(url)` in the renderer, so both ends
+/// must implement one contract: a "clear this site" that quietly matched raw strings
+/// would delete rows the renderer never showed the user.
+fn origin_of(url: &str) -> Option<String> {
+    let u = tauri::Url::parse(url).ok()?;
+    if !has_tuple_origin(u.scheme()) {
+        return None;
+    }
+    let host = u.host_str().filter(|h| !h.is_empty())?;
+    Some(match u.port() {
+        Some(p) => format!("{}://{}:{}", u.scheme(), host, p),
+        None => format!("{}://{}", u.scheme(), host),
+    })
+}
+
 /// Pure: set the title of the most-recent entry for `url`. Returns true if it changed.
 fn apply_title(items: &mut [Value], url: &str, title: &str) -> bool {
     let Some(i) = items
@@ -349,6 +378,36 @@ pub fn dispatch<R: Runtime>(
             crate::emit_event(app, "history.changed", Value::Null);
             Some(Ok(Value::Null))
         }
+        "history.removeForOrigin" => {
+            // Delete every row for one origin. This has to be a CORE operation: the renderer
+            // holds only the last `history.list` page (the core default cap is 200, against
+            // MAX_ENTRIES = 5000), so a renderer-side loop over those entries cannot reach the
+            // rest — it reports success while most of the site's history stays on disk. This
+            // filters the FULL store, so "clear this site" means it.
+            let origin = payload
+                .get("origin")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let want = origin.as_str();
+            let mut removed: usize = 0;
+            // User-initiated deletion → flush now so it leaves disk immediately.
+            mutate(app, true, |items| {
+                let before = items.len();
+                items.retain(|it| {
+                    let u = it.get("url").and_then(Value::as_str).unwrap_or("");
+                    origin_of(u).as_deref() != Some(want)
+                });
+                removed = before - items.len();
+                removed > 0
+            });
+            // Only on an actual change: an event that says nothing happened would just make
+            // every mounted panel refetch a store that did not move.
+            if removed > 0 {
+                crate::emit_event(app, "history.changed", Value::Null);
+            }
+            Some(Ok(json!(removed)))
+        }
         "history.clear" => {
             // Truly remove (history isn't synced) — clear actually clears, and flushes now.
             if let Some(store) = app.try_state::<HistoryStore>() {
@@ -478,6 +537,227 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(all.as_array().unwrap().len(), 2);
+        });
+    }
+
+    /// The renderer hands this channel the string `new URL(url).origin` returns. If the two
+    /// ends disagree about what an origin IS, "clear this site" quietly stops matching the
+    /// rows the panel is showing. These are the shapes where a hand-rolled splitter is wrong:
+    /// a default port, an explicit one, mixed case, userinfo, an IPv6 literal, and the opaque
+    /// schemes the renderer normalises to `null` (and therefore can never pass in).
+    #[test]
+    fn origin_of_matches_the_renderer_contract() {
+        assert_eq!(
+            origin_of("https://example.com/deep/path?q=1#f").as_deref(),
+            Some("https://example.com")
+        );
+        // The url crate drops a DEFAULT port; `new URL().origin` drops it too.
+        assert_eq!(
+            origin_of("https://example.com:443/x").as_deref(),
+            Some("https://example.com")
+        );
+        // A non-default port is kept, on both sides.
+        assert_eq!(
+            origin_of("https://example.com:8443/x").as_deref(),
+            Some("https://example.com:8443")
+        );
+        // Scheme + host are case-normalised, so a mixed-case row still matches a lowercased
+        // origin from the renderer.
+        assert_eq!(
+            origin_of("HTTPS://Example.COM/").as_deref(),
+            Some("https://example.com")
+        );
+        // Userinfo is not part of an origin.
+        assert_eq!(
+            origin_of("https://user:pw@example.com/x").as_deref(),
+            Some("https://example.com")
+        );
+        // IPv6 keeps its brackets in both implementations.
+        assert_eq!(
+            origin_of("http://[::1]:8080/x").as_deref(),
+            Some("http://[::1]:8080")
+        );
+        // Opaque origins are the renderer's `null`, so they are never an origin string.
+        for opaque in [
+            "about:blank",
+            "data:text/html,x",
+            "file:///etc/passwd",
+            "not a url",
+        ] {
+            assert_eq!(origin_of(opaque), None, "{opaque} has no tuple origin");
+        }
+    }
+
+    /// The bug this channel exists for. `history.list` caps at 200 rows (the core default
+    /// against `MAX_ENTRIES` 5000), and the renderer's "Clear remembered data" used to loop
+    /// over exactly that page, calling `history.remove` once per visible row. So on a site
+    /// the user had visited more than 200 times it reported success while most of the site's
+    /// history stayed on disk — and `history.search` filters the FULL snapshot, so the user
+    /// could search the "erased" rows straight back up in the History panel.
+    ///
+    /// Asserts the rows are gone from the STORE (which is what search reads), that the decoy
+    /// origins are untouched, and that the page the renderer held genuinely could not have
+    /// reached them all — otherwise this test would pass on the old behaviour too.
+    #[test]
+    fn remove_for_origin_clears_every_row_not_just_the_last_page() {
+        with_tmp_app(|app| {
+            const VISITS: usize = 250;
+            for n in 0..VISITS {
+                // Distinct URLs on one origin: `apply_visit` only dedups a CONSECUTIVE
+                // repeat, so every one of these is a real row.
+                record(app, &format!("https://busy.test/page/{n}"), "Busy", false);
+            }
+            record(app, "https://other.test/keep", "Other", false);
+            record(app, "http://busy.test/scheme-matters", "Insecure", false);
+            record(app, "https://sub.busy.test/other-host", "Subdomain", false);
+
+            // Precondition: the page the renderer held was SMALLER than the site's history.
+            // Without this, the old renderer-side loop would have been enough and this test
+            // would be proving nothing.
+            let page = dispatch(app, "history.list", &json!({ "opts": {} }))
+                .unwrap()
+                .unwrap();
+            let page_rows = page.as_array().unwrap();
+            assert_eq!(page_rows.len(), 200, "the default list() page is the cap");
+            let page_hits = page_rows
+                .iter()
+                .filter(|e| {
+                    origin_of(e.get("url").and_then(Value::as_str).unwrap_or("")).as_deref()
+                        == Some("https://busy.test")
+                })
+                .count();
+            // The three decoys were recorded last, so the newest-first page is those three
+            // plus 197 of the 250. Precisely the gap the renderer-side loop could not cross.
+            assert_eq!(page_hits, 197, "3 newest decoys + 197 of the 250");
+            assert!(
+                page_hits < VISITS,
+                "the page must be smaller than the rows to remove"
+            );
+
+            let removed = dispatch(
+                app,
+                "history.removeForOrigin",
+                &json!({ "origin": "https://busy.test" }),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                removed,
+                json!(VISITS),
+                "every row for that origin, not one page of them"
+            );
+
+            // The STORE is what `history.search` reads, so this is the user-visible proof.
+            let left = snapshot(app);
+            assert_eq!(
+                left.iter()
+                    .filter(
+                        |e| origin_of(e.get("url").and_then(Value::as_str).unwrap_or(""))
+                            .as_deref()
+                            == Some("https://busy.test")
+                    )
+                    .count(),
+                0,
+                "the supposedly-cleared rows are still searchable"
+            );
+            // Decoys untouched: a different origin, a different SCHEME on the same host (the
+            // scheme is part of an origin), and a different host.
+            let left_urls: Vec<String> = left
+                .iter()
+                .filter_map(|e| e.get("url").and_then(Value::as_str).map(str::to_string))
+                .collect();
+            assert_eq!(
+                left_urls.len(),
+                3,
+                "only the three decoys should remain: {left_urls:?}"
+            );
+            for keep in [
+                "https://other.test/keep",
+                "http://busy.test/scheme-matters",
+                "https://sub.busy.test/other-host",
+            ] {
+                assert!(
+                    left_urls.iter().any(|u| u == keep),
+                    "{keep} was wrongly removed"
+                );
+            }
+        });
+    }
+
+    /// A second call is a no-op and reports 0, so a caller that double-fires the button
+    /// cannot tell the user it removed rows the second time.
+    #[test]
+    fn remove_for_origin_is_idempotent_and_reports_zero_the_second_time() {
+        with_tmp_app(|app| {
+            record(app, "https://a.test/", "A", false);
+            record(app, "https://a.test/2", "A2", false);
+            let first = dispatch(
+                app,
+                "history.removeForOrigin",
+                &json!({ "origin": "https://a.test" }),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(first, json!(2));
+            let second = dispatch(
+                app,
+                "history.removeForOrigin",
+                &json!({ "origin": "https://a.test" }),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(second, json!(0));
+            assert!(snapshot(app).is_empty());
+        });
+    }
+
+    /// A degenerate origin must remove nothing, and must not fall back to some other
+    /// representation of a row's URL.
+    ///
+    /// The rows with no tuple origin are PLANTED, not recorded: `should_record_visit` refuses
+    /// `about:` and `data:`, but `data.import` writes whatever a backup bundle holds straight
+    /// into this store, so the store really can hold them and this channel really can see
+    /// them. `permissions::origin_of` — the one other origin parser in the crate — falls back
+    /// to the RAW STRING for exactly these, which is the behaviour being ruled out here.
+    #[test]
+    fn remove_for_origin_never_matches_on_a_degenerate_origin() {
+        with_tmp_app(|app| {
+            record(app, "https://a.test/", "A", false);
+            let planted = ["about:blank", "data:text/html,x", "file:///etc/passwd"];
+            mutate(app, true, |items| {
+                for (n, url) in planted.iter().enumerate() {
+                    items.push(json!({
+                        "id": 900_000 + n as i64,
+                        "url": url,
+                        "title": "Planted",
+                        "visitedAt": 1,
+                    }));
+                }
+                true
+            });
+            assert_eq!(
+                snapshot(app).len(),
+                4,
+                "the planted rows are really in the store"
+            );
+            for degenerate in [
+                "",
+                "null",
+                "about:blank",
+                "file://",
+                "not-a-url",
+                "https://",
+            ] {
+                let removed = dispatch(
+                    app,
+                    "history.removeForOrigin",
+                    &json!({ "origin": degenerate }),
+                )
+                .unwrap()
+                .unwrap();
+                assert_eq!(removed, json!(0), "{degenerate:?} must not match any row");
+            }
+            assert_eq!(snapshot(app).len(), 4, "every row must still be there");
         });
     }
 

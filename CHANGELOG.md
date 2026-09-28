@@ -9,6 +9,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **“Clear remembered data” for a site left most of that site’s history on disk.** The
+  History panel and the padlock both hold only the most recent 200 rows (of up to 5000), so
+  clearing a site you had visited more than 200 times removed only what happened to be
+  loaded — while the confirmation toast said the site was cleared. Because the History
+  search filters the whole store, you could search the supposedly-erased visits straight
+  back up. Clearing is now one core operation over every row for that origin, and it
+  reports how many it actually removed.
 - **Un-checking “allow ads on this site” could not un-allow a subdomain, and made the
   allowlist grow instead.** The allowlist covers a whole site, so a single “allow ads”
   tick on `example.com` also stops the ads on `www.example.com`. The core stores what you

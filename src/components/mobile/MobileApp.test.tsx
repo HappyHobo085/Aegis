@@ -126,6 +126,7 @@ vi.mock('../../lib/ipcClient', () => ({
       list: vi.fn().mockResolvedValue([]),
       search: vi.fn().mockResolvedValue([]),
       remove: vi.fn().mockResolvedValue(undefined),
+      removeForOrigin: vi.fn().mockResolvedValue(0),
       clear: vi.fn().mockResolvedValue(undefined),
       onChanged: vi.fn().mockReturnValue(() => {}),
     },
@@ -289,9 +290,11 @@ vi.mock('../../lib/ipcClient', () => ({
 
 import { aegis } from '../../lib/ipcClient';
 import { MobileApp } from './MobileApp';
+import { subscribeToasts, __resetToasts, type ToastItem } from '../../lib/toast';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  __resetToasts();
 });
 
 describe('MobileApp', () => {
@@ -347,5 +350,62 @@ describe('MobileApp', () => {
     await waitFor(() =>
       expect(aegis.tabs.recordNav).toHaveBeenCalledWith(1, 'https://example.com/', 'Example'),
     );
+  });
+
+  // "Clear remembered data" used to loop over `history.entries` calling
+  // `history.remove(entry.id)` once per row the renderer happened to hold, then toast
+  // success. `useHistory` loads `aegis.history.list()` with no options, so the core's
+  // default cap of 200 (against MAX_ENTRIES 5000) meant a site visited more than 200
+  // times kept most of its history on disk while the UI claimed otherwise — and
+  // `history.search` filters the FULL snapshot, so the user could search the
+  // "erased" rows straight back up. The removal has to be a core operation.
+  it('clears a site history through the core, not by deleting the rows it happens to hold', async () => {
+    // A full page: 200 rows, all on the site's origin. If the shell looped over these
+    // (the old behaviour) it would make 200 `history.remove` calls and still be wrong.
+    const page = Array.from({ length: 200 }, (_, n) => ({
+      id: n + 1,
+      url: `https://example.com/page/${n}`,
+      title: `Page ${n}`,
+      visitedAt: n,
+    }));
+    (aegis.history.list as ReturnType<typeof vi.fn>).mockResolvedValue(page);
+    (aegis.permissions.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { origin: 'https://example.com', permission: 'geolocation', decision: 'deny' },
+    ]);
+    (aegis.history.removeForOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(431);
+
+    const toasts: ToastItem[] = [];
+    const unsubscribe = subscribeToasts((next) => toasts.splice(0, toasts.length, ...next));
+
+    try {
+      render(<MobileApp />);
+      fireEvent.click(await screen.findByRole('button', { name: /site information/i }));
+      const clear = await screen.findByRole('button', { name: /clear remembered data/i });
+      expect(clear).not.toBeDisabled();
+      fireEvent.click(clear);
+
+      // ONE core call for the whole origin, with the origin the URL actually has.
+      await waitFor(() =>
+        expect(aegis.history.removeForOrigin).toHaveBeenCalledWith('https://example.com'),
+      );
+      expect(aegis.history.removeForOrigin).toHaveBeenCalledTimes(1);
+
+      // The per-row loop is gone: with 200 rows loaded it would have fired 200 times.
+      expect(aegis.history.remove).not.toHaveBeenCalled();
+
+      // The permissions half was already correct and must stay correct — it was never
+      // paginated, so a renderer-side loop was the right shape there.
+      await waitFor(() =>
+        expect(aegis.permissions.remove).toHaveBeenCalledWith('https://example.com', 'geolocation'),
+      );
+
+      await waitFor(() =>
+        expect(
+          toasts.some((t) => /Cleared Aegis history and remembered permissions/i.test(t.message)),
+        ).toBe(true),
+      );
+    } finally {
+      unsubscribe();
+    }
   });
 });
