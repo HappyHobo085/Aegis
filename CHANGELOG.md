@@ -809,6 +809,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Added
 
+- **The backup importer can now read a file you pick, not only pasted text.** The Data
+  tab grew a "Choose a backup file…" button that fills the existing paste box with the
+  file's contents, so a restore is still something you read before you run it \u2014 which
+  matters, because replacing wipes your history. The import itself is unchanged code on
+  an unchanged path, and pasting still works.
+
 - **A test-coverage ratchet on both sides of the repo, wired into CI.** This is a gate, not
   a claim: neither the renderer nor the Rust core is at 100%, and the committed numbers say
   so honestly rather than quietly rounding up to a threshold nobody reads.

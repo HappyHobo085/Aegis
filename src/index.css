@@ -3826,6 +3826,31 @@ body.aegis-fullscreen {
 
 /* Paste-to-import field + hints — in-app, dark (replaces the native file picker,
    which rendered in the OS's light theme). */
+/* Pick-a-file row. Deliberately OUTLINED rather than accent-filled: Export and
+   Import are the two actions that matter, and a third accent button in the same
+   panel would flatten that. The real <input> is .sr-only behind this button. */
+.data-tab__pick {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.data-tab__pick button {
+  padding: 7px 16px;
+  background: transparent;
+  color: var(--fg);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.data-tab__pick button:hover:not(:disabled) {
+  background: var(--bg-hover);
+  border-color: var(--accent-color);
+}
+
 .data-tab__paste {
   display: flex;
   flex-direction: column;

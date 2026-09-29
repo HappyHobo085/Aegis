@@ -114,7 +114,7 @@ describe('DataTab', () => {
     expect((draft as HTMLTextAreaElement).value).toBe('{"history":[]}');
   });
 
-  it('imports pasted JSON (no native file picker) when the paste field is filled', async () => {
+  it('imports pasted JSON through the same path a picked file takes', async () => {
     const p = props();
     render(<DataTab {...p} />);
     fireEvent.change(screen.getByRole('textbox', { name: /backup json to import/i }), {
@@ -122,5 +122,79 @@ describe('DataTab', () => {
     });
     await userEvent.click(screen.getByRole('button', { name: /^import$/i }));
     expect(p.onImport).toHaveBeenCalledWith('merge', { text: '{"version":1}' });
+  });
+
+  // The picker FILLS the paste box rather than importing at once. That is the point: the
+  // box is where a restore can be read before it runs, and `replace` is destructive.
+  it('fills the paste box from a chosen file instead of importing it immediately', async () => {
+    const p = props();
+    render(<DataTab {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /choose a backup file/i }));
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    await userEvent.upload(
+      input,
+      new File(['{"favorites":[]}'], 'aegis-export.json', { type: 'application/json' }),
+    );
+    // The name is surfaced, and the draft is the file's contents...
+    expect(await screen.findByTestId('data-tab-picked')).toHaveTextContent('aegis-export.json');
+    expect(
+      (screen.getByRole('textbox', { name: /backup json to import/i }) as HTMLTextAreaElement)
+        .value,
+    ).toBe('{"favorites":[]}');
+    // ...but nothing has been imported yet.
+    expect(p.onImport).not.toHaveBeenCalled();
+    // And the existing, already-tested button is what actually imports it.
+    await userEvent.click(screen.getByRole('button', { name: /^import$/i }));
+    expect(p.onImport).toHaveBeenCalledWith('merge', { text: '{"favorites":[]}' });
+  });
+
+  // `change` only fires when the value actually changes, so the input's value is cleared
+  // on every pick. Without that, choosing the SAME file twice silently does nothing the
+  // second time — which is exactly what a user retrying a bad backup does.
+  it('lets the same file be chosen twice', async () => {
+    const p = props();
+    render(<DataTab {...p} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const file = new File(['{"a":1}'], 'backup.json', { type: 'application/json' });
+    await userEvent.upload(input, file);
+    await userEvent.upload(input, file);
+    const box = screen.getByRole('textbox', {
+      name: /backup json to import/i,
+    }) as HTMLTextAreaElement;
+    expect(box.value).toBe('{"a":1}');
+    expect(input.value).toBe('');
+  });
+
+  // The BUTTON is the control the user clicks; the input is only its hand-off point.
+  // `userEvent.upload` sets `files` on the input directly, so every other test here
+  // would still pass if the button did nothing at all — this is the only thing that
+  // pins the button to it, and it also pins the input out of the tab order, since a
+  // visually hidden but focusable input would be a second stop nobody can see.
+  it('opens the chooser from the button, and keeps the input out of the tab order', async () => {
+    const p = props();
+    render(<DataTab {...p} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const click = vi.spyOn(input, 'click');
+    await userEvent.click(screen.getByRole('button', { name: /choose a backup file/i }));
+    expect(click).toHaveBeenCalledTimes(1);
+    expect(input.getAttribute('tabindex')).toBe('-1');
+  });
+
+  it('reports a file it could not read and leaves the box alone', async () => {
+    const p = props();
+    render(<DataTab {...p} />);
+    const input = document.querySelector('input[type="file"]') as HTMLInputElement;
+    const bad = new File(['x'], 'broken.json', { type: 'application/json' });
+    // jsdom's File.text() is not wired to a body we can break, so stub the reader itself.
+    vi.spyOn(bad, 'text').mockRejectedValue(new Error('disk gone'));
+    await userEvent.upload(input, bad);
+    await waitFor(() => expect(toast.error).toHaveBeenCalled());
+    expect((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0] as string).toMatch(
+      /broken\.json/,
+    );
+    expect(
+      (screen.getByRole('textbox', { name: /backup json to import/i }) as HTMLTextAreaElement)
+        .value,
+    ).toBe('');
   });
 });
