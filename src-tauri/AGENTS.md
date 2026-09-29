@@ -1566,8 +1566,8 @@ strictly higher):
 
 | Metric               | Measured (floor)     | Gap  |
 | -------------------- | -------------------- | ---- |
-| lines                | 17636/20633 = 85.47% | 2997 |
-| statements (regions) | 30659/35970 = 85.23% | 5311 |
+| lines                | 17630/20634 = 85.44% | 3004 |
+| statements (regions) | 30641/35971 = 85.18% | 5330 |
 | functions            | 2109/2631 = 80.16%   | 522  |
 
 The report holds **45** files, all of which compile on Linux. **7 further modules are
@@ -1575,9 +1575,24 @@ The report holds **45** files, all of which compile on Linux. **7 further module
 excluded from the report (`adblock_win`, `find_win`, `nav_policy_win`, `nav_url_win`,
 `nav_url_mac`, `zoom_win`, `zoom_mac`). One report entry — `linux_layout.rs` — compiles
 but is excluded as unexecutable in a headless session, so **44 files are in the gate**.
-Before the exclusion list the no-keyring run reads 83.17% lines / 82.87% regions / 78.05%
+Before the exclusion list the same run reads 83.14% lines / 82.82% regions / 78.05%
 functions — the difference is entirely `linux_layout.rs` (88/678 lines). With a keyring
 those figures are ~1pp higher, which is exactly why the floor is the committed number.
+
+**That floor is the MINIMUM of several runs, not one run — and the minimum is load-bearing.**
+Stripping D-Bus makes the *keychain* tests skip deterministically (`sync_keystore.rs` reads
+228 lines on every run, with or without a keyring it is 286), but it does **not** make the
+whole suite deterministic. Four `cargo llvm-cov` runs on one unchanged tree gave lines
+17630 / 17637 / 17637 / 17638, all with the same 2109 functions, and the entire spread is
+two files: `sync.rs` 830–837 and `adblock_engine.rs` 310–311. The cause is the **kernel
+keyring**, not D-Bus: the keyring crate's `linux-native` backend needs no session bus at
+all, and the kernel keyring is shared mutable state *outside* the test process. So whether
+`restart_restores_an_enabled_sync_state` finds a stored root — and therefore whether it
+reaches the opening of `sync_once` (sync.rs 355-368, the ±7 lines) — depends on what a
+sibling test happened to leave behind. A baseline generated from one lucky run is a
+threshold the next run may miss, which is the same class of bug as the keyring floor
+itself, one level down. **Regenerate from the lowest run, and re-run the ratchet against
+several reports before committing a baseline.**
 
 **`statements` is llvm `regions`, not an istanbul statement.** A region is a code
 span, not an expression. The label is a deliberate fiction that exists so the
@@ -1640,11 +1655,13 @@ session bus), `tabs.rs` 55.48%, `sync.rs` 62.53%, `sync_keystore.rs` 63.87% (the
 no-keyring figure — 228 of 357), `nav.rs` 66.57%, `permissions.rs` 76.30%,
 `redirect_guard.rs` 79.14%, `update.rs` 81.43%, `subs.rs` 82.51%. The covered end is
 `vault_inject.rs` 100%, `sync_auth.rs` 98.92%, `sync_envelope.rs` 98.82%, `tab_registry.rs`
-98.14%, `data.rs` 98.06%, `crypto.rs` 97.27%, `find.rs` 97.02%, `jsonstore.rs` 97.13%,
-`adblock_engine.rs` 94.53%, `zoom.rs` 93.56%, `form.rs` 91.98%, `view.rs` 87.39%.
+98.14%, `data.rs` 98.06%, `customfilters.rs` 97.70%, `crypto.rs` 97.27%, `find.rs` 97.02%,
+`jsonstore.rs` 97.13%, `adblock_engine.rs` 94.22%, `zoom.rs` 93.56%, `form.rs` 91.98%,
+`view.rs` 87.39%. `adblock_engine.rs` and `sync.rs` are quoted at their FLOOR values (310
+and 830), so a run that measures higher reads better than the table, never worse.
 
 **Read the direction of travel before reading the ratio.** `zoom.rs` went 18.57% → 93.56%
-and `lib.rs` 16.46% → 36.72% because the dispatchers were driven under `MockRuntime`;
+and `lib.rs` 16.46% → 36.83% because the dispatchers were driven under `MockRuntime`;
 neither number moved by deleting anything.
 
 **A percentage can rise while the codebase gets worse**, exactly as on the

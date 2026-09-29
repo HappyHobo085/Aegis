@@ -37,14 +37,14 @@
   ],
   "total": {
     "lines": {
-      "total": 20633,
-      "covered": 17636,
-      "pct": 85.47
+      "total": 20634,
+      "covered": 17630,
+      "pct": 85.44
     },
     "statements": {
-      "total": 35970,
-      "covered": 30659,
-      "pct": 85.23
+      "total": 35971,
+      "covered": 30641,
+      "pct": 85.18
     },
     "functions": {
       "total": 2631,
@@ -102,13 +102,13 @@
     "src-tauri/src/adblock_engine.rs": {
       "lines": {
         "total": 329,
-        "covered": 311,
-        "pct": 94.53
+        "covered": 310,
+        "pct": 94.22
       },
       "statements": {
         "total": 454,
-        "covered": 429,
-        "pct": 94.49
+        "covered": 428,
+        "pct": 94.27
       },
       "functions": {
         "total": 31,
@@ -416,14 +416,14 @@
     },
     "src-tauri/src/lib.rs": {
       "lines": {
-        "total": 542,
-        "covered": 199,
-        "pct": 36.72
+        "total": 543,
+        "covered": 200,
+        "pct": 36.83
       },
       "statements": {
-        "total": 894,
-        "covered": 342,
-        "pct": 38.26
+        "total": 895,
+        "covered": 343,
+        "pct": 38.32
       },
       "functions": {
         "total": 49,
@@ -627,13 +627,13 @@
     "src-tauri/src/sync.rs": {
       "lines": {
         "total": 1337,
-        "covered": 836,
-        "pct": 62.53
+        "covered": 830,
+        "pct": 62.08
       },
       "statements": {
         "total": 2310,
-        "covered": 1437,
-        "pct": 62.21
+        "covered": 1419,
+        "pct": 61.43
       },
       "functions": {
         "total": 131,

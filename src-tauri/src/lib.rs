@@ -1087,6 +1087,14 @@ mod tests {
             }
         }
 
+        // `read_dir` yields entries in whatever order the FILESYSTEM hands them back, which
+        // is not a contract: this list came out alphabetical on the ext4 dev box and in
+        // inode order on CI's runner, so the assertion below failed there while passing
+        // here with the same three files. The assertion's claim is "exactly these three",
+        // which is a claim about the SET, so compare the set. (This test is the only thing
+        // that ever compared the two, and it shipped red on its first CI run.)
+        offenders.sort();
+
         // A walk that read nothing would satisfy any offender-list assertion, so the
         // number of files read is checked against the number of module declarations the
         // crate root makes: every `mod X;` needs a file of that name, so a scan that

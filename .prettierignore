@@ -9,6 +9,14 @@ package-lock.json
 *.AppImage
 # Rust-embedded JS assets (include_str!'d + string-matched by cargo tests) — must not be reformatted
 src-tauri/src
+# Hand-maintained Rust design doc, NOT a formatting target. Measured reasons, not preference:
+#   1. prettier is NOT idempotent on it — it needed 4 --write passes to reach a fixed point, and
+#      it oscillated on a blank line + a list-item indent in the middle of a >2-deep list.
+#   2. The fixed point is LOSSY: reformatting glued inline code spans to adjacent words in 68
+#      lines (e.g. "`…spawn()` on desktop" -> "`…spawn()`on desktop"), dropping the space.
+# So running it would trade a format:check failure for 68 damaged lines of prose. Excluded
+# rather than mangled; every other file in the repo stays fully checked.
+src-tauri/AGENTS.md
 # Agent scratch dirs (git-ignored working files) — keep out of the local format:check
 .superpowers
 .opencode

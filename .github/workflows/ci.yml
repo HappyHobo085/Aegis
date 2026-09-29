@@ -225,6 +225,20 @@ jobs:
           # gnome-keyring-daemon installed at all. Getting this wrong broke run
           # 36440444084 on `sync.rs` (-82) and `sync_keystore.rs` (-58); see
           # "The Rust coverage baseline is a FLOOR" in src-tauri/AGENTS.md.
+          #
+          # That recipe is NECESSARY BUT NOT SUFFICIENT, and the second half of the
+          # problem is not about D-Bus at all. Stripping the bus makes the keychain
+          # tests skip deterministically, but the keyring crate's `linux-native`
+          # backend needs NO session bus and the KERNEL keyring is shared mutable
+          # state outside the test process. Four runs of this exact step on one
+          # unchanged tree gave lines 17630/17637/17637/17638 — same 2109 functions,
+          # the whole spread being `sync.rs` 830-837 and `adblock_engine.rs` 310-311,
+          # because whether a sibling test left a stored root decides if
+          # `restart_restores_an_enabled_sync_state` reaches `sync_once` at all
+          # (sync.rs 355-368). Run 36626888574 failed here on exactly that. So the
+          # committed baseline is the MINIMUM ACROSS RUNS, not one run: regenerate
+          # from the lowest report, and check the ratchet against several reports
+          # before committing, or this step becomes a coin flip.
           cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib --json > "$RUNNER_TEMP/llvmcov.json"
           node scripts/rust-coverage-ratchet.mjs "$RUNNER_TEMP/llvmcov.json"
       - name: cargo audit (BLOCKING — crypto/keyring/TLS surface)
