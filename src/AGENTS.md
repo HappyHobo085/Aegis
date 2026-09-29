@@ -308,6 +308,25 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
     `src/lib/ipcClient.contract.test.ts` — every request channel must have a row there
     pinning its exact channel and payload, and `UNPINNED_REQUEST` is only for channels the
     renderer never emits.
+  - **The HTTPS-Only checkbox is DESKTOP-ONLY — honest tiering, not a hidden gap.**
+    `gen/android/app/build.gradle.kts` sets
+    `manifestPlaceholders["usesCleartextTraffic"]="false"` for RELEASE (`"true"` only for
+    debug), so a release APK cannot load `http://` at all: the setting cannot be turned OFF
+    there, and a checkbox that cannot act is a control that lies. `MainActivity.secureUrl`'s
+    upgrade still runs, so the feature is not lost — it is unconditional. Flipping the manifest
+    instead would re-enable cleartext for EVERY request, third-party ads and trackers included,
+    a real privacy regression on the platform that most needs the protection. On Android the row
+    is replaced by ONE sentence saying so, rather than vanishing silently: a user who un-checks
+    the box on another platform has no idea why nothing changes here, and it is a real privacy
+    control they may be relying on. The gate is `.aegis-mobile` — the repo's ONE Android marker,
+    written in one place (`ipcClient.ts`, from the UA at module load) and read by `App.tsx` to
+    pick the mobile shell and by `useNarrowViewport`; a second platform test is how the crate
+    once ended up with two scheme lists — and it is read at RENDER time for the same reason
+    `App.tsx`'s `getIsMobile()` is a function. `SecurityTab.test.tsx` pins BOTH directions: the
+    row is absent (and the sentence present) with the class set, and the pre-existing
+    `reflects httpsOnly and toggles it via update` uses `getByRole`, which THROWS when the
+    checkbox is missing, so the desktop side cannot pass vacuously. Each side is proven
+    non-vacuous by neutralising the gate in the one direction that should redden it.
 - **`hooks/useSync`** — owns sync UI state. **`quarantined` is deliberately NOT part of
   `state`.** `state` is the core's own `sync.getState` view, so folding a peer-supplied,
   renderer-observed fact into it would make the core's reply look like it is missing a field

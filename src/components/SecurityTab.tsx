@@ -2,6 +2,17 @@
 import { useEffect, useState } from 'react';
 import type { FingerprintState, Settings, WebrtcExemptState } from '../../shared/types';
 
+/** True on the Android shell. `.aegis-mobile` is the repo's ONE Android marker: it is
+ *  written in exactly one place (`ipcClient.ts`, from the UA at module load) and read
+ *  by `App.tsx` to pick the mobile shell and by `useNarrowViewport` to skip its
+ *  desktop branch. Reading the class rather than re-testing the UA is deliberate — a
+ *  second platform test is how the crate got two scheme lists in the first place. */
+function isAndroid(): boolean {
+  return (
+    typeof document !== 'undefined' && document.documentElement.classList.contains('aegis-mobile')
+  );
+}
+
 export function SecurityTab({
   settings,
   update,
@@ -41,17 +52,39 @@ export function SecurityTab({
 
   return (
     <div className="security-tab">
-      <label className="security-tab__field">
-        <input
-          type="checkbox"
-          checked={settings.httpsOnly}
-          onChange={(e) => update({ httpsOnly: e.target.checked })}
-          aria-label="HTTPS-Only mode"
-        />
-        <span>
-          HTTPS-Only mode — upgrade sites to a secure connection and warn before using HTTP
-        </span>
-      </label>
+      {/* HTTPS-Only is a DESKTOP control only, and this is the honest reason rather
+          than a hidden limitation: `gen/android/app/build.gradle.kts` sets
+          `usesCleartextTraffic=false` for RELEASE (true only for debug), so a
+          release build cannot load `http://` at all — the setting cannot be
+          turned OFF there, and a checkbox that cannot do anything is a control
+          that lies. Flipping the manifest instead would re-enable cleartext for
+          EVERY request, third-party ads and trackers included, which is a real
+          privacy regression on the platform that most needs the protection. The
+          upgrade in `MainActivity.secureUrl` still runs, so the feature is not
+          lost — it is unconditional. Gate on `.aegis-mobile`, the single signal
+          the rest of the chrome already uses for the Android shell (written once
+          in `ipcClient.ts` from the UA, read by `App.tsx` and
+          `useNarrowViewport`), and read it at RENDER time for the same reason
+          `App.tsx`'s `getIsMobile()` is a function: import order must not decide
+          whether the control appears. */}
+      {isAndroid() ? (
+        <p>
+          HTTPS-Only mode is always on here — Android's network policy refuses plain HTTP outright,
+          so there is nothing to switch.
+        </p>
+      ) : (
+        <label className="security-tab__field">
+          <input
+            type="checkbox"
+            checked={settings.httpsOnly}
+            onChange={(e) => update({ httpsOnly: e.target.checked })}
+            aria-label="HTTPS-Only mode"
+          />
+          <span>
+            HTTPS-Only mode — upgrade sites to a secure connection and warn before using HTTP
+          </span>
+        </label>
+      )}
 
       <h3>Sites allowed over HTTP</h3>
       {exceptions.length === 0 ? (

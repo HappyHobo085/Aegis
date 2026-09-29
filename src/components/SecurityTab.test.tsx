@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SecurityTab } from './SecurityTab';
@@ -44,6 +44,12 @@ function renderSecurityTab(
   );
 }
 
+// `.aegis-mobile` lives on `<html>` for the whole module, so a test that sets it
+// MUST clear it or every later test in this file renders the Android branch.
+afterEach(() => {
+  document.documentElement.classList.remove('aegis-mobile');
+});
+
 describe('SecurityTab', () => {
   it('reflects httpsOnly and toggles it via update', async () => {
     const update = vi.fn();
@@ -52,6 +58,19 @@ describe('SecurityTab', () => {
     expect(toggle).toBeChecked();
     await userEvent.click(toggle);
     expect(update).toHaveBeenCalledWith({ httpsOnly: false });
+  });
+
+  it('offers no HTTPS-Only switch on Android, and says why', () => {
+    // The desktop side of the pair is the test above: it uses `getByRole`, which
+    // THROWS when the checkbox is absent, so it cannot pass while this passes.
+    document.documentElement.classList.add('aegis-mobile');
+    renderSecurityTab();
+    // `queryAllByRole` — `getAllByRole` throws on an empty match, so the
+    // "expect(…).toHaveLength(0)" idiom has to use the query form.
+    expect(screen.queryAllByRole('checkbox', { name: /https-only/i })).toHaveLength(0);
+    // …and the control is not merely hidden: the user is told the setting is
+    // unconditional, because the alternative is a silently inert privacy control.
+    expect(screen.getByText(/always on here/i)).toBeTruthy();
   });
 
   it('reflects webrtcPolicy and changes it via update', async () => {

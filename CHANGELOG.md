@@ -9,6 +9,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The HTTPS-Only switch is no longer shown on Android, where it could not do
+  anything.** A release build sets Android's `usesCleartextTraffic=false`, so it
+  refuses plain HTTP outright and the setting cannot be turned off; the checkbox
+  was a control that lied. The row is replaced by one line saying HTTPS-Only is
+  always on there. The upgrade itself is unchanged — it was already applied.
 - **On Windows, ad-block rules carrying a type option (`$script`, `$image`,
   `$stylesheet`, `$xhr`, `$font`, `$media`, `$websocket`, …) could never match.** The
   WebView2 network tier passed the literal request type `"other"` to the filter engine, so
