@@ -190,6 +190,22 @@ const UNSUBSCRIBED_EVENTS: Record<string, string> = {
     'subscriber, and vault.onState already reports the same mutation — so the open question is ' +
     'WHICH event is the contract, not who should subscribe. Guessing would either delete a live ' +
     'event or add a second subscription to a payload a component already receives.',
+  // Surfaced by widening the wrapper-key regex above, and the reason is STRONGER than the two
+  // above rather than a third open question: this event is UNREACHABLE, not merely unwatched.
+  // `form.onLoginFormDetected` is a method-shorthand wrapper, so the old regex (which required a
+  // `:`) never saw it and direction 3 dropped the binding and exempted this key for free. It
+  // was exempt for the right OUTCOME by accident. `form.rs:184` answers `form.detectLoginForm`
+  // with `Err(DETECT_UNSUPPORTED)`, and `form.rs:24` states that nothing emits
+  // `form:detectionResult` from ANY platform: a content webview is built with no Tauri
+  // capability and `withGlobalTauri` is absent, so the injected `window.__TAURI__.emit` in the
+  // content JS cannot run. No subscriber could ever be woken. Building the content->core
+  // transport is a feature, not a guard change, so it is recorded here rather than guessed at.
+  evtFormDetectResult:
+    'UNREACHABLE, not unwatched. form.rs:24 states nothing emits form:detectionResult from any ' +
+    'platform, and form.rs:13-19 gives the reason: a content webview has no Tauri capability and ' +
+    'no withGlobalTauri, so the injected window.__TAURI__.emit cannot run. form.rs:184 also ' +
+    'refuses form.detectLoginForm outright. Wiring the content->core transport is a feature, not ' +
+    'a guard change — a subscriber here would be dead code.',
 };
 
 /** Read every `.rs` file in `src-tauri/src`. */
@@ -355,6 +371,34 @@ const TRANSPORT_FILE = 'src/lib/ipcClient.ts';
  * asserted below, so a reformat that breaks the parse fails loudly instead of quietly
  * emptying the map.
  */
+/**
+ * The wrapper NAME a 4-space line introduces, or `null` when the line is not an object member.
+ *
+ * THREE member shapes carry a wrapper name at 4 spaces and the transport uses all three:
+ * `key: (cb) => on<T>(IPC.evtX, cb),` (property, one line), `key: (cb) => {` (property, block)
+ * and `key(cb) {` (METHOD SHORTHAND — `form.onLoginFormDetected` and `form.detectLoginForm` are
+ * the two in the file). Requiring a `:` matched only the first two, so for the third `wrapper`
+ * stayed null, the `IPC.evt…` on the next line was dropped, and `evtFormDetectResult` was
+ * silently EXEMPT from direction 3 — the guard exempted an event without ever having seen its
+ * wrapper, which is the exact failure mode this file exists to stop.
+ *
+ * The terminator test is what keeps this from ALSO matching the 4-space CLASS statements in the
+ * same file (`super(message);`, `cleanupCache();`): they end in `;`, and matching one would set
+ * `wrapper` to a name that is not an `on…` wrapper and misattribute the next event. The accepted
+ * terminators are ENUMERATED over every 4-space `name(`/`name:` line in the transport, not
+ * guessed: 104 end in `,` (the one-line property), 24 in `{` (the property-and-block form and the
+ * method-shorthand form) and 20 in `=>` (the property whose `IPC.evt…` is on the NEXT line, e.g.
+ * `onWillSubmit`). The only 2 that end in `;` are those class statements. `=>` was missing from
+ * an earlier version of this rule, which did not merely lose an event: it left `wrapper` holding
+ * `onState`, so the live, subscribed `evtFormWillSubmit` was reported as an orphan of a DIFFERENT
+ * wrapper. Named and module-level so the anti-vacuity test asserts this rule rather than a copy
+ * of it — a copy would be the second source of truth this fix is about removing.
+ */
+function wrapperKeyOnLine(line: string): string | null {
+  const member = /^ {4}([A-Za-z][A-Za-z0-9]*)[(:]/.exec(line);
+  return member && /(?:[,{]|=>)\s*$/.test(line.trimEnd()) ? member[1] : null;
+}
+
 function collectWrapperSurfaces(): Map<string, string> {
   const src = readFileSync(join(process.cwd(), TRANSPORT_FILE), 'utf8');
   const out = new Map<string, string>();
@@ -375,10 +419,17 @@ function collectWrapperSurfaces(): Map<string, string> {
       wrapper = null;
       continue;
     }
-    const start = /^ {4}([A-Za-z][A-Za-z0-9]*):/.exec(line);
+    // THREE member shapes carry a wrapper name at 4 spaces, and the transport uses all three:
+    // `key: (cb) => on<T>(IPC.evtX, cb),` (property, one line), `key: (cb) => {` (property,
+    // block) and `key(cb) {` (METHOD SHORTHAND — `form.onLoginFormDetected` and `form
+    // .detectLoginForm` are the two in the file). Requiring a `:` matched only the first two,
+    // so for the third `wrapper` stayed null, the `IPC.evt…` on the next line was dropped, and
+    // `evtFormDetectResult` was silently EXEMPT from direction 3 — the guard exempted it
+    // without ever having seen the wrapper, which is the failure mode this file exists to stop.
     // Deliberately NOT `continue`d: the single-line wrapper shape carries its own
     // `IPC.evt…` on the same line, so skipping the rest of the line dropped those events.
-    if (start) wrapper = start[1];
+    const key = wrapperKeyOnLine(line);
+    if (key) wrapper = key;
     const bound = /IPC\.(evt[A-Za-z0-9]+)/.exec(line);
     if (bound && wrapper && wrapper.startsWith('on') && namespace) {
       out.set(bound[1], `${namespace}.${wrapper}`);
@@ -443,6 +494,38 @@ describe('IPC catalog drift', () => {
       ]) {
         expect(mentioned, `FORWARD scan lost shape: ${shape}`).toContain(shape);
       }
+    });
+
+    it('the wrapper scan sees a METHOD-SHORTHAND member, not only a property', () => {
+      // The regression this pins: the 4-space key regex required a `:`, and the transport's
+      // two method-shorthand members (`form.detectLoginForm`, `form.onLoginFormDetected`) use
+      // `(`. One of them was invisible, so `evtFormDetectResult` was exempt from direction 3
+      // without the guard ever having seen the wrapper. The anti-vacuity job here is the same
+      // as the FORWARD test above — pin one name per SHAPE actually used, so a future regex
+      // change cannot quietly blind a shape again.
+      expect(WRAPPER_SURFACE.get('evtFormDetectResult')).toBe('form.onLoginFormDetected');
+      // The other method/property shape, and the one a first attempt at the fix RE-BROKE:
+      // `onWillSubmit: (cb) =>` puts its `IPC.evtFormWillSubmit` on the NEXT line, so the key
+      // line ends in `=>` rather than `,` or `{`. Accepting only `,`/`{` made the guard report
+      // this event with the PREVIOUS wrapper's name — which is exactly the kind of plausible
+      // wrong answer a source scan can produce, and the only reason it was caught.
+      expect(WRAPPER_SURFACE.get('evtFormWillSubmit')).toBe('form.onWillSubmit');
+      // …and the terminator test, in the other direction: it must reject EXACTLY the 4-space
+      // class statements, which the key regex matches but which are not object members. Read the
+      // REAL transport rather than asserting against two hardcoded line strings — a rename would
+      // leave a hardcoded fixture testing nothing, and "the test still passes" is the failure
+      // this file exists to prevent. Pinning the exact rejected SET, rather than only that every
+      // rejected line ends in `;`, is what makes a new 4-space non-member shape a failure instead
+      // of a silent growth of the rejected list.
+      const transport = readFileSync(join(process.cwd(), TRANSPORT_FILE), 'utf8');
+      const nonMembers = transport
+        .split('\n')
+        .filter((l) => /^ {4}[A-Za-z][A-Za-z0-9]*[(:]/.test(l) && wrapperKeyOnLine(l) === null)
+        .map((l) => l.trim());
+      expect(
+        nonMembers,
+        'the 4-space lines the key regex matches but must NOT read as members',
+      ).toEqual(['super(message);', 'cleanupCache();']);
     });
 
     it('the REVERSE scanner sees every contract site', () => {

@@ -125,7 +125,21 @@ password: string; notes: string }` — decrypted record; returned only by direct
      `TRANSPORT_FILE` excluded. **Excluding the transport is the load-bearing part**;
      four `anti-vacuity` tests pin it, the decisive one asserting the transport cannot
      subscribe to itself. Turning it on immediately found three events with a wrapper
-     and no caller — the same class as `subs.changed` and `picker.picked`. An event
+     and no caller — the same class as `subs.changed` and `picker.picked`. **A second,
+     independent blind spot in the same direction was closed on 2026-09-29:** the parser
+     that reads the wrapper surface keyed off `/^ {4}(\w+):/`, so the transport's two
+     **method-shorthand** members (`form.detectLoginForm`, `form.onLoginFormDetected`,
+     written `name(cb) {`) were invisible, `wrapper` stayed null, and `evtFormDetectResult`
+     was EXEMPT from direction 3 without the guard ever having seen its wrapper. The rule
+     is now a named `wrapperKeyOnLine(line)` that accepts `(` as well as `:` and requires
+     an object-member terminator (`,`, `{`, `=>`) — the terminator set is ENUMERATED over
+     the transport (104 lines end in `,`, 24 in `{`, 20 in `=>`; the only two ending in
+     `;` are 4-space class statements), and an anti-vacuity test asserts the exact rejected
+     set so a new non-member shape is a failure rather than a silent growth. Fixing it
+     surfaced `evtFormDetectResult` as a genuine orphan, now recorded in
+     `UNSUBSCRIBED_EVENTS` — and the first attempt at the terminator set, which omitted
+     `=>`, misattributed the live `evtFormWillSubmit` to `onState` and reported it as an
+     orphan. An event
      with **no wrapper at all** is not this direction's problem (the PLACE-3 contract
      test in `ipcClient.contract.test.ts` gates that, expecting `[]`), so direction 3
      does not blame itself for it.
