@@ -10,6 +10,11 @@
 mod adblock;
 // The bundled filter lists (EasyList + EasyPrivacy + Peter Lowe's), single-sourced so
 // every ad-block tier blocks from the identical set across all platforms.
+// WebKit content-blocker conversion. Its only caller is `install_adblock`, which is
+// `#[cfg(target_os = "linux")]`, so on every other platform the whole module is dead. The
+// `test` arm keeps its unit tests running everywhere; that is why the module carries no
+// `#![allow(dead_code)]` -- a blanket allow would suppress Linux's real diagnostics too.
+#[cfg(any(target_os = "linux", test))]
 mod adblock_convert;
 mod adblock_lists;
 // Form detection for autofill triggering
@@ -893,6 +898,14 @@ pub fn run() {
 mod tests {
     use super::ffi_guard;
 
+    /// The needle for a module-level allow attribute, assembled at two halves on purpose.
+    /// Written as one literal it would sit in this file's own source, and this file is one
+    /// of the files the scan below reads — so the scan would match its own matcher and
+    /// report `lib.rs` as an offender on every run, with no way to tell that apart from a
+    /// real finding. This is the same self-reference trap `rust_production_source` exists
+    /// to close, one level up: there it was a whole test, here it is a single constant.
+    const MODULE_ALLOW_PREFIX: &str = concat!("#", "![allow(");
+
     /// The capability is the renderer's ENTIRE authorisation surface, and it is
     /// load-time configuration rather than code, so nothing else in the crate
     /// changes when it is widened. Read from the file, not from a constant, because a
@@ -1013,6 +1026,162 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "a dialog plugin is being registered again, in {offenders:?}"
+        );
+    }
+
+    /// Classify a source file: which of its lines are a MODULE-level blanket dead-code
+    /// allow? Pulled out of the scan so the RULE the scan applies is itself under test,
+    /// instead of the scan being the only place the rule exists and being trusted.
+    ///
+    /// Only a line that trims to start with a module-level `allow(` and mentions
+    /// `dead_code` counts. That deliberately excludes two things that must NOT be
+    /// counted: a per-item `allow(dead_code)` or `cfg_attr(..., allow(dead_code))`,
+    /// which is scoped to one item and is the form the repo actually wants, and a
+    /// commented-out example.
+    fn blanket_dead_code_allow_lines(text: &str) -> Vec<usize> {
+        text.lines()
+            .enumerate()
+            .filter(|(_, line)| {
+                let t = line.trim();
+                t.starts_with(MODULE_ALLOW_PREFIX) && t.contains("dead_code")
+            })
+            .map(|(i, _)| i + 1)
+            .collect()
+    }
+
+    /// A module must not carry a blanket dead-code allow.
+    ///
+    /// Two did, and the two needed DIFFERENT fixes, which is why the scan asserts the
+    /// surviving set rather than asserting an empty one. `adblock_webkit` is declared
+    /// `#[cfg(target_os = "linux")]`, so on the only platform that compiles it nothing in
+    /// it is dead: its allow was pure dead weight, and under CI's externally injected
+    /// `-D warnings` a pure-dead-weight allow still suppresses that platform's REAL
+    /// diagnostics. `adblock_convert` is declared unconditionally, but its only caller,
+    /// `install_adblock`, is `#[cfg(target_os = "linux")]` — so on Windows/macOS/Android
+    /// the entire module is dead and the allow was genuinely load-bearing there. For
+    /// that one the honest spelling is a cfg gate on the `mod` declaration, which is
+    /// what landed; an allow cannot distinguish "dead here" from "dead everywhere".
+    ///
+    /// Three module-level allows REMAIN and are pinned by name, so adding a fourth fails
+    /// here rather than passing silently. Pinning beats asserting emptiness because an
+    /// "empty" assertion could not have been written today without lying.
+    #[test]
+    fn no_module_carries_a_blanket_dead_code_allow() {
+        let src_dir = format!("{}/src", env!("CARGO_MANIFEST_DIR"));
+        let mut offenders: Vec<String> = Vec::new();
+        let mut read = 0usize;
+        for entry in std::fs::read_dir(&src_dir).expect("the crate's src/ directory is readable") {
+            let path = entry.expect("readable directory entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            read += 1;
+            let text = std::fs::read_to_string(&path).expect("readable .rs source file");
+            if !blanket_dead_code_allow_lines(&text).is_empty() {
+                offenders.push(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+
+        // A walk that read nothing would satisfy any offender-list assertion, so the
+        // number of files read is checked against the number of module declarations the
+        // crate root makes: every `mod X;` needs a file of that name, so a scan that
+        // silently stopped early is loud instead of green.
+        let crate_root = std::fs::read_to_string(format!("{src_dir}/lib.rs"))
+            .expect("the crate root is readable");
+        let declared = crate_root
+            .lines()
+            .filter(|l| {
+                let t = l.trim();
+                t.starts_with("mod ") && t.ends_with(';')
+            })
+            .count();
+        assert!(
+            read >= declared,
+            "the scan read {read} .rs files but lib.rs declares {declared} modules, so the walk \
+             is not finding every file and an offender list of {offenders:?} would prove nothing"
+        );
+
+        assert_eq!(
+            offenders,
+            vec!["adblock_lists.rs", "sync_stores.rs", "sync_vault.rs"],
+            "a module gained a blanket dead-code allow. Give the module a cfg gate instead — and \
+             keep a `test` arm on it so its unit tests still run on the platforms where it is \
+             otherwise absent. A blanket allow hides dead code on the platform that DOES \
+             compile the module, which is exactly where you want to hear about it."
+        );
+    }
+
+    /// The scan's rule, tested on a source that contains every shape it must judge. A
+    /// sample is the only way to prove the negative cases, because the live crate has
+    /// none of them to find.
+    #[test]
+    fn the_blanket_allow_scan_separates_module_allows_from_scoped_and_commented_ones() {
+        let sample = concat!(
+            "#![allow(dead_code)]\n",
+            "  #![allow(dead_code)]  // indented, still module level\n",
+            "#![allow(unused_imports)]\n",
+            "#[allow(dead_code)]\n",
+            "#[cfg_attr(target_os = \"android\", allow(dead_code))]\n",
+            "// #![allow(dead_code)]\n",
+            "/* #![allow(dead_code)] */\n",
+            "fn clean() {}\n",
+        );
+        assert_eq!(
+            blanket_dead_code_allow_lines(sample),
+            vec![1, 2],
+            "only the two module-level allows count: the per-item attribute, the cfg_attr, the \
+             line comment, the block comment and the unrelated module allow are all not one"
+        );
+    }
+
+    /// The gate belongs on the DECLARATION. A cfg on the module's own items would leave
+    /// the file compiled everywhere with the rest of it dead, which is the blanket allow
+    /// again under a different spelling. Read the crate root's PRODUCTION source, so
+    /// this test's own text cannot satisfy the search — the same trap
+    /// `rust_production_source` was added for, and `include_str!` of this file returns
+    /// this test.
+    #[test]
+    fn adblock_convert_is_gated_at_its_mod_declaration() {
+        let src = crate::test_support::rust_production_source(include_str!("lib.rs"));
+        let lines: Vec<&str> = src.lines().collect();
+        let at = lines
+            .iter()
+            .position(|l| l.trim() == "mod adblock_convert;")
+            .expect("lib.rs still declares the adblock_convert module");
+        let gate = lines[..at]
+            .iter()
+            .rev()
+            .find(|l| !l.trim().is_empty())
+            .expect("the declaration has a line above it");
+        assert!(
+            gate.trim().starts_with("#[cfg("),
+            "adblock_convert is declared with no cfg attribute ({gate:?}). Its only caller is \
+             `install_adblock`, which is `#[cfg(target_os = \"linux\")]`, so the module is dead \
+             on every other platform and needs a gate on the declaration, not an allow"
+        );
+        assert!(
+            gate.contains("linux") && gate.contains("test"),
+            "the gate must compile the module where it has a caller AND under test, or its eight \
+             conversion tests stop running off Linux ({gate:?})"
+        );
+    }
+
+    /// The `test` arm of that gate, proven at COMPILE time rather than by reading it: this
+    /// reference only resolves if `adblock_convert` is compiled in a test build. If the gate
+    /// ever loses its `test` condition, this stops building on Windows, macOS and Android,
+    /// and eight conversion tests quietly vanish from those platforms' runs. A string
+    /// assertion could not catch that — it would keep passing.
+    #[test]
+    fn adblock_convert_is_compiled_for_its_own_tests_off_linux() {
+        assert_eq!(
+            crate::adblock_convert::to_content_blocker_chunks(&[], 1, &[]).expect("no rules in"),
+            Vec::<String>::new(),
+            "an empty filter list converts to no chunks at all"
         );
     }
 

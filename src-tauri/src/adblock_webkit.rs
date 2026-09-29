@@ -23,7 +23,14 @@
 // `install_adblock` (the result is hash-cached on the lists + the allowlist).
 //
 // Mechanism proven (a content filter blocks a target URL; verified 2026-06-13).
-#![allow(dead_code)]
+//
+// There is deliberately NO `#![allow(dead_code)]` here, and that is worth stating: this
+// module is declared `#[cfg(target_os = "linux")]` (lib.rs), so it is compiled on exactly
+// one platform, and a blanket allow would suppress that platform's real dead-code
+// diagnostics without silencing anything on the platforms where the module does not
+// exist at all. Every item here has a caller on Linux; if one loses it, the warning that
+// appears is the correct one. The sibling module `adblock_convert` needed a cfg gate on
+// its DECLARATION for the same reason — see the note on that `mod` in lib.rs.
 use std::ffi::CString;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicUsize, Ordering};

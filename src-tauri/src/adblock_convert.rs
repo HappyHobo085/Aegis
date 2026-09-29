@@ -12,7 +12,13 @@
 //! compiled into WebKit. The content-blocker format's own escape hatch is an
 //! `ignore-previous-rules` action scoped by `if-domain`, so `to_content_blocker_chunks`
 //! takes the allowlist and appends one exemption per host (see `allowlist_exemptions`).
-#![allow(dead_code)]
+//!
+//! There is no `#![allow(dead_code)]` here either. This module IS reachable on every
+//! platform, but only through `install_adblock`, which is `#[cfg(target_os = "linux")]`,
+//! so on Windows/macOS/Android nothing in the file has a caller. The honest way to say
+//! that is a cfg gate on the `mod` declaration in lib.rs, not an allow that would also
+//! hide a real dead item on Linux. The gate keeps a `test` arm so these conversion tests
+//! still run on every platform.
 use adblock::content_blocking::{CbAction, CbRule, CbTrigger, CbType};
 use adblock::lists::{FilterSet, ParseOptions};
 
