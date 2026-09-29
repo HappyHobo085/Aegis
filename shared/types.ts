@@ -17,7 +17,6 @@ export const IPC = {
   viewSetContentVisible: 'view.setContentVisible',
   viewSetContentInset: 'view.setContentInset',
   viewSetChromeOverlay: 'view.setChromeOverlay',
-  viewSetSidebar: 'view.setSidebar',
   viewSetLayout: 'view.setLayout',
   viewSetFullscreen: 'view.setFullscreen',
   settingsGet: 'settings.get',
@@ -648,13 +647,14 @@ export interface AegisApi {
     setContentVisible(viewId: ViewId, visible: boolean): Promise<void>;
     setContentInset(viewId: ViewId, inset: ContentInset): Promise<void>;
     setChromeOverlay(viewId: ViewId, active: boolean): Promise<void>;
-    /** The sidebar is a right panel: inset the content from the right (page stays
-     * visible) rather than hiding it. Optional — Electron composes its sidebar via
-     * the chrome overlay, so it may not implement this. */
-    setSidebar?(viewId: ViewId, active: boolean, width?: number): Promise<void>;
-    /** Atomic overlay+sidebar update in ONE call, so the content layout is applied from
-     * consistent state — avoids the two-call race (setChromeOverlay + setSidebar) where a
-     * full overlay like Settings could land behind the content. Optional — Tauri desktop. */
+    /** The sidebar is a right panel, not an overlay: it INSETS the content from the right
+     * (page stays visible) rather than hiding it, by the panel's actual width.
+     *
+     * There is deliberately no sidebar-only channel. One existed, and the chrome never
+     * called it, because it set `sidebar`+`right` and left `overlay` untouched — so using
+     * it beside the overlay update fired two layout passes, and a full overlay like
+     * Settings could land behind the content. `setLayout` below is the whole surface.
+     * Optional — Tauri desktop. */
     setLayout?(
       viewId: ViewId,
       opts: { overlay: boolean; sidebar: boolean; width?: number },

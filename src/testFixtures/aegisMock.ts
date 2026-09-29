@@ -71,7 +71,6 @@ export function aegisMockModule() {
         setContentInset: vi.fn(async () => {}),
         setChromeOverlay: vi.fn(async () => {}),
         // Optional methods (Tauri desktop — called with ?. in App.tsx and catalog)
-        setSidebar: vi.fn(async () => {}),
         setLayout: vi.fn(async () => {}),
         setFullscreen: vi.fn(async () => {}),
         onFullscreen: vi.fn().mockReturnValue(() => {}),

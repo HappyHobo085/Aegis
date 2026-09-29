@@ -276,29 +276,11 @@ pub fn dispatch<R: Runtime>(
             update(app, |l| l.overlay = active);
             Ok(Value::Null)
         }
-        // The sidebar is a right panel: inset the content from the right (page stays
-        // visible) instead of hiding it.
-        "view.setSidebar" => {
-            let active = payload
-                .get("active")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            // The sidebar panel is user-resizable; inset the content by its ACTUAL width
-            // (reported by the chrome) so the opaque content never overlaps the panel.
-            let width = payload
-                .get("width")
-                .and_then(Value::as_f64)
-                .unwrap_or(SIDEBAR_WIDTH);
-            update(app, |l| {
-                l.sidebar = active;
-                l.right = if active { width } else { 0.0 };
-            });
-            Ok(Value::Null)
-        }
         // Atomic overlay+sidebar update: the chrome computes both flags and sets them in ONE
         // call so the content layout is applied from a single, consistent state. Opening
-        // Settings while the sidebar was open used to fire two separate updates
-        // (setChromeOverlay + setSidebar), each triggering its own layout pass — which could
+        // Settings while the sidebar was open used to fire two separate updates (one for
+        // the overlay, one for the sidebar), each triggering its own layout pass — which
+        // could
         // apply mid-transition and leave Settings rendered behind the content. One update → one
         // apply removes that race.
         "view.setLayout" => {
@@ -535,21 +517,31 @@ mod tests {
     /// the panel) rather than hiding it, and the inset is the width the chrome
     /// actually measured. Closing it must give the whole edge back — a right inset
     /// left behind on close is a page permanently squeezed for a panel nobody sees.
+    /// The sidebar is a right panel, not an overlay: it INSETS the content so the page
+    /// stays visible, it insets by the panel's ACTUAL width, and closing it gives the edge
+    /// back rather than keeping the last width.
+    ///
+    /// This drives `view.setLayout` and not the sidebar-only channel that used to exist.
+    /// That channel set `sidebar`+`right` and left `overlay` untouched, so the chrome
+    /// calling it alongside the overlay update fired two layout passes — which could apply
+    /// mid-transition and paint an overlay behind the content. The atomic form replaced it
+    /// and this test moved with it; the assertions are unchanged, because `setLayout`
+    /// already applied exactly the same edge maths.
     #[test]
     fn the_sidebar_insets_from_the_right_and_gives_the_edge_back_when_it_closes() {
         with_tmp_app(|app| {
             view_call(
                 app,
-                "view.setSidebar",
-                json!({ "active": true, "width": 420 }),
+                "view.setLayout",
+                json!({ "sidebar": true, "width": 420 }),
             );
             assert_eq!(snap(app), (0.0, 164.0, 420.0, false, false, true));
 
             // The user resized the panel to 420, then closed it: the edge comes back.
             view_call(
                 app,
-                "view.setSidebar",
-                json!({ "active": false, "width": 420 }),
+                "view.setLayout",
+                json!({ "sidebar": false, "width": 420 }),
             );
             assert_eq!(
                 snap(app),
@@ -559,12 +551,12 @@ mod tests {
 
             // A panel opened without a measured width falls back to the chrome's own
             // constant, so the content is never left UN-insetted under an open panel.
-            view_call(app, "view.setSidebar", json!({ "active": true }));
+            view_call(app, "view.setLayout", json!({ "sidebar": true }));
             assert_eq!(snap(app).2, SIDEBAR_WIDTH);
             assert!(snap(app).5, "no `active` key is not \"close it\"");
 
             // `active: false` with no width must not resurrect the constant either.
-            view_call(app, "view.setSidebar", json!({ "active": false }));
+            view_call(app, "view.setLayout", json!({ "sidebar": false }));
             assert_eq!(snap(app), (0.0, 164.0, 0.0, false, false, false));
         });
     }

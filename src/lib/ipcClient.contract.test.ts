@@ -185,12 +185,6 @@ const REQUESTS: ContractRow[] = [
     payload: { viewId: 1, active: false },
   },
   {
-    name: 'view.setSidebar',
-    run: async () => void (await aegis.view.setSidebar?.(1, true, 320)),
-    channel: IPC.viewSetSidebar,
-    payload: { viewId: 1, active: true, width: 320 },
-  },
-  {
     name: 'view.setLayout',
     run: async () =>
       void (await aegis.view.setLayout?.(1, { overlay: true, sidebar: false, width: 200 })),

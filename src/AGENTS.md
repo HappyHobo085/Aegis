@@ -61,7 +61,7 @@ Channel and event names, and all payload/return types, are defined once in
   `computeContentLayout` (`src/lib/contentLayout.ts`), mirrored on the Rust side by
   `view::content_visible`. **To add a new full-window overlay, call `useChromeSurface`
   in its component — there is no central union to update.** The sidebar is not a
-  registry surface either — it insets from the right via `view.setSidebar` and stays
+  registry surface either — it insets from the right via `view.setLayout` and stays
   direct `App` state.
   A new overlay must call `useChromeSurface`, and a test should assert it lowers the
   content (that is what `useChromeSurface` + the `contentLayout` contract mean).
@@ -76,9 +76,12 @@ Channel and event names, and all payload/return types, are defined once in
   webview, so a registered surface that does not lower it is not merely clipped but
   covered. If you add a shell, mount the provider — a test that asserts a surface
   lowers the content is what catches its absence.
-- **Sidebar is a right panel,** not an overlay: it calls `view.setSidebar(active,
-width)` so the page insets from the right and stays visible. Width is remembered
-  in localStorage.
+- **Sidebar is a right panel,** not an overlay: the one layout effect
+  (`App.tsx`) folds sidebar+overlay into a single `view.setLayout({ overlay, sidebar,
+width })` so the page insets from the right and stays visible. There is no
+  sidebar-only channel — a partial update beside the overlay one reopens the
+  two-layout-pass race `setLayout` exists to close. Width is remembered in
+  localStorage.
 - **Content inset** is the sum of the chrome's real heights: `hooks/useChromeHeights.ts`
   measures the chrome elements with `getBoundingClientRect` (falling back to the
   constants in `lib/layout.ts` before the first measurement) and
