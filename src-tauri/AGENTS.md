@@ -192,8 +192,23 @@ dotted event name.
   source set.
   **`nav.reloadOrStop` actually stops.** The toolbar renders an X with `aria-label="Stop"`
   when `state.isLoading`, and the core used to `reload()` unconditionally. `TABS_LOADING`
-  (a `OnceLock<Mutex<HashSet<u32>>>` fed by `note_tab_loading` from `on_page_load` right
-  after `emit_state`) is the only place loading state exists — the core produced it and
+  **A title the page sets itself is not a navigation.** `on_page_load` fires once per
+  navigation, so a page that changes its own `document.title` afterwards — an SPA route
+  change, a Gmail unread count, a video title — left the tab strip showing the title
+  from page load, permanently. The wry builder registers **`.on_document_title_changed`**
+  (note: the hook is `on_document_title_changed`, NOT `on_page_title` — grepping the
+  wrong name finds nothing and looks like a missing feature) and re-emits `nav.state` through
+  the existing `emit_state`, re-reading the URL from the webview rather than a spawn-time
+  capture. Android gets the same event from `WebChromeClient.onReceivedTitle` in
+  `MainActivity.kt`, which re-uses `pushNavState` — that payload already carried
+  `title`. **wry's own Android title hook is dead code here**: the content WebView on Android
+  is the app's native Kotlin one, because `spawn_tab` is `#[cfg(desktop)]` (its Android
+  counterpart at the bottom of `nav.rs` is a no-op). The chrome-side handler is
+  `useTabTitleSync`, which calls `tabs.setTitle` — the channel that sets a title
+  WITHOUT pushing nav history or re-validating an unchanged URL, which `tabs.recordNav`
+  would have to do. Both Rust halves are pinned by tests in `nav.rs` (there is no Kotlin
+  test source set, so the Kotlin half is a source-text pin).
+
   discarded it. **wry 0.55.1, tauri 2.11.3 and tauri-runtime-wry 2.11.3 expose no `stop()`
   and no `is_loading()` at all** (grepped all three), so the stop is
   `navigate(about:blank)`, which cancels an in-flight load on all three engines and is

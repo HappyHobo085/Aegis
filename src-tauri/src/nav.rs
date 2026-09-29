@@ -508,9 +508,11 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
     let app_nav = app.clone();
     let app_load = app.clone();
     let app_dl = app.clone();
+    let app_title = app.clone();
     let nav_id = id;
     let load_id = id;
     let dl_id = id;
+    let title_id = id;
     // `mut` is only needed on Windows (additional_browser_args below); harmless elsewhere.
     #[allow(unused_mut)]
     let mut builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(url))
@@ -575,6 +577,22 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
                     crate::tabs::is_private(&app_load, load_id),
                 );
             }
+        })
+        // A page that changes its OWN title after load "''' + EM + '''" an SPA route change, a
+        // Gmail unread count, a YouTube video title. `on_page_load` above already fired, so
+        // the tab strip kept showing the title from page load: visibly stale, and it never
+        // self-corrected. Re-emit `nav.state` with the new title rather than calling
+        // `tabs::set_title` directly, because the chrome's `useNav` is what owns the title
+        // and it filters by `viewId` "''' + EM + '''" routing through the same event keeps
+        // desktop and Android on ONE path (Android's Kotlin `pushNavState` already carries
+        // `title` in the same payload shape).
+        //
+        // The URL is re-read from the webview rather than captured at spawn: a title change
+        // is not a navigation, so the spawn-time URL may be many navigations stale, and the
+        // same event would then describe a different page than the one that set the title.
+        .on_document_title_changed(move |webview, title| {
+            let url = webview.url().map(|u| u.to_string()).unwrap_or_default();
+            emit_state(&app_title, title_id, &url, &title, false);
         })
         .on_download(move |_webview, event| {
             match event {
@@ -1570,6 +1588,53 @@ mod tests {
     /// narrow what these tests look at; comment stripping because the function's own
     /// comment QUOTES the bypass it replaced, so a negative assert against raw text
     /// would match the documentation of the bug instead of the bug.
+    /// Android's half of the tab-title fix must keep pushing a title. There is no
+    /// Kotlin test source set, so a source-text pin is the only thing that can catch a
+    /// future edit that deletes the override "''' + EM + '''" and the symptom would be a silently
+    /// stale tab strip on a phone, which no Rust test could otherwise see.
+    ///
+    /// Asserts the CALL and not just the override: a `onReceivedTitle` that never
+    /// called `pushNavState` would compile and pass a presence-only check while
+    /// doing nothing. `pushNavState` is asserted rather than the title, because the
+    /// payload it builds already carried `title` and that is the part the chrome
+    /// reads.
+    #[test]
+    fn the_android_tab_title_change_pushes_nav_state_with_it() {
+        let src = kotlin_main_activity();
+        let body = crate::test_support::kotlin_fn_body(&src, "override fun onReceivedTitle(");
+        assert!(
+            body.contains("pushNavState("),
+            "MainActivity.kt's onReceivedTitle no longer pushes nav state, so a page that \
+             renames itself would leave this tab's title stale: {body}"
+        );
+        // The per-tab id is what makes the push land on the right tab, and the tab's
+        // OWN webview is what makes `title` describe this tab rather than the active one.
+        assert!(
+            body.contains("pushNavState(id,") && body.contains("view"),
+            "onReceivedTitle must push the tab's own id and webview, not the active tab's: {body}"
+        );
+    }
+
+    /// The desktop half: the wry builder must register `on_document_title_changed`, and
+    /// it must go through `emit_state` so the chrome's ONE `nav.state` subscriber serves
+    /// desktop and Android alike. A direct `tabs::set_title` call here would still update
+    /// the tab but would leave the two platforms on different code paths "''' + EM + '''" the
+    /// opposite of what the shared handler is for.
+    #[test]
+    fn the_content_webview_reports_a_title_the_page_changed_itself() {
+        let src = include_str!("nav.rs");
+        assert!(
+            src.contains(".on_document_title_changed("),
+            "the content webview no longer watches for a title the page sets itself, so \
+             `tabs.setTitle` has no caller and a renamed page leaves a stale tab title"
+        );
+        assert!(
+            src.contains("emit_state(&app_title,"),
+            "the title hook must re-emit nav.state rather than setting the title directly, so \
+             one renderer handler serves desktop and Android"
+        );
+    }
+
     fn kotlin_main_frame_code(src: &str) -> String {
         let start = src
             .find("override fun shouldOverrideUrlLoading(")

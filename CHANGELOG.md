@@ -9,6 +9,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A tab's title now follows a page that renames itself.** A page that changed its own
+  `document.title` after load "'''-'''an SPA route change, a Gmail unread count, a YouTube video
+  title"'''-'''" never reached the tab strip, which kept showing the title from page load and never
+  corrected itself. Desktop picks this up from the webview's title-change hook and Android
+  from the tab's own `WebChromeClient`, and both feed the existing nav-state event, so there is
+  one path rather than two.
 - **Four tests that asserted nothing now assert what they claim.** The find-in-page, fingerprint, workspace and WebRTC-exempt teardown checks were passing without checking anything: two of them discarded the unsubscribe they were supposed to watch, one asserted a React warning that React 18 no longer emits, and one matched an error message so loosely that a different message would have satisfied it. Each now checks the behaviour it names — the fingerprint test also gains its first check that a peer's merged allowlist is picked up, and the WebRTC one now enforces that the exempt list stays local-only.
 
 - **Find-in-page on macOS can no longer be hijacked by the page you are on.** The shim runs in the page's own JavaScript world, and its idempotence guard used to yield to any `__aegisFind` already defined there — so a site that declared that name first received your search terms and could report any match count it liked. The guard now tests for Aegis's own function and overwrites anything else.

@@ -539,6 +539,23 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     private var customView: View? = null
     private var customCallback: WebChromeClient.CustomViewCallback? = null
 
+    /** A page that changes its OWN title after load \u2014 an SPA route change, a Gmail unread
+     *  count, a YouTube video title. Without this the tab strip keeps showing the title from
+     *  page load: visibly stale, and it never self-corrects.
+     *
+     *  This is Android's half of the desktop `on_document_title_changed` hook in nav.rs. wry
+     *  has an equivalent (`RustWebChromeClient.onReceivedTitle`) but it never sees this tab:
+     *  the content WebView here is OUR OWN Kotlin view, not a wry webview \u2014 `spawn_tab` is
+     *  `#[cfg(desktop)]` and its Android counterpart is a no-op.
+     *
+     *  Re-uses [pushNavState] rather than a new push: it already carries `title` in exactly
+     *  the desktop `nav.state` shape, so the chrome needs one handler for both platforms.
+     *  `loading` is false \u2014 nothing is loading when a page merely renames itself. */
+    override fun onReceivedTitle(view: WebView, title: String?) {
+      super.onReceivedTitle(view, title)
+      pushNavState(id, view.url ?: "", false, view)
+    }
+
     override fun onShowCustomView(view: View, callback: WebChromeClient.CustomViewCallback) {
       if (customView != null) onHideCustomView()
       customView = view

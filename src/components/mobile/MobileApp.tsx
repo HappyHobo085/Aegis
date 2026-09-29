@@ -11,6 +11,7 @@ import { protectionSummary } from '../../lib/protectionSummary';
 import { useDownloadToasts } from '../../hooks/useDownloadToasts';
 import { useTabs } from '../../hooks/useTabs';
 import { useNav } from '../../hooks/useNav';
+import { useTabTitleSync } from '../../hooks/useTabTitleSync';
 import { useAdblock } from '../../hooks/useAdblock';
 import { useFingerprint } from '../../hooks/useFingerprint';
 import { useWebrtcExempt } from '../../hooks/useWebrtcExempt';
@@ -85,6 +86,9 @@ export function MobileApp() {
 function MobileShell() {
   const tabs = useTabs();
   const nav = useNav(tabs.activeId);
+  // Same reason as the desktop chrome: keep a tab's title current when the page
+  // renames itself after load.
+  useTabTitleSync();
   const find = useFind(tabs.activeId);
   const zoom = useZoom(tabs.activeId);
   const adblock = useAdblock(tabs.activeId, nav.state.url);

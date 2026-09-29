@@ -13,6 +13,7 @@ import { computeContentLayout } from './lib/contentLayout';
 import { protectionSummary } from './lib/protectionSummary';
 import { useDownloadToasts } from './hooks/useDownloadToasts';
 import { useNav } from './hooks/useNav';
+import { useTabTitleSync } from './hooks/useTabTitleSync';
 import { useFind } from './hooks/useFind';
 import { useZoom } from './hooks/useZoom';
 import { useAdblock } from './hooks/useAdblock';
@@ -109,6 +110,9 @@ function DesktopApp() {
   const activeIdRef = useRef(tabs.activeId);
   activeIdRef.current = tabs.activeId;
   const nav = useNav(tabs.activeId);
+  // A page that renames itself after load (SPA route, unread count) updates its tab's
+  // title. See the hook for why this is separate from useNav.
+  useTabTitleSync();
   const isNarrow = useNarrowViewport();
   const adblock = useAdblock(tabs.activeId, nav.state.url);
   const zoom = useZoom(tabs.activeId);

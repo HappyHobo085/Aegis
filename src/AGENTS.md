@@ -614,6 +614,15 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
   generic full-screen sheet hosting History/Saved; Settings/Downloads reuse their modals.
 - **`MobileTabSwitcher`** — a vertical-list tab switcher sheet (`'tabs'`): one row per
   tab (page title, or host fallback), tap to switch, X to close, **+ New tab**.
+- **Tab titles after load.** `useTabTitleSync` (both chromes) sends `tabs.setTitle` when a
+  `nav.state` carries a title the tab has not reported yet "''' + EM + '''" which is how a page
+  that renames ITSELF (SPA route, unread count, video title) reaches the strip, since
+  `tabs.recordNav` only runs at navigation. It is separate from `useNav` because `useNav` is
+  mounted per view and filters to the ACTIVE tab (the address bar only tracks the active one),
+  while the strip needs every tab. It skips an unchanged title, because `nav.state` also fires
+  at page load and on progress and each send would be a write plus an `emit_and_persist`.
+  Desktop and Android both feed it from the SAME `nav.state` event, so there is no platform
+  branch in the hook.
 - **Multi-tab wiring.** `MobileApp` uses `useTabs()` + `useNav(tabs.activeId)` (active-id
   keyed); **`useMobileTabSync`** diffs the registry's tabs state and drives the native
   per-tab bridge (`activateTab`/`closeTab`/`discardTab`) — it tracks the last-activated id
