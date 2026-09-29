@@ -16,6 +16,7 @@ vi.mock('@tauri-apps/api/event', () => ({
 
 import { invoke } from '@tauri-apps/api/core';
 import { aegis, AegisIpcError } from './ipcClient';
+import { IPC } from '../../shared/types';
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 
@@ -273,5 +274,33 @@ describe('ipc rejection boundary', () => {
     await aegis.history.search('dedup-probe');
     await aegis.history.search('dedup-probe');
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Android bridge: the find.* channels are the FALLBACK
+// ---------------------------------------------------------------------------
+describe('aegis.find.* with no AegisAndroid bridge', () => {
+  // The premise the core's `find::dispatch` refusal rests on, pinned as an executable
+  // fact. `ipcClient` routes `find.*` to the Kotlin bridge whenever `window.AegisAndroid`
+  // exists, and this file's own module-level comment records that the bridge "is injected
+  // slightly later" than module load — so a `find.start` issued before injection finds no
+  // bridge and falls through to the `findStart` CHANNEL, on a phone, where the core has no
+  // native find implementation. These tests assert that fallthrough really issues the
+  // channel (rather than swallowing the call), which is what makes the core's refusal
+  // reachable instead of theoretical.
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).AegisAndroid;
+  });
+
+  it.each([
+    ['start', IPC.findStart, () => aegis.find.start(1, 'needle')],
+    ['next', IPC.findNext, () => aegis.find.next(1)],
+    ['prev', IPC.findPrev, () => aegis.find.prev(1)],
+    ['close', IPC.findClose, () => aegis.find.close(1)],
+  ])('find.%s issues the %s channel when there is no bridge', async (_name, channel, run) => {
+    expect((window as unknown as Record<string, unknown>).AegisAndroid).toBeUndefined();
+    await run();
+    expect(mockInvoke).toHaveBeenCalledWith('ipc', expect.objectContaining({ channel }));
   });
 });

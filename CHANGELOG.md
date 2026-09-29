@@ -9,6 +9,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Find-in-page could report that it had started when it never did.** All four
+  find channels answered "done" on any platform with no built-in find, having done
+  nothing. Android does its own find-in-page, so normally you never see this — but the
+  Android bridge is attached just after the interface loads, and a search typed in that
+  window fell through to the core, which claimed success. No highlight would ever appear
+  and nothing was ever reported. Those channels now say plainly that the platform cannot
+  do it, which arrives as the same on-screen error as the fix above.
 - **A download could stop opening — and on a phone it never opened at all.** "Open" and
   "Show in folder" in the Downloads list always answered "done", whatever actually
   happened. On a phone that is what it always was: there is no command to hand a path

@@ -2287,12 +2287,20 @@ clamps at the 420×320 minimum.
     re-investigated.** Each looked exactly like gotcha 24's Android history bug (a Rust path
     that is a no-op on that platform), and each is fine:
 
-    - **Find-in-page on Android is NOT broken.** `find::start/next/prev/close` have bodies only
-      for linux/windows/macos, so on Android `find::dispatch` really is a silent no-op. But
-      Kotlin implements find natively (`@JavascriptInterface find/findNext/findPrev/findClose`
-      → `WebView.findAllAsync`/`findNext`), and the renderer's `aegis.find.*` routes to
-      `androidBridge()` **first**, falling back to Tauri IPC. `find::emit_state`'s android allow
-      is honest.
+    - ~~**Find-in-page on Android is NOT broken.**~~ **The `Ok` was the bug; the silent no-op
+      is now an honest `Err`.** Kotlin implements find natively (`@JavascriptInterface
+find/findNext/findPrev/findClose` → `WebView.findAllAsync`/`findNext`) and the
+      renderer's `aegis.find.*` routes to `androidBridge()` **first** — so the Kotlin path
+      is the normal one and `find::emit_state`'s android allow was honest. What this
+      hypothesis missed is that `ipcClient` attaches the bridge _slightly AFTER module
+      load_ (its own comment at `ipcClient.ts:366` says so), and `useFind.ts` calls
+      `aegis.find.start/next/prev/close` with NO platform branch. A query typed in
+      that window therefore falls through to `find::dispatch` on a phone, which
+      answered "done" for a session it never started — no highlight, no error. All four
+      channels now end in `refuse_without_native(native_find())`, whose message reaches
+      the user as the same on-screen error as any other `AegisIpcError`
+      (`main.tsx:28`). The reachability is pinned by a renderer test that drives the
+      four channels with no bridge installed.
     - **Android's block counter is NOT missing.** `MainActivity.noteBlocked(id)` is the Android
       mirror of `adblock::note_blocked`, called from the `shouldInterceptRequest` path; the JNI
       `shouldBlock` entry deliberately only calls `should_block`.

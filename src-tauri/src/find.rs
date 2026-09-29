@@ -135,21 +135,15 @@ pub fn dispatch<R: Runtime>(
                 .get("caseSensitive")
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
-            start(app, id, &q, cs);
-            Ok(Value::Null)
+            // The platform call's own answer, not a hardcoded `Ok(Value::Null)`: on a
+            // platform with no native find it is the refusal, and the `?` here is safe
+            // because `res` is a `Result` (unlike `downloads::dispatch`, whose `Option`
+            // outer layer would swallow it into "channel unhandled").
+            start(app, id, &q, cs).map(|()| Value::Null)
         }
-        "find.next" => {
-            next(app, id);
-            Ok(Value::Null)
-        }
-        "find.prev" => {
-            prev(app, id);
-            Ok(Value::Null)
-        }
-        "find.close" => {
-            close(app, id);
-            Ok(Value::Null)
-        }
+        "find.next" => next(app, id).map(|()| Value::Null),
+        "find.prev" => prev(app, id).map(|()| Value::Null),
+        "find.close" => close(app, id).map(|()| Value::Null),
         _ => return None,
     };
     Some(res)
@@ -191,8 +185,87 @@ pub(crate) fn emit_state<R: Runtime>(
     );
 }
 
+/// The platforms that have a native in-page find implementation, one module each
+/// (`find_linux` / `find_win` / `find_mac`).
+const NATIVE_FIND: bool = cfg!(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "macos"
+));
+
+/// The refusal every `find.*` channel answers where nothing implements it.
+///
+/// The renderer never needs to see this: `ipcClient`'s `find.*` methods route to the
+/// Kotlin bridge (`window.AegisAndroid.find` / `findNext` / `findPrev` / `findClose`)
+/// whenever it exists, which is how Android does find — `MainActivity`'s `Bridge` drives
+/// `WebView.findAllAsync` and pushes the result back over `window.__aegisFindState`. This
+/// channel is the FALLBACK, and the fallback is reachable on a phone: `ipcClient.ts` itself
+/// records that the bridge "is injected slightly later" than module load, so a `find.start`
+/// landing before injection finds no `AegisAndroid` and falls straight through to here.
+/// Answering `Ok(Value::Null)` on that path told the user their find-in-page had started
+/// when no highlight would ever appear and no error was raised anywhere.
+const NO_NATIVE_FIND: &str = "In-page find is not available on this platform.";
+
+// A test-only override for the "this platform has a native find" answer, so the four
+// dispatch arms' REFUSAL path is reachable from a Linux test run.
+//
+// Why this exists: `NATIVE_FIND` is a `const`, and a Linux host always has
+// `find_linux`, so without an override every arm can only ever answer `Ok` here — a
+// probe that made the arms throw the platform answer away produced no red test on the
+// arm wiring at all. Testing `refuse_without_native` directly did not close that gap,
+// because the thing that must not lie is the ARM.
+//
+// Thread-local for the same reasons as `downloads::TEST_OPENER`: the crate's tests run
+// in parallel threads, and `test_support::with_tmp_app` already holds
+// `test_support::LOCK`, so a global lock here would deadlock rather than serialise.
+#[cfg(test)]
+std::thread_local! {
+    static TEST_NATIVE_FIND: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether a native find implementation is answering: the test override if one is
+/// installed, else this build's `NATIVE_FIND`.
+fn native_find() -> bool {
+    #[cfg(test)]
+    if let Some(n) = TEST_NATIVE_FIND.with(|c| c.get()) {
+        return n;
+    }
+    NATIVE_FIND
+}
+
+/// Run `f` with the native-find answer forced to `native`, then put it back.
+#[cfg(test)]
+fn with_test_native_find<T>(native: bool, f: impl FnOnce() -> T) -> T {
+    TEST_NATIVE_FIND.with(|c| {
+        let previous = c.replace(Some(native));
+        let out = f();
+        c.set(previous);
+        out
+    })
+}
+
+/// `Ok(())` where a native implementation is answering, the refusal everywhere else.
+///
+/// The `native` PARAMETER is a seam, not a convenience. `native_find()` is invariably
+/// `true` on the Linux test host, so on its own the refusal arm could not be reached
+/// from a test at all; taking it as an argument makes both arms observable here.
+fn refuse_without_native(native: bool) -> Result<(), String> {
+    if native {
+        Ok(())
+    } else {
+        Err(NO_NATIVE_FIND.to_string())
+    }
+}
+
 // Platform dispatch: each is a thin cfg-routed call into the per-platform module.
-fn start<R: Runtime>(app: &AppHandle<R>, id: u32, query: &str, case_sensitive: bool) {
+// Each returns the refusal above rather than `()` so an unimplemented platform cannot
+// report a find session it never started — see `NO_NATIVE_FIND`.
+fn start<R: Runtime>(
+    app: &AppHandle<R>,
+    id: u32,
+    query: &str,
+    case_sensitive: bool,
+) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     crate::find_linux::start(app, id, query, case_sensitive);
     #[cfg(target_os = "windows")]
@@ -201,9 +274,10 @@ fn start<R: Runtime>(app: &AppHandle<R>, id: u32, query: &str, case_sensitive: b
     crate::find_mac::start(app, id, query, case_sensitive);
     // Suppress "unused" warnings on platforms where cfg blocks don't expand.
     let _ = (app, id, query, case_sensitive);
+    refuse_without_native(native_find())
 }
 
-fn next<R: Runtime>(app: &AppHandle<R>, id: u32) {
+fn next<R: Runtime>(app: &AppHandle<R>, id: u32) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     crate::find_linux::next(app, id);
     #[cfg(target_os = "windows")]
@@ -211,9 +285,10 @@ fn next<R: Runtime>(app: &AppHandle<R>, id: u32) {
     #[cfg(target_os = "macos")]
     crate::find_mac::next(app, id);
     let _ = (app, id);
+    refuse_without_native(native_find())
 }
 
-fn prev<R: Runtime>(app: &AppHandle<R>, id: u32) {
+fn prev<R: Runtime>(app: &AppHandle<R>, id: u32) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     crate::find_linux::prev(app, id);
     #[cfg(target_os = "windows")]
@@ -221,9 +296,10 @@ fn prev<R: Runtime>(app: &AppHandle<R>, id: u32) {
     #[cfg(target_os = "macos")]
     crate::find_mac::prev(app, id);
     let _ = (app, id);
+    refuse_without_native(native_find())
 }
 
-fn close<R: Runtime>(app: &AppHandle<R>, id: u32) {
+fn close<R: Runtime>(app: &AppHandle<R>, id: u32) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     crate::find_linux::close(app, id);
     #[cfg(target_os = "windows")]
@@ -231,6 +307,7 @@ fn close<R: Runtime>(app: &AppHandle<R>, id: u32) {
     #[cfg(target_os = "macos")]
     crate::find_mac::close(app, id);
     let _ = (app, id);
+    refuse_without_native(native_find())
 }
 
 #[cfg(test)]
@@ -296,6 +373,62 @@ mod tests {
                 assert!(
                     dispatch(app, name, &Value::Null).is_none(),
                     "`{name}` is not a find channel and must fall through to the next dispatcher"
+                );
+            }
+        });
+    }
+
+    /// A `find.*` channel must not report a find session it never started.
+    ///
+    /// The regression this pins: all four arms used to end in a hardcoded
+    /// `Ok(Value::Null)` after calling a `start`/`next`/`prev`/`close` that expands
+    /// to NOTHING where no platform module was compiled in, so on Android a
+    /// `find.start` that reached this channel answered "done" while no highlight
+    /// would ever appear. (The reachability is not hypothetical — see
+    /// `NO_NATIVE_FIND` for the module-load race that sends a phone's find-in-page
+    /// here instead of to the Kotlin bridge.)
+    ///
+    /// Driven through `dispatch` with `with_test_native_find(false)`, not by calling
+    /// `refuse_without_native` directly, because the ARM is the thing that shipped the
+    /// lie: a probe that made the arms discard the platform's answer reddened nothing
+    /// until the override existed.
+    #[test]
+    fn every_find_channel_refuses_where_no_platform_implements_find() {
+        // Read through `native_find()` rather than the constant: the point is a
+        // PRECONDITION on the host this binary was compiled for, and clippy's
+        // `assertions_on_constants` would (rightly) call `assert!(NATIVE_FIND)` a
+        // tautology and reject it. The accessor is the same value with no override
+        // installed, so the precondition still holds or the run fails here.
+        assert!(
+            native_find(),
+            "this host has find_linux; without the override below the arms could only \
+             ever answer Ok and the assertions would be measuring the wrong branch"
+        );
+        with_tmp_app(|app| {
+            for (channel, payload) in [
+                ("find.start", json!({ "query": "needle", "viewId": 1 })),
+                ("find.next", json!({ "viewId": 1 })),
+                ("find.prev", json!({ "viewId": 1 })),
+                ("find.close", json!({ "viewId": 1 })),
+            ] {
+                let refused = with_test_native_find(false, || dispatch(app, channel, &payload))
+                    .unwrap_or_else(|| panic!("`{channel}` is a find channel and must be handled"));
+                assert_eq!(
+                    refused.expect_err(&format!(
+                        "`{channel}` must refuse where no platform implements find, \
+                         not report a session it never started"
+                    )),
+                    NO_NATIVE_FIND
+                );
+
+                // The CONTROL for the same `dispatch` call: with this host's real
+                // implementation the channel answers Ok. Without it the assertion above
+                // would pass for the wrong reason — any Err, from any cause.
+                assert!(
+                    dispatch(app, channel, &payload)
+                        .unwrap_or_else(|| panic!("`{channel}` is handled"))
+                        .is_ok(),
+                    "`{channel}` HAS a native implementation on this host, so it must answer Ok"
                 );
             }
         });
