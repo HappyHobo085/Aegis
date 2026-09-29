@@ -11,9 +11,24 @@
 // `AEGISFIND:0:0`.
 //
 // Injected via `include_str!` in find_mac.rs. Idempotent — re-injection is a
-// no-op if `__aegisFind` already exists on `window`.
+// no-op if OUR `__aegisFind` is already on `window`.
+//
+// The idempotence check is on OWNERSHIP, not existence. This shim runs in the
+// content webview's MAIN world — the page's own JS world (`find_mac.rs` injects
+// it with `WKWebView::evaluateJavaScript`) — so `window` is the page's `window`.
+// The guard used to be `if (window.__aegisFind) return;`, which handed a page
+// that defined `__aegisFind` first the whole find feature: every query was passed
+// to the page's own function, and the page learned what the user was searching
+// for. It could also return whatever it liked as the `AEGISFIND:` sentinel, so
+// the real match count was whatever the page wanted to report.
+//
+// A separate `WKContentWorld` would remove the collision entirely and is the
+// better long-term answer, but it cannot be built or verified off macOS
+// (see `find_mac.rs`'s compile note), and the `__aegisFind(...)` call has to be
+// able to see the shim, which is why the two are evaluated as one script.
 (function () {
-  if (window.__aegisFind) return;
+  var OWNER = '__aegis_owned__';
+  if (typeof window.__aegisFind === 'function' && window.__aegisFind[OWNER]) return;
 
   var HIGHLIGHT_CLASS = '__aegis-find-hl';
   var ACTIVE_CLASS = '__aegis-find-active';
@@ -171,4 +186,7 @@
       return emitSentinel(0, 0);
     }
   };
+  // The marker the guard above tests. A page function (or a look-alike) without
+  // it is OVERWRITTEN rather than obeyed, which is the whole point.
+  window.__aegisFind[OWNER] = true;
 })();

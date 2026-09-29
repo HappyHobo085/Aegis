@@ -741,8 +741,17 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     tracking the active index, returning the result as the sentinel
     `AEGISFIND:{matchCount}:{activeMatchIndex}` (also set on `document.title` for a
     brief period, for any title observers). Every `start`/`next`/`prev`/`close`
-    re-injects it idempotently (`if (window.__aegisFind) return`) so it survives
-    in-tab navigation. `next`/`prev` reuse the last query + case-sensitivity, stored
+    re-injects it idempotently so it survives in-tab navigation — and because
+    `evaluateJavaScript` targets the **MAIN world**, that idempotence guard is an
+    OWNERSHIP check, not an existence one: it returns early only for a
+    `__aegisFind` carrying the shim's own `__aegis_owned__` marker, and OVERWRITES
+    anything else. It used to be `if (window.__aegisFind) return`, which handed the
+    whole feature to any page defining that global first — the page then received
+    the user's search terms verbatim and could return any `AEGISFIND:` sentinel it
+    liked, so the match count was whatever the page wanted. A `WKContentWorld`
+    would be the better long-term answer but cannot be built or verified off macOS
+    (see the compile note below). Pinned by `src/lib/findShim.test.ts`, which
+    executes the SHIPPED bytes the way `farbleShim.test.ts` does. `next`/`prev` reuse the last query + case-sensitivity, stored
     per tab in `LAST_QUERY` (`OnceLock<Mutex<HashMap<u32, (String, bool)>>>`).
     WKWebView access mirrors `nav_url_mac::install`: `with_webview` →
     `pw.inner() as *mut WKWebView` → `Retained::retain(ptr)`, and the `with_webview`

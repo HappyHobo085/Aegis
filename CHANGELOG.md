@@ -9,6 +9,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Find-in-page on macOS can no longer be hijacked by the page you are on.** The shim runs in the page's own JavaScript world, and its idempotence guard used to yield to any `__aegisFind` already defined there — so a site that declared that name first received your search terms and could report any match count it liked. The guard now tests for Aegis's own function and overwrites anything else.
 - **The chrome's Tauri permissions are no longer wider than it uses.** The capability file
   granted `core:default`, which expands to 92 individual permissions across the path,
   window, webview, app, image, resource, menu and tray APIs — of which the chrome webview
