@@ -477,7 +477,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       val scripted = !request.hasGesture()
       if (current.isNotEmpty() && redirectBlocked(current, raw, scripted, request.isForMainFrame)) {
         Log.i("AegisRedirect", "BLOCK $raw (from $current)")
-        showRedirectBlocked(raw)
+        showRedirectBlocked(current, raw)
         return true
       }
 
@@ -1308,14 +1308,38 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
    * When a redirect is blocked, open it in a new tab instead of showing blocking UI.
    * This prevents the navigation in the current tab (for security) while providing
    * the content in a new tab for user convenience.
+   *
+   * The open is done by RUST, not by asking the chrome webview to do it. This used to
+   * call `window.__aegisOpenTab`, which reaches `MobileApp` -> `tabs.create(url, true)`
+   * — the same registry-create + `emit_and_persist` that
+   * `tabs::open_redirect_background` performs on desktop. So Android was bypassing
+   * EXACTLY the two things desktop also has: the `RedirectBudget` (dedup within
+   * `REDIRECT_DEDUP_WINDOW`, at most `MAX_LIVE_REDIRECT_TABS` live) and the 30-second
+   * auto-close of a tab the user never looked at. A malverting page could accumulate
+   * unbounded background tabs on a phone while the desktop build refused to, and the
+   * caller had no way to know whether one had actually been opened.
+   *
+   * Calling [openBlockedRedirect] puts both platforms on the SAME budget, so the cap
+   * cannot be bypassed by arriving from the phone. `open_redirect_background` only
+   * creates a registry row and emits; it never spawns a webview, so no engine work
+   * happens here and no thread hop is needed — this is already on the UI thread,
+   * exactly like the `shouldBlock` call above it.
+   *
+   * [from] is the page the redirect came FROM, not just [to]: the dedup key is the
+   * (from, to) PAIR, so half a pair is not a redirect and Rust refuses it.
    */
-  private fun showRedirectBlocked(to: String) {
-    // Open the redirect URL in a new tab instead of showing blocking UI
-    runOnUiThread {
-      chromeWebView?.evaluateJavascript(
-        "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(to)})",
-        null,
-      )
+  private fun showRedirectBlocked(from: String, to: String) {
+    val opened = try {
+      NativeRedirectGuard.openBlockedRedirect(from, to)
+    } catch (t: Throwable) {
+      Log.w("AegisRedirect", "openBlockedRedirect failed for $to", t)
+      false
+    }
+    if (!opened) {
+      // Budget refused (dedup window, cap reached, no app handle yet) or the bridge
+      // failed. Deliberately nothing else happens: the navigation stays refused, and
+      // there is no affordance offered for a tab that does not exist.
+      Log.i("AegisRedirect", "budget refused the blocked redirect to $to; nothing opened")
     }
   }
 

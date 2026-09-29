@@ -9,6 +9,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A page could pile up background tabs on Android by bouncing through the redirect
+  guard.** When a scripted cross-origin redirect is blocked, the destination opens in a
+  background tab that closes itself after 30 seconds if you never look at it, and both
+  the tab limit and the duplicate-hop window are enforced. On Android neither was: the
+  open was handed to the toolbar's own "open in new tab" action, which created a tab but
+  never asked the guard whether it was allowed to. A page that kept redirecting could
+  keep adding tabs you never opened, and they never went away. Blocked redirects on
+  Android now go through the same guard as on desktop. If the guard declines — a
+  duplicate hop, or the limit already reached — nothing opens at all.
+
 - **Long browsing sessions on Android grew the app's memory without bound.** The
   document-start ad-block layer is cached per site (and per on/off state) to avoid
   rebuilding roughly a megabyte of blocking rules for every tab, but nothing ever

@@ -353,13 +353,21 @@ impl RedirectBudget {
 /// If the user hasn't activated (viewed) that tab within 30 seconds, it is
 /// automatically closed — preventing a blocked redirect from silently accumulating
 /// background tabs the user never intended to visit.
-#[cfg_attr(target_os = "android", allow(dead_code))]
-pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to: &str) {
+///
+/// Returns whether a tab was ACTUALLY opened. A caller that offers the user a way to
+/// reach the destination must do so only when this is `true`: offering it otherwise
+/// presents an affordance for a tab the budget refused to open, and the tab that
+/// affordance opens is unadmitted, unclosed and holds no slot — so the user can
+/// reach a destination the guard has already refused them. Android reads this through
+/// the JNI export `Java_com_aegis_browser_NativeRedirectGuard_openBlockedRedirect`;
+/// the two desktop callers (`linux_layout`, `nav_policy_win`) are the pop-under path,
+/// which shows blocking UI and has no affordance to suppress, so they ignore it.
+pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to: &str) -> bool {
     let Some(budget) = app.try_state::<RedirectBudget>() else {
-        return;
+        return false;
     };
     if !budget.admit(from, to) {
-        return;
+        return false;
     }
     let new_id = crate::tabs::open_redirect_background(app, to, false);
     budget.occupy(new_id);
@@ -411,6 +419,7 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to
         // redirects during teardown would wedge the budget for the next launch.
         budget.release(new_id);
     });
+    true
 }
 
 /// Linux two-phase correlation: the gesture/redirect type live on `NavigationAction`,
@@ -572,6 +581,58 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_shouldBlock(
         Some(blocked) => blocked as jni::sys::jboolean,
         None => {
             eprintln!("[aegis-redirect] should_block panicked; failing open for this navigation");
+            0
+        }
+    }
+}
+
+/// JNI bridge for Android's `NativeRedirectGuard.openBlockedRedirect`.
+///
+/// Android's content area is a native `WebView`, so nothing in the core can see a
+/// navigation the way desktop's `decide_navigation` does, and a blocked redirect there
+/// was opened by the CHROME webview calling `window.__aegisOpenTab` — which
+/// reaches `MobileApp` -> `tabs.create(url, true)`. That is the same registry-create +
+/// `emit_and_persist` `tabs::open_redirect_background` performs, so Android was missing
+/// EXACTLY the two things desktop also has: the `admit` budget (dedup within
+/// `REDIRECT_DEDUP_WINDOW`, at most `MAX_LIVE_REDIRECT_TABS` live) and the 30-second
+/// auto-close of a tab the user never looked at. Routing Android through the shared
+/// function instead of a second policy is the whole point of this export: it is the
+/// SAME budget, so the cap cannot be bypassed by coming from the phone.
+///
+/// Returns 1 only when a tab was really opened. The caller must not fall back to
+/// opening the URL itself — a fallback is exactly the unbudgeted path this
+/// replaces, and doing both would open two tabs per block.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_openBlockedRedirect(
+    mut env: jni::JNIEnv,
+    _this: jni::objects::JObject,
+    from: jni::objects::JString,
+    to: jni::objects::JString,
+) -> jni::sys::jboolean {
+    // Both strings are read into owned `String`s BEFORE the guard: `jni::JNIEnv` is not
+    // `UnwindSafe`, so it must not be captured by the `ffi_guard` closure. Same
+    // constraint as every other JNI entry point in this crate.
+    let from: String = env.get_string(&from).map(|s| s.into()).unwrap_or_default();
+    let to: String = env.get_string(&to).map(|s| s.into()).unwrap_or_default();
+    // The budget's dedup key is the (from, to) PAIR, so half a pair is not a
+    // redirect: opening on it would bypass dedup entirely.
+    if from.is_empty() || to.is_empty() {
+        return 0;
+    }
+    // A panic in the redirect path must not leave Kotlin with a half-opened tab, so
+    // this FAILS CLOSED (0 = nothing was opened) rather than open, unlike
+    // `shouldBlock` above, which fails OPEN by contract because a drop there is a
+    // navigation the user asked for.
+    let Some(app) = crate::android_app() else {
+        eprintln!("[aegis-redirect] no app handle yet; refusing to open {to}");
+        return 0;
+    };
+    match crate::ffi_guard(|| on_blocked_redirect_to_new_tab(app, 0, &from, &to)) {
+        Some(opened) => opened as jni::sys::jboolean,
+        None => {
+            eprintln!("[aegis-redirect] opening a blocked redirect panicked; nothing opened");
             0
         }
     }

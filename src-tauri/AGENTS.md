@@ -1684,9 +1684,33 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     (from `nav.rs`) is reachable there. That is why `redirect_guard.rs` carries a macOS-scoped
     `#![cfg_attr(target_os = "macos", allow(dead_code))]`; Windows keeps the lint on and annotates
     only the Linux-only items. The block notification is
-    platform-native: desktop auto-opens a background tab; **Android shows a Material
-    `Snackbar`** (a chrome-layer bar can't paint over the native content WebView) with
-    the same "Open anyway" → new-tab action (`MainActivity.showRedirectBlocked`).
+    platform-native: desktop auto-opens a background tab, and **Android now goes through the
+    same `RedirectBudget`** (gotcha 15) rather than a second, unbudgeted route — see
+    `showRedirectBlocked` below. (This document previously claimed Android showed a Material
+    `Snackbar` with an "Open anyway" → new-tab action. There is no Snackbar and no such step,
+    and there never was: the open was an unconditional `window.__aegisOpenTab` into the chrome
+    webview. `com.google.android.material:material` IS a dependency (`build.gradle.kts:86`), so a
+    Snackbar was buildable and simply was not there.)
+    On Android the open is made by RUST, not by the chrome webview. `showRedirectBlocked` used
+    to evaluate `window.__aegisOpenTab(url)`, which reaches `MobileApp` →
+    `tabs.create(url, true)` — the same registry-create + `emit_and_persist` that
+    `tabs::open_redirect_background`
+    performs on desktop, so Android was missing EXACTLY the two things desktop also has: the
+    `admit` budget and the 30 s auto-close. A malverting page could therefore accumulate
+    unbounded background tabs on a phone while the desktop build refused to, and nothing in the
+    Kotlin path could report whether a tab had been opened at all. It now calls
+    `NativeRedirectGuard.openBlockedRedirect(from, to)`, whose JNI export
+    `Java_com_aegis_browser_NativeRedirectGuard_openBlockedRedirect` calls
+    `on_blocked_redirect_to_new_tab` and returns whether a tab was really opened.
+    `on_blocked_redirect_to_new_tab` therefore returns `bool` (the two desktop callers, the
+    pop-under path, have no affordance to suppress and ignore it), and its
+    `#[cfg_attr(target_os = "android", allow(dead_code))]` is gone — the tell closed itself.
+    **BOTH urls are required**: the dedup key is the `(from, to)` PAIR, so half a pair is not a
+    redirect and the export refuses it. The export also fails CLOSED (nothing opened) where
+    `shouldBlock` fails OPEN, because a dropped permission request is a navigation the user
+    asked for while a double-opened redirect tab is a resource the page chose to spend. The
+    caller must NOT fall back to opening the URL itself: that is the unbudgeted route this
+    replaced, and doing both would open two tabs per block.
 15. **A blocked-redirect loop is BUDGETED — it cannot drive unbounded background tabs.**
     `on_blocked_redirect_to_new_tab` opens the destination natively on every block, with no
     rate limit and no dedup, so a page that bounces through the guard N times cost N tabs **and**
@@ -1724,6 +1748,17 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     event loop is already gone during shutdown. `decide_navigation`'s pop-under auto-close
     already did this, so the precedent was in the file. Compile-verified only — there is no
     real webview reachable from a Linux test.
+    **The budget is CROSS-PLATFORM as of 2026-09-29: Android is inside it too.** It was not
+    before, and the gap was structural rather than an omission in the guard: Android has no wry
+    webview, so nothing in the core could see a `WebViewClient.shouldOverrideUrlLoading` redirect,
+    and the open had to be driven from the chrome side — where it bypassed `admit` entirely. The
+    fix routes it through the SAME function (gotcha 14), so the cap cannot be bypassed by
+    arriving from the phone. `nav::tests` pins that wiring by reading the Kotlin source as TEXT
+    (there is no Kotlin test source set, and the Rust JNI export cannot be reached from a Linux
+    test), using the general `kotlin_fn_body` helper: the `showRedirectBlocked` body must call
+    `NativeRedirectGuard.openBlockedRedirect(from, to)`, must NOT mention `__aegisOpenTab` any
+    more, must take the `(from, to)` pair, the main-frame hook must pass `current` as well as
+    `raw`, and `NativeRedirectGuard.kt` must declare the same pair returning `Boolean`.
 
 16. **Local Windows builds need NASM + CMake** (for `aws-lc-sys`, rustls' crypto C
     backend). The MSVC "Desktop development with C++" workload bundles CMake; install

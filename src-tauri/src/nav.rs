@@ -1465,12 +1465,16 @@ mod tests {
     /// a future Kotlin edit, and it fails the Rust suite if the two lists ever diverge
     /// again. (`script/`Kotlin half is compile-verified only; the behaviour still needs a
     /// device check.)
-    fn kotlin_main_activity() -> String {
-        let path = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt"
+    fn kotlin_source(file: &str) -> String {
+        let path = format!(
+            "{}/gen/android/app/src/main/java/com/aegis/browser/{file}",
+            env!("CARGO_MANIFEST_DIR")
         );
-        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"))
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"))
+    }
+
+    fn kotlin_main_activity() -> String {
+        kotlin_source("MainActivity.kt")
     }
 
     /// The body of the Kotlin `fun isLoadableUrl`, from its opening brace to the one
@@ -1763,6 +1767,64 @@ mod tests {
             body.contains("synchronized(documentStartScriptLock)"),
             "the cache is read from the boot warm-up worker as well as the UI thread, so an \
              unguarded map is a data race."
+        );
+    }
+    /// Android opened a blocked redirect by asking the CHROME webview to do it
+    /// (`window.__aegisOpenTab` -> `MobileApp` -> `tabs.create(url, true)`), which is the
+    /// same registry-create + `emit_and_persist` that `tabs::open_redirect_background`
+    /// performs on desktop. So Android was missing EXACTLY the two things desktop also
+    /// has: the `RedirectBudget` (dedup within `REDIRECT_DEDUP_WINDOW`, at most
+    /// `MAX_LIVE_REDIRECT_TABS` live) and the 30-second auto-close of a tab the user
+    /// never looked at. A malverting page could therefore accumulate unbounded
+    /// background tabs on a phone while the desktop build refused to, and nothing in the
+    /// Kotlin path could report whether a tab had been opened at all.
+    ///
+    /// There is NO Kotlin test source set, so this pins the Kotlin SOURCE TEXT read from
+    /// the Rust suite (the technique the three tests above use). That means the probes for
+    /// it must neutralise the KOTLIN side: a Rust-only change cannot redden a text pin,
+    /// and a text pin is not runtime behaviour. What is NOT covered here is the Rust
+    /// JNI export's own body — see `redirect_guard::tests` for what the budget does.
+    #[test]
+    fn the_android_blocked_redirect_goes_through_the_rust_budget() {
+        let src = kotlin_main_activity();
+
+        let body = kotlin_fn_body(&src, "private fun showRedirectBlocked(");
+        assert!(
+            body.contains("NativeRedirectGuard.openBlockedRedirect(from, to)"),
+            "showRedirectBlocked must ask RUST to open the tab, not the chrome webview: \
+             the renderer route is the unbudgeted one this replaced. body was:\n{body}"
+        );
+        assert!(
+            !body.contains("__aegisOpenTab"),
+            "showRedirectBlocked must NOT reach for window.__aegisOpenTab any more: that \
+             path bypasses RedirectBudget entirely, and keeping it would open TWO tabs per \
+             block. body was:\n{body}"
+        );
+        // The dedup key is the (from, to) PAIR. A one-argument helper cannot supply it, and
+        // deduping on `to` alone would let a page hop one destination through a chain of
+        // different pages and still be admitted every time.
+        assert!(
+            src.contains("private fun showRedirectBlocked(from: String, to: String)"),
+            "showRedirectBlocked must take BOTH urls: the budget's dedup key is the \
+             (from, to) pair, so half a pair is not a redirect and Rust refuses it."
+        );
+        // …and the call site must hand over the page the redirect came FROM, not just the
+        // target, or the pair is still incomplete.
+        let frame = kotlin_main_frame_code(&src);
+        assert!(
+            frame.contains("showRedirectBlocked(current, raw)"),
+            "the main-frame hook must pass the page the redirect came from (`current`) as \
+             well as the target (`raw`); anything else is a half pair. frame was:\n{frame}"
+        );
+
+        // The bridge itself: the same pair, and answering whether a tab was ACTUALLY
+        // opened — a `Unit` return would leave the caller unable to tell a budget refusal
+        // from an open tab, and unable to avoid a double open.
+        let guard = kotlin_source("NativeRedirectGuard.kt");
+        assert!(
+            guard.contains("external fun openBlockedRedirect(from: String, to: String): Boolean"),
+            "NativeRedirectGuard must declare openBlockedRedirect with the (from, to) pair \
+             and answer whether a tab was opened."
         );
     }
 }
