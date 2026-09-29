@@ -1508,6 +1508,40 @@ mod tests {
     /// function must not silently narrow what these tests look at. Comment stripping
     /// because the function's own comment QUOTES the bypass it replaced — asserting
     /// against raw text would match the documentation of the bug instead of the bug.
+    /// The body of any Kotlin `fun` named by `signature`, brace-counted and stripped of
+    /// comment lines. The two existing helpers hard-code one function each; this is the
+    /// general form so a new Kotlin pin does not need a fourth copy of the loop.
+    fn kotlin_fn_body(src: &str, signature: &str) -> String {
+        let start = src
+            .find(signature)
+            .unwrap_or_else(|| panic!("MainActivity.kt no longer declares {signature:?}"));
+        let open = src[start..]
+            .find('{')
+            .map(|i| start + i)
+            .unwrap_or_else(|| panic!("{signature:?} has no opening brace"));
+        let mut depth = 0i32;
+        let mut end = None;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(open + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end.unwrap_or_else(|| panic!("{signature:?} has no matching closing brace"));
+        src[open..=end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     fn kotlin_main_frame_code(src: &str) -> String {
         let start = src
             .find("override fun shouldOverrideUrlLoading(")
@@ -1661,6 +1695,74 @@ mod tests {
             src[setter..].contains("overlayHidden = hidden"),
             "`setContentHidden` no longer assigns `overlayHidden`; the guard above would then \
              never fire."
+        );
+    }
+    /// The document-start layer for one host is ~1 MB (`src-tauri/AGENTS.md`), and the
+    /// cache key is (ad-block toggle, host), so an unbounded map grew the process heap
+    /// for every distinct host a session visited. There is no Kotlin test source set, so
+    /// this pins the Kotlin source the way the two scheme pins above do.
+    #[test]
+    fn the_android_document_start_script_cache_cannot_grow_without_bound() {
+        let src = kotlin_main_activity();
+        let body = kotlin_fn_body(&src, "private fun documentStartScript(");
+
+        assert!(
+            body.contains("MAX_DOCUMENT_START_CACHE_ENTRIES"),
+            "the insert is no longer bounded — the cache grows once per host visited, and \
+             each entry is the whole ad-block layer for that host."
+        );
+        assert!(
+            body.contains("eldest.remove()"),
+            "nothing evicts any more: naming the bound without removing an entry leaves the \
+             map exactly as unbounded as before."
+        );
+        assert!(
+            body.contains("eldest.hasNext()"),
+            "the eviction loop no longer checks for an entry to evict."
+        );
+
+        // The bound itself must be a FINITE number, and the map must be an access-ordered
+        // LinkedHashMap rather than a bare ConcurrentHashMap: the plain map has no order at
+        // all, so the iterator could not yield the least recently USED entry.
+        // The declaration is found by LINE, not by its exact modifier text: `const val` is
+        // illegal for a member of the Activity class (Kotlin only allows it at top level or
+        // in a named/companion object — the Gradle build caught that), so pinning the
+        // literal `private const val …` would pin a form the compiler rejects. A comment
+        // line mentioning the name, or the LinkedHashMap line that only *uses* it, must
+        // not be mistaken for the declaration, hence the '=' and comment filters.
+        let decl = src
+            .lines()
+            .find(|l| {
+                l.contains("MAX_DOCUMENT_START_CACHE_ENTRIES")
+                    && l.contains('=')
+                    && !l.trim_start().starts_with("//")
+                    && !l.trim_start().starts_with('*')
+                    && !l.trim_start().starts_with("/*")
+            })
+            .expect("the bound is no longer a named constant, so it cannot be checked");
+        let digits: String = decl
+            .chars()
+            .skip_while(|c| *c != '=')
+            .skip(1)
+            .skip_while(|c| c.is_whitespace())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        let bound: i64 = digits
+            .parse()
+            .expect("the bound is not a plain integer any more");
+        assert!(
+            (2..=4096).contains(&bound),
+            "the cache bound {bound} is not a real bound"
+        );
+        assert!(
+            src.contains("java.util.LinkedHashMap<String, String>(MAX_DOCUMENT_START_CACHE_ENTRIES, 0.75f, true)"),
+            "the cache is not an access-ordered LinkedHashMap again, so eviction cannot \
+             prefer the least recently used entry."
+        );
+        assert!(
+            body.contains("synchronized(documentStartScriptLock)"),
+            "the cache is read from the boot warm-up worker as well as the UI thread, so an \
+             unguarded map is a data race."
         );
     }
 }

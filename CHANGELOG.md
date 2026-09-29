@@ -9,6 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Long browsing sessions on Android grew the app's memory without bound.** The
+  document-start ad-block layer is cached per site (and per on/off state) to avoid
+  rebuilding roughly a megabyte of blocking rules for every tab, but nothing ever
+  removed an entry, so every distinct site you visited stayed resident for the life
+  of the process. The cache now keeps a fixed number of entries and drops the least
+  recently used one. Sites you have not visited in a long while are re-prepared the
+  next time you open them, which costs nothing you would notice.
+
 - **Pages could navigate themselves while a settings panel covered them, on Android.**
   On desktop a full-window chrome overlay cancels any navigation the page initiates —
   the user is not driving it, and that is the window malvertising fires its top-frame

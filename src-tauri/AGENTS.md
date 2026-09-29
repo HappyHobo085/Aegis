@@ -142,6 +142,26 @@ dotted event name.
   malvertising hop through the one path this exists to stop. It also pins that
   `setContentHidden` still assigns `overlayHidden`, because a rename would leave the
   guard permanently false and look exactly like the bug.
+  **Kotlin's `documentStartScriptCache` is now BOUNDED — it was not, and one entry is
+  ~1 MB.** The cache is keyed on `(adblock toggle, host)` and nothing ever evicted it,
+  so a session visiting N distinct hosts (×2 toggle states) grew the process by N MB
+  for the life of the process, and a user who left a tab open on an ad-heavy site paid
+  for it on every later tab. It is now an **access-ordered `java.util.LinkedHashMap`**
+  behind a `documentStartScriptLock`, with `MAX_DOCUMENT_START_CACHE_ENTRIES = 32` and
+  an LRU eviction (`entries.iterator()`, `hasNext()`, `next()`, `remove()`) taken
+  _before_ each store. Three details are load-bearing rather than cosmetic:
+  **`LinkedHashMap`, not `ConcurrentHashMap`** — `ConcurrentHashMap` has no order, so an
+  iterator over it cannot yield the least-recently-_used_ entry, and the eviction would
+  be arbitrary; **`documentStartScriptLock`**, because `documentStartScript` is called
+  from the UI thread when a tab is created _and_ from the boot warm-up worker, so the
+  "concurrent" map was not in fact being mutated by one thread; and the bound is
+  checked on the way **in**, so the cache never exceeds it. A JNI failure still returns
+  `""` and is still deliberately NOT cached, so a later tab retries instead of pinning a
+  failed layer. `nav::tests` pins the field's exact type, the bound's value (parsed as a
+  plain integer and required to be in `2..=4096`, so `Int.MAX_VALUE` cannot pass as a
+  bound), the presence of `eldest.remove()` and `eldest.hasNext()`, and the
+  `synchronized(…)` — again read from the Rust suite because there is no Kotlin test
+  source set.
   **`nav.reloadOrStop` actually stops.** The toolbar renders an X with `aria-label="Stop"`
   when `state.isLoading`, and the core used to `reload()` unconditionally. `TABS_LOADING`
   (a `OnceLock<Mutex<HashSet<u32>>>` fed by `note_tab_loading` from `on_page_load` right

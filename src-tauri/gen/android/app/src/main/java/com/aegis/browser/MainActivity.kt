@@ -636,19 +636,51 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // cached, so a later tab retries instead of losing injection for the whole process. Warmed
   // on a worker thread at boot (see onWebViewCreate) so the build never lands on the UI
   // thread.
-  private val documentStartScriptCache = java.util.concurrent.ConcurrentHashMap<String, String>()
+  /** The cache is BOUNDED, and the bound is a plain number here so the Rust suite can
+   *  read it. Each entry is one host's whole ad-block + farble + WebRTC document-start
+   *  layer, which `src-tauri/AGENTS.md` measures at roughly a megabyte, and the key
+   *  includes the ad-block toggle, so a long session that visits many hosts (and flips
+   *  the toggle) used to grow the process heap without limit. Least-recently-USED is
+   *  the right policy: a user bouncing between a few sites re-uses their entries, so a
+   *  small cache does not cost a rebuild. */
+  // `val`, not `const val`: this is a member of the Activity CLASS, and Kotlin only allows
+  // `const val` at top level or in a named/companion object. The Rust suite reads the literal
+  // 32 straight out of this line, so keep the value on the same line as the name.
+  private val MAX_DOCUMENT_START_CACHE_ENTRIES = 32
+
+  /** `documentStartScript` is called from the UI thread when a tab is created AND from
+   *  the boot warm-up worker, so the map is guarded rather than merely concurrent. */
+  private val documentStartScriptLock = Any()
+
+  private val documentStartScriptCache =
+    java.util.LinkedHashMap<String, String>(MAX_DOCUMENT_START_CACHE_ENTRIES, 0.75f, true)
 
   private fun documentStartScript(host: String): String {
     // NUL cannot appear in a hostname, so it is an unambiguous key separator.
     val key = (if (adblockEnabled()) "on" else "off") + "\u0000" + host
-    documentStartScriptCache[key]?.let { return it }
+    synchronized(documentStartScriptLock) {
+      documentStartScriptCache[key]?.let { return it }
+    }
     val script = try {
       NativeInject.documentStartScript(host)
     } catch (t: Throwable) {
       Log.w("AegisInject", "document-start script unavailable; injection disabled", t)
       ""
     }
-    if (script.isNotEmpty()) documentStartScriptCache[key] = script
+    if (script.isNotEmpty()) synchronized(documentStartScriptLock) {
+      // Evict the least-recently-USED entries before inserting, so the map can never
+      // exceed its bound no matter how many hosts a session visits. `accessOrder` is
+      // what makes the iterator hand back the least recently READ entry rather than
+      // the oldest inserted one.
+      val eldest = documentStartScriptCache.entries.iterator()
+      while (documentStartScriptCache.size >= MAX_DOCUMENT_START_CACHE_ENTRIES &&
+        eldest.hasNext()
+      ) {
+        eldest.next()
+        eldest.remove()
+      }
+      documentStartScriptCache[key] = script
+    }
     return script
   }
 
