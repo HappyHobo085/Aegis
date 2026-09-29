@@ -123,6 +123,25 @@ dotted event name.
   is NO Kotlin test source set, so a source-text pin is the only thing that can catch
   a future Kotlin edit, and it fails the Rust suite on drift. A textual check can be
   satisfied by a comment, so both asserts read a COMMENT-STRIPPED copy of the body.
+  **A full-window chrome overlay now also cancels a page-initiated navigation on
+  Android, as it already did on desktop.** `decide_navigation` refuses when
+  `lay.overlay && !lay.sidebar` — its own comment says why: the user is not driving
+  the page, and malvertising fires top-frame redirects on the resize/blur that
+  opening Settings/Downloads/shield causes. Android's `overlayHidden` (set by
+  `setContentHidden`, which is what `view.setChromeOverlay` calls there) was
+  VISIBILITY-only, so the destination still reached `pageUrls[id]` and
+  `NativeHistory.recordVisit` and the user got a history row for a page they never
+  opened. The main-frame hook now refuses **before** the redirect guard, in the same
+  order `decide_navigation` uses, and the refusal is deliberately SILENT — the page is
+  covered, nothing is visible, and the user comes back to the page they were on.
+  There is no sidebar tier on Android (`MobileApp.tsx` only ever calls
+  `setChromeOverlay`), so `lay.overlay && !lay.sidebar` reduces to that one flag.
+  `nav::tests` pins three halves from the Rust suite: the guard exists, its block
+  actually `return true` (a log-only guard would be the same bug wearing a message),
+  and it appears **before** `redirectBlocked(` — a guard in the wrong order lets the
+  malvertising hop through the one path this exists to stop. It also pins that
+  `setContentHidden` still assigns `overlayHidden`, because a rename would leave the
+  guard permanently false and look exactly like the bug.
   **`nav.reloadOrStop` actually stops.** The toolbar renders an X with `aria-label="Stop"`
   when `state.isLoading`, and the core used to `reload()` unconditionally. `TABS_LOADING`
   (a `OnceLock<Mutex<HashSet<u32>>>` fed by `note_tab_loading` from `on_page_load` right

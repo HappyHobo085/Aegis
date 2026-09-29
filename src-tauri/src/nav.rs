@@ -1500,6 +1500,46 @@ mod tests {
         panic!("isLoadableUrl has no matching closing brace");
     }
 
+    /// The main-frame `shouldOverrideUrlLoading` as CODE: the FIRST such override in
+    /// `MainActivity.kt` (the popup temp WebView's is the second), sliced to its
+    /// MATCHING closing brace, with comment lines dropped.
+    ///
+    /// Brace counting rather than a byte window, because inserting lines inside the
+    /// function must not silently narrow what these tests look at. Comment stripping
+    /// because the function's own comment QUOTES the bypass it replaced — asserting
+    /// against raw text would match the documentation of the bug instead of the bug.
+    fn kotlin_main_frame_code(src: &str) -> String {
+        let start = src
+            .find("override fun shouldOverrideUrlLoading(")
+            .expect("MainActivity.kt no longer overrides shouldOverrideUrlLoading");
+        let open = src[start..]
+            .find('{')
+            .map(|i| start + i)
+            .expect("the main-frame shouldOverrideUrlLoading has no opening brace");
+        let mut depth = 0i32;
+        let mut end = None;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(open + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end =
+            end.expect("the main-frame shouldOverrideUrlLoading has no matching closing brace");
+        src[open..=end]
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
     #[test]
     fn the_android_scheme_allowlist_is_the_same_set_this_module_enforces() {
         let body = kotlin_is_loadable_body(&kotlin_main_activity());
@@ -1539,24 +1579,11 @@ mod tests {
 
     #[test]
     fn the_android_main_frame_navigation_no_longer_bypasses_the_allowlist() {
-        let src = kotlin_main_activity();
+        let code = kotlin_main_frame_code(&kotlin_main_activity());
         // The bypass was `if (!raw.startsWith("http")) return false`, and `false` is
         // WebView's "carry on" answer. Its return value cannot be asserted from here (no
         // device), so the pin is on the *decision*: the override must now consult the
         // allowlist, and no non-http prefix test may hand the WebView a green light.
-        let start = src
-            .find("override fun shouldOverrideUrlLoading(")
-            .expect("MainActivity.kt no longer overrides shouldOverrideUrlLoading");
-        let body = &src[start..start + 1400];
-        // The function's own comment QUOTES the bypass it replaced, so the negative
-        // assert below has to look at CODE. Comment-only lines are dropped; a `//` in
-        // column 0 vs an indented one is the only distinction Kotlin offers here, and
-        // this file indents every `//` consistently inside the class body.
-        let code: String = body
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
         assert!(
             code.contains("isLoadableUrl(raw)"),
             "the main-frame shouldOverrideUrlLoading must gate on isLoadableUrl, not on an \
@@ -1568,6 +1595,72 @@ mod tests {
             "the `!raw.startsWith(\"http\") -> return false` bypass is back: `false` tells \
              WebView to proceed, so every non-http scheme a page navigates to is allowed. \
              Snippet was:\n{code}"
+        );
+    }
+    /// A full-window chrome overlay (Settings / Downloads / the shield) covers the page
+    /// while it is open, and desktop refuses any navigation the CONTENT initiates in
+    /// that state — `nav::decide_navigation` reads the managed `view::ContentInset` and
+    /// bails on `lay.overlay && !lay.sidebar`, because malvertising fires top-frame
+    /// redirects off the resize/blur that OPENING an overlay causes.
+    ///
+    /// Android had the flag (`overlayHidden`, set by `setContentHidden`, which is the
+    /// mirror of `view.setChromeOverlay`) but only used it for VISIBILITY: the page kept
+    /// loading underneath the overlay, the destination still reached `pageUrls[id]`, and
+    /// `NativeHistory.recordVisit` recorded a visit the user never asked for.
+    ///
+    /// Again a TEXT pin — there is no Kotlin test source set, so this is the only thing
+    /// that can catch a future Kotlin edit, and it fails the Rust suite on drift. The
+    /// observable is the DECISION (a guard that consumes the navigation) and its ORDER
+    /// relative to the redirect guard, not a return value, which no Linux test can see.
+    #[test]
+    fn the_android_overlay_cancels_page_initiated_navigations_like_desktop() {
+        let src = kotlin_main_activity();
+        let code = kotlin_main_frame_code(&src);
+        let guard = code.find("if (overlayHidden)").unwrap_or_else(|| {
+            panic!(
+                "the main-frame shouldOverrideUrlLoading has no `overlayHidden` guard. Desktop \
+                 refuses a page-initiated navigation while a full-window chrome overlay covers \
+                 the page; without the Android half the overlay is VISIBILITY-ONLY, so a \
+                 malvertising redirect still loads underneath it and still lands in \
+                 pageUrls[] and NativeHistory.recordVisit. Snippet was:\n{code}"
+            )
+        });
+        // The guard must CONSUME the navigation — `true` is WebView's "handled, do not
+        // proceed". A log-only guard would be the same bug wearing a message.
+        let block = &code[guard
+            ..code[guard..]
+                .find('}')
+                .map(|i| guard + i)
+                .unwrap_or(code.len())];
+        assert!(
+            block.contains("return true"),
+            "the `overlayHidden` guard logs but does not consume the navigation; `return true` \
+             is what stops the WebView loading it. Snippet was:\n{code}"
+        );
+        // ORDER, the same one desktop uses: after the scheme allowlist, before the
+        // anti-malvertising redirect guard. Checked because moving it later would let the
+        // overlay mask a refusal the user is meant to be told about.
+        let redirect_guard = code.find("redirectBlocked(").unwrap_or_else(|| {
+            panic!(
+                "the main-frame hook no longer calls redirectBlocked( — the redirect guard \
+                     moved; re-point the ORDER assert. Snippet was:\n{code}"
+            )
+        });
+        assert!(
+            guard < redirect_guard,
+            "the overlay check must come BEFORE the anti-malvertising redirect guard, the same \
+             ORDER `nav::decide_navigation` uses; it now runs after it."
+        );
+        // And the flag must still be what the chrome sets: `setContentHidden` is the only
+        // writer, so a rename cannot leave the guard permanently false — which would look
+        // exactly like the bug this test exists for.
+        let setter = src
+            .find("fun setContentHidden(")
+            .expect("MainActivity.kt no longer has fun setContentHidden");
+        assert!(
+            src[setter..].contains("overlayHidden = hidden"),
+            "`setContentHidden` no longer assigns `overlayHidden`; the guard above would then \
+             never fire."
         );
     }
 }

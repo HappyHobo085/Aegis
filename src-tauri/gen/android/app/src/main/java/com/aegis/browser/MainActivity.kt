@@ -452,6 +452,26 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         return true
       }
 
+      // A full-window chrome overlay (Settings/Downloads/shield) covers the page, so
+      // the user is not driving it — any navigation the CONTENT initiates is a
+      // script/ad redirect, which is exactly what malvertising fires on the
+      // resize/blur that opening an overlay causes. Desktop cancels those in
+      // `nav::decide_navigation` (`lay.overlay && !lay.sidebar`); this is the same
+      // rule, and it is checked in the same ORDER (after the scheme allowlist,
+      // before the redirect guard). Without it the overlay was VISIBILITY-ONLY:
+      // the page kept loading underneath, so the destination still reached
+      // `pageUrls[id]` and `NativeHistory.recordVisit` recorded a visit the user
+      // never asked for. Deliberately SILENT — the page is covered, so nothing is
+      // visible, and the user returns to the page they were on when the overlay
+      // closes, which is precisely the desktop behaviour. There is no sidebar
+      // tier on Android (the mobile chrome never calls `view.setSidebar`), so
+      // `lay.overlay && !lay.sidebar` reduces to this one flag; `setContentHidden`
+      // is the Android mirror of `view.setChromeOverlay`.
+      if (overlayHidden) {
+        Log.i("AegisNav", "refused $raw: a chrome overlay covers the page")
+        return true
+      }
+
       // Scripted cross-origin top-frame redirect guard (anti-malvertising).
       val current = pageUrls[id] ?: ""
       val scripted = !request.hasGesture()

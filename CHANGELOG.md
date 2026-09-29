@@ -9,6 +9,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Pages could navigate themselves while a settings panel covered them, on Android.**
+  On desktop a full-window chrome overlay cancels any navigation the page initiates —
+  the user is not driving it, and that is the window malvertising fires its top-frame
+  redirects through. On Android the overlay only _hid_ the page, so the destination still
+  loaded behind it and was written to history: a visit for a page you never opened. The
+  overlay now cancels those navigations there too, silently, exactly as on desktop.
+
 - **The Downloads list stayed empty on Android.** The mobile Downloads sheet shipped with
   no way to fill it: Android's content area is a native `WebView`, so the core never sees
   a `DownloadListener` and nothing recorded a row. Downloads now go through the same store
