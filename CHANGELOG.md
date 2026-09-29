@@ -9,6 +9,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A timed-out ad-block query could be answered by the _previous_ request's verdict.**
+  `should_block` reuses one reply channel per calling thread and reads the first reply it
+  sees. That is only sound while nothing ever times out: when a query waits out its 5 s
+  budget, the engine thread has not sent the answer yet, so it lands in the channel _after_
+  the caller has stopped looking, and the next `should_block` on that thread — on Linux, the
+  very next allowed subresource on the GTK main thread — read it and answered a different
+  request with the stale verdict. The existing "drain on timeout" was written to prevent
+  exactly this and could not: at the moment of the timeout the channel is still empty, so
+  there is nothing to drain. Answers now carry a per-call sequence number, so a leftover
+  reply is recognised, dropped, and can never be mistaken for the current answer. This is
+  what made the `adblock_engine` test flaky: once retries were used to wait out a cold
+  engine, the stale replies surfaced as a _negative_ assertion ("a host containing `cfd` as a
+  non-TLD label must not be blocked") reading a wrong `true`.
+- **A burst of filter-list changes queued one full ~20 MB re-parse per change.** Reload
+  requests are FIFO on the same channel as blocking queries, so each one also delayed every
+  in-flight check — and a check that waited out its budget there was **allowed through**, a
+  real under-block rather than a slow page. Toggling the ad-block filter, editing a custom
+  filter and updating a subscription in quick succession now costs **one** rebuild, using the
+  most recent state. A change arriving while a rebuild is in flight is still honoured.
 - **A page Aegis itself stopped no longer shows a network error.** If a navigation is
   interrupted by Aegis's own policy — the HTTPS-Only upgrade, an ad or tracker document, a
   blocked host, a full-window panel being open — the browser reported it as a failed page

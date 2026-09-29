@@ -5,10 +5,10 @@
 //! WebKit content filters (`adblock_webkit.rs`); this is their Chromium-side
 //! counterpart, reusing the same EasyList and engine the desktop converter parses.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use adblock::lists::{FilterSet, ParseOptions};
 use adblock::request::Request;
@@ -82,7 +82,17 @@ struct Query {
     url: String,
     source: String,
     rtype: String,
-    reply: Sender<bool>,
+    reply: Sender<Verdict>,
+    /// Echoed back with the answer so a caller can tell ITS reply from a late one (see
+    /// `should_block`). Only a `String`/`bool`/`u64` crosses threads, so this stays
+    /// `Send`-safe.
+    seq: u64,
+}
+
+/// One answer from the engine thread, tagged with the `seq` of the `Query` it belongs to.
+struct Verdict {
+    seq: u64,
+    blocked: bool,
 }
 
 /// Messages to the engine thread. The `!Send` `Engine` lives on that one thread, so a
@@ -92,7 +102,9 @@ struct Query {
 /// after a reload always sees the rebuilt engine.
 enum Msg {
     Query(Query),
-    Reload(Vec<String>),
+    /// A rebuild request. The texts live in `PENDING_RELOAD` rather than in the message so
+    /// a burst of requests collapses into one (see `reload_lists`).
+    Reload,
 }
 
 /// How long `should_block` waits for the engine thread's verdict before failing open.
@@ -139,11 +151,25 @@ fn tx() -> &'static Sender<Msg> {
                                 Ok(req) => engine.check_network_request(&req).matched,
                                 Err(_) => false, // fail open: unparseable URL is allowed
                             };
-                            let _ = q.reply.send(blocked);
+                            let _ = q.reply.send(Verdict {
+                                seq: q.seq,
+                                blocked,
+                            });
                         }
                         // Rebuild the FilterSet + Engine in place on this thread (the only
-                        // place the !Send Engine can be replaced).
-                        Msg::Reload(extra) => engine = build_engine(extra),
+                        // place the !Send Engine can be replaced). Take the pending texts
+                        // and clear the "queued" flag FIRST, so a reload that arrives while
+                        // this one is building still queues its own rebuild rather than
+                        // being folded into this one and lost.
+                        Msg::Reload => {
+                            let extra = std::mem::take(
+                                &mut *PENDING_RELOAD.lock().unwrap_or_else(|e| e.into_inner()),
+                            );
+                            PENDING_QUEUED.store(false, Ordering::Release);
+                            #[cfg(test)]
+                            REBUILDS.fetch_add(1, Ordering::Relaxed);
+                            engine = build_engine(&extra);
+                        }
                     }
                 }));
                 if outcome.is_err() {
@@ -153,7 +179,10 @@ fn tx() -> &'static Sender<Msg> {
                     // A Query that panicked never reached its `reply.send`, so its caller
                     // would otherwise block until QUERY_TIMEOUT. Fail open explicitly.
                     if let Msg::Query(q) = &msg {
-                        let _ = q.reply.send(false);
+                        let _ = q.reply.send(Verdict {
+                            seq: q.seq,
+                            blocked: false,
+                        });
                     }
                 }
             }
@@ -164,11 +193,47 @@ fn tx() -> &'static Sender<Msg> {
 
 /// Rebuild the engine's FilterSet from the bundled lists + `extra_lists` (the enabled
 /// subscriptions' text + the user's custom filters) so a filter change takes effect on
-/// Windows/macOS/Android (which otherwise never re-read them after boot). Fire-and-forget;
-/// the FIFO channel guarantees the next query sees the rebuilt engine. Called from
-/// `adblock_refresh::refresh`. (Linux's declarative WebKit tier reloads separately.)
+/// Windows/macOS/Android (which otherwise never re-read them after boot). Non-blocking, and
+/// **coalescing**: a burst of requests collapses into one rebuild from the most recent state
+/// (see the body). The FIFO channel still guarantees the next query sees the rebuilt engine.
+/// Called from `adblock_refresh::refresh`. (Linux's declarative WebKit tier reloads
+/// separately.)
 pub fn reload_lists(extra_lists: Vec<String>) {
-    let _ = tx().send(Msg::Reload(extra_lists));
+    // Coalesce, don't queue. `Msg::Reload` is FIFO on the SAME channel as `Msg::Query`,
+    // so N queued reloads means N full EasyList re-parses sitting in front of every
+    // in-flight query — and a query that waits out `QUERY_TIMEOUT` there fails OPEN,
+    // which is a real under-block, not just a slow test. A user who toggles a filter,
+    // edits a custom filter and updates a subscription in quick succession (or a sync
+    // that touches several stores) must cost ONE rebuild, not one per call.
+    //
+    // "Last write wins": the newest `extra` overwrites the pending one, and the engine
+    // rebuilds once from it. `PENDING` doubles as the "a reload is already queued" flag,
+    // so the steady state costs one atomic swap and allocates nothing.
+    PENDING_RELOAD
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone_from(&extra_lists);
+    if PENDING_QUEUED.swap(true, Ordering::AcqRel) {
+        return; // one is already in the channel; it will pick up the value above
+    }
+    let _ = tx().send(Msg::Reload);
+}
+
+/// The `extra` list texts for a reload that has not been picked up by the engine thread
+/// yet, plus the flag saying a `Msg::Reload` is already in the channel.
+static PENDING_RELOAD: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static PENDING_QUEUED: AtomicBool = AtomicBool::new(false);
+
+/// How many rebuilds the engine thread has actually performed. Test-only: it is what makes
+/// "a burst costs ONE rebuild" an assertion instead of a claim, since the only externally
+/// visible effect of coalescing is that fewer rebuilds happen.
+#[cfg(test)]
+static REBUILDS: AtomicU64 = AtomicU64::new(0);
+
+/// The number of rebuilds performed so far (test-only helper).
+#[cfg(test)]
+fn rebuild_count() -> u64 {
+    REBUILDS.load(Ordering::Relaxed)
 }
 
 /// Whether a subresource request to `url`, made by the page at `source_url` (with a
@@ -188,15 +253,23 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
     }
     // Reuse one reply channel per calling thread (the GTK main thread on Linux — where
     // this runs for EVERY allowed subresource — and the WebView network threads on
-    // Android). Each call sends exactly one Query then immediately recvs its one reply,
-    // so the channel holds at most one in-flight value and never accumulates stale
-    // replies. This avoids a per-subresource `channel()` heap allocation on the hot path.
+    // Android). Each call sends exactly one Query then immediately recvs its one reply.
+    //
+    // The `seq` is what makes that safe beyond the happy path. A bare `bool` channel only
+    // carries ONE in-flight reply as long as NOTHING ever times out; on a timeout the
+    // engine thread has not replied yet, so the reply lands AFTER we stopped looking, and
+    // the next `should_block` on this thread would read it and answer a DIFFERENT request
+    // with the previous one's verdict. (Draining in the timeout arm cannot fix that — the
+    // channel is still empty at that instant, so the drain is a no-op.) Tagging the answer
+    // makes the leftover harmless: it is received, recognised as not-ours, and dropped.
     REPLY.with(|(reply, answer)| {
+        let seq = next_seq();
         let q = Query {
             url: url.to_owned(),
             source: source_url.to_owned(),
             rtype: request_type.to_owned(),
             reply: reply.clone(),
+            seq,
         };
         if tx().send(Msg::Query(q)).is_err() {
             return false;
@@ -208,26 +281,41 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
         // every subresource, so 40 iframes x a filter edit meant 40 serialized stalls.
         // Timing out fails OPEN (the request is allowed), so the worst case is that a
         // filter edit briefly under-blocks instead of hanging the window.
-        match answer.recv_timeout(QUERY_TIMEOUT) {
-            Ok(blocked) => blocked,
-            Err(RecvTimeoutError::Timeout) => {
-                // A late reply is now sitting in this thread's REUSED channel. It must be
-                // drained, or the NEXT query would consume the previous query's verdict
-                // and answer the wrong request.
-                while answer.try_recv().is_ok() {}
-                false
+        //
+        // The deadline is on the WHOLE wait, not per-reply: a late reply from an earlier
+        // call is skipped inside the same budget rather than extending it.
+        let deadline = Instant::now() + QUERY_TIMEOUT;
+        loop {
+            let left = deadline.saturating_duration_since(Instant::now());
+            match answer.recv_timeout(left) {
+                Ok(v) if v.seq == seq => return v.blocked,
+                // Someone else's answer (see the `seq` note above). Drop it and keep
+                // waiting for ours.
+                Ok(_) => continue,
+                Err(RecvTimeoutError::Timeout) => return false, // fail open
+                // The engine thread is gone (disconnected). It cannot recover itself, so
+                // just fail open — same as a dead filter engine, and far better than
+                // blocking.
+                Err(RecvTimeoutError::Disconnected) => return false,
             }
-            // The engine thread is gone (disconnected). It cannot recover itself, so just
-            // fail open — same as a dead filter engine, and far better than blocking.
-            Err(RecvTimeoutError::Disconnected) => false,
         }
     })
+}
+
+/// Per-thread-monotonic id stamped on each `Query` and echoed in its `Verdict`.
+///
+/// This is `Relaxed` and therefore NOT a unique id across threads — it only has to
+/// distinguish consecutive queries *on one thread's reply channel*, and each thread has
+/// its own channel, so a per-thread counter is sufficient and allocation-free.
+fn next_seq() -> u64 {
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    SEQ.fetch_add(1, Ordering::Relaxed)
 }
 
 thread_local! {
     /// Per-thread reusable reply channel for `should_block` (see its body for why this is
     /// safe: strictly one send → one recv per call). Created lazily on first use.
-    static REPLY: (Sender<bool>, Receiver<bool>) = channel();
+    static REPLY: (Sender<Verdict>, Receiver<Verdict>) = channel();
 }
 
 /// Whether a new-window / pop-under request to `url` should be dropped rather than
@@ -291,7 +379,10 @@ pub extern "system" fn Java_com_aegis_browser_NativeAdblock_shouldBlock(
 
 #[cfg(test)]
 mod tests {
-    use super::{is_unwanted_popup, reload_lists, set_policy, should_block};
+    use super::{
+        is_unwanted_popup, rebuild_count, reload_lists, set_policy, should_block, Duration,
+        Verdict, REPLY,
+    };
 
     // The blank/script-scheme shells are dropped without consulting the engine, so those
     // assertions are policy-independent. The last one is not: a real http(s) link IS
@@ -341,20 +432,195 @@ mod tests {
     // `test_support::lock()` (not a lock of our own) is the interlock: a second,
     // module-local mutex would not exclude the `with_tmp_app` tests at all. Its own doc
     // comment already names `adblock_engine`'s policy statics as a reason it is `pub`.
+    /// Block until the engine thread actually returns a verdict for `(url, source, rtype)`,
+    /// or `ENGINE_WARM_DEADLINE` elapses. Returns the last answer, so `false` is a real
+    /// "the engine did not block this" and the caller's `assert!` is what reports it.
+    ///
+    /// Each attempt costs up to `QUERY_TIMEOUT` on a cold backlog, and a failed attempt is
+    /// itself progress: the wait drains the queue in front of it. The deadline is generous
+    /// because the only thing being waited on is a backlog of re-parses, each ~150 ms warm.
+    fn wait_until_engine_blocks(url: &str, source: &str, rtype: &str) -> bool {
+        wait_until_engine_blocks_for(url, source, rtype, Duration::from_secs(30))
+    }
+
+    /// `wait_until_engine_blocks` with the deadline exposed, so the timeout path is
+    /// testable without a 30 s test.
+    fn wait_until_engine_blocks_for(
+        url: &str,
+        source: &str,
+        rtype: &str,
+        deadline: Duration,
+    ) -> bool {
+        let started = std::time::Instant::now();
+        loop {
+            let blocked = should_block(url, source, rtype);
+            if blocked || started.elapsed() >= deadline {
+                return blocked;
+            }
+        }
+    }
+
+    /// THE REGRESSION TEST for the bug this file's `seq` protocol exists to prevent.
+    ///
+    /// A `should_block` that times out leaves its answer sitting in the thread's reused
+    /// `REPLY` channel, because the engine thread has not sent it yet at the moment the
+    /// caller stops waiting. Before the `seq` protocol, the NEXT `should_block` on this
+    /// thread read that leftover and returned it — answering a *different request* with
+    /// the *previous* one's verdict. The old "drain on timeout" was supposed to prevent
+    /// this and could not: at timeout the channel is still empty, so `try_recv` found
+    /// nothing to drain.
+    ///
+    /// The leftover is injected directly, which makes the interleaving deterministic
+    /// instead of a 1-in-20 flake. A stale `true` for a host in no filter list MUST NOT be
+    /// returned as the answer; on the pre-fix code this assertion fails.
+    #[test]
+    fn a_late_reply_from_a_timed_out_query_is_never_read_as_this_querys_answer() {
+        let _guard = crate::test_support::lock();
+        // Warm the engine so the query below is answered from a warm engine and cannot be
+        // confused with a cold-start timeout.
+        assert!(wait_until_engine_blocks(
+            "https://adnxs.com/tag.js",
+            "https://news.example.com",
+            "script"
+        ));
+        // The exact leftover a timed-out query leaves behind: a `true` belonging to some
+        // other request. `u64::MAX` can never collide with a real `next_seq()` value.
+        REPLY.with(|(reply, _answer)| {
+            let _ = reply.send(Verdict {
+                seq: u64::MAX,
+                blocked: true,
+            });
+        });
+        // This host is in no filter list, so the honest answer is `false`. Reading the
+        // stale verdict instead would return `true` — the pre-fix behaviour.
+        assert!(
+            !should_block(
+                "https://stale-reply-probe.example/app.js",
+                "https://site.example",
+                "script"
+            ),
+            "a leftover verdict from a timed-out query must not answer this one"
+        );
+        // And the channel is still usable: the very next query gets its OWN answer, so the
+        // drop loop does not swallow replies.
+        assert!(should_block(
+            "https://adnxs.com/tag.js",
+            "https://news.example.com",
+            "script"
+        ));
+    }
+
+    /// The observable property `reload_lists`' coalescing must preserve: after a burst of
+    /// reload requests, the engine reflects the LAST one. Coalescing collapses the burst
+    /// into a single rebuild that reads the newest pending value, so a filter edit followed
+    /// by a subscription update cannot leave the engine on the older list. Run this in a
+    /// loop with the requests interleaved the worst way available — one landing while a
+    /// previous rebuild is still in flight — because the "queued" flag is what decides
+    /// whether a late request is dropped or re-queued, and getting that wrong silently
+    /// loses the user's most recent filter list.
+    #[test]
+    fn a_burst_of_reload_requests_ends_on_the_last_one() {
+        let _guard = crate::test_support::lock();
+        assert!(wait_until_engine_blocks(
+            "https://adnxs.com/tag.js",
+            "https://news.example.com",
+            "script"
+        ));
+        for round in 0..3 {
+            let before = rebuild_count();
+            // Fire a burst with NO waiting between requests — the case a real user makes by
+            // toggling a filter, editing a custom filter and updating a subscription at once,
+            // and the case a sync import makes. Every one of these used to cost a full
+            // ~20 MB re-parse, all of them queued in front of every in-flight query.
+            for i in 0..200 {
+                reload_lists(vec![format!("||superseded-{i}.example^")]);
+            }
+            reload_lists(vec![format!("||coalesce-final-{round}.example^")]);
+            // Wait for the engine to settle on the final value: the last request must win,
+            // and the superseded ones must NOT linger (that is the coalescing's whole point).
+            loop {
+                if should_block(
+                    &format!("https://coalesce-final-{round}.example/x"),
+                    "https://site.example",
+                    "script",
+                ) {
+                    break;
+                }
+            }
+            // 201 requests, and the whole point is that they did NOT cost 201 rebuilds. A
+            // handful is right: one for the request already in the channel when the burst
+            // started, plus one for whatever arrived after the flag was cleared. Unbounded
+            // growth here is the bug — each rebuild is a ~20 MB parse that every in-flight
+            // `should_block` queues behind, which is how they time out and fail OPEN.
+            let rebuilds = rebuild_count() - before;
+            assert!(
+                rebuilds <= 4,
+                "a burst of 201 reload requests must collapse into a couple of rebuilds, \
+                 not {rebuilds} (round {round})"
+            );
+            for i in [0usize, 100, 199] {
+                assert!(
+                    !should_block(
+                        &format!("https://superseded-{i}.example/x"),
+                        "https://site.example",
+                        "script"
+                    ),
+                    "an earlier reload in the burst must not survive (round {round})"
+                );
+            }
+        }
+        reload_lists(vec![]);
+    }
+
+    /// The warm-up helper's job is to be impossible to fool. Vacuity control: pointed at a
+    /// host in no filter list it must give up and report `false`, not spin forever or invent
+    /// a `true`. Without this, the warm-up in the test below could be a no-op that always
+    /// "succeeds".
+    #[test]
+    fn the_warm_up_helper_gives_up_on_a_host_no_list_blocks() {
+        let _guard = crate::test_support::lock();
+        assert!(
+            !wait_until_engine_blocks_for(
+                "https://warm-up-never-blocks.example/app.js",
+                "https://site.example",
+                "script",
+                Duration::from_millis(300),
+            ),
+            "the helper must give up and report false on a host no list blocks"
+        );
+    }
+
     #[test]
     fn blocks_ads_and_honors_toggle_and_allowlist() {
         let _guard = crate::test_support::lock();
-        // Warm the engine BEFORE asserting anything. The first `should_block` in the process
-        // pays the one-time ~20 MB EasyList parse on the engine thread, and that cost lands
-        // INSIDE the caller's `QUERY_TIMEOUT`, which fails OPEN on expiry. Whichever test
-        // makes that first call is chosen by alphabetical test order, so it is this one — and
-        // adding tests anywhere else in the suite adds load at exactly that moment. Measured
-        // on this box: 1 failure in 20 full-suite runs with extra tests present, 0 in 12
-        // without, always on the assertion below, and never in isolation. A throwaway query
-        // absorbs the build cost; if it does time out, the engine is warm by the time the real
-        // assertions run. (The sibling test above is immune for a different reason: it asserts
-        // the NOT-blocked answer, which is also what a timeout produces.)
-        let _ = should_block("https://example.com/", "https://example.com/", "document");
+        // Wait until the engine genuinely answers BEFORE asserting anything.
+        //
+        // The first `should_block` in the process pays the one-time ~20 MB EasyList parse on
+        // the engine thread, and that cost lands INSIDE the caller's `QUERY_TIMEOUT`, which
+        // FAILS OPEN on expiry. Whichever test makes that first call is chosen by alphabetical
+        // test order, so it is this one. Run 36447158645 failed the first assertion below here.
+        //
+        // A single throwaway warm-up query does NOT protect it, and that is measured, not
+        // assumed. `should_block` is FIFO behind `Msg::Reload` on the ONE engine thread, so
+        // a burst of filter/subscription edits queues full re-parses in front of it. A
+        // `recv_timeout` expiry leaves the query still QUEUED, so the engine is *busy*, not
+        // *warm*, and the very next query queues behind the same backlog and fails open too.
+        // Probe result with 4 queued reloads and a 50 ms timeout: `warmup=false real=false
+        // settled=false` — a warm-up buys nothing, which is why "1 failure in 20 runs,
+        // always on this assertion" went unfixed. (`reload_lists` now coalesces, which
+        // removes most of the backlog at its source, but the queue is still shared with
+        // queries and the test must not depend on the backlog being empty.)
+        //
+        // So warm up on the assertion's OWN query and retry until it answers `true`. A blocking
+        // verdict can only come from the engine actually deciding, which makes `true` an
+        // unambiguous warm signal, and each attempt also advances the FIFO. Retrying cannot
+        // manufacture a pass: if the engine never blocks this domain, every attempt fails open
+        // and the assert below fires with the helper's `false`.
+        let _ = wait_until_engine_blocks(
+            "https://adnxs.com/tag.js",
+            "https://news.example.com",
+            "script",
+        );
         // Default: on, empty allowlist. `||adnxs.com^` is an unconditional anchor in
         // the vendored EasyList; example.com is clean.
         assert!(

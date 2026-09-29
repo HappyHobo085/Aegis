@@ -37,19 +37,19 @@
   ],
   "total": {
     "lines": {
-      "total": 16954,
-      "covered": 13245,
-      "pct": 78.12
+      "total": 20633,
+      "covered": 17636,
+      "pct": 85.47
     },
     "statements": {
-      "total": 29928,
-      "covered": 23422,
-      "pct": 78.26
+      "total": 35970,
+      "covered": 30659,
+      "pct": 85.23
     },
     "functions": {
-      "total": 2185,
-      "covered": 1618,
-      "pct": 74.05
+      "total": 2631,
+      "covered": 2109,
+      "pct": 80.16
     },
     "branches": {
       "total": 0,
@@ -59,19 +59,19 @@
   "files": {
     "src-tauri/src/adblock.rs": {
       "lines": {
-        "total": 393,
-        "covered": 369,
-        "pct": 93.89
+        "total": 456,
+        "covered": 432,
+        "pct": 94.74
       },
       "statements": {
-        "total": 631,
-        "covered": 584,
-        "pct": 92.55
+        "total": 696,
+        "covered": 649,
+        "pct": 93.25
       },
       "functions": {
-        "total": 57,
-        "covered": 43,
-        "pct": 75.44
+        "total": 61,
+        "covered": 47,
+        "pct": 77.05
       },
       "branches": {
         "total": 0,
@@ -86,8 +86,8 @@
       },
       "statements": {
         "total": 265,
-        "covered": 253,
-        "pct": 95.47
+        "covered": 254,
+        "pct": 95.85
       },
       "functions": {
         "total": 21,
@@ -101,19 +101,19 @@
     },
     "src-tauri/src/adblock_engine.rs": {
       "lines": {
-        "total": 217,
-        "covered": 204,
-        "pct": 94.01
+        "total": 329,
+        "covered": 311,
+        "pct": 94.53
       },
       "statements": {
-        "total": 316,
-        "covered": 294,
-        "pct": 93.04
+        "total": 454,
+        "covered": 429,
+        "pct": 94.49
       },
       "functions": {
-        "total": 21,
-        "covered": 19,
-        "pct": 90.48
+        "total": 31,
+        "covered": 27,
+        "pct": 87.1
       },
       "branches": {
         "total": 0,
@@ -227,19 +227,19 @@
     },
     "src-tauri/src/customfilters.rs": {
       "lines": {
-        "total": 344,
-        "covered": 335,
-        "pct": 97.38
+        "total": 479,
+        "covered": 468,
+        "pct": 97.7
       },
       "statements": {
-        "total": 610,
-        "covered": 594,
-        "pct": 97.38
+        "total": 896,
+        "covered": 884,
+        "pct": 98.66
       },
       "functions": {
-        "total": 64,
-        "covered": 63,
-        "pct": 98.44
+        "total": 82,
+        "covered": 81,
+        "pct": 98.78
       },
       "branches": {
         "total": 0,
@@ -248,19 +248,19 @@
     },
     "src-tauri/src/data.rs": {
       "lines": {
-        "total": 489,
-        "covered": 478,
-        "pct": 97.75
+        "total": 671,
+        "covered": 658,
+        "pct": 98.06
       },
       "statements": {
-        "total": 900,
-        "covered": 875,
-        "pct": 97.22
+        "total": 1216,
+        "covered": 1182,
+        "pct": 97.2
       },
       "functions": {
-        "total": 47,
-        "covered": 45,
-        "pct": 95.74
+        "total": 58,
+        "covered": 56,
+        "pct": 96.55
       },
       "branches": {
         "total": 0,
@@ -269,19 +269,19 @@
     },
     "src-tauri/src/downloads.rs": {
       "lines": {
-        "total": 406,
-        "covered": 331,
-        "pct": 81.53
+        "total": 687,
+        "covered": 641,
+        "pct": 93.3
       },
       "statements": {
-        "total": 666,
-        "covered": 563,
-        "pct": 84.53
+        "total": 1124,
+        "covered": 1053,
+        "pct": 93.68
       },
       "functions": {
-        "total": 58,
-        "covered": 47,
-        "pct": 81.03
+        "total": 103,
+        "covered": 92,
+        "pct": 89.32
       },
       "branches": {
         "total": 0,
@@ -290,14 +290,14 @@
     },
     "src-tauri/src/farble.rs": {
       "lines": {
-        "total": 470,
-        "covered": 444,
-        "pct": 94.47
+        "total": 475,
+        "covered": 449,
+        "pct": 94.53
       },
       "statements": {
-        "total": 680,
-        "covered": 637,
-        "pct": 93.68
+        "total": 690,
+        "covered": 647,
+        "pct": 93.77
       },
       "functions": {
         "total": 60,
@@ -311,19 +311,19 @@
     },
     "src-tauri/src/find.rs": {
       "lines": {
-        "total": 128,
-        "covered": 54,
-        "pct": 42.19
+        "total": 302,
+        "covered": 293,
+        "pct": 97.02
       },
       "statements": {
-        "total": 200,
-        "covered": 97,
-        "pct": 48.5
+        "total": 465,
+        "covered": 451,
+        "pct": 96.99
       },
       "functions": {
-        "total": 24,
-        "covered": 11,
-        "pct": 45.83
+        "total": 50,
+        "covered": 41,
+        "pct": 82
       },
       "branches": {
         "total": 0,
@@ -333,18 +333,18 @@
     "src-tauri/src/find_linux.rs": {
       "lines": {
         "total": 101,
-        "covered": 21,
-        "pct": 20.79
+        "covered": 38,
+        "pct": 37.62
       },
       "statements": {
         "total": 177,
-        "covered": 31,
-        "pct": 17.51
+        "covered": 59,
+        "pct": 33.33
       },
       "functions": {
         "total": 19,
-        "covered": 4,
-        "pct": 21.05
+        "covered": 8,
+        "pct": 42.11
       },
       "branches": {
         "total": 0,
@@ -353,19 +353,19 @@
     },
     "src-tauri/src/form.rs": {
       "lines": {
-        "total": 119,
-        "covered": 44,
-        "pct": 36.97
+        "total": 237,
+        "covered": 218,
+        "pct": 91.98
       },
       "statements": {
-        "total": 177,
-        "covered": 72,
-        "pct": 40.68
+        "total": 322,
+        "covered": 309,
+        "pct": 95.96
       },
       "functions": {
-        "total": 22,
-        "covered": 8,
-        "pct": 36.36
+        "total": 35,
+        "covered": 33,
+        "pct": 94.29
       },
       "branches": {
         "total": 0,
@@ -374,19 +374,19 @@
     },
     "src-tauri/src/history.rs": {
       "lines": {
-        "total": 387,
-        "covered": 354,
-        "pct": 91.47
+        "total": 564,
+        "covered": 532,
+        "pct": 94.33
       },
       "statements": {
-        "total": 722,
-        "covered": 667,
-        "pct": 92.38
+        "total": 996,
+        "covered": 941,
+        "pct": 94.48
       },
       "functions": {
-        "total": 55,
-        "covered": 46,
-        "pct": 83.64
+        "total": 72,
+        "covered": 63,
+        "pct": 87.5
       },
       "branches": {
         "total": 0,
@@ -395,19 +395,19 @@
     },
     "src-tauri/src/jsonstore.rs": {
       "lines": {
-        "total": 550,
-        "covered": 532,
-        "pct": 96.73
+        "total": 663,
+        "covered": 644,
+        "pct": 97.13
       },
       "statements": {
-        "total": 1097,
-        "covered": 1055,
-        "pct": 96.17
+        "total": 1285,
+        "covered": 1241,
+        "pct": 96.58
       },
       "functions": {
-        "total": 86,
-        "covered": 85,
-        "pct": 98.84
+        "total": 105,
+        "covered": 104,
+        "pct": 99.05
       },
       "branches": {
         "total": 0,
@@ -416,19 +416,19 @@
     },
     "src-tauri/src/lib.rs": {
       "lines": {
-        "total": 401,
-        "covered": 66,
-        "pct": 16.46
+        "total": 542,
+        "covered": 199,
+        "pct": 36.72
       },
       "statements": {
-        "total": 654,
-        "covered": 108,
-        "pct": 16.51
+        "total": 894,
+        "covered": 342,
+        "pct": 38.26
       },
       "functions": {
-        "total": 31,
-        "covered": 11,
-        "pct": 35.48
+        "total": 49,
+        "covered": 26,
+        "pct": 53.06
       },
       "branches": {
         "total": 0,
@@ -437,19 +437,19 @@
     },
     "src-tauri/src/nav.rs": {
       "lines": {
-        "total": 608,
-        "covered": 197,
-        "pct": 32.4
+        "total": 1008,
+        "covered": 671,
+        "pct": 66.57
       },
       "statements": {
-        "total": 1032,
-        "covered": 304,
-        "pct": 29.46
+        "total": 1700,
+        "covered": 1098,
+        "pct": 64.59
       },
       "functions": {
-        "total": 93,
-        "covered": 29,
-        "pct": 31.18
+        "total": 136,
+        "covered": 77,
+        "pct": 56.62
       },
       "branches": {
         "total": 0,
@@ -458,19 +458,19 @@
     },
     "src-tauri/src/permissions.rs": {
       "lines": {
-        "total": 212,
-        "covered": 100,
-        "pct": 47.17
+        "total": 384,
+        "covered": 293,
+        "pct": 76.3
       },
       "statements": {
-        "total": 372,
-        "covered": 182,
-        "pct": 48.92
+        "total": 650,
+        "covered": 501,
+        "pct": 77.08
       },
       "functions": {
-        "total": 27,
-        "covered": 14,
-        "pct": 51.85
+        "total": 43,
+        "covered": 35,
+        "pct": 81.4
       },
       "branches": {
         "total": 0,
@@ -479,19 +479,19 @@
     },
     "src-tauri/src/picker.rs": {
       "lines": {
-        "total": 222,
-        "covered": 165,
-        "pct": 74.32
+        "total": 396,
+        "covered": 375,
+        "pct": 94.7
       },
       "statements": {
-        "total": 391,
-        "covered": 283,
-        "pct": 72.38
+        "total": 703,
+        "covered": 668,
+        "pct": 95.02
       },
       "functions": {
-        "total": 36,
-        "covered": 27,
-        "pct": 75
+        "total": 63,
+        "covered": 55,
+        "pct": 87.3
       },
       "branches": {
         "total": 0,
@@ -526,9 +526,9 @@
         "pct": 88.17
       },
       "statements": {
-        "total": 783,
+        "total": 785,
         "covered": 673,
-        "pct": 85.95
+        "pct": 85.73
       },
       "functions": {
         "total": 64,
@@ -542,14 +542,14 @@
     },
     "src-tauri/src/redirect_guard.rs": {
       "lines": {
-        "total": 440,
+        "total": 441,
         "covered": 349,
-        "pct": 79.32
+        "pct": 79.14
       },
       "statements": {
-        "total": 688,
+        "total": 689,
         "covered": 516,
-        "pct": 75
+        "pct": 74.89
       },
       "functions": {
         "total": 65,
@@ -584,19 +584,19 @@
     },
     "src-tauri/src/settings.rs": {
       "lines": {
-        "total": 839,
-        "covered": 693,
-        "pct": 82.6
+        "total": 1079,
+        "covered": 994,
+        "pct": 92.12
       },
       "statements": {
-        "total": 1396,
-        "covered": 1144,
-        "pct": 81.95
+        "total": 1790,
+        "covered": 1653,
+        "pct": 92.35
       },
       "functions": {
-        "total": 105,
-        "covered": 88,
-        "pct": 83.81
+        "total": 138,
+        "covered": 124,
+        "pct": 89.86
       },
       "branches": {
         "total": 0,
@@ -605,19 +605,19 @@
     },
     "src-tauri/src/subs.rs": {
       "lines": {
-        "total": 473,
-        "covered": 361,
-        "pct": 76.32
+        "total": 732,
+        "covered": 604,
+        "pct": 82.51
       },
       "statements": {
-        "total": 870,
-        "covered": 625,
-        "pct": 71.84
+        "total": 1252,
+        "covered": 983,
+        "pct": 78.51
       },
       "functions": {
-        "total": 65,
-        "covered": 44,
-        "pct": 67.69
+        "total": 90,
+        "covered": 67,
+        "pct": 74.44
       },
       "branches": {
         "total": 0,
@@ -626,19 +626,19 @@
     },
     "src-tauri/src/sync.rs": {
       "lines": {
-        "total": 1329,
-        "covered": 703,
-        "pct": 52.9
+        "total": 1337,
+        "covered": 836,
+        "pct": 62.53
       },
       "statements": {
-        "total": 2297,
-        "covered": 1204,
-        "pct": 52.42
+        "total": 2310,
+        "covered": 1437,
+        "pct": 62.21
       },
       "functions": {
-        "total": 129,
-        "covered": 70,
-        "pct": 54.26
+        "total": 131,
+        "covered": 78,
+        "pct": 59.54
       },
       "branches": {
         "total": 0,
@@ -752,19 +752,19 @@
     },
     "src-tauri/src/sync_vault.rs": {
       "lines": {
-        "total": 595,
-        "covered": 443,
-        "pct": 74.45
+        "total": 860,
+        "covered": 816,
+        "pct": 94.88
       },
       "statements": {
-        "total": 1212,
-        "covered": 947,
-        "pct": 78.14
+        "total": 1703,
+        "covered": 1620,
+        "pct": 95.13
       },
       "functions": {
-        "total": 72,
-        "covered": 54,
-        "pct": 75
+        "total": 93,
+        "covered": 80,
+        "pct": 86.02
       },
       "branches": {
         "total": 0,
@@ -773,19 +773,19 @@
     },
     "src-tauri/src/tab_registry.rs": {
       "lines": {
-        "total": 1229,
-        "covered": 1205,
-        "pct": 98.05
+        "total": 1290,
+        "covered": 1266,
+        "pct": 98.14
       },
       "statements": {
-        "total": 2106,
-        "covered": 2068,
-        "pct": 98.2
+        "total": 2218,
+        "covered": 2181,
+        "pct": 98.33
       },
       "functions": {
-        "total": 151,
-        "covered": 147,
-        "pct": 97.35
+        "total": 158,
+        "covered": 154,
+        "pct": 97.47
       },
       "branches": {
         "total": 0,
@@ -794,14 +794,14 @@
     },
     "src-tauri/src/tabs.rs": {
       "lines": {
-        "total": 842,
-        "covered": 460,
-        "pct": 54.63
+        "total": 858,
+        "covered": 476,
+        "pct": 55.48
       },
       "statements": {
-        "total": 1451,
-        "covered": 779,
-        "pct": 53.69
+        "total": 1478,
+        "covered": 806,
+        "pct": 54.53
       },
       "functions": {
         "total": 131,
@@ -815,19 +815,19 @@
     },
     "src-tauri/src/test_support.rs": {
       "lines": {
-        "total": 107,
-        "covered": 106,
-        "pct": 99.07
+        "total": 223,
+        "covered": 215,
+        "pct": 96.41
       },
       "statements": {
-        "total": 199,
-        "covered": 197,
-        "pct": 98.99
+        "total": 371,
+        "covered": 361,
+        "pct": 97.3
       },
       "functions": {
-        "total": 12,
-        "covered": 11,
-        "pct": 91.67
+        "total": 40,
+        "covered": 34,
+        "pct": 85
       },
       "branches": {
         "total": 0,
@@ -836,19 +836,19 @@
     },
     "src-tauri/src/update.rs": {
       "lines": {
-        "total": 129,
-        "covered": 59,
-        "pct": 45.74
+        "total": 210,
+        "covered": 171,
+        "pct": 81.43
       },
       "statements": {
-        "total": 256,
-        "covered": 124,
-        "pct": 48.44
+        "total": 381,
+        "covered": 304,
+        "pct": 79.79
       },
       "functions": {
-        "total": 19,
-        "covered": 10,
-        "pct": 52.63
+        "total": 33,
+        "covered": 27,
+        "pct": 81.82
       },
       "branches": {
         "total": 0,
@@ -857,19 +857,19 @@
     },
     "src-tauri/src/vault.rs": {
       "lines": {
-        "total": 1754,
-        "covered": 1667,
-        "pct": 95.04
+        "total": 1849,
+        "covered": 1737,
+        "pct": 93.94
       },
       "statements": {
-        "total": 3618,
-        "covered": 3402,
-        "pct": 94.03
+        "total": 3767,
+        "covered": 3506,
+        "pct": 93.07
       },
       "functions": {
-        "total": 188,
-        "covered": 142,
-        "pct": 75.53
+        "total": 197,
+        "covered": 148,
+        "pct": 75.13
       },
       "branches": {
         "total": 0,
@@ -899,19 +899,19 @@
     },
     "src-tauri/src/view.rs": {
       "lines": {
-        "total": 206,
-        "covered": 51,
-        "pct": 24.76
+        "total": 333,
+        "covered": 291,
+        "pct": 87.39
       },
       "statements": {
-        "total": 270,
-        "covered": 48,
-        "pct": 17.78
+        "total": 500,
+        "covered": 428,
+        "pct": 85.6
       },
       "functions": {
-        "total": 24,
-        "covered": 8,
-        "pct": 33.33
+        "total": 42,
+        "covered": 34,
+        "pct": 80.95
       },
       "branches": {
         "total": 0,
@@ -962,19 +962,19 @@
     },
     "src-tauri/src/zoom.rs": {
       "lines": {
-        "total": 70,
-        "covered": 13,
-        "pct": 18.57
+        "total": 233,
+        "covered": 218,
+        "pct": 93.56
       },
       "statements": {
-        "total": 132,
-        "covered": 20,
-        "pct": 15.15
+        "total": 433,
+        "covered": 407,
+        "pct": 94
       },
       "functions": {
-        "total": 14,
-        "covered": 2,
-        "pct": 14.29
+        "total": 36,
+        "covered": 28,
+        "pct": 77.78
       },
       "branches": {
         "total": 0,

@@ -628,6 +628,31 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     `NativeAdblock.enabled()` JNI getter so the Kotlin document-start cache is keyed on the
     toggle, and under `test` through `adblock_inject::android_document_start_layer`. Gated
     rather than `allow(dead_code)`, because outside those two there is genuinely no caller.
+    - **Two concurrency contracts in that file, both learned the hard way — read these
+      before touching `should_block` or `reload_lists`.**
+      - **Replies are `Verdict { seq, blocked }`, not a bare `bool`.** The one-engine-thread
+        design reuses a single reply channel per calling thread, which is only sound while
+        _nothing times out_. A query that waits out `QUERY_TIMEOUT` leaves its answer sitting
+        in that channel, because the engine thread has not sent it yet at the instant the
+        caller stops waiting. The next `should_block` on that thread then reads it and
+        **answers a different request with the previous one's verdict**. The old
+        "drain on timeout" could not prevent this: at timeout the channel is still empty, so
+        `try_recv` drained nothing. The `seq` (a `Relaxed` global counter, unique enough
+        because each thread has its own channel) makes the leftover harmless — it is
+        received, recognised as not-ours, and dropped — and the deadline is on the whole
+        wait, so skipping a stale reply does not extend it. This is reachable in
+        production, not just in tests: `should_block` runs for every allowed subresource on
+        the GTK main thread, so one timed-out query mis-answers the next subresource.
+      - **`reload_lists` coalesces; do not make it queue again.** `Msg::Reload` is FIFO on
+        the _same_ channel as `Msg::Query`, so N queued rebuilds put N full ~20 MB EasyList
+        re-parses in front of every in-flight query — and a query that waits out
+        `QUERY_TIMEOUT` behind one fails OPEN, i.e. a real under-block. A user who toggles a
+        filter, edits a custom filter and updates a subscription in quick succession must
+        cost ONE rebuild. The shape is a `PENDING_RELOAD` slot (last write wins) plus a
+        `PENDING_QUEUED` flag; the engine thread **takes the texts and clears the flag
+        before building**, so a reload arriving mid-build re-queues instead of being folded
+        into the running one and lost. Measured: 201 queued requests went from stalling the
+        engine thread for over 5 minutes to 1–2 rebuilds.
   - `adblock_webkit.rs` (Linux) — declarative WebKit content filters via
     `adblock_convert.rs` (Brave → Safari content-blocker JSON), chunked ~25k
     rules/filter (WebKit caps ~50k), disk-cached by hash **over the lists AND the
@@ -1418,6 +1443,24 @@ existing lock, not a module-local one, which would not exclude the `with_tmp_app
 tests at all. When adding a test that calls `should_block` / `is_unwanted_popup`,
 take that lock.
 
+**Taking the lock is necessary but NOT sufficient — CI run 36447158645 flaked on
+that same test anyway.** The old warm-up was a single throwaway `should_block`
+call, justified as "if it times out, the engine is warm by the time the real
+assertions run". That reasoning is **false**: a `recv_timeout` expiry leaves the
+query still _queued_, so the engine is _busy_, not _warm_, and the very next query
+queues behind the same backlog and fails open too. A probe (50 ms timeout, 4
+queued reloads) gave `warmup=false real=false settled=false` — the warm-up bought
+nothing, which is why "1 failure in 20 runs, always on this assertion" survived
+the previous fix. The warm-up is now
+`wait_until_engine_blocks(<the assertion's OWN query>)`: it retries until the
+engine answers `true`, which can only come from a real verdict, and each attempt
+also advances the FIFO. **That is only sound because replies carry a `seq`** —
+before that fix a `true` could be a leftover from the previous attempt, and a
+retry loop on top of the broken protocol reports a false "warm" and then
+mis-answers every assertion after it (that is how the first version of this fix
+failed on a _negative_ assertion instead of the flaky one). If you change either
+the `seq` protocol or the retry helper, the other must move with it.
+
 **The pattern — `with_tmp_app`:**
 
 ```rust
@@ -1515,7 +1558,7 @@ Tooling: `cargo-llvm-cov` + the `llvm-tools-preview` component. Neither is a
 `Cargo.toml` change, so adding them does not touch `Cargo.lock` and does not
 trigger the ~4-minute full dependency rebuild a `rust-toolchain.toml` edit would.
 
-### Measured, 2026-09-28 (Linux, `cargo llvm-cov --lib --json`, stable 1.98.0)
+### Measured, 2026-09-29 (Linux, `cargo llvm-cov --lib --json`, stable 1.98.0)
 
 **The committed floor, taken with NO keyring** (see the floor rule below — these are the
 numbers in `src-tauri/coverage-baseline.json`, and a machine with a working keyring measures
@@ -1523,18 +1566,18 @@ strictly higher):
 
 | Metric               | Measured (floor)     | Gap  |
 | -------------------- | -------------------- | ---- |
-| lines                | 13245/16954 = 78.12% | 3709 |
-| statements (regions) | 23422/29928 = 78.26% | 6506 |
-| functions            | 1618/2185 = 74.05%   | 567  |
+| lines                | 17636/20633 = 85.47% | 2997 |
+| statements (regions) | 30659/35970 = 85.23% | 5311 |
+| functions            | 2109/2631 = 80.16%   | 522  |
 
-The report holds 44 files. **7 of them are `cfg`-gated out of the build on
-Linux** (`adblock_win`, `find_win`, `nav_policy_win`, `nav_url_win`, `nav_url_mac`,
-`zoom_win`, `zoom_mac`), so 37 compile here, and a 38th — `linux_layout.rs` —
-compiles but is excluded as unexecutable in a headless session. **36 files are
-in the gate.** Before the exclusion list the no-keyring run reads 75.44% lines /
-75.57% regions / 71.50% functions — the difference is entirely
-`linux_layout.rs`. With a keyring those figures are ~1pp higher, which is exactly
-why the floor is the committed number.
+The report holds **45** files, all of which compile on Linux. **7 further modules are
+`cfg`-gated out of a Linux build** and are listed in the baseline as inert here rather than
+excluded from the report (`adblock_win`, `find_win`, `nav_policy_win`, `nav_url_win`,
+`nav_url_mac`, `zoom_win`, `zoom_mac`). One report entry — `linux_layout.rs` — compiles
+but is excluded as unexecutable in a headless session, so **44 files are in the gate**.
+Before the exclusion list the no-keyring run reads 83.17% lines / 82.87% regions / 78.05%
+functions — the difference is entirely `linux_layout.rs` (88/678 lines). With a keyring
+those figures are ~1pp higher, which is exactly why the floor is the committed number.
 
 **`statements` is llvm `regions`, not an istanbul statement.** A region is a code
 span, not an expression. The label is a deliberate fiction that exists so the
@@ -1589,15 +1632,20 @@ are not in the report rather than being excluded from it.
 
 ### What the number does and does not measure
 
-The gap is not spread evenly. Real, measurable debt concentrates in the modules
-that wrap an `AppHandle`, a real webview, or the network — exactly the code a
-`MockRuntime` cannot reach: `lib.rs` 16.46% (the `ipc()` dispatcher and `setup`),
-`zoom.rs` 18.57%, `find_linux.rs` 20.79% (AT-SPI over a session bus),
-`adblock_webkit.rs` 21.32%, `view.rs` 24.76%, `nav.rs` 32.4%, `update.rs` 45.74%,
-`permissions.rs` 47.17%, `sync.rs` 52.9%, `tabs.rs` 54.63%, `redirect_guard.rs`
-79.32%. The pure, already-covered end is `sync_envelope.rs` 98.82%, `tab_registry.rs`
-98.05%, `data.rs` 97.75%, `customfilters.rs` 97.38%, `crypto.rs` 97.27%,
-`jsonstore.rs` 96.73%, `places.rs` 96.55%.
+The gap is not spread evenly, and it is much narrower than it was. Real, measurable
+debt now concentrates in one module and one dispatcher: `adblock_webkit.rs` 21.32%
+(declarative WebKit content filters, no headless driver reaches them), `lib.rs` 36.72%
+(what is left of the `ipc()` dispatcher and `setup`), `find_linux.rs` 37.62% (AT-SPI over a
+session bus), `tabs.rs` 55.48%, `sync.rs` 62.53%, `sync_keystore.rs` 63.87% (the floor's
+no-keyring figure — 228 of 357), `nav.rs` 66.57%, `permissions.rs` 76.30%,
+`redirect_guard.rs` 79.14%, `update.rs` 81.43%, `subs.rs` 82.51%. The covered end is
+`vault_inject.rs` 100%, `sync_auth.rs` 98.92%, `sync_envelope.rs` 98.82%, `tab_registry.rs`
+98.14%, `data.rs` 98.06%, `crypto.rs` 97.27%, `find.rs` 97.02%, `jsonstore.rs` 97.13%,
+`adblock_engine.rs` 94.53%, `zoom.rs` 93.56%, `form.rs` 91.98%, `view.rs` 87.39%.
+
+**Read the direction of travel before reading the ratio.** `zoom.rs` went 18.57% → 93.56%
+and `lib.rs` 16.46% → 36.72% because the dispatchers were driven under `MockRuntime`;
+neither number moved by deleting anything.
 
 **A percentage can rise while the codebase gets worse**, exactly as on the
 TypeScript side: deleting 0%-covered code moves the ratio and not one test.
