@@ -6,6 +6,35 @@ use std::path::PathBuf;
 use serde_json::{json, Value};
 use tauri::{AppHandle, Manager, Runtime};
 
+/// Upper bound on the persisted custom-filter text, matching `picker::MAX_FILTER_BYTES`.
+///
+/// Every injected rule costs a full ad-block engine re-parse (and a WebKit filter
+/// reinstall) on each refresh, and the text is written twice — the `.txt` plus the
+/// sync record that ships it — so an unbounded file is a CPU, storage and sync
+/// amplifier at once.
+///
+/// The danger is not the user pasting a large list into the settings textarea, which
+/// is visible and deliberate. It is the two paths that take text from somewhere else:
+/// a **peer's sync record**, and a **restore bundle**. Neither is a decision this
+/// device made, and both end up re-parsed on every ad-block refresh forever. The
+/// cap is therefore enforced in the two places those paths arrive — `write` (which
+/// every local path, data-import and the element picker funnel through) and
+/// `merge_remote` (which writes the `.txt` directly and so does NOT go through
+/// `write`).
+const MAX_TEXT_BYTES: usize = 512 * 1024;
+
+/// Reject text over the cap. An additive cap: the check lives where text enters, and
+/// the byte count rather than a rule or line count is what bounds the re-parse cost.
+fn check_size(text: &str) -> Result<(), String> {
+    if text.len() <= MAX_TEXT_BYTES {
+        return Ok(());
+    }
+    Err(format!(
+        "custom filter text is {} bytes, over the {MAX_TEXT_BYTES}-byte limit",
+        text.len()
+    ))
+}
+
 fn path<R: Runtime>(app: &AppHandle<R>) -> Option<PathBuf> {
     app.path()
         .app_data_dir()
@@ -113,6 +142,20 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &Value) -> bool {
     } else {
         remote.get("text").and_then(Value::as_str).unwrap_or("")
     };
+    // This arm writes the `.txt` DIRECTLY, so it does not pass through `write` and
+    // needs the cap of its own — a peer is the one party that can push a text this
+    // device would never have typed, and it would then be re-parsed by the engine on
+    // every refresh, forever. Refusing leaves the local text and the local record
+    // exactly as they were, so the peer's record simply loses on the next pull
+    // against the unchanged local HLC. Reporting `false` is honest: nothing changed.
+    //
+    // The check is placed AFTER `observe`, so the peer's HLC is still recorded and a
+    // later, smaller edit from that peer is not re-fetched forever; it is before any
+    // write, so nothing lands.
+    if let Err(e) = check_size(text) {
+        eprintln!("[aegis] refusing a peer custom-filter record: {e}");
+        return false;
+    }
     // The `.txt` FIRST, and the record only once it landed. The record is what says "we have
     // this peer's HLC", so persisting it after a failed `.txt` write told the next merge the
     // text was already here when it is not — and the peer's own text then lost to that stale
@@ -151,6 +194,13 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &Value) -> bool {
 /// text this device does not have, in both directions, with no error anywhere. The stamp is
 /// now the second step, not the second half of an unconditional pair.
 pub fn write<R: Runtime>(app: &AppHandle<R>, text: &str) -> Result<(), String> {
+    // Before the write AND before the stamp, so an over-cap text is rejected without
+    // disturbing the sync record — otherwise the record would advance its HLC for
+    // text that is not on disk, and the peer's own text would then lose to it on
+    // every later pull, in both directions. That is the exact failure
+    // `a_filter_write_that_fails_does_not_stamp_the_sync_record` guards for a write
+    // error, and it applies identically to a refused size.
+    check_size(text)?;
     if let Some(p) = path(app) {
         crate::jsonstore::write_atomic(&p, text.as_bytes()).map_err(|e| {
             eprintln!("[aegis] failed to persist custom filters: {e}");
@@ -388,6 +438,130 @@ mod tests {
             assert_eq!(stored["hlc"]["wall_ms"], json!(remote_hlc));
             assert_eq!(stored["hlc"]["node"], json!("peer"));
             assert_eq!(stored["text"], json!("||theirs.test^\n"));
+        });
+    }
+
+    /// The cap is on BYTES, and the boundary is inclusive: text exactly at the limit
+    /// is accepted, one byte over is refused. Enumerating both sides of the boundary
+    /// is the only way to catch an off-by-one that a single "big text is rejected"
+    /// assertion would pass straight over.
+    #[test]
+    fn the_size_limit_accepts_the_boundary_and_refuses_one_byte_past_it() {
+        with_tmp_app(|app| {
+            let at_limit = "a".repeat(MAX_TEXT_BYTES);
+            assert!(
+                write(app, &at_limit).is_ok(),
+                "text exactly at the limit must be accepted"
+            );
+            assert_eq!(load(app).len(), MAX_TEXT_BYTES);
+            let one_over = "a".repeat(MAX_TEXT_BYTES + 1);
+            let err = write(app, &one_over)
+                .expect_err("one byte over the limit must be refused")
+                .to_string();
+            assert!(
+                err.contains(&MAX_TEXT_BYTES.to_string()) && err.contains("limit"),
+                "the refusal must name the limit it applied, got: {err}"
+            );
+            // And the refusal must not have disturbed what was already on disk.
+            assert_eq!(
+                load(app).len(),
+                MAX_TEXT_BYTES,
+                "a refused write must leave the previous list intact"
+            );
+        });
+    }
+
+    /// A refused write must not advance the sync record. This is the same invariant
+    /// `a_filter_write_that_fails_does_not_stamp_the_sync_record` holds for an I/O
+    /// error: a record stamped for text that is not on disk beats the peer's real
+    /// text on every later pull, in both directions, so the peer's edit is lost
+    /// permanently rather than merely delayed.
+    #[test]
+    fn a_size_refused_write_does_not_stamp_the_sync_record() {
+        with_tmp_app(|app| {
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
+            let before = sync_record(app);
+            assert!(write(app, &"a".repeat(MAX_TEXT_BYTES + 1)).is_err());
+            assert_eq!(
+                sync_record(app),
+                before,
+                "a refused size must leave the sync record exactly where it was"
+            );
+            assert_eq!(load(app), "||mine.test^\n");
+            // Control: an accepted write at the limit DOES move the record, so the
+            // assertion above cannot pass just because nothing ever stamps.
+            assert!(write(app, &"b".repeat(MAX_TEXT_BYTES)).is_ok());
+            assert_ne!(sync_record(app), before, "an accepted write still stamps");
+        });
+    }
+
+    /// The peer path writes the `.txt` directly and so never reaches `write`. Without
+    /// a cap of its own it was the one route by which text this device would never
+    /// have typed reached the engine — and then the sync record, and then every peer
+    /// it is ever pushed to.
+    #[test]
+    fn an_oversized_peer_record_is_refused_without_landing_or_stamping() {
+        with_tmp_app(|app| {
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
+            let before = sync_record(app);
+            let huge = "a".repeat(MAX_TEXT_BYTES + 1);
+            // Derived, never hardcoded (see the control test below).
+            let peer = hlc_of(app).wall_ms + 10_000;
+            assert!(
+                !merge_remote(app, &remote(peer, &huge)),
+                "an oversized peer record must report that nothing changed"
+            );
+            assert_eq!(
+                load(app),
+                "||mine.test^\n",
+                "the local rules must be untouched by a refused peer record"
+            );
+            assert_eq!(
+                sync_record(app),
+                before,
+                "a refused peer record must not be persisted as the winning record"
+            );
+        });
+    }
+
+    /// The control for the test above: a peer record just UNDER the cap is a normal
+    /// merge. Without it, the refusal test could pass for the wrong reason — because
+    /// `remote()` records never win on a fresh app, or because `merge_remote` is
+    /// refusing peers generally.
+    #[test]
+    fn a_peer_record_just_under_the_limit_merges_normally() {
+        with_tmp_app(|app| {
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
+            let at_limit = "a".repeat(MAX_TEXT_BYTES);
+            // Derived, never hardcoded: HLCs are wall-clock based (~1.79e12), so a fixed
+            // peer stamp is in the PAST and loses on its own.
+            let peer = hlc_of(app).wall_ms + 10_000;
+            assert!(
+                merge_remote(app, &remote(peer, &at_limit)),
+                "a peer record at the limit must merge"
+            );
+            assert_eq!(load(app), at_limit);
+            assert_eq!(sync_record(app)["text"], json!(at_limit));
+        });
+    }
+
+    /// A tombstone clears the list, so it must not be refused for carrying a large
+    /// `text` field alongside its `deleted` flag. A delete that does not take effect
+    /// is the worst possible failure for this feature: the user is trying to REMOVE
+    /// rules and the app keeps enforcing them.
+    #[test]
+    fn a_tombstone_carrying_a_large_text_still_clears_the_rules() {
+        with_tmp_app(|app| {
+            write(app, "||mine.test^\n").expect("filter/settings fixture write");
+            let mut t = remote_tombstone(hlc_of(app).wall_ms + 10_000);
+            // The text field is ignored when `deleted` is set, so its size is
+            // irrelevant to whether the delete can be applied.
+            t["text"] = json!("a".repeat(MAX_TEXT_BYTES + 1));
+            assert!(
+                merge_remote(app, &t),
+                "a delete must always be able to land"
+            );
+            assert_eq!(load(app), "", "a tombstoned record must clear the rules");
         });
     }
 

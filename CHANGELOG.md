@@ -9,6 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A huge filter list can no longer be written over sync or from a backup.** Custom
+  filters were size-checked on the one path you trigger yourself, and not on either path
+  where the text arrives from somewhere else: a filter list arriving over sync, and a
+  bundle you restore. Both went straight to disk, so a single oversized list — from a peer
+  device, or from a file you were handed — was written whole, and a rejected list is now
+  refused with a message naming the size and the limit (512 KiB, the same limit the
+  filter picker has always used). A filter list that was deleted elsewhere still clears
+  the rules as it always did; only the text of a list that is not a deletion is measured.
 - **A tab's Back/Forward history is now capped at 100 steps per tab.** It grew by one entry per navigation with no limit, in a process that keeps one entry per tab for as long as it is open, so a long-lived tab's memory grew for as long as the app ran. The oldest steps are the ones discarded; the page you are on and every step still inside the cap stay reachable, in order.
 - **Find-in-page could report that it had started when it never did.** All four
   find channels answered "done" on any platform with no built-in find, having done

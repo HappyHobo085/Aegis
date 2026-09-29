@@ -429,6 +429,19 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     its own failure path. `customFilters.set` reports the error rather than echoing text the
     file does not hold, `picker::on_picked` emits no `picker.picked` for a rule it could not
     save, and `data.import` adds `settings` / `customFilters` to the `failed` list above.
+  - **`customfilters` text is size-capped on BOTH write paths, not only the local one.**
+    `write` — the single path behind the `customFilters.set` dispatch, the element picker
+    and `data::import` — runs `check_size` before the write and before the stamp, so a
+    refused size cannot leave the record advertising text that is not on disk (the failure
+    mode above). `merge_remote` is the path that needed its OWN check: it writes the `.txt`
+    DIRECTLY through `jsonstore::write_atomic` and never calls `write`, so a peer's sync
+    record — text this device never chose, arriving over the network — was unbounded. It
+    checks AFTER `observe`, so the peer HLC is still recorded and the record is not
+    re-fetched on every subsequent pull, and returns `false` so the next pull retries
+    rather than leaving the device stuck on a value it refuses. The check sits after the
+    `if deleted {""} else {…}` extraction, because a tombstone's large `text` field is
+    irrelevant: a tombstone means “delete the rules” and must still clear them. The limit is
+    `MAX_TEXT_BYTES = 512 * 1024`, matching `picker::MAX_FILTER_BYTES`.
     `Result` is `#[must_use]`, so every test call site of either writer needed an explicit
     `.expect("… fixture write")`; the production callers are only `apply_synced` and
     `apply_imported`.
