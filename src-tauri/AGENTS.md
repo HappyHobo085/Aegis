@@ -628,7 +628,7 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     `NativeAdblock.enabled()` JNI getter so the Kotlin document-start cache is keyed on the
     toggle, and under `test` through `adblock_inject::android_document_start_layer`. Gated
     rather than `allow(dead_code)`, because outside those two there is genuinely no caller.
-    - **Two concurrency contracts in that file, both learned the hard way — read these
+    - **Three concurrency contracts in that file, all learned the hard way — read these
       before touching `should_block` or `reload_lists`.**
       - **Replies are `Verdict { seq, blocked }`, not a bare `bool`.** The one-engine-thread
         design reuses a single reply channel per calling thread, which is only sound while
@@ -653,6 +653,20 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
         before building**, so a reload arriving mid-build re-queues instead of being folded
         into the running one and lost. Measured: 201 queued requests went from stalling the
         engine thread for over 5 minutes to 1–2 rebuilds.
+      - **`should_block` returns a bare `bool`, so it cannot say "no answer yet" — and a
+        test built on it is either flaky or lying.** "The engine allows this" and "the engine
+        never answered, failed open after `QUERY_TIMEOUT`" are the same value, and a *negative*
+        assertion cannot tell them apart at all: a fail-open timeout looks exactly like the
+        verdict it hoped for, so the test passes for the wrong reason. The fix is a test-only
+        `thread_local! LAST_QUERY_UNANSWERED` flag that `should_block` raises in its three
+        no-verdict arms (send failed / `Timeout` / `Disconnected`) and clears at the top —
+        **thread-local because the verdict is per-thread** (`REPLY` is a thread-local channel;
+        a global flag is cleared by any other test thread and the reading thread then
+        concludes "answered" with a fail-open `false`). `verdict_of` in the test module asks
+        for a *verdict*: retry only while that flag is set, sleep 20 ms, stop the instant one
+        exists. A warm-up is a precondition, not a guarantee — a rebuild can land after it —
+        so the assertions themselves must ask for a verdict. Panic-recovery `false` is
+        deliberately NOT marked: that one IS a verdict.
   - `adblock_webkit.rs` (Linux) — declarative WebKit content filters via
     `adblock_convert.rs` (Brave → Safari content-blocker JSON), chunked ~25k
     rules/filter (WebKit caps ~50k), disk-cached by hash **over the lists AND the
@@ -1566,33 +1580,41 @@ strictly higher):
 
 | Metric               | Measured (floor)     | Gap  |
 | -------------------- | -------------------- | ---- |
-| lines                | 17630/20634 = 85.44% | 3004 |
-| statements (regions) | 30641/35971 = 85.18% | 5330 |
-| functions            | 2109/2631 = 80.16%   | 522  |
+| lines                | 17675/20685 = 85.45% | 3010 |
+| statements (regions) | 30713/36039 = 85.22% | 5326 |
+| functions            | 2116/2638 = 80.21%   | 522  |
 
 The report holds **45** files, all of which compile on Linux. **7 further modules are
 `cfg`-gated out of a Linux build** and are listed in the baseline as inert here rather than
 excluded from the report (`adblock_win`, `find_win`, `nav_policy_win`, `nav_url_win`,
 `nav_url_mac`, `zoom_win`, `zoom_mac`). One report entry — `linux_layout.rs` — compiles
 but is excluded as unexecutable in a headless session, so **44 files are in the gate**.
-Before the exclusion list the same run reads 83.14% lines / 82.82% regions / 78.05%
+Before the exclusion list the same run reads 83.15% lines / 82.86% regions / 78.11%
 functions — the difference is entirely `linux_layout.rs` (88/678 lines). With a keyring
 those figures are ~1pp higher, which is exactly why the floor is the committed number.
 
 **That floor is the MINIMUM of several runs, not one run — and the minimum is load-bearing.**
 Stripping D-Bus makes the *keychain* tests skip deterministically (`sync_keystore.rs` reads
-228 lines on every run, with or without a keyring it is 286), but it does **not** make the
-whole suite deterministic. Four `cargo llvm-cov` runs on one unchanged tree gave lines
-17630 / 17637 / 17637 / 17638, all with the same 2109 functions, and the entire spread is
-two files: `sync.rs` 830–837 and `adblock_engine.rs` 310–311. The cause is the **kernel
-keyring**, not D-Bus: the keyring crate's `linux-native` backend needs no session bus at
-all, and the kernel keyring is shared mutable state *outside* the test process. So whether
-`restart_restores_an_enabled_sync_state` finds a stored root — and therefore whether it
-reaches the opening of `sync_once` (sync.rs 355-368, the ±7 lines) — depends on what a
-sibling test happened to leave behind. A baseline generated from one lucky run is a
-threshold the next run may miss, which is the same class of bug as the keyring floor
-itself, one level down. **Regenerate from the lowest run, and re-run the ratchet against
-several reports before committing a baseline.**
+228 lines on every run, with or without a keyring it is 286), but it does **not** by itself
+make the whole suite deterministic. Four `cargo llvm-cov` runs on one unchanged tree gave
+lines 17630 / 17637 / 17637 / 17638, all with the same 2109 functions, and the entire spread
+was two files: `sync.rs` 830–837 and `adblock_engine.rs` 310–311. A baseline generated from
+one lucky run is a threshold the next run may miss, which is the same class of bug as the
+keyring floor itself, one level down. **Regenerate from the lowest run, and re-run the
+ratchet against several reports before committing a baseline.**
+
+The two halves of that spread had **different causes, and only one of them is still live.**
+`adblock_engine.rs` was the test-only warm-up helper *busy-looping* on a bare `bool` it could
+not tell from a timeout, so its covered lines depended on timing; asking for a verdict
+instead (see the `verdict_of` note above) made it deterministic, and **three consecutive runs
+on the fixed tree are now byte-identical** (17763 / 30830 / 2130 pre-exclusion, with
+`sync.rs` at 836 and `adblock_engine.rs` at 349 in all three). The `sync.rs` half is the
+**kernel keyring**, not D-Bus: the keyring crate's `linux-native` backend needs no session
+bus at all, and the kernel keyring is shared mutable state *outside* the test process, so
+whether `restart_restores_an_enabled_sync_state` finds a stored root — and therefore whether
+it reaches the opening of `sync_once` (sync.rs 355-368) — can still depend on what a sibling
+test left behind. Three identical runs are not proof of determinism, so the
+minimum-across-runs discipline stands for that reason alone.
 
 **`statements` is llvm `regions`, not an istanbul statement.** A region is a code
 span, not an expression. The label is a deliberate fiction that exists so the
@@ -1649,16 +1671,24 @@ are not in the report rather than being excluded from it.
 
 The gap is not spread evenly, and it is much narrower than it was. Real, measurable
 debt now concentrates in one module and one dispatcher: `adblock_webkit.rs` 21.32%
-(declarative WebKit content filters, no headless driver reaches them), `lib.rs` 36.72%
+(declarative WebKit content filters, no headless driver reaches them), `lib.rs` 36.83%
 (what is left of the `ipc()` dispatcher and `setup`), `find_linux.rs` 37.62% (AT-SPI over a
 session bus), `tabs.rs` 55.48%, `sync.rs` 62.53%, `sync_keystore.rs` 63.87% (the floor's
 no-keyring figure — 228 of 357), `nav.rs` 66.57%, `permissions.rs` 76.30%,
 `redirect_guard.rs` 79.14%, `update.rs` 81.43%, `subs.rs` 82.51%. The covered end is
 `vault_inject.rs` 100%, `sync_auth.rs` 98.92%, `sync_envelope.rs` 98.82%, `tab_registry.rs`
 98.14%, `data.rs` 98.06%, `customfilters.rs` 97.70%, `crypto.rs` 97.27%, `find.rs` 97.02%,
-`jsonstore.rs` 97.13%, `adblock_engine.rs` 94.22%, `zoom.rs` 93.56%, `form.rs` 91.98%,
-`view.rs` 87.39%. `adblock_engine.rs` and `sync.rs` are quoted at their FLOOR values (310
-and 830), so a run that measures higher reads better than the table, never worse.
+`jsonstore.rs` 97.13%, `zoom.rs` 93.56%, `form.rs` 91.98%, `view.rs` 87.39%. `sync.rs` is
+quoted at its FLOOR value (836 of 1337), so a run that measures higher reads better than the
+table, never worse.
+
+`adblock_engine.rs` reads 91.84% (349 of 380) and is the one place where a **lower ratio is
+the better news**: the engine's test suite gained the answered-verdict plumbing and its own
+test, which added 51 total lines of which 39 are covered, so the percentage fell from 94.22%
+while the covered count rose from 310. The uncovered remainder is the three "no verdict"
+arms (`send` failed, `Timeout`, `Disconnected`) and the retry path, which cannot be reached
+without stalling the engine for more than `QUERY_TIMEOUT` — not fast-testable, and the flag
+contract is covered directly instead.
 
 **Read the direction of travel before reading the ratio.** `zoom.rs` went 18.57% → 93.56%
 and `lib.rs` 16.46% → 36.83% because the dispatchers were driven under `MockRuntime`;

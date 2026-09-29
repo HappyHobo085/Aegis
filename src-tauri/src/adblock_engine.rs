@@ -236,11 +236,60 @@ fn rebuild_count() -> u64 {
     REBUILDS.load(Ordering::Relaxed)
 }
 
+// Whether the most recent `should_block` on this thread gave up because the engine did not
+// answer, rather than because the engine answered `false`.
+//
+// Both are the same `bool` to a caller, and telling them apart is what lets a test wait for
+// the engine to become RESPONSIVE without waiting for it to change its MIND. It is the
+// difference between "the engine says allow this" (a verdict — retrying cannot help) and "the
+// engine is still busy" (no verdict — retrying is the only thing that helps). A test that
+// cannot see the difference has to retry until a deadline, which is both slow and wrong: it
+// reports a false failure whenever the answer really is `false`, and it cannot stop early when
+// the answer is `true`.
+//
+// THREAD-LOCAL on purpose, and that is load-bearing rather than tidiness: a query's verdict
+// is per-thread (`REPLY` above is a `thread_local!` channel, one per calling thread), so the
+// flag that describes that verdict has to be per-thread too. As a plain `static` it was a
+// cross-thread bug: an unrelated test thread's `should_block` — anything not holding
+// `test_support::lock()` — cleared the flag between one thread's timeout and its own read of
+// it, so that thread concluded "the engine answered" with a `false` that was really a fail-open
+// timeout, and the warm-up gave up instantly. It reproduced as `a_late_reply_...` and
+// `the_unanswered_flag_...` both failing their warm-up in the FULL suite while passing in
+// isolation.
+//
+// (`//` rather than `///` on purpose: a doc comment cannot attach to a `thread_local!`
+// macro invocation, so clippy reports it as an unused doc comment.)
+#[cfg(test)]
+thread_local! {
+    static LAST_QUERY_UNANSWERED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Record that the last `should_block` failed to get a verdict. Compiled out entirely in a
+/// release build, so the flag costs nothing in production.
+#[cfg(test)]
+fn mark_query_unanswered() {
+    LAST_QUERY_UNANSWERED.with(|unanswered| unanswered.set(true));
+}
+
+#[cfg(not(test))]
+#[inline]
+fn mark_query_unanswered() {}
+
+/// Whether the last `should_block` on this thread timed out instead of returning a verdict.
+#[cfg(test)]
+fn last_query_was_unanswered() -> bool {
+    LAST_QUERY_UNANSWERED.with(|unanswered| unanswered.get())
+}
+
 /// Whether a subresource request to `url`, made by the page at `source_url` (with a
 /// best-effort `request_type` such as "script"/"image"/"document"), should be
 /// blocked. Honors the on/off toggle and per-page-host allowlist; fails open on any
 /// error, so ad-blocking never breaks a page.
 pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
+    // Cleared up front, before every return path below, so a caller can never read a flag
+    // left over from a previous call on this thread.
+    #[cfg(test)]
+    LAST_QUERY_UNANSWERED.with(|unanswered| unanswered.set(false));
     // Off, or the page's host is allowlisted → allow everything (malware blocking is
     // separate, in the Kotlin guard).
     if !ENABLED.load(Ordering::Relaxed) {
@@ -272,6 +321,7 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
             seq,
         };
         if tx().send(Msg::Query(q)).is_err() {
+            mark_query_unanswered();
             return false;
         }
         // Bounded wait. `Msg` is FIFO on ONE channel, so a `Msg::Reload` (any filter
@@ -292,11 +342,17 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
                 // Someone else's answer (see the `seq` note above). Drop it and keep
                 // waiting for ours.
                 Ok(_) => continue,
-                Err(RecvTimeoutError::Timeout) => return false, // fail open
+                Err(RecvTimeoutError::Timeout) => {
+                    mark_query_unanswered();
+                    return false;
+                } // fail open
                 // The engine thread is gone (disconnected). It cannot recover itself, so
                 // just fail open — same as a dead filter engine, and far better than
                 // blocking.
-                Err(RecvTimeoutError::Disconnected) => return false,
+                Err(RecvTimeoutError::Disconnected) => {
+                    mark_query_unanswered();
+                    return false;
+                }
             }
         }
     })
@@ -380,8 +436,8 @@ pub extern "system" fn Java_com_aegis_browser_NativeAdblock_shouldBlock(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_unwanted_popup, rebuild_count, reload_lists, set_policy, should_block, Duration,
-        Verdict, REPLY,
+        is_unwanted_popup, last_query_was_unanswered, mark_query_unanswered, rebuild_count,
+        reload_lists, set_policy, should_block, Duration, Verdict, REPLY,
     };
 
     // The blank/script-scheme shells are dropped without consulting the engine, so those
@@ -436,9 +492,22 @@ mod tests {
     /// or `ENGINE_WARM_DEADLINE` elapses. Returns the last answer, so `false` is a real
     /// "the engine did not block this" and the caller's `assert!` is what reports it.
     ///
-    /// Each attempt costs up to `QUERY_TIMEOUT` on a cold backlog, and a failed attempt is
-    /// itself progress: the wait drains the queue in front of it. The deadline is generous
-    /// because the only thing being waited on is a backlog of re-parses, each ~150 ms warm.
+    /// Retry is driven by `last_query_was_unanswered`, NOT by "the answer was `false`".
+    /// Those are different situations and the difference is the whole point:
+    /// `should_block` reports both as the same `bool`, so a helper that retries on `false`
+    /// cannot tell "the engine says allow this" from "the engine is still re-parsing", and
+    /// has to spin until its deadline. That is how this helper failed CI run 36631144042:
+    /// the `rust` job's `cargo test` step passed 643/643 uninstrumented, and then the
+    /// `cargo llvm-cov` step failed all three tests that wait on the engine, because under
+    /// instrumentation the engine answered late enough for the busy loop to burn its whole
+    /// 30 s deadline. Spinning also floods the engine thread with a query per iteration,
+    /// which is the opposite of what a "wait for it to settle" helper should do.
+    ///
+    /// So: retry only while there is no verdict yet, stop the instant there is one, and
+    /// sleep between attempts so a retry cannot outrun the engine it is waiting for. A
+    /// `false` verdict is a real answer and is returned immediately — the caller's
+    /// `assert!` then fails at once, and with the engine's own reason rather than after a
+    /// pointless 30 s.
     fn wait_until_engine_blocks(url: &str, source: &str, rtype: &str) -> bool {
         wait_until_engine_blocks_for(url, source, rtype, Duration::from_secs(30))
     }
@@ -454,9 +523,46 @@ mod tests {
         let started = std::time::Instant::now();
         loop {
             let blocked = should_block(url, source, rtype);
-            if blocked || started.elapsed() >= deadline {
+            if blocked || !last_query_was_unanswered() {
                 return blocked;
             }
+            if started.elapsed() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Ask the engine for its decision about `(url, source, rtype)` and return that
+    /// decision — retrying only while the engine has not answered at all.
+    ///
+    /// This is the primitive every assertion about engine behaviour should use, and the
+    /// reason is the same one above: a bare `should_block` cannot tell the caller whether
+    /// its `false` is "allow this" or "the engine never answered", and a *negative*
+    /// assertion cannot tell at all — a fail-open timeout looks exactly like the verdict
+    /// it hoped for, so such a test passes for the wrong reason. A positive assertion is
+    /// merely flaky on the same input. That is not theoretical: with the warm-up alone,
+    /// `blocks_ads_and_honors_toggle_and_allowlist` still failed once on
+    /// "a known ad/tracker domain must be blocked" at line 741, because
+    /// `a_burst_of_reload_requests_ends_on_the_last_one` runs first and its final
+    /// `reload_lists` was still in flight — a rebuild the warm-up cannot cover, since it
+    /// can land *after* the warm-up's answer. The assertion then queued behind a ~20 MB
+    /// parse and failed open. A warm-up is a precondition, not a guarantee; only asking
+    /// for a verdict is a guarantee.
+    fn verdict_of(url: &str, source: &str, rtype: &str) -> bool {
+        let started = std::time::Instant::now();
+        let deadline = Duration::from_secs(30);
+        loop {
+            let blocked = should_block(url, source, rtype);
+            // `blocked` short-circuits the `!`, so a `true` is returned even if the flag is
+            // somehow still set: a positive answer is never ambiguous.
+            if blocked || !last_query_was_unanswered() {
+                return blocked;
+            }
+            if started.elapsed() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(20));
         }
     }
 
@@ -572,6 +678,62 @@ mod tests {
         reload_lists(vec![]);
     }
 
+    /// The flag the warm-up helper reads is the whole reason it can tell "the engine said
+    /// allow" from "the engine never answered", so the flag's contract is asserted directly
+    /// rather than inferred from a slow run.
+    ///
+    /// `should_block` returns a bare `bool` and reports BOTH "allow" and "timed out" as
+    /// `false`. Under `cargo llvm-cov` everything is far slower, so CI run 36631144042 had
+    /// the engine miss a query's 5 s budget; the old helper could not distinguish that from
+    /// a real verdict, so it kept retrying and burned its entire deadline. The flag makes
+    /// the distinction observable. If the flag were not cleared at the top of
+    /// `should_block`, a stale `true` would make the helper give up early and report a
+    /// fail-open as a verdict — so that half is asserted too, not just the setting.
+    #[test]
+    fn the_unanswered_flag_distinguishes_a_real_verdict_from_a_timeout() {
+        let _guard = crate::test_support::lock();
+        // Warm up first: a `true` can only come from the engine actually deciding, so this
+        // guarantees the calls below are ANSWERED rather than timing out — which is the
+        // precondition for the flag assertions to mean anything.
+        assert!(wait_until_engine_blocks(
+            "https://adnxs.com/tag.js",
+            "https://news.example.com",
+            "script"
+        ));
+        // An answered query must leave the flag DOWN, or the helper would treat a real
+        // `false` as a timeout and keep retrying (which is the run-36631144042 failure).
+        should_block(
+            "https://example.org/somewhere",
+            "https://example.org/",
+            "script",
+        );
+        assert!(
+            !last_query_was_unanswered(),
+            "an answered query must not report itself unanswered, or the helper would \\
+             treat a real verdict as a timeout and keep retrying"
+        );
+        // Now the flag is raised, as a timeout raises it.
+        mark_query_unanswered();
+        assert!(
+            last_query_was_unanswered(),
+            "a query the engine never answered must be visible as such"
+        );
+        // And the NEXT query clears it, so a raised flag can never leak into a later
+        // verdict. This is the stale-value half: without the clear at the top of
+        // `should_block`, the helper would give up on the next call before the engine
+        // ever spoke.
+        should_block(
+            "https://example.net/elsewhere",
+            "https://example.net/",
+            "script",
+        );
+        assert!(
+            !last_query_was_unanswered(),
+            "the following answered query must clear the flag, or the helper would give up \\
+             on the next call before the engine ever spoke"
+        );
+    }
+
     /// The warm-up helper's job is to be impossible to fool. Vacuity control: pointed at a
     /// host in no filter list it must give up and report `false`, not spin forever or invent
     /// a `true`. Without this, the warm-up in the test below could be a no-op that always
@@ -624,7 +786,7 @@ mod tests {
         // Default: on, empty allowlist. `||adnxs.com^` is an unconditional anchor in
         // the vendored EasyList; example.com is clean.
         assert!(
-            should_block(
+            verdict_of(
                 "https://adnxs.com/tag.js",
                 "https://news.example.com",
                 "script"
@@ -635,7 +797,7 @@ mod tests {
         // privacy list is actually in the engine (they would NOT block on EasyList
         // alone, which is exactly the coverage gap this bundle closes).
         assert!(
-            should_block(
+            verdict_of(
                 "https://www.google-analytics.com/analytics.js",
                 "https://news.example.com",
                 "script"
@@ -643,7 +805,7 @@ mod tests {
             "an analytics tracker (EasyPrivacy) must be blocked"
         );
         assert!(
-            should_block(
+            verdict_of(
                 "https://sb.scorecardresearch.com/beacon.js",
                 "https://news.example.com",
                 "script"
@@ -654,7 +816,7 @@ mod tests {
         // networks) — caught by the abuse-TLD block (`||cfd^`), since no static domain
         // list can keep up with disposable random names like these.
         assert!(
-            should_block(
+            verdict_of(
                 "https://cupcake.limbycocking.cfd/banner.jpg",
                 "https://streamex.sh/watch",
                 "image"
@@ -662,7 +824,7 @@ mod tests {
             "a rotating .cfd malvertising domain must be blocked by the abuse-TLD list"
         );
         assert!(
-            should_block(
+            verdict_of(
                 "https://1x39.r5zkgi2ufhmkn5ty2i.cfd/x",
                 "https://streamex.sh/watch",
                 "script"
@@ -670,7 +832,7 @@ mod tests {
             "any .cfd host must be blocked regardless of the random subdomain"
         );
         assert!(
-            !should_block(
+            !verdict_of(
                 "https://cfd.example.com/app.js",
                 "https://example.com",
                 "script"
@@ -678,11 +840,11 @@ mod tests {
             "a host that merely contains 'cfd' as a non-TLD label must NOT be blocked"
         );
         assert!(
-            !should_block("https://example.com/", "https://example.com/", "document"),
+            !verdict_of("https://example.com/", "https://example.com/", "document"),
             "a normal first-party page must not be blocked"
         );
         assert!(
-            !should_block(
+            !verdict_of(
                 "https://example.com/styles.css",
                 "https://example.com/",
                 "stylesheet"
@@ -692,7 +854,7 @@ mod tests {
         // A pop-under (top-level document) to an ad domain is blocked too — this is
         // exactly what nav::on_new_window checks to drop ad pop-unders into nowhere.
         assert!(
-            should_block(
+            verdict_of(
                 "https://adnxs.com/popunder",
                 "https://news.example.com",
                 "document"
@@ -700,7 +862,7 @@ mod tests {
             "an ad-domain pop-under (document) must be blocked"
         );
         assert!(
-            !should_block(
+            !verdict_of(
                 "https://example.org/article",
                 "https://news.example.com",
                 "document"
@@ -716,7 +878,7 @@ mod tests {
         // Toggle OFF → nothing is ad-blocked.
         set_policy(false, &[]);
         assert!(
-            !should_block(
+            !verdict_of(
                 "https://adnxs.com/tag.js",
                 "https://news.example.com",
                 "script"
@@ -727,7 +889,7 @@ mod tests {
         // ON, page host allowlisted → ads allowed on that page, blocked elsewhere.
         set_policy(true, &["news.example.com".to_string()]);
         assert!(
-            !should_block(
+            !verdict_of(
                 "https://adnxs.com/tag.js",
                 "https://news.example.com/article",
                 "script"
@@ -735,7 +897,7 @@ mod tests {
             "ads on an allowlisted page must be allowed"
         );
         assert!(
-            should_block(
+            verdict_of(
                 "https://adnxs.com/tag.js",
                 "https://other.example.org/",
                 "script"
@@ -745,7 +907,7 @@ mod tests {
 
         // Reset to default so nothing else sees a mutated engine.
         set_policy(true, &[]);
-        assert!(should_block(
+        assert!(verdict_of(
             "https://adnxs.com/tag.js",
             "https://news.example.com",
             "script"
@@ -757,7 +919,7 @@ mod tests {
         // below is processed after the reload).
         reload_lists(vec!["||reloadtest.example^".to_string()]);
         assert!(
-            should_block(
+            verdict_of(
                 "https://reloadtest.example/x",
                 "https://site.example",
                 "script"
@@ -765,7 +927,7 @@ mod tests {
             "a reloaded custom filter must take effect"
         );
         assert!(
-            should_block(
+            verdict_of(
                 "https://adnxs.com/tag.js",
                 "https://news.example.com",
                 "script"
@@ -775,7 +937,7 @@ mod tests {
         // Reset the engine to the bundled-only lists so other tests don't see it blocked.
         reload_lists(vec![]);
         assert!(
-            !should_block(
+            !verdict_of(
                 "https://reloadtest.example/x",
                 "https://site.example",
                 "script"
