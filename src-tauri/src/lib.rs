@@ -558,7 +558,14 @@ pub fn run() {
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_dialog::init())
+        // No dialog plugin, deliberately. `tauri-plugin-dialog` was registered here
+        // with no caller, no `dialog:*` grant in `capabilities/default.json` and no
+        // JS package, so nothing could ever have reached it. Separately, `data.rs`
+        // records that the native save dialog is not wanted: it renders in the OS's
+        // light theme and clashes with the dark UI, so a backup is written to a fixed
+        // location and never named by a dialog. `DataTab` picks a file to IMPORT with
+        // the webview's own `<input type="file">`, which needs no permission at all.
+        // `tests::no_dialog_plugin_is_registered_or_declared` keeps it gone.
         .manage(view::ContentInset::default())
         .manage(update::UpdateState::default())
         .manage(adblock::AdblockState::default())
@@ -927,6 +934,85 @@ mod tests {
         assert_eq!(
             v["windows"][0], "main",
             "the capability must stay bound to `main`"
+        );
+    }
+
+    /// The dialog plugin must stay GONE. It was registered with no `dialog:*` grant in
+    /// `capabilities/default.json`, no JS package and no caller, so nothing could have
+    /// reached it — and `data.rs` records a separate, deliberate reason not to want it
+    /// (the native save dialog renders in the OS light theme and clashes with the dark
+    /// UI; a backup is written to a fixed location instead, and `DataTab` picks a file to
+    /// import with the webview's own `<input type="file">`, which needs no permission).
+    ///
+    /// The manifest is the load-bearing half: with the dependency gone, registering the
+    /// plugin is a COMPILE error, so the source scan can only ever fire if somebody
+    /// re-declared the dependency first — at which point the first assertion fails. The two
+    /// together state the invariant in both places it could be broken, and the scan covers
+    /// every `.rs` file rather than only the crate root.
+    #[test]
+    fn no_dialog_plugin_is_registered_or_declared() {
+        let manifest = format!("{}/Cargo.toml", env!("CARGO_MANIFEST_DIR"));
+        let raw = std::fs::read_to_string(&manifest)
+            .unwrap_or_else(|e| panic!("cannot read {manifest}: {e}"));
+        // Parse the `[dependencies]` table rather than searching the file, so a mention
+        // in a comment or in another table cannot satisfy (or trip) this.
+        let mut in_deps = false;
+        let mut names: Vec<&str> = Vec::new();
+        for line in raw.lines() {
+            let line = line.trim();
+            if line.starts_with('[') {
+                in_deps = line == "[dependencies]";
+                continue;
+            }
+            if in_deps && !line.is_empty() && !line.starts_with('#') {
+                if let Some((name, _)) = line.split_once('=') {
+                    names.push(name.trim());
+                }
+            }
+        }
+        assert!(
+            !names.contains(&"tauri-plugin-dialog"),
+            "tauri-plugin-dialog is back in [dependencies] — if something now needs an OS \
+             native file dialog, say so in the commit that adds it and grant the matching \
+             `dialog:*` permission in capabilities/default.json at the same time"
+        );
+
+        // And the Rust path form must appear in no source file of the crate — not just this
+        // one, because a refactor could move the builder out of the crate root.
+        //
+        // The needle is assembled at runtime, and that is load-bearing twice over. A literal
+        // here would match its own assertion, which is exactly what the first version did
+        // (it reddened for a string it had just written). And `Vec::concat` joins with NO
+        // separator, so a two-element split that looks right reads as a path that does not
+        // exist — the needle would match nothing at all and the scan would be vacuous. The
+        // self-check below is what makes that failure mode loud instead of silent.
+        let needle = ["tauri", "_plugin_", "dialog", "::"].concat();
+        let realistic = ["tauri", "_plugin_", "dialog", "::init()"].concat();
+        assert!(
+            realistic.contains(&needle),
+            "the needle no longer matches a realistic registration, so the scan below is vacuous"
+        );
+
+        let src_dir = format!("{}/src", env!("CARGO_MANIFEST_DIR"));
+        let mut offenders: Vec<String> = Vec::new();
+        for entry in std::fs::read_dir(&src_dir).expect("the crate's src/ directory is readable") {
+            let path = entry.expect("readable directory entry").path();
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).expect("readable .rs source file");
+            if text.contains(&needle) {
+                offenders.push(
+                    path.file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .into_owned(),
+                );
+            }
+        }
+        assert!(
+            offenders.is_empty(),
+            "a dialog plugin is being registered again, in {offenders:?}"
         );
     }
 
