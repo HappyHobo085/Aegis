@@ -435,8 +435,22 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       view: WebView,
       request: WebResourceRequest,
     ): Boolean {
-      val raw = request.url?.toString() ?: return false
-      if (!raw.startsWith("http")) return false
+      val raw = request.url?.toString() ?: return true
+      // ONE scheme allowlist, the same [isLoadableUrl] every load site funnels
+      // through. This used to read `if (!raw.startsWith("http")) return false`, and
+      // `false` means "let the WebView proceed" — so a page-initiated main-frame
+      // navigation to data:/file:/content:/blob: was ALLOWED here while the typed
+      // path (Bridge.navigate -> [blockReason]) refused the very same URL, and the
+      // allowlist the app already had ([isLoadableUrl]) was never consulted for a
+      // navigation the PAGE started. That is a second scheme list by another name:
+      // a prefix test standing in for the allowlist. Refuse it, and say why, on the
+      // SAME block page the other two refusals use — a silent block would look like
+      // a broken page.
+      if (!isLoadableUrl(raw)) {
+        Log.i("AegisNav", "refused $raw: $SCHEME_REASON")
+        showMalwareWarning(id, view, raw, SCHEME_REASON)
+        return true
+      }
 
       // Scripted cross-origin top-frame redirect guard (anti-malvertising).
       val current = pageUrls[id] ?: ""
@@ -1095,12 +1109,21 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
    *  injection vector. Every load site funnels through here (see [loadableUrl]) so there is
    *  exactly one allowlist. */
   private fun isLoadableUrl(raw: String): Boolean {
-    val scheme = try {
-      Uri.parse(raw).scheme?.lowercase()
+    val uri = try {
+      Uri.parse(raw)
     } catch (_: Throwable) {
-      null
-    } ?: return false
-    return scheme == "http" || scheme == "https" || scheme == "about"
+      return false
+    }
+    val scheme = uri.scheme?.lowercase() ?: return false
+    if (scheme == "http" || scheme == "https") return true
+    // `about:blank` and NOTHING ELSE — the same rule `nav::is_navigable` applies on
+    // every desktop, matched on the path rather than the whole string so a benign
+    // `about:blank#x` still passes while `about:config` does not. This used to be
+    // any `about:` at all, which is a third scheme list: the desktop refused
+    // `about:config` in a browsed tab and Android accepted it. `nav::tests` pins the
+    // two lists to the same set by reading this file, so a future edit here that
+    // drifts from the desktop policy fails the Rust suite.
+    return scheme == "about" && uri.path == "blank"
   }
 
   /** Security policy for a main-frame navigation target: returns the URL to actually

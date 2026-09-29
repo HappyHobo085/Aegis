@@ -108,6 +108,21 @@ dotted event name.
   list — a second list is how `file:` reached `tabs.json` in the first place. Callers:
   `decide_navigation`, `tabs::on_tab_url`, the `tabs.recordNav` arm,
   `open_redirect_background`, `nav.home`, `tabs.create` and `safety.proceed`.
+  **Android now enforces that same list instead of a second one wearing a prefix
+  test's clothes.** `makeContentClient(id)`'s `shouldOverrideUrlLoading` read
+  `if (!raw.startsWith("http")) return false`, and in `WebViewClient` returning
+  `false` means "let the WebView proceed" — so a page-initiated main-frame
+  navigation to `data:`/`file:`/`content:`/`blob:` was ALLOWED, while the typed and
+  programmatic paths (`Bridge.navigate` → `blockReason` → `showMalwareWarning`)
+  refused the very same URL. It now consults `isLoadableUrl(raw)` and, on refusal,
+  logs and shows the block page that path already used. `isLoadableUrl` also used to
+  accept ANY `about:`; it now allows only `uri.path == "blank"`, matching
+  `is_navigable` — two lists with two scopes is the same mistake as `file:` reaching
+  `tabs.json`. **Both Kotlin bodies are pinned from the Rust suite** (`nav::tests`
+  reads `gen/android/…/MainActivity.kt` as text through `CARGO_MANIFEST_DIR`): there
+  is NO Kotlin test source set, so a source-text pin is the only thing that can catch
+  a future Kotlin edit, and it fails the Rust suite on drift. A textual check can be
+  satisfied by a comment, so both asserts read a COMMENT-STRIPPED copy of the body.
   **`nav.reloadOrStop` actually stops.** The toolbar renders an X with `aria-label="Stop"`
   when `state.isLoading`, and the core used to `reload()` unconditionally. `TABS_LOADING`
   (a `OnceLock<Mutex<HashSet<u32>>>` fed by `note_tab_loading` from `on_page_load` right

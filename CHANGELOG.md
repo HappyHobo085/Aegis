@@ -18,6 +18,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   private tab still leave no trace, as on desktop. _Verified by the store-level tests and a
   release-build compile; the on-device behaviour is pending a device check._
 
+- **A page could navigate an Android tab to `data:`, `file:` or `blob:`.** The main-frame
+  navigation hook tested only whether the URL started with `http`, and answering "no"
+  there means _let the load proceed_ — so a link or `location = …` on a phone reached
+  schemes the app refuses everywhere else (the address bar refuses the same URL, and
+  desktop refuses it too). The hook now consults the same scheme allowlist the rest of
+  the app uses, and shows the existing block page when a scheme is refused. The allowlist
+  itself also accepted any `about:` URL, where only `about:blank` is meaningful; it is
+  now that strict. _Verified by tests that read the Android source; on-device behaviour
+  is pending a device check._
+
 - **A new tab could inherit a closed tab's zoom level.** The core keeps each tab's zoom in a
   per-tab store and replays it when a tab is spawned, but nothing removed the entry when a tab
   closed — so a tab id handed back by a restored session backup opened at the dead tab's zoom

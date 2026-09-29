@@ -1450,4 +1450,124 @@ mod tests {
             forget_tab_loading(other);
         });
     }
+
+    /// Wave 6.10: the Android content WebView is a native `WebView`, so it does not
+    /// go through `decide_navigation` — the scheme policy there is desktop-only. Kotlin
+    /// has its own copy, `MainActivity.isLoadableUrl`, and for years nothing checked the
+    /// two against each other, so they had drifted into DIFFERENT lists
+    /// (`is_navigable` = http/https/about:blank, `isLoadableUrl` = http/https/ANY `about:`)
+    /// while the main-frame `shouldOverrideUrlLoading` consulted NEITHER and let every
+    /// non-`http` navigation proceed (`return false` = "let the WebView do it").
+    ///
+    /// There is no Kotlin test source set, so the drift is pinned from here: this test
+    /// reads the Kotlin source and asserts the allowlist it spells is the same set this
+    /// module enforces. It is a TEXT pin on purpose — it is the only thing that can catch
+    /// a future Kotlin edit, and it fails the Rust suite if the two lists ever diverge
+    /// again. (`script/`Kotlin half is compile-verified only; the behaviour still needs a
+    /// device check.)
+    fn kotlin_main_activity() -> String {
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/gen/android/app/src/main/java/com/aegis/browser/MainActivity.kt"
+        );
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"))
+    }
+
+    /// The body of the Kotlin `fun isLoadableUrl`, from its opening brace to the one
+    /// that closes it. Brace counting, not a line range, so inserting a line inside the
+    /// function cannot silently narrow what this test looks at.
+    fn kotlin_is_loadable_body(src: &str) -> String {
+        let start = src.find("private fun isLoadableUrl(").expect(
+            "MainActivity.kt no longer has a private fun isLoadableUrl — rename it and this test",
+        );
+        let open = src[start..]
+            .find('{')
+            .map(|i| start + i)
+            .expect("isLoadableUrl has no opening brace");
+        let mut depth = 0i32;
+        for (i, c) in src[open..].char_indices() {
+            match c {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return src[open..=open + i].to_string();
+                    }
+                }
+                _ => {}
+            }
+        }
+        panic!("isLoadableUrl has no matching closing brace");
+    }
+
+    #[test]
+    fn the_android_scheme_allowlist_is_the_same_set_this_module_enforces() {
+        let body = kotlin_is_loadable_body(&kotlin_main_activity());
+        // Every scheme this module accepts must be named in the Kotlin allowlist …
+        for scheme in ["http", "https", "about"] {
+            assert!(
+                body.contains(&format!("scheme == \"{scheme}\"")),
+                "Android's isLoadableUrl no longer names {scheme:?}; this module accepts it, so \
+                 the two lists have diverged. Body was:\n{body}"
+            );
+        }
+        // … and Kotlin must not have grown a scheme this module refuses.
+        for refused in [
+            "data",
+            "file",
+            "content",
+            "blob",
+            "javascript",
+            "intent",
+            "ftp",
+        ] {
+            assert!(
+                !body.contains(&format!("scheme == \"{refused}\"")),
+                "Android's isLoadableUrl now accepts {refused:?}, which nav::is_navigable \
+                 refuses — the drift this test exists to catch. Body was:\n{body}"
+            );
+        }
+        // The `about:` case is narrowed to `about:blank`, matching `u.path() == "blank"`
+        // here. Asserted as a PROPERTY (a Kotlin `about:` that is not blank-and-only is
+        // what drifted) rather than by string-matching the whole expression.
+        assert!(
+            body.contains("uri.path == \"blank\""),
+            "Android's isLoadableUrl no longer restricts `about:` to about:blank; this module \
+             refuses about:config, so the lists have diverged. Body was:\n{body}"
+        );
+    }
+
+    #[test]
+    fn the_android_main_frame_navigation_no_longer_bypasses_the_allowlist() {
+        let src = kotlin_main_activity();
+        // The bypass was `if (!raw.startsWith("http")) return false`, and `false` is
+        // WebView's "carry on" answer. Its return value cannot be asserted from here (no
+        // device), so the pin is on the *decision*: the override must now consult the
+        // allowlist, and no non-http prefix test may hand the WebView a green light.
+        let start = src
+            .find("override fun shouldOverrideUrlLoading(")
+            .expect("MainActivity.kt no longer overrides shouldOverrideUrlLoading");
+        let body = &src[start..start + 1400];
+        // The function's own comment QUOTES the bypass it replaced, so the negative
+        // assert below has to look at CODE. Comment-only lines are dropped; a `//` in
+        // column 0 vs an indented one is the only distinction Kotlin offers here, and
+        // this file indents every `//` consistently inside the class body.
+        let code: String = body
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            code.contains("isLoadableUrl(raw)"),
+            "the main-frame shouldOverrideUrlLoading must gate on isLoadableUrl, not on an \
+             http prefix test — a page-initiated data:/file:/content: navigation is still \
+             being allowed through. Snippet was:\n{code}"
+        );
+        assert!(
+            !code.contains("!raw.startsWith(\"http\")) return false"),
+            "the `!raw.startsWith(\"http\") -> return false` bypass is back: `false` tells \
+             WebView to proceed, so every non-http scheme a page navigates to is allowed. \
+             Snippet was:\n{code}"
+        );
+    }
 }
