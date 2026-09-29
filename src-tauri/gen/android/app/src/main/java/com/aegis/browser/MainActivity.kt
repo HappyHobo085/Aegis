@@ -1262,6 +1262,32 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     return scheme == "about" && uri.path == "blank"
   }
 
+  /** The scheme allowlist for a URL handed to ANOTHER app through `ACTION_VIEW`: http and
+   *  https, and nothing else.
+   *
+   *  `openExternal` is a `@JavascriptInterface` method on the CHROME WebView, so anything
+   *  that can run script in the chrome document can call it with any string it likes, and
+   *  it fired `ACTION_VIEW` on whatever it was handed. That turned the chrome document
+   *  into a way to make another app act on our behalf: an `intent:` URL is a
+   *  fully-specified action and component that the caller chooses, and the local ones
+   *  are filesystem / content-provider reads performed in the receiving app's context.
+   *  The one real caller is a hardcoded https release URL, so narrowing the list costs
+   *  nothing.
+   *
+   *  `about:` is deliberately absent even though [isLoadableUrl] allows `about:blank`:
+   *  handing an empty page to another app is not a thing anyone wants, and allowing it
+   *  here would be exactly the "a third scheme list by another name" drift the note above
+   *  describes. `nav::tests` pins this list from the Rust suite, because there is no
+   *  Kotlin test source set to pin it from. */
+  private fun isExternallyOpenableUrl(raw: String): Boolean {
+    val scheme = try {
+      Uri.parse(raw).scheme?.lowercase()
+    } catch (_: Throwable) {
+      return false
+    }
+    return scheme == "http" || scheme == "https"
+  }
+
   /** Security policy for a main-frame navigation target: returns the URL to actually
    *  load, the same URL if it's fine, or null to BLOCK it as known malware. Upgrades
    *  http→https when the `httpsOnly` setting says to (localhost always exempt).
@@ -1766,6 +1792,13 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
      *  an update — the Tauri updater is desktop-only). */
     @JavascriptInterface
     fun openExternal(url: String) = runOnUiThread {
+      if (!isExternallyOpenableUrl(url)) {
+        // Refused, not handed to whatever app claims the scheme. The chrome WebView is
+        // the only thing that can reach this, so the list is a last line of defence
+        // rather than the primary one — but it is the last one, and it was missing.
+        Log.w("AegisNav", "refused to hand $url to another app: $EXTERNAL_SCHEME_REASON")
+        return@runOnUiThread
+      }
       try {
         startActivity(
           android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))
@@ -1909,6 +1942,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // phrase a refusal the same way (and so a new refusal reason has one obvious home).
     private const val MALWARE_REASON = "it's on a known-malware list."
     private const val SCHEME_REASON = "only web addresses (http/https) open in a tab."
+
+    /** The refusal string for [isExternallyOpenableUrl]. Separate from [SCHEME_REASON]
+     *  because the two lists are separate: a page-in-tab refusal and a
+     *  hand-to-another-app refusal are different decisions with different consequences. */
+    private const val EXTERNAL_SCHEME_REASON =
+      "only web addresses (http/https) open in another app."
 
     // requestType() runs once per HTTP subresource (shouldInterceptRequest), so these two
     // patterns are compiled once here instead of per request.

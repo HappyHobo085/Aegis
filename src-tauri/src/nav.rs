@@ -1497,6 +1497,68 @@ mod tests {
         panic!("isLoadableUrl has no matching closing brace");
     }
 
+    /// 6.12 #4: `Bridge.openExternal` hands a URL to another app through `ACTION_VIEW`,
+    /// and it is a `@JavascriptInterface` method on the CHROME WebView — so it is
+    /// reachable by anything that can run script in the chrome document, and it used to
+    /// fire the intent on whatever string it was handed. It is pinned here, with no
+    /// Kotlin test source set to pin it from, the same way the content-WebView allowlist
+    /// is (see [kotlin_is_loadable_body]).
+    ///
+    /// The list is http/https only — a stricter set than [isLoadableUrl], because handing
+    /// a URL to another app is a different act from loading it in a tab, and there is
+    /// nothing legitimate to hand over except a web address.
+    #[test]
+    fn the_android_external_url_allowlist_is_http_and_https_and_nothing_else() {
+        let src = kotlin_main_activity();
+        let body =
+            crate::test_support::kotlin_fn_body(&src, "private fun isExternallyOpenableUrl(");
+        // The two schemes that must be accepted. Asserted as the comparison the Kotlin
+        // spells, not as the word appearing anywhere — the helper's own KDoc names the
+        // schemes it refuses, so a bare substring check would match the comment.
+        for scheme in ["http", "https"] {
+            assert!(
+                body.contains(&format!("scheme == \"{scheme}\"")),
+                "isExternallyOpenableUrl no longer accepts {scheme:?}, so the one real \
+                 caller — a hardcoded https release URL — would stop working. Body was:\n{body}"
+            );
+        }
+        // And the schemes it must NOT accept. `about:` is in this list deliberately:
+        // `isLoadableUrl` allows `about:blank` for a tab, and allowing it here too would
+        // be the same "a third scheme list" drift the Kotlin comment describes.
+        for refused in [
+            "about",
+            "data",
+            "file",
+            "content",
+            "blob",
+            "javascript",
+            "intent",
+            "ftp",
+            "market",
+        ] {
+            assert!(
+                !body.contains(&format!("scheme == \"{refused}\"")),
+                "isExternallyOpenableUrl now accepts {refused:?}, which turns the chrome \
+                 document into a way to make another app act on our behalf — the exact \
+                 defect this test exists to catch. Body was:\n{body}"
+            );
+        }
+        // The refusal must be reached, not merely declared: `openExternal` has to consult
+        // the helper before it builds the intent. A helper nothing calls is the shape
+        // the drift guard was written to be blind to.
+        let ext = crate::test_support::kotlin_fn_body(&src, "fun openExternal(url: String)");
+        assert!(
+            ext.contains("!isExternallyOpenableUrl(url)"),
+            "openExternal no longer consults isExternallyOpenableUrl — the allowlist \
+             exists but nothing enforces it. Body was:\n{ext}"
+        );
+        assert!(
+            ext.contains("return@runOnUiThread"),
+            "openExternal no longer returns before startActivity when the URL is \
+             refused, so the allowlist would be a log line and not a gate. Body was:\n{ext}"
+        );
+    }
+
     /// The main-frame `shouldOverrideUrlLoading` as CODE: the FIRST such override in
     /// `MainActivity.kt` (the popup temp WebView's is the second), sliced to its
     /// MATCHING closing brace, with comment lines dropped.

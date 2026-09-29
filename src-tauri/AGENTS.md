@@ -134,6 +134,21 @@ dotted event name.
   is NO Kotlin test source set, so a source-text pin is the only thing that can catch
   a future Kotlin edit, and it fails the Rust suite on drift. A textual check can be
   satisfied by a comment, so both asserts read a COMMENT-STRIPPED copy of the body.
+  **Handing a URL to another app is a third, DELIBERATELY narrower policy — and it is
+  not the same decision.** `Bridge.openExternal` is a `@JavascriptInterface` method on the
+  CHROME webview, so anything that can run script in the chrome document can call it, and it
+  fires `ACTION_VIEW` on whatever string it is handed: an `intent:` URL is a fully specified
+  action+component the caller chooses, and `file:`/`content:` are filesystem and
+  content-provider reads in the receiving app's context. It now consults
+  `isExternallyOpenableUrl`, which allows `http`/`https` and nothing else. `about:` is
+  deliberately ABSENT even though `isLoadableUrl` allows `about:blank` — a page-in-tab
+  navigation and a hand-to-another-app are different questions, so the list is separate rather
+  than shared, and the refusal string is a separate constant
+  (`EXTERNAL_SCHEME_REASON`, not `SCHEME_REASON`) so the two messages cannot drift into one
+  another. The one non-test caller is a hardcoded https release URL, so nothing the app does
+  loses. Pinned from `nav::tests` by the same Kotlin-text mechanism, and the pin asserts the
+  CALLER (`openExternal` consults it and returns before `startActivity`), not just the helper —
+  a helper nothing calls is exactly the kind of dead code that survives a widening like this.
   **A full-window chrome overlay now also cancels a page-initiated navigation on
   Android, as it already did on desktop.** `decide_navigation` refuses when
   `lay.overlay && !lay.sidebar` — its own comment says why: the user is not driving

@@ -9,6 +9,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Opening a link in another app no longer hands over whatever the page asked for.**
+  The bridge method that hands a URL to Android's `ACTION_VIEW` accepted any scheme, so
+  anything able to run script in the chrome window could hand the system a `file:`,
+  `content:` or `intent:` address. Only web addresses are handed over now; anything else
+  is refused and written to the log.
 - **Restoring a backup on Android no longer forgets the zoom you had set.** Per-tab zoom was
   cached in the chrome document, and a successful restore reloads that document — so the
   toolbar then reported 100% for a page the WebView was still rendering zoomed, and the next
