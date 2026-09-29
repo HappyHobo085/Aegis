@@ -11,7 +11,9 @@ Crate: binary `app` (`src/main.rs` → `app_lib::run()`); library `app_lib` (`sr
 ```
 src-tauri/
 ├── src/                # Rust source (modules below)
-├── capabilities/       # Tauri permission grants (default.json)
+├── capabilities/       # Tauri permission grants (default.json) — the WHOLE surface
+│                      #   (withGlobalTauri is off); see "What the chrome is allowed
+│                      #   to call" below
 ├── gen/android/        # generated Android project + hand-written Kotlin bridge
 ├── icons/              # app icons (png/ico/icns)
 ├── resources/          # bundled filter lists (easylist.txt, easyprivacy.txt, peter-lowe.txt, abuse-tlds.txt, malware-hosts.txt)

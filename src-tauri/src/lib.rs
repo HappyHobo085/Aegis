@@ -886,6 +886,50 @@ pub fn run() {
 mod tests {
     use super::ffi_guard;
 
+    /// The capability is the renderer's ENTIRE authorisation surface, and it is
+    /// load-time configuration rather than code, so nothing else in the crate
+    /// changes when it is widened. Read from the file, not from a constant, because a
+    /// constant would be a restatement rather than a check.
+    ///
+    /// The whole file is the assertion, not a prefix: a capability that grows a
+    /// permission the app never calls is the exact failure this pins. `core:default`
+    /// expands to nine sub-permission sets — `path`, `event`, `window`, `webview`,
+    /// `app`, `image`, `resources`, `menu` and `tray` — which is 92 individual
+    /// `allow-*` permissions over window geometry, menu and tray construction, and
+    /// filesystem path resolution. The renderer reaches none of them: it imports from
+    /// `@tauri-apps/api` in exactly two files, `tauriInvoke.ts:1-2`, for `invoke`
+    /// (the app's own `ipc` command, which is not ACL-gated) and `listen`. So the
+    /// capability names precisely the one set those two need, and dropping `core:default`
+    /// removes 92 reachable-by-mistake grants.
+    #[test]
+    fn the_renderer_capability_grants_only_the_event_permission() {
+        let path = format!("{}/capabilities/default.json", env!("CARGO_MANIFEST_DIR"));
+        let raw =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+        let v: serde_json::Value =
+            serde_json::from_str(&raw).unwrap_or_else(|e| panic!("{path} is not JSON: {e}"));
+        let perms: Vec<&str> = v["permissions"]
+            .as_array()
+            .expect("capabilities/default.json must carry a `permissions` array")
+            .iter()
+            .map(|p| p.as_str().expect("every permission must be a string"))
+            .collect();
+        assert_eq!(
+            perms,
+            vec!["core:event:default"],
+            "the renderer capability must name ONLY core:event:default — widen it here and in \
+             the same commit add the code that needs the new permission, with a test"
+        );
+        // The identifier and window scope are what make this the *only* capability, so
+        // assert them too: a second file in capabilities/ would grant a second surface
+        // and this test would keep passing.
+        assert_eq!(v["identifier"], "default", "the identifier must not change");
+        assert_eq!(
+            v["windows"][0], "main",
+            "the capability must stay bound to `main`"
+        );
+    }
+
     /// `ffi_guard` is only CALLED from `#[cfg(target_os = "android")]` JNI exports, so
     /// without a test that exercises it on every platform it would be dead code on
     /// Linux/Windows/macOS and trip `clippy -D warnings`. Testing it here also means the

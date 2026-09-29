@@ -38,8 +38,11 @@ browsing untrusted web content:
   constrains the chrome to its own bundled assets — `default-src 'self'`,
   `script-src 'self'`, `object-src 'none'`, no inline/remote scripts.
 - **Least privilege:** the Tauri capability set (`src-tauri/capabilities/default.json`)
-  grants only core events and open/save file dialogs — no filesystem, shell, or
-  arbitrary-command permissions.
+  grants exactly one permission set, `core:event:default`, because the chrome webview
+  uses exactly one gated Tauri API — `listen`. Every renderer→core call goes through the
+  app's own `ipc` command, which is not ACL-gated. There is no filesystem, shell, or
+  arbitrary-command permission. `withGlobalTauri` is off, so this file is the entire
+  surface, and a unit test reads it and fails if any permission is added back.
 - **Network protections (built in):**
   - **Ad/tracker blocking** via Brave's `adblock` engine + EasyList — WebKit content
     filters on Linux, a native `WebResourceRequested` handler on Windows (WebView2),

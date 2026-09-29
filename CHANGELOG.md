@@ -9,6 +9,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The chrome's Tauri permissions are no longer wider than it uses.** The capability file
+  granted `core:default`, which expands to 92 individual permissions across the path,
+  window, webview, app, image, resource, menu and tray APIs — of which the chrome webview
+  called exactly four, all of them core events. It now grants `core:event:default` and
+  nothing else, and a test reads the file and fails on any permission that reappears.
 - **Opening a link in another app no longer hands over whatever the page asked for.**
   The bridge method that hands a URL to Android's `ACTION_VIEW` accepted any scheme, so
   anything able to run script in the chrome window could hand the system a `file:`,
