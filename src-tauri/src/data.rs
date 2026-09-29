@@ -309,6 +309,23 @@ pub fn dispatch<R: Runtime>(
                                 o.insert("savedAt".into(), json!(jsonstore::now_ms()));
                             }
                         }
+                        // `saveDir` is the directory a download was written to, and
+                        // `downloads::trusted_download_path` accepts a row whose file lives
+                        // inside its own recorded `saveDir` — which is what makes a row
+                        // still openable after the download folder setting changes, and what
+                        // makes Android's rows (Kotlin writes into its app-private
+                        // `getExternalFilesDir("downloads")`, never the setting's path)
+                        // openable at all. A bundle is the one place a stranger's bytes
+                        // reach that check, so an imported row must NOT get to choose its
+                        // own trusted base: drop the field and the row falls back to the
+                        // strict "is it under the current download folder" test. The
+                        // `downloads` namespace is not in `sync_stores::SYNCABLE`, so this
+                        // strip is the whole attack surface, not one of three paths.
+                        if *s == "downloads" {
+                            if let Some(o) = it.as_object_mut() {
+                                o.remove("saveDir");
+                            }
+                        }
                     }
                     // The result is COLLECTED, not discarded: a store that cannot be written
                     // is reported by name below instead of being reported as imported.

@@ -331,6 +331,38 @@ success)` → `on_finished`. **The destination must be PASSED IN, not derived**:
     was extracted into `push_row` (returns whether it changed; the CALLER emits
     `downloads.changed`, so one row never yields two events) and
     `record_download_start` is the Android-only entry point.
+    **`open`/`showInFolder` return a `Result`; they never lie.** The body used to be
+    `let _ = Command::new(cmd).arg(target).spawn()` on desktop and `let _ = target` on
+    mobile, and BOTH dispatch arms answered `Ok(Value::Null)` regardless — so on a
+    phone the button did nothing and said it had, and on a desktop with no system
+    handler the failure was discarded. `OPENER` is `None` off the three desktop
+    targets, which is now an `Err`, and a spawn failure names the command and the
+    path. `?` CANNOT be used in the arms: `dispatch` returns
+    `Option<Result<Value, String>>`, so it would bind to the `Option` and report
+    "channel unhandled" instead.
+    **A downloads row records the `saveDir` it was written into.** `trusted_download_path`
+    used to accept only paths under the LIVE `downloadDir` setting, but a row is a
+    HISTORICAL record: change the setting and every earlier download stopped opening,
+    and on Android EVERY row was refused, because Kotlin saves under
+    `getExternalFilesDir("downloads")` (no storage permission) while `dir(app)`
+    resolves to `/storage/emulated/0/Download`. `push_row` now records
+    `saveDir` = the parent of the caller's own path, and the check accepts a canonical
+    path under the row's recorded base OR under the current `dir(app)`
+    (`within()` canonicalises BOTH sides, or a symlinked downloads dir never
+    string-prefixes its own children). `data::import` **STRIPS `saveDir` from
+    imported rows**: a bundle is the one path where a stranger's bytes reach the
+    trust check, and `downloads` is not in `sync_stores::SYNCABLE`, so that strip is
+    the entire new attack surface. Tests cover both halves — a download that stays
+    openable after the folder setting moves, and an imported row that cannot name
+    its own trusted folder.
+    **The opener is a `cfg(test)` CLOSURE seam, never a command-name override.** With a
+    name override the "control" assertion ran the HOST's real `xdg-open`, which then
+    reported a `/tmp/aegis-test-…` path the test had just deleted — a GTK error
+    WINDOW on the developer's desktop. `Opener = Arc<dyn Fn(&str) -> Result<(), String>>`
+    (an `Arc`, because the override is CLONED per call and `Box<dyn Fn>` is not
+    `Clone`; not `take()`, which would clear it mid-test) means only ONE test starts a
+    process at all, and it execs a name that fails at `exec` with no process and no
+    window.
     **The JNI exports take `isPrivate` from Kotlin but the Rust side still resolves
     privateness from the tab registry**, exactly as `record_page_finished` does for
     history — see `a_download_started_in_a_private_tab_records_nothing`.

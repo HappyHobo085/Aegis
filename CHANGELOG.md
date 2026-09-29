@@ -9,6 +9,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A download could stop opening — and on a phone it never opened at all.** "Open" and
+  "Show in folder" in the Downloads list always answered "done", whatever actually
+  happened. On a phone that is what it always was: there is no command to hand a path
+  to, and the button did nothing at all. On a computer, a missing system handler (a
+  minimal install with no `xdg-open`) was discarded with nothing written to the log. A
+  download row was also checked against whatever the download-folder setting said at the
+  moment you clicked, so changing that setting broke every earlier download — and on
+  Android, where downloads are kept inside the app's own folder precisely so that no
+  storage permission is needed, that check turned away every row, always. Each download
+  now remembers the folder it was written into and is checked against that; a row whose
+  file has really been deleted, or one restored from a desktop backup onto a phone where
+  the files did not come with it, now says so. The message arrives as an error in the
+  corner of the screen instead of a silent no-op.
 - **A settings file that failed to save could leave a stray temporary file behind every
   time.** A save writes to a temporary file and renames it over the real one, and any
   failure in between — a full disk, a revoked permission, a device unplugged mid-write —

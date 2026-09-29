@@ -16,6 +16,7 @@
 //! cache is self-contained (unlike favorites/saved, which the sync engine reads from disk).
 //! Crash within the flush window loses at most the last few seconds of download-state updates.
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::Mutex;
 
 use serde_json::{json, Value};
@@ -199,6 +200,15 @@ fn push_row<R: Runtime>(
     let url = url.to_string();
     let filename = filename.to_string();
     let save_path = save_path.to_string();
+    // The directory this file was ACTUALLY written to, recorded per row. See
+    // `trusted_download_path` for why a row cannot be validated against the current
+    // `downloadDir` setting alone. Derived from the caller's own path rather than
+    // passed in, so the two entry points (`on_requested` picks `dir(app).join(name)`,
+    // Android's `record_download_start` takes Kotlin's `getExternalFilesDir` path
+    // verbatim) cannot disagree about where the file went.
+    let save_dir = Path::new(&save_path)
+        .parent()
+        .map(|d| d.to_string_lossy().to_string());
     let now = jsonstore::now_ms();
     mutate(app, false, |items| {
         let id = jsonstore::next_id(items);
@@ -212,6 +222,12 @@ fn push_row<R: Runtime>(
             "totalBytes": 0,
             "startedAt": now
         });
+        // Only written when there IS a parent, so a bare filename leaves the field
+        // absent rather than writing an empty string that would fail canonicalisation
+        // for a different reason.
+        if let Some(d) = &save_dir {
+            item["saveDir"] = json!(d);
+        }
         jsonstore::stamp_new(&mut item, app);
         items.push(item);
 
@@ -403,25 +419,33 @@ pub fn dispatch<R: Runtime>(
         }
 
         "downloads.openFile" => {
-            if let Some(p) = path_of(app, id()) {
-                open(&p);
-            } else {
+            let Some(p) = path_of(app, id()) else {
                 return Some(Err(
                     "Downloaded file is missing or outside the downloads folder.".into(),
                 ));
+            };
+            // `?` cannot be used here: `dispatch` returns `Option<Result<…>>`, so it
+            // would bind to the Option and turn a failed open into "channel unhandled".
+            // Map the open's error into the arm's answer explicitly.
+            if let Err(e) = open(&p) {
+                return Some(Err(e));
             }
             Some(Ok(Value::Null))
         }
 
         "downloads.showInFolder" => {
-            if let Some(p) = path_of(app, id()) {
-                if let Some(parent) = Path::new(&p).parent() {
-                    open(&parent.to_string_lossy());
-                }
-            } else {
+            let Some(p) = path_of(app, id()) else {
                 return Some(Err(
                     "Downloaded file is missing or outside the downloads folder.".into(),
                 ));
+            };
+            let Some(parent) = Path::new(&p).parent() else {
+                return Some(Err(
+                    "Downloaded file is missing or outside the downloads folder.".into(),
+                ));
+            };
+            if let Err(e) = open(&parent.to_string_lossy()) {
+                return Some(Err(e));
             }
             Some(Ok(Value::Null))
         }
@@ -431,15 +455,56 @@ pub fn dispatch<R: Runtime>(
 }
 
 fn path_of<R: Runtime>(app: &AppHandle<R>, id: Option<i64>) -> Option<String> {
-    let p = snapshot(app)
+    let rows = snapshot(app);
+    let row = rows
         .iter()
-        .find(|it| it.get("id").and_then(Value::as_i64) == id)
-        .and_then(|it| it.get("savePath").and_then(Value::as_str))
-        .map(String::from)?;
-    trusted_download_path(app, &p).then_some(p)
+        .find(|it| it.get("id").and_then(Value::as_i64) == id)?;
+    let p = row.get("savePath").and_then(Value::as_str)?;
+    let base = row.get("saveDir").and_then(Value::as_str);
+    trusted_download_path(app, p, base).then(|| p.to_string())
 }
 
-fn trusted_download_path<R: Runtime>(app: &AppHandle<R>, raw: &str) -> bool {
+/// True when `canon` is inside `base`, resolving symlinks on BOTH sides first.
+///
+/// Both sides must be canonicalized or the comparison is meaningless: a downloads
+/// folder reached through a symlink (macOS `/tmp` -> `/private/tmp`, and any Linux
+/// box with the home directory on another filesystem) never string-prefixes its own
+/// children.
+fn within(canon: &Path, base: Option<&Path>) -> bool {
+    base.and_then(|b| b.canonicalize().ok())
+        .is_some_and(|b| canon.starts_with(b))
+}
+
+/// Whether `openFile`/`showInFolder` may hand this path to the OS.
+///
+/// A downloads row is a HISTORICAL record, so validating it against the *current*
+/// `downloadDir` setting was wrong in two ways a user actually hits:
+///
+/// 1. Change the download folder in Settings and every download taken before the
+///    change stops opening -- the file is still on disk, still in a downloads folder,
+///    just not the current one. It used to fail as a silent no-op.
+/// 2. On Android it failed for EVERY row, always. `record_download_start` records
+///    Kotlin's `getExternalFilesDir("downloads")` path
+///    (`/storage/emulated/0/Android/data/<pkg>/files/downloads/...`) because that
+///    needs no storage permission, while `dir(app)` resolves the `downloadDir`
+///    setting or Tauri's `download_dir()` (`/storage/emulated/0/Download`). The two
+///    never match.
+///
+/// So each row records the directory it was written to and that is accepted too.
+///
+/// **What this does and does not trust.** The recorded `saveDir` comes from the same
+/// `downloads.json` a tamperer would control, so honouring it means a hand-crafted
+/// store could name any base. That is why `data::import` STRIPS `saveDir` from
+/// imported rows: a bundle is the one path where a stranger's bytes reach this
+/// check, and an imported row falls back to the strict `dir(app)` test. The
+/// `downloads` namespace is not in `sync_stores::SYNCABLE`, so there is no third
+/// path. Locally-written rows are written by `push_row` from a path the core itself
+/// chose, which is the same trust level as the file already being on disk there.
+fn trusted_download_path<R: Runtime>(
+    app: &AppHandle<R>,
+    raw: &str,
+    recorded_base: Option<&str>,
+) -> bool {
     let p = Path::new(raw);
     if !p.is_absolute() || !p.is_file() {
         return false;
@@ -447,27 +512,124 @@ fn trusted_download_path<R: Runtime>(app: &AppHandle<R>, raw: &str) -> bool {
     let Ok(canon) = p.canonicalize() else {
         return false;
     };
-    let Ok(base) = dir(app).canonicalize() else {
-        return false;
-    };
-    canon.starts_with(base)
+    within(&canon, recorded_base.map(Path::new)) || within(&canon, Some(&dir(app)))
 }
 
-/// Open a file or folder with the OS default handler (desktop only — mobile has
-/// no shell command to spawn; a platform-appropriate opener is a later follow-up).
-fn open(target: &str) {
-    #[cfg(desktop)]
-    {
-        #[cfg(target_os = "linux")]
-        let cmd = "xdg-open";
-        #[cfg(target_os = "macos")]
-        let cmd = "open";
-        #[cfg(target_os = "windows")]
-        let cmd = "explorer";
-        let _ = std::process::Command::new(cmd).arg(target).spawn();
+/// The OS command that hands a path to the desktop's default handler, or `None` on a
+/// tier that has no such command. `None` is the mobile answer: there is no shell
+/// command to spawn, so "open this file" is not something the core can do at all.
+#[cfg(target_os = "linux")]
+const OPENER: Option<&str> = Some("xdg-open");
+#[cfg(target_os = "macos")]
+const OPENER: Option<&str> = Some("open");
+#[cfg(target_os = "windows")]
+const OPENER: Option<&str> = Some("explorer");
+#[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+const OPENER: Option<&str> = None;
+
+/// An opener: given a path, either hand it to the OS or explain why not.
+type Opener = std::sync::Arc<dyn Fn(&str) -> std::result::Result<(), String>>;
+
+/// The real opener for one command. Split out from [`opener`] so a test can build an
+/// opener for a command that does not exist — proving the OS-error text — without ever
+/// going near the tier's real handler.
+fn opener_for(cmd: &'static str) -> Opener {
+    Arc::new(
+        move |target| match std::process::Command::new(cmd).arg(target).spawn() {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                eprintln!("[aegis-downloads] {cmd} could not open {target}: {e}");
+                Err(format!("Could not open {target}: {e}"))
+            }
+        },
+    )
+}
+
+fn real_opener() -> Option<Opener> {
+    OPENER.map(opener_for)
+}
+
+// A test-only override for the opener the dispatch arms use.
+//
+// Why this exists, in the order it was learned: `OPENER` is a `const` and every Linux
+// box has `xdg-open`, so without an override the arms could only ever answer `Ok` here
+// — a probe that made `dispatch` throw `open`'s error away produced NO red test at
+// all, which is how the arms were found to be unverified rather than verified.
+// Testing `open_with`'s arms directly did not close that gap, because the thing that
+// must not lie is the ARM, not the helper it calls.
+//
+// Why it is a CLOSURE and not a command name: the first version took `Option<&str>`
+// and the "control" assertion used the host's REAL opener, which meant every run of
+// the suite spawned `xdg-open` on a path under `/tmp/aegis-test-*`. On a box with no
+// file manager that answers with a GTK error dialog — the tests were popping error
+// windows on the developer's desktop, on a file the test itself had already deleted.
+// A test must not have that side effect, and the success path does not need a process
+// to be proven reachable: the closure stands in for one.
+//
+// Thread-local rather than a `static` because the crate's tests run in parallel
+// threads and one test's override must not be visible to another — and because
+// `test_support::with_tmp_app` already holds `test_support::LOCK`, so a global lock
+// here would deadlock rather than serialise. `None` inside the cell means "no
+// override", which is why the override is itself an `Option`.
+#[cfg(test)]
+std::thread_local! {
+    static TEST_OPENER: std::cell::RefCell<Option<Option<Opener>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The opener to use: the test override if one is installed, else the tier's real one.
+#[cfg(not(test))]
+fn opener() -> Option<Opener> {
+    real_opener()
+}
+
+/// The opener to use: the test override if one is installed, else the tier's real one.
+#[cfg(test)]
+fn opener() -> Option<Opener> {
+    if let Some(forced) = TEST_OPENER.with(|c| c.borrow().clone()) {
+        return forced;
     }
-    #[cfg(not(desktop))]
-    let _ = target;
+    real_opener()
+}
+
+/// Run `f` with the opener forced to `forced` — `None` for the mobile tier, `Some`
+/// closure to stand in for a working or a failing handler. The previous value is put
+/// back afterwards; a panicking test aborts its thread, so a stale override cannot
+/// leak into another test's thread.
+#[cfg(test)]
+fn with_test_opener<T>(forced: Option<Opener>, f: impl FnOnce() -> T) -> T {
+    TEST_OPENER.with(|c| {
+        let previous = c.replace(Some(forced));
+        let out = f();
+        *c.borrow_mut() = previous;
+        out
+    })
+}
+
+/// Open a file or folder with the OS default handler.
+///
+/// Returns `Err` wherever the open demonstrably did NOT happen, so the caller stops
+/// answering `Some(Ok(Null))` for a no-op.
+///
+/// Two cases, and the old code got both wrong:
+/// - **No opener on this tier** (mobile). The old body was `#[cfg(not(desktop))] let
+///   target;` — a literal no-op that the dispatch arms still reported as
+///   `Some(Ok(Null))`, so "Open" and "Show in folder" on a phone silently did nothing.
+///   `data.import` does not filter the `downloads` namespace, so a desktop backup
+///   restored on a phone produces exactly such rows: one import away from a lie. A
+///   platform-appropriate opener is a real follow-up; until one exists the honest
+///   answer is an error the UI can show.
+/// - **The spawn fails** (no `xdg-open` in a minimal container, a full process table).
+///   The old `let _ = …spawn()` swallowed that too, leaving no log line. Reported, not
+///   fatal — the file is still on disk either way.
+///
+/// `Command::new(cmd).arg(target)` passes NO shell, so `target` can never be read as a
+/// command line; this is a liveness/diagnostics fix, not an injection fix.
+fn open(target: &str) -> std::result::Result<(), String> {
+    let Some(try_open) = opener() else {
+        return Err("Opening a downloaded file is not available on this device yet.".into());
+    };
+    try_open(target)
 }
 
 #[cfg(test)]
@@ -598,6 +760,262 @@ mod tests {
         });
     }
 
+    /// One COMPLETE, TRUSTED download row plus the file it points at, and returns
+    /// `(id, path)`. The two open-arm tests need exactly that, and they need it to be
+    /// genuinely openable — an unresolvable row would be refused by `path_of` before
+    /// `open` was ever reached, so every failure assertion after it would be measuring
+    /// the wrong branch.
+    fn seed_one_download(
+        app: &tauri::AppHandle<tauri::test::MockRuntime>,
+    ) -> (i64, std::path::PathBuf) {
+        let app_dir = app.path().app_data_dir().unwrap();
+        let dl_dir = app_dir.join("downloads");
+        std::fs::create_dir_all(&dl_dir).unwrap();
+        crate::settings::write(app, &json!({ "downloadDir": dl_dir.to_string_lossy() }))
+            .expect("settings fixture write");
+        let inside = dl_dir.join("ok.bin");
+        std::fs::write(&inside, b"ok").unwrap();
+        let id = {
+            on_requested(app, "https://files.test/ok.bin", &mut PathBuf::new(), false);
+            flush(app);
+            let rows = live_rows(app);
+            assert_eq!(rows.len(), 1);
+            rows[0].get("id").and_then(Value::as_i64).unwrap()
+        };
+        (id, inside)
+    }
+
+    /// The regression this pins: `trusted_download_path` used to validate a row
+    /// against the CURRENT `downloadDir` setting, which is wrong for a record of
+    /// where a file was written. Change the setting and every earlier download
+    /// stopped opening; on Android it was worse, because Kotlin writes into its
+    /// app-private `getExternalFilesDir("downloads")` and that never matches the
+    /// setting's path, so NO row ever resolved.
+    ///
+    /// Both are the same defect, and the file is a real one on disk inside the
+    /// directory the app itself chose.
+    #[test]
+    fn a_download_stays_openable_after_the_download_folder_setting_changes() {
+        with_tmp_app(|app| {
+            let (id, inside) = seed_one_download(app);
+            // The control: the row opens while the setting still points at its folder.
+            with_test_opener(Some(ok_opener()), || {
+                assert_eq!(
+                    dispatch(app, "downloads.openFile", &json!({ "id": id })),
+                    Some(Ok(Value::Null)),
+                    "a row whose file is under the current download folder must open"
+                );
+            });
+
+            // Now point the setting somewhere else entirely, the way changing it in
+            // Settings does. The file has not moved and is still a real download.
+            let elsewhere = app.path().app_data_dir().unwrap().join("other-folder");
+            std::fs::create_dir_all(&elsewhere).unwrap();
+            crate::settings::write(app, &json!({ "downloadDir": elsewhere.to_string_lossy() }))
+                .expect("settings fixture write");
+
+            with_test_opener(Some(ok_opener()), || {
+                assert_eq!(
+                    dispatch(app, "downloads.openFile", &json!({ "id": id })),
+                    Some(Ok(Value::Null)),
+                    "changing the download folder must not make an existing download unopenable; \
+                     the row records where the file actually went"
+                );
+            });
+            assert!(
+                inside.is_file(),
+                "control: the file itself is untouched by the setting change"
+            );
+        });
+    }
+
+    /// The `saveDir` half of that fix is only safe because an IMPORTED row cannot
+    /// choose its own trusted base: a bundle is the one path where a stranger's bytes
+    /// reach the check, so `data::import` strips the field and the row falls back to
+    /// the strict "is it under the current download folder" test.
+    ///
+    /// `record_download_start` (not `on_requested`) is what mints a row for this, so
+    /// the row carries exactly the path the caller named — which is how Android's
+    /// rows are produced, and what a hostile bundle would imitate.
+    #[test]
+    fn an_imported_row_cannot_name_its_own_trusted_download_folder() {
+        with_tmp_app(|app| {
+            let dl_dir = app.path().app_data_dir().unwrap().join("downloads");
+            std::fs::create_dir_all(&dl_dir).unwrap();
+            crate::settings::write(app, &json!({ "downloadDir": dl_dir.to_string_lossy() }))
+                .expect("settings fixture write");
+            // A real file, outside the configured download folder, in a directory only
+            // the bundle names.
+            let outside = app.path().app_data_dir().unwrap().join("elsewhere");
+            std::fs::create_dir_all(&outside).unwrap();
+            let smuggled = outside.join("payload.bin");
+            std::fs::write(&smuggled, b"x").unwrap();
+
+            let bundle = json!({
+                "downloads": [{
+                    "id": 1,
+                    "url": "https://files.test/payload.bin",
+                    "filename": "payload.bin",
+                    "savePath": smuggled.to_string_lossy(),
+                    "saveDir": outside.to_string_lossy(),
+                    "state": "completed",
+                }],
+            });
+            let r =
+                crate::data::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
+                    .unwrap()
+                    .unwrap();
+            assert_eq!(
+                r.get("ok").and_then(Value::as_bool),
+                Some(true),
+                "the import itself must still succeed; only the trusted base is refused"
+            );
+            flush(app);
+
+            let rows = live_rows(app);
+            assert_eq!(rows.len(), 1);
+            assert!(
+                rows[0].get("saveDir").is_none(),
+                "an imported row must not carry a saveDir, or a bundle could hand the \
+                 core an arbitrary trusted folder"
+            );
+            assert_eq!(
+                dispatch(app, "downloads.openFile", &json!({ "id": 1 })),
+                Some(Err(
+                    "Downloaded file is missing or outside the downloads folder.".to_string()
+                )),
+                "with saveDir stripped, a bundle row outside the download folder is refused"
+            );
+        });
+    }
+
+    /// A stand-in for a working desktop handler. Returns `Ok` without touching a
+    /// process, so no test that needs the success path has to spawn anything.
+    fn ok_opener() -> Opener {
+        Arc::new(|_| Ok(()))
+    }
+
+    /// A stand-in for a handler that fails the way a real spawn failure does, so the
+    /// arms' error path is reachable on any host.
+    fn failing_opener() -> Opener {
+        Arc::new(|target| Err(format!("Could not open {target}: forced failure")))
+    }
+
+    /// The OS-error text, from a real spawn failure, without the tier's real handler.
+    ///
+    /// This is the one place a process is genuinely started, and it fails at `exec` on a
+    /// command that does not exist, so nothing runs and nothing is displayed. The
+    /// success path is NOT covered by spawning — see `ok_opener`.
+    #[test]
+    fn a_spawn_failure_names_the_command_and_the_path() {
+        let err = opener_for("aegis-no-such-opener-binary")("/tmp/aegis-test-x/ok.bin")
+            .expect_err("spawning a command that does not exist must fail");
+        assert!(
+            err.contains("Could not open /tmp/aegis-test-x/ok.bin"),
+            "the message must name the path the user asked for, got {err:?}"
+        );
+    }
+
+    /// `open` must never report success for a no-op, and — the part that actually
+    /// shipped broken — neither may the DISPATCH ARM that calls it. Both failures
+    /// `open` can produce are driven here, through `dispatch` rather than through
+    /// `open_with`, because the arm is the thing that used to answer `Some(Ok(Null))`
+    /// for a no-op:
+    /// - `opener: None` is the MOBILE tier's real state. The old body was a literal
+    ///   `let _ = target;` and the arms still reported success, so an "Open" click on a
+    ///   phone did nothing and said it worked.
+    /// - A command that does not exist is a real desktop spawn failure (a minimal
+    ///   container with no `xdg-open`). The old `let _ = …spawn()` discarded it with no
+    ///   log line at all.
+    ///
+    /// Going through `dispatch` needs `with_test_opener` (see `TEST_OPENER`). The seam is a
+    /// CLOSURE precisely so this test does not spawn anything: an earlier version used this
+    /// host's real `xdg-open` as the control, which popped a GTK error dialog on the
+    /// developer's desktop for a `/tmp/aegis-test-*` path the test had already deleted.
+    #[test]
+    fn the_open_arms_report_a_failure_instead_of_a_success_they_cannot_honour() {
+        with_tmp_app(|app| {
+            let (id, inside) = seed_one_download(app);
+
+            // The CONTROL: a trusted row plus a working opener is the success case, and
+            // the arms must answer `Ok` for it. Without this, the two assertions below
+            // would pass for the wrong reason — any `Err` at all, from any cause, would
+            // satisfy them. The opener is a CLOSURE, not this host's real `xdg-open`:
+            // spawning that from a test pops a GTK error dialog on the developer's
+            // desktop, for a path under `/tmp/aegis-test-*` the test has already deleted.
+            with_test_opener(Some(ok_opener()), || {
+                assert!(
+                    dispatch(app, "downloads.openFile", &json!({ "id": id }))
+                        .unwrap_or_else(|| panic!("openFile is handled"))
+                        .is_ok(),
+                    "a trusted row plus a working opener is the success case and must answer Ok"
+                );
+            });
+
+            for (channel, forced, expect) in [
+                (
+                    "downloads.openFile",
+                    Some(failing_opener()),
+                    "Could not open",
+                ),
+                // The mobile shape: no opener at all, which is what a phone has.
+                (
+                    "downloads.showInFolder",
+                    None,
+                    "not available on this device",
+                ),
+            ] {
+                let err = with_test_opener(forced, || dispatch(app, channel, &json!({ "id": id })))
+                    .unwrap_or_else(|| panic!("{channel} is handled"))
+                    .expect_err(&format!(
+                        "{channel} must not report a successful open when the open did not happen"
+                    ));
+                assert!(
+                    err.contains(expect),
+                    "{channel}: expected a message containing {expect:?}, got {err:?}"
+                );
+            }
+            assert!(inside.is_file(), "the fixture file must still be there");
+        });
+    }
+
+    /// A row whose file is gone or was never under the downloads dir cannot be opened
+    /// at all, and that is a different failure from `open`'s: the refusal happens before
+    /// any opener is consulted, so it is observable on every host and needs no override.
+    ///
+    /// `path_of` → `trusted_download_path` is what refuses, which is also why a desktop
+    /// backup restored on a phone fails here honestly instead of reaching `open`.
+    #[test]
+    fn the_open_arms_refuse_a_row_they_cannot_resolve() {
+        with_tmp_app(|app| {
+            let (id, inside) = seed_one_download(app);
+            // The file is there and trusted, so both arms get past the lookup and reach
+            // `open`. Injected rather than the host's real handler, so a test run spawns
+            // no process and pops up no window on the developer's desktop.
+            with_test_opener(Some(ok_opener()), || {
+                for channel in ["downloads.openFile", "downloads.showInFolder"] {
+                    assert!(
+                        dispatch(app, channel, &json!({ "id": id })).is_some(),
+                        "{channel} is handled"
+                    );
+                }
+            });
+
+            // Now delete the file: neither row resolves, and both arms must say so
+            // rather than claiming the open happened.
+            std::fs::remove_file(&inside).unwrap();
+            for channel in ["downloads.openFile", "downloads.showInFolder"] {
+                let err = dispatch(app, channel, &json!({ "id": id }))
+                    .unwrap_or_else(|| panic!("{channel} is handled"))
+                    .expect_err(&format!("{channel} must not report a successful open"));
+                assert!(
+                    err.contains("missing") || err.contains("outside the downloads folder"),
+                    "{channel}: unexpected message {err:?}"
+                );
+            }
+        });
+    }
+
     #[test]
     fn trusted_download_path_requires_existing_file_under_download_dir() {
         with_tmp_app(|app| {
@@ -616,13 +1034,18 @@ mod tests {
             let outside = app_dir.join("outside.bin");
             std::fs::write(&outside, b"no").unwrap();
 
-            assert!(trusted_download_path(app, &inside.to_string_lossy()));
-            assert!(!trusted_download_path(app, &outside.to_string_lossy()));
+            assert!(trusted_download_path(app, &inside.to_string_lossy(), None));
             assert!(!trusted_download_path(
                 app,
-                &dl_dir.join("missing.bin").to_string_lossy()
+                &outside.to_string_lossy(),
+                None
             ));
-            assert!(!trusted_download_path(app, "relative.bin"));
+            assert!(!trusted_download_path(
+                app,
+                &dl_dir.join("missing.bin").to_string_lossy(),
+                None
+            ));
+            assert!(!trusted_download_path(app, "relative.bin", None));
         });
     }
 
