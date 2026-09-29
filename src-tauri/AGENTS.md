@@ -744,8 +744,68 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   of adding a second scheme list, and an unparseable url returns `Err` rather than
   silently doing nothing.
   `permissions.rs` (site permission prompts) — **unit-tested via
-  `test_support::with_tmp_app`:** list/remove/clear, `origin_of` strip (4
-  tests).
+  `test_support::with_tmp_app`:** list/remove/clear, `origin_of` strip, `verdict`,
+  `persist`-replaces (12 tests).
+  **The decision half is CROSS-PLATFORM; the RAISE side is per platform.**
+  `origin_of` / `remembered` / `persist` / `verdict` used to be
+  `#[cfg(target_os = "linux")]` because only the Linux handler raised a prompt;
+  they are now `#[cfg(any(target_os = "linux", target_os = "android", test))]`
+  (the `test` is what lets a LINUX test drive them, and the windows-gnu
+  `--all-targets` check is what forces the gate: the permission handler does not
+  exist on Windows, so these are genuinely dead there). `verdict` is gated
+  NARROWER — `#[cfg(any(target_os = "android", test))]` — because on a Linux build
+  the handler inlines the `remembered` match and `verdict`'s only production caller
+  is the Android JNI shell, so `clippy -D warnings` reported it dead. That is
+  exactly why the gate beats an `allow(dead_code)`: the attribute made the
+  unreachability explicit, and narrowing it to the platform that really calls it
+  was the fix. `verdict(app, origin, permission) -> "allow" | "deny" | ""`
+  is the one function Kotlin asks, and the three JNI exports
+  `NativePermissions_{normalizeOrigin, decision, remember}` are thin shells over
+  `origin_of` / `verdict` / `persist`.
+  **Why the verdict cannot come back through Rust:** the JNI gateway is
+  Kotlin→Rust only (no up-calls), and the LIVE request object is a WebView
+  `PermissionRequest` / geolocation `Callback` that only Kotlin holds — so
+  `permissions.resolve` is a LINUX-ONLY resolution path (`run_on_main_thread` into
+  the `PENDING` map) and its non-Linux arm only logs. On Android the renderer
+  therefore calls `AegisAndroid.resolvePermission(requestId, decision)` instead of
+  the `permissions.resolve` channel, and Kotlin answers the request it is holding
+  and calls `NativePermissions.remember` for a decision that is not `allow-once`.
+  `requestId`s are minted by whichever side raises the prompt (Rust's `NEXT_ID` on
+  Linux, Kotlin's own counter on Android) — they only have to be unique among
+  _pending_ requests, and the unknown/stale-id case is logged and ignored on both
+  sides rather than swallowed.
+  **What Android can and cannot reach:** the two Android callbacks are
+  `onPermissionRequest` (camera/mic via `RESOURCE_VIDEO_CAPTURE` /
+  `RESOURCE_AUDIO_CAPTURE`) and `onGeolocationPermissionsShowPrompt`, so the
+  vocabulary is `geolocation` / `camera` / `microphone` / `camera-microphone`.
+  `notifications` and `pointer-lock` have **no** Android WebView callback and are
+  therefore never written from either side — a Windows/macOS-only tier, not a gap.
+  Before the fix the WebView default was to deny every request SILENTLY (there was
+  no `onPermissionRequest` override at all), while `MobileApp` rendered
+  `SitePermissionsTab` and `PermissionPromptDialog` over a list that could never be
+  populated. Geolocation is answered with `retain = false` deliberately: Aegis
+  re-prompts per origin through its own store rather than letting WebView retain it.
+  The `permissions` store still lives in Rust, so list/remove/clear keep using the
+  IPC channels on every platform.
+  **Two permission layers, and only one of them is ours.** Approving the web request
+  does not grant the OS permission: `requestAndroidPermissionFor` asks for
+  `CAMERA` / `RECORD_AUDIO` / `ACCESS_FINE_LOCATION` at that moment, so a user who
+  approves the site and then declines the OS dialog still fails `getUserMedia` /
+  geolocation. That matches how a real browser behaves (the site permission is
+  remembered, the device grant is re-asked), and the three `uses-feature`s are
+  declared `required="false"` so no device is filtered out.
+  There is NO Kotlin test source set, so all of the Android half is
+  COMPILE-VERIFIED ONLY and the on-device behaviour is PENDING. `permissions::tests`
+  pins five things by reading the Kotlin and the manifest as TEXT through
+  `crate::test_support::{kotlin_source, kotlin_fn_body}`: the
+  `onPermissionRequest` override exists and routes through the shared handler, the
+  geolocation override exists and uses the SAME prompt, `resolvePermission` consumes
+  its queue entry (so a stale id can never answer a live request) and remembers
+  every decision except `allow-once`, the three OS permissions are in the manifest
+  and named in `requestAndroidPermissionFor`, and `NativePermissions.kt` declares
+  the three calls the Kotlin side makes. Those pins neutralise the KOTLIN side, and
+  the Rust-side pins (`verdict` answering `allow` for a stored deny, `persist`
+  appending instead of replacing) cover the decision half.
 - **E2E sync ("F2b") + crypto** — `sync.rs` (per-namespace pull→merge→push over
   `reqwest::blocking`, `GET/POST /v1/records`, a debounced periodic background pass),
   `sync_auth.rs` (per-device **Ed25519** signed access tokens — the server authorizes
@@ -1478,10 +1538,15 @@ Consequences worth knowing before "fixing" this:
 Hand-written Kotlin under `app/src/main/java/com/aegis/browser/`:
 `MainActivity.kt` (native content WebView; `shouldInterceptRequest` → ad-block +
 malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt` +
-`NativeHistory.kt` (JNI into the Rust `libapp_lib.so`), and `NativeDownloads.kt`
+`NativeHistory.kt` (JNI into the Rust `libapp_lib.so`), `NativeDownloads.kt`
 (added 2026-09-29 — the Android `DownloadListener`; see the `downloads.rs` bullet
-for why the destination has to be passed in rather than derived).
-`AndroidManifest.xml` grants only `INTERNET`.
+for why the destination has to be passed in rather than derived), and
+`NativePermissions.kt` (added 2026-09-29 — the Android site-permission store
+half; see the `permissions.rs` bullet for why the verdict cannot come back through
+Rust).
+`AndroidManifest.xml` grants `INTERNET` plus `CAMERA`, `RECORD_AUDIO` and
+`ACCESS_FINE_LOCATION` — the last three ONLY because a granted web permission
+request cannot capture anything without them (see the `permissions.rs` bullet).
 
 **⚠ A `--debug` build is a DIFFERENT APP, not an upgrade — and `adb install` will not
 tell you.** `tauri android build --debug` gets Gradle's standard `applicationIdSuffix`,

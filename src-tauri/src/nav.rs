@@ -990,6 +990,7 @@ mod tests {
         ReloadOrStop,
     };
     use crate::test_support::with_tmp_app;
+    use crate::test_support::{kotlin_fn_body, kotlin_source};
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use tauri::{AppHandle, Manager, Runtime, Url};
@@ -1465,14 +1466,6 @@ mod tests {
     /// a future Kotlin edit, and it fails the Rust suite if the two lists ever diverge
     /// again. (`script/`Kotlin half is compile-verified only; the behaviour still needs a
     /// device check.)
-    fn kotlin_source(file: &str) -> String {
-        let path = format!(
-            "{}/gen/android/app/src/main/java/com/aegis/browser/{file}",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"))
-    }
-
     fn kotlin_main_activity() -> String {
         kotlin_source("MainActivity.kt")
     }
@@ -1508,44 +1501,13 @@ mod tests {
     /// `MainActivity.kt` (the popup temp WebView's is the second), sliced to its
     /// MATCHING closing brace, with comment lines dropped.
     ///
-    /// Brace counting rather than a byte window, because inserting lines inside the
-    /// function must not silently narrow what these tests look at. Comment stripping
-    /// because the function's own comment QUOTES the bypass it replaced — asserting
-    /// against raw text would match the documentation of the bug instead of the bug.
-    /// The body of any Kotlin `fun` named by `signature`, brace-counted and stripped of
-    /// comment lines. The two existing helpers hard-code one function each; this is the
-    /// general form so a new Kotlin pin does not need a fourth copy of the loop.
-    fn kotlin_fn_body(src: &str, signature: &str) -> String {
-        let start = src
-            .find(signature)
-            .unwrap_or_else(|| panic!("MainActivity.kt no longer declares {signature:?}"));
-        let open = src[start..]
-            .find('{')
-            .map(|i| start + i)
-            .unwrap_or_else(|| panic!("{signature:?} has no opening brace"));
-        let mut depth = 0i32;
-        let mut end = None;
-        for (i, c) in src[open..].char_indices() {
-            match c {
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        end = Some(open + i);
-                        break;
-                    }
-                }
-                _ => {}
-            }
-        }
-        let end = end.unwrap_or_else(|| panic!("{signature:?} has no matching closing brace"));
-        src[open..=end]
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
+    /// The shared `test_support::kotlin_fn_body` cannot be used here because it looks a
+    /// function up by DECLARATION text, and this one is a member of an anonymous
+    /// `object : WebChromeClient()` that exists once per tab. Brace counting rather than
+    /// a byte window, because inserting lines inside the function must not silently
+    /// narrow what these tests look at; comment stripping because the function's own
+    /// comment QUOTES the bypass it replaced, so a negative assert against raw text
+    /// would match the documentation of the bug instead of the bug.
     fn kotlin_main_frame_code(src: &str) -> String {
         let start = src
             .find("override fun shouldOverrideUrlLoading(")

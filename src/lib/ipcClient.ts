@@ -331,6 +331,20 @@ interface AndroidBridge {
   /** Set page zoom for tab `id` (percentage int, 100 == 1.0). No-op off Android. */
   setZoom(id: number, percent: number): void;
   /**
+   * Answer a site-permission prompt with `requestId` and `decision`
+   * ('allow' | 'allow-once' | 'deny').
+   *
+   * This is an IPC BRIDGE method rather than a `permissions.*` channel because the live
+   * request is held by the platform (a WebView `PermissionRequest` /
+   * `GeolocationPermissions.Callback`), and Rust cannot up-call into Kotlin — a JNI export
+   * has no way to reach a WebView callback. So on Android the request is minted and
+   * answered natively, and the renderer routes the decision here instead of over the
+   * channel, exactly as `view.setChromeOverlay` calls `setContentHidden` rather than
+   * issuing a channel. The remembered store stays in Rust either way, so the permissions
+   * LIST the user sees is the same one desktop writes.
+   */
+  resolvePermission(requestId: number, decision: string): void;
+  /**
    * Apply an HTTP or SOCKS5 proxy process-globally (all WebViews in this process,
    * including the chrome).  Called by `proxy.setConfig` when `config.mode === 'proxy'`.
    * The chrome's own localhost/tauri.localhost origin is bypassed on the native side.
@@ -580,8 +594,35 @@ export const aegis: AegisApi = {
     remove: (origin, permission) =>
       dedupedCall<SitePermission[]>(IPC.permissionsRemove, { origin, permission }),
     clear: () => dedupedCall<SitePermission[]>(IPC.permissionsClear, undefined),
-    resolve: (requestId, decision) => dedupedCall(IPC.permissionsResolve, { requestId, decision }),
-    onPrompt: (cb) => on<PermissionPrompt>(IPC.evtPermissionsPrompt, cb),
+    resolve: (requestId, decision) => {
+      // Android owns the pending request natively, so the decision has to go BACK over
+      // the bridge; issuing the channel as well would be a second, no-op resolve (the
+      // non-Linux arm of that arm cannot reach the request) and would look like it worked.
+      const a = androidBridge();
+      if (a) {
+        a.resolvePermission(requestId, decision);
+        return Promise.resolve();
+      }
+      return dedupedCall(IPC.permissionsResolve, { requestId, decision });
+    },
+    onPrompt: (cb) => {
+      // Same Kotlin-push pattern as find.onState / nav.onState: Android has no Tauri
+      // event bus for the content side, so the prompt arrives as
+      // window.__aegisPermissionPrompt and this installs the multi-subscriber dispatcher.
+      if (androidBridge()) {
+        const w = window as unknown as {
+          __aegisPermissionPromptCbs?: Set<(p: PermissionPrompt) => void>;
+          __aegisPermissionPrompt?: (p: PermissionPrompt) => void;
+        };
+        const cbs = (w.__aegisPermissionPromptCbs ??= new Set());
+        cbs.add(cb);
+        w.__aegisPermissionPrompt = (p) => cbs.forEach((f) => f(p));
+        return () => {
+          cbs.delete(cb);
+        };
+      }
+      return on<PermissionPrompt>(IPC.evtPermissionsPrompt, cb);
+    },
   },
   data: {
     // No native save dialog (it renders in the OS's light theme, clashing with

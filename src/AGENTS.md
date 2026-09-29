@@ -27,8 +27,13 @@ src/
   `on(event, cb)`. `on()` translates the event name `.` → `:` because **Tauri 2
   forbids `.` in event names** (the Rust side emits with `:`). Don't bypass this.
 - **Android path:** when `window.AegisAndroid` is present (native Kotlin bridge,
-  no Tauri), `ipcClient` routes nav + content-visibility calls to the bridge
-  instead of `invoke`, and sets the `.aegis-mobile` class. On mobile `App` renders
+  no Tauri), `ipcClient` routes nav, content-visibility, find, zoom,
+  update-restart and **`permissions.resolve`** to the bridge
+  instead of `invoke`, and sets the `.aegis-mobile` class. `permissions.resolve`
+  is the one that is not a reimplementation of a core arm: the JNI gateway is
+  Kotlin→Rust only, so the verdict cannot come back through a channel at all — the
+  request object is a WebView `PermissionRequest` that only Kotlin holds, while the
+  remembered store stays in Rust. On mobile `App` renders
   **`MobileApp`** (a dedicated touch shell) instead of the desktop chrome — see the
   Mobile shell section below.
   **A bridge branch is a REIMPLEMENTATION, not a shortcut.** Android has no Tauri

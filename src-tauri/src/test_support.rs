@@ -260,6 +260,62 @@ pub fn import_tick() {
     });
 }
 
+/// Read one of the Android sources in `gen/android` as text, for the drift pins the
+/// crate keeps on the Kotlin half.
+///
+/// There is NO Kotlin test source set in this project, so a `.kt` change is
+/// compile-verified (by the Gradle build) and nothing else. A Rust test that reads the
+/// Kotlin SOURCE and asserts on it is therefore the only thing that can catch a future
+/// Kotlin edit silently reverting a fix the Rust suite already proves. These helpers
+/// live here, not in one module's test block, because that is a crate-wide concern:
+/// `nav` pins the navigation policy and `permissions` pins the permission prompt, and
+/// neither should own a private copy of the brace-counting loop.
+pub fn kotlin_source(file: &str) -> String {
+    let path = format!(
+        "{}/gen/android/app/src/main/java/com/aegis/browser/{file}",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"))
+}
+
+/// The body of the Kotlin `fun` whose declaration starts with `signature`, sliced from
+/// its opening brace to the MATCHING closing one and stripped of comment lines.
+///
+/// Brace counting rather than a byte or line range, so inserting a line inside the
+/// function cannot silently narrow what a pin looks at. Comment stripping because the
+/// Kotlin comments this repo writes QUOTE the code they replaced, so a negative assert
+/// against raw text matches the documentation of a bug instead of the bug.
+pub fn kotlin_fn_body(src: &str, signature: &str) -> String {
+    let start = src
+        .find(signature)
+        .unwrap_or_else(|| panic!("the Kotlin source no longer declares {signature:?}"));
+    let open = src[start..]
+        .find('{')
+        .map(|i| start + i)
+        .unwrap_or_else(|| panic!("{signature:?} has no opening brace"));
+    let mut depth = 0i32;
+    let mut end = None;
+    for (i, c) in src[open..].char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    end = Some(open + i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let end = end.unwrap_or_else(|| panic!("{signature:?} has no matching closing brace"));
+    src[open..=end]
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

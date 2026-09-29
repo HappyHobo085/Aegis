@@ -2,6 +2,21 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- The device-level half of the site-permission prompt. The web prompt in the
+         chrome asks "does this SITE get the camera?"; these are the separate
+         app-wide grants the platform asks about, which `MainActivity` requests the
+         moment a web request is granted (see requestAndroidPermissionFor). Without
+         them a granted web request still fails: getUserMedia and geolocation both
+         require the app itself to hold the permission. All four are OPTIONAL
+         (uses-feature required="false" below) so the app still installs on a device
+         with no camera, no microphone or no location provider. -->
+    <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+    <uses-feature android:name="android.hardware.microphone" android:required="false" />
+    <uses-feature android:name="android.hardware.location.gps" android:required="false" />
+
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 

@@ -1,10 +1,12 @@
 package com.aegis.browser
 
+import android.Manifest
 import android.app.DownloadManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
@@ -17,7 +19,9 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
+import android.webkit.GeolocationPermissions
 import android.webkit.JavascriptInterface
+import android.webkit.PermissionRequest
 import android.webkit.URLUtil
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
@@ -128,6 +132,28 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // Bridge.findClose). Android's FindListener doesn't report the query back, so we
   // cache it here to include in the __aegisFindState push.
   @Volatile private var currentFindQuery = ""
+
+  // A web permission request the user has not answered yet (camera, microphone or
+  // geolocation). The `answer` lambda captures whichever platform callback the request
+  // arrived with — a `PermissionRequest` to grant/deny, or a geolocation callback to
+  // invoke — so the two very different WebView APIs share ONE queue, ONE prompt and ONE
+  // `PermissionPrompt.requestId` space. Keyed by a counter this class owns: unlike
+  // Linux's `NEXT_ID`, the id is minted on the platform that HOLDS the request, because
+  // that is the side that must be able to answer it.
+  private val pendingPermissions = HashMap<Int, PendingPermission>()
+  private var nextPermissionId = 1
+
+  /**
+   * One unanswered web permission request. [tab] is the tab whose WebView raised it, so
+   * closing that tab can answer it (a callback belonging to a destroyed WebView can only
+   * be denied, never granted).
+   */
+  private class PendingPermission(
+    val tab: Int,
+    val origin: String,
+    val permission: String,
+    val answer: (allow: Boolean) -> Unit,
+  )
 
   // Coalescing for the chrome pushes. noteBlocked → pushBlockedCount fires once per
   // BLOCKED request (a heavy ad-heavy page = dozens per navigation), and pushNavState
@@ -532,6 +558,56 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         .show(WindowInsetsCompat.Type.systemBars())
       customCallback?.onCustomViewHidden()
       customCallback = null
+    }
+
+    // A site asking for the camera or the microphone. Without this override the
+    // WebView DENIES every request silently, which is why the mobile permissions list
+    // could never be populated and a geolocation site simply never worked: there was no
+    // prompt, and no remembered decision either.
+    override fun onPermissionRequest(request: PermissionRequest) {
+      val resources = request.resources
+      // The resource set is a SET, so one request can be for the camera, the microphone
+      // or both, and the store keys one (origin, permission) row per NAME — the same
+      // vocabulary the desktop `classify` produces, so a store row written on one
+      // platform means the same thing on the other.
+      val permission = permissionFor(resources)
+      if (permission == null) {
+        // Nothing Aegis can key, and the platform WebView has no callback for the
+        // desktop's `notifications` / `pointer-lock` names either. Denying is the
+        // platform default and is also the desktop `classify` "other" rule: a prompt the
+        // user could answer but that nothing would act on is worse than a silent no.
+        request.deny()
+        return
+      }
+      // `PermissionRequest.getOrigin()` is a Uri, not a String: the platform hands
+      // back the origin as a parsed value and Rust normalizes it from text. An
+      // absent origin is left empty, and askUser refuses to key a row for it.
+      val origin = request.origin?.toString() ?: ""
+      askUser(id, origin, permission) { allow ->
+        if (allow) {
+          request.grant(resources)
+          requestAndroidPermissionFor(permission)
+        } else {
+          request.deny()
+        }
+      }
+    }
+
+    // Geolocation arrives through its OWN callback on the platform WebView — it is
+    // never part of a `PermissionRequest`, so it is a second door into the same queue
+    // and the same prompt rather than a second policy.
+    override fun onGeolocationPermissionsShowPrompt(
+      origin: String,
+      callback: GeolocationPermissions.Callback,
+    ) {
+      askUser(id, origin, "geolocation") { allow ->
+        // The third argument is the platform's own "retain this answer" flag. It is
+        // deliberately false: that grant is app-wide and lives outside Aegis, while
+        // Aegis re-prompts per origin and records the choice itself, in the store
+        // `permissions.list` answers from on every platform.
+        callback.invoke(origin, allow, false)
+        if (allow) requestAndroidPermissionFor("geolocation")
+      }
     }
 
     // Task 9: target=_blank / window.open → background tab.
@@ -1305,6 +1381,118 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   }
 
   /**
+   * The store's permission name for an Android resource set, or null when the set holds
+   * nothing this platform can name. Camera and microphone are the only two resources a
+   * site can ask for here that Aegis keys a row for.
+   */
+  private fun permissionFor(resources: Array<String>): String? = when {
+    resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE) &&
+      resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE) -> "camera-microphone"
+    resources.contains(PermissionRequest.RESOURCE_VIDEO_CAPTURE) -> "camera"
+    resources.contains(PermissionRequest.RESOURCE_AUDIO_CAPTURE) -> "microphone"
+    else -> null
+  }
+
+  /**
+   * Apply the remembered decision for ([origin], [permission]) or raise the chrome
+   * prompt, then run [onDecision] with the answer on the UI thread.
+   *
+   * [origin] is normalized through Rust (`permissions::origin_of`) so the store row, the
+   * prompt text and the desktop key are the same string for the same site — a
+   * hand-normalized origin here would silently re-prompt a user who already decided.
+   * Both native calls fail soft: a JNI error asks, which is the safe direction, because
+   * a remembered ALLOW must never be assumed when the lookup could not happen.
+   */
+  private fun askUser(
+    tab: Int,
+    origin: String,
+    permission: String,
+    onDecision: (allow: Boolean) -> Unit,
+  ) {
+    val key = try {
+      NativePermissions.normalizeOrigin(origin)
+    } catch (t: Throwable) {
+      Log.w("AegisPerm", "normalizeOrigin failed for $origin", t)
+      origin
+    }
+    if (key.isEmpty()) {
+      // No origin means every such site would share one store row, so there is nothing
+      // safe to remember or to show. Deny without prompting.
+      onDecision(false)
+      return
+    }
+    val remembered = try {
+      NativePermissions.decision(key, permission)
+    } catch (t: Throwable) {
+      Log.w("AegisPerm", "decision failed for $key $permission", t)
+      ""
+    }
+    if (remembered == "allow" || remembered == "deny") {
+      onDecision(remembered == "allow")
+      return
+    }
+    val requestId = nextPermissionId++
+    pendingPermissions[requestId] = PendingPermission(tab, key, permission, onDecision)
+    pushPermissionPrompt(requestId, key, permission)
+  }
+
+  /**
+   * Raise the permission prompt in the CHROME webview, which is where the dialog lives:
+   * the same `window.__aegisX` push the find, nav, zoom and ad-block counters use.
+   */
+  private fun pushPermissionPrompt(requestId: Int, origin: String, permission: String) {
+    val obj = JSONObject()
+      .put("requestId", requestId)
+      .put("origin", origin)
+      .put("permission", permission)
+    val js = "window.__aegisPermissionPrompt && window.__aegisPermissionPrompt($obj)"
+    chromeWebView?.post { chromeWebView?.evaluateJavascript(js, null) }
+  }
+
+  /**
+   * Ask the OS for the device-level permission a granted web request implies. The web
+   * prompt and the OS dialog are two different decisions — Aegis asks "does this site get
+   * the camera?", the platform asks "does this app get the camera?" — and granting the
+   * first without the second would leave `getUserMedia` failing on a permission the user
+   * had just granted, which reads as a bug. `requestPermissions` is a no-op when the
+   * grant is already held, so calling it on every remembered allow is free.
+   */
+  private fun requestAndroidPermissionFor(permission: String) {
+    val needed = when (permission) {
+      "camera" -> arrayOf(Manifest.permission.CAMERA)
+      "microphone" -> arrayOf(Manifest.permission.RECORD_AUDIO)
+      "camera-microphone" -> arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
+      "geolocation" -> arrayOf(Manifest.permission.ACCESS_FINE_LOCATION)
+      else -> return
+    }
+    val missing = needed.filter { checkSelfPermission(it) != PackageManager.PERMISSION_GRANTED }
+    if (missing.isEmpty()) return
+    try {
+      requestPermissions(missing.toTypedArray(), REQ_WEB_PERMISSION)
+    } catch (t: Throwable) {
+      Log.w("AegisPerm", "requestPermissions failed for $permission", t)
+    }
+  }
+
+  /**
+   * Answer every pending request belonging to [tab] with "no" and forget it. A callback
+   * that belongs to a destroyed WebView can only be denied, so leaving it queued would
+   * show a prompt in the chrome whose answer could no longer reach the page. The site is
+   * going away with the tab, so the denial is silent.
+   */
+  private fun dropPermissionsForTab(id: Int) {
+    val stale = pendingPermissions.filterValues { it.tab == id }.keys.toList()
+    for (requestId in stale) {
+      val pending = pendingPermissions.remove(requestId) ?: continue
+      try {
+        pending.answer(false)
+      } catch (t: Throwable) {
+        Log.w("AegisPerm", "deny on tab close failed for $requestId", t)
+      }
+    }
+  }
+
+  /**
    * When a redirect is blocked, open it in a new tab instead of showing blocking UI.
    * This prevents the navigation in the current tab (for security) while providing
    * the content in a new tab for user convenience.
@@ -1353,6 +1541,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
    * (tab is gone permanently so the stored zoom is useless).
    */
   private fun teardownTab(id: Int, keepZoom: Boolean) {
+    dropPermissionsForTab(id)
     // An HTML5-fullscreen view lives on window.decorView, not on the tab, so closing the tab
     // has to take it down explicitly or it survives with no owner.
     chromeClients.remove(id)?.onHideCustomView()
@@ -1425,6 +1614,29 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       // The new active tab has its own back/forward availability, so the gesture container
       // has to re-decide which system-gesture edges it may claim.
       gestureContainer?.updateGestureExclusion()
+    }
+
+    @JavascriptInterface
+    fun resolvePermission(requestId: Int, decision: String) = runOnUiThread {
+      val pending = pendingPermissions.remove(requestId)
+      if (pending == null) {
+        // The Linux path logs the same shape: a double click, or a prompt for a tab that
+        // has since closed, must not grant a second time.
+        Log.i("AegisPerm", "resolve for unknown/stale requestId=$requestId; ignoring")
+        return@runOnUiThread
+      }
+      val allow = decision == "allow" || decision == "allow-once"
+      // `allow-once` is the only decision NOT written to the store: it answers this
+      // request and asks again next time, exactly as `permissions.resolve` does on Linux.
+      val remember = decision != "allow-once"
+      pending.answer(allow)
+      if (remember) {
+        try {
+          NativePermissions.remember(pending.origin, pending.permission, allow)
+        } catch (t: Throwable) {
+          Log.w("AegisPerm", "remember failed for $requestId", t)
+        }
+      }
     }
 
     /** Permanently close a tab: destroy its WebView and remove it from the map. */
@@ -1648,6 +1860,11 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   override fun gestureReload() { contentWebView?.reload() }
 
   companion object {
+    // Request code for the OS permission dialogs a granted web request implies. Only
+    // used to keep the calls apart in logs; the result is deliberately not routed back
+    // into the web request (see requestAndroidPermissionFor).
+    private const val REQ_WEB_PERMISSION = 4701
+
     // Vanilla mobile Chrome UA (no "; wv" WebView marker), mirroring the desktop
     // build's Chrome UA in nav.rs. Bump the Chrome version alongside it.
     private const val CHROME_UA =

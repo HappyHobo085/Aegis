@@ -9,6 +9,27 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Every site's camera, microphone and location request was silently refused on
+  Android, while the app showed a permissions list that could never fill.** The
+  native webview had no permission handler at all, so Android's default — refuse
+  everything — applied, and the permission list in the mobile shell stayed empty
+  no matter what you did. A recognized request is now asked about the same way as
+  on a desktop, the answer is remembered per site and survives a restart, and an
+  unrecognized kind of request is still refused outright. The app also now declares
+  and asks for the camera, microphone and location permissions the system needs
+  before a site can actually use them, and sites that only ask for something
+  Android cannot provide (notifications, pointer-lock) are still refused.
+
+- **Every site's camera, microphone and location request was silently refused on
+  Android, while the app showed a permissions list that could never fill.** The
+  native webview had no permission handler at all, so Android's default — refuse
+  everything — applied, and the permission list in the mobile shell stayed empty
+  no matter what you did. A recognized request is now asked about the same way as
+  on a desktop, the answer is remembered per site and survives a restart, and an
+  unrecognized kind of request is still refused outright. The app also now declares
+  and asks for the camera, microphone and location permissions the system needs
+  before a site can actually use them, and sites that only ask for something
+  Android cannot provide (notifications, pointer-lock) are still refused.
 - **A page could pile up background tabs on Android by bouncing through the redirect
   guard.** When a scripted cross-origin redirect is blocked, the destination opens in a
   background tab that closes itself after 30 seconds if you never look at it, and both

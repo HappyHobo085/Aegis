@@ -48,6 +48,12 @@ const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 const mockListen = listen as ReturnType<typeof vi.fn>;
 
 const win = window as unknown as Record<string, unknown>;
+/** The Kotlin-push globals are installed by ipcClient at runtime, so they are not on
+ *  Window's type; the pins that raise them cast through this alias. */
+const push = (name: string, arg: unknown): void => {
+  const f = win[name] as ((a: unknown) => void) | undefined;
+  f?.(arg);
+};
 
 /** Representative non-empty values, so a dropped argument cannot hide behind a default. */
 const INSET: ContentInset = { top: 12, left: 4 };
@@ -1152,6 +1158,7 @@ describe('the Android bridge path', () => {
       findPrev: vi.fn(),
       findClose: vi.fn(),
       setZoom: vi.fn(),
+      resolvePermission: vi.fn(),
       setProxy: vi.fn(),
       clearProxy: vi.fn(),
     };
@@ -1160,6 +1167,7 @@ describe('the Android bridge path', () => {
     delete win.__aegisBlockedCount;
     delete win.__aegisFindState;
     delete win.__aegisZoomChanged;
+    delete win.__aegisPermissionPrompt;
   });
 
   afterEach(() => {
@@ -1206,6 +1214,16 @@ describe('the Android bridge path', () => {
       { name: 'find.next', run: () => aegis.find.next(1), method: 'findNext', args: [] },
       { name: 'find.prev', run: () => aegis.find.prev(1), method: 'findPrev', args: [] },
       { name: 'find.close', run: () => aegis.find.close(1), method: 'findClose', args: [] },
+      {
+        // The live request is held by the platform WebView, and Rust cannot up-call into
+        // Kotlin, so the decision has to travel BACK over the bridge. Issuing
+        // `permissions.resolve` as well would be a second, no-op resolve that looks like
+        // it worked — the non-Linux arm of that channel cannot reach the request.
+        name: 'permissions.resolve',
+        run: () => aegis.permissions.resolve(7, 'allow'),
+        method: 'resolvePermission',
+        args: [7, 'allow'],
+      },
     ];
 
   describe.each(bridged)('$name', (row) => {
@@ -1276,6 +1294,28 @@ describe('the Android bridge path', () => {
       setBottomBarHidden(false);
       setFullscreen(false);
     }).not.toThrow();
+  });
+
+  it('permissions.onPrompt is answered by the Kotlin push, and unsubscribing stops it', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const offFirst = aegis.permissions.onPrompt(first);
+    const offSecond = aegis.permissions.onPrompt(second);
+    // Kotlin raises the prompt with `window.__aegisPermissionPrompt` (the same push the
+    // find/zoom/nav counters use); every subscriber must see it, or only the first
+    // component mounted would ever learn there is a prompt.
+    const prompt = { requestId: 3, origin: 'https://a.test', permission: 'camera' };
+    push('__aegisPermissionPrompt', prompt);
+    expect(first).toHaveBeenCalledWith(prompt);
+    expect(second).toHaveBeenCalledWith(prompt);
+    offFirst();
+    push('__aegisPermissionPrompt', prompt);
+    expect(first).toHaveBeenCalledTimes(1);
+    expect(second).toHaveBeenCalledTimes(2);
+    offSecond();
+    // The list is still the Rust store on Android: the remembered decision lives there,
+    // so the permissions the user sees is the same one desktop writes.
+    expect(mockInvoke).not.toHaveBeenCalled();
   });
 
   it('activateTab / closeTab / discardTab forward to the bridge', async () => {
