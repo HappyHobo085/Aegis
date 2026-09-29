@@ -38,7 +38,18 @@ dotted event name.
   lifecycle (`create`/`activate`/`close`/`reopen_closed`), pinned/reorder,
   per-tab back/forward history (`record_nav`/`go_back`/`go_forward`),
   time-based idle sweep (`sweep_idle`), session (de)serialization
-  (`to_persisted`/`restore`). 56 unit tests.
+  (`to_persisted`/`restore`). 58 unit tests.
+  **The per-tab back/forward stack is capped** at `MAX_NAV_HISTORY` (100 entries). It
+  was the one long-lived collection in the crate with no bound - one `String` per
+  navigation, per tab, for as long as the process lives - while `history.rs`
+  (`MAX_ENTRIES` 5000), `downloads.rs` (`MAX_DOWNLOAD_ENTRIES` 1000) and `picker.rs`
+  (`MAX_FILTER_BYTES`) all cap themselves. `trim_history` drops from the FRONT, because
+  `record_nav` always leaves the current page as the LAST entry, and shifts
+  `hist_index` by the same amount, so `go_back`/`go_forward` keep addressing the URLs
+  they addressed before. A tab that has walked back to the clamped end reports
+  `can_go_back == false`, which is the honest reading: the steps were discarded, not
+  mis-addressed. `history` is in-memory only - `PersistedTab` has no such field - so
+  the cap bounds one session's memory, not the on-disk `tabs.json`.
   **Id allocation can never collide.** `alloc_tab_id` (used by `create_private` and
   `reopen_closed`) and `alloc_workspace_id` skip occupied ids instead of trusting
   `next_id += 1` / `max_id + 1`. Four sites overflowed: a hand-edited `tabs.json` with a

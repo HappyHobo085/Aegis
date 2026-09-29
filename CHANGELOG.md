@@ -9,6 +9,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A tab's Back/Forward history is now capped at 100 steps per tab.** It grew by one entry per navigation with no limit, in a process that keeps one entry per tab for as long as it is open, so a long-lived tab's memory grew for as long as the app ran. The oldest steps are the ones discarded; the page you are on and every step still inside the cap stay reachable, in order.
 - **Find-in-page could report that it had started when it never did.** All four
   find channels answered "done" on any platform with no built-in find, having done
   nothing. Android does its own find-in-page, so normally you never see this — but the

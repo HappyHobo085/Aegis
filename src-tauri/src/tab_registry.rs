@@ -105,6 +105,31 @@ fn default_workspace_id() -> String {
     "default".into()
 }
 
+/// How many back/forward steps one tab keeps. Chromium's limit is 50 per tab; this
+/// is deliberately more generous than that, because a tab that is never closed is the
+/// only case that reaches the cap and there is no cost to keeping a few extra entries
+/// beyond what a browser would.
+const MAX_NAV_HISTORY: usize = 100;
+
+/// Drop the OLDEST entries so `history` holds at most [`MAX_NAV_HISTORY`], keeping
+/// `hist_index` on the same entry it named before.
+///
+/// Trimming from the front is the only safe end: the current page is always the LAST
+/// entry (`record_nav` sets `hist_index = len - 1`), so the page the user is looking
+/// at can never be the one discarded. Shifting the index by the same amount keeps
+/// `go_back`/`go_forward` addressing the URLs they addressed before, and
+/// `saturating_sub` is the honest edge — an index that would go negative means the
+/// caller was pointing before the start of the stack, and clamping it to 0 reads as
+/// "no history back" rather than panicking on a slice.
+fn trim_history(history: &mut Vec<String>, hist_index: &mut usize) {
+    let excess = history.len().saturating_sub(MAX_NAV_HISTORY);
+    if excess == 0 {
+        return;
+    }
+    history.drain(..excess);
+    *hist_index = hist_index.saturating_sub(excess);
+}
+
 #[derive(Clone, Serialize, Deserialize, Default)]
 pub struct PersistedSession {
     pub tabs: Vec<PersistedTab>,
@@ -535,6 +560,15 @@ impl Registry {
             t.history.truncate(t.hist_index + 1);
             t.history.push(url.to_string());
             t.hist_index = t.history.len() - 1;
+            // The one collection in the crate that grew without a bound. Every other
+            // long-lived list caps itself (`MAX_ENTRIES` 5000 in history.rs,
+            // `MAX_DOWNLOAD_ENTRIES` 1000 in downloads.rs, `MAX_FILTER_BYTES` in
+            // picker.rs), and this one is per tab, so a user who leaves one tab open
+            // for a week of clicking adds a `String` per navigation for as long as the
+            // process lives. Nothing reads the trimmed entries — `can_go_back` is
+            // `hist_index > 0`, so a dropped-back-to-zero index reads as "no history"
+            // rather than as a wrong URL.
+            trim_history(&mut t.history, &mut t.hist_index);
             t.url = url.to_string();
         }
     }
@@ -1130,6 +1164,103 @@ mod tests {
         let mut r = reg();
         assert_eq!(r.go_back(1), None); // at home, nothing behind
         assert_eq!(r.go_forward(1), None); // nothing ahead
+    }
+
+    /// A tab's back/forward stack used to grow by one `String` per navigation with no
+    /// bound, in a process that keeps one entry per tab for as long as it lives. The
+    /// observable is not the length but what the trim does to the URLs the user can
+    /// still reach: the cap must cost the OLDEST steps, never the current page, and
+    /// `hist_index` must keep naming the entry the user is on.
+    #[test]
+    fn a_long_navigation_run_drops_the_oldest_steps_and_never_the_current_page() {
+        let mut r = reg(); // tab 1 starts at home, so history=[home]
+        let total = MAX_NAV_HISTORY + 40;
+        for i in 0..total {
+            r.record_nav(1, &format!("https://n{i}.test/"));
+        }
+        // The current page is always the last entry, and it is the one entry a trim
+        // must never be able to drop — otherwise the tab shows a URL it is not on.
+        let current = format!("https://n{}.test/", total - 1);
+        assert_eq!(r.url_of(1), Some(current.as_str()));
+        // Exactly at the cap, not above it.
+        let kept = r.tabs.iter().find(|t| t.id == 1).unwrap().history.len();
+        assert_eq!(
+            kept, MAX_NAV_HISTORY,
+            "the stack must stop growing at the cap"
+        );
+        // The history was [home, n0 … n{total-1}] — total + 1 entries — and the trim
+        // dropped (total + 1 - MAX_NAV_HISTORY) of them from the FRONT, so the oldest
+        // survivor is the page at that label, not the home page it started from.
+        let oldest_kept = format!("https://n{}.test/", total - MAX_NAV_HISTORY);
+        // One step back from the current page must land on the page immediately before
+        // it. This is the assertion that `hist_index` was shifted with the drain: an
+        // index left pointing at the old offset would land somewhere else entirely.
+        assert!(
+            r.can_go_back(1),
+            "a capped stack is still walkable backwards"
+        );
+        assert_eq!(
+            r.go_back(1),
+            Some(format!("https://n{}.test/", total - 2)),
+            "one step back lands on the page immediately before the current one"
+        );
+        // And forward from there returns to the current page — the pair proves the
+        // index was translated, not merely clamped.
+        assert_eq!(
+            r.go_forward(1),
+            Some(format!("https://n{}.test/", total - 1)),
+            "and forward returns to the current page"
+        );
+        // The whole surviving run is still walkable, in order, right down to the cap.
+        let mut walked = vec![r.url_of(1).unwrap().to_string()];
+        while let Some(u) = r.go_back(1) {
+            walked.push(u);
+        }
+        assert_eq!(
+            walked.len(),
+            MAX_NAV_HISTORY,
+            "every kept entry stays reachable"
+        );
+        assert_eq!(
+            walked[walked.len() - 1],
+            oldest_kept,
+            "the walk ends on the OLDEST survivor, and home is gone"
+        );
+        assert!(
+            walked.iter().all(|u| u.starts_with("https://n")),
+            "no entry older than the cap survived the trim"
+        );
+    }
+
+    /// The cap must not change the shape of a stack that never reaches it — the
+    /// existing `nav_history_tracks_back_forward` covers the mechanics, this covers
+    /// the boundary from the other side: one navigation past the cap trims exactly
+    /// one entry and leaves the index pointing at the same URL.
+    #[test]
+    fn trimming_past_the_cap_keeps_the_index_on_the_same_entry() {
+        let mut r = reg();
+        for i in 0..MAX_NAV_HISTORY {
+            r.record_nav(1, &format!("https://n{i}.test/"));
+        }
+        assert_eq!(
+            r.tabs.iter().find(|t| t.id == 1).unwrap().hist_index,
+            MAX_NAV_HISTORY - 1
+        );
+        // Go back two steps, then navigate somewhere new: the forward stack is
+        // truncated and the index lands on the new last entry after the trim.
+        r.go_back(1);
+        r.go_back(1);
+        let before = r.url_of(1).unwrap().to_string();
+        r.record_nav(1, "https://fresh.test/");
+        let t = r.tabs.iter().find(|t| t.id == 1).unwrap();
+        assert_eq!(
+            t.hist_index,
+            t.history.len() - 1,
+            "the index is the current page"
+        );
+        assert_eq!(t.url, "https://fresh.test/");
+        // The URL that was current before the new navigation is still behind us.
+        assert_eq!(r.go_back(1), Some(before));
     }
 
     #[test]
