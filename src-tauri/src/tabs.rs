@@ -531,6 +531,13 @@ fn forget_closed_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
     // term is stored at all). The wrapper is called unconditionally on every
     // platform; only its body is cfg-gated. See `find::forget_query_on_close`.
     crate::find::forget_query_on_close(id);
+    // `zoom::ZoomStore` is the SEVENTH table keyed by tab, and the last one nothing
+    // ever removed an entry from. Unlike the others its cost is visible rather than
+    // invisible: `zoom::apply_to_tab` REPLAYS the stored factor at `nav::spawn_tab`,
+    // and `alloc_tab_id` only skips ids still in the registry, so a hand-edited
+    // `tabs.json` or a restored backup can hand back a reused id and the reusing tab
+    // would open zoomed to the dead tab's factor.
+    crate::zoom::forget_zoom_on_close(app, id);
 }
 
 pub fn close_tab(app: &AppHandle, id: u32) {
@@ -1184,6 +1191,16 @@ mod tests {
             // The find session is a per-tab table too: a reusing id must not
             // inherit the closed tab's search term.
             crate::find::note_query(4242, "needle");
+            // The per-tab zoom store is one too: a reusing id must not open
+            // zoomed to whatever the closed tab had. Primed through the real
+            // dispatcher, so this is the state a user actually produces.
+            crate::zoom::dispatch(
+                app,
+                "zoom.set",
+                &serde_json::json!({ "viewId": 4242, "factor": 2.0 }),
+            )
+            .expect("zoom.set is a zoom channel")
+            .expect("zoom.set answers Ok");
             assert!(
                 crate::nav::tab_has_content(4242),
                 "precondition: content flag set"
@@ -1210,6 +1227,15 @@ mod tests {
                 "",
                 "a closed id left in the find store makes the reusing tab report the \
                  dead tab's search term into its own FindBar"
+            );
+            assert_eq!(
+                crate::zoom::dispatch(app, "zoom.get", &serde_json::json!({ "viewId": 4242 }))
+                    .expect("zoom.get is a zoom channel")
+                    .expect("zoom.get answers Ok")["factor"]
+                    .as_f64(),
+                Some(1.0),
+                "a closed id left in the zoom store is replayed at spawn, so the \
+                 reusing tab opens zoomed to the dead tab's factor"
             );
         });
     }

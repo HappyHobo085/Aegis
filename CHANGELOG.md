@@ -18,6 +18,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   private tab still leave no trace, as on desktop. _Verified by the store-level tests and a
   release-build compile; the on-device behaviour is pending a device check._
 
+- **A new tab could inherit a closed tab's zoom level.** The core keeps each tab's zoom in a
+  per-tab store and replays it when a tab is spawned, but nothing removed the entry when a tab
+  closed — so a tab id handed back by a restored session backup opened at the dead tab's zoom
+  with nothing on screen saying why. Closing a tab now clears its zoom along with the rest of
+  its per-tab state. _Verified by store-level tests._
+
 - **The HTTPS-Only switch is no longer shown on Android, where it could not do
   anything.** A release build sets Android's `usesCleartextTraffic=false`, so it
   refuses plain HTTP outright and the setting cannot be turned off; the checkbox

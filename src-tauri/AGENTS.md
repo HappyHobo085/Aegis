@@ -633,6 +633,19 @@ ordinal+1)` → `window.__aegisFindState(…)` in the chrome (mirroring `pushNav
     `linux_layout::set_zoom_level_label`) purely so a `MockRuntime` test can reach them; the
     native half is unreachable there — no content webview exists on a mock — so what the tests
     pin is the STORE plus the `zoom.changed` event, never the applied WebKit/WebView2 factor.
+    **`ZoomStore` is torn down when a tab closes** (`forget_zoom_on_close(app, id)`, called from
+    `tabs::forget_closed_tab`, the ONE definition both close paths share). It is the SEVENTH
+    process-global tab-keyed table and the second one with no remover, after
+    `find::FIND_QUERIES` (fixed in the same audit). Its cost is VISIBLE rather than a slow
+    leak: `apply_to_tab` REPLAYS the stored factor at `nav::spawn_tab`, and `alloc_tab_id` only
+    skips ids still in the registry, so a hand-edited `tabs.json` or a restored backup that
+    hands back a reused id opened that tab at the dead tab's zoom with nothing on screen saying
+    why. Unlike `find::forget_query_on_close` the seam is NOT `cfg`-gated — `ZoomStore` is
+    MANAGED state, so the remover has to read it through the `AppHandle`. The WIRING half is
+    pinned by `tabs::tests::forgetting_a_closed_tab_clears_both_side_tables` (primed through the
+    real `zoom.set` dispatch, observed through `zoom.get`) and the BODY's half by
+    `zoom::tests::the_tab_close_hook_removes_the_recorded_zoom`; the split is deliberate, so
+    deleting the call must leave the latter green and turn the former red.
     **Session-only** (not persisted, not per-origin): the core is the source of truth so a
     discarded→reloaded tab keeps its zoom (see `apply_to_tab` called from `nav::spawn_tab`).
     Per-origin persistence is a forward-compatible v2 that won't change this IPC surface.

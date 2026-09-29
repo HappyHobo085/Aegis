@@ -15,6 +15,24 @@ pub const ZOOM_MAX: f64 = 3.0;
 #[derive(Default)]
 pub struct ZoomStore(pub Mutex<HashMap<u32, f64>>);
 
+/// Drop tab `id`'s stored zoom factor. Called from `tabs::forget_closed_tab`, the one
+/// cleanup that runs on every platform, so this per-tab table cannot hand a REUSED id
+/// another tab's zoom.
+///
+/// `ZoomStore` is the SEVENTH table keyed by tab id (after `nav::TABS_WITH_CONTENT`,
+/// `nav::TABS_LOADING`, `redirect_guard::NavActions`, `redirect_guard::Chains`,
+/// `adblock::PAGE_BLOCKED` and `find::FIND_QUERIES`), and the last one nothing ever
+/// removed an entry from. Its cost is visible rather than a slow leak: `apply_to_tab`
+/// REPLAYS the stored factor at `nav::spawn_tab`, and `alloc_tab_id` only skips ids
+/// still in the registry, so a hand-edited `tabs.json` or a restored backup can hand back
+/// a reused id and the reusing tab would open zoomed to the dead tab's factor — with no
+/// way for the user to see why.
+pub(crate) fn forget_zoom_on_close<R: Runtime>(app: &AppHandle<R>, id: u32) {
+    if let Some(s) = app.try_state::<ZoomStore>() {
+        s.0.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    }
+}
+
 /// Clamp to [ZOOM_MIN, ZOOM_MAX]; non-finite → 1.0. Pure (testable without Tauri).
 pub fn clamp(f: f64) -> f64 {
     if !f.is_finite() {
@@ -328,6 +346,43 @@ mod tests {
             zoom_call(app, "zoom.reset", &json!({ "viewId": 4242 }));
             zoom_call(app, "zoom.reset", &json!({ "viewId": 4242 }));
             assert_eq!(stored(app, 4242), Some(1.0));
+        });
+    }
+
+    /// The hook removes exactly ONE tab's factor, leaves another alone, is idempotent,
+    /// and tolerates an unknown id. The OTHER half — that `tabs::forget_closed_tab`, the
+    /// one definition both close paths share, actually calls it — is `tabs::tests`'
+    /// business, and the split is deliberate: deleting the call in `forget_closed_tab`
+    /// must leave THIS test green and turn that one red.
+    #[test]
+    fn the_tab_close_hook_removes_the_recorded_zoom() {
+        with_tmp_app(|app| {
+            zoom_call(app, "zoom.set", &json!({ "viewId": 5150, "factor": 2.0 }));
+            zoom_call(app, "zoom.set", &json!({ "viewId": 5151, "factor": 0.75 }));
+            assert_eq!(stored(app, 5150), Some(2.0), "precondition: 5150 is zoomed");
+            assert_eq!(
+                stored(app, 5151),
+                Some(0.75),
+                "precondition: 5151 is zoomed"
+            );
+
+            super::forget_zoom_on_close(app, 5150);
+
+            assert_eq!(
+                stored(app, 5150),
+                None,
+                "a closed id left in the zoom store is replayed at spawn, so the reusing \
+                 tab opens zoomed to the dead tab's factor"
+            );
+            assert_eq!(
+                stored(app, 5151),
+                Some(0.75),
+                "closing one tab must not clear another tab's zoom"
+            );
+            // Idempotent, and an id that was never zoomed is harmless.
+            super::forget_zoom_on_close(app, 5150);
+            super::forget_zoom_on_close(app, 999_999);
+            assert_eq!(stored(app, 5150), None);
         });
     }
 }
