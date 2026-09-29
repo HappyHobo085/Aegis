@@ -173,6 +173,32 @@ pub(crate) fn ffi_guard<T>(f: impl FnOnce() -> T) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
 }
 
+/// The app handle for the Android JNI entry points that need managed state.
+///
+/// Kotlin -> Rust is the only usable direction on Android (Rust cannot up-call into
+/// Kotlin), and most native entry points get away without an `AppHandle` because
+/// they are pure functions over their arguments. Two cannot: recording a page load
+/// (`history`) and recording a download (`downloads`) both need a store that only
+/// exists as managed state behind a handle. The handle therefore lives HERE, not in
+/// `history.rs`, so the second feature does not have to depend on the first.
+#[cfg(target_os = "android")]
+static ANDROID_APP: std::sync::OnceLock<tauri::AppHandle> = std::sync::OnceLock::new();
+
+/// Publish the app handle to the Android JNI entry points. Called once from `setup()`.
+/// Idempotent (a second call is ignored, not an error).
+#[cfg(target_os = "android")]
+pub(crate) fn set_android_app(app: &tauri::AppHandle) {
+    let _ = ANDROID_APP.set(app.clone());
+}
+
+/// The published handle, or `None` when a native call arrives before `setup()`
+/// finished. Dropping one event is strictly better than writing into a store that
+/// isn't managed yet.
+#[cfg(target_os = "android")]
+pub(crate) fn android_app() -> Option<&'static tauri::AppHandle> {
+    ANDROID_APP.get()
+}
+
 /// Single IPC entry point. The renderer calls `invoke('ipc', {channel, payload})`
 /// with a channel name (the strings in shared/types.ts `IPC`). `nav.*` and `view.*`
 /// are handled live against the content webview; the remaining data namespaces
@@ -717,13 +743,14 @@ pub fn run() {
         // Coalesce per-navigation history writes into a periodic background flush (the
         // live history lives in an in-memory cache; see history.rs "Write batching").
         history::start_flush(app.handle());
-        // Android only: publish the handle the `NativeHistory.recordVisit` JNI entry
-        // point needs. On desktop the visit is recorded from wry's `on_page_load`
-        // (nav.rs); Android's content view is a native Kotlin WebView, so Kotlin has to
-        // report the load down to us, and recording needs managed state. Must come after
-        // every `.manage()` above — see the ordering note on `sync::start`.
+        // Android only: publish the handle the JNI entry points need. On desktop a page
+        // load is recorded from wry's `on_page_load` (nav.rs) and a download from the
+        // content webview's on_download handler; Android's content view is a native
+        // Kotlin WebView, so Kotlin has to report both down to us, and both need
+        // managed state. Must come after every `.manage()` above — see the ordering note
+        // on `sync::start`.
         #[cfg(target_os = "android")]
-        history::set_android_app(app.handle());
+        set_android_app(app.handle());
         // Same batching for downloads (per-event full-file fsync → periodic flush).
         downloads::start_flush(app.handle());
 

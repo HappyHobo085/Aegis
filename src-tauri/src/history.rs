@@ -249,15 +249,10 @@ pub fn record_page_finished<R: Runtime>(app: &AppHandle<R>, tab_id: u32, url: &s
 /// every other native entry point gets away without an `AppHandle` because it is a
 /// pure function over its arguments. Recording a visit cannot: the `HistoryStore`
 /// and the tab registry only exist as managed state behind a handle.
-#[cfg(target_os = "android")]
-static ANDROID_APP: std::sync::OnceLock<AppHandle> = std::sync::OnceLock::new();
-
-/// Publish the app handle to the Android JNI entry point. Called once from `lib.rs`
-/// setup. Idempotent (a second call is ignored, not an error).
-#[cfg(target_os = "android")]
-pub fn set_android_app(app: &AppHandle) {
-    let _ = ANDROID_APP.set(app.clone());
-}
+/// The handle lives in `lib.rs` now (`set_android_app`/`android_app`), not here:
+/// `downloads`' Android bridge needs the same handle, and this module's own doc
+/// already predicted it — "expect the next native feature to want one too". Two
+/// features that both need it must not make one of them depend on the other.
 
 /// JNI bridge for Android's `NativeHistory.recordVisit`, called from each content
 /// WebView's `onPageFinished`. Same pattern (and same `ffi_guard` obligation) as
@@ -287,7 +282,7 @@ pub extern "system" fn Java_com_aegis_browser_NativeHistory_recordVisit(
     let title: String = env.get_string(&title).map(|s| s.into()).unwrap_or_default();
     // A page can finish before setup publishes the handle. Dropping one visit is
     // strictly better than writing into a store that isn't managed yet.
-    let Some(app) = ANDROID_APP.get() else {
+    let Some(app) = crate::android_app() else {
         return;
     };
     if crate::ffi_guard(|| record_page_finished(app, tab_id, &url, &title)).is_none() {

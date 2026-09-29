@@ -242,7 +242,35 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
     would match rows the renderer never showed (and `data.import` really can
     plant `about:`/`data:` URLs in the store).  - `downloads.rs` — **unit-tested via `test_support::with_tmp_app`:** private-tab
     skip, `on_requested` filename derivation + state, `on_finished` complete/
-    interrupted, `remove` tombstone, `clear` keeps in-progress (6 tests).
+    interrupted, `remove` tombstone, `clear` keeps in-progress, plus the four
+    Android-recording tests below (14 tests).
+    **Android records downloads too, through the SAME rows — this was the
+    `#[cfg_attr(target_os = "android", allow(dead_code))]` tell (gotcha 24).**
+    `should_record_download` and `on_finished` carried that attribute, i.e. the
+    crate claimed the feature did not exist on Android while the mobile Downloads
+    UI shipped and stayed permanently empty. Android's content area is a native
+    `WebView`, so nothing in the core can ever see a `DownloadListener`; Kotlin is
+    the only side that gets it, and Rust cannot up-call into Kotlin.
+    `NativeDownloads.recordStart(url, destination, isPrivate)` →
+    `record_download_start` pushes the `progressing` row; `recordFinish(url,
+success)` → `on_finished`. **The destination must be PASSED IN, not derived**:
+    `on_requested` (the desktop wry path) derives the filename from the URL and
+    OVERWRITES the caller's destination, whereas Android's
+    `DownloadListener.onDownloadStart` has no destination parameter at all, so the
+    Kotlin listener chooses one under `getExternalFilesDir("downloads")` — a REAL
+    path, because `open`/`showInFolder`/`trusted_download_path` need one and a
+    `DownloadManager` `content://` URI is not one. So `on_requested`'s row-push body
+    was extracted into `push_row` (returns whether it changed; the CALLER emits
+    `downloads.changed`, so one row never yields two events) and
+    `record_download_start` is the Android-only entry point.
+    **The JNI exports take `isPrivate` from Kotlin but the Rust side still resolves
+    privateness from the tab registry**, exactly as `record_page_finished` does for
+    history — see `a_download_started_in_a_private_tab_records_nothing`.
+    The shared app handle moved OUT of `history.rs` into `lib.rs`
+    (`set_android_app` / `android_app()`) so a second native feature does not have
+    to depend on the first. **There is NO Kotlin test source set, so the listener,
+    the `DownloadManager` enqueue and the `ACTION_DOWNLOAD_COMPLETE` receiver are
+    COMPILE-VERIFIED ONLY (Gradle) and the on-device behaviour is PENDING.**
   - `subs.rs` (filter subscriptions + fetch) — also **seeds the built-in default
     subscriptions** (EasyList, EasyPrivacy, Peter Lowe's) on first run via
     `seed_defaults` (called from `lib.rs` setup): idempotent + tombstone-aware
@@ -1383,7 +1411,9 @@ Consequences worth knowing before "fixing" this:
 Hand-written Kotlin under `app/src/main/java/com/aegis/browser/`:
 `MainActivity.kt` (native content WebView; `shouldInterceptRequest` → ad-block +
 malware; `window.AegisAndroid` JS bridge), `NativeAdblock.kt` + `NativeSafety.kt` +
-`NativeHistory.kt` (JNI into the Rust `libapp_lib.so`).
+`NativeHistory.kt` (JNI into the Rust `libapp_lib.so`), and `NativeDownloads.kt`
+(added 2026-09-29 — the Android `DownloadListener`; see the `downloads.rs` bullet
+for why the destination has to be passed in rather than derived).
 `AndroidManifest.xml` grants only `INTERNET`.
 
 **⚠ A `--debug` build is a DIFFERENT APP, not an upgrade — and `adb install` will not

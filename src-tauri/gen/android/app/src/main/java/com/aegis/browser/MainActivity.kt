@@ -1,5 +1,10 @@
 package com.aegis.browser
 
+import android.app.DownloadManager
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.net.Uri
@@ -13,6 +18,7 @@ import android.view.ViewGroup
 import android.view.WindowManager
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
+import android.webkit.URLUtil
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -29,6 +35,7 @@ import androidx.webkit.ProxyController
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import java.io.ByteArrayInputStream
+import java.io.File
 import org.json.JSONObject
 
 /**
@@ -176,6 +183,11 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
       }
     }
+    // One receiver for the whole Activity rather than one per download: it recovers the
+    // URL from the DownloadManager row itself (see settleDownload), so it needs no map to
+    // keep in sync, it cannot leak a registration per file, and a transfer that completes
+    // after a process restart still settles its row.
+    registerDownloadReceiver()
   }
 
   // --- Lifecycle ---------------------------------------------------------------------
@@ -240,6 +252,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       pendingNavJs.clear()
       pendingBlockedJs.clear()
     }
+    unregisterDownloadReceiver()
     super.onDestroy()
   }
 
@@ -747,6 +760,9 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         }
       }
     }
+    // Downloads are per-tab: the listener records the row with THIS tab's privateness, so
+    // a private tab's download is not listed the way its history and its cache are not.
+    wireDownloadListener(wv, id, isPrivate)
     val lp = FrameLayout.LayoutParams(
       FrameLayout.LayoutParams.MATCH_PARENT,
       FrameLayout.LayoutParams.MATCH_PARENT,
@@ -915,6 +931,125 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       )
     } catch (t: Throwable) {
       Log.w("AegisProxy", "boot proxy apply failed", t)
+    }
+  }
+
+  // --- Downloads -----------------------------------------------------------------
+  //
+  // Before this, the core's downloads::on_requested / on_finished had NO caller on Android at
+  // all — they carried #[cfg_attr(target_os = "android", allow(dead_code))], which per gotcha 24
+  // in src-tauri/AGENTS.md is a claim that the feature does not exist on the platform rather
+  // than a lint exemption. The Downloads sheet rendered, and was permanently empty. Kotlin is
+  // the only side that can see the download, and it drives the core down this path.
+
+  /** Where downloads land. `getExternalFilesDir` needs NO storage permission, is app-private,
+   *  and yields a REAL filesystem path — which is what the core's `downloads::open` /
+   *  `showInFolder` / `trusted_download_path` checks need; a `DownloadManager` `content://` URI
+   *  is not one, and `setDestinationInExternalPublicDir` would need WRITE_EXTERNAL_STORAGE. */
+  private fun downloadDir(): File {
+    val base = getExternalFilesDir("downloads") ?: filesDir
+    val dir = File(base, "downloads")
+    if (!dir.isDirectory) dir.mkdirs()
+    return dir
+  }
+
+  /** `URLUtil.guessFileName` derives its answer from a page-controlled Content-Disposition, so
+   *  it can come back with a path separator in it. Flatten it, and never return an empty name
+   *  (`DownloadManager` rejects one). */
+  private fun safeDownloadName(name: String, url: String): String {
+    val flat = name.replace('/', '_').replace('\\', '_').trim()
+    return flat.ifEmpty { "download-" + url.hashCode().toString(16) }
+  }
+
+  /** Per-tab download wiring, called from `createTabWebView` so it closes over the tab's id and
+   *  privateness. The listener records the row through the core FIRST (so the sheet shows the
+   *  item even if the transfer then fails), enqueues the transfer, and settles the row from the
+   *  `ACTION_DOWNLOAD_COMPLETE` broadcast — `DownloadListener` has no completion callback, so
+   *  that broadcast is the only signal there is. Every step is best-effort with a logcat line:
+   *  a download must never take the page down with it. */
+  private fun wireDownloadListener(wv: WebView, id: Int, isPrivate: Boolean) {
+    wv.setDownloadListener { url, userAgent, disposition, mimeType, _ ->
+      try {
+        if (!url.startsWith("http")) {
+          Log.w("AegisDownload", "ignoring non-http download $url")
+          return@setDownloadListener
+        }
+        val name = safeDownloadName(URLUtil.guessFileName(url, disposition, mimeType), url)
+        val file = File(downloadDir(), name)
+        val req = DownloadManager.Request(Uri.parse(url))
+        CookieManager.getInstance().getCookie(url)?.let { req.addRequestHeader("Cookie", it) }
+        // `CHROME_UA`, not `userAgentString`: that is a `WebSettings` property, and this
+        // listener is not the tab's creation path. The listener hands us the page's own UA,
+        // and the constant is the honest fallback when it hands us null.
+        req.addRequestHeader("User-Agent", userAgent ?: CHROME_UA)
+        if (!mimeType.isNullOrEmpty()) req.setMimeType(mimeType)
+        req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+        // Must match downloadDir()'s subdirectory: setDestinationInExternalFilesDir appends the
+        // subdir to getExternalFilesDir, so passing "downloads" here is what puts the file where
+        // the row's savePath says it is.
+        req.setDestinationInExternalFilesDir(this, "downloads", name)
+        val dm = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
+        if (dm == null) {
+          Log.w("AegisDownload", "no DownloadManager for $url")
+          return@setDownloadListener
+        }
+        dm.enqueue(req)
+        NativeDownloads.recordStart(url, file.absolutePath, isPrivate)
+      } catch (t: Throwable) {
+        Log.w("AegisDownload", "download start for $url failed", t)
+      }
+    }
+  }
+
+  private fun registerDownloadReceiver() {
+    try {
+      val filter = IntentFilter(DownloadManager.ACTION_DOWNLOAD_COMPLETE)
+      if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+        registerReceiver(downloadReceiver, filter, Context.RECEIVER_EXPORTED)
+      } else {
+        @Suppress("UnspecifiedRegisterReceiverFlag")
+        registerReceiver(downloadReceiver, filter)
+      }
+    } catch (t: Throwable) {
+      Log.w("AegisDownload", "could not register the download receiver", t)
+    }
+  }
+
+  private fun unregisterDownloadReceiver() {
+    try {
+      unregisterReceiver(downloadReceiver)
+    } catch (t: Throwable) {
+      // Not registered (onCreate failed, or a second onDestroy) — nothing to undo.
+    }
+  }
+
+  /** Settle one finished transfer. The URL comes from the DownloadManager row rather than from
+   *  a map this Activity kept, so a download that completed after the process restarted still
+   *  reaches the core. `COLUMN_LOCAL_URI` is read only to log where it landed; the core's
+   *  `savePath` is the path we named at start time, and the file is written to exactly that. */
+  private fun settleDownload(downloadId: Long) {
+    try {
+      val dm = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager ?: return
+      val q = DownloadManager.Query().setFilterById(downloadId)
+      dm.query(q)?.use { c ->
+        if (!c.moveToFirst()) return
+        val url = c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_URI)) ?: return
+        val status = c.getInt(c.getColumnIndexOrThrow(DownloadManager.COLUMN_STATUS))
+        val ok = status == DownloadManager.STATUS_SUCCESSFUL
+        val local = c.getString(c.getColumnIndexOrThrow(DownloadManager.COLUMN_LOCAL_URI))
+        Log.i("AegisDownload", "download $url finished ok=$ok at $local")
+        NativeDownloads.recordFinish(url, ok)
+      }
+    } catch (t: Throwable) {
+      Log.w("AegisDownload", "settling download $downloadId failed", t)
+    }
+  }
+
+  private val downloadReceiver = object : BroadcastReceiver() {
+    override fun onReceive(context: Context?, intent: Intent?) {
+      val id = intent?.getLongExtra(DownloadManager.EXTRA_DOWNLOAD_ID, -1L) ?: return
+      if (id < 0) return
+      settleDownload(id)
     }
   }
 

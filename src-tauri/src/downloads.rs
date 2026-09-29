@@ -149,7 +149,6 @@ fn dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
 /// Private tabs skip the record so the download leaves no persistent trace —
 /// but the file itself is always saved (the user explicitly asked for it),
 /// matching Chrome/Firefox incognito behaviour.
-#[cfg_attr(target_os = "android", allow(dead_code))]
 pub fn should_record_download(is_private: bool) -> bool {
     !is_private
 }
@@ -174,16 +173,34 @@ pub fn on_requested<R: Runtime>(
     let save = dir(app).join(&filename);
     *destination = save.clone();
 
+    if push_row(app, url, &filename, &save.to_string_lossy(), private) {
+        crate::emit_event(app, "downloads.changed", Value::Null);
+    }
+}
+
+/// Push a `progressing` downloads row. Shared by the desktop `on_requested` and by
+/// Android's `record_download_start`, which is why the two entry points cannot
+/// drift: same id scheme, same `MAX_DOWNLOAD_ENTRIES` drain, same `stamp_new`.
+/// Returns whether the store changed; the CALLER emits `downloads.changed`, so one
+/// row never produces two events.
+fn push_row<R: Runtime>(
+    app: &AppHandle<R>,
+    url: &str,
+    filename: &str,
+    save_path: &str,
+    private: bool,
+) -> bool {
     if !should_record_download(private) {
         // The file is saved normally; we just skip writing a downloads.json row so the
         // download leaves no persistent trace.
-        return;
+        return false;
     }
 
-    let save_path = save.to_string_lossy().to_string();
     let url = url.to_string();
+    let filename = filename.to_string();
+    let save_path = save_path.to_string();
     let now = jsonstore::now_ms();
-    let changed = mutate(app, false, |items| {
+    mutate(app, false, |items| {
         let id = jsonstore::next_id(items);
         let mut item = json!({
             "id": id,
@@ -206,8 +223,33 @@ pub fn on_requested<R: Runtime>(
         }
 
         true
-    });
-    if changed {
+    })
+}
+
+/// Android's half of a download start. Kotlin's `DownloadListener.onDownloadStart`
+/// receives a URL and NOTHING about a destination — the app picks the path and hands
+/// it to `DownloadManager` — so this takes the caller's path verbatim instead of
+/// deriving one. That is what makes the row's `savePath` the same real filesystem
+/// path `openFile`/`showInFolder` later check: a `content://` URI would not be one,
+/// and those two channels are why it has to be a path.
+///
+/// `private` is the CALLER's claim, not this function's — it comes from the tab the
+/// download started in, and a caller-supplied flag is the only way this can be
+/// wrong, so the Kotlin side is documented to pass the real per-tab value.
+#[cfg_attr(not(target_os = "android"), allow(dead_code))]
+pub fn record_download_start<R: Runtime>(
+    app: &AppHandle<R>,
+    url: &str,
+    destination: &str,
+    private: bool,
+) {
+    let filename = destination
+        .rsplit('/')
+        .next()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("download")
+        .to_string();
+    if push_row(app, url, &filename, destination, private) {
         crate::emit_event(app, "downloads.changed", Value::Null);
     }
 }
@@ -219,7 +261,7 @@ pub fn on_requested<R: Runtime>(
 /// complete while the first stayed `progressing` forever — and since `openFile`/`showInFolder`/
 /// `remove` are all keyed on the row's id, the wrong file gets opened. The event always supplies
 /// the url, so pass it; `None` is the last-resort fallback to the old newest-progressing scan.
-#[cfg_attr(target_os = "android", allow(dead_code))]
+/// Live on Android too, via `recordDownloadFinish`.
 pub fn on_finished<R: Runtime>(app: &AppHandle<R>, success: bool, url: Option<&str>) {
     let url = url.filter(|u| !u.is_empty());
     let changed = mutate(app, false, |items| {
@@ -256,6 +298,71 @@ fn finish_row<R: Runtime>(it: &mut Value, success: bool, app: &AppHandle<R>) {
         );
     }
     jsonstore::touch(it, app);
+}
+
+/// JNI bridge for Android's `NativeDownloads.recordStart`, called from each content
+/// WebView's `DownloadListener`. Same pattern (and same `ffi_guard` obligation) as
+/// `history.rs`'s `recordVisit`; lives in libapp_lib.so.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+// `#[no_mangle]` is itself linted as `unsafe_code`: overriding the linker's symbol
+// name means two libraries could export the same symbol, which the linker leaves
+// undefined. That is inherent to every JNI entry point (Kotlin resolves the symbol
+// by name), so it is allowed here explicitly rather than by the module scope —
+// `deny(unsafe_code)` in lib.rs would otherwise break every Android build.
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeDownloads_recordStart(
+    mut env: jni::JNIEnv,
+    _this: jni::objects::JObject,
+    url: jni::objects::JString,
+    destination: jni::objects::JString,
+    is_private: jni::sys::jboolean,
+) {
+    // Read the JNI args into owned Strings FIRST: `JNIEnv` is `!UnwindSafe`, so it
+    // must stay outside the `ffi_guard` closure (see lib.rs::ffi_guard).
+    let url: String = env.get_string(&url).map(|s| s.into()).unwrap_or_default();
+    let destination: String = env
+        .get_string(&destination)
+        .map(|s| s.into())
+        .unwrap_or_default();
+    // An empty url or destination is malformed. The row's whole purpose is to name the
+    // real path `openFile`/`showInFolder` will be handed, so there is nothing to record.
+    if url.is_empty() || destination.is_empty() {
+        return;
+    }
+    let Some(app) = crate::android_app() else {
+        return;
+    };
+    if crate::ffi_guard(|| record_download_start(app, &url, &destination, is_private != 0))
+        .is_none()
+    {
+        eprintln!("[aegis-downloads] recordStart panicked for {url}; download not recorded");
+    }
+}
+
+/// JNI bridge for Android's `NativeDownloads.recordFinish`, called from the
+/// `ACTION_DOWNLOAD_COMPLETE` receiver. Settles the row by URL, exactly like the
+/// desktop `on_download` event path — see `on_finished` for why matching on the URL
+/// rather than "whichever row is newest" is load-bearing when two transfers overlap.
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeDownloads_recordFinish(
+    mut env: jni::JNIEnv,
+    _this: jni::objects::JObject,
+    url: jni::objects::JString,
+    success: jni::sys::jboolean,
+) {
+    let url: String = env.get_string(&url).map(|s| s.into()).unwrap_or_default();
+    if url.is_empty() {
+        return;
+    }
+    let Some(app) = crate::android_app() else {
+        return;
+    };
+    if crate::ffi_guard(|| on_finished(app, success != 0, Some(&url))).is_none() {
+        eprintln!("[aegis-downloads] recordFinish panicked for {url}; row left progressing");
+    }
 }
 
 pub fn dispatch<R: Runtime>(
@@ -367,6 +474,8 @@ fn open(target: &str) {
 mod tests {
     use super::*;
     use crate::test_support::with_tmp_app;
+    use std::sync::mpsc;
+    use tauri::Listener;
 
     /// Live rows from the cache (the source of truth) — NOT a fresh disk read, since writes
     /// now batch in memory and only flush periodically.
@@ -566,6 +675,119 @@ mod tests {
             assert!(
                 live_rows(app).is_empty(),
                 "a late finish event must not resurrect a removed download"
+            );
+        });
+    }
+
+    // ---- the Android bridge (record_download_start), the half no desktop path reaches ----
+
+    /// The row's `savePath` is the CALLER's path, verbatim. Android's
+    /// `DownloadListener.onDownloadStart` hands over a URL and nothing about a destination —
+    /// the app picks the path and passes it to `DownloadManager` — so if this entry point
+    /// derived one from the URL (which is what the desktop `on_requested` does) the row
+    /// would name a file that is never written, and `openFile`/`showInFolder` would resolve
+    /// a path that does not exist.
+    #[test]
+    fn a_android_download_records_the_path_the_caller_chose() {
+        with_tmp_app(|app| {
+            record_download_start(
+                app,
+                "https://files.test/dl/9f2c/report.pdf",
+                "/storage/emulated/0/Android/data/com.aegis.browser/files/downloads/report.pdf",
+                false,
+            );
+            let rows = live_rows(app);
+            assert_eq!(rows.len(), 1, "one row per download start");
+            assert_eq!(
+                rows[0].get("savePath").and_then(Value::as_str),
+                Some(
+                    "/storage/emulated/0/Android/data/com.aegis.browser/files/downloads/report.pdf"
+                ),
+                "savePath must be the caller's real path, not one derived from the URL"
+            );
+            // The filename is the path's last segment, so the downloads list shows a name
+            // rather than a full path.
+            assert_eq!(
+                rows[0].get("filename").and_then(Value::as_str),
+                Some("report.pdf")
+            );
+            assert_eq!(
+                rows[0].get("state").and_then(Value::as_str),
+                Some("progressing")
+            );
+        });
+    }
+
+    /// The same privacy rule the desktop path has always had, on the path that is actually
+    /// used on Android: a download in a private tab saves the file (the user asked for it)
+    /// but leaves no row. `should_record_download` was `#[cfg_attr(android,
+    /// allow(dead_code))]`, i.e. claimed dead on Android; reaching it again is the point.
+    #[test]
+    fn a_download_started_in_a_private_tab_records_nothing() {
+        with_tmp_app(|app| {
+            record_download_start(
+                app,
+                "https://files.test/secret.pdf",
+                "/tmp/secret.pdf",
+                true,
+            );
+            assert!(
+                live_rows(app).is_empty(),
+                "a private download must leave no persistent trace in the store"
+            );
+        });
+    }
+
+    /// Two downloads in flight, then the first finishes. The settled row must be the one
+    /// whose URL matches — the mobile Downloads list shows a per-row state, so marking the
+    /// wrong one tells the user a file finished that has not (and vice versa). This is the
+    /// same property `on_finished`'s doc calls load-bearing, reached through the Android
+    /// entry point rather than wry's `on_download` event.
+    #[test]
+    fn finishing_one_android_download_does_not_settle_the_other() {
+        with_tmp_app(|app| {
+            record_download_start(app, "https://files.test/a.bin", "/tmp/a.bin", false);
+            record_download_start(app, "https://files.test/b.bin", "/tmp/b.bin", false);
+            on_finished(app, true, Some("https://files.test/a.bin"));
+
+            let rows = live_rows(app);
+            assert_eq!(rows.len(), 2);
+            assert_eq!(
+                rows[0].get("state").and_then(Value::as_str),
+                Some("completed"),
+                "the url that finished must settle its own row"
+            );
+            assert_eq!(
+                rows[1].get("state").and_then(Value::as_str),
+                Some("progressing"),
+                "the still-running download must not be marked complete"
+            );
+        });
+    }
+
+    /// Exactly one event per recorded row. The row push and the event were split when the
+    /// Android entry point was added (both call the shared `push_row`), so the emitter has
+    /// to stay with the CALLER: emitting inside `push_row` as well would double every
+    /// desktop event and double every Android one.
+    #[test]
+    fn a_android_download_start_tells_the_chrome_exactly_once() {
+        with_tmp_app(|app| {
+            let (tx, rx) = mpsc::channel();
+            let _id = app.listen("downloads:changed", move |e| {
+                let _ = tx.send(serde_json::from_str::<Value>(e.payload()).unwrap_or(Value::Null));
+            });
+
+            record_download_start(app, "https://files.test/one.pdf", "/tmp/one.pdf", false);
+            assert!(
+                rx.try_recv().is_ok(),
+                "recording a row must tell the chrome so the sheet refreshes"
+            );
+
+            // A private tab records nothing, so it must not emit either.
+            record_download_start(app, "https://files.test/two.pdf", "/tmp/two.pdf", true);
+            assert!(
+                rx.try_recv().is_err(),
+                "a download that was NOT recorded must not produce an event"
             );
         });
     }

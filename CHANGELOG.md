@@ -9,6 +9,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The Downloads list stayed empty on Android.** The mobile Downloads sheet shipped with
+  no way to fill it: Android's content area is a native `WebView`, so the core never sees
+  a `DownloadListener` and nothing recorded a row. Downloads now go through the same store
+  as on desktop — the listener records the row, the platform transfer runs, and a
+  completion broadcast settles it — so a download started on a phone appears in the sheet,
+  is marked complete or interrupted, and can be opened from it. Downloads started in a
+  private tab still leave no trace, as on desktop. _Verified by the store-level tests and a
+  release-build compile; the on-device behaviour is pending a device check._
+
 - **The HTTPS-Only switch is no longer shown on Android, where it could not do
   anything.** A release build sets Android's `usesCleartextTraffic=false`, so it
   refuses plain HTTP outright and the setting cannot be turned off; the checkbox
