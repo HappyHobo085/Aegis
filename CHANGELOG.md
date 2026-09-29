@@ -9,6 +9,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Four tests that asserted nothing now assert what they claim.** The find-in-page, fingerprint, workspace and WebRTC-exempt teardown checks were passing without checking anything: two of them discarded the unsubscribe they were supposed to watch, one asserted a React warning that React 18 no longer emits, and one matched an error message so loosely that a different message would have satisfied it. Each now checks the behaviour it names — the fingerprint test also gains its first check that a peer's merged allowlist is picked up, and the WebRTC one now enforces that the exempt list stays local-only.
+
 - **Find-in-page on macOS can no longer be hijacked by the page you are on.** The shim runs in the page's own JavaScript world, and its idempotence guard used to yield to any `__aegisFind` already defined there — so a site that declared that name first received your search terms and could report any match count it liked. The guard now tests for Aegis's own function and overwrites anything else.
 - **The chrome's Tauri permissions are no longer wider than it uses.** The capability file
   granted `core:default`, which expands to 92 individual permissions across the path,

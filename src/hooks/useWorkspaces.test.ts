@@ -11,6 +11,10 @@ const setColor = vi.fn();
 const remove = vi.fn();
 const reorder = vi.fn();
 const onState = vi.fn();
+// The unsubscribe the hook's teardown effect returns. Captured rather than discarded so a
+// test can assert teardown actually happens — a listener that outlives the component keeps
+// pushing workspace state into a dead fiber.
+const unsub = vi.fn();
 
 vi.mock('../lib/ipcClient', () => ({
   aegis: {
@@ -57,7 +61,7 @@ beforeEach(() => {
   setColor.mockResolvedValue({ ...work2, color: 'red' });
   remove.mockResolvedValue({ tabs: [], activeId: 1 });
   reorder.mockResolvedValue([work2, defaultWorkspace]);
-  onState.mockReturnValue(() => {});
+  onState.mockReturnValue(unsub);
 });
 
 describe('useWorkspaces', () => {
@@ -167,10 +171,20 @@ describe('useWorkspaces', () => {
     expect(result.current.activeWorkspaceId).toBe('ws-2');
   });
 
-  it('cleans up on unmount without error', async () => {
+  it('unsubscribes from workspace events on unmount', async () => {
     const { unmount } = renderHook(() => useWorkspaces());
-    await waitFor(() => expect(list).toHaveBeenCalled());
+    await waitFor(() => expect(onState).toHaveBeenCalledTimes(1));
+    // The subscription exists while mounted, and its teardown has not run yet.
+    expect(unsub).not.toHaveBeenCalled();
+
     unmount();
-    // No assertion needed — just verify no crash / stale setState after unmount.
+
+    expect(unsub).toHaveBeenCalledTimes(1);
+  });
+
+  it('subscribes with a callback, not a no-op', async () => {
+    renderHook(() => useWorkspaces());
+    await waitFor(() => expect(onState).toHaveBeenCalled());
+    expect(onState).toHaveBeenCalledWith(expect.any(Function));
   });
 });

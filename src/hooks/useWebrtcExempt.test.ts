@@ -11,6 +11,16 @@ const getExemptHosts = vi.fn();
 const toggleExempt = vi.fn();
 const removeExempt = vi.fn();
 const clearExempt = vi.fn();
+// The webrtc exempt list is LOCAL-ONLY (see the hook's doc comment), so the hook must not
+// subscribe to the sync bus. Mocking `onSyncChange` is what makes that absence ASSERTABLE
+// rather than merely documented — without this spy nothing could tell a deliberately
+// unsubscribed hook from one that simply forgot.
+// A rest parameter, not a fixed one — see the note in useFingerprint.test.ts: a fixed
+// signature makes the mock factory's spread a TS2556 compile error.
+const onSyncChange = vi.fn((..._a: unknown[]) => () => {});
+vi.mock('../lib/syncBus', () => ({
+  onSyncChange: (...a: unknown[]) => onSyncChange(...a),
+}));
 vi.mock('../lib/ipcClient', () => ({
   aegis: {
     webrtc: {
@@ -84,22 +94,42 @@ describe('useWebrtcExempt', () => {
     expect(result.current.clearExempt).toBe(first.clear);
   });
 
-  it('does not set state after unmount', async () => {
+  it('subscribes to nothing, because the exempt list is local-only', async () => {
+    // The absence IS the feature: a peer merge must not be able to change this list, so
+    // the hook deliberately has no `onSyncChange` subscription. This replaces an older
+    // test that spied on `console.error` and asserted no warning was logged — React 18
+    // REMOVED the post-unmount setState warning, so that assertion could never fail and
+    // reported coverage it was not providing.
+    renderHook(() => useWebrtcExempt());
+    await waitFor(() => expect(getExemptHosts).toHaveBeenCalled());
+    expect(onSyncChange).not.toHaveBeenCalled();
+  });
+
+  it('swallows a seed that resolves after unmount', async () => {
     // The seed resolves through a promise, so an unmount can land between the request and
-    // its reply. The `active` flag is the guard; without it React warns about a
-    // state-update-after-unmount and writes to a dead fiber.
+    // its reply; the `active` flag is the guard.
+    //
+    // HONEST LIMIT: that guard's EFFECT is not observable from a test. React 18 removed
+    // the warning it used to raise, and there is no public way to see that `setState` was
+    // skipped. So this asserts what IS observable — that the late reply is absorbed
+    // without throwing, surfacing an unhandled rejection, or leaking into the next test —
+    // and the `active` flag itself remains untested defence-in-depth.
     let resolveSeed: (s: WebrtcExemptState) => void = () => {};
     getExemptHosts.mockReturnValue(
       new Promise<WebrtcExemptState>((r) => {
         resolveSeed = r;
       }),
     );
-    const warn = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onRejection = vi.fn();
+    process.on('unhandledRejection', onRejection);
+
     const { unmount } = renderHook(() => useWebrtcExempt());
     unmount();
     resolveSeed(state(['late.test']));
     await new Promise((r) => setTimeout(r, 0));
-    expect(warn).not.toHaveBeenCalled();
-    warn.mockRestore();
+
+    expect(onRejection).not.toHaveBeenCalled();
+    expect(getExemptHosts).toHaveBeenCalledTimes(1);
+    process.off('unhandledRejection', onRejection);
   });
 });

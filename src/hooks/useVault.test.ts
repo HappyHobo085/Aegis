@@ -139,14 +139,19 @@ describe('useVault', () => {
   });
 
   it('unlock(wrong) surfaces the error and state stays locked', async () => {
-    unlock.mockRejectedValue(new Error('wrong password'));
+    // The REAL message from `vault.rs` (both the decrypt failure and the verifier
+    // mismatch). Mocking a shorter string here would have let this test pass against a
+    // product that said something else entirely, because `toThrow` matches on a SUBSTRING.
+    unlock.mockRejectedValue(new Error('wrong master password'));
     const { result } = renderHook(() => useVault());
     await waitFor(() => expect(getState).toHaveBeenCalled());
     await expect(
       act(async () => {
         await result.current.unlock('wrongpassword');
       }),
-    ).rejects.toThrow('wrong password');
+      // Anchored and exact, so the assertion pins the string a user actually sees and
+      // cannot be satisfied by any message merely CONTAINING `wrong password`.
+    ).rejects.toThrow(/^wrong master password$/);
     // state remains locked (getState returned the initial vs())
     expect(result.current.state.unlocked).toBe(false);
   });
