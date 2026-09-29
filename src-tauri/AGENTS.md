@@ -1580,16 +1580,16 @@ strictly higher):
 
 | Metric               | Measured (floor)     | Gap  |
 | -------------------- | -------------------- | ---- |
-| lines                | 17675/20685 = 85.45% | 3010 |
-| statements (regions) | 30713/36039 = 85.22% | 5326 |
-| functions            | 2116/2638 = 80.21%   | 522  |
+| lines                | 17636/20685 = 85.26% | 3049 |
+| statements (regions) | 30641/36039 = 85.02% | 5398 |
+| functions            | 2112/2638 = 80.06%   | 526  |
 
 The report holds **45** files, all of which compile on Linux. **7 further modules are
 `cfg`-gated out of a Linux build** and are listed in the baseline as inert here rather than
 excluded from the report (`adblock_win`, `find_win`, `nav_policy_win`, `nav_url_win`,
 `nav_url_mac`, `zoom_win`, `zoom_mac`). One report entry — `linux_layout.rs` — compiles
 but is excluded as unexecutable in a headless session, so **44 files are in the gate**.
-Before the exclusion list the same run reads 83.15% lines / 82.86% regions / 78.11%
+Before the exclusion list the same run reads 82.97% lines / 82.67% regions / 77.96%
 functions — the difference is entirely `linux_layout.rs` (88/678 lines). With a keyring
 those figures are ~1pp higher, which is exactly why the floor is the committed number.
 
@@ -1603,18 +1603,31 @@ one lucky run is a threshold the next run may miss, which is the same class of b
 keyring floor itself, one level down. **Regenerate from the lowest run, and re-run the
 ratchet against several reports before committing a baseline.**
 
-The two halves of that spread had **different causes, and only one of them is still live.**
+The two halves of that spread had **different causes, and both are now settled differently.**
 `adblock_engine.rs` was the test-only warm-up helper *busy-looping* on a bare `bool` it could
 not tell from a timeout, so its covered lines depended on timing; asking for a verdict
-instead (see the `verdict_of` note above) made it deterministic, and **three consecutive runs
-on the fixed tree are now byte-identical** (17763 / 30830 / 2130 pre-exclusion, with
-`sync.rs` at 836 and `adblock_engine.rs` at 349 in all three). The `sync.rs` half is the
-**kernel keyring**, not D-Bus: the keyring crate's `linux-native` backend needs no session
-bus at all, and the kernel keyring is shared mutable state *outside* the test process, so
-whether `restart_restores_an_enabled_sync_state` finds a stored root — and therefore whether
-it reaches the opening of `sync_once` (sync.rs 355-368) — can still depend on what a sibling
-test left behind. Three identical runs are not proof of determinism, so the
-minimum-across-runs discipline stands for that reason alone.
+instead (see the `verdict_of` note above) made it deterministic, and three consecutive runs on
+the fixed tree came back byte-identical (with `adblock_engine.rs` at 349 in all three).
+
+`sync.rs` is the harder one, and the explanation is **not** "a sibling test left a root
+behind". `restart_restores_an_enabled_sync_state` guards on
+`sync_keystore::keyring_available()`, which probes with a *write*. Whether it returns true
+depends on whether the box has a working **kernel** keyring, and stripping D-Bus does not
+change that: keyring 3.6.3's `linux-native` backend tries the secret service first and then
+falls back to the kernel keyring, which needs no session bus. A dev box (like this one) has
+one, so the test proceeds and covers the opening of `sync_once`; a GitHub runner does not, so
+it early-returns. That is a **39-line** gap — 836 against 797 — far wider than the 6-line
+timing spread, and it is why CI run 36635754260 read `total lines 85.26% (17636/20685)` while
+three local runs on the identical tree all read 85.45%.
+
+**So the two unset `env -u`s reproduce the no-D-Bus condition, not the no-keyring one, and a
+locally measured baseline is therefore NOT the floor CI enforces.** The committed numbers
+here are CI's own, taken from run 36635754260 and carried into `src-tauri/coverage-baseline.json`
+by hand, with each total asserted to equal the sum of the per-file records so the file stays
+internally consistent. That is the one place in this repo where a committed threshold is a
+measurement this machine could not take, and the reason is recorded here rather than left to
+be rediscovered. **Regenerate the floor from a CI run, or from a box where `add_key` genuinely
+fails — never from a dev box, and never from one run.**
 
 **`statements` is llvm `regions`, not an istanbul statement.** A region is a code
 span, not an expression. The label is a deliberate fiction that exists so the
@@ -1673,13 +1686,13 @@ The gap is not spread evenly, and it is much narrower than it was. Real, measura
 debt now concentrates in one module and one dispatcher: `adblock_webkit.rs` 21.32%
 (declarative WebKit content filters, no headless driver reaches them), `lib.rs` 36.83%
 (what is left of the `ipc()` dispatcher and `setup`), `find_linux.rs` 37.62% (AT-SPI over a
-session bus), `tabs.rs` 55.48%, `sync.rs` 62.53%, `sync_keystore.rs` 63.87% (the floor's
+session bus), `tabs.rs` 55.48%, `sync.rs` 59.61%, `sync_keystore.rs` 63.87% (the floor's
 no-keyring figure — 228 of 357), `nav.rs` 66.57%, `permissions.rs` 76.30%,
 `redirect_guard.rs` 79.14%, `update.rs` 81.43%, `subs.rs` 82.51%. The covered end is
 `vault_inject.rs` 100%, `sync_auth.rs` 98.92%, `sync_envelope.rs` 98.82%, `tab_registry.rs`
 98.14%, `data.rs` 98.06%, `customfilters.rs` 97.70%, `crypto.rs` 97.27%, `find.rs` 97.02%,
 `jsonstore.rs` 97.13%, `zoom.rs` 93.56%, `form.rs` 91.98%, `view.rs` 87.39%. `sync.rs` is
-quoted at its FLOOR value (836 of 1337), so a run that measures higher reads better than the
+quoted at its FLOOR value (797 of 1337), so a run that measures higher reads better than the
 table, never worse.
 
 `adblock_engine.rs` reads 91.84% (349 of 380) and is the one place where a **lower ratio is

@@ -38,18 +38,18 @@
   "total": {
     "lines": {
       "total": 20685,
-      "covered": 17675,
-      "pct": 85.45
+      "covered": 17636,
+      "pct": 85.26
     },
     "statements": {
       "total": 36039,
-      "covered": 30713,
-      "pct": 85.22
+      "covered": 30641,
+      "pct": 85.02
     },
     "functions": {
       "total": 2638,
-      "covered": 2116,
-      "pct": 80.21
+      "covered": 2112,
+      "pct": 80.06
     },
     "branches": {
       "total": 0,
@@ -627,18 +627,18 @@
     "src-tauri/src/sync.rs": {
       "lines": {
         "total": 1337,
-        "covered": 836,
-        "pct": 62.53
+        "covered": 797,
+        "pct": 59.61
       },
       "statements": {
         "total": 2310,
-        "covered": 1437,
-        "pct": 62.21
+        "covered": 1365,
+        "pct": 59.09
       },
       "functions": {
         "total": 131,
-        "covered": 78,
-        "pct": 59.54
+        "covered": 74,
+        "pct": 56.49
       },
       "branches": {
         "total": 0,
