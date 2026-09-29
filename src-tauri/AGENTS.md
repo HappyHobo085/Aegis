@@ -1443,6 +1443,23 @@ The mock never spawns real webviews, so dispatchers that call `spawn_tab` or
 touch native webview handles skip or no-op silently in tests — that is expected
 behavior (these are unit tests against a mock app, not GUI/runtime tests).
 
+**Source-text pins read the file they live in, so scope them.** There is NO Kotlin test
+source set, so every Android behaviour is pinned by reading `MainActivity.kt` as TEXT
+(`test_support::kotlin_source`, plus `kotlin_fn_body` to take one function's brace-matched
+body with `//` comment lines dropped — the Kotlin comments here QUOTE the code they
+replaced, so a raw-text assert matches the documentation of a bug instead of the bug).
+The Rust half has the mirror-image trap: `include_str!("nav.rs")` written _inside_
+`nav.rs` also returns the test doing the including, so a whole-file `src.contains("…")`
+is satisfied by the pin's OWN literal. `nav.rs`'s tab-title pin
+(`the_content_webview_reports_a_title_the_page_changed_itself`) shipped exactly that:
+deleting the `on_document_title_changed` hook from the wry builder — all three lines,
+closure included — left it GREEN. `test_support::rust_production_source` now cuts the
+source at `#[cfg(test)] mod tests` and drops comment lines, so a pin can only be
+satisfied by production code, and a source with no test module PANICS instead of
+silently passing the whole file through. Scope every source-text pin through it, and
+prove the pin by neutralising the code it claims to pin — a pin never watched failing is
+a comment.
+
 **Convention for new AppHandle tests.** To add a test for a module whose
 dispatcher takes `app: AppHandle<R>` (or any generic `<R: Runtime>`):
 

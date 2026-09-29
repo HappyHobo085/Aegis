@@ -1620,9 +1620,16 @@ mod tests {
     /// desktop and Android alike. A direct `tabs::set_title` call here would still update
     /// the tab but would leave the two platforms on different code paths "''' + EM + '''" the
     /// opposite of what the shared handler is for.
+    ///
+    /// Both asserts read `test_support::rust_production_source`, NOT the whole file.
+    /// This test is itself a line of `nav.rs`, so `include_str!("nav.rs")` hands it the
+    /// very literals it searches for and the pin is satisfied by its own ASSERTION: a
+    /// probe that deleted the `on_document_title_changed` hook outright ''' + EM + ''' all three
+    /// lines, closure included ''' + EM + ''' left this test GREEN. It proved nothing about the
+    /// code, and would have shipped the regression it claims to catch.
     #[test]
     fn the_content_webview_reports_a_title_the_page_changed_itself() {
-        let src = include_str!("nav.rs");
+        let src = crate::test_support::rust_production_source(include_str!("nav.rs"));
         assert!(
             src.contains(".on_document_title_changed("),
             "the content webview no longer watches for a title the page sets itself, so \

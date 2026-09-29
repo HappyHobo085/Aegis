@@ -316,10 +316,66 @@ pub fn kotlin_fn_body(src: &str, signature: &str) -> String {
         .join("\n")
 }
 
+/// `src` narrowed to PRODUCTION Rust: everything before its `#[cfg(test)] mod tests`
+/// block, with every `//` comment line dropped.
+///
+/// A source-text pin must not read the file that CONTAINS it. `include_str!("nav.rs")`
+/// written inside `nav.rs` also returns the test doing the including, so a whole-file
+/// `src.contains("...")` is satisfied by the pin's own literal: `nav.rs`'s tab-title pin
+/// passed with the `on_document_title_changed` hook deleted outright, because the two
+/// strings it looks for are themselves lines of `nav.rs`. That was a probe, not a
+/// reading — neutralise the hook, watch the test stay GREEN, re-point it here, watch it
+/// go RED. Comment lines go for the reason `kotlin_fn_body` drops them: this repo's
+/// comments QUOTE the code they replaced, so even production text can carry a hook that
+/// no longer exists.
+pub fn rust_production_source(src: &str) -> String {
+    let (head, _) = src
+        .split_once("\n#[cfg(test)]\nmod tests {")
+        .unwrap_or_else(|| {
+            panic!("the Rust source no longer has a `#[cfg(test)] mod tests` block to cut at")
+        });
+    head.lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The contract, on a synthetic source: the test module is cut away, `//` comment
+    /// lines are dropped, and a source with no test module PANICS instead of silently
+    /// passing the whole file through. That panic is the point, not a nicety: the
+    /// whole-file behaviour is the vacuity this helper exists to prevent.
+    #[test]
+    fn production_source_cuts_the_test_module_and_its_comments() {
+        let src = concat!(
+            "fn emit() {}\n",
+            "// .on_document_title_changed( quoted in a comment\n",
+            "fn other() {}\n",
+            "\n",
+            "#[cfg(test)]\n",
+            "mod tests {\n",
+            "    fn t() {}\n",
+            "}\n",
+        );
+        let out = rust_production_source(src);
+        assert!(out.contains("fn emit() {}"), "{out}");
+        assert!(out.contains("fn other() {}"), "{out}");
+        assert!(
+            !out.contains("on_document_title_changed"),
+            "a comment quoting a deleted hook must not satisfy a pin: {out}"
+        );
+        assert!(!out.contains("mod tests"), "{out}");
+    }
+
+    #[test]
+    #[should_panic(expected = "no longer has a `#[cfg(test)] mod tests` block")]
+    fn production_source_panics_when_there_is_no_test_module() {
+        rust_production_source("fn emit() {}\n");
+    }
 
     #[test]
     fn tmp_app_data_dir_is_under_the_temp_dir() {
