@@ -67,6 +67,40 @@ fn bak_path(path: &Path) -> PathBuf {
 /// process, even for two threads writing the same store in the same nanosecond.
 static TMP_SEQ: AtomicU64 = AtomicU64::new(0);
 
+/// Removes an in-flight temp file unless the write disarms it. Covers the failure
+/// paths between creating the temp and the successful rename — a `?` that unwound
+/// past the rename would otherwise leave the temp behind forever.
+struct TempGuard {
+    path: PathBuf,
+    armed: bool,
+}
+
+impl Drop for TempGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// Copy `path` to its `<name>.bak` recovery sidecar and fsync the copy, so a crash
+/// cannot leave a present-but-empty `.bak` — which `read_with_backup` rejects as
+/// invalid JSON, making it indistinguishable from having no backup at all. (The
+/// parent dir is fsynced by the caller, which is what makes the sidecar's own
+/// directory entry durable.)
+///
+/// Returns the copy's error instead of discarding it. The caller in
+/// `write_atomic_inner` logs it and carries on with the primary write; the seam
+/// exists so a test can observe that the error is reported at all.
+fn refresh_backup(path: &Path) -> std::io::Result<()> {
+    let bak = bak_path(path);
+    fs::copy(path, &bak)?;
+    // `File::open` on the copy can fail (it was just created, so this is near-impossible
+    // — but a reported error beats a silent one). `sync_all` on an already-closed or
+    // exotic handle likewise.
+    File::open(&bak)?.sync_all()
+}
+
 /// Durably write `bytes` to `path`: temp file (a sibling in the same dir) → fsync →
 /// rename over the target → fsync the parent dir. When `backup` is set, the prior good
 /// copy is kept at `<name>.bak` for corrupt-recovery. Temp-then-rename in the same
@@ -79,7 +113,19 @@ fn write_atomic_inner(path: &Path, bytes: &[u8], backup: bool) -> std::io::Resul
         fs::create_dir_all(dir)?;
     }
     if backup && path.exists() {
-        let _ = fs::copy(path, bak_path(path));
+        // Deliberately NOT fatal for the caller to act on. Bailing out of the write
+        // would make a store permanently unwritable for anything that blocks the copy
+        // but not the write — a directory sitting at the `.bak` path, say — trading a
+        // degraded recovery point (the copy from two writes ago) for lost writes on the
+        // primary. The write itself is still temp → fsync → rename, so the PRIMARY is
+        // never at risk here; only the sidecar is. The error is still REPORTED rather
+        // than discarded, so a silently backup-less store is visible in the log.
+        if let Err(e) = refresh_backup(path) {
+            eprintln!(
+                "[aegis] could not refresh the recovery copy for {}: {e}",
+                path.display()
+            );
+        }
     }
     // The temp file must be unique per write so two concurrent writers (e.g. the sync
     // thread and the IPC thread in later phases) can never share one — a shared temp
@@ -125,10 +171,22 @@ fn write_atomic_inner(path: &Path, bytes: &[u8], backup: bool) -> std::io::Resul
             }
         }
     };
+    // Three steps below can fail with the temp already on disk (`write_all` on a full
+    // disk, `sync_all` on a filesystem that refuses it, `rename` when the target is a
+    // non-empty directory). A bare `?` on any of them used to strand the temp: the
+    // success path renames it away, so the leak only ever happened on the paths that
+    // had ALREADY failed — exactly when the store is in trouble and a pile of
+    // `<name>.<pid>.<nanos>.<seq>.tmp` siblings in the data dir is the last thing
+    // anyone needs. `TempGuard` removes it on every exit that is not the rename.
+    let mut guard = TempGuard {
+        path: tmp.clone(),
+        armed: true,
+    };
     f.write_all(bytes)?;
     f.sync_all()?;
     drop(f);
     fs::rename(&tmp, path)?;
+    guard.armed = false;
     // Best-effort dir fsync so the rename is durable. Opening a directory as a File
     // fails on Windows — swallow the error there.
     if let Some(dir) = path.parent() {
@@ -656,6 +714,31 @@ mod tests {
         d
     }
 
+    /// The `*.tmp` siblings sitting next to `dir` — the temp files `write_atomic`
+    /// creates and is supposed to consume.
+    fn leftover_temps(dir: &Path) -> Vec<String> {
+        let mut v: Vec<String> = fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.ends_with(".tmp"))
+            .collect();
+        v.sort();
+        v
+    }
+
+    /// A directory in place of `dir/<name>.json`, so the final `rename` fails for a
+    /// real user. This is the write-failure lever the repo uses everywhere else
+    /// (`test_support::block_store_file`); `chmod 0500` is a no-op under root.
+    fn block_rename_target(p: &Path) {
+        if p.is_dir() {
+            return;
+        }
+        let _ = fs::remove_file(p);
+        fs::create_dir_all(p).unwrap();
+        fs::write(p.join("occupied"), b"x").unwrap();
+    }
+
     #[test]
     fn write_atomic_roundtrips_and_creates_missing_dirs() {
         let dir = tmp_dir("roundtrip");
@@ -690,6 +773,71 @@ mod tests {
         write_atomic_no_backup(&p, b"{}").unwrap();
         write_atomic_no_backup(&p, b"{}").unwrap();
         assert!(!bak_path(&p).exists(), "no .bak for the no-backup variant");
+    }
+
+    /// A write that fails AFTER the temp file exists must still take its temp with it.
+    /// The rename is the only one of the three post-creation steps a test can provoke
+    /// deterministically, and it is the last one — the temp is fully written and fsynced
+    /// by then, so this is the worst case for the leak.
+    #[test]
+    fn a_failed_write_leaves_no_temp_file_behind() {
+        let dir = tmp_dir("failtmp");
+        let p = dir.join("store.json");
+        block_rename_target(&p);
+
+        assert!(
+            write_atomic(&p, b"[]").is_err(),
+            "precondition: a rename onto a non-empty directory must fail"
+        );
+        assert_eq!(
+            leftover_temps(&dir),
+            Vec::<String>::new(),
+            "a failed write must not strand its temp file in the store directory"
+        );
+    }
+
+    /// The same must hold for the no-backup variant, which skips the recovery copy and
+    /// so exercises a different prefix of the function.
+    #[test]
+    fn a_failed_no_backup_write_leaves_no_temp_file_behind() {
+        let dir = tmp_dir("failtmp-nobak");
+        let p = dir.join("export.json");
+        block_rename_target(&p);
+
+        assert!(write_atomic_no_backup(&p, b"{}").is_err());
+        assert_eq!(leftover_temps(&dir), Vec::<String>::new());
+    }
+
+    /// A failing recovery copy is REPORTED (`refresh_backup` returns the error) but must
+    /// not stop the primary write — the store stays writable, it just loses its sidecar.
+    /// Before the fix the copy's error was `let _ =`-discarded, so nothing observed it.
+    #[test]
+    fn a_failed_recovery_copy_is_reported_and_the_write_still_lands() {
+        let dir = tmp_dir("bakfail");
+        let p = dir.join("store.json");
+        // Two writes, so a `.bak` really exists: the first has nothing to back up.
+        write_atomic(&p, b"[\"first\"]").unwrap();
+        write_atomic(&p, b"[\"second\"]").unwrap();
+        let bak = bak_path(&p);
+        assert!(
+            bak.is_file(),
+            "precondition: a sidecar exists to be blocked"
+        );
+        // A non-empty directory at the .bak path: `fs::copy` onto it fails for a real
+        // user (EISDIR / ENOTEMPTY), while the primary rename is unaffected.
+        block_rename_target(&bak);
+
+        assert!(
+            refresh_backup(&p).is_err(),
+            "precondition: the recovery copy must actually fail here"
+        );
+        // ...and the store itself must still accept the write.
+        write_atomic(&p, b"[\"second\"]").unwrap();
+        assert_eq!(
+            fs::read_to_string(&p).unwrap(),
+            "[\"second\"]",
+            "an unwritable .bak must not cost the user their primary write"
+        );
     }
 
     #[test]

@@ -9,6 +9,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A settings file that failed to save could leave a stray temporary file behind every
+  time.** A save writes to a temporary file and renames it over the real one, and any
+  failure in between — a full disk, a revoked permission, a device unplugged mid-write —
+  left that temporary file in place forever, never cleaned up. A failure to write the
+  previous copy aside (the safety net that recovers a corrupted file) was thrown away
+  with no trace, and that copy was never flushed to disk, so it could itself be empty
+  after a crash. Temporary files are now cleaned up on every path out, the safety-net
+  copy is written and flushed, and a failure to refresh it is written to the log instead
+  of disappearing. A save that cannot write its safety copy still succeeds rather than
+  refusing to save at all.
 - **Every site's camera, microphone and location request was silently refused on
   Android, while the app showed a permissions list that could never fill.** The
   native webview had no permission handler at all, so Android's default — refuse

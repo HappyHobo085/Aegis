@@ -273,6 +273,20 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   `data.import` calls after each store write — lets the test run the REAL
   `history::flush`/`downloads::flush` from inside the import and then assert on
   the files.
+- **A failed `write_atomic` leaves NO temp file.** The write is temp→fsync→rename,
+  and all THREE steps can fail (full disk, revoked permission, a device unplugged
+  mid-write). Each `?` used to return with the temp still on disk, so a store that
+  failed to save once leaked `<name>.<pid>.<nanos>.<seq>.tmp` on every subsequent
+  failure. A `TempGuard` now removes it on every path out and is DISARMED immediately
+  after the rename succeeds. The `.bak` recovery copy went through `let _ = fs::copy(
+…)`, so a failure to write it vanished with no trace and it was never fsynced — so
+  after a crash the very file meant to recover a corrupt store could be empty.
+  `refresh_backup` copies then `sync_all`s, and its error is `eprintln!`ed rather
+  than propagated, because bailing would make a store PERMANENTLY unwritable for
+  anything that blocks the copy but not the write. Three tests: two for the temp
+  leak (with and without a `.bak`) and one asserting the recovery-copy error is
+  REPORTED while the write still lands. Both provoke failure with a **non-empty
+  directory at the target path** (rule 36) — a `chmod 0500` is a no-op as root.
 - **Data stores** — `jsonstore.rs` (tiny JSON-array helper, unit-tested via
   `test_support::with_tmp_app` in `test_support::tests`) backs:
   - `places.rs` (favorites + saved) — **unit-tested via `test_support::with_tmp_app`:**
