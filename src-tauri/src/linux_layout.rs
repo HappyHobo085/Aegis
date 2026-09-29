@@ -78,6 +78,32 @@ fn webkit_error_code(err: &glib::Error) -> i32 {
     0
 }
 
+/// `WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE`, the only value in the
+/// 100-199 `WEBKIT_POLICY_ERROR` band that does not mean "this resource is refused".
+///
+/// The other four in that band are refusals of the resource itself
+/// (`CANNOT_SHOW_MIME_TYPE` 100, `CANNOT_SHOW_URI` 101, `CANNOT_USE_RESTRICTED_PORT` 103,
+/// `FAILED` 199); 300-399 is the whole `WEBKIT_NETWORK_ERROR` family. So 102 cannot be a
+/// network fault, and its description says exactly what it is: OUR `decide-policy` handler
+/// interrupted a frame load that was already under way.
+pub(crate) const POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE: i32 = 102;
+
+/// Whether a reported `load-failed` code is Aegis interrupting its own load rather than the
+/// page failing.
+///
+/// `decide_navigation` (`nav::decide_navigation`) cancels navigation on purpose for a
+/// non-navigable scheme, an open full-window overlay, a malware host (which raises its own
+/// interstitial), an ad or tracker document, and the HTTPS-Only upgrade. A cancel that lands
+/// after the provisional load has begun surfaces as code 102, and the chrome then told the
+/// user "Check the address and your network connection" about a page whose address and
+/// network were both fine -- the app had stopped the load itself.
+///
+/// Note the code space is disjoint from every genuine failure, so this cannot swallow one:
+/// see the constant's docs for the full band.
+pub(crate) fn is_self_inflicted_load_interruption(code: i32) -> bool {
+    code == POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE
+}
+
 pub fn connect_nav_failure_label(app: &AppHandle, label: &str) {
     let Some(content) = app.get_webview(label) else {
         return;
@@ -113,14 +139,16 @@ pub fn connect_nav_failure_label(app: &AppHandle, label: &str) {
                 return false;
             }
             loading.store(false, Ordering::Relaxed);
-            crate::nav::emit_nav_failed(
-                &fail_app,
-                id,
-                webkit_error_code(err),
-                err.message(),
-                validated_url,
-                "load",
-            );
+            let code = webkit_error_code(err);
+            if is_self_inflicted_load_interruption(code) {
+                // We interrupted this load ourselves (see the predicate). The page did not
+                // fail, so reporting a failure would be a lie the user has to debug. Return
+                // `true` anyway: WebKit's bare error page is a worse thing to show than the
+                // clean content area the caller is about to leave behind, and whatever
+                // cancelled the navigation is responsible for what happens next.
+                return true;
+            }
+            crate::nav::emit_nav_failed(&fail_app, id, code, err.message(), validated_url, "load");
             // Aegis renders its own error view, so suppress WebKit's default error page.
             true
         });
@@ -919,4 +947,161 @@ pub fn layout<R: Runtime>(
         // No show_all here: re-showing every layout call would override the hidden
         // background tabs and the content webview's hide (view.setChromeOverlay).
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every WebKitGTK error code `webkit_error_code` can decode, with the values read out of
+    /// `webkit2gtk-sys` 2.0.2's constants rather than written from memory.
+    const POLICY: &[(i32, &str)] = &[
+        (100, "CANNOT_SHOW_MIME_TYPE"),
+        (101, "CANNOT_SHOW_URI"),
+        (102, "FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE"),
+        (103, "CANNOT_USE_RESTRICTED_PORT"),
+        (199, "FAILED"),
+    ];
+    const NETWORK: &[(i32, &str)] = &[
+        (300, "TRANSPORT"),
+        (301, "UNKNOWN_PROTOCOL"),
+        (302, "CANCELLED"),
+        (303, "FILE_DOES_NOT_EXIST"),
+        (399, "FAILED"),
+    ];
+
+    /// The predicate must carve out exactly one code. A page that genuinely cannot be fetched
+    /// has to keep reaching the chrome, or this fix silences every real error page in the
+    /// browser -- the failure mode that matters, because the user is then left with a blank
+    /// content area and no Retry.
+    #[test]
+    fn only_the_policy_change_interruption_is_treated_as_self_inflicted() {
+        for (code, name) in POLICY.iter().chain(NETWORK.iter()) {
+            let expected = *code == POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE;
+            assert_eq!(
+                is_self_inflicted_load_interruption(*code),
+                expected,
+                "policy/network code {code} ({name}) was classified wrong",
+            );
+        }
+    }
+
+    /// A code outside both known bands is 0 -- `webkit_error_code`'s "unknown domain" value.
+    /// Treating it as self-inflicted would hide every unrecognised failure.
+    #[test]
+    fn an_unrecognised_code_is_not_self_inflicted() {
+        for code in [0, 1, 99, 104, 198, 200, 299, 304, 398, 400, -1, i32::MAX] {
+            assert!(
+                !is_self_inflicted_load_interruption(code),
+                "code {code} is not a known self-interruption but was treated as one",
+            );
+        }
+    }
+
+    /// Pin the constant to the binding it mirrors, so a dependency bump that renumbers the
+    /// error space cannot silently re-point the predicate at a different error. The expected
+    /// value is derived from the `webkit2gtk` enum rather than written out, so this also
+    /// proves `webkit_error_code` would decode that variant to exactly our number.
+    #[test]
+    fn the_constant_matches_the_webkit_binding() {
+        use webkit2gtk::PolicyError;
+        assert_eq!(
+            POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE,
+            ErrorDomain::code(PolicyError::FrameLoadInterruptedByPolicyChange),
+        );
+    }
+
+    /// `connect_load_failed`'s body is a GTK signal handler: it can only run against a live
+    /// WebKitGTK view, so nothing in this crate can drive it and the guard inside it cannot be
+    /// exercised by a test. This pins the ORDER that matters instead — the predicate is
+    /// consulted BEFORE anything is emitted, and the early `return true` in between is what
+    /// keeps WebKit's own error page suppressed.
+    ///
+    /// It reads the production source through `rust_production_source`, which cuts this very
+    /// test module out and drops `//` lines: a whole-file read would be satisfied by the
+    /// pin's own text, which is the exact failure this helper exists to prevent elsewhere.
+    ///
+    /// Both needles are asserted to match EXACTLY once, so a search that stopped matching (or
+    /// started matching somewhere else) fails loudly instead of comparing two offsets that
+    /// happen to be in a sensible order.
+    #[test]
+    fn the_self_interruption_guard_precedes_the_failure_emit() {
+        let src = crate::test_support::rust_production_source(include_str!("linux_layout.rs"));
+        // Scope to the `load-failed` handler. `emit_nav_failed` is called twice in this file —
+        // the second is the certificate handler, a different signal with its own `kind` — so
+        // searching the whole file would compare an offset from the wrong handler.
+        let handler = src
+            .split_once("wv.connect_load_failed(")
+            .expect("the load-failed handler must still be connected in this file")
+            .1
+            .split_once("wv.connect_")
+            .map(|(head, _)| head)
+            .expect("the load-failed handler must be followed by another connect_ call");
+        let occurrences = |needle: &str| handler.matches(needle).count();
+        // `if …(` so this is the CALL, not the `pub(crate) fn …(` definition above.
+        let guard = "if is_self_inflicted_load_interruption(";
+        let emit = "crate::nav::emit_nav_failed(";
+        assert_eq!(
+            occurrences(guard),
+            1,
+            "the load-failed handler must consult the predicate exactly once"
+        );
+        assert_eq!(
+            occurrences(emit),
+            1,
+            "the load-failed handler must emit real failures exactly once"
+        );
+        let (g, e) = (
+            handler.find(guard).expect("guard"),
+            handler.find(emit).expect("emit"),
+        );
+        assert!(
+            g < e,
+            "the self-interruption guard (offset {g}) must be evaluated before the failure \
+             is emitted (offset {e}), or a policy interruption still reaches the chrome"
+        );
+        assert!(
+            handler[g..e].contains("return true;"),
+            "the guard's early return must still suppress WebKit's own error page"
+        );
+    }
+
+    /// And the same for every other value the predicate's neighbours are judged against, taken
+    /// from the enum so the table above cannot drift from the crate in either direction.
+    #[test]
+    fn the_enumerated_codes_match_the_webkit_binding() {
+        use webkit2gtk::{NetworkError, PolicyError};
+        for (code, _) in POLICY {
+            let decoded = [
+                PolicyError::CannotShowMimeType,
+                PolicyError::CannotShowUri,
+                PolicyError::FrameLoadInterruptedByPolicyChange,
+                PolicyError::CannotUseRestrictedPort,
+                PolicyError::Failed,
+            ]
+            .iter()
+            .map(|e| ErrorDomain::code(*e))
+            .find(|c| c == code);
+            assert!(
+                decoded.is_some(),
+                "policy code {code} is not a PolicyError variant"
+            );
+        }
+        for (code, _) in NETWORK {
+            let decoded = [
+                NetworkError::Transport,
+                NetworkError::UnknownProtocol,
+                NetworkError::Cancelled,
+                NetworkError::FileDoesNotExist,
+                NetworkError::Failed,
+            ]
+            .iter()
+            .map(|e| ErrorDomain::code(*e))
+            .find(|c| c == code);
+            assert!(
+                decoded.is_some(),
+                "network code {code} is not a NetworkError variant"
+            );
+        }
+    }
 }

@@ -9,6 +9,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **A page Aegis itself stopped no longer shows a network error.** If a navigation is
+  interrupted by Aegis's own policy — the HTTPS-Only upgrade, an ad or tracker document, a
+  blocked host, a full-window panel being open — the browser reported it as a failed page
+  load and showed "This page could not be loaded / Check the address and your network
+  connection" with the raw detail `Frame load interrupted (102)`. Nothing was wrong with
+  the address or with the network: 102 is WebKit's own "the policy handler stopped this
+  frame" signal, and the address and the connection are exactly what they were. A
+  navigation Aegis stopped on purpose is no longer reported as a page failure, so it no
+  longer turns into an error screen.
 - **A tab's title now follows a page that renames itself.** A page that changed its own
   `document.title` after load "'''-'''an SPA route change, a Gmail unread count, a YouTube video
   title"'''-'''" never reached the tab strip, which kept showing the title from page load and never

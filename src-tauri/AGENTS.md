@@ -111,6 +111,16 @@ dotted event name.
   `shouldInterceptRequest`), emits `nav.state`/`nav.failed`. Active webview now accessed via
   `active_content_label()`/`active_webview()` (refactored from the old single
   `CONTENT_LABEL` constant).
+  **`nav.failed` must not report a load Aegis stopped itself.** `decide_navigation` cancels
+  for a non-navigable scheme, an open full-window overlay, a malware host, an ad/tracker
+  document and the HTTPS-Only upgrade, and WebKit turns each of those into a policy error
+  `102` (`WEBKIT_POLICY_ERROR_FRAME_LOAD_INTERRUPTED_BY_POLICY_CHANGE`) on the in-flight
+  load. `linux_layout::connect_load_failed` therefore consults
+  `is_self_inflicted_load_interruption` and swallows only that code — the policy code space
+  is 100/101/102/103/199 and the `WEBKIT_NETWORK_ERROR` family is 300-399, so 102 cannot
+  be a real network fault, while every other code is still reported. Without this the
+  error overlay told the user to "check the address and your network connection" for a
+  navigation the address and the network were fine for.
   **ONE scheme policy: `is_navigable` (http/https/`about:blank`).** `decide_navigation` now
   consults it as its FIRST check, before the overlay, malware, ad-block and HTTPS-Only
   checks — every one of which reads the destination as an ordinary web address. It
