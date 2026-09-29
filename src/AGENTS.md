@@ -203,8 +203,8 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   served and had zero callers, so it is gone; drive state through the real IPC in tests.
 - **A save the core REFUSES must say so (`lib/saveError.ts`).** `settings.set` and the
   custom-filter save go through `settings.rs::validate_setting`, which has ~20 rejection
-  messages ("searchEngines may hold at most 32 entries", "Home URL must be http(s), got
-  Null"). A component that `await`s one of those and then does nothing leaves the user
+  messages ("searchEngines may hold at most 32 entries", `homeUrl must be http(s), got "file"`).
+  A component that `await`s one of those and then does nothing leaves the user
   staring at a button that appears dead — and, worse, the rejection escaping a floating
   `void (async () => …)()` becomes an **unhandled promise rejection** nobody sees. So
   `HomeTab`, `MyFiltersTab` and `SearchTab` each catch and surface it, and a form clears
@@ -381,7 +381,7 @@ bypassHosts, active, uri }`). Seeds from `aegis.proxy.getState()` on mount; subs
   - A note informs the user that the proxy covers browsed pages only (not the OS or other
     apps) and that DNS/QUIC may still leak outside the proxy path.
   - On Windows: a note warns that proxy changes apply only to new or reloaded tabs
-    (spawn-time limitation — see `src-tauri/AGENTS.md` gotcha 22).
+    (spawn-time limitation — see `src-tauri/AGENTS.md` gotcha 23).
     Coverage: `useProxy.test.ts` covers the getState seed, the live `proxy.state`
     subscription, and every mutator; `ProxySettingsTab.test.tsx` drives the mode select,
     host/port inputs, bypass add/remove, and the Apply/Turn-off/Test buttons through the
@@ -701,7 +701,8 @@ Run the whole suite with `npm test` from the repo root.
 rewrite in `tauriInvoke.ts` and the whole Android bridge switch were, until
 `src/lib/ipcClient.contract.test.ts`, unasserted by anything. That test mocks **only**
 `@tauri-apps/api/core` + `/event`, so the real `aegis` runs, and it pins every request
-channel in the catalog (128 rows) plus every event subscription (22 rows), with two
+channel in the catalog (127 rows, counted as one table entry per `channel:` field) plus
+every event subscription (23 rows, counted the same way), with two
 derived ratchets so the table cannot silently shrink or grow stale.
 
 Together the two guards are complementary, not redundant, and each is non-vacuous:
@@ -757,7 +758,8 @@ guard must go red and name the file.
 **Every inset the Android shell pushes in must be consumed, and vice versa.**
 `MainActivity.kt:806-809` pushes the REAL system status/nav bar insets in as
 `--aegis-inset-{top,bottom,left,right}`; `index.css` consumes them as
-`var(--aegis-inset-top, env(safe-area-inset-top))` in 6 rules. Drift in **either** direction
+`var(--aegis-inset-top, env(safe-area-inset-top))` in 9 distinct rules (30 `var()`
+occurrences). Drift in **either** direction
 is a real bug and neither was catchable. A surface that forgets to consume an inset renders
 under the status bar. A rule consuming a var the native side never sets silently falls back
 to `env(safe-area-inset-*)`, which `index.css:5181-5183` records as being only the DISPLAY
@@ -767,8 +769,8 @@ one of the four vars in `MainActivity.kt`; a single rename turns on BOTH directi
 cheapest possible demonstration that the guard sees the whole relation.
 
 The failure messages deliberately **name the offending file / rule** rather than just the
-variable, because "expected [] to equal []" tells a reader nothing about which of six rules
-is wrong. Each guard also has an anti-vacuity test asserting the scan actually found
+variable, because "expected [] to equal []" tells a reader nothing about which of the nine
+rules is wrong. Each guard also has an anti-vacuity test asserting the scan actually found
 something (the three popovers; the four insets), so neither can pass by measuring nothing.
 
 ### Tests that could not fail (the vacuous-test inventory)

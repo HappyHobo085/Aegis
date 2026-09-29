@@ -82,15 +82,20 @@ describe('MyFiltersTab', () => {
   // A rejected save used to be swallowed entirely: no "Saved" (good) but also no error,
   // so a failed save looked identical to a click that did nothing. The rejection value
   // is a bare STRING — `tauriInvoke.call` is a bare `invoke` and Rust's `Err(String)`
-  // rejects with the string — so an `instanceof Error` check would drop the reason.
+  // rejects with the string — so an `instanceof Error` check would drop the reason. The
+  // string below is VERBATIM the core's only custom-filter rejection: `customfilters.rs`
+  // has no syntax validator, just `check_size`, so an over-cap paste is the one thing
+  // `save` can actually refuse with.
   it('reports a REFUSED save instead of looking like nothing happened', async () => {
     const save = vi.fn(async () => {
-      throw 'custom filters must be valid ABP syntax';
+      throw 'custom filter text is 600000 bytes, over the 524288-byte limit';
     });
     render(<MyFiltersTab text="||x^" save={save} />);
     await userEvent.click(screen.getByRole('button', { name: /save filters/i }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('custom filters must be valid ABP syntax'),
+      expect(toast.error).toHaveBeenCalledWith(
+        'custom filter text is 600000 bytes, over the 524288-byte limit',
+      ),
     );
     expect(toast.success).not.toHaveBeenCalled();
   });

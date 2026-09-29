@@ -15,8 +15,7 @@ aegis-export.json
 
 # Cargo build dirs. `tauri build` and the cross-compile helper can put a target dir
 # at the repo root; src-tauri/target is ignored by src-tauri/.gitignore. (There is no
-# autopilot run-output dir to ignore here — the live/app-level autopilot launcher
-# scripts/autopilot/run-autopilot.sh that an earlier revision of this comment
-# referenced does not exist; the harness that does run is the vitest-level one in
-# src/autopilot/.)
+# autopilot run-output dir to ignore here: the whole `src/autopilot/` harness was
+# deleted in 8b2b461 along with the `scripts/autopilot/run-autopilot.sh` launcher this
+# comment used to name, so there is nothing left for this file to ignore.)
 /target/

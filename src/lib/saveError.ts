@@ -17,7 +17,7 @@
  * case first.
  *
  * The core's own messages are already written for a human ("searchEngines may hold at
- * most 32 entries", "Home URL must be http(s), got Null"), so passing them through is
+ * most 32 entries", 'homeUrl must be http(s), got "file"'), so passing them through is
  * the honest copy; the fallback exists only for a rejection that carries no text.
  */
 export function saveErrorText(err: unknown): string {

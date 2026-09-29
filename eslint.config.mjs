@@ -22,27 +22,31 @@
 // of `^_`, `caughtErrors: 'none'`) and `reportUnusedDisableDirectives: 'error'`
 // actually report today.
 //
-// 1. `@typescript-eslint/no-unused-vars` — 11 hits, all genuinely dead:
-//      src/App.tsx:142                      unused destructured `setSidebarInitialTab`
-//      src/autopilot/interactions/toolbar.ts:726   unused spec arg `ctx`
-//      src/components/CommandPalette.test.tsx:1     unused import `afterEach`
-//      src/components/CommandPalette.tsx:12          unused import `FuzzyResult`
-//      src/hooks/useVaultAutofill.test.ts:4          unused import `act`
-//      src/hooks/useVaultDomainSuggestions.test.ts:11 unused spec arg `args`
-//      src/hooks/useVaultDomainSuggestions.ts:2      unused import `useMemo`
-//      src/hooks/useVaultDomainSuggestions.ts:21     unused local `hasLoginForm`
-//      src/hooks/useWorkspaces.ts:2                  unused import `useRef`
-//      src/lib/format.test.ts:14                     unused local `DAY`
-//      src/lib/omnibox.ts:65                         unused function `hostOf`
+// 1. `@typescript-eslint/no-unused-vars` — 17 hits, all genuinely dead:
+//      scripts/check-android-versioncode.mjs:58  unused spec arg `label`
+//      scripts/cliGates.test.mjs:10              unused local `REPO_ROOT`
+//      shared/ipcCatalog.drift.test.ts:639       unused spec arg `value`
+//      src/App.test.tsx:5                        unused import `SavedItem`
+//      src/App.tsx:2                             unused import `useMemo`
+//      src/App.tsx:7                             unused import `confirm`
+//      src/components/CommandPalette.test.tsx:1  unused import `afterEach`
+//      src/components/CommandPalette.tsx:12      unused import `FuzzyResult`
+//      src/components/HistoryPanel.test.tsx:2    unused import `afterEach`
+//      src/hooks/useDownloadToasts.test.tsx:14   unused import `act`
+//      src/hooks/useNarrowViewport.test.tsx:100  unused local `mm`
+//      src/hooks/useVault.ts:13                  unused import `useRef`
+//      src/hooks/useVault.ts:14                  unused imports `Dispatch`, `SetStateAction`
+//      src/hooks/useWorkspaces.ts:2              unused import `useRef`
+//      src/lib/format.test.ts:14                 unused local `DAY`
+//      src/lib/omnibox.ts:65                     unused function `hostOf`
 //    Delete/prefix each, drop the two `'off'` entries below, and the rule is on.
 //
-// 2. `reportUnusedDisableDirectives` — 6 hits. One is fallout from (1)
+// 2. `reportUnusedDisableDirectives` — 5 hits. One is fallout from (1)
 //    (shared/types.ts:507 disables no-unused-vars for the whole `Settings` interface).
-//    The other five are directives for TYPE-AWARE-ONLY rules this config
+//    The other four are directives for TYPE-AWARE-ONLY rules this config
 //    deliberately does not load, so they can never be "used" under the
 //    non-type-aware strategy above and are not removable by any config change:
-//      src/autopilot/interactionCtx.ts:250   @typescript-eslint/no-unsafe-assignment
-//      src/lib/farbleShim.test.ts:122,368,449,830   @typescript-eslint/no-implied-eval
+//      src/lib/farbleShim.test.ts:122,435,516,897   @typescript-eslint/no-implied-eval
 //    Turning the option on therefore means deleting those five lines, which is only
 //    correct alongside a decision about the type-aware configs.
 import js from '@eslint/js';
@@ -55,8 +59,8 @@ import globals from 'globals';
 export default tseslint.config(
   // Never lint generated / vendored / build output.
   //
-  // reportUnusedDisableDirectives is 'off' only because of the 6 measured hits
-  // catalogued in the header — 5 of them are directives for rules this config does
+  // reportUnusedDisableDirectives is 'off' only because of the 5 measured hits
+  // catalogued in the header — 4 of them are directives for rules this config does
   // not load. Flip it to 'error' in the same commit that deletes those directives.
   {
     linterOptions: {
@@ -72,8 +76,9 @@ export default tseslint.config(
       'src-tauri/target/**',
       'src-tauri/gen/**',
       'src-tauri/src/**',
-      // (`scripts/autopilot/fixture/**` was ignored here for a live autopilot harness
-      // that does not exist — see the "Autopilot test harness" section of AGENTS.md.)
+      // (`scripts/autopilot/fixture/**` was ignored here for a live autopilot harness.
+      // That harness and the AGENTS.md section describing it were both deleted in
+      // 8b2b461, so the entry is gone and nothing needs re-adding.)
       'sync-server/**',
       '*.config.js',
     ],
@@ -102,11 +107,11 @@ export default tseslint.config(
       '@typescript-eslint/no-explicit-any': 'off',
       // The codebase has intentional empty catch/else fall-throughs.
       'no-empty': ['error', { allowEmptyCatch: true }],
-      // Unused code is currently NOT checked — the 11-site backlog that keeps this off
+      // Unused code is currently NOT checked — the 17-site backlog that keeps this off
       // is catalogued in the header, with the one-line fix for each. Enable it with
       // { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrors: 'none' }
-      // (the `^_` prefix is already the convention: 36 of the 47 raw hits are `_`-named
-      // params) and delete those 11 sites in the same commit.
+      // (the `^_` prefix is already the convention) and delete those 17 sites in the
+      // same commit.
       '@typescript-eslint/no-unused-vars': 'off',
       // These React Compiler advisory rules are too noisy for this event/subscription-heavy
       // codebase today, so they are not checked at all (see the header: there is no

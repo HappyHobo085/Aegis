@@ -77,7 +77,7 @@ dotted event name.
   `test_support::with_tmp_app`:** session round-trip, private-tab exclusion,
   title/pinned persistence, reorder, idempotent persist, `managed_registry`
   well-formedness, `is_private`, spawn-failure rollback, the `on_tab_url` scheme
-  gate, `forget_closed_tab` (16 tests).
+  gate, `forget_closed_tab` (19 tests).
   **`on_tab_url` enforces the same scheme policy as its sibling writer.** It runs on
   every `PageLoadEvent` and writes the url into the registry + `tabs.json`, and it had
   NO scheme check — so the `tabs.recordNav` arm's claim to be "the last point at which a
@@ -281,7 +281,7 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   **Unit-tested via `test_support::with_tmp_app`:** export produces a v2 bundle
   with every store present; cross-app import round-trip (export → fresh app →
   import) restores favorites, saved, history, downloads, allowlist, settings, and
-  customFilters; error cases (garbage input, partial bundle) (4 tests).
+  customFilters; error cases (garbage input, partial bundle) (18 tests).
   **A failed store write is REPORTED, and `counts` covers only the stores that
   landed.** The arm used to run `let _ = jsonstore::save(app, s, &migrated);` and
   then return `"ok": true` unconditionally, so a restore that silently lost a whole
@@ -334,11 +334,11 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   `test_support::with_tmp_app` in `test_support::tests`) backs:
   - `places.rs` (favorites + saved) — **unit-tested via `test_support::with_tmp_app`:**
     add/list/remove/update/reorder for favorites; add/dedup/remove/tag/union for
-    saved (6 tests).
+    saved (12 tests).
   - `history.rs` — **unit-tested via `test_support::with_tmp_app`:** record
     dedup, scheme filter, private-tab skip, list order + pagination, search,
     remove + clear, update_title, unknown-channel dispatch, and the Android
-    `record_page_finished` path (12 tests).
+    `record_page_finished` path (16 tests).
     **Visits are recorded by the PLATFORM, not by the chrome** — see the Android
     history gotcha below before touching either side.
     `history.removeForOrigin` (added 2026-09-28) deletes EVERY row for one
@@ -354,9 +354,9 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
     plant `about:`/`data:` URLs in the store).  - `downloads.rs` — **unit-tested via `test_support::with_tmp_app`:** private-tab
     skip, `on_requested` filename derivation + state, `on_finished` complete/
     interrupted, `remove` tombstone, `clear` keeps in-progress, plus the four
-    Android-recording tests below (14 tests).
+    Android-recording tests below (19 tests).
     **Android records downloads too, through the SAME rows — this was the
-    `#[cfg_attr(target_os = "android", allow(dead_code))]` tell (gotcha 24).**
+    `#[cfg_attr(target_os = "android", allow(dead_code))]` tell (gotcha 26).**
     `should_record_download` and `on_finished` carried that attribute, i.e. the
     crate claimed the feature did not exist on Android while the mobile Downloads
     UI shipped and stayed permanently empty. Android's content area is a native
@@ -441,7 +441,7 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     and the cache-path containment set — the id rule, the join-to-a-direct-child property,
     an imported `../outside` row NOT reading a planted file above the cache dir, a
     `../victim` removal NOT unlinking a planted file above it, `https://x.test/..` refused
-    on add, and a `../escape` row refused on enable (18 tests).
+    on add, and a `../escape` row refused on enable (30 tests).
   - `customfilters.rs`, `settings.rs` — **a failed write must NEVER advance the sync
     projection.** Each keeps a local record of "we have this peer's HLC" beside the file the
     value actually lands in, and that record is what makes the next merge skip a value it
@@ -559,7 +559,7 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     **Unit-tested via `test_support::with_tmp_app`:** default state, `set_enabled`,
     `toggle_allowlist` + subdomain coverage + persist, `clear_allowlist`,
     `note_blocked` session/page counters, per-tab page count + reset, plus the pure
-    `host_covered` scope table and the engine's subdomain veto (10 tests).
+    `host_covered` scope table and the engine's subdomain veto (13 tests).
     **The allowlist reaches every tier, each by a different mechanism** — this was the
     defect it did NOT do before (a "trusted site" was still filtered everywhere):
     - **engine** (`adblock_engine`): `set_policy` mirrors the hosts in; `should_block`
@@ -857,7 +857,7 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   silently doing nothing.
   `permissions.rs` (site permission prompts) — **unit-tested via
   `test_support::with_tmp_app`:** list/remove/clear, `origin_of` strip, `verdict`,
-  `persist`-replaces (12 tests).
+  `persist`-replaces (14 tests).
   **The decision half is CROSS-PLATFORM; the RAISE side is per platform.**
   `origin_of` / `remembered` / `persist` / `verdict` used to be
   `#[cfg(target_os = "linux")]` because only the Linux handler raised a prompt;
@@ -1151,9 +1151,11 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   (`webrtc.getExemptHosts`/`toggleExempt`/`removeExempt`/`clearExempt`, `useWebrtcExempt`,
   a "Sites with WebRTC protection off" list in `SecurityTab`) is pinned by
   `ipcClient.contract.test.ts` and `SecurityTab.test.tsx`.
-  **HONEST GAP: `lib/protectionSummary.ts` was NOT updated**, so the shield badge can
-  still report "WebRTC: public-only" for a host whose protection is actually off — a
-  second control-that-lies instance, left as a follow-up rather than smuggled in here.
+  **This gap is CLOSED — `lib/protectionSummary.ts` WAS updated.** It reports
+  `webrtcExempt: hostCovered(webrtc.exemptHosts, host)` as a REQUIRED field and
+  `AdblockShield.tsx` consumes it, so a host whose WebRTC protection is off reports off
+  instead of claiming "public-only". An earlier revision of this file listed it as a
+  second control-that-lies instance; no follow-up is outstanding.
 - **Linux** — `linux_layout.rs`: works around **tauri#10420** by reparenting
   webkit2gtk widgets GtkBox → GtkFixed; title-changed signal feeds history +
   routes the element-picker sentinel; Esc-exits-fullscreen; GTK key hook
@@ -1277,7 +1279,7 @@ syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserv
   - **Unit-tested via `test_support::with_tmp_app`**: init/unlock round-trip, wrong
     password rejection, lock zeroizes key + clears records, list-while-locked rejected,
     add/update/remove CRUD round-trips, at-rest ciphertext has no plaintext fields,
-    update/remove persistence + reload, dispatch wrong-password, search. (~15 tests in
+    update/remove persistence + reload, dispatch wrong-password, search. (42 tests in
     `vault::tests`.)
 - **Content-webview Proxy** — `proxy.rs`: routes browsed pages through a user-configured
   HTTP or SOCKS5 proxy. **This is a Proxy, not a VPN** — content-webview-scoped only; leaky
@@ -1311,7 +1313,7 @@ syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserv
     `"proxy"` via `settings.set`. `proxy.state` event emitted on every config change.
   - Unit-tested in `proxy::tests`: `from_value` parse/validate, `default_uri` schemes,
     `is_active` guard, `test_connection` socket probe, serde `bypassHosts` round-trip
-    (the canonical key lesson — see gotcha 21 below).
+    (the canonical key lesson — see gotcha 22 below).
 - **Misc** — `picker.rs` (element picker, **desktop-only**: Linux/Windows/macOS each inject
   the overlay natively; Android has no tier and `picker.start` answers `{ok:false}`),
   `form.rs` (**a seam, not a mechanism — NEITHER detection mode works, and the module
@@ -1327,7 +1329,7 @@ syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserv
   impl) and what `a_detection_result_answers_only_the_request_that_asked_for_it` pins
   (a lookup that ignored the `requestId` would bleed one tab's form state into another's
   pending answer). `emit_will_submit` is still a `TODO(M13)` stub with zero references
-  while the renderer subscribes to `form.willSubmit` — see gotcha 25,
+  while the renderer subscribes to `form.willSubmit` — see gotcha 26,
   `update.rs` (tauri-plugin-updater state). **`update.getState` answers the
   MANAGED `UpdateState`, not a freshly-minted default**, so a `set` that ran
   first is observable through the same channel; the `idle()` shape is the
@@ -1422,7 +1424,9 @@ fn my_test() {
 ```
 
 `with_tmp_app` constructs a `MockRuntime` app (via `tauri::test::mock_builder`) and
-registers all 11 managed states that the real `lib.rs` builder + `setup()` install:
+registers the 17 managed states that the real `lib.rs` builder + `setup()` install —
+every one of the 18 `lib.rs` installs except `redirect_guard::RedirectBudget`, the
+desktop redirect cap, which no mock-app test reads today:
 
 | State                                                        | Source in `lib.rs` |
 | ------------------------------------------------------------ | ------------------ |
@@ -1436,6 +1440,11 @@ registers all 11 managed states that the real `lib.rs` builder + `setup()` insta
 | `redirect_guard::Chains`                                     | builder            |
 | `zoom::ZoomStore`                                            | builder            |
 | `vault::VaultState` (locked by default — no auto-unlock)     | builder            |
+| `farble::FarbleState`                                        | builder            |
+| `proxy::ProxyState`                                          | builder            |
+| `settings::SettingsCache`                                    | builder            |
+| `history::HistoryStore`                                      | builder            |
+| `downloads::DownloadsStore`                                  | builder            |
 | `tabs::Tabs` (single-tab Registry, home `"about:blank"`)     | `setup()`          |
 | `linux_layout::LayoutInsets` (`#[cfg(target_os = "linux")]`) | `setup()`          |
 
@@ -1695,8 +1704,8 @@ your fix is broken. This cost a long false-negative investigation. Rules:
 
 **Mobile chrome (`MainActivity.kt`), kept in sync with the `MobileApp` shell in `src/`:**
 
-- The content area is inset by the chrome heights: `topMargin = 72dp`
-  (`MOBILE_ADDRESS_H` 48 + `MOBILE_FAV_H` 24) + status inset, `bottomMargin = 56dp`
+- The content area is inset by the chrome heights: `topMargin = 84dp`
+  (`MOBILE_ADDRESS_H` 48 + `MOBILE_FAV_H` 36) + status inset, `bottomMargin = 56dp`
   (`MOBILE_BOTTOMBAR_H`) + nav inset. **`applyContentMargins()`** is the single place
   that computes them from the `fullscreen` / `bottomBarHidden` flags + cached chrome
   heights + captured system insets; the insets listener and the bridges all call it.
@@ -2138,7 +2147,7 @@ mode the exit button must be re-added as the last (topmost z-order) child of
 the `GtkFixed` each layout pass — `raise()` alone is not enough to lift a GTK
 widget above native WebKit windows.
 
-21. **Proxy `bypassHosts` canonical-key lesson.** The `ProxyConfig` struct uses
+22. **Proxy `bypassHosts` canonical-key lesson.** The `ProxyConfig` struct uses
     `#[serde(rename = "bypassHosts")]` so that `serde_json::to_value` writes
     `"bypassHosts"` (matching `settings.json`, `state_json`, and the TS
     `ProxyConfig` interface) and `from_value` reads the same key back. Without
@@ -2148,7 +2157,7 @@ widget above native WebKit windows.
     restart. The fix: one canonical `"bypassHosts"` string used everywhere;
     enforced by the `serde_roundtrip_preserves_bypass_hosts` unit test.
 
-22. **Proxy: four very different apply mechanisms per platform.** Adding a
+23. **Proxy: four very different apply mechanisms per platform.** Adding a
     new proxy feature must account for each tier independently:
     - **Linux**: live per-webview `set_network_proxy_settings` — changes take
       effect immediately on all existing tabs.
@@ -2164,7 +2173,7 @@ widget above native WebKit windows.
       NOT recoverable, so the macOS tier has to be re-derived from scratch (raw `msg_send!`
       / `nw_proxy_config_*` Network.framework bindings, uncompilable from Linux).
 
-23. **Windows: content webviews need their OWN user-data-folder, keyed on their
+24. **Windows: content webviews need their OWN user-data-folder, keyed on their
     browser args (the `additional_browser_args` blank-page regression).** WebView2
     refuses to create a webview whose `AdditionalBrowserArguments` differ from
     another webview already using the **same user-data-folder** —
@@ -2191,7 +2200,7 @@ widget above native WebKit windows.
     network/privacy context). **Lesson:** never give one webview different browser args
     than its same-profile siblings; isolate the profile if the args must differ.
 
-24. **A visit is recorded by the PLATFORM that owns the page load — and on Android
+25. **A visit is recorded by the PLATFORM that owns the page load — and on Android
     that is Kotlin, so `on_page_load` silently records NOTHING there.** `history::record`
     had exactly one non-test caller: the `on_page_load` closure inside
     `nav::spawn_tab`. That is a **wry** callback, and Android's content area is a
@@ -2204,7 +2213,7 @@ widget above native WebKit windows.
     That attribute was not a harmless lint exemption — it was the bug, suppressed.
     **Lesson: a `cfg`-scoped `allow(dead_code)` on a FEATURE is a claim that the
     feature does not exist on that platform. Read it as a parity gap and go verify,
-    never as a cleanup.** (Generalised, with a full audit method, in gotcha 25 — which
+    never as a cleanup.** (Generalised, with a full audit method, in gotcha 26 — which
     also records that most `allow(dead_code)` in this crate hide _live_ code, so "remove
     it and see if it warns" is only sound when you check EVERY target.) Fix:
     `NativeHistory.recordVisit(tabId, url, title)` (Kotlin
@@ -2231,11 +2240,11 @@ widget above native WebKit windows.
           automated coverage: `cargo check --target aarch64-linux-android` proves the Rust side
           and `compileUniversalDebugKotlin` the Kotlin side, but only a real device proves the
           two agree. **Device-VERIFIED on a Galaxy S22 (2026-09-27):** navigating to
-          `https://example.com` produced `onPageFinished -> recordVisit -> app=SET
-
-    is_private=false should_record=true -> store len=1`, and the mobile History sheet
-    rendered "1 visit / Example Domain / example.com / just now". Only the JNI seam
-    needed proving; the hook itself was always correct.
+          `https://example.com` produced
+          `onPageFinished -> recordVisit -> app=SET`, `is_private=false`, `should_record=true`,
+          `store len=1`, and the mobile History sheet rendered "1 visit / Example Domain /
+          example.com / just now". Only the JNI seam needed proving; the hook itself was
+          always correct.
 
 e. **Size the webviews via `size_allocate`, NOT `set_size_request` — or the window
 can't shrink.** In a `GtkFixed`, `set_size_request(w, h)` sets each child's
@@ -2252,7 +2261,7 @@ floor is set via Tauri `set_min_size` (now effective — only because the webvie
 no longer pin the minimum). Live-verified: the window resizes to 600×400 and
 clamps at the 420×320 minimum.
 
-25. **Most `#[allow(dead_code)]` in this crate hide LIVE code, not dead code — audit by
+26. **Most `#[allow(dead_code)]` in this crate hide LIVE code, not dead code — audit by
     STRIPPING and re-compiling, never by reading the comment.** (Full audit,
     2026-09-27: every occurrence, three targets.)
 
@@ -2357,7 +2366,7 @@ clamps at the 420×320 minimum.
     Android consumer — it reads the setting through
     `NativeSettings.httpsOnlyOrDefault()`. An earlier revision of this bullet claimed
     `secureUrl` HARDCODED the upgrade and never read the setting; that stopped being true
-    when Wave 8 added the `ANDROID_HTTPS_ONLY` JNI global (see gotcha 26), and it was left
+    when Wave 8 added the `ANDROID_HTTPS_ONLY` JNI global (see gotcha 27), and it was left
     to rot here. What is still true, and is the real gap: `secureUrl` only ever **upgrades**
     a URL, so on a **release** APK the setting cannot be honoured in the other direction —
     `build.gradle.kts` sets `manifestPlaceholders["usesCleartextTraffic"]="false"` for release
@@ -2368,7 +2377,7 @@ clamps at the 420×320 minimum.
     Android, or align the release manifest.
 
     **Four hypotheses the audit raised and DISPROVED — recorded so they are not
-    re-investigated.** Each looked exactly like gotcha 24's Android history bug (a Rust path
+    re-investigated.** Each looked exactly like gotcha 25's Android history bug (a Rust path
     that is a no-op on that platform), and each is fine:
 
     - ~~**Find-in-page on Android is NOT broken.**~~ **The `Ok` was the bug; the silent no-op
@@ -2400,7 +2409,7 @@ find/findNext/findPrev/findClose` → `WebView.findAllAsync`/`findNext`) and the
     whose justification no local run re-confirmed. The question a `cfg_attr` always raises is
     "does _that_ target's tier call it?", and for macOS nobody has run the probe. Re-run the
 
-## Gotcha 26 — a privacy setting the platform IGNORES, and a counter that counts the wrong thing
+## Gotcha 27 — a privacy setting the platform IGNORES, and a counter that counts the wrong thing
 
 Wave 8's findings, and the shape they share: **a control that is present in the
 contract and absent from the code, or present in the code and wrong in the label.**
@@ -2474,15 +2483,20 @@ contract and absent from the code, or present in the code and wrong in the label
   anti-malvertising guard** — no `nav_policy_mac.rs` — but `redirect_guard.rs`'s module doc
   already names that in plain words, so it was never hidden by the `cfg_attr`; closing it
   needs WKWebView `decidePolicyForNavigationAction:` via objc2, which cannot be compiled or
-  verified from Linux. (b) `navigator.plugins` seeded from `location.origin` **does not
-  exist in this codebase** — neither string appears anywhere in `farble.rs`. (c)
-  `hardwareConcurrency` IS a deliberate deterministic clamp to `{2,4,8}` in the JS artifacts
-  (`src/farble.standard.js`, `src/farble.strict.js`), not noise; the genuine tell is that
-  every OTHER perturbation is jittered per session while this one is byte-identical, which
-  identifies the shim — but varying it changes behaviour, so it is the owner's call, not a
-  silent fix. (d) **On Android the per-page ad count is never reset on navigation:**
-  `adblock::reset_page` has exactly one caller, `nav.rs:556` on the desktop path, so
-  Android's count accumulates for the tab's whole lifetime and is mislabelled "here" since
-  the relabel above. The fix is a Kotlin→Rust call on top-frame navigation; this project has
-  **no Kotlin test source set**, so a change there could not be proven with a failing test,
-  which is a hard stop under the project's own rules.
+  verified from Linux. (b) **CLOSED — `navigator.plugins` IS faked, in JS.**
+  `src-tauri/src/farble.standard.js` installs a configurable own-property getter returning
+  `{ length, item() { null }, namedItem() { null } }` with every index `null`, where
+  `length = ((seedNum ^ originHash) & 0xFF) % 7 + 1`, `seedNum` is the first four bytes of
+  `SEEDHEX` and `originHash` hashes `location.href`. "Does not exist in this codebase" was
+  true of `farble.rs` only — the farbling is injected as a JS artifact, so grepping the
+  Rust file finds nothing (and the artifact paths are `src-tauri/src/farble.standard.js`
+  and `src-tauri/src/farble.strict.js`, not bare `src/`). (c)
+  `hardwareConcurrency` IS a deliberate deterministic clamp to `{2,4,8}` in the JS
+  artifacts (`src-tauri/src/farble.standard.js`, `src-tauri/src/farble.strict.js`), not
+  noise; the genuine tell is that every OTHER perturbation is jittered per session while
+  this one is byte-identical, which identifies the shim — but varying it changes behaviour,
+  so it is the owner's call, not a silent fix. (d) **CLOSED — the Android per-page ad count
+  IS reset on navigation.** `MainActivity.kt`'s `onPageStarted` calls `resetPageBlocked(id)`,
+  the Android mirror of `adblock::reset_page`, so the count covers one page load instead of
+  the tab's whole lifetime. `nav.rs:556` is the DESKTOP caller; the Kotlin→Rust call that
+  this paragraph called a hard stop was never needed.

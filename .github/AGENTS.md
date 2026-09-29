@@ -68,16 +68,22 @@ GitHub Actions workflows and Dependabot config for Aegis.
       `continue-on-error` and no `|| true` — a new advisory fails the job.
   - **`sync-server`**: the same fmt/clippy/test treatment plus its own **blocking**
     `cargo audit` for the standalone crate (the one internet-facing service in the
-    project). It is a separate non-workspace crate, so it needs no webkit2gtk and has
-    its own `sync-server/.cargo/audit.toml`.
+    project). It is a separate non-workspace crate, so it needs no webkit2gtk. It has
+    **no** `sync-server/.cargo/audit.toml` — the step runs from `sync-server/` precisely
+    so that adding one later is picked up without editing CI, and today it accepts
+    nothing.
   - **`cross-target`** (matrix, `cargo check --locked` only — no link, no test, no
     bundle): `x86_64-pc-windows-gnu` + `aarch64-linux-android` on ubuntu (mingw-w64 /
     the Android NDK supply the cross toolchain) and `x86_64-apple-darwin` on a
     **macOS-15** runner, because objc2's build script needs a macOS C toolchain and
     cannot be cross-compiled from Linux. This is the only job that compiles
     `nav_url_win.rs`, `nav_url_mac.rs`, `zoom_win.rs`, `zoom_mac.rs` and the JNI /
-    `sync_keystore` / `ffi_guard` block — everything else is Linux-cfg. `fail-fast` is
-    off so all three surfaces report at once.
+    `sync_keystore` / `ffi_guard` block. The other platform-gated modules are
+    `adblock_win.rs` and `nav_policy_win.rs` (both Windows), `find_win.rs` and
+    `find_mac.rs`, and the Linux trio `adblock_webkit.rs` / `linux_layout.rs` /
+    `find_linux.rs`; the authoritative list is the `mod` declarations in
+    `src-tauri/src/lib.rs`, not this paragraph. `fail-fast` is off so all three
+    surfaces report at once.
   - **`msrv`**: `cargo check --locked` for BOTH manifests against the `rust-version`
     declared in each `Cargo.toml`, on a toolchain resolved from that manifest (the one
     job that deliberately does NOT use `rust-toolchain.toml`, so a new stable release
@@ -142,8 +148,8 @@ tracked for **both** Rust manifests — `/src-tauri` (the Tauri core) and `/sync
 The CI `rust` and `sync-server` jobs both run a **blocking** `cargo audit`, so a
 Dependabot bump that lands a vulnerable version goes red rather than waiting for the
 weekly schedule; the accept-lists that keep known-and-accepted advisories out of that
-path are `src-tauri/.cargo/audit.toml` and `sync-server/.cargo/audit.toml`, each entry
-carrying the one-line reason it is accepted.
+path is `src-tauri/.cargo/audit.toml` (the only accept-list in the tree; `sync-server`
+has none), each entry carrying the one-line reason it is accepted.
 
 ## Notes
 

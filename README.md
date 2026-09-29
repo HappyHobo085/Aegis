@@ -51,7 +51,7 @@ destinations, so `window.open()` ad shells do not accumulate as background tabs.
 - **Content-webview proxy** — optional HTTP or SOCKS5 proxy. This is a _proxy_, not a
   VPN: it covers the browsing webview only, and DNS/QUIC/UDP egress is outside its
   path.
-- **Per-site permissions** (camera/microboard/notifications), with remember/reset
+- **Per-site permissions** (camera/microphone/notifications), with remember/reset
   controls.
 
 ### Browser basics
@@ -212,7 +212,7 @@ npm run tauri:build        # or: npm run build
 
 > **Multi-tab note:** webview creation is deliberately off the UI thread on Windows —
 > WebView2's async `CreateCoreWebView2Controller` cannot complete while the event loop
-> is blocked. Do not "simplify" that back onto the main thread; see gotcha 17 in
+> is blocked. Do not "simplify" that back onto the main thread; see gotcha 18 in
 > `src-tauri/AGENTS.md`.
 
 ---

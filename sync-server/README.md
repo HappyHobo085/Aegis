@@ -28,7 +28,7 @@ All requests carry `Authorization: AegisSig {accountId}.{tokenHex}.{sigHex}`.
 
 | Method + path           | Body                                   | Returns                                  |
 |-------------------------|----------------------------------------|------------------------------------------|
-| `GET  /v1/records?ns=`  | —                                      | `{ records: [{uuid,hlc,deleted,nonce,ct}] }` |
+| `GET  /v1/records?ns=`  | —                                      | `{ records: [{uuid,hlc,deleted,nonce,ct}], next: "<uuid>"\|null }` — `?limit=&cursor=` pages it; `next` is the last served uuid |
 | `POST /v1/records`      | `{ ns, records: [...] }`               | `{ ok: true }` (HLC last-writer-wins upsert) |
 | `POST /v1/devices`      | `{ accountId, deviceId, label, accountSig }` | `{ ok: true }` (register; `accountSig` proves the root) |
 | `GET  /v1/devices`      | —                                      | `{ devices: [{deviceId,label,lastSeenMs}] }` |

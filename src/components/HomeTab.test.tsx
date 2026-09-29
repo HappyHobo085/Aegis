@@ -106,17 +106,20 @@ describe('HomeTab', () => {
   });
 
   // The core REFUSES a bad home URL (`settings.rs` validates it as http(s)); that
-  // rejection used to vanish, leaving a Save button that appeared to do nothing.
+  // rejection used to vanish, leaving a Save button that appeared to do nothing. The
+  // string below is VERBATIM the message `settings.rs::validate_setting`'s `http_url`
+  // produces for a non-http scheme (`format!("{what} must be http(s), got {other:?}")`),
+  // so this fixture exercises the real contract rather than an invented one.
   // The rejection value is a bare STRING, not an Error — `tauriInvoke.call` is a bare
   // `invoke` and a Rust `Err(String)` rejects with that string.
   it('reports a REFUSED save instead of looking like nothing happened', async () => {
     const update = vi.fn(async () => {
-      throw 'Home URL must be http(s), got Null';
+      throw 'homeUrl must be http(s), got "file"';
     });
     render(<HomeTab settings={settings()} update={update} />);
     await userEvent.click(screen.getByRole('button', { name: /save home url/i }));
     await waitFor(() =>
-      expect(toast.error).toHaveBeenCalledWith('Home URL must be http(s), got Null'),
+      expect(toast.error).toHaveBeenCalledWith('homeUrl must be http(s), got "file"'),
     );
     // "Saved" must NOT also fire — the write was refused.
     expect(toast.success).not.toHaveBeenCalled();

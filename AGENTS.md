@@ -91,16 +91,17 @@ and the ratchet will (correctly) fail on the first CI run after that commit. Use
 
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
 here is either lying in CI or about to quietly relax the number. The measured gap, as of
-2026-09-28 (`120 test files / 1697 tests`):
+2026-09-29 (`122 test files / 1746 tests`):
 
 | Metric     | Measured               | Gap |
 | ---------- | ---------------------- | --- |
-| lines      | 4483/5084 = **88.17%** | 601 |
-| statements | 5928/6835 = **86.73%** | 907 |
-| functions  | 1197/1407 = **85.07%** | 210 |
-| branches   | 3573/4400 = **81.2%**  | 827 |
+| lines      | 4554/5140 = **88.60%** | 586 |
+| statements | 6012/6902 = **87.11%** | 890 |
+| functions  | 1222/1422 = **85.94%** | 200 |
+| branches   | 3633/4458 = **81.49%** | 825 |
 
-45 of the 119 files are at 100% statements. The 907 uncovered statements decompose as:
+46 of the 120 measured files are at 100% statements. The 890 uncovered statements decompose
+as:
 
 - **301 statements in 7 CLI scripts that v8 structurally cannot see** — `check-bundle-size`
   (35), `check-npm-audit` (36), `check-android-versioncode` (57), `coverage-baseline` (17),
@@ -109,16 +110,18 @@ here is either lying in CI or about to quietly relax the number. The measured ga
   coverage credit**. These are all thin I/O entry points whose logic lives in a pure module
   that _is_ measured: `scripts/cliGates.test.mjs` really does cover the first three (30
   passing tests) and the report still says 0%, and `scripts/rustCoverageCheck.mjs` is at
-  **96.9%** because `rustCoverageCheck.test.mjs` imports it. Treat "0% in a report" as
+  **96.58%** statements (100% lines and functions) because `rustCoverageCheck.test.mjs`
+  imports it. Treat "0% in a report" as
   _"not measurable here"_, never as _"untested"_, for anything a test spawns. See
   `scripts/AGENTS.md`.
-- **553 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (49, the
-  `createRoot` entry point), `src/testFixtures/aegisMock.ts` (503, a mock), and
+- **557 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (49, the
+  `createRoot` entry point), `src/testFixtures/aegisMock.ts` (507, a mock), and
   `src/vite-env.d.ts` (1). All three are entry-point-or-mock by design.
-- **606 statements of real, measurable test debt** spread across 74 of the 119 files,
-  concentrated in a handful: `App.tsx` 123, `mobile/MobileApp.tsx` 84, `TabStrip.tsx` 13,
+- **580 statements of real, measurable test debt** spread across 64 of the 120 files,
+  concentrated in a handful: `App.tsx` 121, `mobile/MobileApp.tsx` 73, `TabStrip.tsx` 13,
   `SettingsModal.tsx` 2, `ipcClient.ts` 29, `Sidebar.tsx` 1, `mobile/MobileMenuSheet.tsx`
-  25, `PrivacyDashboard.tsx` 21. By directory: `src/` 597, `scripts/` 9, `shared/` **0**.
+  25, `PrivacyDashboard.tsx` 21. By directory: `src/` 580 (components 206, mobile 147,
+  hooks 38, lib 68, top level 121), `scripts/` 310, `shared/` **0**.
   The file count is _files with at least one uncovered statement_, recomputed from
   `coverage/coverage-summary.json` rather than carried forward: an earlier revision of this
   line said "68 files", which is not what the report yields.
@@ -166,7 +169,7 @@ coverage section of `src-tauri/AGENTS.md`.
   - **New interactive control or user action** → a test that drives the real UI the way a
     user does (click/type/keyboard) and asserts the effect.
   - **Gate:** `npm test` green. Runtime behaviour on real hardware is **not** covered by
-    any automated gate here — see gotcha 17 in `src-tauri/AGENTS.md` for the known gaps.
+    any automated gate here — see gotcha 18 in `src-tauri/AGENTS.md` for the known gaps.
 
 ## Status (as of the Tauri migration branch)
 
@@ -267,7 +270,7 @@ cover the config validation instead. Per-platform parity matrix:
   (WebView2 browser args are immutable after creation). NOTE: because content webviews
   carry these args, each distinct args set lives in its OWN WebView2 user-data-folder
   (`EBWebView-content-<hash>`) — required to avoid a blank-page failure; see
-  `src-tauri/AGENTS.md` gotcha 23.
+  `src-tauri/AGENTS.md` gotcha 24.
 - **macOS** — NOT implemented. Direct connection. `WKWebsiteDataStore.proxyConfigurations`
   (macOS 14+) requires raw `msg_send!` / hand-rolled `nw_proxy_config_*` Network.framework
   bindings that cannot be compiled or verified from Linux (objc2 needs a macOS toolchain).
