@@ -207,6 +207,65 @@ describe('aegis.zoom IPC routing', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Android bridge: zoom.get asks the native side, which outlives a reload
+// ---------------------------------------------------------------------------
+describe('aegis.zoom.get Android branch', () => {
+  // The native WebView is the thing that actually renders the page, so its per-tab
+  // zoom is the truth. The renderer used to keep its own copy in a module-local Map,
+  // which `data.import` destroys when it reloads the chrome document on success — the
+  // toolbar then reported 100% for a page still rendered zoomed. The value is read
+  // back from the bridge instead, so a fresh module reports what the WebView is doing.
+  const bridge = {
+    getZoom: vi.fn().mockReturnValue(175),
+    setZoom: vi.fn(),
+  };
+
+  beforeEach(() => {
+    // This bridge is a file-local object, not the globally mocked `invoke`, so the
+    // outer beforeEach does not clear it and calls would leak between these tests.
+    bridge.getZoom.mockReset();
+    bridge.setZoom.mockReset();
+    bridge.getZoom.mockReturnValue(175);
+    (window as unknown as Record<string, unknown>).AegisAndroid = bridge;
+  });
+
+  afterEach(() => {
+    delete (window as unknown as Record<string, unknown>).AegisAndroid;
+    vi.resetModules();
+  });
+
+  it('reads the percentage from the bridge and divides it to a factor', async () => {
+    await expect(aegis.zoom.get(1)).resolves.toEqual({ viewId: 1, factor: 1.75 });
+    expect(bridge.getZoom).toHaveBeenCalledWith(1);
+  });
+
+  it('asks the bridge for the tab it was given, not a cached tab', async () => {
+    bridge.getZoom.mockReturnValue(300);
+    await expect(aegis.zoom.get(7)).resolves.toEqual({ viewId: 7, factor: 3.0 });
+    expect(bridge.getZoom).toHaveBeenCalledWith(7);
+  });
+
+  // The regression this pins. A `location.reload()` is observable here as a FRESH
+  // module instance: the document is new, so every module-local cache starts empty,
+  // while the native side keeps the value it was given. With the old renderer-side Map
+  // this re-imported module would answer 1.0 for a page still rendered at 175%.
+  it('still reports the native zoom after the document is reloaded', async () => {
+    expect(await aegis.zoom.get(1)).toEqual({ viewId: 1, factor: 1.75 });
+    vi.resetModules();
+    const reloaded = await import('./ipcClient');
+    await expect(reloaded.aegis.zoom.get(1)).resolves.toEqual({ viewId: 1, factor: 1.75 });
+  });
+
+  it('zoom.set hands the percentage to the bridge and reads nothing back', async () => {
+    bridge.getZoom.mockReturnValue(175);
+    await aegis.zoom.set(1, 2);
+    expect(bridge.setZoom).toHaveBeenCalledWith(1, 200);
+    // The native side is the only writer now, so set must not consult the old value.
+    expect(bridge.getZoom).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Rejection boundary
 //
 // The core returns Err(String) for ORDINARY conditions — the vault is locked,

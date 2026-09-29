@@ -331,6 +331,15 @@ interface AndroidBridge {
   /** Set page zoom for tab `id` (percentage int, 100 == 1.0). No-op off Android. */
   setZoom(id: number, percent: number): void;
   /**
+   * Read page zoom for tab `id` (percentage int, 100 == 1.0).
+   *
+   * The native side owns this value: its per-tab map outlives the chrome document,
+   * whereas a renderer-side cache does not — `data.import` reloads the document on
+   * success, which used to leave the toolbar reporting 100% for a page the WebView
+   * was still rendering zoomed.
+   */
+  getZoom(id: number): number;
+  /**
    * Answer a site-permission prompt with `requestId` and `decision`
    * ('allow' | 'allow-once' | 'deny').
    *
@@ -367,9 +376,6 @@ function androidBridge(): AndroidBridge | undefined {
 if (typeof navigator !== 'undefined' && /Android/i.test(navigator.userAgent)) {
   document.documentElement.classList.add('aegis-mobile');
 }
-
-// Module-local cache for Android zoom factors (no return channel from the native bridge).
-const androidZoom = new Map<number, number>();
 
 // The last full `Settings` the core handed us. Android's `nav.home` cannot ask the core to
 // resolve the home page — the core's arm drives a Tauri content webview, which does not exist
@@ -751,14 +757,13 @@ export const aegis: AegisApi = {
   zoom: {
     get: (viewId) => {
       const a = androidBridge();
-      if (a) return Promise.resolve({ viewId, factor: androidZoom.get(viewId) ?? 1.0 });
+      if (a) return Promise.resolve({ viewId, factor: a.getZoom(viewId) / 100 });
       return dedupedCall<ZoomState>(IPC.zoomGet, { viewId });
     },
     set: (viewId, factor) => {
       const a = androidBridge();
       if (a) {
         const f = clampZoom(factor);
-        androidZoom.set(viewId, f);
         a.setZoom(viewId, Math.round(f * 100));
         // No native event bus on Android content side; push to onChanged subscribers,
         // mirroring nav.onState's __aegisNavState multi-subscriber pattern.

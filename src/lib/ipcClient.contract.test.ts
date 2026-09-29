@@ -1158,6 +1158,7 @@ describe('the Android bridge path', () => {
       findPrev: vi.fn(),
       findClose: vi.fn(),
       setZoom: vi.fn(),
+      getZoom: vi.fn(() => 100),
       resolvePermission: vi.fn(),
       setProxy: vi.fn(),
       clearProxy: vi.fn(),
@@ -1235,10 +1236,16 @@ describe('the Android bridge path', () => {
     });
   });
 
-  it('zoom.get is answered from the module-local cache, with no channel', async () => {
-    // 1.0 is the documented default for a view the native side has never reported.
+  it('zoom.get is answered from the native side, with no channel', async () => {
+    // The native side owns the value, and a 1.0 answer for a tab it has never reported
+    // is the documented default. It used to be answered from a module-local cache, which
+    // `data.import` wipes when it reloads the chrome document on success.
     await expect(aegis.zoom.get(1)).resolves.toStrictEqual({ viewId: 1, factor: 1.0 });
-    await aegis.zoom.set(1, 2.0);
+    expect(bridge.getZoom).toHaveBeenCalledWith(1);
+
+    // A value the native side reports is returned verbatim, so this cannot pass just
+    // because the default is 1.0 and nothing is being read.
+    (bridge.getZoom as ReturnType<typeof vi.fn>).mockReturnValue(200);
     await expect(aegis.zoom.get(1)).resolves.toStrictEqual({ viewId: 1, factor: 2.0 });
     expect(mockInvoke).not.toHaveBeenCalled();
   });

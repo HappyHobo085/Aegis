@@ -783,6 +783,7 @@ ordinal+1)` → `window.__aegisFindState(…)` in the chrome (mirroring `pushNav
     objc2 cannot be built from Linux; runtime needs a macOS desktop (sub-project I).
   * **Android** — no Rust involvement: the chrome calls `window.AegisAndroid.setZoom(id,
 percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
+    `zoom.get` reads it back through `MainActivity.getZoom(id)` (`tabZoom[id] ?: 100`) rather than from a renderer-side cache: the native map is what outlives the chrome document, and `data.import` reloads that document on a successful restore, so a cached copy reported 100% for a page the WebView was still rendering zoomed. `tabZoom` is a `ConcurrentHashMap` because a `@JavascriptInterface` method runs on the JS-bridge thread, not the UI thread `setZoom` writes on.
     (where `percent` is `Math.round(factor * 100)`). **Limitation:** `textZoom` is text-size
     scaling, not true page zoom (images/layout stay fixed-size); a pixel-perfect page-zoom
     alternative requires Android 9+ `WebView.setDefaultZoom` workarounds. Kotlin compile-verified

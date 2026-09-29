@@ -40,6 +40,7 @@ import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import org.json.JSONObject
 
 /**
@@ -76,7 +77,14 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // Per-tab zoom (textZoom percent, 100 == 1.0). Session-only (not persisted), matching
   // the desktop v1 design. Kept on discard so a reactivated tab restores its zoom;
   // dropped on close (session ends).
-  private val tabZoom = HashMap<Int, Int>()
+  //
+  // Concurrent because `getZoom` is a @JavascriptInterface method and therefore runs on
+  // the JS-bridge thread, not the UI thread (see the note above `Bridge`), while
+  // `setZoom` writes it on the UI thread. A plain HashMap read across those two threads
+  // is a data race. Only this map is read off the UI thread, so the type change is
+  // local — the five call sites (clear, []?.let, remove, []=, and the new getter) all
+  // take the same shape on a ConcurrentHashMap.
+  private val tabZoom = ConcurrentHashMap<Int, Int>()
   // IDs of private (incognito-mode) tabs. Android WebView has no per-WebView data partition,
   // so strict privacy here means: while a private tab is active, the process-global cookie
   // manager is put into no-cookie mode; private WebViews run with DOM storage + form data
@@ -1741,6 +1749,18 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       tabZoom[id] = clamped
       tabWebViews[id]?.settings?.textZoom = clamped
     }
+
+    /** The current zoom for tab [id] as a percentage (100 == 1.0), or 100 for a tab
+     *  with no recorded zoom.
+     *
+     *  This exists because the renderer used to cache zoom factors in a module-local
+     *  `Map`, which `data.import` destroys: a successful restore reloads the chrome
+     *  document, so the toolbar would then report 100% on a page still rendered at
+     *  whatever the user had set. The native map already outlives the renderer
+     *  document, so it is the source of truth and the renderer asks for the value
+     *  rather than keeping a second copy that a reload loses. */
+    @JavascriptInterface
+    fun getZoom(id: Int): Int = tabZoom[id] ?: 100
 
     /** Open a URL in the external browser (used to reach the releases page to install
      *  an update — the Tauri updater is desktop-only). */

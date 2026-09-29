@@ -9,6 +9,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Restoring a backup on Android no longer forgets the zoom you had set.** Per-tab zoom was
+  cached in the chrome document, and a successful restore reloads that document — so the
+  toolbar then reported 100% for a page the WebView was still rendering zoomed, and the next
+  zoom change was computed from that wrong base. The value now comes from the native side,
+  which already keeps it and is what actually renders the page.
 - **A huge filter list can no longer be written over sync or from a backup.** Custom
   filters were size-checked on the one path you trigger yourself, and not on either path
   where the text arrives from somewhere else: a filter list arriving over sync, and a
