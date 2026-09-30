@@ -38,8 +38,8 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   navigation Aegis stopped on purpose is no longer reported as a page failure, so it no
   longer turns into an error screen.
 - **A tab's title now follows a page that renames itself.** A page that changed its own
-  `document.title` after load "'''-'''an SPA route change, a Gmail unread count, a YouTube video
-  title"'''-'''" never reached the tab strip, which kept showing the title from page load and never
+  `document.title` after load — an SPA route change, a Gmail unread count, a YouTube video
+  title — never reached the tab strip, which kept showing the title from page load and never
   corrected itself. Desktop picks this up from the webview's title-change hook and Android
   from the tab's own `WebChromeClient`, and both feed the existing nav-state event, so there is
   one path rather than two.
@@ -921,7 +921,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 - **The backup importer can now read a file you pick, not only pasted text.** The Data
   tab grew a "Choose a backup file…" button that fills the existing paste box with the
-  file's contents, so a restore is still something you read before you run it \u2014 which
+  file's contents, so a restore is still something you read before you run it — which
   matters, because replacing wipes your history. The import itself is unchanged code on
   an unchanged path, and pasting still works.
 

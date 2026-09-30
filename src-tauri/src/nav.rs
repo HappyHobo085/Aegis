@@ -598,14 +598,14 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
                 );
             }
         })
-        // A page that changes its OWN title after load "''' + EM + '''" an SPA route change, a
-        // Gmail unread count, a YouTube video title. `on_page_load` above already fired, so
-        // the tab strip kept showing the title from page load: visibly stale, and it never
-        // self-corrected. Re-emit `nav.state` with the new title rather than calling
-        // `tabs::set_title` directly, because the chrome's `useNav` is what owns the title
-        // and it filters by `viewId` "''' + EM + '''" routing through the same event keeps
-        // desktop and Android on ONE path (Android's Kotlin `pushNavState` already carries
-        // `title` in the same payload shape).
+        // A page that changes its OWN title after load — an SPA route change, a Gmail
+        // unread count, a YouTube video title. `on_page_load` above already fired, so
+        // the tab strip kept showing the title from page load: visibly stale, and it
+        // never self-corrected. Re-emit `nav.state` with the new title rather than
+        // calling `tabs::set_title` directly, because the chrome's `useNav` is what owns
+        // the title and it filters by `viewId` — routing through the same event keeps
+        // desktop and Android on ONE path (Android's Kotlin `pushNavState` already
+        // carries `title` in the same payload shape).
         //
         // The URL is re-read from the webview rather than captured at spawn: a title change
         // is not a navigation, so the spawn-time URL may be many navigations stale, and the
@@ -1708,7 +1708,7 @@ mod tests {
     /// would match the documentation of the bug instead of the bug.
     /// Android's half of the tab-title fix must keep pushing a title. There is no
     /// Kotlin test source set, so a source-text pin is the only thing that can catch a
-    /// future edit that deletes the override "''' + EM + '''" and the symptom would be a silently
+    /// future edit that deletes the override — and the symptom would be a silently
     /// stale tab strip on a phone, which no Rust test could otherwise see.
     ///
     /// Asserts the CALL and not just the override: a `onReceivedTitle` that never
@@ -1736,14 +1736,14 @@ mod tests {
     /// The desktop half: the wry builder must register `on_document_title_changed`, and
     /// it must go through `emit_state` so the chrome's ONE `nav.state` subscriber serves
     /// desktop and Android alike. A direct `tabs::set_title` call here would still update
-    /// the tab but would leave the two platforms on different code paths "''' + EM + '''" the
+    /// the tab but would leave the two platforms on different code paths — the
     /// opposite of what the shared handler is for.
     ///
     /// Both asserts read `test_support::rust_production_source`, NOT the whole file.
     /// This test is itself a line of `nav.rs`, so `include_str!("nav.rs")` hands it the
     /// very literals it searches for and the pin is satisfied by its own ASSERTION: a
-    /// probe that deleted the `on_document_title_changed` hook outright ''' + EM + ''' all three
-    /// lines, closure included ''' + EM + ''' left this test GREEN. It proved nothing about the
+    /// probe that deleted the `on_document_title_changed` hook outright — all three
+    /// lines, closure included — left this test GREEN. It proved nothing about the
     /// code, and would have shipped the regression it claims to catch.
     #[test]
     fn the_content_webview_reports_a_title_the_page_changed_itself() {

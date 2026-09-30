@@ -26,9 +26,13 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
   - **There is deliberately no `redirect.*` channel or event.** A scripted cross-origin
     top-frame redirect that the guard cancels is reported to the chrome by NO channel — the
     native guard opens the destination itself: `redirect_guard::on_blocked_redirect_to_new_tab`
-    → `tabs::open_redirect_background` on desktop, and a Material Snackbar on Android
-    (a chrome-layer toast can't paint over the native content WebView; see
-    `MainActivity.showRedirectBlocked`). An earlier version of this doc claimed a
+    → `tabs::open_redirect_background` on desktop, and on Android the same native
+    guard opens it (`NativeRedirectGuard.openBlockedRedirect` from
+    `MainActivity.showRedirectBlocked`). A chrome-layer toast cannot paint over the
+    native content WebView, so Android offers **no** affordance: when the budget
+    refuses the open, `showRedirectBlocked` only logs, and the navigation stays
+    refused. There is no Snackbar anywhere in the Kotlin, and no "Open anyway".
+    An earlier version of this doc claimed a
     `redirect.blocked` event carried `{viewId, from, to}` to an `aegis.redirect.onBlocked`
     callback that then called `tabs.create(r.to, true)`. **That was never true, and the whole
     chain is now deleted** — no Rust ever emitted the event, and the renderer's own open path is
@@ -150,8 +154,8 @@ password: string; notes: string }` — decrypted record; returned only by direct
      inventory entry. Adding a key to silence a failure is the antipattern this file
      exists to prevent; fix the code or the contract instead.
 
-     **`UNSUBSCRIBED_EVENTS` currently holds two entries, and neither is an excuse
-     — both are open questions about the contract, recorded rather than guessed.**
+     **`UNSUBSCRIBED_EVENTS` currently holds THREE entries, and none is an excuse
+     — they are open questions about the contract, recorded rather than guessed.**
      `vault.changed` (`vault.rs` `emit_changed`, six call sites) exists so "sync and
      other listeners know the vault data mutated", but `vault.state` is already
      subscribed and carries the same mutation. `form.state` (`form.rs`
@@ -159,6 +163,13 @@ password: string; notes: string }` — decrypted record; returned only by direct
      `form.detectionResult`. In both cases the open question is **which event is the
      contract**, not who should subscribe — deleting either on a hunch would remove a
      live contract. Resolving them needs a decision, not a guard change.
+     The third is `form.detectionResult`: nothing emits it on ANY platform
+     (`form.rs` describes the result but no arm sends it), and the login-form
+     detector cannot work on any platform today — the content webview has no Tauri
+     capability, so `window.__TAURI__` is undefined there and `form.detectLoginForm`
+     now returns an `Err` instead of quietly reporting "no form". This file already
+     names that event elsewhere as the reason the detector is inert, which is why the
+     count here was the one number that had drifted out of step with the list below.
      **`sync.vaultQuarantined` was in this class and is now FIXED** (2026-09-28): the
      event is the _only_ channel for a rejected vault write (it is in no `state_json`,
      so there is no polling fallback), `shared/types.ts` calls it "a security outcome

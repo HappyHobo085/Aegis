@@ -44,7 +44,9 @@ GitHub Actions workflows and Dependabot config for Aegis.
     `AGENTS.md`; the tooling's own contract: `scripts/AGENTS.md`.
   - **`rust`** (the `src-tauri` crate): installs the webkit2gtk build deps, then
     `cargo fmt --check` → `cargo clippy --locked --all-targets -- -D warnings` →
-    `cargo test --locked` (the 517 `src-tauri` unit tests, Linux-cfg paths) →
+    `cargo test --locked` (the 649 `src-tauri` unit tests that compile on the Linux
+    runner: 663 `#[test]` functions in `src-tauri/src` less 14 that are
+    platform-gated — `find_mac` 10, `find_win` 2, `adblock_win` 2) →
     `cargo llvm-cov` + `node scripts/rust-coverage-ratchet.mjs` → a **BLOCKING**
     `cargo audit` over the crypto/keyring/TLS surface. Two things in there are not
     incidental:

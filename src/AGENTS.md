@@ -632,7 +632,7 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
 - **`MobileTabSwitcher`** — a vertical-list tab switcher sheet (`'tabs'`): one row per
   tab (page title, or host fallback), tap to switch, X to close, **+ New tab**.
 - **Tab titles after load.** `useTabTitleSync` (both chromes) sends `tabs.setTitle` when a
-  `nav.state` carries a title the tab has not reported yet "''' + EM + '''" which is how a page
+  `nav.state` carries a title the tab has not reported yet "—" which is how a page
   that renames ITSELF (SPA route, unread count, video title) reaches the strip, since
   `tabs.recordNav` only runs at navigation. It is separate from `useNav` because `useNav` is
   mounted per view and filters to the ACTIVE tab (the address bar only tracks the active one),
@@ -876,7 +876,8 @@ eval" — they already do: `run` and `runStrict` both use `(0, eval)(…)`, and 
 ### The four biggest coverage gaps, and what closing them cost (2026-09-28)
 
 Uncovered statements before and after, measured from `coverage/coverage-summary.json`:
-`App.tsx` 145 → **123**, `TabStrip.tsx` 60 → **13**, `SettingsModal.tsx` 34 → **2**,
+`App.tsx` 145 → **123** at the time of that change, `TabStrip.tsx` 60 → **13**,
+`SettingsModal.tsx` 34 → **2**,
 `Sidebar.tsx` 28 → **1**. Every one of these four files' own source files came out
 **byte-identical to HEAD** — the whole change is tests, and each new test was proved
 non-vacuous by neutralising the mechanism it covers and watching exactly the right tests
@@ -933,8 +934,8 @@ the tablist handler — structurally unreachable, not untested. `Sidebar`'s sing
 statement is `if (typeof window === 'undefined') return 900;`, an SSR guard jsdom can never
 hit. `TabStrip`'s 13 are a **genuine** remaining gap, not an excuse: its own `focusTabAt`
 keyboard navigation (the Enter/Space/Arrow/Home/End arms and the scroll-a-missed-tab-into-view
-branch) is still untested. `App.tsx`'s remaining 123 are mostly the conditionally-rendered
-modals and their callback props.
+branch) is still untested. `App.tsx`'s remaining debt (the count in the `src/`-only view
+below) is mostly the conditionally-rendered modals and their callback props.
 
 **Two method notes worth more than the code.** _A hand-derived index is a liability_ — three
 times this session I computed an expected index or an off-by-one wrap by hand and was wrong
@@ -952,9 +953,9 @@ then counts both. One render per test.
 `src/main.tsx` (the `createRoot` entry point), `src/vite-env.d.ts`, and
 `src/testFixtures/**` (a mock). The measured totals, the ratchet and the full gap
 decomposition live in the **root** `AGENTS.md`. The `src/`-only view, for when you want it
-without opening the other file: `src/` is at **90.5%** statements (5711/6308, 597 uncovered)
-and the debt is concentrated in `src/components/` (368) and the `App.tsx` root (123); the
-hooks sit at 38 uncovered statements out of 1386, and `shared/` is at 0. Every figure here
-is recomputed from `coverage/coverage-summary.json` when it is touched — the previous
-revision of this paragraph said 88.0% / 736 uncovered / 479 / 152 / 42-of-1350, none of
-which the report yields any more.
+without opening the other file: `src/` is at **90.92%** statements (5797/6376, 579 uncovered)
+and the debt is concentrated in `src/components/` (353, of which 147 is `mobile/`) and the
+`App.tsx` root (121 of 344); the hooks sit at 38 uncovered statements out of 1412, and
+`shared/` is at 0. Every figure here is recomputed from `coverage/coverage-summary.json`
+when it is touched — the previous revision of this paragraph said 88.0% / 736 uncovered /
+479 / 152 / 42-of-1350, none of which the report yields any more.

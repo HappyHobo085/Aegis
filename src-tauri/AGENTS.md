@@ -1776,8 +1776,10 @@ env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR \
 
 That reproduces CI **exactly** — measured `sync.rs` 703, `sync_keystore.rs` 228,
 13245 total lines, 1618 functions, every one identical to what run 36440444084
-reported. Four `SKIP keychain tests` lines appear and all 517 tests still pass,
-because the keychain tests early-return rather than fail. `dbus-run-session -- env
+reported. Four `SKIP keychain tests` lines appear and all 517 tests still pass
+(517 is the count in that run; the suite has grown since, and the live number is
+the one `cargo test --lib` prints), because the keyring tests early-return rather
+than fail. `dbus-run-session -- env
 -u XDG_RUNTIME_DIR …` works as a wrapper if you need the D-Bus variable itself
 defined; `unshare -U -r` does **not** isolate the keyring, and neither does an
 `LD_PRELOAD` shim over `add_key`/`keyctl` — the binary issues no such calls, since

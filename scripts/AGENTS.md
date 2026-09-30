@@ -21,7 +21,7 @@ GitHub Actions workflows in `.github/workflows/`:
     `node scripts/check-npm-audit.mjs` → `node scripts/check-android-versioncode.mjs`.
   - **`rust`**: installs the webkit2gtk build deps, then
     `cargo fmt --check` → `cargo clippy --locked --all-targets -- -D warnings` →
-    `cargo test` (the 517 `src-tauri` unit tests, Linux-cfg paths) → the Rust
+    `cargo test` (the 649 `src-tauri` unit tests that compile on the Linux runner — 663 `#[test]` functions in `src-tauri/src`, less the 14 that are platform-gated: `find_mac` 10, `find_win` 2, `adblock_win` 2) → the Rust
     coverage ratchet (`cargo llvm-cov` + `node scripts/rust-coverage-ratchet.mjs`),
     plus `cargo audit` over the crypto/keyring/TLS deps. That audit is **blocking**
     despite the historical "advisory" label — it has no `continue-on-error`, so any

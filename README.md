@@ -76,7 +76,14 @@ per-subsystem record, and they document what is _pending_ as well as what ships.
   weaker by design — see the per-platform notes in `src-tauri/AGENTS.md`.
 - **iOS:** unstarted (needs macOS + Xcode).
 - **Not implemented:** password autofill (the vault is manage-only), macOS proxy,
-  macOS/Android find-in-page parity, and the Android farbling allowlist.
+  and macOS/Android find-in-page parity.
+
+  The Android farbling allowlist is **not** in that list: it ships. `farble.rs` keeps
+  an `ANDROID_FP_ALLOWLIST` global that `note_fp_allowlist` mirrors from the same
+  `FarbleState` the desktop path uses, `android_host_allowlisted` consults it
+  (exact-or-subdomain), and Android's JNI getter is handed the tab's content host
+  so an allowlisted site gets no shim there either. It was previously listed here as
+  unimplemented, which was wrong.
 
 > **No automated gate exercises the real Rust core or a real webview.** The test suite is
 > vitest-level and runs against an IPC mock. Platform-specific behaviour — the Linux
