@@ -1724,6 +1724,18 @@ no-keyring figure — 228 of 357), `nav.rs` 66.57%, `permissions.rs` 76.30%,
 quoted at its FLOOR value (797 of 1337), so a run that measures higher reads better than the
 table, never worse.
 
+The table is the floor, so a file can also sit below it, and one does. Measured on the
+current tree: `nav.rs` 700/1043, `tabs.rs` 513/904, `zoom.rs` 229/244 and
+`redirect_guard.rs` 624/663 are all above their floor entries, while `lib.rs` measures
+**194 of 543** against the floor's 200 — and CI's runner measured that same 194, so it
+is not a dev-box artefact. It is a stale entry: `a810267`, the commit that set this
+floor, hand-edited exactly the three totals and `sync.rs`'s three covered counts and left
+`lib.rs` alone, and `0bf98f8` — the only `lib.rs` change since, `+15/−5` of doc comments
+and one string literal — cannot move a covered count, because the module's counted line
+total is 543 in both. Per-file entries do not gate: the ratchet compares totals and
+prints these deltas as diagnostics. So nothing depends on that number being right, and
+the generated baseline is left alone rather than hand-edited.
+
 `adblock_engine.rs` reads 91.84% (349 of 380) and is the one place where a **lower ratio is
 the better news**: the engine's test suite gained the answered-verdict plumbing and its own
 test, which added 51 total lines of which 39 are covered, so the percentage fell from 94.22%
@@ -1750,6 +1762,18 @@ lines with a keyring, and **228** without one; `sync.rs` moves 574 vs 498. CI's
 `cargo llvm-cov` has never had a usable keyring — runs 36325245069 and 36326730887 both
 reported exactly 11038/14750, twice. (Those four runs are the pre-2026-09-28 tree; the
 current tree moves `sync.rs` 785 vs 703 and `sync_keystore.rs` 286 vs 228.)
+
+**On the current tree the same command is bistable, which is the whole reason the floor
+is a minimum across runs and not one reading.** Four keyring-free runs of `4d30ede` — two
+of them the same tree, same toolchain — measured `sync.rs` covered lines **830, 797, 830,
+830** and covered functions **78, 74, 78, 78**, with `sync_keystore.rs` 228 and
+`adblock_engine.rs` 349 in all four. The entire spread is one file: 33 lines and 4
+functions. The 797 reading is the floor's own value, so one dev-box reading is not
+evidence of what CI will measure. The attribution is exact rather than inferred: on
+`beea9eb` this box reproduces every per-file delta CI printed — lib.rs −6,
+test_support +10, zoom +11, nav +29, downloads +37, tabs +37 — and differs on exactly
+one file, `sync.rs`, by +33 lines and +4 functions, which is 17787 − 33 = 17754 (CI's
+total) and 2125 − 4 = 2121 (CI's function count).
 
 **This bit the tree a second time on 2026-09-28, so the rule has an operational
 half as well as a moral one.** Run 36440444084 failed the ratchet on two per-file
