@@ -891,6 +891,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   halves, and when the platform has no usable folder the download is dropped with a log
   line rather than recorded at a path it will never occupy.
 
+- **A private Android tab stopped protecting you the moment you switched tabs.** The
+  first-party cookie gate is process-wide — Android's `CookieManager` has no per-WebView
+  form — and the app keyed it on the **active** tab. With a private tab open in the
+  background, tapping a normal tab re-enabled cookies for the whole process, so the
+  still-running private page resumed sending and storing them. That is not the documented
+  Android limitation (first-party cookies lingering in the shared jar _after_ a private tab
+  is closed); here the tab was still live. Cookies are now refused while **any** private tab
+  is alive, and the cost of that is stated rather than hidden: a normal tab in the background
+  does not receive cookies while a private tab is open. First-party cookies already stored
+  by other tabs before the private one opened still linger, as before.
+
 ### Added
 
 - **The backup importer can now read a file you pick, not only pasted text.** The Data

@@ -1331,4 +1331,100 @@ mod tests {
             );
         });
     }
+
+    /// The Android private-tab cookie gate was keyed on the ACTIVE tab, and
+    /// `CookieManager.setAcceptCookie` is process-global — so with a private tab alive in the
+    /// background, switching to any normal tab re-enabled cookies process-wide while the
+    /// private WebView was still RUNNING and resumed sending and storing them. That is not the
+    /// accepted "first-party cookies linger in the jar after close" Android tier, where the tab
+    /// is already gone; here the tab was live and the gate was simply open.
+    ///
+    /// The invariant is now the strictest one the platform allows: a private tab alive ANYWHERE
+    /// means cookies are off for the process. There is no Kotlin test source set in this repo,
+    /// so this is a source-text pin through the crate's existing Kotlin helpers, and it pins
+    /// the two things that together make the invariant hold:
+    ///
+    /// 1. the gate is written in exactly ONE place, from the whole file rather than from one
+    ///    function — a second writer somewhere in a 1900-line file would re-open the hole, and
+    ///    a per-function pin cannot see that;
+    /// 2. every site that can change `privateTabs` re-syncs afterwards, in the right order
+    ///    (membership first, then the gate), so a new private tab cannot be live with cookies
+    ///    accepted and a teardown cannot restore them while another private tab survives.
+    #[test]
+    fn android_refuses_cookies_while_any_private_tab_is_alive_not_only_the_active_one() {
+        use crate::test_support::{kotlin_fn_body, kotlin_production_source, kotlin_source};
+        let src = kotlin_source("MainActivity.kt");
+        let production = kotlin_production_source(&src);
+
+        // 1. One writer, over the whole file. The strip is what makes this an assertion rather
+        //    than a count of the prose that documents the old keying.
+        let writers = production.matches("setAcceptCookie(").count();
+        assert_eq!(
+            writers,
+            1,
+            "setAcceptCookie is PROCESS-GLOBAL, so the gate must be written in exactly one \
+             place. {writers} writers exist in MainActivity.kt, so one of them can re-enable \
+             cookies while a private WebView is live. The single writer must key off the whole \
+             private set, never off the active tab; the writes are: {:?}",
+            production
+                .lines()
+                .filter(|l| l.contains("setAcceptCookie("))
+                .collect::<Vec<_>>()
+        );
+        let gate = kotlin_fn_body(&src, "private fun syncCookieAcceptance(");
+        assert!(
+            gate.contains("setAcceptCookie(privateTabs.isEmpty())"),
+            "the gate must refuse cookies while ANY private tab is alive; it reads: {gate}"
+        );
+
+        // 2. Every mutation of `privateTabs` is followed by a re-sync, in that order.
+        for (signature, member, why) in [
+            (
+                "override fun onDestroy(",
+                "privateTabs.clear()",
+                "onDestroy drops the last private tabs, so the gate must be restored after it",
+            ),
+            (
+                "private fun teardownTab(",
+                "privateTabs.remove(id)",
+                "closing a private tab must restore cookies only if no private tab survives",
+            ),
+            (
+                "fun activateTab(",
+                "if (isPrivate) privateTabs.add(id)",
+                "a new private tab must be refused cookies before it loads anything",
+            ),
+        ] {
+            let body = kotlin_fn_body(&src, signature);
+            let member_at = body.find(member).unwrap_or_else(|| {
+                panic!(
+                    "{signature} no longer contains {member:?}, so this pin is describing \
+                        a state of the file that no longer exists: {body}"
+                )
+            });
+            let sync_at = body.find("syncCookieAcceptance()").unwrap_or_else(|| {
+                panic!(
+                    "{signature} changes the private set ({why}) but never syncs the \
+                        process-global cookie gate"
+                )
+            });
+            assert!(
+                member_at < sync_at,
+                "{signature} must change the private set BEFORE syncing the gate, or the gate \
+                 is written from the membership it is about to invalidate ({why}): {body}"
+            );
+        }
+
+        // The old keying must be gone, not merely unused: a re-keyed gate would still pass
+        // every assert above while the bug is live.
+        for gone in [
+            "setAcceptCookie(!privateTabs.contains(id))",
+            "privateTabs.contains(activeTabId)",
+        ] {
+            assert!(
+                !production.contains(gone),
+                "{gone:?} is the active-tab keying this test exists to keep out of the file"
+            );
+        }
+    }
 }

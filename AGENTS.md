@@ -211,8 +211,12 @@ flag; desktop content webview uses `WebviewBuilder::incognito(true)` — Linux
 `nonPersistentDataStore`; history/downloads-list/session-persistence all skip private
 tabs; closed private tabs are not reopenable; a tab opened from a private tab inherits
 privateness; Android is a best-effort weaker tier — `LOAD_NO_CACHE` + 3rd-party-cookies
-refused + cache/history cleared on close, but first-party cookies linger in Android's
-process-global jar after close, which is documented and accepted). Affordance: **New
+refused + cache/history cleared on close, and the process-global cookie gate is refused
+while ANY private tab is ALIVE (not merely while one is the active tab — see
+`MainActivity.kt`'s `syncCookieAcceptance`, which is the only writer of that gate), but
+first-party cookies linger in Android's process-global jar after close, which is
+documented and accepted; the strict invariant's cost is that a normal background tab
+stops receiving cookies while a private tab is open). Affordance: **New
 private tab** button in `TabStrip` + `Ctrl+Shift+N` (desktop) + mobile tab switcher.
 Tests cover the button + the keyboard shortcut. The "a private navigation leaves no
 history row" assertion is **not** automated — proving it needs a real webview, and

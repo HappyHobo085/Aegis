@@ -340,6 +340,29 @@ pub fn rust_production_source(src: &str) -> String {
         .join("\n")
 }
 
+/// The whole of a Kotlin source with every comment line dropped: both `// …` lines and the
+/// `* …` body lines of a `/** … */` KDoc block (the first line of such a block, `/** …`, is
+/// not one, so a pin looking for a KDoc-only token is matched by the block's own first line —
+/// deliberate, because a KDoc that names a function the file no longer has is itself worth
+/// seeing).
+///
+/// `kotlin_fn_body` already strips `//` lines, but a pin that must hold over a FILE ("this
+/// process-global gate is written in exactly one place") has no function to slice, and a raw
+/// `src.matches("setAcceptCookie(").count()` would be satisfied by this repo's own habit of
+/// quoting the code it replaced inside a comment — here, in the KDoc that documents the gate.
+/// The stripping is deliberately only these two line forms: `/* … */` blocks, block comments
+/// ending a line, and a trailing `//` are not used by the Kotlin sources in this repo, and
+/// guessing at more general parsing would be untested.
+pub fn kotlin_production_source(src: &str) -> String {
+    src.lines()
+        .filter(|l| {
+            let t = l.trim_start();
+            !t.starts_with("//") && !(t.starts_with('*') && !t.starts_with("/**"))
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -2235,12 +2235,28 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
         The native path in `MainActivity.kt` is a best-effort tier: `privateTabs` (`HashSet`)
         tracks private tab ids; at creation, `wv.settings.cacheMode = LOAD_NO_CACHE` (memory-
         only HTTP cache) and 3rd-party cookies are refused for that WebView. On close,
-        `wv.clearCache(true)` + `wv.clearHistory()` are called. **Honest limit:** Android's
+        `wv.clearCache(true)` + `wv.clearHistory()` are called. Because `CookieManager` is
+        process-global, the first-party cookie gate is too: `syncCookieAcceptance()` is the ONLY
+        writer of `setAcceptCookie`, and it refuses cookies while `privateTabs` is non-empty —
+        i.e. while any private tab is ALIVE, not merely while one is the ACTIVE tab. (It used to
+        be keyed on the active tab, so switching to a normal tab re-enabled cookies
+        process-wide while a private WebView was still running. That is a different weakness
+        from the honest limit below: the tab was LIVE, not closed.) The cost of the strict
+        invariant is real and is not hidden: a normal tab in the background stops receiving
+        cookies for as long as any private tab is open. Every site that mutates `privateTabs`
+        (`onDestroy`, `teardownTab`, `activateTab`) re-syncs after the mutation, and
+        `activateTab` does it BEFORE the private WebView is created, so a private tab is never
+        live with cookies accepted. A `tabs::tests` source-text pin covers all of that over the
+        Kotlin source, since there is no Kotlin test source set.
+
+        **Honest limit:** Android's
         `CookieManager` / `WebStorage` are process-global — there is no per-WebView cookie
-        partition in the released Android WebView API. First-party cookies set by a private tab
-        LINGER in the shared cookie jar after the tab is closed. The app deliberately does NOT
-        flush the global cookie jar on close (that would log the user out of normal-tab sites).
-        This limit is documented in `MainActivity.kt` and is the accepted Android weakest tier.
+        partition in the released Android WebView API. First-party cookies set by NORMAL tabs
+        before a private tab was opened LINGER in the shared cookie jar after the private tab is
+        closed (a private tab's own WebView is created with the gate already refused, so it
+        stores nothing new). The app deliberately does NOT flush the global cookie jar on close
+        (that would log the user out of normal-tab sites). This limit is documented in
+        `MainActivity.kt` and is the accepted Android weakest tier.
 
         **Parity matrix (honest):**
         - **Linux**: ephemeral WebKit partition — compile-verified; **live GUI verify PENDING**

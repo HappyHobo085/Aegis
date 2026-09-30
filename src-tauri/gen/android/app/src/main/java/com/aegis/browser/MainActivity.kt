@@ -87,10 +87,11 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // take the same shape on a ConcurrentHashMap.
   private val tabZoom = ConcurrentHashMap<Int, Int>()
   // IDs of private (incognito-mode) tabs. Android WebView has no per-WebView data partition,
-  // so strict privacy here means: while a private tab is active, the process-global cookie
-  // manager is put into no-cookie mode; private WebViews run with DOM storage + form data
-  // persistence disabled; and cache/history/state are cleared at teardown. Normal tabs restore
-  // cookie acceptance when activated.
+  // so strict privacy here means: while a private tab is ALIVE, the process-global cookie
+  // manager is in no-cookie mode (see syncCookieAcceptance for why "alive", not "active");
+  // private WebViews run with DOM storage + form data persistence disabled; and
+  // cache/history/state are cleared at teardown. Cookie acceptance is restored when the last
+  // private tab goes away.
   private val privateTabs = HashSet<Int>()
   private var activeTabId = -1
   // Per-tab current page URL (the ad-block first-party context), read on the network
@@ -279,6 +280,8 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     tabWebViews.clear()
     tabZoom.clear()
     privateTabs.clear()
+    // Every private WebView is destroyed by this point, so no live tab is owed no-cookie mode.
+    syncCookieAcceptance()
     pageUrls.clear()
     pageBlocked.clear()
     gestureContainer = null
@@ -874,7 +877,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     tabZoom[id]?.let { wv.settings.textZoom = it }
     if (isPrivate) {
       // Strict private mode: avoid persistent WebView stores for this tab and refuse cookies
-      // while it is active (activateTab toggles the process-global CookieManager).
+      // for as long as it is alive (syncCookieAcceptance owns the process-global gate).
       wv.settings.cacheMode = WebSettings.LOAD_NO_CACHE
       CookieManager.getInstance().setAcceptThirdPartyCookies(wv, false)
     }
@@ -1648,10 +1651,34 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   }
 
   /**
+   * The single writer of the process-global cookie gate.
+   *
+   * `CookieManager.setAcceptCookie` is process-wide: there is no per-WebView form of it, so
+   * cookies cannot be refused for one tab and accepted for another. The invariant is therefore
+   * the strictest one the platform allows — while ANY private tab is ALIVE, cookies are refused
+   * for the whole process — and this function is the only place that sets it.
+   *
+   * It used to be keyed on the ACTIVE tab: `activateTab` did
+   * `setAcceptCookie(!privateTabs.contains(id))` and `teardownTab` did
+   * `setAcceptCookie(activeTabId < 0 || !privateTabs.contains(activeTabId))`. With a private
+   * tab in the background, switching to any normal tab re-enabled cookies process-wide while
+   * the private WebView was still RUNNING and resumed sending and storing them. That is not
+   * the accepted "first-party cookies linger in the jar after close" Android tier — there the
+   * tab is already gone; here the tab was live and the gate was simply open.
+   *
+   * The cost of the strict invariant, stated rather than hidden: a normal tab open in the
+   * background stops receiving cookies for as long as any private tab is alive. It is the same
+   * platform gate as before, correctly scoped, and erring this way is the right direction.
+   */
+  private fun syncCookieAcceptance() {
+    CookieManager.getInstance().setAcceptCookie(privateTabs.isEmpty())
+  }
+
+  /**
    * Shared teardown for closeTab and discardTab.
    *
    * Removes the WebView from the gesture container, clears private per-tab state, then destroys
-   * it. If the active private tab is gone, cookie acceptance is restored for normal tabs.
+   * it. Cookie acceptance is restored only once the LAST private tab is gone.
    *
    * [keepZoom] — pass true for discardTab (zoom survives a reload) and false for closeTab
    * (tab is gone permanently so the stored zoom is useless).
@@ -1680,7 +1707,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     if (!keepZoom) tabZoom.remove(id)
     if (activeTabId == id) { activeTabId = -1; contentWebView = null }
     privateTabs.remove(id)
-    CookieManager.getInstance().setAcceptCookie(activeTabId < 0 || !privateTabs.contains(activeTabId))
+    syncCookieAcceptance()
   }
 
   /** Exposed to the chrome webview's JS as `window.AegisAndroid`. Methods run on the
@@ -1690,8 +1717,9 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
      * Activate a tab: create its WebView lazily on first call, show it, hide all others.
      * The chrome calls this on mount for the first tab and on every tab switch.
      *
-     * [isPrivate] — when true this tab runs with cookies refused while active, no DOM storage,
-     * no form-data persistence, no disk cache, and teardown clearing.
+     * [isPrivate] — when true this tab runs with no DOM storage, no form-data persistence, no
+     * disk cache, teardown clearing, and with cookies refused process-wide for as long as it is
+     * alive (see syncCookieAcceptance).
      */
     @JavascriptInterface
     @JvmOverloads
@@ -1709,7 +1737,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       // should say so, exactly like a live navigation does.
       val reason = if (url == ABOUT_BLANK || url.isEmpty()) null else blockReason(url)
       if (isPrivate) privateTabs.add(id)
-      CookieManager.getInstance().setAcceptCookie(!privateTabs.contains(id))
+      syncCookieAcceptance()
       val wv = tabWebViews[id] ?: createTabWebView(id, target, isPrivate).also { tabWebViews[id] = it }
       activeTabId = id
       contentWebView = wv
