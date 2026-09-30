@@ -519,7 +519,6 @@ export interface SearchEngine {
   template: string; // contains %s
 }
 
-/* eslint-disable @typescript-eslint/no-unused-vars */
 export interface Settings {
   homeUrl: string;
   primaryColor: string;

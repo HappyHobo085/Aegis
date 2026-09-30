@@ -41,14 +41,17 @@
 //      src/lib/omnibox.ts:65                     unused function `hostOf`
 //    Delete/prefix each, drop the two `'off'` entries below, and the rule is on.
 //
-// 2. `reportUnusedDisableDirectives` — 5 hits. One is fallout from (1)
-//    (shared/types.ts:507 disables no-unused-vars for the whole `Settings` interface).
-//    The other four are directives for TYPE-AWARE-ONLY rules this config
-//    deliberately does not load, so they can never be "used" under the
-//    non-type-aware strategy above and are not removable by any config change:
+// 2. `reportUnusedDisableDirectives` — 4 hits, all of them directives for
+//    TYPE-AWARE-ONLY rules this config deliberately does not load, so they can
+//    never be "used" under the non-type-aware strategy above and are not
+//    removable by any config change:
 //      src/lib/farbleShim.test.ts:122,435,516,897   @typescript-eslint/no-implied-eval
-//    Turning the option on therefore means deleting those five lines, which is only
-//    correct alongside a decision about the type-aware configs.
+//    A fifth used to sit in the list: `shared/types.ts` disabled
+//    `@typescript-eslint/no-unused-vars` from the `Settings` interface to EOF,
+//    which was both stale (it silenced a rule that is 'off' repo-wide, see (1))
+//    and misleading to a reader of the contract. It is deleted.
+//    Turning the option on therefore means deleting those four lines, which is
+//    only correct alongside a decision about the type-aware configs.
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 import reactHooks from 'eslint-plugin-react-hooks';
@@ -59,8 +62,8 @@ import globals from 'globals';
 export default tseslint.config(
   // Never lint generated / vendored / build output.
   //
-  // reportUnusedDisableDirectives is 'off' only because of the 5 measured hits
-  // catalogued in the header — 4 of them are directives for rules this config does
+  // reportUnusedDisableDirectives is 'off' only because of the 4 measured hits
+  // catalogued in the header — all of them directives for rules this config does
   // not load. Flip it to 'error' in the same commit that deletes those directives.
   {
     linterOptions: {
