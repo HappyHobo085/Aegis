@@ -395,3 +395,101 @@ describe('getSettingsResults', () => {
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// Action closures. Every entry in the static action list must actually DO
+// something when picked — an action closure that silently no-ops is invisible
+// to a title-filtering test, which is why each one is driven here.
+// ---------------------------------------------------------------------------
+describe('every action does what its title promises', () => {
+  const byId = (id: string) => {
+    const action = getActionResults('').find((a) => a.id === id);
+    if (!action) throw new Error(`no such palette action: ${id}`);
+    return action;
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockTabs.list.mockResolvedValue({ activeId: 7, tabs: [] });
+    mockZoom.get.mockResolvedValue({ factor: 1.5 });
+  });
+
+  it('opens a normal tab and a private one with the right incognito flag', async () => {
+    await byId('action.newTab').action();
+    expect(mockTabs.create).toHaveBeenCalledWith();
+
+    vi.clearAllMocks();
+    await byId('action.newPrivateTab').action();
+    // The third argument is what makes it PRIVATE; asserting the whole call
+    // matters because a dropped flag still opens a tab.
+    expect(mockTabs.create).toHaveBeenCalledWith(undefined, false, true);
+  });
+
+  it.each([
+    ['action.back', 'back'],
+    ['action.forward', 'forward'],
+    ['action.reload', 'reloadOrStop'],
+    ['action.home', 'home'],
+  ])('%s navigates the ACTIVE view, not a hardcoded one', async (id, method) => {
+    await byId(id).action();
+    expect(mockNav[method as 'back' | 'forward' | 'reloadOrStop' | 'home']).toHaveBeenCalledWith(7);
+  });
+
+  it("steps zoom down by a tenth from the tab's real current factor", async () => {
+    await byId('action.zoomOut').action();
+    // Read-modify-write: 1.5 - 0.1. A hardcoded factor would drift silently.
+    expect(mockZoom.set).toHaveBeenCalledWith(7, 1.4);
+  });
+
+  it('resets zoom on the active tab', async () => {
+    await byId('action.zoomReset').action();
+    expect(mockZoom.reset).toHaveBeenCalledWith(7);
+  });
+
+  it('dispatches the keyboard event App.tsx listens for, and both toggles', () => {
+    const seen: string[] = [];
+    const keys: string[] = [];
+    const onKey = (e: KeyboardEvent) => keys.push(`${e.key}${e.ctrlKey ? '+ctrl' : ''}`);
+    const onSide = () => seen.push('sidebar');
+    const onFav = () => seen.push('favorites');
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('aegis:toggleSidebar', onSide);
+    window.addEventListener('aegis:toggleFavoritesBar', onFav);
+    try {
+      byId('action.findInPage').action();
+      byId('action.toggleSidebar').action();
+      byId('action.toggleFavoritesBar').action();
+      expect(keys).toEqual(['f+ctrl']);
+      expect(seen).toEqual(['sidebar', 'favorites']);
+    } finally {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('aegis:toggleSidebar', onSide);
+      window.removeEventListener('aegis:toggleFavoritesBar', onFav);
+    }
+  });
+});
+
+describe('labels fall back when a record has no title', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('a tab with neither title nor url is labelled by its id', async () => {
+    mockTabs.list.mockResolvedValue({ activeId: 1, tabs: [{ id: 9, url: '', title: '' }] });
+    const [result] = await getTabResults('tab');
+    expect(result?.title).toBe('Tab 9');
+  });
+
+  it('a tab with no title falls back to its url', async () => {
+    mockTabs.list.mockResolvedValue({
+      activeId: 1,
+      tabs: [{ id: 9, url: 'https://example.com/', title: '' }],
+    });
+    const [result] = await getTabResults('example');
+    expect(result?.title).toBe('https://example.com/');
+  });
+
+  it('a history entry with no title falls back to its url', async () => {
+    mockHistory.list.mockResolvedValue([{ id: 3, url: 'https://no-title.example/', title: '' }]);
+    const [result] = await getHistoryResults('no-title');
+    expect(result?.title).toBe('https://no-title.example/');
+  });
+});
