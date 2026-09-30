@@ -1062,9 +1062,17 @@ mod tests {
     /// that one the honest spelling is a cfg gate on the `mod` declaration, which is
     /// what landed; an allow cannot distinguish "dead here" from "dead everywhere".
     ///
-    /// Three module-level allows REMAIN and are pinned by name, so adding a fourth fails
-    /// here rather than passing silently. Pinning beats asserting emptiness because an
-    /// "empty" assertion could not have been written today without lying.
+    /// It also used to pin THREE module-level allows by name, because an "empty"
+    /// assertion could not be written then without lying. All three are gone now
+    /// (`adblock_lists`, `sync_stores`, `sync_vault`), so the assertion is the empty set
+    /// and the list is empty because every one of them was unnecessary rather than
+    /// because the scan stopped looking: all three are declared with a PRIVATE
+    /// `mod X;`, so nothing inside them is exported and rustc applies the same
+    /// effective-visibility cap to a `staticlib`, a `cdylib` and an `rlib` alike. The
+    /// `sync_stores` comment that argued for its allow ("unused pub items warn on the
+    /// Android cdylib build, unlike the host rlib") is exactly the argument that cannot
+    /// hold for a private module, and it is the reason the three went: they were
+    /// suppressing the diagnostics they were supposed to be standing in for.
     #[test]
     fn no_module_carries_a_blanket_dead_code_allow() {
         let src_dir = format!("{}/src", env!("CARGO_MANIFEST_DIR"));
@@ -1116,11 +1124,13 @@ mod tests {
 
         assert_eq!(
             offenders,
-            vec!["adblock_lists.rs", "sync_stores.rs", "sync_vault.rs"],
+            Vec::<String>::new(),
             "a module gained a blanket dead-code allow. Give the module a cfg gate instead — and \
              keep a `test` arm on it so its unit tests still run on the platforms where it is \
              otherwise absent. A blanket allow hides dead code on the platform that DOES \
-             compile the module, which is exactly where you want to hear about it."
+             compile the module, which is exactly where you want to hear about it. A module \
+             declared PRIVATE never needs one at all: nothing inside it is exported, so \
+             rustc already applies the dead-code cap on every crate type, `cdylib` included."
         );
     }
 

@@ -2495,11 +2495,14 @@ clamps at the 420×320 minimum.
         flipping `RUSTFLAGS` — that forces the ~4-minute full dependency rebuild noted in
         the coverage section, on every target.
 
-    **The inventory, and what each shape means.** 69 real attributes: **51 `cfg_attr`-gated**
-    (49 per-item plus the 2 module-level ones below) + **18 unconditional** (15 per-item plus 3
-    blanket). A raw `grep -rn 'allow(dead_code)' src-tauri/src` says 89 — the other 20 hits are
-    prose inside `//` and `///` comments, which is exactly the trap step 1 of the method below
-    warns about. They are not interchangeable, and each class has a different verdict:
+    **The inventory, and what each shape means.** 67 real attributes: **52 `cfg_attr`-gated**
+    (50 per-item plus the 2 module-level ones below) + **15 unconditional, all per-item — there
+    is no blanket module allow left in the crate.** A raw `grep -rn 'allow(dead_code)'
+    src-tauri/src` says 89, and the other 22 are not attributes: 17 are prose inside `//` and
+    `///` comments and 5 are the sample source lines inside
+    `the_blanket_allow_scan_separates_module_allows_from_scoped_and_commented_ones`, which is
+    exactly the trap step 1 of the method below warns about. They are not interchangeable, and
+    each class has a different verdict:
 
     | Class                | What the allow is hiding                                    | Verdict                                    |
     | -------------------- | ----------------------------------------------------------- | ------------------------------------------ |
@@ -2511,22 +2514,26 @@ clamps at the 420×320 minimum.
 
     The two conventions in use, so a new one matches something:
 
-    - **Per-item `#[cfg_attr(<plat>, allow(dead_code))]`** — 49, concentrated in
+    - **Per-item `#[cfg_attr(<plat>, allow(dead_code))]`** — 50, concentrated in
       `redirect_guard.rs` (19) and `nav.rs` (8), then `adblock.rs` 5, `downloads.rs` 3,
       `tabs.rs` 3, `adblock_inject.rs`/`safety.rs` 2, and 1 each in `adblock_engine`,
       `farble`, `find`, `history`, `lib`, `tab_registry`, `zoom` (`settings.rs` no longer has
       any — its last went with the false "consumed by the F2b sync merge" claim below). By
-      platform: 39 name `android`, 10 `windows`, 2 `macos` (some name two, via `any(..)`).
+      platform: 40 name `android`, 10 `windows`, 3 `macos` (some name two, via `any(..)`).
       **Prefer this shape** — it keeps the lint on for every other platform, so the
       exemption is visible at the item.
-    - **Module-level `#![allow(dead_code)]`** — 3 blanket: `adblock_lists`, `sync_stores`,
-      `sync_vault`. Two modules instead scope the blanket to a platform: `picker.rs`
-      (`#![cfg_attr(target_os = "android", …)]`) and `redirect_guard.rs` (`… "macos"`, per the
-      no-macOS-redirect-tier note in gotcha 14). Those two are the module-level half of the 51;
-      the other 18 are 3 blanket + 15 per-item unconditional. **The two Linux ad-block modules
-      that used to be in the blanket list are not any more** — see the structural finding below,
-      and `no_module_carries_a_blanket_dead_code_allow` in `lib.rs`'s tests, which pins this
-      list by name so a new blanket fails `cargo test` instead of hiding a diagnostic.
+    - **Module-level `#![allow(dead_code)]`** — **none.** Two modules scope a module-level allow
+      to a platform instead: `picker.rs` (`#![cfg_attr(target_os = "android", …)]`) and
+      `redirect_guard.rs` (`… "macos"`, per the no-macOS-redirect-tier note in gotcha 14).
+      Those two are the module-level half of the 52 `cfg_attr`-gated attributes. The three
+      blanket allows that used to sit here — `adblock_lists`, `sync_stores`, `sync_vault` — are
+      gone, and **not** for the reason the structural finding below gives: all three are
+      declared with a PRIVATE `mod X;` in `lib.rs`, so nothing inside them is exported and
+      rustc applies the same dead-code cap to a `staticlib`, a `cdylib` and an `rlib` alike. A
+      blanket is therefore never the right spelling for a private module, whatever platform it
+      is compiled for. `no_module_carries_a_blanket_dead_code_allow` in `lib.rs`'s tests now
+      asserts the empty set (it used to pin those three by name), so a new blanket fails
+      `cargo test` instead of hiding a diagnostic.
 
     **Structural finding: a blanket module allow is usually a missing `#[cfg]` on the `mod`
     declaration — and the two cases this audit found are now fixed exactly that way.**
@@ -2543,8 +2550,12 @@ clamps at the 420×320 minimum.
     call `adblock_webkit` unconditionally declared. That was half wrong: it has always been
     `#[cfg(target_os = "linux")]` in `lib.rs`, so nothing in it is dead on the single platform
     that compiles it and its blanket was pure dead weight — simply deleted.) `sync_stores` /
-    `sync_vault` are still un-gated but genuinely span platforms, so for those two the blanket is
-    the honest choice. (`adblock_lists` is a data module.)
+    `sync_vault` are still un-gated and genuinely span platforms, which used to be read as
+    "so the blanket is the honest choice". It is not: they are PRIVATE modules, so the cap
+    that makes `pub` items in a `pub mod` warn on a `cdylib` does not apply to them at all, and
+    the three blanket allows are gone with no lint change on any target. (`adblock_lists` is a
+    data module — its named consts feed `ALL`, which is the only member the rest of the crate
+    reads.)
 
     **What the audit removed.** 7 attributes whose comments claimed to be _"dead on the
     Android cdylib until F2b"_ / _"consumed by the F2b sync merge"_. F2b is done and the merge

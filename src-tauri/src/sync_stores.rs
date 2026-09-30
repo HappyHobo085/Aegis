@@ -11,9 +11,15 @@
 //!     remote clock. Returns the changed uuids so the caller can emit a TARGETED
 //!     `sync.changed` (never a full reload). An allowlist merge also re-seeds the engine.
 // This whole module is the frozen contract the F2b (Phase 3) sync engine consumes; until
-// then nothing calls read_all/merge_into/SYNCABLE, which reads as dead code on the Android
-// cdylib build (unused pub items warn there, unlike the host rlib).
-#![allow(dead_code)]
+// then nothing calls read_all/merge_into/SYNCABLE, which used to read as dead code and be
+// allowed for with a module-level `#![allow(dead_code)]` on the theory that "unused pub items
+// warn on the Android cdylib build, unlike the host rlib". That theory was false here: the
+// module is declared PRIVATE in `lib.rs` (`mod sync_stores;`), so nothing in it is exported
+// and rustc applies the same effective-visibility cap to a `staticlib`, a `cdylib` and an
+// `rlib` alike — a cdylib-only argument cannot apply to a private module, only to a
+// `pub mod`. The allow suppressed the real diagnostics it was never meant to stand in for,
+// and it is gone. "Not called yet" is a fact about the FROZEN contract, so it is recorded
+// here rather than silenced.
 
 use serde_json::Value;
 use tauri::{AppHandle, Runtime};

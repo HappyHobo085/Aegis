@@ -44,7 +44,13 @@
 // it under the local key; anything that fails is counted as quarantined and never written.
 // That is what stops a peer (or a corrupted blob) from destroying a real local credential,
 // which the previous timestamp-only merge could do silently and permanently.
-#![allow(dead_code)]
+//
+// This module used to carry a module-level `#![allow(dead_code)]`, with no comment saying
+// what it was for. It is gone, and it was not needed: `lib.rs` declares the module PRIVATE
+// (`mod sync_vault;`), so nothing in it is exported and rustc already treats every item as
+// dead-eligible on every crate type, `cdylib` included. A blanket allow here suppressed the
+// real diagnostics this platform is compiled to report, which is the opposite of what a
+// placeholder for "not wired up yet" should do.
 
 use serde_json::{json, Value};
 use std::sync::Mutex;

@@ -22,10 +22,17 @@
 //! Lowe's). User subscriptions (`subs.rs`) and custom rules (`customfilters.rs`) are
 //! layered on top of these by the callers that support them.
 //!
-//! Some consts/items are unused under certain target cfgs (e.g. only the engine
-//! consumes the lists on Android), so the module allows dead code like its sibling
-//! `adblock_convert`/`adblock_webkit`.
-#![allow(dead_code)]
+//! This module used to carry a module-level `#![allow(dead_code)]`, on the stated theory
+//! that "some consts/items are unused under certain target cfgs (e.g. only the engine
+//! consumes the lists on Android)" and "the module allows dead code like its sibling
+//! `adblock_convert`/`adblock_webkit`". Both halves were false, and the allow is gone.
+//! The siblings no longer carry one either — a blanket allow hides dead code on the
+//! platform that DOES compile a module, which is exactly where you want to hear about
+//! it. The allowance was never needed here for a simpler reason: `lib.rs` declares this
+//! module PRIVATE (`mod adblock_lists;`), so nothing in it is exported and rustc already
+//! treats every item as dead-eligible on every crate type — a `pub` item inside a
+//! private module reaches nobody, whichever of
+//! `staticlib`/`cdylib`/`rlib` is being built.
 
 /// EasyList — ad servers (baseline ad blocking).
 pub const EASYLIST: &str = include_str!("../resources/easylist.txt");
