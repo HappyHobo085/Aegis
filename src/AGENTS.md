@@ -246,7 +246,9 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   `aegis.zoom.get(activeId)` on mount and on every tab switch; subscribes to
   `aegis.zoom.onChanged` (filtered by `viewId`). `zoomIn`/`zoomOut` step along the
   Chrome-style discrete ladder (via `lib/zoom.ts`'s `stepZoom`), apply optimistically,
-  then confirm via `aegis.zoom.set`. `reset` restores 100% via `aegis.zoom.reset`.
+  then confirm via `aegis.zoom.set`. `reset` restores 100% via `aegis.zoom.reset`, which
+  is a RENDERER-side wrapper that sends `zoom.set` with a factor of 1.0 — there is no
+  `zoom.reset` IPC channel (see the `zoom.rs` bullet in `src-tauri/AGENTS.md`).
   Returns `{ factor, percent, zoomIn, zoomOut, reset, setFactor }`.
 - **`components/VaultSettingsTab`** — the "Passwords" tab inside the Settings modal (Phase
   A — manage only, no autofill). Renders three views depending on `VaultState`: a create

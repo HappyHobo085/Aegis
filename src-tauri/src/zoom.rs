@@ -111,8 +111,9 @@ fn apply_native<R: Runtime>(app: &AppHandle<R>, id: u32, factor: f64) {
 ///
 /// PLACE 2 of the three-place rule: the channel names live in `shared/types.ts`
 /// and the renderer calls them through `ipcClient`. The target tab is the
-/// payload's `viewId`, defaulting to the ACTIVE tab, so `zoom.get`/`set`/`reset`
-/// are per-tab and a `view.setFullscreen`-style tab switch keeps each tab's own level.
+/// payload's `viewId`, defaulting to the ACTIVE tab, so `zoom.get`/`set` are per-tab and
+/// a `view.setFullscreen`-style tab switch keeps each tab's own level. Resetting is not a
+/// third channel: the renderer sends `zoom.set` with a factor of 1.0.
 ///
 /// Generic over `R: Runtime` so all three arms — the `viewId` defaulting, the
 /// `factor` default, and the clamp the chrome relies on — are reachable from a
@@ -142,7 +143,12 @@ pub fn dispatch<R: Runtime>(
             let f = payload.get("factor").and_then(Value::as_f64).unwrap_or(1.0);
             Some(Ok(put(app, id, f)))
         }
-        "zoom.reset" => Some(Ok(put(app, id, 1.0))),
+        // There is deliberately NO `zoom.reset` arm. The renderer's `aegis.zoom.reset`
+        // delegates to `zoom.set(viewId, 1.0)` so the clamp lives in exactly one place,
+        // so a `zoom.reset` channel had no caller at all: it was declared in
+        // `shared/types.ts`, dispatched here, documented, and unit-tested, and nothing in the
+        // product could ever emit it. `shared/ipcCatalog.drift.test.ts` direction 5 now fails
+        // if a request channel is declared and never named by a renderer source.
         _ => None,
     }
 }
@@ -316,23 +322,46 @@ mod tests {
                 rx.try_recv().is_err(),
                 "exactly one event per set, not one per layout pass"
             );
-            // reset is the same writer, so it must be announced too — the chrome's
-            // indicator has to come back to 100% without a page reload.
-            zoom_call(app, "zoom.reset", &json!({}));
-            let ev = rx
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .expect("zoom.reset emits zoom.changed");
-            assert_eq!(ev.pointer("/factor").and_then(Value::as_f64), Some(1.0));
         });
     }
 
+    /// Resetting zoom is `zoom.set` with a factor of 1.0, and it is the path the product
+    /// actually takes: `aegis.zoom.reset` in `ipcClient.ts` delegates to `set`. This used to
+    /// be asserted through a `zoom.reset` channel that no renderer could emit, so the test
+    /// passed while proving nothing about the app; it now drives the channel that is sent,
+    /// and still checks what the old one checked — the chrome's indicator has to come back
+    /// to 100% without a page reload.
     #[test]
-    fn a_zoom_reset_returns_the_tab_to_100_percent() {
+    fn a_zoom_set_to_100_percent_is_told_to_the_chrome_like_any_other_change() {
+        with_tmp_app(|app| {
+            let id = active_id(app);
+            let rx = watch_changed(app);
+            zoom_call(app, "zoom.set", &json!({ "factor": 2.0 }));
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+            // Exactly what `aegis.zoom.reset(viewId)` sends.
+            zoom_call(app, "zoom.set", &json!({ "viewId": id, "factor": 1.0 }));
+            let ev = rx
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the reset the chrome sends is announced like any other change");
+            assert_eq!(ev.pointer("/factor").and_then(Value::as_f64), Some(1.0));
+            assert_eq!(
+                ev.pointer("/viewId").and_then(Value::as_u64),
+                Some(id as u64)
+            );
+        });
+    }
+
+    /// What the old `a_zoom_reset_returns_the_tab_to_100_percent` test checked, re-pointed
+    /// at the channel the chrome really sends. Kept as its own test because the store write
+    /// is the part that matters: the reply is easy, the tab's own level is what the toolbar
+    /// re-renders from, and only one of the two is guaranteed by the answer.
+    #[test]
+    fn setting_a_tab_to_100_percent_writes_the_store_not_just_the_answer() {
         with_tmp_app(|app| {
             let id = active_id(app);
             zoom_call(app, "zoom.set", &json!({ "factor": 2.0 }));
             assert_eq!(stored(app, id), Some(2.0));
-            let answered = zoom_call(app, "zoom.reset", &json!({}));
+            let answered = zoom_call(app, "zoom.set", &json!({ "viewId": id, "factor": 1.0 }));
             assert_eq!(
                 answered.pointer("/factor").and_then(Value::as_f64),
                 Some(1.0)
@@ -343,8 +372,8 @@ mod tests {
                 "reset must write 100% into the store, not just answer it"
             );
             // Idempotent, and still scoped to the tab it was aimed at.
-            zoom_call(app, "zoom.reset", &json!({ "viewId": 4242 }));
-            zoom_call(app, "zoom.reset", &json!({ "viewId": 4242 }));
+            zoom_call(app, "zoom.set", &json!({ "viewId": 4242, "factor": 1.0 }));
+            zoom_call(app, "zoom.set", &json!({ "viewId": 4242, "factor": 1.0 }));
             assert_eq!(stored(app, 4242), Some(1.0));
         });
     }

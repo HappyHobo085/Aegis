@@ -144,7 +144,6 @@ export const IPC = {
   // page zoom (chrome <-> main)
   zoomGet: 'zoom.get',
   zoomSet: 'zoom.set',
-  zoomReset: 'zoom.reset',
   // event (main -> chrome): a tab's zoom factor changed
   evtZoomChanged: 'zoom.changed',
   // password vault (Phase A — manage only, NO autofill)

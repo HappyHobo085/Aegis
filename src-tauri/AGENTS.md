@@ -833,13 +833,23 @@ ordinal+1)` → `window.__aegisFindState(…)` in the chrome (mirroring `pushNav
     involvement for Android find.
 - **Page zoom** (`zoom.rs` + `zoom_{win,mac}.rs` + `linux_layout::set_zoom_level_label`
   - Android `MainActivity.setZoom`):
-  * `zoom.rs` — dispatcher (`zoom.*` IPC channels: `zoom.get` / `zoom.set` / `zoom.reset`),
+  * `zoom.rs` — dispatcher (`zoom.*` IPC channels: `zoom.get` / `zoom.set` — there is
+    deliberately **no** `zoom.reset` channel; see the drift guard below),
     in-memory per-tab `ZoomStore` (`Mutex<HashMap<u32, f64>>`), `clamp(f)` (pure, unit-tested),
     `factor_of`, `apply_to_tab` (replays at spawn), and `apply_native` (per-platform fan-out).
-    The `put` helper stores + applies + emits `zoom.changed`.
+    The `put` helper stores + applies + emits `zoom.changed`. **`zoom.reset` is NOT a
+    channel.** The renderer's `aegis.zoom.reset(viewId)` sends `zoom.set` with a factor of
+    1.0, deliberately, so the clamp lives in exactly one place — which means a `zoom.reset`
+    channel had no possible emitter. It was declared, dispatched, documented and covered by
+    three unit tests anyway, and every test passed because the tests drove the dead arm
+    directly. It has since been removed; `shared/ipcCatalog.drift.test.ts` direction 5 now
+    fails on any REQUEST channel declared and never named by a renderer source, and
+    `ipcClient.contract.test.ts`'s `UNPINNED_REQUEST` (now empty) could never be a substitute:
+    an inventory entry that ACCURATELY describes "nothing emits this" is how the defect got
+    filed as a decision.
     **`zoom.get` answers the ACTIVE tab unless the payload names a `viewId`.** The router
     resolves the target from `tabs::Tabs`'s `active_id` (falling back to tab 1 when the registry
-    is not managed), and `zoom.set` / `zoom.reset` act on that same id, so one call never
+    is not managed), and `zoom.set` acts on that same id, so one call never
     re-zooms the tab the user is no longer looking at. **The value is clamped BEFORE it is
     stored**, so the store, the `zoom.changed` payload and the `zoom.get` answer can never
     disagree about what the tab is actually zoomed to. `dispatch`, `put`, `factor_of`,

@@ -642,7 +642,8 @@ const REQUESTS: ContractRow[] = [
     payload: { viewId: 1, factor: 1.75 },
   },
   // `reset` deliberately has NO channel of its own on the renderer side: it delegates to
-  // `set` so the clamp lives in exactly one place. The `zoom.reset` Rust arm still exists.
+  // `set` so the clamp lives in exactly one place, which is also why there is no
+  // `zoom.reset` channel to pin. It used to be declared and dispatched with no emitter.
   {
     name: 'zoom.reset (delegates to zoom.set)',
     run: () => aegis.zoom.reset(1),
@@ -846,12 +847,7 @@ const REQUESTS: ContractRow[] = [
  * Request channels the catalog declares that this file deliberately does NOT pin, each
  * with the reason. A channel landing here needs a human decision, not a silent gap.
  */
-const UNPINNED_REQUEST: Record<string, string> = {
-  [IPC.zoomReset]:
-    '`aegis.zoom.reset` deliberately delegates to `zoom.set(1.0)` so the clamp lives in one ' +
-    'place (pinned above); the renderer never emits this channel. The Rust arm at ' +
-    "src-tauri/src/zoom.rs:110 is exercised by that module's own unit tests.",
-};
+const UNPINNED_REQUEST: Record<string, string> = {};
 
 describe('the renderer→core channel contract (desktop path)', () => {
   beforeEach(() => {

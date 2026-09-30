@@ -938,6 +938,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Removed
 
+- **The `zoom.reset` IPC channel.** Resetting page zoom to 100% never went through it: the
+  renderer's `aegis.zoom.reset(viewId)` sends `zoom.set` with a factor of 1.0, deliberately,
+  so the clamp lives in exactly one place. The channel was nevertheless declared, dispatched,
+  documented and covered by three Rust unit tests — and because those tests drove the dead
+  dispatch arm directly, they passed while proving nothing about the app. The toolbar, the
+  mobile menu and the command palette are unchanged; only the unreachable channel, its three
+  tests and the documentation that called it a live path are gone. The contract drift guard
+  gained the matching direction: a declared **request** channel that no renderer source ever
+  names now fails, which is the one failure an "unpinned request" list cannot catch — such a
+  list only proves a channel was reviewed, and this one was reviewed accurately and still
+  wrong.
 - **Split view is gone** (`Ctrl+Shift+S`, drag-a-tab-onto-a-tab, the resize handles, and the
   toolbar pane-count badge). It was a **user-facing feature on Windows only**: the pane
   positioning existed solely in `view.rs`'s `#[cfg(target_os = "windows")]` branch, so on

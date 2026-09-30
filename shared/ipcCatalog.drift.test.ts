@@ -346,6 +346,18 @@ const isCatalogued = (name: string): boolean => CATALOG_VALUES.has(catalogForm(n
  * which is the whole point of this constant existing.
  */
 const TRANSPORT_FILE = 'src/lib/ipcClient.ts';
+/**
+ * The same file as `readRendererSources` NAMES it.
+ *
+ * That helper returns paths relative to `src/`, so the transport arrives as
+ * `lib/ipcClient.ts`. Comparing the two constants directly - which is what the exclusion in
+ * `collectSubscribed` used to do - compared `src/lib/ipcClient.ts` against `lib/ipcClient.ts`,
+ * matched nothing, and excluded nothing. The direction still passed, because the transport
+ * holds no `aegis.<ns>.on…` reference of its own, so the no-op happened to be harmless; the
+ * guard it claimed to enforce was not being enforced. There is now a test that the exclusion
+ * removes a file, because "harmless by luck" is not a property to leave in place.
+ */
+const TRANSPORT_RENDERER_PATH = TRANSPORT_FILE.slice('src/'.length);
 
 /**
  * `evt*` catalog key → the `aegis` surface a renderer must actually CALL, parsed out of the
@@ -450,7 +462,7 @@ const WRAPPER_SURFACE = collectWrapperSurfaces();
 function collectSubscribed(sources: { file: string; src: string }[]): Map<string, Set<string>> {
   const out = new Map<string, Set<string>>();
   for (const { file, src } of sources) {
-    if (file === TRANSPORT_FILE) continue;
+    if (file === TRANSPORT_RENDERER_PATH) continue;
     for (const m of stripComments(src).matchAll(
       /\baegis\.([A-Za-z][A-Za-z0-9]*)\.(on[A-Za-z0-9]*)/g,
     )) {
@@ -465,6 +477,83 @@ function collectSubscribed(sources: { file: string; src: string }[]): Map<string
   }
   return out;
 }
+
+/**
+ * Catalogued REQUEST channels that no renderer source ever NAMES.
+ *
+ * **Currently EMPTY, and that is the goal state.** It held exactly one entry when this
+ * direction was written: `zoomReset` (`zoom.reset`). `src/lib/ipcClient.ts` implements
+ * `aegis.zoom.reset(viewId)` as `aegis.zoom.set(viewId, 1.0)` — deliberately, so the clamp
+ * lives in one place — so nothing in the product could ever emit the channel. It was
+ * nevertheless declared in `shared/types.ts`, dispatched in `zoom.rs`, named in
+ * `src-tauri/AGENTS.md`, and covered by three Rust unit tests. 2,400 green tests passed,
+ * because the three tests drove the dead arm directly and the contract test had parked the
+ * channel in `UNPINNED_REQUEST` with a note explaining that nothing emits it. That is a
+ * description of a defect filed as if it were a decision, which is why an INVENTORY alone
+ * could not catch it: the entry existed, was accurate, and still let the bug through.
+ * Deleting the channel is only half the fix; this direction is the other half, so the next
+ * one cannot be filed this way.
+ *
+ * Like `UNSUBSCRIBED_EVENTS`, an entry here is an admission that a real defect exists, and the
+ * "no stale entry" test below makes fixing a defect oblige deleting its excuse.
+ */
+const UNCALLED_REQUESTS: Record<string, string> = {};
+
+/**
+ * The catalog keys that are REQUESTS (chrome → core), i.e. everything that is not an event.
+ *
+ * An event's whole contract lives in the renderer — the core emits it whether or not anyone
+ * listens, which is what direction 3 is for. A request's contract lives in BOTH halves: an
+ * un-emittable channel is unreachable, and an un-implemented one comes back `Err` from
+ * lib.rs's `_` arm (direction 1). This direction covers the remaining failure, the one that
+ * needs no bug report and no crash: a channel that is declared, implemented, documented and
+ * tested, that the product simply never uses.
+ */
+const REQUEST_KEYS = Object.keys(IPC).filter((key) => !key.startsWith('evt'));
+
+/**
+ * Catalog keys a renderer source actually NAMES, mapped to the files that name them.
+ *
+ * Comments are stripped first, so a channel cannot be satisfied by a file that merely talks
+ * about it — `ipcClient.contract.test.ts` and the docs name channels in prose, and the
+ * transport's own header does too.
+ *
+ * The search space INCLUDES the transport, which is the opposite of direction 3's rule and
+ * the single most important difference between the two. A request channel's one and only
+ * legitimate reference is the `dedupedCall(IPC.<key>, …)` (or bridge) call inside the wrapper
+ * that sends it: the wrappers are the chokepoint every renderer call goes through, so
+ * excluding the transport here would report all 100+ channels as uncalled. Direction 3 has
+ * the opposite requirement because an `on…` wrapper only proves the core MIGHT be asked; a
+ * request wrapper is the send itself.
+ *
+ * What this does NOT prove: that the wrapper is CALLED. A wrapper nobody calls is a dead
+ * renderer method (there is a known one — `aegis.form.onLoginFormDetected`, with no
+ * subscriber for the event it wraps, per `UNSUBSCRIBED_EVENTS`), and that is a different
+ * defect with a different blast radius. This direction is deliberately "declared but never
+ * named", which is the defect that was actually found.
+ */
+function collectCatalogReferences(
+  sources: { file: string; src: string }[],
+): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
+  for (const { file, src } of sources) {
+    for (const m of stripComments(src).matchAll(/\bIPC\.([A-Za-z][A-Za-z0-9]*)/g)) {
+      const set = out.get(m[1]) ?? new Set<string>();
+      set.add(file);
+      out.set(m[1], set);
+    }
+  }
+  return out;
+}
+
+/** The keys in `keys` that no source in `sources` names. Pure, so the tests below can drive it. */
+function uncalledRequestKeys(keys: string[], sources: { file: string; src: string }[]): string[] {
+  const referenced = collectCatalogReferences(sources);
+  return keys.filter((key) => !referenced.has(key)).sort();
+}
+
+/** The same scan over the real renderer tree, built once for the anti-vacuity assertions. */
+const CATALOG_REFERENCES = collectCatalogReferences(readRendererSources());
 
 describe('IPC catalog drift', () => {
   const rustSources = readRustSources();
@@ -690,7 +779,12 @@ describe('IPC catalog drift', () => {
         // event would look unsubscribed and the direction would fail loudly — fine. The
         // dangerous case is the opposite: a search space of ONE file, which is what the old
         // guard actually had. So assert the space is plural.
-        const searched = rendererSources.filter(({ file }) => file !== TRANSPORT_FILE);
+        // The exclusion must actually exclude: `rendererSources` names files relative to
+        // `src/`, so an exclusion written with the repo-relative path matches nothing and
+        // this count is one too high for the wrong reason.
+        expect(rendererSources.map(({ file }) => file)).toContain(TRANSPORT_RENDERER_PATH);
+        const searched = rendererSources.filter(({ file }) => file !== TRANSPORT_RENDERER_PATH);
+        expect(searched.length).toBe(rendererSources.length - 1);
         expect(searched.length).toBeGreaterThan(50);
         expect(subscribed.get('evtNavState')?.size ?? 0).toBeGreaterThan(0);
       });
@@ -698,8 +792,11 @@ describe('IPC catalog drift', () => {
       it('the transport itself can never satisfy the search', () => {
         // Pins the actual fix. If `TRANSPORT_FILE` were ever dropped from the exclusion, this
         // fails before the direction silently stops working again.
+        // The fixture is named the way `readRendererSources` names files, which is the only
+        // way it can exercise the exclusion at all - with the repo-relative path it would
+        // not match and the assertion below would pass for the wrong reason.
         const viaTransport = collectSubscribed([
-          { file: TRANSPORT_FILE, src: 'aegis.nav.onState(() => {});' },
+          { file: TRANSPORT_RENDERER_PATH, src: 'aegis.nav.onState(() => {});' },
         ]);
         expect(viaTransport.size, 'the transport must not be able to subscribe to itself').toBe(0);
       });
@@ -742,6 +839,86 @@ describe('IPC catalog drift', () => {
           'rewrites `.` to `:`:\n  ' +
           (offenders.join('\n  ') || '(none)'),
       ).toEqual([]);
+    });
+  });
+
+  describe('direction 5 - every declared request channel is actually named by the renderer', () => {
+    it('has no uncalled request channel', () => {
+      const uncalled = uncalledRequestKeys(REQUEST_KEYS, readRendererSources()).filter(
+        (key) => !(key in UNCALLED_REQUESTS),
+      );
+
+      expect(
+        uncalled,
+        `Declared in shared/types.ts as a REQUEST, but no renderer source ever writes\n` +
+          `IPC.<key> for it (specs, the mock and comments excluded), so no user action can\n` +
+          `reach it. The Rust arm, its unit tests and its documentation are all real code\n` +
+          `exercising a path the product does not take. Either make the renderer send it, or\n` +
+          `delete the declaration, the dispatch arm, the tests and the docs together:\n` +
+          `  unexplained: ${uncalled.join(', ') || '(none)'}\n` +
+          `  known-and-explained: ${Object.keys(UNCALLED_REQUESTS).join(', ') || '(none)'}\n\n` +
+          Object.entries(UNCALLED_REQUESTS)
+            .map(([k, v]) => `  ${k}: ${v}`)
+            .join('\n'),
+      ).toEqual([]);
+    });
+
+    it('the UNCALLED_REQUESTS inventory has no stale entry', () => {
+      // Bidirectional, like the three inventories above: an entry must be a catalog REQUEST
+      // key, and it must genuinely be unreferenced. The second half is the one that matters -
+      // an entry left behind after a channel got wired would keep the gate quiet forever.
+      const stale = Object.keys(UNCALLED_REQUESTS)
+        .filter((key) => !REQUEST_KEYS.includes(key))
+        .concat(
+          uncalledRequestKeys(Object.keys(UNCALLED_REQUESTS), readRendererSources()).length === 0
+            ? Object.keys(UNCALLED_REQUESTS).map((key) => `${key} (now named by the renderer)`)
+            : [],
+        )
+        .sort();
+      expect(
+        stale,
+        'UNCALLED_REQUESTS no longer describes reality. Remove the entry (the channel is ' +
+          'called now) or rename the key (it is not a request channel in the catalog).',
+      ).toEqual([]);
+    });
+
+    describe('anti-vacuity - the three things that could make the above pass for nothing', () => {
+      it('the search sees the transport, which is where a request is actually sent', () => {
+        // The inverse of direction 3's "the transport can never satisfy the search". If the
+        // transport were excluded here, every channel would look uncalled and the direction
+        // would fail loudly - the dangerous case is a search space that cannot see a real
+        // reference at all, so assert a real one is visible, in the real file.
+        expect(
+          [...(CATALOG_REFERENCES.get('zoomSet') ?? [])],
+          'a live request channel must be visible, and through the transport',
+        ).toContain(TRANSPORT_RENDERER_PATH);
+        expect(CATALOG_REFERENCES.size).toBeGreaterThan(50);
+        expect(readRendererSources().length).toBeGreaterThan(50);
+      });
+
+      it('a comment naming a request channel is not a call', () => {
+        // `ipcClient.contract.test.ts` and the AGENTS.md files name channels in prose. Without
+        // comment stripping a channel deleted from the transport would stay green.
+        expect(
+          collectCatalogReferences([
+            { file: 'src/lib/Commented.ts', src: '// dedupedCall(IPC.zoomSet, { viewId: 1 })\n' },
+          ]).size,
+        ).toBe(0);
+      });
+
+      it('the predicate reports a channel that nothing names', () => {
+        // The direction above is a `toEqual([])`, which passes just as happily if the
+        // predicate is vacuous. Drive it with a REAL catalog key and a source set that does
+        // not name it: a predicate that always returned `[]`, or one that counted comments,
+        // fails here.
+        expect(uncalledRequestKeys(['zoomSet'], readRendererSources())).toEqual([]);
+        expect(
+          uncalledRequestKeys(
+            ['zoomSet'],
+            [{ file: 'src/components/Quiet.tsx', src: 'export {};\n' }],
+          ),
+        ).toEqual(['zoomSet']);
+      });
     });
   });
 });
