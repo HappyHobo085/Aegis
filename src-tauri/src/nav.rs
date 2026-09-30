@@ -1577,6 +1577,104 @@ mod tests {
         );
     }
 
+    /// The Android Back button was dead on every release build, and nothing in the crate
+    /// could see it. `MainActivity`'s only back handling was a `@Deprecated override fun
+    /// onBackPressed()`, but on API 33+ `ComponentActivity` registers an
+    /// `OnBackInvokedDispatcher` observer on `ON_CREATE`, and with no callback enabled on
+    /// `onBackPressedDispatcher` the dispatcher's fallback runnable calls
+    /// `androidx.core.app.ComponentActivity.onBackPressed()` NON-virtually (verified with
+    /// `javap` against androidx.activity 1.10.1) — the superclass, not the override. So the
+    /// documented three-tier precedence (close a chrome sheet, else page-back, else exit)
+    /// never ran and Back exited the app. `TauriActivity` pins
+    /// `handleBackNavigation = false`, so WryActivity registers no callback of its own.
+    ///
+    /// There is NO Kotlin test source set, so the Kotlin half of this fix is
+    /// compile-verified (Gradle) and nothing else; these text pins are the substitute, and
+    /// they are written to go red on the three properties whose loss restores the bug: the
+    /// dispatcher callback is INSTALLED, it runs the SHARED precedence, and its exit arm
+    /// cannot re-enter itself.
+    #[test]
+    fn android_back_press_runs_the_three_tier_precedence_from_the_dispatcher() {
+        let src = kotlin_main_activity();
+
+        // 1. Installed. A declared-but-unregistered callback is the defect itself, and a
+        //    helper nothing calls is exactly the shape the IPC drift guard is blind to.
+        let on_create = kotlin_fn_body(&src, "override fun onCreate(");
+        assert!(
+            on_create.contains("installBackCallback()"),
+            "MainActivity.onCreate no longer installs the Back callback, so the dispatcher has \
+             none enabled and Back exits the app on API 33+. onCreate was:\n{on_create}"
+        );
+
+        let install = kotlin_fn_body(&src, "private fun installBackCallback(");
+        assert!(
+            install.contains("onBackPressedDispatcher.addCallback(")
+                && install.contains("object : OnBackPressedCallback(true)")
+                && install.contains("override fun handleOnBackPressed("),
+            "installBackCallback is no longer an enabled OnBackPressedCallback registered on \
+             the dispatcher, so it cannot receive a Back press. Body was:\n{install}"
+        );
+        assert!(
+            install.contains("if (!handleBackPress())"),
+            "the callback must delegate to the shared precedence rather than re-implement it, \
+             so the two entry points cannot drift. Body was:\n{install}"
+        );
+        // 2. The exit arm. `super.onBackPressed()` here would resolve to
+        //    androidx.activity.ComponentActivity.onBackPressed() ==
+        //    getOnBackPressedDispatcher().onBackPressed(), which re-enters THIS callback and
+        //    leaves the app un-exitable; the fix disables the callback first, so the press
+        //    lands on the dispatcher's fallback (the platform default).
+        assert!(
+            install.contains("isEnabled = false")
+                && install.contains("onBackPressedDispatcher.onBackPressed()"),
+            "the exit arm must disable the callback before re-dispatching, so Back falls \
+             through to the platform default instead of re-entering handleOnBackPressed. \
+             Body was:\n{install}"
+        );
+        assert!(
+            !install.contains("super.onBackPressed()"),
+            "installBackCallback routes its exit back through the dispatcher while this \
+             callback is still enabled, so the press loops instead of exiting. Body was:\n{install}"
+        );
+
+        // 3. The policy, in order: a chrome sheet outranks page-back, page-back outranks
+        //    exit, and the sheet arm really closes the sheet.
+        let policy = kotlin_fn_body(&src, "private fun handleBackPress(");
+        let sheet = policy.find("backInterceptActive").unwrap_or_else(|| {
+            panic!(
+                "handleBackPress no longer consults backInterceptActive, so \
+                 an open chrome sheet would fall through to page-back/exit. Body was:\n{policy}"
+            )
+        });
+        let page_back = policy.find("canGoBack()").unwrap_or_else(|| {
+            panic!(
+                "handleBackPress no longer offers page-back, so Back would exit the app \
+                     with a page history behind it. Body was:\n{policy}"
+            )
+        });
+        let exit = policy.find("else -> false").unwrap_or_else(|| {
+            panic!("handleBackPress no longer returns false to let the caller exit. Body was:\n{policy}")
+        });
+        assert!(
+            sheet < page_back && page_back < exit,
+            "the three-tier precedence is out of order: a chrome sheet must close before \
+             page-back, and page-back before the exit. Body was:\n{policy}"
+        );
+        assert!(
+            policy.contains("window.__aegisMobileBack"),
+            "the sheet arm must call the chrome's own back handler, not just consume the press. \
+             Body was:\n{policy}"
+        );
+        // 4. The legacy platform entry point keeps the SAME policy rather than a second copy,
+        //    so an OEM that still routes Back to the override behaves identically.
+        let legacy = kotlin_fn_body(&src, "override fun onBackPressed()");
+        assert!(
+            legacy.contains("handleBackPress()") && legacy.contains("super.onBackPressed()"),
+            "the deprecated onBackPressed must delegate to handleBackPress and only fall through \
+             to super when that returns false. Body was:\n{legacy}"
+        );
+    }
+
     /// The main-frame `shouldOverrideUrlLoading` as CODE: the FIRST such override in
     /// `MainActivity.kt` (the popup temp WebView's is the second), sliced to its
     /// MATCHING closing brace, with comment lines dropped.

@@ -30,6 +30,7 @@ import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.widget.FrameLayout
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.enableEdgeToEdge
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -222,6 +223,9 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // keep in sync, it cannot leak a registration per file, and a transfer that completes
     // after a process restart still settles its row.
     registerDownloadReceiver()
+    // Back has to go through the androidx dispatcher (see installBackCallback), and this
+    // is the first point where the Activity owns a dispatcher with a live lifecycle.
+    installBackCallback()
   }
 
   // --- Lifecycle ---------------------------------------------------------------------
@@ -311,19 +315,61 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
   }
 
-  // Back-press precedence: (a) a chrome sheet/menu is open -> tell the chrome to close
-  // it (window.__aegisMobileBack) and consume the press; (b) else the content page can
-  // go back -> navigate it back; (c) else default (exit). The chrome sets
-  // backInterceptActive via the AegisAndroid bridge whenever a sheet is open.
+  // Back-press precedence, ONE definition in handleBackPress(), reached from two
+  // entry points. The override below is only the LEGACY platform path: on API 33+ the
+  // system delivers Back to the androidx OnBackPressedDispatcher (ComponentActivity
+  // registers an OnBackInvokedDispatcher observer on ON_CREATE), and with no callback
+  // enabled on it the dispatcher's fallback runnable calls
+  // androidx.core.app.ComponentActivity.onBackPressed() NON-virtually, so a deprecated
+  // override alone is never reached and Back just exits the app. installBackCallback()
+  // registers the real path; the override stays so an OEM that still uses it behaves the
+  // same. WryActivity registers its own callback only `if (handleBackNavigation)`, which
+  // TauriActivity pins to false, so nothing else on this dispatcher.
   @Deprecated("Back press precedence: close an open chrome sheet, else page-back, else default")
   override fun onBackPressed() {
-    when {
-      backInterceptActive -> chromeWebView?.evaluateJavascript(
+    if (!handleBackPress()) {
+      @Suppress("DEPRECATION")
+      super.onBackPressed()
+    }
+  }
+
+  // (a) a chrome sheet/menu is open -> tell the chrome to close it
+  // (window.__aegisMobileBack) and consume the press; (b) else the content page can go
+  // back -> navigate it back; (c) else return false so the caller falls through to the
+  // platform default (exit). The chrome sets backInterceptActive via the AegisAndroid
+  // bridge whenever a sheet is open.
+  private fun handleBackPress(): Boolean = when {
+    backInterceptActive -> {
+      chromeWebView?.evaluateJavascript(
         "window.__aegisMobileBack && window.__aegisMobileBack()", null,
       )
-      contentWebView?.canGoBack() == true -> contentWebView?.goBack()
-      else -> @Suppress("DEPRECATION") super.onBackPressed()
+      true
     }
+    contentWebView?.canGoBack() == true -> {
+      contentWebView?.goBack()
+      true
+    }
+    else -> false
+  }
+
+  // Tier (c) disables this callback before re-dispatching, so the press lands on the
+  // platform default instead of re-entering handleOnBackPressed (a call to
+  // super.onBackPressed() would come straight back here: it resolves to
+  // androidx.activity.ComponentActivity.onBackPressed(), which is
+  // getOnBackPressedDispatcher().onBackPressed()).
+  private fun installBackCallback() {
+    onBackPressedDispatcher.addCallback(
+      this,
+      object : OnBackPressedCallback(true) {
+        override fun handleOnBackPressed() {
+          if (!handleBackPress()) {
+            isEnabled = false
+            onBackPressedDispatcher.onBackPressed()
+            isEnabled = true
+          }
+        }
+      },
+    )
   }
 
   /** Count one blocked ad/tracker subresource on tab [id] and record the running totals —

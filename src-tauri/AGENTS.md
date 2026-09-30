@@ -1837,6 +1837,26 @@ your fix is broken. This cost a long false-negative investigation. Rules:
   `WindowInsetsControllerCompat.hide(systemBars())` on enter / `show(...)` on exit, with
   `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` — so the page truly owns the whole screen (status
   - nav bars hidden), matching the HTML5-video `onShowCustomView` path. Back exits.
+- **Back is dispatched by AndroidX, not by the deprecated `onBackPressed()` override.**
+  `targetSdk = 36` and no `android:enableOnBackInvokedCallback` anywhere, so on API 33+ the
+  system hands Back to `onBackPressedDispatcher`: `ComponentActivity` registers an
+  `OnBackInvokedDispatcher` observer on `ON_CREATE`, and with no ENABLED
+  `OnBackPressedCallback` on the dispatcher its fallback runnable calls
+  `androidx.core.app.ComponentActivity.onBackPressed()` **non-virtually** (verified with
+  `javap` against androidx.activity 1.10.1) — the superclass, never `MainActivity`'s
+  override. So the three-tier precedence above (close a chrome sheet → page-back → exit)
+  never ran and Back just exited the app. `TauriActivity` pins `handleBackNavigation =
+  false`, so `WryActivity.setWebView` registers no callback of its own either.
+  `installBackCallback()` (last statement of `onCreate`) registers a real
+  `OnBackPressedCallback`, and the precedence lives ONCE in `handleBackPress(): Boolean`,
+  which the `@Deprecated` override also calls — so an OEM that still routes Back the legacy
+  way behaves identically. **Tier (c) must disable the callback before re-dispatching**: its
+  `super.onBackPressed()` resolves to `androidx.activity.ComponentActivity.onBackPressed()`,
+  which *is* `getOnBackPressedDispatcher().onBackPressed()`, so it would re-enter our own
+  callback and leave the app un-exitable. Pinned from `nav::tests`
+  (`android_back_press_runs_the_three_tier_precedence_from_the_dispatcher`); with no Kotlin
+  test source set the Kotlin half is COMPILE-VERIFIED ONLY (`:app:compileArmReleaseKotlin`)
+  and on-device behaviour is **PENDING**.
 - **Safe-area insets (all four edges):** the insets listener reads
   `systemBars() ∪ displayCutout()` and pushes the real status/nav/side insets to the chrome
   as `--aegis-inset-top/bottom/left/right` CSS vars (px ÷ density); `onCreate` sets

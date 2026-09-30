@@ -854,6 +854,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   defect it describes. It also now rejects a new subscriber that forgets to unsubscribe,
   and the contract test's derived ratchet expects **every** catalogued event to have a
   real subscriber — previously one was allowed to be missing.
+- **The Android Back button did nothing but leave the app.** The whole back behaviour —
+  close an open menu or sheet, otherwise step the page back, otherwise exit — lived in a
+  deprecated `onBackPressed()` override that modern Android no longer calls: Back is handed
+  to the AndroidX back dispatcher, and with nothing registered on it the fallback goes
+  straight to the framework's own handler and skips the app's entirely. A menu could not be
+  dismissed with the gesture a user reaches for, and a tab with page history behind it could
+  not go back at all. The same three-step precedence now runs from a real back callback. The
+  deprecated override is kept and shares that single implementation, so a device that still
+  routes Back the old way behaves identically.
 
 ### Added
 
