@@ -181,7 +181,7 @@ pub fn note_nav<R: tauri::Runtime>(
 /// robust to WebKit firing NavigationAction several times for one navigation.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 #[cfg_attr(target_os = "windows", allow(dead_code))] // Linux's committed-Response phase; Windows decides at NavigationStarting.
-pub fn decide_at_response(app: &AppHandle, tab: u32, final_url: &str) -> Option<String> {
+pub fn decide_at_response<R: Runtime>(app: &AppHandle<R>, tab: u32, final_url: &str) -> Option<String> {
     let chain = take_action(app, tab, final_url)?;
     let app_initiated = app
         .try_state::<PendingNavs>()
@@ -490,7 +490,7 @@ pub fn record_action<R: tauri::Runtime>(
 /// from the main-frame Response path, so `None` is the correct answer for a subframe-only key.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 #[cfg_attr(target_os = "windows", allow(dead_code))] // Linux-only; only `decide_at_response` (Linux) consumes.
-pub fn take_action(app: &AppHandle, tab: u32, target: &str) -> Option<ChainStart> {
+pub fn take_action<R: Runtime>(app: &AppHandle<R>, tab: u32, target: &str) -> Option<ChainStart> {
     let s = app.try_state::<NavActions>()?;
     let key = (tab, norm_key(target));
     let mut m = s.0.lock().unwrap_or_else(|e| e.into_inner());

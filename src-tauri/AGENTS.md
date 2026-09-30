@@ -2684,6 +2684,15 @@ contract and absent from the code, or present in the code and wrong in the label
   tab that no longer exists. **`note_nav`/`block_at_start`/`chain_origin`/`record_action`
   became generic as a side effect, which is what made the two-phase and single-phase paths
   testable at all — and it was cheap because they only use `try_state`.**
+  `decide_at_response` and `take_action` were the two this left behind, and they are the two
+  the widening mattered MOST for: they are the Response-phase decision itself, so while they
+  took a concrete `&AppHandle` the whole of Linux's anti-malvertising path had no test at
+  all (only the pure `should_block_pred` did) — the chain store, the per-tab keying, the
+  subframe refusal and the app-initiated match were all untested production code. Both are
+  generic now, with no body edit and no call-site edit (`linux_layout.rs` infers `Wry`).
+  What still cannot be reached is `on_blocked_redirect_to_new_tab`, which takes a concrete
+  `&AppHandle` because it opens a real window from a spawned thread; that is the deliberate
+  limit, not an oversight.
 
 - **`adblock::PAGE_BLOCKED` had no remover at all** — the only genuinely unbounded
   tab-keyed table left (`nav::TABS_WITH_CONTENT` and `nav::TABS_LOADING` are cleaned, and
