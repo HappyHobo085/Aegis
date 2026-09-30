@@ -133,7 +133,7 @@ fn fresh_tmp() -> PathBuf {
 /// Run `f` with a mock `AppHandle` whose data/cache/config dirs are a fresh temp dir
 /// and whose managed state matches what the dispatchers expect. Serialized + cleaned.
 ///
-/// ## Managed state registered (mirrors lib.rs builder + setup):
+/// ## Managed state registered (mirrors lib.rs builder + setup, in the same order):
 /// - `view::ContentInset`
 /// - `update::UpdateState`
 /// - `adblock::AdblockState`
@@ -142,7 +142,14 @@ fn fresh_tmp() -> PathBuf {
 /// - `redirect_guard::PendingNavs`
 /// - `redirect_guard::NavActions`
 /// - `redirect_guard::Chains`
+/// - `redirect_guard::RedirectBudget`
 /// - `zoom::ZoomStore`
+/// - `vault::VaultState`
+/// - `farble::FarbleState`
+/// - `proxy::ProxyState`
+/// - `settings::SettingsCache`
+/// - `history::HistoryStore`
+/// - `downloads::DownloadsStore`
 /// - `tabs::Tabs` (from a fresh single-tab Registry with `"about:blank"` as home)
 /// - `linux_layout::LayoutInsets` (Linux only, `#[cfg(target_os = "linux")]`)
 ///
@@ -175,6 +182,7 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
         .manage(crate::redirect_guard::PendingNavs::default())
         .manage(crate::redirect_guard::NavActions::default())
         .manage(crate::redirect_guard::Chains::default())
+        .manage(crate::redirect_guard::RedirectBudget::default())
         .manage(crate::zoom::ZoomStore::default())
         .manage(crate::vault::VaultState::default())
         .manage(crate::farble::FarbleState::default())
@@ -427,6 +435,9 @@ mod tests {
                 .try_state::<crate::redirect_guard::NavActions>()
                 .is_some());
             assert!(app.try_state::<crate::redirect_guard::Chains>().is_some());
+            assert!(app
+                .try_state::<crate::redirect_guard::RedirectBudget>()
+                .is_some());
             assert!(app.try_state::<crate::zoom::ZoomStore>().is_some());
             assert!(app.try_state::<crate::tabs::Tabs>().is_some());
             assert!(app.try_state::<crate::farble::FarbleState>().is_some());
