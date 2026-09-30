@@ -1162,4 +1162,277 @@ mod tests {
             );
         });
     }
+
+    // --- lock-poison recovery: what all ten `unwrap_or_else(|e| e.into_inner())` sites buy ---
+
+    /// Lock `m` and then panic while the guard is held. The unwind drops the guard and leaves
+    /// the mutex poisoned, which is the state every `unwrap_or_else(|e| e.into_inner())` in
+    /// this module exists to survive; the panic is caught, so the test itself is unaffected.
+    ///
+    /// `catch_unwind` runs the default hook before it unwinds, so one "panicked at …
+    /// deliberate" line is EXPECTED output from the tests below. The hook is deliberately left
+    /// in place: replacing it process-wide to silence that would also swallow a real panic
+    /// from any test running in parallel.
+    fn poison<T>(m: &Mutex<T>) {
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _held = m.lock().expect("the mutex starts unpoisoned");
+            panic!("deliberate: poison a redirect-guard store mutex");
+        }));
+        assert!(r.is_err(), "the helper has to poison, not merely run");
+    }
+
+    /// The point of `into_inner()` is that a poisoned lock hands back the SAME data, not an
+    /// empty store: losing `PendingNavs` would block the next app-initiated navigation, and
+    /// losing `Chains` would make every later hop judge itself instead of its chain — the
+    /// fail-open this whole module exists to prevent. So the assertions below are about the
+    /// VALUES, never about "it did not panic": a recovery that quietly substituted a fresh
+    /// store would pass a did-not-panic check while dropping every record.
+    #[test]
+    fn a_poisoned_pending_nav_or_chain_lock_still_answers_with_what_was_written() {
+        with_tmp_app(|app| {
+            expect(app, 7, "https://app.example/");
+            note_nav(
+                app,
+                7,
+                "https://from.example/",
+                "https://to.example/",
+                true,
+                false,
+                true,
+            );
+            assert!(
+                chain_origin(app, 7).is_some(),
+                "precondition: the hop seeded a chain to lose"
+            );
+
+            poison(&app.try_state::<PendingNavs>().unwrap().0);
+            poison(&app.try_state::<Chains>().unwrap().0);
+
+            // A new app-initiated nav can still be RECORDED through the poisoned lock …
+            expect(app, 8, "https://after.example/");
+            let pending = app.try_state::<PendingNavs>().unwrap();
+            assert!(pending.take_if_match(8, "https://after.example/"));
+            // … and the one recorded before the panic is still there, still one-shot.
+            assert!(pending.take_if_match(7, "https://app.example/"));
+            assert!(
+                !pending.take_if_match(7, "https://app.example/"),
+                "the match is consumed once, poison or not"
+            );
+
+            // The chain is still there …
+            let chain = chain_origin(app, 7).expect("the chain survived the poisoned lock");
+            assert_eq!(chain.origin_target, "https://to.example/");
+            assert!(
+                chain.scripted,
+                "its trust inputs survive too, not just its presence"
+            );
+            // … and the per-tab cleanup still reaches it.
+            clear_chain(app, 7);
+            assert!(chain_origin(app, 7).is_none());
+        });
+    }
+
+    /// The same for the two stores whose data decides rather than records: the redirect
+    /// budget's `Arc<Mutex<_>>` and the (tab, url) -> action correlation map. A budget that
+    /// came back EMPTY would re-admit a destination it had just handled, and a correlation
+    /// map that came back empty would stop judging redirects at all.
+    #[test]
+    fn a_poisoned_budget_or_correlation_lock_still_honours_what_it_recorded() {
+        with_tmp_app(|app| {
+            let budget = app.try_state::<RedirectBudget>().unwrap();
+            assert!(
+                budget.admit("https://a.example/", "https://b.example/"),
+                "precondition: the first hop was admitted"
+            );
+            note_nav(
+                app,
+                3,
+                "https://a.example/",
+                "https://b.example/",
+                true,
+                false,
+                true,
+            );
+
+            poison(&budget.0);
+            poison(&app.try_state::<NavActions>().unwrap().0);
+
+            // The hop it already handled is still deduped. The 30 s auto-close timer depends
+            // on this: it frees the slot, but it never forgets the key.
+            assert!(!budget.admit("https://a.example/", "https://b.example/"));
+            // … and a destination it has not seen is still admitted.
+            assert!(budget.admit("https://a.example/", "https://c.example/"));
+
+            // The recorded action survived, so the Response phase still judges by the chain.
+            assert_eq!(
+                decide_at_response(app, 3, "https://b.example/"),
+                Some("https://a.example/".to_string())
+            );
+
+            // A poisoned correlation map is still cleanable, so a dead tab's decision cannot
+            // outlive it and be inherited by a later tab that reuses the id.
+            note_nav(
+                app,
+                4,
+                "https://x.example/",
+                "https://y.example/",
+                true,
+                false,
+                true,
+            );
+            clear_tab_actions(app, 4);
+            assert_eq!(decide_at_response(app, 4, "https://y.example/"), None);
+
+            // A record WRITTEN through the poisoned lock is still there for the Response.
+            note_nav(
+                app,
+                5,
+                "https://r.example/",
+                "https://s.example/",
+                true,
+                false,
+                true,
+            );
+            assert_eq!(
+                decide_at_response(app, 5, "https://s.example/"),
+                Some("https://r.example/".to_string())
+            );
+        });
+    }
+
+    /// `block_at_start` is the SINGLE-phase path (Windows, Android) and is therefore only
+    /// reachable on a Windows runner, so on Linux it is dead code the suite never executed.
+    /// It is the other writer of `Chains` — the defect `clear_chain`'s doc records — and it
+    /// resolves the app-initiated match at the FIRST hop where `note_nav` deliberately leaves
+    /// it unresolved for the Response phase. It is a different decision, so it is driven
+    /// here rather than assumed to agree with the two-phase path.
+    #[test]
+    fn the_single_phase_path_seeds_the_same_chain_the_two_phase_path_does() {
+        with_tmp_app(|app| {
+            // A page-initiated hop seeds the chain that later redirect hops read, and is
+            // itself judged (the hosts differ, so it is cross-origin).
+            assert_eq!(
+                block_at_start(
+                    app,
+                    10,
+                    "https://from.example/",
+                    "https://to.example/",
+                    true,
+                    false
+                ),
+                Some("https://from.example/".to_string())
+            );
+            let chain = chain_origin(app, 10).expect("the single-phase path seeds Chains too");
+            assert_eq!(chain.from, "https://from.example/");
+            assert_eq!(chain.origin_target, "https://to.example/");
+            assert!(chain.scripted && !chain.app_initiated);
+            // The redirect hop inherits that chain, so it is judged against where the chain
+            // STARTED rather than against the hop it arrived on.
+            assert_eq!(
+                block_at_start(
+                    app,
+                    10,
+                    "https://to.example/",
+                    "https://ads.example/",
+                    true,
+                    true
+                ),
+                Some("https://from.example/".to_string())
+            );
+
+            // A redirect hop with no chain of its own falls back to its OWN hop's flags, and
+            // consumes the one-shot app-initiated match itself.
+            expect(app, 11, "https://elsewhere.example/");
+            assert_eq!(
+                block_at_start(
+                    app,
+                    11,
+                    "https://x.example/",
+                    "https://elsewhere.example/",
+                    true,
+                    true
+                ),
+                None,
+                "an app-initiated destination is never blocked, with or without a chain"
+            );
+            assert_eq!(
+                block_at_start(
+                    app,
+                    11,
+                    "https://x.example/",
+                    "https://ads.example/",
+                    true,
+                    true
+                ),
+                Some("https://x.example/".to_string()),
+                "the match was one-shot, so the next hop is scripted again"
+            );
+        });
+    }
+
+    /// …and the single-phase path's own WRITE lands on a poisoned lock, which is the one path
+    /// through `Chains` the two-phase tests above cannot reach.
+    #[test]
+    fn a_poisoned_chain_lock_still_carries_a_single_phase_hops_chain() {
+        with_tmp_app(|app| {
+            note_nav(
+                app,
+                5,
+                "https://m.example/",
+                "https://n.example/",
+                true,
+                false,
+                true,
+            );
+            assert!(
+                chain_origin(app, 5).is_some(),
+                "precondition: a chain exists"
+            );
+            poison(&app.try_state::<Chains>().unwrap().0);
+
+            // The two-phase path's chain survived the poisoned lock …
+            let seeded = chain_origin(app, 5).expect("the chain survived the poisoned lock");
+            assert_eq!(seeded.origin_target, "https://n.example/");
+
+            // … and the single-phase path's own write lands on it.
+            assert_eq!(
+                block_at_start(
+                    app,
+                    12,
+                    "https://p.example/",
+                    "https://q.example/",
+                    true,
+                    false
+                ),
+                Some("https://p.example/".to_string())
+            );
+            let chain = chain_origin(app, 12).expect("the write went through the poison");
+            assert_eq!(chain.origin_target, "https://q.example/");
+            assert_eq!(
+                block_at_start(
+                    app,
+                    12,
+                    "https://q.example/",
+                    "https://ads.example/",
+                    true,
+                    true
+                ),
+                Some("https://p.example/".to_string()),
+                "and the chain written through the poison still drives the redirect hop"
+            );
+
+            // The two-phase path's own write goes through it too.
+            note_nav(
+                app,
+                13,
+                "https://r.example/",
+                "https://s.example/",
+                true,
+                false,
+                true,
+            );
+            let two_phase = chain_origin(app, 13).expect("the write went through the poison");
+            assert_eq!(two_phase.origin_target, "https://s.example/");
+        });
+    }
 }
