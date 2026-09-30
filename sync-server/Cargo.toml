@@ -36,6 +36,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Only the verification half of the auth scheme — the server never signs.
 ed25519-dalek = "2"
+# OS randomness for ONE thing: separating a synthesized record id from an id that is already
+# taken (see `unique_uuid`). `getrandom` 0.2 is already in Cargo.lock — it arrives transitively via
+# `ed25519-dalek` -> `rand_core` — so this adds a dependency edge and NO new package, and it is the
+# same 0.2 line `src-tauri` uses for its own CSPRNG, deliberately (0.4 is a different API).
+getrandom = "0.2"
 
 # Release profile: strip symbols + LTO so the deployed/Docker binary is lean (the plain
 # `cargo build --release` was shipping an unstripped ~2.3 MB binary). panic=unwind is kept

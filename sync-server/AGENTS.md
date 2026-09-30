@@ -52,6 +52,25 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
   → `413`; per-account total records (`MAX_RECORDS_PER_ACCOUNT`) → `507`; plus a coarse
   `DefaultBodyLimit` (`MAX_BODY_BYTES`). A registered-but-malicious paired device can't OOM the
   process or fill disk. Updates to existing records bypass the per-account cap (no growth).
+- **A synthesized record id costs ONE pass over that record, and that is a security
+  property.** A push that arrives without a `uuid` gets one derived from its content by
+  `unique_uuid`, and the taken-set is client-controlled: `post_records` stores a client
+  `uuid` VERBATIM as the map key, so a peer can put any string there — including the digest
+  of any record it chooses, because `content_digest` is public, unkeyed and deterministic.
+  The original implementation walked an incrementing salt and re-hashed `ns` + `nonce` +
+  the whole `ct` on every probe, so the loop count — and therefore the CPU — was a function
+  of how many digests the caller had pre-stored. It cost the attacker one cheap record per
+  probe and charged the victim `taken.len() x |ct|` of hashing (bounded only by
+  `MAX_BODY_BYTES` = 8 MiB per request, so tens of GB), inside the synchronous `db` lock in
+  a stretch with no `.await` — where the `guard` 30 s budget cannot fire, because a timeout
+  only cancels at an await point. Its doc comment called the collision "astronomically
+  unlikely": nothing about it was unlikely, it was merely *un-precomputed*. Now the content
+  is read exactly once (`content_pass`, which is where the test instrument counts) and the
+  one remaining case — that id already taken — is separated by 128 bits of OS entropy
+  (`getrandom`, added for this; it was already in the lockfile transitively, so no new
+  package) instead of an integer. A peer can fill the taken-set with every digest it likes
+  and still only cause the one pass it was always going to cause. The uncontested id is
+  byte-identical to what the old walk produced, so ids do not change under a running server.
 - **Two record-stamp bounds, enforced by `reject_client_poisoning_stamps` on every push.** A stamp
   the server HOSTS is a stamp it hands to every peer, so a bad one is a namespace-wide problem,
   and the damage is permanent rather than a lost LWW comparison:

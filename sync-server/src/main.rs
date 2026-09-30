@@ -231,9 +231,10 @@ struct WireRecord {
 /// Deterministic 128-bit content digest (FNV-1a run at two independent offsets/seeds).
 ///
 /// Used only to synthesize a missing record `uuid` — deliberately dependency-free so the server
-/// keeps its tiny lockfile. This is NOT a security primitive: it just has to be stable and wide
-/// enough that two distinct records derive different uuids, and [`unique_uuid`] re-checks for a
-/// collision anyway rather than trusting the digest.
+/// keeps its tiny lockfile. This is NOT a security primitive and NOT unpredictable: it is
+/// unkeyed, public and deterministic, so anyone who knows a record's `(ns, nonce, ct)` can
+/// compute the id it will be given. That is exactly why [`unique_uuid`] must not let the caller
+/// choose how many times it is run.
 fn content_digest(parts: &[&str]) -> String {
     const OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
     const PRIME: u64 = 0x0000_0100_0000_01b3;
@@ -251,23 +252,96 @@ fn content_digest(parts: &[&str]) -> String {
     format!("{:016x}{:016x}", h1, h2)
 }
 
+/// ONE pass over a record's entire content — the only place the record's own bytes are read.
+///
+/// Split out from `content_digest` so the test instrument counts PASSES over the content rather
+/// than calls of the function that happens to do it: the defect is *re-reading the ciphertext*,
+/// which is a property of the hashing, not of the function wrapped around it. Counting at the
+/// call site instead would have counted "how many times `unique_uuid` ran", which is 1 in the
+/// fixed code and 1 in the broken code alike — a test that cannot tell them apart proves nothing
+/// (proved here: the first version of this instrument passed against the pre-fix loop).
+fn content_pass(ns: &str, rec: &WireRecord, salt: &str) -> String {
+    #[cfg(test)]
+    CONTENT_PASSES.with(|c| c.set(c.get() + 1));
+    content_digest(&[ns, &rec.nonce, &rec.ct, salt])
+}
+
 /// The uuid an incoming record should be stored under: its own if it has one, otherwise one
-/// derived from its content so that two different records never share an id. Re-checks the
-/// derived id against `taken` and, on the (astronomically unlikely) collision, re-derives with an
-/// incrementing salt until it is unique — so the "same id ⇒ same record" invariant holds even if
-/// the digest collides.
+/// derived from its content so that two different records never share an id.
+///
+/// ## Reading the record's bytes exactly ONCE is a security property, not an optimisation
+///
+/// A client-supplied `uuid` is stored VERBATIM — `post_records` puts it straight into the map key
+/// — so a peer can put ANY string into `taken`, including digests it computed offline: this
+/// function's digest is public, unkeyed and deterministic (see [`content_digest`]). The previous
+/// version walked an incrementing salt and re-hashed `ns`, `nonce` and the entire `ct` on every
+/// probe, which made the loop count — and so the CPU — a function of how many digests the caller
+/// had already pre-stored. The attacker paid one cheap record per probe; the victim paid
+/// `taken.len() x |ct|` of hashing, with `|ct|` up to `MAX_CT_LEN` and the total bounded only by
+/// `MAX_BODY_BYTES` (8 MiB) — tens of gigabytes per request, sustained, because the store keeps the
+/// attacker's records. All of it inside the synchronous `db` lock in a region with no `.await`, so
+/// the 30s `guard` timeout could not interrupt it (a timeout only fires at an await point).
+///
+/// Its doc comment called that collision "astronomically unlikely". That was the false premise, and
+/// it was false in the only way that matters: nothing about the collision was unlikely, it was
+/// merely *un-precomputed*, and precomputing it costs the attacker nothing.
+///
+/// So the content is hashed once and the walk never sees it again. The separator for the case where
+/// that one digest is already taken is 128 bits of OS entropy rather than an integer, which the
+/// caller cannot pre-store however many records it owns: the walk's first candidate is new by
+/// construction. It is still a walk, so termination does not rest on that argument — each iteration
+/// draws FRESH entropy and the counter only varies the input, so the candidate is a new random
+/// 128-bit value every time (exit probability 1 - 2^-128 per attempt), and a miss costs ~70 bytes
+/// rather than the whole ciphertext.
 fn unique_uuid(rec: &WireRecord, ns: &str, taken: &HashSet<String>) -> String {
     if !rec.uuid.is_empty() {
         return rec.uuid.clone();
     }
-    let mut salt = 0u32;
-    loop {
-        let digest = content_digest(&[ns, &rec.nonce, &rec.ct, &salt.to_string()]);
-        if !taken.contains(&digest) {
-            return digest;
-        }
-        salt = salt.wrapping_add(1);
+    // Salt 0, spelled the way the old walk spelled it, so a record that found a free id keeps the
+    // exact id an earlier build would have given it. The fast path is byte-identical to before.
+    let base = content_pass(ns, rec, "0");
+    if !taken.contains(&base) {
+        return base;
     }
+    // The base id is taken. Every record that hashed to it hashed the SAME `(ns, nonce, ct)` —
+    // identical content — so content alone cannot separate them, which is what the salt walk was
+    // for. Note what is NOT hashed here: the record's own bytes are long gone.
+    let mut draws = 0u32;
+    loop {
+        let candidate = content_digest(&[&base, &format!("{}:{draws}", entropy_hex())]);
+        if !taken.contains(&candidate) {
+            return candidate;
+        }
+        draws = draws.wrapping_add(1);
+    }
+}
+
+/// 128 bits of OS randomness, hex — the only part of a synthesized id the server does not derive
+/// from the request.
+///
+/// `getrandom` 0.2 is already in this crate's lockfile (via `ed25519-dalek`) and is the same line
+/// `src-tauri` uses for its own CSPRNG. The `expect` is deliberate and adds no new failure mode:
+/// the only way to reach it is an OS with no working entropy source, and that deserves a loud
+/// panic rather than a silently-repeating id — a repeating one would hand the caller a collision
+/// the loop below cannot escape, and a panicking request handler fails only its own task.
+fn entropy_hex() -> String {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).expect("OS randomness unavailable");
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+// How many times THIS THREAD read a record's whole content — i.e. how many times `content_pass`
+// ran.
+//
+// A test-only instrument, compiled out of the release build. The defect this exists to guard is
+// *work*, and "how much of the victim's ciphertext did we re-read" measures it directly; a
+// wall-clock bound would be the same claim with the machine's speed baked in. Thread-local because
+// the test harness runs tests on separate threads and a process-global counter would be perturbed
+// by every other test that canonicalizes a body. (`//`, not `///`: a doc comment cannot attach to
+// a `thread_local!` invocation, and clippy says so.)
+#[cfg(test)]
+thread_local! {
+    static CONTENT_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Total order on the cleartext HLC (wall_ms, counter, node) — matches the client's Hlc Ord.
@@ -2885,6 +2959,83 @@ mod tests {
         let recs = vec![body_rec("", 10, 0, "alpha")];
         let out = canonicalize_body(recs, "ns", "acct", &store);
         assert_ne!(out[0].0, "taken");
+    }
+
+    // ── the work a caller can force in `unique_uuid` ──────────────────────────────────────────
+
+    /// Reads and resets this thread's `CONTENT_PASSES` instrument.
+    fn take_content_passes() -> usize {
+        CONTENT_PASSES.with(|c| c.replace(0))
+    }
+
+    /// How many probes an attacker who has pre-stored N of a record's digests costs the server.
+    ///
+    /// Each pre-stored id is one CHEAP record on the attacker's side (a client `uuid` is stored
+    /// verbatim, so an attacker may store any string it likes), and each one used to cost the
+    /// server a full pass over the victim's ciphertext — up to `MAX_CT_LEN` bytes, up to
+    /// `MAX_RECORDS_PER_REQUEST` records, all inside the synchronous `db` lock where the request
+    /// timeout cannot fire. The victim records carry `ct` of their own; here `"victim"` stands in
+    /// for that, since the instrument counts passes, not bytes.
+    const PRECOMPUTED_IDS: u32 = 64;
+
+    #[test]
+    fn precomputed_digest_collisions_cost_one_pass_over_the_content_not_one_per_taken_id() {
+        let victim = body_rec("", 10, 0, "victim");
+        // Exactly the ids the old salt walk would have walked through: the digest of salt 0, of
+        // salt 1, ... A client can hold all of these, because it may store `uuid` verbatim.
+        let taken: HashSet<String> = (0..PRECOMPUTED_IDS)
+            .map(|salt| content_digest(&["ns", &victim.nonce, &victim.ct, &salt.to_string()]))
+            .collect();
+        // The ids a peer can actually hold: `post_records` stores a client `uuid` verbatim, so any
+        // string at all is reachable — these included.
+        assert_eq!(
+            taken.len(),
+            PRECOMPUTED_IDS as usize,
+            "the setup must be a real collision set"
+        );
+        assert!(taken.contains(&content_digest(&["ns", &victim.nonce, &victim.ct, "0"])));
+
+        let _ = take_content_passes();
+        let uuid = unique_uuid(&victim, "ns", &taken);
+        assert!(
+            !taken.contains(&uuid),
+            "the id must not land on one the caller already holds"
+        );
+        assert_eq!(
+            take_content_passes(),
+            1,
+            "the victim's content must be hashed ONCE however many ids the caller pre-stored"
+        );
+    }
+
+    /// The uncontested case must be unchanged, so an id an earlier build derived is still the same
+    /// id — a store written by the old walk does not re-key itself under the new code.
+    #[test]
+    fn an_uncontested_synthesized_id_is_the_same_id_the_salt_walk_produced() {
+        let rec = body_rec("", 10, 0, "alpha");
+        assert_eq!(
+            unique_uuid(&rec, "ns", &HashSet::new()),
+            content_digest(&["ns", &rec.nonce, &rec.ct, "0"])
+        );
+    }
+
+    /// The entropy path has to stay both live and terminating: 256 records with IDENTICAL content
+    /// (the only case that reaches it) must each get their own id, and none may wedge the loop.
+    #[test]
+    fn identical_content_still_yields_one_id_per_record() {
+        let rec = body_rec("", 10, 0, "same");
+        let mut taken = HashSet::new();
+        let ids: HashSet<String> = (0..256)
+            .map(|_| {
+                let id = unique_uuid(&rec, "ns", &taken);
+                assert!(
+                    taken.insert(id.clone()),
+                    "two identical records shared the id {id}"
+                );
+                id
+            })
+            .collect();
+        assert_eq!(ids.len(), 256);
     }
 
     /// The tie-break must make ordering total WITHOUT touching the AEAD-bound `hlc`.

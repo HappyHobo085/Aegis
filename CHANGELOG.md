@@ -838,6 +838,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   actioned. It had no visible symptom until now (`FilterListsTab` never displayed
   `lastUpdated`/`etag`/`hash`, and subscriptions do not sync between devices), so it was a
   trap for the next person to add a "last updated" column rather than a live bug.
+- **The sync server no longer lets a peer choose what a push costs it.** A record that
+  arrives without an id is given one derived from its content, and the derivation walked an
+  incrementing salt until it found a free one, re-reading the whole ciphertext on every step.
+  Because a client may store an id _verbatim_, a peer could pre-store every step of that
+  walk as its own cheap record and make the victim's push pay for all of them — tens of
+  gigabytes of hashing inside one request, on the store's global lock, where the 30-second
+  request budget cannot interrupt it. The record's bytes are now read exactly once, and the
+  single remaining case (that id is already taken) is settled with 128 bits of OS randomness
+  rather than a counter, so it cannot be queued up in advance either. The id an uncontested
+  record receives is unchanged.
+
 - **The IPC drift guard's "known and explained" lists are now empty.** The two real
   entries in them are the two fixes above, and the guard fails if an excuse outlives the
   defect it describes. It also now rejects a new subscriber that forgets to unsubscribe,
