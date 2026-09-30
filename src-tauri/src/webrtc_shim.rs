@@ -468,4 +468,33 @@ a=candidate:3 1 udp 41885439 198.51.100.9 60000 typ relay\r\n";
             );
         }
     }
+
+    /// `prewarm` is an OPTIMISATION and nothing else: it builds the three policy variants once
+    /// at boot so the per-tab spawn path hands out a `&'static str` instead of cloning a
+    /// String. An optimisation that is not byte-for-byte equivalent to the path it replaces is
+    /// a behaviour change wearing a performance hat — and nothing else in the crate pins that
+    /// equivalence. `shim_for` falls through to `shim_for_inner` whenever the cache is empty,
+    /// and the only production caller of `prewarm` is `lib.rs`'s `run()`, which no test can
+    /// reach, so before this test the prewarmed path is NEVER taken and a wrong variant would
+    /// ship unnoticed.
+    ///
+    /// So pin the CONTENT, not the construction: each variant must be the shipped artifact
+    /// bytes, and the "no interference" policy must be empty.
+    #[test]
+    fn prewarm_populates_every_policy_variant_with_the_shipped_bytes() {
+        prewarm();
+        assert_eq!(get_precomputed("default"), Some(""));
+        assert_eq!(get_precomputed("public-only"), Some(PUBLIC_ONLY_JS));
+        assert_eq!(get_precomputed("disable"), Some(DISABLE_JS));
+    }
+
+    /// The cache is keyed by policy string and nothing else, so an unrecognised policy has to
+    /// MISS it — serving a neighbour's bytes would hand a page the wrong WebRTC shim for its
+    /// actual policy. The miss must still reach the same empty result through the cold path.
+    #[test]
+    fn an_unknown_policy_misses_the_prewarmed_cache_and_falls_through() {
+        prewarm();
+        assert!(get_precomputed("nonsense").is_none());
+        assert_eq!(shim_for("nonsense", false), "");
+    }
 }
