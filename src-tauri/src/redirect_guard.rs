@@ -181,7 +181,11 @@ pub fn note_nav<R: tauri::Runtime>(
 /// robust to WebKit firing NavigationAction several times for one navigation.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 #[cfg_attr(target_os = "windows", allow(dead_code))] // Linux's committed-Response phase; Windows decides at NavigationStarting.
-pub fn decide_at_response<R: Runtime>(app: &AppHandle<R>, tab: u32, final_url: &str) -> Option<String> {
+pub fn decide_at_response<R: Runtime>(
+    app: &AppHandle<R>,
+    tab: u32,
+    final_url: &str,
+) -> Option<String> {
     let chain = take_action(app, tab, final_url)?;
     let app_initiated = app
         .try_state::<PendingNavs>()
@@ -641,6 +645,7 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_openBlockedRed
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::with_tmp_app;
 
     // --- the redirect-tab budget: a hostile page must not drive unbounded tabs or writes ---
 
@@ -953,5 +958,208 @@ mod tests {
         p.expect(1, "https://b.com/");
         // tab 2 has no pending entry → no match
         assert!(!p.take_if_match(2, "https://b.com/"));
+    }
+
+    // --- the Linux two-phase path: record at NavigationAction, decide at Response ---
+    //
+    // Every test below needs `decide_at_response` and `take_action`, which took a concrete
+    // `&AppHandle` until 637817a and were therefore unreachable from a `MockRuntime`.
+    // The pure predicate is unit-tested above; these drive the STORE, which is where the
+    // chain logic actually lives.
+
+    /// The module's reason for existing, end to end on the phase Linux uses. A page at A
+    /// runs `location = "https://b.example/"` (a NavigationAction with no user gesture, not a
+    /// redirect) and b.example answers 301 to `https://ads.tracker.example/`. The hop that
+    /// ends up DISPLAYED carries `is_redirect=true`, so an `is_redirect ⇒ allow`
+    /// short-circuit waves a malvertising bounce straight through. `decide_at_response` must
+    /// answer with the chain's ORIGIN instead — that string is what the caller cancels on and
+    /// what `on_blocked_redirect_to_new_tab` opens in the background, so returning the
+    /// redirecting hop would be a different (wrong) page.
+    #[test]
+    fn a_scripted_cross_origin_bounce_is_blocked_against_the_hop_that_started_it() {
+        with_tmp_app(|app| {
+            // Hop 1: scripted, not a redirect → seeds the chain.
+            note_nav(
+                app,
+                1,
+                "https://a.example/",
+                "https://b.example/",
+                true,
+                false,
+                true,
+            );
+            // Hop 2: the server's 301. It IS a redirect, so it must INHERIT hop 1's origin.
+            note_nav(
+                app,
+                1,
+                "https://b.example/",
+                "https://ads.tracker.example/",
+                false,
+                true,
+                true,
+            );
+            // The Response phase, for the URL that will actually be displayed.
+            assert_eq!(
+                decide_at_response(app, 1, "https://ads.tracker.example/"),
+                Some("https://a.example/".to_string()),
+                "the chain's ORIGIN, not the redirecting hop"
+            );
+        });
+    }
+
+    /// The same chain, but the app asked for it. The one-shot `PendingNavs` record is the
+    /// only thing that allows the second half: WebKit reports a restore or programmatic
+    /// navigation with NO gesture, so `scripted` is true even for a navigation the user made,
+    /// and the match is what rescues it. It is matched against the chain's ORIGIN target
+    /// (the URL the app asked for) rather than `final_url`, because the server moved the
+    /// browser somewhere else entirely.
+    ///
+    /// The second half is the sharp half: identical URLs, identical flags, differing ONLY in
+    /// whether a one-shot match was still unconsumed. Without it, the `None` above would also
+    /// be what a guard with the whole app-initiated path deleted returns.
+    #[test]
+    fn the_app_initiated_match_against_the_chains_origin_overrides_a_scripted_hop() {
+        with_tmp_app(|app| {
+            // The user asked for b.example; the app records it BEFORE navigating.
+            expect(app, 1, "https://b.example/");
+            note_nav(
+                app,
+                1,
+                "https://a.example/",
+                "https://b.example/",
+                true,
+                false,
+                true,
+            );
+            note_nav(
+                app,
+                1,
+                "https://b.example/",
+                "https://b.cdn.example/",
+                true,
+                true,
+                true,
+            );
+            assert_eq!(
+                decide_at_response(app, 1, "https://b.cdn.example/"),
+                None,
+                "an app-initiated navigation is not a scripted redirect, however WebKit flags it"
+            );
+
+            // A different tab, same URLs, same flags — and now the match is GONE.
+            note_nav(
+                app,
+                2,
+                "https://a.example/",
+                "https://b.example/",
+                true,
+                false,
+                true,
+            );
+            note_nav(
+                app,
+                2,
+                "https://b.example/",
+                "https://b.cdn.example/",
+                true,
+                true,
+                true,
+            );
+            assert_eq!(
+                decide_at_response(app, 2, "https://b.cdn.example/"),
+                Some("https://a.example/".to_string()),
+                "the app-initiated match is one-shot, so a page-initiated twin is still blocked"
+            );
+        });
+    }
+
+    /// A subframe shares the tab id with the main frame, so a subframe reporting the same
+    /// target must neither overwrite the main frame's entry nor be consumed by the main
+    /// frame's Response lookup. If it did either, the lookup would find a subframe entry,
+    /// refuse to consume it, and return `None` — the guard would FAIL OPEN for the very
+    /// navigation it exists to police.
+    #[test]
+    fn a_subframe_never_consumes_or_overwrites_the_main_frames_decision() {
+        with_tmp_app(|app| {
+            // The main frame starts a scripted cross-origin nav…
+            note_nav(
+                app,
+                1,
+                "https://a.example/",
+                "https://b.example/",
+                true,
+                false,
+                true,
+            );
+            // …and a subframe in the SAME tab reports the same target immediately after.
+            note_nav(
+                app,
+                1,
+                "https://a.example/",
+                "https://b.example/",
+                true,
+                false,
+                false,
+            );
+            // The main frame's Response must still find ITS OWN decision.
+            assert_eq!(
+                decide_at_response(app, 1, "https://b.example/"),
+                Some("https://a.example/".to_string())
+            );
+        });
+    }
+
+    /// `Chains` is written by BOTH platform paths and cleared only by `forget_closed_tab`, so
+    /// a redirect hop must inherit the chain of ITS OWN tab and fall back to its own flags
+    /// when it has none. Inheriting another tab's origin would be a cross-tab leak: tab 3's
+    /// redirect would be judged against where tab 1 came from, which is exactly the
+    /// cross-navigation staleness the store is keyed by tab id to prevent.
+    #[test]
+    fn a_redirect_hop_inherits_its_own_tabs_chain_and_nobody_elses() {
+        with_tmp_app(|app| {
+            note_nav(
+                app,
+                1,
+                "https://a.example/",
+                "https://b.example/",
+                true,
+                false,
+                true,
+            );
+            note_nav(
+                app,
+                2,
+                "https://x.example/",
+                "https://y.example/",
+                true,
+                false,
+                true,
+            );
+            assert_eq!(
+                chain_origin(app, 1).map(|c| c.from),
+                Some("https://a.example/".to_string())
+            );
+            assert_eq!(
+                chain_origin(app, 2).map(|c| c.from),
+                Some("https://x.example/".to_string())
+            );
+            // Tab 3 has recorded no hop, so it has no chain to inherit.
+            assert!(chain_origin(app, 3).is_none());
+            // Its redirect hop is therefore judged on its OWN flags, against its own origin.
+            note_nav(
+                app,
+                3,
+                "https://b.example/",
+                "https://z.example/",
+                true,
+                true,
+                true,
+            );
+            assert_eq!(
+                decide_at_response(app, 3, "https://z.example/"),
+                Some("https://b.example/".to_string()),
+                "no chain of its own means no borrowed origin — it starts where it lands"
+            );
+        });
     }
 }
