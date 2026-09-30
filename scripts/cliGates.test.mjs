@@ -579,7 +579,12 @@ describe('coverage-ratchet.mjs (the "baseline was lowered" check)', () => {
     // compare — and the first run of it disproved that.)
     const box = ratchetSandbox();
     write(join(box.root, 'coverage-baseline.json'), JSON.stringify(buildBaseline(summaryWith(10))));
-    const { status, out } = RUN(box, { AEGIS_BASE_REF: '' });
+    // GITHUB_ACTIONS MUST be cleared, not just AEGIS_BASE_REF: the child inherits
+    // process.env, and `coverage-ratchet.mjs:96` reads `isCI` from
+    // `process.env.GITHUB_ACTIONS === 'true'`. Under GitHub Actions it is set, so
+    // without this the ratchet takes the CI branch, SKIPS loudly, and this test
+    // passes nowhere but on a developer machine.
+    const { status, out } = RUN(box, { AEGIS_BASE_REF: '', GITHUB_ACTIONS: '' });
     expect(out).toContain('the committed baseline was LOWERED in this commit');
     expect(out).toContain('lines: baseline 90% -> 10% (90/100 -> 10/100)');
     expect(status).toBe(1);
