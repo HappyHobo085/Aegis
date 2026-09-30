@@ -384,6 +384,25 @@ success)` → `on_finished`. **The destination must be PASSED IN, not derived**:
     was extracted into `push_row` (returns whether it changed; the CALLER emits
     `downloads.changed`, so one row never yields two events) and
     `record_download_start` is the Android-only entry point.
+    **The Kotlin download directory is the platform's, and only one name names it.**
+    `downloadDir()` used to be `File(getExternalFilesDir("downloads"), "downloads")`,
+    i.e. `<extFiles>/downloads/downloads`, while
+    `DownloadManager.Request.setDestinationInExternalFilesDir(this, "downloads", name)`
+    writes to `<extFiles>/downloads/<name>`: `getExternalFilesDir` ALREADY appends its
+    dirType (`ContextImpl.getExternalFilesDirs` -> `Environment.buildPaths(dirs, type)`),
+    and the platform's own `setDestinationInExternalFilesDir` is implemented as exactly
+    `getExternalFilesDir(dirType)` + the file name (frameworks/base
+    `core/java/android/app/DownloadManager.java`). So the recorded `savePath` was one
+    directory below the file: `openFile`/`showInFolder` pointed at nothing, and
+    `trusted_download_path`'s prefix check passed vacuously. The subdirectory is now the
+    single `DOWNLOAD_SUBDIR` constant used by BOTH halves, `downloadDir()` returns
+    `File?`, and the `?: filesDir` fallback is gone because
+    `setDestinationInExternalFilesDir` THROWS when the directory is unavailable — a
+    fallback path would be recorded and never written. The listener drops the download
+    with a log line before `recordStart` instead. There is no Kotlin test source set, so
+    `downloads::tests::the_kotlin_download_directory_is_the_one_the_platform_writes_into`
+    pins the Kotlin TEXT; it is paired with the Gradle build, because a text pin can lock
+    in a form the COMPILER rejects and the compiler only runs where the pin cannot.
     **`open`/`showInFolder` return a `Result`; they never lie.** The body used to be
     `let _ = Command::new(cmd).arg(target).spawn()` on desktop and `let _ = target` on
     mobile, and BOTH dispatch arms answered `Ok(Value::Null)` regardless — so on a

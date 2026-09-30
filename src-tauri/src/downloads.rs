@@ -1214,4 +1214,97 @@ mod tests {
             );
         });
     }
+
+    /// The regression this pins, and the reason the Rust side is involved at all: Kotlin
+    /// computed the row's `savePath` as `File(getExternalFilesDir("downloads"), "downloads")`,
+    /// one directory below where the transfer actually wrote. Nothing above could see it,
+    /// because `getExternalFilesDir` ALREADY appends its dirType -- and
+    /// `DownloadManager.Request.setDestinationInExternalFilesDir` is implemented as exactly
+    /// `getExternalFilesDir(dirType) + <fileName>` (frameworks/base
+    /// `core/java/android/app/DownloadManager.java`), so the two paths could never agree.
+    /// The row named a directory that never existed, `downloads.openFile` /
+    /// `showInFolder` pointed at nothing, and `trusted_download_path`'s `is_file()` failed on
+    /// the row's own prefix.
+    ///
+    /// The fix is in Kotlin, and this project has NO Kotlin test source set, so the pin is
+    /// the strongest thing available: it reads the Kotlin SOURCE and asserts the two halves
+    /// that must stay in step. It is a text pin, so it is also verified against the
+    /// COMPILER (the Gradle build), which is the half a Rust test cannot reach.
+    #[test]
+    fn the_kotlin_download_directory_is_the_one_the_platform_writes_into() {
+        use crate::test_support::{kotlin_fn_body, kotlin_source};
+        let src = kotlin_source("MainActivity.kt");
+
+        let dir = kotlin_fn_body(&src, "private fun downloadDir()");
+        assert!(
+            dir.contains("getExternalFilesDir(DOWNLOAD_SUBDIR)"),
+            "downloadDir() must resolve the platform's own directory; \
+             the platform's getExternalFilesDir already appends the dirType"
+        );
+        assert!(
+            !dir.contains("File("),
+            "downloadDir() must not nest another directory under getExternalFilesDir: \
+             that is the off-by-one, because setDestinationInExternalFilesDir writes into \
+             getExternalFilesDir(<dirType>)/<fileName> and nothing deeper"
+        );
+        assert!(
+            dir.contains("return null"),
+            "with no directory there is no path a row may record, so downloadDir() must \
+             report that instead of naming one the platform will never write to"
+        );
+        assert!(
+            !dir.contains("filesDir"),
+            "a filesDir fallback disagrees with setDestinationInExternalFilesDir, which \
+             THROWS when the directory is unavailable; the fallback path would be recorded \
+             and never written"
+        );
+
+        // The recorded path and the platform's destination must come from ONE name, or the
+        // two can drift apart again with nothing to catch it.
+        let listener = kotlin_fn_body(&src, "private fun wireDownloadListener(");
+        assert!(
+            listener.contains("File(dir, name)"),
+            "the recorded savePath is the file inside the directory downloadDir() resolved"
+        );
+        assert!(
+            listener.contains("setDestinationInExternalFilesDir(this, DOWNLOAD_SUBDIR, name)"),
+            "the platform destination must be the SAME constant the recorded path is built from"
+        );
+        assert!(
+            !listener.contains("setDestinationInExternalFilesDir(this, \"downloads\""),
+            "a literal here would be a second name for the subdirectory, which is how the \
+             two sides drifted in the first place"
+        );
+        // And the null case must be handled BEFORE a row is recorded, not after. The bail is
+        // searched FORWARD from the resolution: the listener already returns early for a
+        // non-http URL, and that earlier return says nothing about the directory.
+        let null_at = listener
+            .find("downloadDir()")
+            .expect("the listener resolves the directory");
+        let bail_at = listener[null_at..]
+            .find("return@setDownloadListener")
+            .map(|i| null_at + i)
+            .expect("the listener drops a download it cannot place");
+        let record_at = listener
+            .find("NativeDownloads.recordStart")
+            .expect("the listener records the row");
+        assert!(
+            null_at < bail_at && bail_at < record_at,
+            "with no directory the download must be dropped BEFORE recordStart, or the row \
+             would advertise a file that was never written"
+        );
+    }
+
+    /// The pin above reads `MainActivity.kt`; if a future refactor moves `downloadDir()`
+    /// into another file the pin would still pass on stale text, so the constant has to
+    /// actually exist where the pin says it does.
+    #[test]
+    fn the_kotlin_download_subdirectory_constant_exists() {
+        let src = crate::test_support::kotlin_source("MainActivity.kt");
+        assert!(
+            src.contains("private const val DOWNLOAD_SUBDIR = \"downloads\""),
+            "DOWNLOAD_SUBDIR is the single name the recorded path and the platform \
+             destination share; without it the pin above is asserting a fiction"
+        );
+    }
 }

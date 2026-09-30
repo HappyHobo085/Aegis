@@ -1155,14 +1155,28 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
   // than a lint exemption. The Downloads sheet rendered, and was permanently empty. Kotlin is
   // the only side that can see the download, and it drives the core down this path.
 
-  /** Where downloads land. `getExternalFilesDir` needs NO storage permission, is app-private,
-   *  and yields a REAL filesystem path — which is what the core's `downloads::open` /
-   *  `showInFolder` / `trusted_download_path` checks need; a `DownloadManager` `content://` URI
-   *  is not one, and `setDestinationInExternalPublicDir` would need WRITE_EXTERNAL_STORAGE. */
-  private fun downloadDir(): File {
-    val base = getExternalFilesDir("downloads") ?: filesDir
-    val dir = File(base, "downloads")
-    if (!dir.isDirectory) dir.mkdirs()
+  /** Where downloads land, or null when the platform has no usable app-specific external
+   *  directory. `getExternalFilesDir` needs NO storage permission, is app-private, and yields a
+   *  REAL filesystem path — which is what the core's `downloads::open` / `showInFolder` /
+   *  `trusted_download_path` checks need; a `DownloadManager` `content://` URI is not one, and
+   *  `setDestinationInExternalPublicDir` would need WRITE_EXTERNAL_STORAGE.
+   *
+   *  `getExternalFilesDir(DOWNLOAD_SUBDIR)` IS the directory, and that is not a style choice:
+   *  the platform's own `DownloadManager.Request.setDestinationInExternalFilesDir` is
+   *  implemented as exactly `context.getExternalFilesDir(dirType)` followed by the file name
+   *  (frameworks/base `core/java/android/app/DownloadManager.java`, ~line 525). Appending
+   *  `DOWNLOAD_SUBDIR` here a second time put the recorded `savePath` one directory below
+   *  where the transfer actually wrote, so the row named a path no file ever occupied.
+   *
+   *  Null rather than a `filesDir` fallback, for the same reason: the platform throws
+   *  `IllegalStateException` from `setDestinationInExternalFilesDir` when the directory is
+   *  unavailable, so a fallback path here would be recorded and then never written. The
+   *  caller drops the download with a log line, which is what the throw would have done. */
+  private fun downloadDir(): File? {
+    val dir = getExternalFilesDir(DOWNLOAD_SUBDIR) ?: return null
+    // getExternalFilesDir creates it in-process, so this is belt and braces; a failure to
+    // create is reported as "no directory" rather than left to fail later.
+    if (!dir.isDirectory && !dir.mkdirs()) return null
     return dir
   }
 
@@ -1188,7 +1202,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
           return@setDownloadListener
         }
         val name = safeDownloadName(URLUtil.guessFileName(url, disposition, mimeType), url)
-        val file = File(downloadDir(), name)
+        val dir = downloadDir()
+        if (dir == null) {
+          Log.w("AegisDownload", "no app-private external directory for $url")
+          return@setDownloadListener
+        }
+        val file = File(dir, name)
         val req = DownloadManager.Request(Uri.parse(url))
         CookieManager.getInstance().getCookie(url)?.let { req.addRequestHeader("Cookie", it) }
         // `CHROME_UA`, not `userAgentString`: that is a `WebSettings` property, and this
@@ -1197,10 +1216,10 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
         req.addRequestHeader("User-Agent", userAgent ?: CHROME_UA)
         if (!mimeType.isNullOrEmpty()) req.setMimeType(mimeType)
         req.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-        // Must match downloadDir()'s subdirectory: setDestinationInExternalFilesDir appends the
-        // subdir to getExternalFilesDir, so passing "downloads" here is what puts the file where
-        // the row's savePath says it is.
-        req.setDestinationInExternalFilesDir(this, "downloads", name)
+        // DOWNLOAD_SUBDIR, not a literal: the row's `savePath` is `File(downloadDir(), name)`
+        // and this call writes to `getExternalFilesDir(<dirType>)/<name>`, so the two agree
+        // only while both name the same subdirectory from the same constant.
+        req.setDestinationInExternalFilesDir(this, DOWNLOAD_SUBDIR, name)
         val dm = getSystemService(Context.DOWNLOAD_SERVICE) as? DownloadManager
         if (dm == null) {
           Log.w("AegisDownload", "no DownloadManager for $url")
@@ -2000,6 +2019,12 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     // popup's first navigation to be captured, short enough to bound the memory an
     // ad-driven window.open() loop can hold.
     private const val POPUP_TEMP_TTL_MS = 10_000L
+
+    // The subdirectory downloads are written to and recorded under. ONE name for both sides:
+    // `downloadDir()` resolves it and `setDestinationInExternalFilesDir` is handed it, so the
+    // path a row records cannot drift from the path the platform writes to. See downloadDir()
+    // for why it is a constant and not a second literal.
+    private const val DOWNLOAD_SUBDIR = "downloads"
 
     // Block-page copy, kept with the other constants so showMalwareWarning's callers all
     // phrase a refusal the same way (and so a new refusal reason has one obvious home).

@@ -880,6 +880,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   weekly schedule share that ref, so either could cancel the other mid-run. The one
   unpinned action reference in the workflow is gone as well.
 
+- **A finished download on Android pointed one directory above the file.** Downloads are
+  handed to the platform's download manager with the subdirectory `downloads`, and the
+  saved location is recorded from the same subdirectory — but the platform's accessor
+  already appends the subdirectory itself, so the recorded path was
+  `<app files>/downloads/downloads` while the file landed in `<app files>/downloads`.
+  Nothing on the path back could notice: "show in folder" and "open" targeted a
+  directory that never existed, and the trust check on a download's own location was
+  matching a prefix nothing was under. One name now names the subdirectory for both
+  halves, and when the platform has no usable folder the download is dropped with a log
+  line rather than recorded at a path it will never occupy.
+
 ### Added
 
 - **The backup importer can now read a file you pick, not only pasted text.** The Data
