@@ -215,6 +215,9 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   bare `invoke` and a Rust `Err(String)` rejects with that string, not an `Error` — so the
   usual `err instanceof Error ? err.message : …` is false for every real refusal and
   would silently discard the core's reason. A draft is never cleared by a refusal.
+  `saveError.test.ts` covers all four shapes it accepts — the core's sentence, an
+  `Error`'s message, a rejection with no text at all, and a blank one — because the
+  last two are the only things standing between a refusal and an empty toast.
 - **A resolved `{ ok: false }` is a REFUSAL, not a success (`DataTab`).** `data.export`
   has no save dialog — the core picks the path and writes the bundle itself, so a
   failure is a failed WRITE (no space, no permission, a missing directory) and it
