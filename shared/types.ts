@@ -306,6 +306,22 @@ export interface PermissionPrompt {
 }
 export type PermissionDecision = 'allow' | 'allow-once' | 'deny';
 export type ImportMode = 'merge' | 'replace';
+
+/**
+ * The core's `data.export` reply.
+ *
+ * There is no save dialog — the core writes the bundle itself and answers with where
+ * it went, so a refusal is a failed WRITE (no space, no permission, a missing
+ * directory), never a user cancellation. `error` carries the core's reason for it and
+ * is absent on success. The UI MUST show it: a failed export with no feedback is
+ * indistinguishable, to the user, from an export that succeeded, and the backup they
+ * then think they have is not there.
+ */
+export interface DataExportResult {
+  ok: boolean;
+  path?: string;
+  error?: string;
+}
 /**
  * The core's `data.import` reply.
  *
@@ -749,7 +765,7 @@ export interface AegisApi {
     onPrompt(cb: (p: PermissionPrompt) => void): () => void;
   };
   data: {
-    export(): Promise<{ ok: boolean; path?: string }>;
+    export(): Promise<DataExportResult>;
     import(mode: ImportMode, source?: { text?: string }): Promise<DataImportResult>;
   };
   picker: {

@@ -215,6 +215,18 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   bare `invoke` and a Rust `Err(String)` rejects with that string, not an `Error` — so the
   usual `err instanceof Error ? err.message : …` is false for every real refusal and
   would silently discard the core's reason. A draft is never cleared by a refusal.
+- **A resolved `{ ok: false }` is a REFUSAL, not a success (`DataTab`).** `data.export`
+  has no save dialog — the core picks the path and writes the bundle itself, so a
+  failure is a failed WRITE (no space, no permission, a missing directory) and it
+  arrives as a **resolved** `{ ok: false, error }` rather than a rejection, which is
+  why `handleImport`'s `catch` cannot catch it. `handleExport` had no `else` branch,
+  so a failed export told the user nothing at all: no success either, and the user is
+  left believing they hold a backup they do not have, to be discovered at restore
+  time. The rule for this repo's `{ok}`-shaped replies: a caller must handle the
+  negative arm, and its test must assert the message the user SEES — not merely that
+  the success toast is absent. The old test (`does NOT toast success when export is
+canceled`) passed because of the defect and named a "canceled" state the flow
+  cannot reach.
 - **A promise built from a ONE-SHOT event needs a second way to settle
   (`lib/updateResult.ts`).** `FilterListsTab`'s "Update all" disables itself and only
   re-enables in `.finally`, and the refresh result arrives as a single

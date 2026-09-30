@@ -36,12 +36,32 @@ describe('DataTab', () => {
     await waitFor(() => expect(toast.success).toHaveBeenCalled());
   });
 
-  it('does NOT toast success when export is canceled', async () => {
+  // The old version of this test asserted only that no success toast appeared, which
+  // is what the bug ALSO produced -- it passed because of the defect, and it named
+  // a "canceled" state the flow cannot reach (the core has no save dialog, so a
+  // refusal is a failed WRITE, not a user cancellation). What the user actually
+  // needs to be told is that their backup is not there.
+  it('a failed export tells the user, with the reason the core gave', async () => {
+    const p = props({
+      onExport: vi.fn(async () => ({ ok: false, error: 'No space left on device' })),
+    });
+    render(<DataTab {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /^export$/i }));
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect(toast.success).not.toHaveBeenCalled();
+    expect((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0]).toContain(
+      'No space left on device',
+    );
+  });
+
+  it('a failed export with no reason still says the export failed', async () => {
+    // The core's reply always carries `error` today, but the UI must not depend on
+    // that: a silent no-op on a missing field is exactly the bug being fixed.
     const p = props({ onExport: vi.fn(async () => ({ ok: false })) });
     render(<DataTab {...p} />);
     await userEvent.click(screen.getByRole('button', { name: /^export$/i }));
-    await waitFor(() => expect(p.onExport).toHaveBeenCalled());
-    expect(toast.success).not.toHaveBeenCalled();
+    await waitFor(() => expect(toast.error).toHaveBeenCalledTimes(1));
+    expect((toast.error as ReturnType<typeof vi.fn>).mock.calls[0][0]).toMatch(/export/i);
   });
 
   it('defaults the import mode to merge and imports without a confirm', async () => {

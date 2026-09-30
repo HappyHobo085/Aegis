@@ -20,6 +20,7 @@ import {
   SitePermission,
   PermissionPrompt,
   DataImportResult,
+  DataExportResult,
   TabsState,
   TabShortcut,
   UpdateState,
@@ -632,7 +633,7 @@ export const aegis: AegisApi = {
     // No native save dialog (it renders in the OS's light theme, clashing with
     // Aegis's dark UI). The backend writes the backup to the Downloads dir and
     // returns the path, which the Data tab shows in a toast.
-    export: async () => dedupedCall<{ ok: boolean; path?: string }>(IPC.dataExport, {}),
+    export: async () => dedupedCall<DataExportResult>(IPC.dataExport, {}),
     // No native open dialog. Import from JSON pasted into the in-app field when
     // given; otherwise restore the last export from the Downloads dir.
     import: async (mode, source) => {

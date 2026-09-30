@@ -1,11 +1,11 @@
 // src/components/DataTab.tsx
 import { useRef, useState } from 'react';
 import type { ChangeEvent } from 'react';
-import type { ImportMode } from '../../shared/types';
+import type { DataExportResult, ImportMode } from '../../shared/types';
 import { confirm, toast } from '../lib/toast';
 
 export interface DataTabProps {
-  onExport(): Promise<{ ok: boolean; path?: string }>;
+  onExport(): Promise<DataExportResult>;
   onImport(mode: ImportMode, source?: { text?: string }): Promise<ImportResult>;
 }
 
@@ -36,6 +36,17 @@ export function DataTab({ onExport, onImport }: DataTabProps) {
       const res = await onExport();
       if (res.ok) {
         toast.success(`Exported to ${res.path ?? 'file'}.`);
+      } else {
+        // A refusal here is a failed WRITE, not a cancellation: there is no save
+        // dialog (the core picks the path), so `ok: false` means the bundle is NOT
+        // on disk. Saying nothing was the worst option available — the user is left
+        // believing they have a backup they do not have, and a restore later finds
+        // nothing. The core's reason is shown when there is one, because "no space
+        // left" and "the folder is not writable" need different things from the
+        // reader; the fallback still says plainly that the export failed.
+        toast.error(
+          res.error ? `Export failed: ${res.error}` : 'Export failed — no backup was written.',
+        );
       }
     } finally {
       setBusy(false);

@@ -902,6 +902,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   does not receive cookies while a private tab is open. First-party cookies already stored
   by other tabs before the private one opened still linger, as before.
 
+- **A failed backup export now says so.** Exporting a backup wrote the bundle from the
+  core, which has no save dialog, and replied `{ ok: false, error }` — a resolved
+  refusal, not a rejected promise. The Settings › Data tab only looked at the
+  positive arm, so a failed export produced no message at all: the user was left
+  believing they had a backup they did not have, and found out at restore time. The
+  failure is now reported, with the reason the core gave when it gives one.
+
 ### Added
 
 - **The backup importer can now read a file you pick, not only pasted text.** The Data
