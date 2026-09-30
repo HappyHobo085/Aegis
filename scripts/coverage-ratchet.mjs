@@ -4,7 +4,9 @@
 //
 // Three failure modes, all of them real regressions:
 //   1. any metric below the committed baseline
-//   2. the baseline itself lowered in this commit (vs the version in git HEAD)
+//   2. the baseline itself lowered in this commit (vs the version in the commit
+//      it descends from — NOT vs `HEAD`, which in a CI worktree is this very file;
+//      see `resolveBaselineBaseRef` in coverageCheck.mjs)
 //   3. a baseline file dropped out of the report (a new coverage.exclude)
 //
 // Raising coverage, or raising the baseline, always passes. Lowering the
@@ -19,20 +21,32 @@ import {
   METRICS,
   buildBaseline,
   compareToBaseline,
+  baselineLoweringSkipMessage,
   detectBaselineLowering,
+  resolveBaselineBaseRef,
 } from './coverageCheck.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const SUMMARY = resolve(ROOT, 'coverage/coverage-summary.json');
-const BASELINE = resolve(ROOT, 'coverage-baseline.json');
+const BASELINE_REL = 'coverage-baseline.json';
+const BASELINE = resolve(ROOT, BASELINE_REL);
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
 
-/** The baseline as committed, or null if it is new / unavailable (shallow clone). */
-function committedBaseline() {
+/**
+ * The baseline as recorded at `ref`, or null if that commit does not have one.
+ *
+ * Two different failures both mean "no comparison was made", and the caller
+ * reports them, because the whole point of this fix is that a check which did
+ * not run must not read as a check which passed. `ref` may be unresolvable (a
+ * shallow clone, or a base ref that was never fetched) — the ratchet step in
+ * ci.yml verifies it and only exports a ref that resolves, so this is a
+ * belt-and-braces path.
+ */
+function committedBaselineAt(ref) {
   try {
     return JSON.parse(
-      execFileSync('git', ['show', `HEAD:${'coverage-baseline.json'}`], {
+      execFileSync('git', ['show', `${ref}:${BASELINE_REL}`], {
         cwd: ROOT,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
@@ -77,7 +91,17 @@ if (improvements.length) {
 
 if (regressions.length) fail(regressions);
 
-const lowered = detectBaselineLowering(committedBaseline(), baseline);
+const base = resolveBaselineBaseRef({
+  env: process.env,
+  isCI: process.env.GITHUB_ACTIONS === 'true',
+});
+const committed = base.ref ? committedBaselineAt(base.ref) : null;
+if (!committed) {
+  console.warn(
+    baselineLoweringSkipMessage({ script: 'coverage ratchet', base, baselineRel: BASELINE_REL }),
+  );
+}
+const lowered = detectBaselineLowering(committed, baseline);
 if (lowered.length) {
   if (process.env.COVERAGE_ALLOW_BASELINE_LOWER === '1') {
     console.warn(

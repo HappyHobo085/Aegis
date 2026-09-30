@@ -89,6 +89,18 @@ alone or higher. A baseline generated from a run that predates new files is simp
 and the ratchet will (correctly) fail on the first CI run after that commit. Use
 `COVERAGE_ALLOW_BASELINE_LOWER=1` to land the correction, then say in the commit why.
 
+That escape hatch only works if the ratchet knows _which_ commit to compare against. It reads
+`AEGIS_BASE_REF`, and defaults to `HEAD` — which in a CI worktree is the very commit being
+checked, making the "was the baseline lowered?" half of the gate a comparison of a file with
+itself. CI sets the variable from the event (`github.event.pull_request.base.sha`, else
+`github.event.before`) and checks the commit is present before exporting it; with no ref the
+ratchet prints a loud "This is not a pass" warning rather than passing quietly. Locally, to
+review the same comparison your CI would make, point it at a ref yourself:
+
+```bash
+AEGIS_BASE_REF=origin/main npm run coverage:ratchet
+```
+
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
 here is either lying in CI or about to quietly relax the number. The measured gap, as of
 2026-09-29 (`122 test files / 1746 tests`):

@@ -7,7 +7,9 @@
 // "the ratchet may only go up" is a single promise, not one per language:
 //
 //   1. any metric below the committed baseline
-//   2. the baseline itself lowered in this commit (vs the version in git HEAD)
+//   2. the baseline itself lowered in this commit (vs the version in the commit
+//      it descends from — NOT vs `HEAD`, which in a CI worktree is this very file;
+//      see `resolveBaselineBaseRef` in coverageCheck.mjs)
 //   3. a baseline file dropped out of the report (a new exclusion)
 //
 // The file argument exists so the gate can be re-run against an artifact without
@@ -17,7 +19,13 @@ import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { compareToBaseline, detectBaselineLowering, METRICS } from './coverageCheck.mjs';
+import {
+  baselineLoweringSkipMessage,
+  compareToBaseline,
+  detectBaselineLowering,
+  METRICS,
+  resolveBaselineBaseRef,
+} from './coverageCheck.mjs';
 import {
   EXCLUSIONS,
   applyExclusions,
@@ -34,10 +42,20 @@ const BASELINE_REL = 'src-tauri/coverage-baseline.json';
 
 const readJson = (p) => JSON.parse(readFileSync(p, 'utf8'));
 
-function committedBaseline() {
+/**
+ * The baseline as recorded at `ref`, or null if that commit does not have one.
+ *
+ * Two different failures both mean "no comparison was made", and the caller
+ * reports them, because the whole point of this fix is that a check which did
+ * not run must not read as a check which passed. `ref` may be unresolvable (a
+ * shallow clone, or a base ref that was never fetched) — the ratchet step in
+ * ci.yml verifies it and only exports a ref that resolves, so this is a
+ * belt-and-braces path.
+ */
+function committedBaselineAt(ref) {
   try {
     return JSON.parse(
-      execFileSync('git', ['show', `HEAD:${BASELINE_REL}`], {
+      execFileSync('git', ['show', `${ref}:${BASELINE_REL}`], {
         cwd: ROOT,
         encoding: 'utf8',
         stdio: ['ignore', 'pipe', 'ignore'],
@@ -159,7 +177,21 @@ if (regressions.length) {
   fail([...formatDeltas(perFileDeltas(baseline, current)), ...regressions]);
 }
 
-const lowered = detectBaselineLowering(committedBaseline(), baseline);
+const base = resolveBaselineBaseRef({
+  env: process.env,
+  isCI: process.env.GITHUB_ACTIONS === 'true',
+});
+const committed = base.ref ? committedBaselineAt(base.ref) : null;
+if (!committed) {
+  console.warn(
+    baselineLoweringSkipMessage({
+      script: 'rust coverage ratchet',
+      base,
+      baselineRel: BASELINE_REL,
+    }),
+  );
+}
+const lowered = detectBaselineLowering(committed, baseline);
 if (lowered.length) {
   if (process.env.COVERAGE_ALLOW_BASELINE_LOWER === '1') {
     console.warn(

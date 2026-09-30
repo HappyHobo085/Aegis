@@ -3,24 +3,24 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 5140,
-      "covered": 4554,
-      "pct": 88.59
+      "total": 5161,
+      "covered": 4562,
+      "pct": 88.39
     },
     "statements": {
-      "total": 6902,
-      "covered": 6012,
-      "pct": 87.1
+      "total": 6925,
+      "covered": 6022,
+      "pct": 86.96
     },
     "functions": {
-      "total": 1422,
-      "covered": 1222,
-      "pct": 85.93
+      "total": 1424,
+      "covered": 1224,
+      "pct": 85.95
     },
     "branches": {
-      "total": 4458,
-      "covered": 3633,
-      "pct": 81.49
+      "total": 4483,
+      "covered": 3647,
+      "pct": 81.35
     }
   },
   "files": {
@@ -48,12 +48,12 @@
     },
     "scripts/check-android-versioncode.mjs": {
       "lines": {
-        "total": 52,
+        "total": 56,
         "covered": 0,
         "pct": 0
       },
       "statements": {
-        "total": 57,
+        "total": 61,
         "covered": 0,
         "pct": 0
       },
@@ -63,7 +63,7 @@
         "pct": 0
       },
       "branches": {
-        "total": 32,
+        "total": 36,
         "covered": 0,
         "pct": 0
       }
@@ -135,12 +135,12 @@
     },
     "scripts/coverage-ratchet.mjs": {
       "lines": {
-        "total": 34,
+        "total": 39,
         "covered": 0,
         "pct": 0
       },
       "statements": {
-        "total": 41,
+        "total": 46,
         "covered": 0,
         "pct": 0
       },
@@ -150,31 +150,31 @@
         "pct": 0
       },
       "branches": {
-        "total": 10,
+        "total": 14,
         "covered": 0,
         "pct": 0
       }
     },
     "scripts/coverageCheck.mjs": {
       "lines": {
-        "total": 53,
-        "covered": 51,
-        "pct": 96.22
+        "total": 61,
+        "covered": 59,
+        "pct": 96.72
       },
       "statements": {
-        "total": 68,
-        "covered": 64,
-        "pct": 94.11
+        "total": 78,
+        "covered": 74,
+        "pct": 94.87
       },
       "functions": {
-        "total": 8,
-        "covered": 8,
+        "total": 10,
+        "covered": 10,
         "pct": 100
       },
       "branches": {
-        "total": 55,
-        "covered": 49,
-        "pct": 89.09
+        "total": 68,
+        "covered": 63,
+        "pct": 92.64
       }
     },
     "scripts/rust-coverage-baseline.mjs": {
@@ -201,12 +201,12 @@
     },
     "scripts/rust-coverage-ratchet.mjs": {
       "lines": {
-        "total": 65,
+        "total": 69,
         "covered": 0,
         "pct": 0
       },
       "statements": {
-        "total": 72,
+        "total": 76,
         "covered": 0,
         "pct": 0
       },
@@ -216,7 +216,7 @@
         "pct": 0
       },
       "branches": {
-        "total": 22,
+        "total": 26,
         "covered": 0,
         "pct": 0
       }

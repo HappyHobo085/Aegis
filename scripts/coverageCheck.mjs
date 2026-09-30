@@ -4,7 +4,8 @@
 //
 // The gate is a RATCHET, not a threshold. It enforces three things:
 //   1. current >= baseline          (coverage may not fall)
-//   2. baseline not lowered vs HEAD (you may not relax the bar to hide a fall)
+//   2. baseline not lowered vs the commit being tested (you may not relax the
+//      bar to hide a fall)
 //   3. no metric file silently added/excluded (the file list is itself compared)
 //
 // (3) matters as much as (1): a one-line `coverage.exclude` addition would
@@ -139,9 +140,11 @@ export function compareToBaseline(baseline, current) {
 }
 
 /**
- * Has the baseline been lowered relative to the committed (HEAD) version?
- * `committed` is the baseline as it exists in git; `working` is the file on disk.
- * Returns an array of lowered-metric strings (empty when nothing was lowered).
+ * Has the baseline been lowered relative to the committed version at some other
+ * commit? `committed` is the baseline as that commit recorded it; `working` is
+ * the file on disk. Returns an array of lowered-metric strings (empty when
+ * nothing was lowered, and when `committed` is null — the commit that first
+ * introduced the baseline has nothing to compare against).
  */
 export function detectBaselineLowering(committed, working) {
   const lowered = [];
@@ -158,4 +161,72 @@ export function detectBaselineLowering(committed, working) {
     }
   }
   return lowered;
+}
+
+/**
+ * Which commit's copy of the baseline is the "committed" one that the lowering
+ * check compares the file on disk against?
+ *
+ * WHY THIS IS NOT `HEAD`. It used to be, and that made the check unreachable in
+ * CI. A CI worktree IS the checked-out commit, so `git show HEAD:…` returned the
+ * very file being checked, `detectBaselineLowering` compared it with itself, and
+ * `COVERAGE_ALLOW_BASELINE_LOWER=1` — advertised in the root AGENTS.md as a real
+ * escape hatch — could never be reached. The base has to be the commit that
+ * PRECEDED the one under test, and only the event knows which that is:
+ *
+ *   1. `AEGIS_BASE_REF`, when the caller knows the base. ci.yml derives it from
+ *      the event (`pull_request.base.sha`, else `before`) and exports it; a human
+ *      can set it by hand. `check-android-versioncode.mjs` reads the same variable
+ *      for the same reason.
+ *   2. `null` in CI with nothing set. The caller must then SKIP the comparison
+ *      LOUDLY. Falling back to HEAD here would reintroduce the self-comparison
+ *      that reports a pass, which is the one outcome that is worse than not
+ *      checking: on the weekly `schedule` run there genuinely is no predecessor
+ *      (the push run already covered that commit), and a gate that cannot know
+ *      its base must say so rather than invent one.
+ *   3. `HEAD` outside CI, which is correct there: the file on disk is the
+ *      uncommitted candidate and HEAD is what it would replace.
+ *
+ * Pure: it reads the given `env` object, never `process.env` itself, so every
+ * branch is reachable from a test. `isCI` is likewise a parameter because the
+ * caller — not this module — decides what "in CI" means.
+ */
+export function resolveBaselineBaseRef({ env = {}, isCI = false } = {}) {
+  const explicit = env.AEGIS_BASE_REF;
+  if (explicit) return { ref: explicit, source: 'AEGIS_BASE_REF' };
+  if (isCI) return { ref: null, source: 'ci-without-a-base-ref' };
+  return { ref: 'HEAD', source: 'local-HEAD' };
+}
+
+/**
+ * The operator-facing text for a lowering check that could NOT be made.
+ *
+ * The two reasons are different failures and read differently, because the fix is
+ * different: no base ref means the caller (a workflow) did not supply one, while an
+ * unreadable ref means the commit is not in this clone — a `fetch-depth: 0`
+ * checkout. Either way the gate ends in the same place — no comparison happened —
+ * so both end by saying that a pass is not what this was.
+ *
+ * This lives in the tested module for the reason `rust-coverage-ratchet.mjs` gives
+ * for `formatDeltas`: the ratchets are top-level scripts no test imports, so v8
+ * scores them 0% and every line of prose added to one dilutes the very ratio it
+ * reports. Here it is also the only way the wording is tested at all.
+ */
+export function baselineLoweringSkipMessage({ script, base, baselineRel }) {
+  const head = `${script}: SKIPPING the "baseline was lowered" check`;
+  if (!base || !base.ref) {
+    return (
+      `\n${head} (${base ? base.source : 'no-base-ref'}).\n` +
+      '  A CI run has no base to compare against unless AEGIS_BASE_REF names one;\n' +
+      '  without it the only ref available is HEAD, which IS the file just read, so\n' +
+      '  the comparison would be a file against itself and would always pass.\n' +
+      '  ci.yml derives AEGIS_BASE_REF from the event. This is not a pass.\n'
+    );
+  }
+  return (
+    `\n${head}: could not read\n` +
+    `  ${baselineRel} at ${base.ref} (${base.source}). Either that commit introduced\n` +
+    '  the baseline, or the ref is not in this clone — a checkout with\n' +
+    '  fetch-depth: 0 is required for the base commit to be present. Not a pass.\n'
+  );
 }

@@ -26,6 +26,20 @@ GitHub Actions workflows and Dependabot config for Aegis.
     a file the baseline names left the report (which is what stops an added
     `coverage.exclude` from buying a green build by shrinking the denominator).
     `COVERAGE_ALLOW_BASELINE_LOWER` is deliberately **not** set in the workflow.
+    The "lowered in the same commit" half is only meaningful because this job
+    first runs a `Resolve the base ref for the comparison gates` step: the
+    `_lowered_` check reads `git show <base>:coverage-baseline.json`, and in a CI
+    worktree `HEAD` _is_ the file being checked, so comparing against `HEAD`
+    would be a tautology that can never fire. The step prefers
+    `github.event.pull_request.base.sha` (pull_request), falls back to
+    `github.event.before` (ignoring the all-zeros value a branch-creation event
+    carries), and exports `AEGIS_BASE_REF` only after `git cat-file -e` proves
+    the commit is actually in the clone — which is also why the checkout is
+    `fetch-depth: 0`. With no resolvable base the ratchets and
+    `check-android-versioncode.mjs` print a loud warning naming what they could
+    not check; they do not fall back to a self-comparison.
+    The `rust` job repeats the same step and the same `fetch-depth: 0`, because
+    `rust-coverage-ratchet.mjs` carries the identical check.
     Numbers and the full gap decomposition: the coverage section of the root
     `AGENTS.md`; the tooling's own contract: `scripts/AGENTS.md`.
   - **`rust`** (the `src-tauri` crate): installs the webkit2gtk build deps, then

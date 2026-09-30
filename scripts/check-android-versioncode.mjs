@@ -20,11 +20,14 @@
 // land".
 //
 // Semantics: an UNCHANGED version is fine (most PRs are not releases). A CHANGED
-// version must be STRICTLY GREATER. A decrease, a non-semver version, or a
-// missing base ref all fail.
+// version must be STRICTLY GREATER. A decrease or a non-semver version fails.
 //
 // Usage:  node scripts/check-android-versioncode.mjs
-//   env AEGIS_BASE_REF  git ref to compare against (default: origin/main)
+//   env AEGIS_BASE_REF  git ref to compare against. Locally the default is
+//                       origin/main; in CI it is deliberately UNSET unless the
+//                       workflow provides it, and then the gate SKIPS itself
+//                       loudly. See below — this is not a nit, it is the whole
+//                       gate.
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -33,7 +36,34 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const CONF_REL = 'src-tauri/tauri.conf.json';
 const PROPS_REL = 'src-tauri/gen/android/app/tauri.properties';
-const BASE_REF = process.env.AEGIS_BASE_REF || 'origin/main';
+
+// WHY THE DEFAULT IS NOT `origin/main` IN CI. It used to be, unconditionally, and
+// this gate had teeth on exactly one of its three triggers. `ci.yml` runs on
+// `push: main`, `pull_request` and a weekly `schedule`; on a push to main and on a
+// schedule, HEAD *is* `origin/main`, so the script compared the working tree with
+// itself, printed "version unchanged from origin/main" and passed. A versionCode
+// DECREASED on main — which Android refuses to install as a downgrade — was
+// therefore only ever caught on a PR, and only by luck if the PR's own run saw it.
+//
+// So: AEGIS_BASE_REF wins; a local run with nothing set keeps `origin/main` (that
+// is the useful thing to check against on a branch); a CI run with nothing set has
+// NO base and says so, loudly, instead of comparing the file with itself. The
+// coverage ratchets resolve their base the same way — see `resolveBaselineBaseRef`
+// in coverageCheck.mjs — so all three gates answer "what am I comparing against"
+// with the same rules.
+const IS_CI = process.env.GITHUB_ACTIONS === 'true';
+const BASE_REF = process.env.AEGIS_BASE_REF || (IS_CI ? '' : 'origin/main');
+
+if (!BASE_REF) {
+  console.log(
+    '::warning::No base ref available — SKIPPING the Android versionCode monotonicity ' +
+      'check. AEGIS_BASE_REF is unset and this is a CI run, so there is no earlier ' +
+      'commit to compare against; comparing against the current HEAD would be a file ' +
+      'against itself and would always pass. ci.yml sets AEGIS_BASE_REF from the ' +
+      'event, and a push to main is what checks the merged result. This is not a pass.',
+  );
+  process.exit(0);
+}
 
 const fail = (msg) => {
   console.error(`::error::${msg}`);

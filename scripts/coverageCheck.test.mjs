@@ -4,8 +4,10 @@ import {
   buildBaseline,
   compareToBaseline,
   coversLess,
+  baselineLoweringSkipMessage,
   detectBaselineLowering,
   pctOf,
+  resolveBaselineBaseRef,
 } from './coverageCheck.mjs';
 
 // A metric record in the shape istanbul writes into coverage-summary.json.
@@ -201,5 +203,86 @@ describe('detectBaselineLowering', () => {
 
   it('is a no-op on the first commit that introduces a baseline', () => {
     expect(detectBaselineLowering(null, base)).toEqual([]);
+  });
+});
+
+// The base of the lowering check. Every branch here is reachable only because the
+// function takes its inputs as arguments: the bug it exists to fix was a CI
+// worktree comparing a file with itself, which a test calling the real thing can
+// no longer reproduce by accident.
+describe('resolveBaselineBaseRef', () => {
+  it('uses AEGIS_BASE_REF when the caller knows the base', () => {
+    // ci.yml derives this from the event; a human can set it by hand.
+    expect(resolveBaselineBaseRef({ env: { AEGIS_BASE_REF: 'deadbeef' }, isCI: true })).toEqual({
+      ref: 'deadbeef',
+      source: 'AEGIS_BASE_REF',
+    });
+  });
+
+  it('prefers AEGIS_BASE_REF over the local HEAD fallback', () => {
+    expect(resolveBaselineBaseRef({ env: { AEGIS_BASE_REF: 'base-sha' } }).ref).toBe('base-sha');
+  });
+
+  it('returns NO ref in CI with nothing set, so the caller skips loudly', () => {
+    // THE bug: the old code answered `HEAD` here, and in a CI worktree HEAD is
+    // the file being checked, so the comparison was a file against itself and
+    // `COVERAGE_ALLOW_BASELINE_LOWER=1` was unreachable.
+    expect(resolveBaselineBaseRef({ env: {}, isCI: true })).toEqual({
+      ref: null,
+      source: 'ci-without-a-base-ref',
+    });
+  });
+
+  it('treats an EMPTY AEGIS_BASE_REF as unset, not as a ref named ""', () => {
+    // `AEGIS_BASE_REF=` in a workflow env block is an empty string, and
+    // `git show :coverage-baseline.json` would read the INDEX — a fourth kind of
+    // comparison nobody asked for.
+    expect(resolveBaselineBaseRef({ env: { AEGIS_BASE_REF: '' }, isCI: true }).ref).toBe(null);
+    expect(resolveBaselineBaseRef({ env: { AEGIS_BASE_REF: '' } }).ref).toBe('HEAD');
+  });
+
+  it('falls back to HEAD outside CI, which is correct there', () => {
+    // Locally the file on disk is the uncommitted candidate and HEAD is what it
+    // would replace, so HEAD is the right base — the local behaviour is unchanged
+    // on purpose.
+    expect(resolveBaselineBaseRef({ env: {} })).toEqual({ ref: 'HEAD', source: 'local-HEAD' });
+    expect(resolveBaselineBaseRef({ isCI: false }).ref).toBe('HEAD');
+  });
+});
+
+// The wording of a check that did not run is the whole deliverable of that branch:
+// the outcome is a pass either way, so the only thing distinguishing "I checked and
+// it is fine" from "I could not check" is this text. Asserted here so the two ratchets
+// cannot drift into saying something else.
+describe('baselineLoweringSkipMessage', () => {
+  const ci = { ref: null, source: 'ci-without-a-base-ref' };
+  const unreadable = { ref: 'deadbeef', source: 'AEGIS_BASE_REF' };
+
+  it('names the cause and disclaims a pass when there is no base ref', () => {
+    const m = baselineLoweringSkipMessage({
+      script: 'coverage ratchet',
+      base: ci,
+      baselineRel: 'coverage-baseline.json',
+    });
+    expect(m).toContain('coverage ratchet: SKIPPING the "baseline was lowered" check');
+    expect(m).toContain('ci-without-a-base-ref');
+    expect(m).toContain('This is not a pass');
+  });
+
+  it('names the ref and the fix when the ref is not in the clone', () => {
+    const m = baselineLoweringSkipMessage({
+      script: 'rust coverage ratchet',
+      base: unreadable,
+      baselineRel: 'src-tauri/coverage-baseline.json',
+    });
+    expect(m).toContain('could not read');
+    expect(m).toContain('src-tauri/coverage-baseline.json at deadbeef');
+    expect(m).toContain('fetch-depth: 0');
+    expect(m).toContain('Not a pass');
+  });
+
+  it('survives a missing base argument instead of printing "undefined"', () => {
+    // A caller that forgets to resolve the ref must still get a usable message.
+    expect(baselineLoweringSkipMessage({ script: 'x', baselineRel: 'y' })).toContain('no-base-ref');
   });
 });

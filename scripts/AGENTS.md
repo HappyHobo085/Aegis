@@ -103,6 +103,14 @@ that path is `src-tauri/.cargo/audit.toml`.
   CI gates (gzipped `dist/assets` vs `BUDGETS`; Android `versionCode` monotonicity
   vs `AEGIS_BASE_REF`). They are top-level CLIs like `check-npm-audit.mjs`, with
   the same "one implementation, wired into both `npm run` and `ci.yml`" shape.
+  `check-android-versioncode.mjs` defaults its base to `origin/main` **only
+  outside CI**: on `push: main` and on the weekly `schedule` the checkout is that
+  very commit, so the comparison would always be `cmp == 0` and the gate would
+  always pass — which is exactly the run where a _decreased_ `versionCode` (an
+  install Android refuses as a downgrade) could land. Under `CI` it therefore
+  requires `AEGIS_BASE_REF` and, with none, prints a `::warning::No base ref
+available — SKIPPING…` line and exits 0 before touching the build files, so
+  the skip is visible in the log instead of reading as a pass.
 - **`cliGates.test.mjs`** — spawns all three CLIs as subprocesses in a **copied
   sandbox** and asserts the exit code _and_ the operator-facing message. Three
   facts force that shape:
@@ -139,10 +147,19 @@ that path is `src-tauri/.cargo/audit.toml`.
 - **`coverage-ratchet.mjs`** / **`coverage-baseline.mjs`** / **`rust-coverage-ratchet.mjs`** /
   **`rust-coverage-baseline.mjs`** — the four CLIs. The two ratchets are the CI
   gates; both are three-failure-mode gates (below baseline / baseline lowered vs
-  `git show HEAD:…` / a baseline file dropped out of the report) and both print
-  their excluded files with their **real** numbers on every run.
-  `COVERAGE_ALLOW_BASELINE_LOWER=1` is the documented, deliberately noisy escape
-  hatch for the lowering check. Each ratchet also accepts a path to a saved
+  **the commit this one descends from** / a baseline file dropped out of the report)
+  and both print their excluded files with their **real** numbers on every run.
+  The lowering check compares against `AEGIS_BASE_REF` when it is set, and that
+  variable is what makes the check real: in a CI worktree the checkout _is_ `HEAD`,
+  so `git show HEAD:coverage-baseline.json` is the file being checked and the
+  comparison is a tautology. `ci.yml` resolves the ref from
+  `github.event.pull_request.base.sha` (or `github.event.before`) and only exports
+  it after `git cat-file -e` confirms the commit is in the clone, which is why both
+  the `web` and `rust` checkouts need `fetch-depth: 0`. With no ref at all — which
+  is the case on a first push, or a shallow clone — the ratchet prints a **loud
+  skip that ends "This is not a pass."** and carries on; it does not silently
+  pass. `COVERAGE_ALLOW_BASELINE_LOWER=1` is the documented, deliberately noisy
+  escape hatch, and it is only reachable with a base ref. Each ratchet also accepts a path to a saved
   `llvmcov.json` (or `coverage-summary.json`) so a CI failure can be reproduced
   from an artifact without re-instrumenting.
   `rust-coverage-ratchet.mjs` additionally prints **per-file covered-line deltas**

@@ -1,10 +1,20 @@
 import { describe, it, expect, beforeAll, afterAll, afterEach } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, cpSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  cpSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildBaseline } from './coverageCheck.mjs';
+import { applyExclusions, buildRustBaseline, llvmToSummary } from './rustCoverageCheck.mjs';
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(SCRIPTS_DIR, '..');
@@ -439,4 +449,327 @@ describe('check-android-versioncode.mjs (the Android bump gate)', () => {
   // (±999) is narrower than the next-high field's weight (1000). So "cmp > 0"
   // and "headCode <= baseCode" cannot both hold. It is a defensive re-check
   // against a future change to the derivation, not a live path.
+});
+
+// ------------------------------------------- "was the baseline LOWERED?" checks
+
+// WHY EVERY FIXTURE HERE COMMITS THE LOWERED BASELINE. The check used to run
+// `git show HEAD:coverage-baseline.json` and compare it with the file on disk —
+// and in a CI worktree the checkout IS the commit under test, so those are the
+// same bytes and the comparison could never fire. `COVERAGE_ALLOW_BASELINE_LOWER=1`
+// was advertised in the root AGENTS.md as a real escape hatch and was unreachable,
+// on both coverage gates. A fixture that only edited the file in the worktree
+// would pass against the old code and prove nothing; these commit the lowering, so
+// HEAD and the worktree are byte-identical exactly as CI sees them, and the only
+// thing that can catch it is a base ref that is NOT HEAD.
+describe('coverage-ratchet.mjs (the "baseline was lowered" check)', () => {
+  const rec = (covered, total) => ({
+    total,
+    covered,
+    skipped: 0,
+    pct: total ? (covered / total) * 100 : 100,
+  });
+  /** An istanbul summary whose every metric sits at `covered`/100. */
+  const summaryWith = (covered) => {
+    const f = {
+      lines: rec(covered, 100),
+      statements: rec(covered, 100),
+      functions: rec(covered, 100),
+      branches: rec(covered, 100),
+    };
+    return { total: f, 'src/a.ts': f };
+  };
+
+  /** A git sandbox with a real summary and a real baseline, committed at 90%. */
+  function ratchetSandbox() {
+    const root = sandbox('coverage-ratchet.mjs', 'coverageCheck.mjs');
+    const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' }).stdout;
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'gate@example.invalid');
+    git('config', 'user.name', 'Gate Test');
+    git('config', 'commit.gpgsign', 'false');
+    write(join(root, 'coverage', 'coverage-summary.json'), JSON.stringify(summaryWith(90)));
+    write(join(root, 'coverage-baseline.json'), JSON.stringify(buildBaseline(summaryWith(90))));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'baseline at 90%');
+    return {
+      root,
+      /** Commit a LOWERED baseline. After this HEAD and the worktree are identical. */
+      lowerTo: (covered) => {
+        write(
+          join(root, 'coverage-baseline.json'),
+          JSON.stringify(buildBaseline(summaryWith(covered))),
+        );
+        git('add', '-A');
+        git('commit', '-q', '-m', `lower the baseline to ${covered}%`);
+      },
+      /** What the COMMIT under test really holds — asserted, not assumed. */
+      headBaseline: () =>
+        JSON.parse(
+          spawnSync('git', ['show', 'HEAD:coverage-baseline.json'], {
+            cwd: root,
+            encoding: 'utf8',
+          }).stdout,
+        ),
+    };
+  }
+
+  const RUN = (box, env) => run(box.root, 'coverage-ratchet.mjs', { env });
+
+  it('FAILS a lowered baseline, against the BASE commit and not against HEAD', () => {
+    const box = ratchetSandbox();
+    box.lowerTo(10);
+    // The fixture really is CI's shape: the lowered baseline IS the commit.
+    expect(box.headBaseline().total.lines.covered).toBe(10);
+    const { status, out } = RUN(box, { AEGIS_BASE_REF: 'HEAD~1' });
+    expect(out).toContain('the committed baseline was LOWERED in this commit');
+    expect(out).toContain('lines: baseline 90% -> 10% (90/100 -> 10/100)');
+    expect(out).not.toContain('coverage ratchet: OK');
+    expect(status).toBe(1);
+  });
+
+  it('still honours COVERAGE_ALLOW_BASELINE_LOWER=1 now that the check can fire', () => {
+    // The escape hatch is only honest if the thing it escapes is reachable, and
+    // until this fix it was not. Keep the hatch, and keep it loud.
+    const box = ratchetSandbox();
+    box.lowerTo(10);
+    const { status, out } = RUN(box, {
+      AEGIS_BASE_REF: 'HEAD~1',
+      COVERAGE_ALLOW_BASELINE_LOWER: '1',
+    });
+    expect(out).toContain('baseline LOWERED — allowed by COVERAGE_ALLOW_BASELINE_LOWER=1');
+    expect(out).toContain('90% -> 10%');
+    expect(out).not.toContain('FAILED');
+    expect(status).toBe(0);
+  });
+
+  it('SKIPS loudly in CI with no base ref, instead of comparing HEAD with itself', () => {
+    // The old code answered `HEAD` here, so a CI run with no base printed a plain
+    // "OK" for a lowered baseline. The outcome is still a pass — there is nothing
+    // to compare against — but it now says so, and says it cannot be a pass.
+    const box = ratchetSandbox();
+    box.lowerTo(10);
+    const { status, out } = RUN(box, { GITHUB_ACTIONS: 'true', AEGIS_BASE_REF: '' });
+    expect(out).toContain('SKIPPING the "baseline was lowered" check');
+    expect(out).toContain('ci-without-a-base-ref');
+    expect(out).toContain('This is not a pass');
+    expect(out).not.toContain('LOWERED in this commit');
+    expect(status).toBe(0);
+  });
+
+  it('says so, and names the cause, when the base ref is not in the clone', () => {
+    // A shallow checkout, or a base ref the fetch never covered. This must not
+    // read as a pass, and the message has to say what to fix.
+    const box = ratchetSandbox();
+    box.lowerTo(10);
+    const { status, out } = RUN(box, { AEGIS_BASE_REF: 'no-such-ref' });
+    expect(out).toContain('could not read');
+    expect(out).toContain('no-such-ref');
+    expect(out).toContain('fetch-depth: 0');
+    expect(out).toContain('Not a pass');
+    expect(out).not.toContain('LOWERED in this commit');
+    expect(status).toBe(0);
+  });
+
+  it('compares against HEAD outside CI, so an UNCOMMITTED lowering is caught too', () => {
+    // The local path is unchanged on purpose, and it is not toothless: HEAD is what
+    // the candidate would replace, so editing the baseline downward and running the
+    // gate before committing fails here exactly as it would in CI. (This test was
+    // first written asserting the opposite — that a local run had nothing to
+    // compare — and the first run of it disproved that.)
+    const box = ratchetSandbox();
+    write(join(box.root, 'coverage-baseline.json'), JSON.stringify(buildBaseline(summaryWith(10))));
+    const { status, out } = RUN(box, { AEGIS_BASE_REF: '' });
+    expect(out).toContain('the committed baseline was LOWERED in this commit');
+    expect(out).toContain('lines: baseline 90% -> 10% (90/100 -> 10/100)');
+    expect(status).toBe(1);
+  });
+});
+
+describe('rust-coverage-ratchet.mjs (the same check, Rust side)', () => {
+  // The smallest llvm export the real reader accepts. `linux_layout.rs` MUST be
+  // present even though it is EXCLUDED, or the linux exclusion reads as stale
+  // ("matched NO file on this platform") and the gate fails for another reason.
+  const llvm = (covered) => {
+    const s = (c) => ({
+      lines: { count: 100, covered: c, percent: c },
+      regions: { count: 100, covered: c, percent: c },
+      functions: { count: 100, covered: c, percent: c },
+      branches: { count: 0, covered: 0, percent: 0 },
+    });
+    return {
+      data: [
+        {
+          files: [
+            { filename: 'src-tauri/src/zoom.rs', summary: s(covered) },
+            { filename: 'src-tauri/src/linux_layout.rs', summary: s(0) },
+          ],
+        },
+      ],
+    };
+  };
+  const baselineFor = (covered) => {
+    const { kept, total } = applyExclusions(llvmToSummary(llvm(covered)));
+    return buildRustBaseline({ total, files: kept });
+  };
+
+  it('FAILS a lowered baseline, against the BASE commit and not against HEAD', () => {
+    const root = sandbox('rust-coverage-ratchet.mjs', 'coverageCheck.mjs', 'rustCoverageCheck.mjs');
+    const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' }).stdout;
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'gate@example.invalid');
+    git('config', 'user.name', 'Gate Test');
+    git('config', 'commit.gpgsign', 'false');
+    const llvmPath = join(root, 'llvmcov.json');
+    write(llvmPath, JSON.stringify(llvm(90)));
+    write(join(root, 'src-tauri', 'coverage-baseline.json'), JSON.stringify(baselineFor(90)));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'baseline at 90%');
+    // Now lower it and COMMIT, so HEAD is the lowered file — the CI shape.
+    write(join(root, 'src-tauri', 'coverage-baseline.json'), JSON.stringify(baselineFor(10)));
+    git('add', '-A');
+    git('commit', '-q', '-m', 'lower the baseline');
+    const head = JSON.parse(
+      spawnSync('git', ['show', 'HEAD:src-tauri/coverage-baseline.json'], {
+        cwd: root,
+        encoding: 'utf8',
+      }).stdout,
+    );
+    expect(head.total.lines.covered).toBe(10);
+
+    const { status, out } = run(root, 'rust-coverage-ratchet.mjs', {
+      // Absolute: the ratchet resolves its argument against the PROCESS cwd, not
+      // the sandbox root, so a relative path would read the real repo instead.
+      args: [llvmPath],
+      env: { AEGIS_BASE_REF: 'HEAD~1' },
+    });
+    expect(out).toContain('the committed baseline was LOWERED in this commit');
+    expect(out).toContain('lines: baseline 90% -> 10% (90/100 -> 10/100)');
+    expect(out).not.toContain('rust coverage ratchet: OK');
+    expect(status).toBe(1);
+  });
+
+  it('SKIPS loudly in CI with no base ref rather than reading HEAD', () => {
+    const root = sandbox('rust-coverage-ratchet.mjs', 'coverageCheck.mjs', 'rustCoverageCheck.mjs');
+    const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' }).stdout;
+    git('init', '-q', '-b', 'main');
+    git('config', 'user.email', 'gate@example.invalid');
+    git('config', 'user.name', 'Gate Test');
+    git('config', 'commit.gpgsign', 'false');
+    const { kept, total } = applyExclusions(llvmToSummary(llvm(90)));
+    write(join(root, 'llvmcov.json'), JSON.stringify(llvm(90)));
+    write(
+      join(root, 'src-tauri', 'coverage-baseline.json'),
+      JSON.stringify(buildRustBaseline({ total, files: kept })),
+    );
+    git('add', '-A');
+    git('commit', '-q', '-m', 'baseline');
+
+    const { status, out } = run(root, 'rust-coverage-ratchet.mjs', {
+      args: [join(root, 'llvmcov.json')],
+      env: { GITHUB_ACTIONS: 'true', AEGIS_BASE_REF: '' },
+    });
+    expect(out).toContain('SKIPPING the "baseline was lowered" check');
+    expect(out).toContain('This is not a pass');
+    expect(status).toBe(0);
+  });
+});
+
+// ------------------------------------------------- the Android gate's base ref
+
+describe('check-android-versioncode.mjs (which commit it compares against)', () => {
+  it('SKIPS loudly in CI with no base ref, even when the version DECREASED', () => {
+    // The defect: `BASE_REF` defaulted to `origin/main` unconditionally, and on
+    // `push: main` and on the weekly `schedule` HEAD *is* origin/main, so the gate
+    // compared the file with itself and printed "unchanged". A decreased
+    // versionCode — which Android refuses to install — was only ever caught by a PR.
+    const box = gitSandbox('1.2.3');
+    box.setVersion('1.1.9');
+    const { status, out } = run(box.root, 'check-android-versioncode.mjs', {
+      env: { AEGIS_BASE_REF: '', GITHUB_ACTIONS: 'true' },
+    });
+    expect(out).toContain('::warning::No base ref available');
+    expect(out).toContain('SKIPPING the Android versionCode monotonicity check');
+    expect(out).toContain('This is not a pass');
+    expect(out).not.toContain('::error::');
+    expect(status).toBe(0);
+  });
+
+  it('keeps origin/main as the default OUTSIDE CI, where it is a real earlier commit', () => {
+    // Regression guard for the behaviour deliberately preserved: on a local branch
+    // origin/main is exactly the thing to compare a version against.
+    const box = gitSandbox('1.2.3');
+    // `git init` does not create `origin/main`; this ref is the local equivalent of
+    // having fetched the default branch, which is what the old default resolved to.
+    box.git('update-ref', 'refs/remotes/origin/main', 'HEAD');
+    box.setVersion('1.1.9');
+    const { status, out } = run(box.root, 'check-android-versioncode.mjs', {
+      env: { AEGIS_BASE_REF: '', GITHUB_ACTIONS: '' },
+    });
+    expect(out).toContain('::error::version was DECREASED: 1.2.3 (origin/main) -> 1.1.9');
+    expect(status).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------- ci.yml wiring itself
+
+// These gates are only as real as the workflow that feeds them a base ref, and a
+// YAML file has no seam. The assertions below are the closest thing to that seam:
+// each one is a fact whose absence silently re-arms one of the bugs fixed here.
+describe('ci.yml (the wiring the comparison gates depend on)', () => {
+  const WORKFLOWS = join(REPO_ROOT, '.github', 'workflows');
+  const read = (f) => readFileSync(join(WORKFLOWS, f), 'utf8');
+  const ci = read('ci.yml');
+
+  /** The YAML text of one job, from its `  <name>:` line to the next one. */
+  const job = (name) => {
+    const starts = [...ci.matchAll(/^ {2}([a-z][\w-]*):$/gm)].map((m) => [m[1], m.index]);
+    const i = starts.findIndex(([n]) => n === name);
+    expect(i, `job "${name}" is not in ci.yml`).toBeGreaterThan(-1);
+    return ci.slice(starts[i][1], starts[i + 1] ? starts[i + 1][1] : ci.length);
+  };
+
+  for (const name of ['web', 'rust']) {
+    it(`the ${name} job derives AEGIS_BASE_REF from the event`, () => {
+      const block = job(name);
+      expect(block).toContain('AEGIS_BASE_REF=');
+      expect(block).toContain('github.event.pull_request.base.sha');
+      expect(block).toContain('github.event.before');
+      // The all-zeros `before` of a branch's first push is not a commit.
+      expect(block).toContain('0000000000000000000000000000000000000000');
+    });
+
+    it(`the ${name} job checks out with enough history to resolve that base`, () => {
+      // At depth 1 the base commit is not in the clone, so every comparison the
+      // step above exports a ref for is skipped — silently, before this fix.
+      expect(job(name)).toContain('fetch-depth: 0');
+    });
+
+    it(`the ${name} job verifies the ref before exporting it`, () => {
+      // The degradation has to be visible: an unresolvable base becomes a warning
+      // in the workflow, not a self-comparison inside the gate.
+      expect(job(name)).toContain('git cat-file -e');
+      expect(job(name)).toContain('::warning::No base commit available');
+    });
+  }
+
+  it('separates the weekly schedule run from a push to main', () => {
+    // `github.ref` is refs/heads/main for BOTH, so with cancel-in-progress a push
+    // could cancel the one run that catches a vulnerability nobody opened a PR for.
+    expect(ci).toMatch(/^ {2}group: ci-\$\{\{ github\.event_name \}\}-\$\{\{ github\.ref \}\}$/m);
+  });
+
+  it('references every action by a released tag, not by a mutable branch', () => {
+    // `dtolnay/rust-toolchain@master` was the only one, and it gated the job that
+    // proves the declared MSRV compiles.
+    const mutable = [...read('ci.yml').matchAll(/uses: (\S+)/g)]
+      .map((m) => m[1])
+      .filter((u) => /@(master|main|HEAD)$/.test(u));
+    expect(mutable).toEqual([]);
+  });
+
+  it('the msrv job uses the same installer as the other Rust jobs', () => {
+    expect(job('msrv')).toContain('uses: actions-rust-lang/setup-rust-toolchain@v1');
+    expect(job('msrv')).not.toMatch(/uses: dtolnay\//);
+  });
 });

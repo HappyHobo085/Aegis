@@ -23,8 +23,15 @@ permissions:
 
 # Supersede an in-flight run when a PR branch is re-pushed (e.g. Dependabot
 # re-syncing a grouped update) so redundant jobs don't pile up.
+#
+# `github.event_name` is PART OF THE GROUP, and it has to be. `github.ref` alone
+# is `refs/heads/main` for BOTH `push: main` and the weekly `schedule`, so a push
+# landing while the scheduled dependency audit was running cancelled it — the one
+# run that exists to catch a vulnerability nobody opened a PR for. Superseding
+# still works where it should: two runs of the same event on the same ref (a PR
+# re-push) share a group, and each is superseded by the next.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -35,9 +42,46 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The Android versionCode gate compares against the default branch, so it
-          # needs the history, not just the single checked-out commit.
+          # The Android versionCode gate and the coverage ratchets all compare
+          # against an EARLIER commit, so they need the history, not just the single
+          # checked-out commit: at depth 1 the base commit is not in the clone and
+          # every one of those comparisons is skipped.
           fetch-depth: 0
+
+      # The base ref for the gates that compare this commit against an EARLIER
+      # one: `coverage-ratchet.mjs` / `rust-coverage-ratchet.mjs` ("was the
+      # baseline lowered in this commit?") and `check-android-versioncode.mjs`
+      # ("did the versionCode go backwards?"). In a CI worktree the checkout IS
+      # the commit under test, so `git show HEAD:<file>` returned the very file
+      # being checked and both gates compared a file with itself — the
+      # versionCode gate then printed "unchanged from origin/main" and passed on
+      # every push to main and on every weekly run, so a DECREASED versionCode
+      # (which Android refuses to install) was only ever caught by a PR. The base
+      # is therefore the event's own predecessor: the PR's base sha, or `before`
+      # on a push.
+      #
+      # The ref is VERIFIED here, in this step, before it is exported, so a base
+      # commit this clone does not hold (a shallow checkout, or a ref the fetch
+      # did not cover) degrades to a visible warning here instead of a silent
+      # self-comparison inside the gate. `before` is 40 zeroes for a branch's
+      # first push, which is not a commit, so that value is excluded explicitly.
+      # `schedule` and `workflow_dispatch` have no `before` at all: the gates then
+      # skip those two comparisons loudly and the push run covers the commit.
+      - name: Resolve the base ref for the comparison gates
+        run: |
+          REF=''
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            REF='${{ github.event.pull_request.base.sha }}'
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            REF='${{ github.event.before }}'
+          fi
+          if [ -n "$REF" ] && git cat-file -e "$REF^{commit}" 2>/dev/null; then
+            echo "AEGIS_BASE_REF=$REF" >> "$GITHUB_ENV"
+            echo "AEGIS_BASE_REF=$REF (derived from the ${{ github.event_name }} event)"
+          else
+            echo "::warning::No base commit available for ${{ github.event_name }} — the coverage-baseline-lowering and Android versionCode comparisons will SKIP loudly."
+            echo "  (event.before='${{ github.event.before }}' pull_request.base.sha='${{ github.event.pull_request.base.sha }}')"
+          fi
       - uses: actions/setup-node@v6
         with:
           node-version: '22.23.3'
@@ -100,6 +144,46 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+        with:
+          # The Rust coverage ratchet compares the committed baseline against the
+          # version at this commit's BASE, so the base commit has to be in the
+          # clone. Without this the lookup fails and the comparison is skipped.
+          fetch-depth: 0
+
+      # The base ref for the gates that compare this commit against an EARLIER
+      # one: `coverage-ratchet.mjs` / `rust-coverage-ratchet.mjs` ("was the
+      # baseline lowered in this commit?") and `check-android-versioncode.mjs`
+      # ("did the versionCode go backwards?"). In a CI worktree the checkout IS
+      # the commit under test, so `git show HEAD:<file>` returned the very file
+      # being checked and both gates compared a file with itself — the
+      # versionCode gate then printed "unchanged from origin/main" and passed on
+      # every push to main and on every weekly run, so a DECREASED versionCode
+      # (which Android refuses to install) was only ever caught by a PR. The base
+      # is therefore the event's own predecessor: the PR's base sha, or `before`
+      # on a push.
+      #
+      # The ref is VERIFIED here, in this step, before it is exported, so a base
+      # commit this clone does not hold (a shallow checkout, or a ref the fetch
+      # did not cover) degrades to a visible warning here instead of a silent
+      # self-comparison inside the gate. `before` is 40 zeroes for a branch's
+      # first push, which is not a commit, so that value is excluded explicitly.
+      # `schedule` and `workflow_dispatch` have no `before` at all: the gates then
+      # skip those two comparisons loudly and the push run covers the commit.
+      - name: Resolve the base ref for the comparison gates
+        run: |
+          REF=''
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            REF='${{ github.event.pull_request.base.sha }}'
+          elif [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            REF='${{ github.event.before }}'
+          fi
+          if [ -n "$REF" ] && git cat-file -e "$REF^{commit}" 2>/dev/null; then
+            echo "AEGIS_BASE_REF=$REF" >> "$GITHUB_ENV"
+            echo "AEGIS_BASE_REF=$REF (derived from the ${{ github.event_name }} event)"
+          else
+            echo "::warning::No base commit available for ${{ github.event_name }} — the coverage-baseline-lowering and Android versionCode comparisons will SKIP loudly."
+            echo "  (event.before='${{ github.event.before }}' pull_request.base.sha='${{ github.event.pull_request.base.sha }}')"
+          fi
       # src-tauri links webkit2gtk on Linux; cargo test/clippy compile the crate, so the
       # native build deps must be present (mirrors tauri-build-check.yml's Linux deps).
       - name: Install Linux dependencies
@@ -456,12 +540,13 @@ jobs:
       # The one place a toolchain is NOT taken from rust-toolchain.toml: this job
       # deliberately installs the MSRV, not the CI pin. Reading it from the manifest
       # keeps the tested value and the declared value the same number by construction.
-      # NOTE: keep `rust-version` three-component (1.88.0, not 1.88) — dtolnay's action
-      # rewrites a bare `1.NN` into whatever the current release cycle is, which would
-      # silently stop testing the declared floor.
+      # NOTE: keep `rust-version` three-component (1.88.0, not 1.88). Both manifests
+      # declare it that way and it is passed verbatim to `cargo +<version>`, so the
+      # argument to cargo and the declared floor are the same string by construction.
+      # A bare `1.NN` would be a different string from the one the manifests say.
       #
-      # Installing it is NOT enough: `dtolnay/rust-toolchain` sets the rustup DEFAULT,
-      # and a default loses to a DIRECTORY OVERRIDE. rust-toolchain.toml sits at the
+      # Installing it is NOT enough: a toolchain action sets the rustup DEFAULT, and a
+      # default loses to a DIRECTORY OVERRIDE. rust-toolchain.toml sits at the
       # repo root and pins 1.98.0, and these steps run from the repo root, so a plain
       # `cargo check` here resolved 1.98.0 and silently re-checked what the `rust` job
       # already checks — the declared floor was never compiled at all (CI run
@@ -469,9 +554,23 @@ jobs:
       # `cargo check (src-tauri)` was the step that reported "syncing channel updates
       # for 1.98.0" → "Compiling app"). The `+toolchain` form below outranks both the
       # override and the default, which is what actually makes this job test the floor.
-      - uses: dtolnay/rust-toolchain@master
+      #
+      # This WAS `dtolnay/rust-toolchain@master`, the only Action in these workflows
+      # referenced by a mutable ref: everything else is pinned to a released tag
+      # (`actions/checkout@v7`, `actions-rust-lang/setup-rust-toolchain@v1`, …). A
+      # third party moving that branch is a supply-chain change to the job that
+      # exists to prove the declared floor compiles, and it would arrive as a normal
+      # green run. The action is now the same `actions-rust-lang/setup-rust-toolchain`
+      # the other Rust jobs already use, with `toolchain:` naming the value read from
+      # the manifest — the same explicit-toolchain form the `rust` job's comment
+      # describes, so there is one installer to understand instead of two. `cache` is
+      # 'false' for the same reason it is there: the explicit actions/cache step below
+      # keys on the MSRV, which this action's own cache (keyed on the default
+      # toolchain, i.e. 1.98.0) would not.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
+          cache: 'false'
       - name: Cache cargo
         uses: actions/cache@v6
         with:

@@ -864,6 +864,22 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   deprecated override is kept and shares that single implementation, so a device that still
   routes Back the old way behaves identically.
 
+- **Two coverage gates were passing because they compared a file with itself.**
+  The renderer and Rust ratchets both try to catch a baseline lowered in the same commit,
+  and both read `git show HEAD:coverage-baseline.json` — in CI, `HEAD` _is_ the commit
+  being checked, so the check could never fail and the documented
+  `COVERAGE_ALLOW_BASELINE_LOWER=1` hatch was unreachable there. The Android version-code
+  gate had the same shape for a different reason: its base defaulted to `origin/main`, which
+  on a push to `main` and on the weekly scheduled run _is_ the checkout, so it always
+  reported "version unchanged" — on exactly the runs where a decreased `versionCode`, which
+  Android refuses to install as a downgrade, could land. All three now compare against the
+  commit the run descends from, taken from the GitHub event, and when there is no such
+  commit to compare against they say so loudly instead of passing quietly.
+- **A push can no longer cancel the weekly dependency audit, and the MSRV job's toolchain is
+  pinned.** The concurrency group was keyed on the ref alone, and a push to `main` and the
+  weekly schedule share that ref, so either could cancel the other mid-run. The one
+  unpinned action reference in the workflow is gone as well.
+
 ### Added
 
 - **The backup importer can now read a file you pick, not only pasted text.** The Data
