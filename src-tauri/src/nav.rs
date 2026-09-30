@@ -367,6 +367,22 @@ pub(crate) fn emit_nav_crashed(app: &AppHandle, id: u32, reason: &str) {
 /// Non-Linux: wired via Tauri's `on_navigation`. Linux: called from our own `decide-policy`
 /// handler (which also adds the gesture/frame-aware redirect guard), because wry otherwise
 /// claims the `decide-policy` signal and our handler never runs.
+///
+/// **KNOWN LIMITATION — the HTTPS-Only arm cannot tell a subframe from the top frame.** It
+/// gets no frame argument, and no desktop path can supply one: Tauri's `on_navigation` is
+/// `Fn(&Url) -> bool` (tauri 2.11.3), and wry reduces each backend's richer signal before
+/// calling us — WebKitGTK's `WebKitNavigationAction` exposes no main-frame API at all (only
+/// `WebKitResponsePolicyDecision` does, checked against webkit2gtk 2.52.5's exported symbols
+/// and headers), WebView2's `NavigationStarting` args are cut down to `Uri()`, and
+/// WKWebView's `WKNavigationAction` never leaves wry's private delegate. Consequence: when
+/// an `http://` SUBFRAME (ad slot, comment widget, embedded map) loads, the arm cancels that
+/// subframe load AND navigates the TAB to the same URL over https, so the page the user was
+/// reading is replaced by the iframe's URL. `httpsOnly` defaults to `true`, so this is the
+/// default path. Deferring the decision to the frame-aware `ResponsePolicyDecision` oracle the
+/// redirect guard uses is the only frame-aware hook the crate owns, and it fires AFTER the
+/// request went out — enforcing HTTPS-Only there would newly send the plaintext `http://`
+/// request this feature exists to prevent. Left unchanged deliberately; see gotcha 13 in
+/// `src-tauri/AGENTS.md`.
 #[cfg(desktop)]
 pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
     // Scheme gate, FIRST, before anything that reasons about the destination.
@@ -442,7 +458,11 @@ pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
     }
 
     // HTTPS-Only: upgrade http -> https (unless localhost, or the setting is off). Re-navigate
-    // on the main thread AFTER this returns, to avoid re-entrancy.
+    // on the main thread AFTER this returns, to avoid re-entrancy. NOTE: this rewrites the
+    // TAB's top-level content webview, and this function cannot tell a top-level navigation
+    // from a subframe one (see the doc comment above) — an `http://` subframe load therefore
+    // hijacks the tab. Deliberate and documented, not fixed: no desktop backend exposes the
+    // frame flag to this callback.
     if u.scheme() == "http" && !is_local_host(u) && crate::settings::https_only(app) {
         let https = u.as_str().replacen("http://", "https://", 1);
         let app_main = app.clone();

@@ -1980,7 +1980,23 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     (WKWebView `URL` KVO, mirroring wry's own `DocumentTitleChangedObserver`). NOTE: the
     macOS objc2 code can't be compiled from Linux at all — `objc2`'s build script needs a
     macOS C toolchain — so it is **CI-verified only** (macos-latest), not locally.
-14. **Linux OWNS the `decide-policy` signal for the redirect guard.** wry connects its own
+    **HTTPS-Only is the ONE check in that list this constraint actually bites** (investigated
+    2026-09-30; left unfixed on purpose, see the note at the top of `nav::decide_navigation`).
+    Its arm cancels an `http://` navigation and re-navigates the TAB's content webview to the
+    `https://` form, and it cannot tell a top-level navigation from a subframe one — so an
+    `http://` iframe (ad slot, comment widget, embedded map) replaces the page the user was
+    reading with the iframe's URL. `httpsOnly` defaults to `true`, so this is the default path.
+    There is no frame-aware alternative with the current stack: `on_navigation` is
+    `Fn(&Url) -> bool`, wry discards the richer signal on every backend, and the one
+    frame-aware hook the crate owns — `ResponsePolicyDecision::is_main_frame_main_resource()`,
+    which the redirect guard uses — fires AFTER the request went out, so enforcing
+    HTTPS-Only there would newly send the plaintext `http://` request the feature exists to
+    prevent. A fix needs wry/Tauri to pass the frame flag (upstream) or per-platform native
+    plumbing. **Android's exposure is UNVERIFIED here:** its own `secureUrl` policy rewrites
+    the same way from `shouldOverrideUrlLoading` (which does receive `request.isForMainFrame`),
+    but whether WebView invokes that callback for subframe loads at all is device behaviour no
+    gate here exercises.
+14. **Linux OWINS the `decide-policy` signal for the redirect guard.** wry connects its own
     `decide-policy` handler (powering `on_navigation`) and CLAIMS the signal (`return true`),
     so a second handler never fires — and Tauri ALWAYS installs a `navigation_handler` (to run
     plugin hooks), so you can't free it by skipping `.on_navigation`. To get the gesture/frame
