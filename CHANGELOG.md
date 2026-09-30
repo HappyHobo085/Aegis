@@ -909,6 +909,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   believing they had a backup they did not have, and found out at restore time. The
   failure is now reported, with the reason the core gave when it gives one.
 
+- **The address bar stopped highlighting your query twice.** When a page matched in
+  both its title and its URL, the row was built with the match ranges for **both**
+  strings, and the dropdown renders a highlight on the title and the URL separately.
+  So the query lit up twice on one row, including in places the text does not
+  contain it. A title match now wins the highlight, as the code's own comment
+  always said it should, and the URL is highlighted only on a row that the URL is
+  what matched.
+
 ### Added
 
 - **The backup importer can now read a file you pick, not only pasted text.** The Data

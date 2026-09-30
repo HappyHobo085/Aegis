@@ -176,6 +176,34 @@ describe('buildOmniboxSuggestions', () => {
     expect(historyRow?.titleMatches).toEqual([0, 1, 2, 3, 4, 5, 6]);
   });
 
+  it('highlights the title only, when the title is the half that won the match', () => {
+    // Both halves match here, and the title wins the ranking. `OmniboxDropdown`
+    // renders <Highlighted> for the title AND for the url from the same row, so
+    // a row that keeps `urlMatches` populated highlights the query twice — once
+    // where the user searched and once where they did not.
+    const rows = buildOmniboxSuggestions({
+      ...base,
+      query: 'example',
+      history: [hist()],
+    });
+    const historyRow = rows.find((r) => r.kind === 'history');
+    expect(historyRow?.titleMatches).toEqual([0, 1, 2, 3, 4, 5, 6]);
+    expect(historyRow?.urlMatches).toEqual([]);
+  });
+
+  it('still highlights the url when the url is the half that won the match', () => {
+    // The counter-test: the empty array above must come from the title winning,
+    // not from urlMatches being abandoned. A query that occurs in the url and
+    // not in the title must light the url up.
+    const rows = buildOmniboxSuggestions({
+      ...base,
+      query: 'example.com',
+      history: [hist({ title: 'Untitled page' })],
+    });
+    const historyRow = rows.find((r) => r.kind === 'history');
+    expect(historyRow?.urlMatches.length).toBeGreaterThan(0);
+  });
+
   it('never exceeds the row limit', () => {
     const rows = buildOmniboxSuggestions({
       ...base,

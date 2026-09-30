@@ -85,7 +85,7 @@ function scoreCandidate(
   return {
     score,
     titleMatches: useTitle ? titleHit!.matches : [],
-    urlMatches: useTitle ? (urlHit?.matches ?? []) : (urlHit?.matches ?? []),
+    urlMatches: useTitle ? [] : (urlHit?.matches ?? []),
   };
 }
 
