@@ -694,6 +694,17 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       resultMsg: android.os.Message,
     ): Boolean {
       val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
+      // A window.open() with NO user gesture is script asking for a new tab, not the user.
+      // Every desktop browser blocks this by default (Chrome and Firefox both treat
+      // `isUserGesture = false` as a refused popup), and it is the shape an ad network
+      // uses to bury the page you asked for: open a background tab, then navigate it to the
+      // tracking pixel. Honouring it means a page cannot manufacture tabs at all without a
+      // real tap — and a real tap is exactly the case this handler is FOR, since target=_blank
+      // on a genuine click is the feature.
+      //
+      // Returning false makes the WebView drop the request (no popup is created at all),
+      // which is also the cheapest outcome: no capture WebView, no TTL timer, no budget.
+      if (!isUserGesture) return false
       val temp = WebView(this@MainActivity)
       // The popup renders real web content while it lives here, so it gets the same
       // hardening as a tab (no file:// or content:// reads, no cleartext subresources).
@@ -710,6 +721,16 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       // callback is fragile; the TTL is not in a callback, but it reuses the same helper.
       temp.postDelayed({ destroyPopupTemp(temp) }, POPUP_TEMP_TTL_MS)
       temp.webViewClient = object : WebViewClient() {
+        // KNOWN LIMIT, deliberately not "fixed": this client overrides only
+        // shouldOverrideUrlLoading, so a popup's SUBRESOURCES are never offered to
+        // shouldBlock / isMalwareHost the way a real tab's are. Wiring them up is not
+        // possible here: a popup is un-parented and has NO tab id, so `pageUrls[id]` has
+        // no correct entry and using the active tab's url would be exactly the
+        // misattribution permissions.rs documents for `wv.uri()`. The blast radius is
+        // small by construction — the temp WebView is never parented, its JS is off by
+        // default, it is destroyed after POPUP_TEMP_TTL_MS, and its navigation is only
+        // ever forwarded via __aegisOpenTab, which DOES get a full first-party context.
+        // A fix needs a real opener-derived context for a frame that has no id.
         override fun shouldOverrideUrlLoading(v: WebView, req: WebResourceRequest): Boolean {
           val url = req.url?.toString() ?: return true
           // Drop ad pop-unders instead of opening a background tab: blank/script-scheme
@@ -1704,6 +1725,17 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
     pageUrls.remove(id)
     pageBlocked.remove(id)
+    // A find-in-page session belongs to the tab that ran it. `currentFindQuery` is
+    // Activity-wide (Android's FindListener never reports the query back, so it is cached
+    // here to be included in the __aegisFindState push) — which meant closing a tab
+    // mid-search left the query behind: findAllAsync is ASYNCHRONOUS and its listener
+    // fires whenever the count completes, so the surviving query produced a
+    // __aegisFindState push naming a tab that no longer exists, with a match count for
+    // highlights that were just destroyed. Clearing it here means the late callback sees
+    // an empty query and reports nothing. Only the CLOSING tab's query is at risk, because
+    // a find is always run against `contentWebView` (the active tab), so this is the only
+    // case where the two can disagree.
+    if (activeTabId == id) currentFindQuery = ""
     if (!keepZoom) tabZoom.remove(id)
     if (activeTabId == id) { activeTabId = -1; contentWebView = null }
     privateTabs.remove(id)

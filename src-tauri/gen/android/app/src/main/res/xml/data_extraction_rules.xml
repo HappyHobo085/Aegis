@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  android:dataExtractionRules="data_extraction_rules.xml" — the rules that actually GOVERN
+  backup and transfer on Android 12+ (API 31+), referenced from <application> in
+  AndroidManifest.xml.
+
+  WHY THIS FILE EXISTS ALONGSIDE android:allowBackup="false":
+  Google's own wording (https://developer.android.com/guide/topics/data/autobackup,
+  "Enable and disable backup") is: "For apps targeting Android 12 (API level 31) or higher,
+  this behavior varies. On devices from some device manufacturers, specifying
+  android:allowBackup="false" disables cloud-based backup and restore (such as Google Drive
+  backups) but doesn't disable device-to-device transfers for the app." So `allowBackup`
+  alone leaves D2D transfer to the OEM's interpretation on part of the fleet. This file is
+  the mechanism that does NOT vary by manufacturer, so it is what carries the requirement.
+
+  The requirement: nothing this app stores may leave the device by a backup transport. Every
+  store is plain JSON on disk — history.json, favorites.json, saved.json, allowlist.json,
+  settings.json, customFilters — plus vault.json and the wrapped sync-root blobs, i.e.
+  exactly the data this product exists to keep on the user's own device. Sync is the ONLY
+  sanctioned way for it to move between a user's own devices, and that goes through this
+  app's own encrypted protocol.
+
+  HOW "EVERYTHING" IS EXPRSSED: the rule vocabulary is per-DOMAIN, and `path="."` applies
+  recursively to the whole domain. There is no "exclude all" shorthand and no wildcard, so
+  every one of the nine domains has to be listed. This list is EXHAUSTIVE against the
+  documented domain set (root, file, database, sharedpref, external, device_root,
+  device_file, device_database, device_sharedpref) — if Android ever adds a domain, this
+  file must gain a line for it, because the platform's own fallback is INCLUSIVE:
+  "If there are no rules for a particular backup mode ... that mode is fully enabled for all
+  content except for no-backup and cache directories."
+
+  Each of the three sections is listed for the same reason — an absent section is a fully
+  enabled one, per that same sentence. <cloud-backup> is Google Drive, <device-transfer> is
+  D2D, and <cross-platform-transfer> (Android 16 QPR2 / API 36.1, targetSdk here is 36) is
+  the newer hand-off to non-Android devices; a future platform that is not opted out of by
+  name would otherwise default to copying everything.
+
+  Note the cache / no-backup / code-cache directories are excluded by the platform whatever
+  this file says, so the `root`/`file`/`external` lines here are belt-and-braces for those
+  paths rather than the only thing keeping them out.
+
+  There is deliberately NO android:fullBackupContent. That older format is what
+  Android 11 (API 30) and lower read, and this app's minSdk is 24 — but `allowBackup="false"`
+  already disables the pre-31 cloud path, and the docs say plainly that full-backup-content
+  has no effect on D2D transfers on API 31+. A file that looks like it protects the data
+  while governing nothing is worse than no file. The pre-31 requirement stays satisfied by
+  allowBackup="false"; the API 31+ requirement is met here.
+-->
+<data-extraction-rules>
+    <cloud-backup>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
+    </device-transfer>
+    <cross-platform-transfer platform="ios">
+        <exclude domain="root" path="." />
+        <exclude domain="file" path="." />
+        <exclude domain="database" path="." />
+        <exclude domain="sharedpref" path="." />
+        <exclude domain="external" path="." />
+        <exclude domain="device_root" path="." />
+        <exclude domain="device_file" path="." />
+        <exclude domain="device_database" path="." />
+        <exclude domain="device_sharedpref" path="." />
+    </cross-platform-transfer>
+</data-extraction-rules>

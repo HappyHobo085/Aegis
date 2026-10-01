@@ -13,13 +13,23 @@
     @android.webkit.JavascriptInterface <methods>;
 }
 
-# The nine Rust JNI exports (NativeAdblock.shouldBlock, NativeSafety.isMalwareHost,
-# NativeRedirectGuard.shouldBlock, NativeInject.documentStartScript,
-# NativeWebrtc.shimScript, NativeFarble.farbleScript, NativeFormDetect.formDetectionScript,
-# NativeProxy.proxyConfig, NativeSyncKeystore.provideClass) are `external fun`s — R8 cannot
+# The Rust JNI exports — every `external fun` under src/main/java/com/aegis/browser/, now
+# EIGHTEEN of them (this line used to say "nine" and name nine, so half the surface R8 could
+# break was undocumented):
+#   NativeAdblock.enabled / shouldBlock, NativeDownloads.recordStart / recordFinish,
+#   NativeFarble.farbleScript, NativeFormDetect.formDetectionScript,
+#   NativeHistory.recordVisit, NativeInject.documentStartScript,
+#   NativePermissions.decision / normalizeOrigin / remember, NativeProxy.proxyConfig,
+#   NativeRedirectGuard.openBlockedRedirect / shouldBlock, NativeSafety.isMalwareHost,
+#   NativeSettings.httpsOnly, NativeSyncKeystore.provideClass, NativeWebrtc.shimScript.
+# They are `external fun`s — R8 cannot
 # see that the Rust side binds to them by name, so renaming either side breaks the JNI
 # binding (UnsatisfiedLinkError / NoSuchMethodError at CALL time, i.e. ad-block injection,
 # the WebRTC shim and malware blocking silently dying in the release build only).
+# The COUNT matters less than the list does: the keep rule below is a wildcard, so it was
+# always correct for all eighteen — but a reader auditing "did we keep everything?" against
+# prose would have checked nine and concluded the other nine were deliberately dropped.
+# Re-derive with: grep -rn "external fun" src/main/java/com/aegis/browser/*.kt | wc -l
 # This keep used to be an IMPLICIT dependency on two files this repo does not own:
 # Android's default proguard file (getDefaultProguardFile("proguard-android-optimize.txt")
 # in build.gradle.kts) and the generated

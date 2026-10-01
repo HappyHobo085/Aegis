@@ -20,19 +20,41 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
-    <!-- android:allowBackup="false" (on <application> below) is a PRIVACY requirement, not
-         a default. With no allowBackup / fullBackupContent / dataExtractionRules attribute
-         the platform default is TRUE, so BOTH cloud backup AND device-to-device transfer
-         carry the whole app data dir off-device — and those stores are UNENCRYPTED JSON
-         (history.json, favorites.json, saved.json, allowlist.json, settings.json,
-         customFilters) plus vault.json and the wrapped sync-root blobs. That is exactly the
-         data this product exists to keep on the user's own device, so both transports are
-         opted out of rather than filtered. -->
+    <!-- Backup is a PRIVACY requirement, not a default, and it is enforced by TWO
+         mechanisms because no single one covers both transports.
+
+         What is at stake: every store is UNENCRYPTED JSON on disk (history.json,
+         favorites.json, saved.json, allowlist.json, settings.json, customFilters) plus
+         vault.json and the wrapped sync-root blobs — exactly the data this product exists
+         to keep on the user's own device. Sync is the ONLY sanctioned way for it to move
+         between a user's own devices, and that goes through this app's own encrypted
+         protocol, not a platform backup.
+
+         android:allowBackup="false" (on <application> below) handles the pre-31 CLOUD path.
+         It is deliberately NOT the whole answer on its own: Google documents that "for apps
+         targeting Android 12 (API level 31) or higher, this behavior varies. On devices from
+         some device manufacturers, specifying android:allowBackup="false" disables
+         cloud-based backup and restore (such as Google Drive backups) but doesn't disable
+         device-to-device transfers for the app." targetSdk here is 36, so on part of the
+         fleet the D2D transfer stayed live while the manifest claimed otherwise.
+
+         android:dataExtractionRules (added below, pointing at res/xml/data_extraction_rules.xml)
+         is the mechanism that does not vary by manufacturer: it governs BOTH cloud backup and
+         device-to-device transfer on API 31+, and that file excludes every documented domain
+         under <cloud-backup>, <device-transfer> and <cross-platform-transfer>. Its own header
+         comment records why each of those three sections is spelled out even though an absent
+         section would be a fully ENABLED one.
+
+         There is deliberately no android:fullBackupContent: that older format is what
+         Android 11 and lower read, where allowBackup="false" already covers it, and it has no
+         effect on D2D transfers on API 31+ — a file that looks protective while governing
+         nothing would be worse than none. -->
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.app"
         android:allowBackup="false"
+        android:dataExtractionRules="@xml/data_extraction_rules"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
         <!-- configChanges also covers fontScale / density / layoutDirection / colorMode:
              the platform default RECREATES the Activity on those, and every tab WebView
