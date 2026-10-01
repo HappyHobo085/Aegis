@@ -102,43 +102,47 @@ AEGIS_BASE_REF=origin/main npm run coverage:ratchet
 ```
 
 **The target is deliberately not literally 100%, and cannot be.** Anyone promising "100%"
-here is either lying in CI or about to quietly relax the number. The measured gap, as of
-2026-09-30 (`123 test files / 1784 tests`):
+here is either lying in CI or about to quietly relax the number. The measured gap, from the
+committed `coverage-baseline.json` (**recompute these, do not carry them forward**):
 
 | Metric     | Measured               | Gap |
 | ---------- | ---------------------- | --- |
-| lines      | 4564/5162 = **88.41%** | 598 |
-| statements | 6024/6926 = **86.97%** | 902 |
-| functions  | 1224/1424 = **85.95%** | 200 |
-| branches   | 3648/4483 = **81.37%** | 835 |
+| lines      | 4586/5162 = **88.84%** | 576 |
+| statements | 6049/6926 = **87.34%** | 877 |
+| functions  | 1237/1424 = **86.87%** | 187 |
+| branches   | 3658/4483 = **81.60%** | 825 |
 
-47 of the 120 measured files are at 100% statements. The 902 uncovered statements decompose
+48 of the 120 measured files are at 100% statements. The 877 uncovered statements decompose
 as:
 
-- **314 statements in 7 CLI scripts that v8 structurally cannot see** — `check-bundle-size`
+- **323 statements in 10 `scripts/` files that v8 structurally cannot see** — `check-bundle-size`
   (35), `check-npm-audit` (36), `check-android-versioncode` (61), `coverage-baseline` (17),
-  `coverage-ratchet` (46), `rust-coverage-baseline` (43), `rust-coverage-ratchet` (76).
+  `coverage-ratchet` (46), `rust-coverage-baseline` (43), `rust-coverage-ratchet` (76), plus
+  three whose logic module is fully covered (`auditCheck`, `coverageCheck`, `rustCoverageCheck`
+  — together 9).
   v8 only instruments the test worker's own V8 runtime, so a **spawned subprocess earns zero
   coverage credit**. These are all thin I/O entry points whose logic lives in a pure module
-  that _is_ measured: `scripts/cliGates.test.mjs` really does cover the first three (48
+  that _is_ measured: `scripts/cliGates.test.mjs` really does cover the first three (49
   passing tests) and the report still says 0%, and `scripts/rustCoverageCheck.mjs` is at
   **96.58%** statements (100% lines and functions) because `rustCoverageCheck.test.mjs`
   imports it. Treat "0% in a report" as
   _"not measurable here"_, never as _"untested"_, for anything a test spawns. See
   `scripts/AGENTS.md`.
-- **557 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (49, the
-  `createRoot` entry point), `src/testFixtures/aegisMock.ts` (507, a mock), and
-  `src/vite-env.d.ts` (1). All three are entry-point-or-mock by design.
-- **588 statements of real, measurable test debt** spread across 66 of the 120 files (the 7
-  CLI scripts above are counted separately), concentrated in a handful: `App.tsx` 121,
-  `mobile/MobileApp.tsx` 73, `ipcClient.ts` 29, `mobile/MobileMenuSheet.tsx` 25,
+- **591 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (50, the
+  `createRoot` entry point), `src/testFixtures/aegisMock.ts` (539, a mock), and
+  `src/vite-env.d.ts` (2). All three are entry-point-or-mock by design. They are absent from
+  the report entirely, so they are not part of any ratio above.
+- **554 statements of real, measurable test debt** spread across 62 of the 120 files (the
+  `scripts/` files above are counted separately), concentrated in a handful: `App.tsx` 121
+  of 344, `mobile/MobileApp.tsx` 73, `ipcClient.ts` 29, `mobile/MobileMenuSheet.tsx` 25,
   `PrivacyDashboard.tsx` 21, `mobile/MobileSheet.tsx` 19, `Toolbar.tsx` 18,
-  `commandPaletteData.ts` 17, `TabStrip.tsx` 13, `SettingsModal.tsx` 2, `Sidebar.tsx` 1.
-  By directory: `src/` 579 (components 206, mobile 147, hooks 38, lib 67, top level 121),
-  `scripts/` 9, `shared/` **0**.
+  `commandPaletteData.ts` 1, `TabStrip.tsx` 13, `SettingsModal.tsx` 2, `Sidebar.tsx` 1.
+  By directory: `src/` 554 (components 206, mobile 147, hooks 38, lib 42, top level 121),
+  `shared/` **0**.
   The file count is _files with at least one uncovered statement_, recomputed from
-  `coverage/coverage-summary.json` rather than carried forward: an earlier revision of this
-  line said "68 files", which is not what the report yields.
+  `coverage-baseline.json` rather than carried forward — an earlier revision of this line
+  said "66 files / 588 statements" and another "68 files", and neither is what the committed
+  baseline yields. Recompute; do not edit these numbers by hand.
 
 **A percentage can move in the opposite direction from the codebase, so never read the ratio
 alone.** Removing split view deleted three fully-covered source files: the percentage went
@@ -255,9 +259,9 @@ super-cookie). Seed is baked INSIDE the IIFE closure, not a top-level `var`/`win
 in true global scope via indirect eval to catch this). Per-spawn: level/allowlist apply
 to newly created/reloaded tabs only. Honest limits: a same-world JS shim is detectable
 (default-off for this reason); on WebKit the Chrome-148 UA already lies about the engine;
-per-frame-origin seeding (not Brave's per-top-eTLD+1); Android has no fp-allowlist (v1).
+per-frame-origin seeding (not Brave's per-top-eTLD+1).
 `vitest src/lib/farbleShim.test.ts` is authoritative for shim runtime behavior and passes
-(22 tests; the tree has 1205 TS tests in 112 files in total, verified on vitest
+(23 tests; the tree has 1825 tests in 123 files in total, verified on vitest
 4.1.9 and 4.1.11 — run `npm test` for the full count). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
 are **PENDING** user. **Content-webview Proxy** (`proxy.rs`; sub-project M): routes
 browsed pages through a user-configured HTTP or SOCKS5 proxy. **This is a Proxy, not a

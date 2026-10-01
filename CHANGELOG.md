@@ -9,6 +9,108 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **On a phone, any page could open as many tabs as it liked.** A page that asked for a new
+  window without you tapping anything — the shape an ad network uses to bury the page you
+  asked for — was handed a real tab in the background. Popups now open only for an actual
+  tap, which is what opening them is for; a scripted one is refused before anything is
+  created. Clicking a link normally still opens its tab.
+- **Closing a tab while find-in-page was still running left the find bar describing a page
+  that was gone.** Finding is asynchronous and the phone's WebView never reports the search
+  text back, so the query was remembered for the whole app rather than for the tab that ran
+  it. The query is now forgotten with the tab, so no late result can describe a page you have
+  already left.
+- **A misbehaving sync server could exhaust memory.** Sync responses were read into memory in
+  one piece with no size limit, so anything able to answer on your sync server's address —
+  which, for a self-hosted server, is whoever holds its DNS name — could send as much as it
+  liked. The request timeouts never helped: a server sending slowly is well inside the time
+  budget and still fills memory. Responses are now capped, and one that is over the limit is
+  refused by name so the log says why.
+- **Turning sync on could give two devices the same identity, silently.** Each install keeps
+  a random 16-byte value so every device has its own signing key, which is what lets
+  "remove this device" revoke one device and only that one. If the system random number
+  generator ever failed, that value was quietly filled with zeroes and written to disk — so
+  every install of every account would share a key and revoking one device would revoke all
+  of them. Aegis now checks, retries once, and if the generator is genuinely unavailable it
+  refuses to turn sync on and says why, rather than registering a device whose identity
+  already belongs to someone else.
+- **Pressing Escape in the find bar could leave the page highlighting matches after the bar
+  was gone.** Find-in-page searches are debounced by about a tenth of a second. Escape closes
+  the bar immediately, but it used to do so without cancelling that pending search, so the
+  search fired a moment later and started a live find session — scrolling to the first match
+  and painting its highlight — on a page with no find bar left to stop it. Closing the bar,
+  or switching tabs, now cancels the pending search first.
+- **Adding a filter list that Aegis refused could erase what you typed, silently.** The add
+  form checked the address itself, then cleared the box the instant you pressed Add. The core
+  can still refuse one address — a list whose file name would be `.` or `..` — and the
+  browser's console was the only place that showed up. The form now reports the reason next
+  to the field and keeps your text, and clears it only once the list is actually saved.
+- **Making or restoring a backup could freeze the window for as long as it took.** Export
+  writes every store to one file and an import reads one back; both do a lot of work — flushing
+  each store, rewriting rows that need migrating, formatting a large JSON file, then forcing
+  it to disk — and all of it ran inside the request that asked for it, on the thread that
+  draws the window. The toolbar, the tab switch and your typing all waited for the disk. Both
+  now happen in the background, so you can carry on using the browser while a backup is being
+  written or a restore is being applied, and the app only says it is done when it really is.
+  The Settings → Data tab looks and behaves the same: the same button, the same confirmation,
+  the same message with the file you can copy. It also measures how long the work took and
+  writes it to the log, so the real cost is visible instead of guessed at.
+- **Android: browsing history, bookmarks and vault data could leave the device through a
+  transfer the app had opted out of.** The app's build already asked Android not to back it
+  up, but that request is only honoured for cloud backup on some manufacturers' phones —
+  Android's own documentation says that from Android 12 onwards a device-to-device transfer
+  can go ahead regardless. The app now also declares an explicit rule set covering both
+  transports, which excludes every category of app data from each of them. Your own E2E sync
+  remains the only way your data moves between your devices.
+- **Deleting a password on one device could bring it back on another.** When you deleted a
+  vault entry, the deletion was synced to your other devices. But a device that had never held
+  that entry had nothing to remove, so the delete was recorded only in memory and never written
+  to disk — and the next time that vault was locked, the record of the deletion was gone. The
+  entry then came back on that device at the next sync. A peer's delete is now remembered
+  durably whether or not this device ever had the entry.
+- **The ad-block shield could show the previous tab's blocked count.** Switching tabs quickly —
+  within a third of a second — left the shield on the new tab reporting the OLD tab's number for
+  the rest of the session, because the state request carried no tab id and every request inside
+  that window shared one cached reply. Nothing corrected it afterwards: the only other way the
+  count changes is a live "something was just blocked" signal, which a new tab that has blocked
+  nothing never sends. The request now names the tab it is about, and the core answers for that
+  tab, so the badge follows the tab you are actually looking at.
+- **Revoking a site's permission could come back after a restart.** The remembered-permission
+  list is the one store that neither syncs nor carries a merge clock, and its save path also
+  never took the store's write lock. Worse, "Revoke" rebuilt its answer from the list it had
+  just edited in memory and reported success even when the save could not land — a full disk, a
+  read-only mount, a directory where the file belongs. The row then vanished from the panel while
+  the file still held it, and the permission you had just taken away was granted again the next
+  time Aegis started. Revoking and clearing now report the failure, so what you see is what is
+  stored. The "Clear remembered site data" action had the same problem for one step of its
+  sweep and said it had cleared everything; it now says so only when nothing was refused.
+- **Setting or clearing the content-webview proxy could kill the app.** The `proxy.setConfig` /
+  `proxy.clear` handler saved with `expect("settings fixture write")` — a _test_ fixture's panic
+  message left behind in production code when the call site was mechanically converted when
+  `settings::write` started returning a `Result`. Any save that could not land — a full disk, a
+  read-only mount, a directory where `settings.json` belongs — panicked, and because a Tauri
+  command body has no `catch_unwind`, the panic unwound out of the GUI thread and took the whole
+  process with it. Pressing Apply, Turn off, or Test in the proxy panel could end the session.
+  These saves now report the failure instead of aborting. The handler also stops doing its own
+  unlocked read-modify-write of the whole settings file: it goes through the same locked,
+  validated local-edit path as every other setting, so a proxy change can no longer be silently
+  reverted by a concurrent settings save, a sync merge, or a data import.
+- **The proxy configuration now syncs to your other paired devices.** A consequence of the fix
+  above: the proxy was previously never recorded as a sync change, so it stayed on the device
+  where you set it while every other setting followed you. Setting a proxy on one device now
+  applies it on the others, like the rest of your settings.
+- **A sync pass could delete a bookmark you had just created, on every paired device.** Two of
+  your own bookmarks can be the same page reached two ways — `https://example.com/article` and
+  `https://example.com/article#comments` — and Aegis treats those as the same address for
+  deduplication. Adding the second one was allowed, and then the next sync pass (every 5
+  minutes by default) decided the pair was a cross-device duplicate, deleted one of them, and
+  pushed that deletion to all your other devices — even when the pass had heard nothing at all
+  from the server, which is the usual case. A collapse now only happens when a record really
+  did arrive from another device that pass, which is the case the behaviour was written for.
+  On top of that, adding a bookmark the core already holds — the same page with or without its
+  `#fragment` or trailing slash — is now refused with a plain message instead of creating the
+  duplicate that used to be deleted a few minutes later. The same refusal appears in the Manage
+  bookmarks form and when you tap + on the phone's bookmarks bar, rather than failing silently.
+
 - **A timed-out ad-block query could be answered by the _previous_ request's verdict.**
   `should_block` reuses one reply channel per calling thread and reads the first reply it
   sees. That is only sound while nothing ever times out: when a query waits out its 5 s
@@ -471,8 +573,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   `fp-allowlist` (separate store, separate IPC, separate UI list in Settings > Security >
   "Sites with WebRTC protection off"). The ad-block allowlist stays synced and keeps its
   own meaning. Match scope is still `adblock::host_covered`, so the two lists cannot drift
-  in what they match. Known gap, left as a follow-up: the shield badge
-  (`lib/protectionSummary.ts`) still reports the policy, not the per-host exemption.
+  in what they match. (This entry used to close with a "Known gap, left as a follow-up: the
+  shield badge (`lib/protectionSummary.ts`) still reports the policy, not the per-host
+  exemption." That gap was closed twenty lines later in this same release — `protectionSummary`
+  now reads `webrtcExempt: hostCovered(webrtc.exemptHosts, host)` — so the note had been left
+  here describing a bug that no longer existed.)
 - **`syncVault` was synced.** The opt-in that includes the password vault in E2E sync is
   now local-only, like `syncAllowInsecure`. Same mechanism, same reason: it is a switch
   whose flipped state moves data off this machine, and while it was synced one record on
@@ -928,13 +1033,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - **A test-coverage ratchet on both sides of the repo, wired into CI.** This is a gate, not
   a claim: neither the renderer nor the Rust core is at 100%, and the committed numbers say
   so honestly rather than quietly rounding up to a threshold nobody reads.
-  - **Renderer** (`coverage-baseline.json`, 116 files): lines 85.72%, statements 84.27%,
-    functions 82.22%, branches 77.71%. The gate fails if any metric drops below the
+  - **Renderer** (`coverage-baseline.json`, 120 files): lines 88.84%, statements 87.34%,
+    functions 86.87%, branches 81.60%. The gate fails if any metric drops below the
     baseline, if the baseline was _lowered_ in the same commit, or if a file the baseline
     names left the report — the last check is what stops an added `coverage.exclude` from
     buying a green build by shrinking the denominator. Raising the baseline is free.
-  - **Rust core** (`src-tauri/coverage-baseline.json`, 43 files): lines 75.76%, statements
-    76.45%, functions 72.13%, measured with `cargo llvm-cov --lib`. Branches are **not**
+    Regenerate it whenever the measured file list changes, not only when coverage rises: a
+    new 0%-measured source file lowers every ratio while the covered count may rise, and a
+    baseline built before that file existed simply fails on the next CI run.
+  - **Rust core** (`src-tauri/coverage-baseline.json`, 44 files): lines 85.26%, statements
+    85.02%, functions 80.06%, measured with `cargo llvm-cov --lib`. Branches are **not**
     gated: llvm branch coverage needs `-Z coverage-options=branch`, i.e. a nightly
     compiler, and the repo pins stable 1.98.0. The eight platform-gated modules
     (`linux_layout.rs` and the `*_win.rs` / `*_mac.rs` pair) are excluded with a
@@ -943,16 +1051,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     depends on the machine is not a threshold.
   - **The Rust coverage baseline is a FLOOR, measured with no OS keyring.** The three
     keychain round-trips in `sync_keystore.rs` share one keyring, so their covered-line
-    footprint depends on credential state left by earlier runs — measured at 286, 289 and
-    300 covered lines across three runs of the same tree, and 228 with no keyring at all.
-    CI's `cargo llvm-cov` has never had a usable keyring (two runs, both exactly
-    11038/14750). The committed number is therefore the _least-capable_ measurement, so
-    every environment satisfies it: a machine with a keyring covers strictly more and
-    passes, CI without one lands on the floor. A threshold that is not reproducible in every
-    environment is not a threshold. The `cargo test` step still provisions a keyring (so
-    those three tests run rather than skip — test quality, not the gate); the coverage step
-    deliberately does not, and the Rust ratchet now prints per-file covered-line deltas on
-    failure so "code stopped executing" is distinguishable from "code was deleted".
+    footprint depends on credential state left by earlier runs — and the KERNEL keyring
+    survives stripping D-Bus, so a dev box with one still measures more than CI's runner,
+    which has none. The committed floor is `sync.rs` 797/1337 and `sync_keystore.rs` 228,
+    against ~785/~286 on a box that has a keyring. **The floor is ~9.5 points above a naive
+    no-keyring reading, so take it from a CI run (or a box where `add_key` genuinely fails)
+    and reason at the MINIMUM — a baseline measured on a dev box fails CI every time.** The
+    `cargo test` step still provisions a keyring (so those three tests run rather than skip —
+    test quality, not the gate); the coverage step deliberately does not, and the Rust
+    ratchet prints per-file covered-line deltas on failure so "code stopped executing" is
+    distinguishable from "code was deleted".
   - Both gates run in the `web` and `rust` jobs only, never in `msrv` or `cross-target`.
 - **Three drift guards, replacing the ones lost with `src/autopilot/`.**
   - `shared/ipcCatalog.drift.test.ts` walks the IPC contract in **four directions**:
