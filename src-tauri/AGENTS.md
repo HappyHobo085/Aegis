@@ -278,7 +278,12 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   `DEFAULT_INSET_TOP` (164.0), a missing `active` is `false` and not "open", a missing
   `width` is `SIDEBAR_WIDTH`, a missing `visible` is `true`, and a missing `on` is an
   exit. They also pin that the right inset is the panel width only WHILE the panel is
-  open (`setSidebar` and `setLayout` both), that `setLayout` replaces the overlay and
+  open (and only `setLayout` — `setSidebar` is a NEGATIVE pin, not a positive one:
+  `view.rs`'s `view_dispatch_declines_every_channel_it_does_not_own` lists
+  `"view.setSidebar "` WITH ITS TRAILING SPACE precisely so the router must DECLINE it,
+  and the channel was removed in `20cd725`; a doc that reads the pair as two pinned
+  channels is reading a negative pin as a positive one), that `setLayout` replaces the
+  overlay and
   sidebar flags together in one `update` (the deliberate atomic update that removed a
   mid-transition race), and — through `content_visible`, the ONE predicate the
   consumers read — that a full-window overlay hides the page while a sidebar does not
@@ -288,10 +293,64 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   at all (it only talks to the webview), and its test asserts exactly that — it answers
   `Ok` and disturbs nothing.
 - **`data.rs`** — `data.export` / `data.import` (bundles all stores + settings).
+  **BOTH channels run on a DETACHED thread and answer in two hops.** They flush every
+  store, walk `STORES` through `load_synced` (which can migrate rows), serialize the
+  bundle with `to_string_pretty` and fsync — unbounded work, none of it bounded in
+  time — and `ipc` is a **synchronous** `#[tauri::command]` that wry delivers on the UI
+  thread, so doing that inline froze the window (toolbar, tab switch, input) for the
+  whole pass, and nothing measured how long. `dispatch` therefore does almost nothing:
+  it calls `bulk`, which spawns a `std::thread` and returns
+  `{"ok": true, "pending": true, "channel": …}` — an **acknowledgement with no outcome**,
+  so a caller that believed it would tell the user a backup was written before it was.
+  The worker times itself with `Instant`, logs `[aegis] <channel> finished in <ms>ms`
+  (the first honest measurement of this path), and emits `data.bulkDone` with
+  `{channel, ms, result}` as its last statement. The real work moved verbatim into
+  `export_blocking` / `import_blocking`, which the tests call directly, so a change to
+  either is still covered.
+  **`channel` is in the event because `subs`' precedent cannot carry two of them at
+  once.** The bridge (`ipcClient`'s `awaitBulkData`, built on `lib/updateResult.ts`)
+  settles on the FIRST event it is handed, so an export and a restore in flight
+  together would otherwise resolve each other's promises — the export would report a
+  written path for a finished RESTORE, which is a claim the user acts on. The poller
+  filters on the channel; that is the only thing making the pair safe.
+  **The hand-off, not the work, is what the gate tests.** `test_support::set_bulk_gate`
+  hands back `(parked_rx, resume_tx)` for two **zero-capacity** channels, so the worker's
+  own `bulk_gate_tick()` park IS the signal that it is parked — there is no window in
+  which it could have finished first. A `static`, not a `thread_local`, because the
+  worker is on another thread. `an_export_answers_before_the_work_has_been_done` and
+  `an_import_answers_before_the_work_has_been_done` assert the ack's shape, assert the
+  effect has NOT happened yet (no file / no favorites) while parked, then resume and
+  assert the event carries the outcome. **Making `ipc` itself `async` was rejected**:
+  it has zero tests anywhere, so it would move ~100 channels off the UI thread with no
+  gate able to catch a regression.
+  **A test in ANOTHER module that cares what a restore DID must call
+  `data::run_blocking_for_test(channel, app, &payload)`**, which runs the same worker body
+  synchronously (and panics on a channel that is not one of the two). Two tests were
+  written against the old synchronous `dispatch` and had to be repointed:
+  `downloads`' imported-`saveDir` test read a row that was not written yet, and `subs`'
+  cache-traversal test was **vacuous** — it asserted `res.ok === true` (which the
+  acknowledgement also satisfies) and its real claim held because the import never ran, so
+  "an import that does nothing" satisfied it. That one now carries a **positive control**:
+  a benign row in the SAME bundle with a real cache file, whose marker must appear in
+  `enabled_text(app)`. Without it the negative assertion proves nothing. Do not add an
+  import assertion without a control.
   **Unit-tested via `test_support::with_tmp_app`:** export produces a v2 bundle
   with every store present; cross-app import round-trip (export → fresh app →
   import) restores favorites, saved, history, downloads, allowlist, settings, and
-  customFilters; error cases (garbage input, partial bundle) (18 tests).
+  customFilters; error cases (garbage input, partial bundle), plus
+   `no_backup_or_device_transfer_transport_is_left_to_a_platform_default` — the
+   Android **platform-backup** rules, which are the other way this data can leave
+   the device, and the only route that is NOT this app's own encrypted sync. It is a
+   STRUCTURAL pin over the real `AndroidManifest.xml` and
+   `res/xml/data_extraction_rules.xml`: the `dataExtractionRules` attribute on
+   `<application>`, and an exclusion for all nine documented backup domains under
+   all three documented transfer modes. Two things make it non-obvious and are
+   spelled out in the test: an ABSENT mode is a fully ENABLED one, and there is no
+   "exclude all" shorthand, so a missing domain line silently re-admits that whole
+   domain (see the manifest section at the Android tree heading). Both XML files are
+   read with their comments STRIPPED, because the manifest's comment quotes the
+   attributes being asserted. The assertions are set EQUALITY per mode, so a typo'd
+   domain the platform would ignore reds just as loudly as a missing one (19 tests).
   **A failed store write is REPORTED, and `counts` covers only the stores that
   landed.** The arm used to run `let _ = jsonstore::save(app, s, &migrated);` and
   then return `"ok": true` unconditionally, so a restore that silently lost a whole
@@ -344,7 +403,9 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   `test_support::with_tmp_app` in `test_support::tests`) backs:
   - `places.rs` (favorites + saved) — **unit-tested via `test_support::with_tmp_app`:**
     add/list/remove/update/reorder for favorites; add/dedup/remove/tag/union for
-    saved (12 tests).
+    saved (13 tests). **`favorites.add` dedups against LIVE rows by
+    `sync_stores::normalize_url`, not by string equality** — see the sync bullet's
+    near-duplicate sub-bullet for why the weaker rule was a data loss.
   - `history.rs` — **unit-tested via `test_support::with_tmp_app`:** record
     dedup, scheme filter, private-tab skip, list order + pagination, search,
     remove + clear, update_title, unknown-channel dispatch, and the Android
@@ -573,9 +634,20 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     a tier that cannot read the policy must never decide to stop blocking.
     Also owns the **shield-badge counters**: `note_blocked`/`reset_page` keep a
     monotonic session total + per-tab page count and emit `adblock.blockedCount`;
-    `getState` returns the active tab's `pageBlocked` so the chrome recovers the
+    `getState` returns the REQUESTED tab's `pageBlocked` so the chrome recovers the
     count on mount/tab-switch (live events emitted before the chrome subscribed —
-    e.g. the restored boot page — are otherwise lost). Counting is wired on **all three
+    e.g. the restored boot page — are otherwise lost). **It answers for the view the
+    payload names, via `target_view` (payload `viewId`, else `active_id()` — the same
+    resolver `find::dispatch` uses), not unconditionally for the active tab.** That
+    distinction is load-bearing: the registry's `active_id` and the renderer's view are
+    updated by different round-trips, so during a tab switch they disagree — and the
+    chrome's request was payload-less and deduped for 300 ms, which meant ONE cache key
+    shared by every caller and a shield that showed the PREVIOUS tab's count for the rest
+    of the session (the only other writer is a live `blockedCount` event, which a tab that
+    blocks nothing never sends). The policy mutators (`setEnabled` / `toggleAllowlist` /
+    `removeAllowlist` / `clearAllowlist`) still pass `None` — they are global and their
+    `AdblockState` reply is read for `enabled`/`allowlistedHosts`, never for the count.
+    Counting is wired on **all three
     tiers**: Linux (`linux_layout::connect_block_counter` / `resource-load-started`),
     Windows (the `adblock_win.rs` `WebResourceRequested` network tier → `note_blocked`),
     and Android (Kotlin `shouldInterceptRequest` ad-block branch → `__aegisBlockedCount`).
@@ -587,8 +659,11 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     content-filter-blocked ads (cancelled before the signal fires); see gotcha 6.
     **Unit-tested via `test_support::with_tmp_app`:** default state, `set_enabled`,
     `toggle_allowlist` + subdomain coverage + persist, `clear_allowlist`,
+    `get_state_reports_the_requested_views_page_count_not_the_active_tabs` (reads the
+    registry's real `active_id` rather than assuming 1, then asserts the payload's view
+    wins and a payload-less call still answers for the active tab),
     `note_blocked` session/page counters, per-tab page count + reset, plus the pure
-    `host_covered` scope table and the engine's subdomain veto (13 tests).
+    `host_covered` scope table and the engine's subdomain veto (14 tests).
     **The allowlist reaches every tier, each by a different mechanism** — this was the
     defect it did NOT do before (a "trusted site" was still filtered everywhere):
     - **engine** (`adblock_engine`): `set_policy` mirrors the hosts in; `should_block`
@@ -935,7 +1010,42 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   silently doing nothing.
   `permissions.rs` (site permission prompts) — **unit-tested via
   `test_support::with_tmp_app`:** list/remove/clear, `origin_of` strip, `verdict`,
-  `persist`-replaces (14 tests).
+  `persist`-replaces, and three "the store refused the write" cases (17 tests).
+  **This store's ONLY serialization is the store lock — take it, and propagate
+  the `Result`.** `permissions` is deliberately outside `sync_stores::HLC_CARRIERS`
+  (no `hlc` field, plain `load`/`save`), so unlike every synced store it has no
+  vector-clock conflict resolution and therefore no implicit mutual exclusion
+  either. `persist`, `permissions.remove` and `permissions.clear` all read, mutate,
+  then `jsonstore::save`, and all three did it with **no `with_store_lock` at all**
+  and with `let _ =` on the save. `remove` was the sharp edge: it answered
+  `Some(Ok(json!(items)))` built from the **in-memory** list, so a refused write
+  reported SUCCESS — the UI dropped the row, the file kept it, and a grant the
+  user had just revoked **came back on the next start**. All three now save
+  through the lock and propagate (`?`), so the refusal is reported and the file
+  keeps the row. Note the shape: `dispatch` returns
+  `Option<Result<Value, String>>`, so a `with_store_lock` closure's `Result` must
+  be wrapped back in `Some(...)` or it is a type error. The Linux resolve path
+  calls `persist` from inside `run_on_main_thread` with nowhere to return to, so
+  it LOGS; the Android JNI shell matches `crate::ffi_guard(|| persist(…))` and
+  treats `Some(Err(e))` as the logged-failure case.
+  **On Linux the origin is the MAIN FRAME's, and that is a deliberate
+  platform limit, not an oversight.** `connect_permission_request`'s callback
+  receives a `WebView` handle, and `wv.uri()` is that webview's own address —
+  the top-level document. A request raised by a **cross-origin iframe** is
+  therefore attributed to the embedding page and inherits its remembered
+  decision: allow the camera on `example.com` once, and any third-party frame
+  embedded there can request one and be let through. The pinned `webkit2gtk`
+  binding makes this **unfixable**: `PermissionRequestExt` exposes only
+  `allow()`/`deny()` and no per-request URI getter, so there is nothing else to
+  attribute a request to. Fixing it needs a binding that surfaces the requesting
+  frame's URI, or upstream WebKitGTK adding it to `WebKitPermissionRequest`.
+  **Do not "fix" it by trusting `wv.uri()` more than it already is** — the
+  `let origin = …` line is the only signal available and re-labelling it changes
+  nothing. Android's tier attributes per tab from `NativePermissions.normalizeOrigin`,
+  which is a real per-request signal, so the limit is Linux-only. Documented in the
+  function's own doc comment (where anyone editing that line must see it) and here.
+  Bounded by `classify` refusing anything unrecognized and by the same stored
+  decision being consulted on every platform.
   **The decision half is CROSS-PLATFORM; the RAISE side is per platform.**
   `origin_of` / `remembered` / `persist` / `verdict` used to be
   `#[cfg(target_os = "linux")]` because only the Linux handler raised a prompt;
@@ -1039,6 +1149,28 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     live process does not). **Unit-tested** in `sync::tests`:
     `allow_insecure_waiver_opens_plaintext_remote` pins that the waiver relaxes _transport_
     only, so `ftp:` / scheme-less / empty are still rejected with it on.
+  - **A failed CSPRNG REFUSES to enable sync; it never yields a shared identity.**
+    `sync_keystore::fresh_salt` draws the per-install 16-byte salt that
+    `crypto::device_signing_seed` mixes into `HKDF(root, "device-sign:" + salt)`. That salt is
+    the entire reason `sync.removeDevice` can revoke ONE install: it is what makes every
+    install's signing key distinct. The code used to be
+    `let _ = getrandom::getrandom(&mut salt);` on an all-zero array — an RNG failure was
+    DISCARDED and the zeros were **persisted**, so every install of every account would derive
+    the same key, silently. There is no safe fallback: any constant has that property.
+    `fresh_salt` retries once (a single EAGAIN under early-boot entropy pressure is the
+    realistic case), then returns `Err`; `device_local_salt` is therefore
+    `Result<Vec<u8>, String>`; and `sync::enable_with_root` matches the `Err` by setting
+    `Status::Error` with the reason, leaving `enabled = false` and `device_seed = None`, and
+    returning before any identity is derived or registered.
+    The seam that makes this testable is a `#[cfg(test)] thread_local` `RNG_HOOK` +
+    `set_rng_hook`/`RngHookGuard` in `sync_keystore.rs` itself — **not** in `test_support`,
+    which is `#[cfg(test)]`-only and so does not exist in a release build (I put it there
+    first and got `cannot find test_support in crate`). There is no way to make an OS CSPRNG
+    fail from a test, so without the hook the contract is a comment nobody can hold up. A hook
+    must not re-enter `rng_fill` (the `RefCell` borrow would panic). Tests:
+    `an_unavailable_random_number_generator_never_yields_a_shared_salt` and
+    `a_transient_random_failure_is_retried_rather_than_surfaced` (which pins exactly one
+    retry, so the error path cannot become the happy path).
   - **`syncAllowInsecure` is LOCAL-ONLY and is never synced, by design** (see
     `LOCAL_ONLY_KEYS` in `settings.rs`). `syncServerUrl` IS an ordinary synced setting, so a
     peer that can write it can already redirect this device anywhere; a waiver that travelled
@@ -1112,6 +1244,23 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     `ns` (a fixed internal string) a raw `&`/`#`/`+` in it would re-parse the query string.
     `MAX_PULL_PAGES` (64) is what stops a server that always answers with a cursor from spinning
     the client; on exhaustion we keep what was pulled, because a partial pull beats none.
+  - **A response BODY is capped, because the timeouts bound time and nothing about size**
+    (`sync::MAX_RESPONSE_BYTES`, 32 MiB, applied in `read_body_capped`). `resp.text()`
+    buffered whatever the server sent, so "whoever holds the DNS name or the address" for a
+    self-hosted deployment could make this process allocate until it could not — and a
+    timeout cannot help, because a peer streaming 8 GB slowly is well inside a 30 s budget.
+    The cap is on the RESPONSE, not the request, so a user with a large local history is
+    unaffected; `read_body_capped` takes a `&mut impl Read` **specifically so this is testable
+    without a socket**, and reads `MAX + 1` bytes because that extra byte is what distinguishes
+    "exactly at the cap" from "over it" — a truncated body would otherwise reach
+    `serde_json::from_str` as "unexpected end of input", naming nothing about the real cause.
+    It also replaced `String::from_utf8(..).unwrap_or_default()`, which turned a decode failure
+    into an EMPTY body that then parsed as "no records". The check runs BEFORE the status
+    branch, so an oversized **error** body is refused too. Tests:
+    `a_response_body_is_refused_when_it_is_over_the_limit_and_accepted_when_it_is_not`,
+    `a_read_failure_is_reported_rather_than_read_as_an_empty_body`,
+    `an_empty_body_still_reads_as_empty` (the other end — a body-less 204 must not become an
+    error, or `Ok(Value::Null)` would be dead).
   - **A pull in which NOTHING decrypts is now an `Err`, not an empty success** (`sync::pull_verdict`).
     `open_wire` failures are per-record and non-fatal by design — one corrupt or legacy-keyed
     record must not block a namespace, and its own `eprintln!` is the diagnostic. But a namespace
@@ -1139,6 +1288,28 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     `consecutive_rate_limits` live on `sync::Inner` and are deliberately **not** in `state_json`, so
     the `shared/types.ts` IPC contract is unchanged; a successful pass resets both, so a later
     refusal restarts at the short end of the curve rather than inheriting a stale streak.
+  - **A near-duplicate collapse requires a record that ARRIVED FROM A PEER.** `merge_into_locked`
+    runs `duplicate_losers` over the merged array — grouping LIVE rows by `normalize_url` (no
+    `#fragment`, no trailing slash; `host` for the allowlist store), tombstoning the losers and
+    **pushing** those uuids so the deletion converges. It used to do that UNCONDITIONALLY on every
+    pass, including one where the server returned nothing, while its own comment claimed
+    "collapse _cross_device_ duplicates" — a condition the code did not have. `places.rs`'s
+    `favorites.add` stored the url VERBATIM with no dedup (only `saved.add` checks
+    `live_has_url`), so favoriting `https://x/p` from the address bar and
+    `https://x/p#comments` from an in-page link produced two rows that normalize alike: the next
+    periodic pass (300 s default) tombstoned one, the uuid went into `changed`, and the user's
+    own bookmark vanished here **and on every paired device**. The gate is `peer_keys` — the
+    normalized keys held by a row whose uuid `merge_records` actually landed this pass, captured
+    BEFORE the dedup appends its own losers or the gate would be satisfied by the act it guards.
+    Convergence is unchanged: a tombstone is still an ordinary record, so a device that does
+    collapse a peer-learned duplicate still propagates the delete. `duplicate_losers` itself is
+    left pure and order-independent so the existing tests still pin it. `favorites.add` now also
+    REFUSES a url that normalizes onto a live one ("that page is already bookmarked"), which
+    closes the local collision at the source and is what the renderer's `saveErrorText` path
+    reports (see `FavoritesManager` / `MobileApp` in `src/AGENTS.md`). Two tests, one per half:
+    `a_pass_that_learned_nothing_from_a_peer_leaves_a_local_near_duplicate_pair_alone` and
+    `a_near_duplicate_that_arrived_from_a_peer_is_still_collapsed_and_pushed` — the second
+    exists so the gate cannot be "fixed" into never collapsing.
 - **Anti-fingerprinting / farbling** — `farble.rs`: opt-in document-start JS shim
   that perturbs fingerprinting surfaces with per-frame-origin, per-session deterministic
   noise. Key design points:
@@ -1334,7 +1505,25 @@ adopted && vault unlocked` (four conditions; the first two are `vault_sync_opted
     `{"wall_ms":updatedAt,"counter":0,"node":"vault"}` into the transport's cleartext
     `hlc` AAD field, derived from the record's own timestamp so re-pushing an unchanged
     record reuses the same AAD instead of forking a new version. - **A locked vault does not sync at all** — it is neither uploaded nor merged, because
-    you cannot merge records you cannot decrypt.
+    you cannot merge records you cannot decrypt. - **A peer's DELETE must be durable even
+     when this device never held the record it deletes.** `merge_remote` receives a
+     tombstone for a uuid, authenticates it, and (until this was fixed) pushed that uuid into
+     `changed` **only if a local record was actually removed** — which is false on any device
+     that was not holding that credential, i.e. the *normal* case for a third device. The
+     in-memory marker was still inserted, but the persist step only writes when
+     `!out.changed.is_empty()`, so the marker never reached disk. `vault.lock` clears
+     `g.tombstones` in memory and `unlock_vault` rebuilds them from `vault.json`, so at the
+     next lock the delete was simply gone — and the record itself came back on the following
+     pass, because that marker was the only thing vetoing it. `upsert_tombstone` therefore
+     returns whether it actually changed the list, and `merge_remote` carries a
+     `tombstone_dirty` flag that forces the write even when nothing local changed.
+     **The retain arm deliberately has no such flag, and that asymmetry is not an oversight:**
+     a pass that reaches the retain path always puts the uuid into `changed` (it retained a
+     record the peer no longer has), so a dirty flag there could never fire. A second
+     "a marker and a record for one uuid" test was written and **deleted as unreachable** — a
+     credential pass drops the uuid's marker and a tombstone pass drops its record, so no
+     state the product can reach has both. Pinned by
+     `a_delete_for_a_credential_this_device_never_held_survives_a_lock_and_unlock`.
   - **`vault.state` carries no credential data:** only `{exists, unlocked, count, undecryptable,
 syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserved verbatim by
     `persist`/`Inner.orphans`, surfaced so the UI warns instead of silently dropping them).
@@ -1387,11 +1576,27 @@ syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserv
 0.3.2` and uncompilable from Linux. Deferred to sub-project I.
   - IPC: `proxy.getState` / `proxy.setConfig` / `proxy.clear` / `proxy.testConnection`
     (TCP-reachability probe, not egress verification). `ProxyState` (`Mutex<ProxyConfig>`)
-    managed at boot; seeded from `settings::proxy_config`; persisted into settings key
-    `"proxy"` via `settings.set`. `proxy.state` event emitted on every config change.
+    managed at boot; seeded from `settings::proxy_config`. Persisted into settings key
+    `"proxy"` through **`settings::apply_local`** — the shared locked local-edit region — with
+    `{"partial": {"proxy": <cfg>}}`. It used to do its own `settings::all` → mutate →
+    `settings::write` instead, which (a) ended in a production
+    `.expect("settings fixture write")` that **aborted the process** on any failed save (a
+    Tauri command body has no `catch_unwind`) and (b) took no store lock and recorded no
+    per-key sync projection entry, so a concurrent settings save / `merge_remote` /
+    `data.import` could revert it and the config never left the device that set it. Going
+    through `apply_local` fixes the lock, the validation, the projection and the panic at
+    once. **Consequence: the proxy config syncs like any other non-local-only setting.**
+    `proxy.state` event emitted on every config change.
   - Unit-tested in `proxy::tests`: `from_value` parse/validate, `default_uri` schemes,
     `is_active` guard, `test_connection` socket probe, serde `bypassHosts` round-trip
-    (the canonical key lesson — see gotcha 22 below).
+    (the canonical key lesson — see gotcha 22 below), plus four dispatch-level tests that pin
+    the persistence route: `a_failed_settings_write_is_reported_rather_than_aborting_the_process`
+    (the panic regression — forces the failure with a non-empty **directory** at
+    `settings.json` via `test_support::block_store_file`, because `chmod 0500` is a no-op as
+    root), `the_persisted_proxy_is_the_sanitised_config_not_the_callers_bytes` (the
+    `--remote-debugging-port` injection host is blanked **on disk**, not just in memory),
+    `a_proxy_change_becomes_a_sync_projection_record`, and
+    `the_proxy_config_round_trips_through_the_store_and_clear_returns_to_off`.
 - **Misc** — `picker.rs` (element picker, **desktop-only**: Linux/Windows/macOS each inject
   the overlay natively; Android has no tier and `picker.start` answers `{ok:false}`),
   `form.rs` (**a seam, not a mechanism — NEITHER detection mode works, and the module
@@ -1798,9 +2003,11 @@ env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR \
   cargo llvm-cov --manifest-path src-tauri/Cargo.toml --lib --json > cov.json
 ```
 
-That reproduces CI **exactly** — measured `sync.rs` 703, `sync_keystore.rs` 228,
-13245 total lines, 1618 functions, every one identical to what run 36440444084
-reported. Four `SKIP keychain tests` lines appear and all 517 tests still pass
+That reproduces CI **exactly** — for THAT run. Its figures were `sync.rs` 703,
+`sync_keystore.rs` 228, 13245 total lines, 1618 functions, every one identical to what
+run 36440444084 reported; **none of them is the current tree's**, and `:1964` above
+already records that the same command now moves `sync.rs` 785 vs 703. Four `SKIP
+keychain tests` lines appear and all 517 tests still pass
 (517 is the count in that run; the suite has grown since, and the live number is
 the one `cargo test --lib` prints), because the keyring tests early-return rather
 than fail. `dbus-run-session -- env
@@ -1859,6 +2066,34 @@ Rust).
 `AndroidManifest.xml` grants `INTERNET` plus `CAMERA`, `RECORD_AUDIO` and
 `ACCESS_FINE_LOCATION` — the last three ONLY because a granted web permission
 request cannot capture anything without them (see the `permissions.rs` bullet).
+
+**Backup is opted out of by TWO mechanisms, because no single one covers both
+transports.** `android:allowBackup="false"` covers the pre-31 CLOUD path. It is
+deliberately NOT the whole answer: Google documents that "for apps targeting
+Android 12 (API level 31) or higher, this behavior varies. On devices from some
+device manufacturers, specifying android:allowBackup="false" disables cloud-based
+backup and restore (such as Google Drive backups) but doesn't disable
+device-to-device transfers for the app" — `targetSdk` is 36, so on part of the fleet
+D2D stayed live while the manifest claimed both transports were off. The
+manifest's own comment used to make exactly that claim and was wrong.
+`android:dataExtractionRules="@xml/data_extraction_rules"` (added 2026-10-01) is
+the manufacturer-independent mechanism: it governs BOTH cloud backup and D2D on
+API 31+, and the file excludes every documented domain under `<cloud-backup>`,
+`<device-transfer>` and `<cross-platform-transfer>` (the last is Android 16 QPR2 /
+API 36.1). **Two facts make that file's shape non-obvious:** there is no "exclude
+all" shorthand and no wildcard, so all NINE domains (`root`, `file`, `database`,
+`sharedpref`, `external`, `device_root`, `device_file`, `device_database`,
+`device_sharedpref`) must each be listed with `path="."`; and an ABSENT section is
+a fully ENABLED one ("if there are no rules for a particular backup mode … that
+mode is fully enabled for all content except for no-backup and cache
+directories") — which is why all three sections are spelled out rather than relying
+on the two obvious ones. There is deliberately NO `android:fullBackupContent`: that
+older format is what Android 11 and lower read, where `allowBackup="false"` already
+covers it, and it has no effect on D2D on API 31+ — a file that looks protective
+while governing nothing is worse than none. **Nothing here is tested: there is no
+Kotlin or XML test source set, so the gate is Gradle compiling and linking the
+attribute + resource, and whether a given OEM still honours it is only knowable on
+that OEM's device — PENDING hardware.**
 
 **⚠ A `--debug` build is a DIFFERENT APP, not an upgrade — and `adb install` will not
 tell you.** `tauri android build --debug` gets Gradle's standard `applicationIdSuffix`,
@@ -1933,6 +2168,55 @@ your fix is broken. This cost a long false-negative investigation. Rules:
   bar would blank). The tab title is NOT observed natively (no WebKit signal) — the chrome
   relays it via `tabs.setTitle`. `makeChromeClient().onCreateWindow` routes
   `target=_blank`/`window.open` to `window.__aegisOpenTab` → a background tab.
+  **It refuses a popup that had NO user gesture, before it builds anything.**
+  `onCreateWindow(view, isDialog, isUserGesture, resultMsg)` used to receive the flag and
+  ignore it, which meant any page could call `window.open()` and get a real, ad-block-
+  contexted BACKGROUND tab — the shape an ad network uses to bury the page you asked for
+  (open a background tab, then navigate it to the tracking pixel). Every desktop browser
+  blocks that by default. The guard is `if (!isUserGesture) return false`, placed
+  immediately after the `transport` unwrap and **before** `WebView(this@MainActivity)`,
+  because refusing afterwards would still construct the capture WebView and still leave its
+  navigation to `__aegisOpenTab`; returning `false` also makes it the cheapest outcome (no
+  capture WebView, no TTL timer, no `popupTemps` entry). A real tap is the case the handler
+  exists for, so a genuine `<a target=_blank>` click is unaffected.
+  **There is deliberately NO tab cap anywhere in the product** (verified: nothing in
+  `useTabs.ts` or `tabs.rs` bounds the count), and none was added here — with the gesture
+  guard there is no gesture-free route to abuse, and inventing a cap would be a policy
+  change nobody asked for. If a cap is wanted it belongs in the tab registry, for every
+  source of tabs, not on this one route.
+  Pinned from `cargo test` by `nav::tests::the_android_popup_needs_a_user_gesture_and_a_find_session_dies_with_its_tab`,
+  which asserts the guard's presence AND that it precedes `WebView(this@MainActivity)`.
+- **`currentFindQuery` is Activity-wide, so `teardownTab` has to clear it.** Android's
+  `FindListener` never reports the query back, so the query lives in one `@Volatile` rather
+  than per tab — and `findAllAsync` is ASYNCHRONOUS. Closing a tab mid-search therefore left
+  the query set, and the late callback pushed a `__aegisFindState` naming a tab that no longer
+  existed, carrying a match count for highlights that had just been destroyed.
+  `teardownTab` clears it with `if (activeTabId == id) currentFindQuery = ""` — guarded by
+  `activeTabId == id` because a find always runs against `contentWebView`, so that is the
+  only case where the two can disagree. Pinned by the same test (the `teardownTab` half).
+  Both halves are read through `test_support::kotlin_fn_body`, which strips `//` comment
+  lines; that is load-bearing here, not hygiene, because the gesture guard's own comment
+  QUOTES the line a naive `contains` would match.
+  **The capture WebView's `WebViewClient` overrides only `shouldOverrideUrlLoading`, NOT
+  `shouldInterceptRequest`** — so `NativeAdblock.shouldBlock` / `NativeSafety.isMalwareHost`
+  run for a TAB's subresources but never for a popup's. Left as-is deliberately, and the
+  reasoning is a mix of bound and open design:
+  - **Bounded today.** The capture WebView is un-parented (never added to any layout),
+    `hardenContentWebView(temp.settings)` runs on it (no `file://`/`content://`, no cleartext
+    subresources), JS is off by default, and `POPUP_TEMP_TTL_MS` destroys it in 10 s. With
+    the gesture guard above, a page cannot even REACH this path without a real tap, so the
+    "ad network opens a pop-under to bury the page" vector that motivates the handler is
+    already closed.
+  - **Genuinely open, and not a one-liner.** The main-tier `shouldInterceptRequest` decides
+    against `pageUrls[activeTabId]` — the OPENING tab's first-party ad-block context. A popup
+    is deliberately un-parented and has **no tab id**, so there is no correct context to ask
+    the engine with. Reusing the active tab's would attribute the popup to whichever tab the
+    user happened to be looking at — the same class of misattribution as the permission-URI
+    limit above. The real fix is giving the popup its own id and putting it in `pageUrls`,
+    and that is a design decision (what IS a popup's first-party context?), not a missing
+    line. **Do not "fix" this by copying the active tab's url in.**
+  There is **no Kotlin test source set**, so any such change would be compile-verified only;
+  that is a further reason to land it deliberately rather than inside a security sweep.
 - **Touch gestures (`GestureContainer.kt`).** A custom `FrameLayout` wraps the tab
   WebViews (so the chrome-bar margins live on it, not per-tab). It uses the
   watch-then-steal model — `onInterceptTouchEvent` lets the active WebView handle
@@ -2717,6 +3001,48 @@ contract and absent from the code, or present in the code and wrong in the label
   What still cannot be reached is `on_blocked_redirect_to_new_tab`, which takes a concrete
   `&AppHandle` because it opens a real window from a spawned thread; that is the deliberate
   limit, not an oversight.
+
+- **`NavActions` could grow without bound inside a single tab** — the leak the entry above
+  did NOT find, because there `Chains` (one entry per tab id, overwritten) was the whole
+  story. `record_action` writes one entry per Linux `NavigationAction`, and the only
+  in-lifetime consumer is `clear_tab_actions` on a **top-frame main-resource Response**,
+  which drops the WHOLE tab. So the shape that grew forever was **one long-lived top-level
+  document that keeps loading subframes**: each records an action, and none of them ever has
+  a main-frame Response to consume it. A page under an ad-heavy third-party embed drives
+  hundreds of those between two top-frame loads, and each entry held a `ChainStart` (two
+  `String`s), for as long as the tab stayed open.
+  The fix is `MAX_ACTIONS_PER_TAB` (32) with **oldest-first** eviction in `record_action`.
+  Three design points, each of which was a decision rather than the obvious implementation:
+  - **The value carries a `u64` stamp** (`(ChainStart, bool, u64)`, from a process-global
+    `ACTION_SEQ: AtomicU64`), because "oldest" needs insertion order and a `HashMap` has
+    none. Re-recording an existing key REPLACES the stamp, so the freshest decision is also
+    the last to be evicted — the same preference `insert` already gave it.
+  - **The cap is PER TAB, not global.** `clear_tab_actions` already removes a tab wholesale,
+    so a global cap would let one noisy tab evict another tab's in-flight decisions. The
+    count is a full scan of the map, which is acceptable only because the map is now bounded
+    at (tabs × 32).
+  - **An evicted navigation FAILS OPEN, deliberately.** It finds no entry, so
+    `take_action` returns `None`, so `decide_at_response` returns `None` and that ONE
+    navigation is allowed. That is the honest trade, and it is recorded in the const's doc:
+    an unbounded map is a leak that lasts as long as the tab, and a stale entry is worse
+    than no entry anyway — a decision stamped many navigations ago describes a navigation
+    that has already finished. **Deciding at RECORD time instead was rejected:** it would
+    cancel SUBFRAME navigations, which is exactly what `record_action`'s own doc forbids.
+  - **`linux_layout.rs`'s hardcoded `true` for `main_frame` is untouched and correct.** It is
+    a deliberate fail-safe with a comment explaining that WebKitGTK's `NavigationAction`
+    carries NO frame flag (only `ResponsePolicyDecision` does, via
+    `is_main_frame_main_resource()`). Because every Linux entry is therefore `main_frame ==
+    true`, `record_action`'s "a subframe must not clobber a main-frame entry" early-return
+    is **unreachable on Linux** — it fires safe, and its comment overclaims. Do not "fix"
+    the hardcoded `true`; there is no signal to fix it with.
+  Pinned by `a_long_lived_top_level_document_cannot_grow_the_action_map_without_bound`
+  (drives the PRODUCTION writer `note_nav` with `drive = 4 * MAX_ACTIONS_PER_TAB` DISTINCT
+  normalized urls — re-recording one key keeps the map the same size, so a count-only test
+  would never notice the absence of a bound — then asserts the survivors are **exactly** the
+  tail of the drive, which is what states "oldest-first"; my first version tried to say that
+  with stamp arithmetic, `ACTION_SEQ - oldest`, and that quantity is the size of the
+  SURVIVING window, not the number of stamps issued before it) and by
+  `evicting_one_tabs_oldest_action_does_not_touch_another_tabs` for the per-tab half.
 
 - **`adblock::PAGE_BLOCKED` had no remover at all** — the only genuinely unbounded
   tab-keyed table left (`nav::TABS_WITH_CONTENT` and `nav::TABS_LOADING` are cleaned, and
