@@ -428,17 +428,33 @@ jobs:
           # Windows: the GNU cross-check the repo docs already treat as the canonical
           # "does adblock_win/find_win/zoom_win still compile" command
           # (src-tauri/AGENTS.md gotcha 18/20), run here on every PR instead of on
-          # demand. mingw-w64 supplies the host gcc; `cargo check` does not link, so no
-          # NASM/CMake (aws-lc-sys) is needed. The webkit2gtk/appindicator/rsvg/xdo
-          # packages are the same host build deps the `rust` job installs — tauri-build
-          # compiles on the host regardless of the target triple.
+          # demand. mingw-w64 is the ONLY apt package this leg needs. `cargo check`
+          # does not link, so no NASM/CMake (aws-lc-sys) is needed, but ring's build
+          # script DOES compile C for the target even under `cargo check` — the objects
+          # it leaves are `x86-64 COFF`, not ELF — so a windows-targeting compiler is
+          # genuinely required.
+          #
+          # This leg used to install the same five webkit/appindicator/rsvg/xdo
+          # packages as the `rust` job, on the claim that "tauri-build compiles on the
+          # host regardless of the target triple". That is false, and measured: the
+          # windows-gnu graph contains ZERO webkit/gtk-family crates (the host graph has
+          # 17), tauri-build's build.rs and lib.rs contain no pkg-config/webkit/gtk
+          # reference, and a logging pkg-config shim on PATH recorded ZERO invocations
+          # across a from-cold check. Those five packages cost ~2m on a good day and
+          # blew the 45-minute job budget twice on 2026-10-01, cancelling the gate
+          # before it ever ran. If a future bump does reintroduce a pkg-config need, a
+          # fast clear build error beats a silent 45-minute hang.
           - target: x86_64-pc-windows-gnu
             os: ubuntu-latest
-            apt: 'libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libxdo-dev mingw-w64 patchelf'
-          # Android: the JNI/sync_keystore/ffi_guard block, plus the same host deps.
+            apt: 'mingw-w64'
+          # Android: the JNI/sync_keystore/ffi_guard block. NO apt packages — the NDK
+          # clang is already on the runner at ANDROID_NDK_LATEST_HOME (the step below
+          # points the build scripts at it), and a from-cold check of this leg also
+          # recorded zero pkg-config invocations. It was spending ~15 minutes of apt to
+          # install packages nothing queried.
           - target: aarch64-linux-android
             os: ubuntu-latest
-            apt: 'libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libxdo-dev patchelf'
+            apt: ''
           # macOS: MUST be a macOS runner. objc2's build script needs a macOS C
           # toolchain, so this cannot be cross-compiled from Linux at all
           # (src-tauri/AGENTS.md gotcha 13). x86_64-apple-darwin specifically, because
@@ -449,7 +465,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: Install Linux dependencies
-        if: runner.os == 'Linux'
+        # Skip the whole step when a matrix row needs no packages: `apt-get install -y`
+        # with an empty list is a no-op, but skipping also skips the `apt-get update`
+        # that dominates this step's runtime.
+        if: runner.os == 'Linux' && matrix.apt != ''
         run: |
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.apt }}

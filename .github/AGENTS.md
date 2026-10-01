@@ -94,7 +94,17 @@ GitHub Actions workflows and Dependabot config for Aegis.
     bundle): `x86_64-pc-windows-gnu` + `aarch64-linux-android` on ubuntu (mingw-w64 /
     the Android NDK supply the cross toolchain) and `x86_64-apple-darwin` on a
     **macOS-15** runner, because objc2's build script needs a macOS C toolchain and
-    cannot be cross-compiled from Linux. This is the only job that compiles
+    cannot be cross-compiled from Linux. Its `apt:` lists are deliberately minimal —
+    `mingw-w64` for Windows and **nothing at all** for Android (the NDK clang is
+    already on the runner) — because a non-host target never builds `webkit2gtk`.
+    Measured: 0 webkit/gtk-family crates in both non-Linux graphs against 17 on the
+    host, no pkg-config/webkit reference in `tauri-build`'s build script, and a
+    from-cold check that invokes `pkg-config` zero times. This leg used to install the
+    same five webkit/appindicator/rsvg/xdo packages as the `rust` job, on the belief
+    that "tauri-build compiles on the host regardless of the target triple"; that cost
+    ~2m at best and blew this job's 45-minute budget twice on 2026-10-01, cancelling
+    `cargo check` before it ever ran. Do not add them back without re-measuring.
+    This is the only job that compiles
     `nav_url_win.rs`, `nav_url_mac.rs`, `zoom_win.rs`, `zoom_mac.rs` and the JNI /
     `sync_keystore` / `ffi_guard` block. The other platform-gated modules are
     `adblock_win.rs` and `nav_policy_win.rs` (both Windows), `find_win.rs` and
