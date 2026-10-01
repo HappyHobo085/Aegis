@@ -125,6 +125,20 @@ describe('check-bundle-size.mjs (the size gate)', () => {
     expect(status).toBe(0);
   });
 
+  it('FAILS when dist/ has assets but NO JavaScript, instead of reading it as clean', () => {
+    // The trap this guards: `assetsOfKind` succeeds (the directory exists), the `.js`
+    // glob comes back empty, and the loop `continue`d on `files === 0` — so the
+    // stale-dist guard below was skipped in exactly the case it exists for and the gate
+    // exited 0 on a dist/ that ships no JavaScript at all. A CSS-only dist/ is what a
+    // truncated or wrong-directory build looks like, and this renderer always emits an
+    // entry chunk, so "no JS" can never be a legitimate build here (unlike no CSS).
+    const root = withDist({ 'index-a1b2.css': 'c'.repeat(8_000) });
+    const { status, out } = run(root, 'check-bundle-size.mjs');
+    expect(out).toContain('::error::No JS assets emitted');
+    expect(out).toContain('npm run build:renderer');
+    expect(status).toBe(1);
+  });
+
   it('FAILS on a gzipped JS bundle over the 512 KB budget, with the percentage', () => {
     // Random bytes do not compress, so this crosses the budget for real rather
     // than by inflating the fixture until the number looks big.

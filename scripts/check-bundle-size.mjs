@@ -29,6 +29,23 @@ const BUDGETS = {
   css: 102_400, // 100 KB — previously unchecked entirely
 };
 
+/**
+ * Whether this renderer build may legitimately emit NO asset of a kind.
+ *
+ * Only CSS: Vite emits no stylesheet until one is imported. JS is different — `main.tsx`
+ * is always imported by `index.html`, so a build that emits zero `.js` chunks is not a
+ * build that chose to ship no JavaScript, it is a `dist/` that is missing or truncated.
+ * Treating the two the same (which this script did) meant the stale-dist guard below was
+ * skipped precisely in the case it exists for: `assetsOfKind` succeeded, `files.length` was
+ * 0, the loop `continue`d, and the gate exited 0 — so a `dist/` containing only a CSS file
+ * reported a clean run no matter how broken it was. A boolean per kind keeps the
+ * justification where the reader can see it, next to the consequence.
+ */
+const MAY_BE_ABSENT = {
+  js: false,
+  css: true,
+};
+
 function assetsOfKind(ext) {
   let entries;
   try {
@@ -46,9 +63,19 @@ function assetsOfKind(ext) {
 function measure(kind, ext) {
   const files = assetsOfKind(ext);
   if (files.length === 0) {
-    // No CSS at all is legitimate (Vite emits no stylesheet until one is imported);
-    // an empty glob is not a size regression, so do not invent a failure for it.
-    return { kind, files: 0, bytes: 0, budget: BUDGETS[kind], over: false, biggest: 0 };
+    // Absent is only "fine" for a kind that MAY be absent — see MAY_BE_ABSENT. For any
+    // other kind this returns the same zeroed measurement anyway, and the loop below
+    // deliberately does NOT skip it: `biggest: 0` is what trips the stale-dist guard,
+    // which is the whole point of measuring it.
+    return {
+      kind,
+      files: 0,
+      bytes: 0,
+      budget: BUDGETS[kind],
+      over: false,
+      biggest: 0,
+      mayBeAbsent: MAY_BE_ABSENT[kind] === true,
+    };
   }
   const paths = files.map((f) => join(ASSETS, f));
   // One gzip stream over every asset of this kind, so the total is the size of the
@@ -63,6 +90,7 @@ function measure(kind, ext) {
     // Guards against measuring a stale or truncated dist/: a 500-byte "bundle"
     // would otherwise sail under the budget and report a clean run.
     biggest: paths.reduce((max, p) => Math.max(max, statSync(p).size), 0),
+    mayBeAbsent: false,
   };
 }
 
@@ -71,8 +99,19 @@ let failed = false;
 
 for (const r of [measure('js', '.js'), measure('css', '.css')]) {
   const label = r.kind.toUpperCase().padEnd(3);
+  if (r.files === 0 && r.mayBeAbsent) {
+    console.log(`  ${label}  no assets emitted — skipped (none is a legitimate build)`);
+    continue;
+  }
   if (r.files === 0) {
-    console.log(`  ${label}  no assets emitted — skipped`);
+    // Not skippable, and not a size regression either: fall through so the
+    // stale-dist guard reports it, then skip the budget line that would read "0 KB".
+    console.error(
+      `::error::No ${r.kind.toUpperCase()} assets emitted at ${ASSETS}. This renderer ` +
+        'always emits JavaScript, so dist/ is stale or truncated — re-run ' +
+        '`npm run build:renderer`.',
+    );
+    failed = true;
     continue;
   }
   console.log(

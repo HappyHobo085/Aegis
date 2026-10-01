@@ -14,14 +14,16 @@ GitHub Actions workflows in `.github/workflows/`:
   - **`web`**: `npm ci` → `npm run typecheck` (`tsc --noEmit` via
     `tsconfig.build.json`, which now typechecks test files and `src/testFixtures`
     too — a test-only type error is a real error) → `npm run lint` (ESLint flat
-    config, errors fail / warnings are the migration backlog) →
+    config; `eslint . --max-warnings=0`, so `'warn'` gates exactly like `'error'`
+    and there is no warning tier — this line used to say warnings were "the
+    migration backlog", which the script has never allowed) →
     `npm run format:check` (Prettier) → `npm run test:coverage` (vitest node +
     jsdom, **with** the v8 report) → `npm run coverage:ratchet` →
     `npm run build:renderer` → `npm run sizecheck` →
     `node scripts/check-npm-audit.mjs` → `node scripts/check-android-versioncode.mjs`.
   - **`rust`**: installs the webkit2gtk build deps, then
     `cargo fmt --check` → `cargo clippy --locked --all-targets -- -D warnings` →
-    `cargo test` (the 649 `src-tauri` unit tests that compile on the Linux runner — 663 `#[test]` functions in `src-tauri/src`, less the 14 that are platform-gated: `find_mac` 10, `find_win` 2, `adblock_win` 2) → the Rust
+    `cargo test` (the 682 `src-tauri` unit tests that compile on the Linux runner — 696 `#[test]` functions in `src-tauri/src`, less the 14 that are platform-gated: `find_mac` 10, `find_win` 2, `adblock_win` 2) → the Rust
     coverage ratchet (`cargo llvm-cov` + `node scripts/rust-coverage-ratchet.mjs`),
     plus `cargo audit` over the crypto/keyring/TLS deps. That audit is **blocking**
     despite the historical "advisory" label — it has no `continue-on-error`, so any
@@ -103,6 +105,18 @@ that path is `src-tauri/.cargo/audit.toml`.
   CI gates (gzipped `dist/assets` vs `BUDGETS`; Android `versionCode` monotonicity
   vs `AEGIS_BASE_REF`). They are top-level CLIs like `check-npm-audit.mjs`, with
   the same "one implementation, wired into both `npm run` and `ci.yml`" shape.
+  **`check-bundle-size.mjs`'s per-kind emptiness is a POLICY, not a uniform rule.**
+  `MAY_BE_ABSENT` says only `css: true` — no CSS is a legitimate Vite build (nothing
+  imports a stylesheet yet), but this renderer ALWAYS emits an entry `.js` chunk, so a
+  `.js` glob that comes back empty means `dist/` is stale or truncated. Before that
+  table existed, `measure` returned `files: 0` for any empty glob and the loop
+  `continue`d on `r.files === 0`, which meant the `biggest < 1024` stale-dist guard was
+  skipped **precisely in the case it exists for**: a `dist/assets` holding only a CSS
+  file passed. Now a non-skippable empty kind prints `::error::No JS assets emitted…`
+  and sets `failed`, and only a `mayBeAbsent` kind prints the `no assets emitted —
+skipped` line. Pinned by `cliGates.test.mjs`'s `FAILS when dist/ has assets but NO
+JavaScript, instead of reading it as clean` (a CSS-only fixture) — a CSS-only
+  `dist/` is exactly what a truncated or wrong-directory build looks like.
   `check-android-versioncode.mjs` defaults its base to `origin/main` **only
   outside CI**: on `push: main` and on the weekly `schedule` the checkout is that
   very commit, so the comparison would always be `cmp == 0` and the gate would
