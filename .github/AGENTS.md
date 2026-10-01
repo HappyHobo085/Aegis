@@ -13,9 +13,11 @@ GitHub Actions workflows and Dependabot config for Aegis.
     type error is a real error. The CI step is named "Type-check (whole surface,
     tests included)" — it was previously "Type-check (production source, scoped)",
     which was a misnomer, and this line was that claim's last remaining home) →
-    `npm run lint` (ESLint flat config, errors fail / warnings are the
-    migration backlog) → `npm run format:check` (Prettier) → `npm run test:coverage`
-    (vitest, node project and jsdom, 1697 tests, **with** the v8 report) →
+    `npm run lint` (ESLint flat config; the script is
+    `eslint . --max-warnings=0`, so a `'warn'` rule gates exactly like an `'error'` —
+    there is NO warning tier in this repo's ESLint setup, contrary to what this line
+    used to say; see `eslint.config.mjs`'s own header for the same note) → `npm run format:check` (Prettier) → `npm run test:coverage`
+    (vitest, node project and jsdom, 1825 tests, **with** the v8 report) →
     `npm run coverage:ratchet` → `npm run build:renderer` → `npm run sizecheck` →
     `node scripts/check-npm-audit.mjs` → `node scripts/check-android-versioncode.mjs`.
     The `--coverage` flag rides on the _test_ step rather than buying a second
@@ -44,8 +46,8 @@ GitHub Actions workflows and Dependabot config for Aegis.
     `AGENTS.md`; the tooling's own contract: `scripts/AGENTS.md`.
   - **`rust`** (the `src-tauri` crate): installs the webkit2gtk build deps, then
     `cargo fmt --check` → `cargo clippy --locked --all-targets -- -D warnings` →
-    `cargo test --locked` (the 649 `src-tauri` unit tests that compile on the Linux
-    runner: 663 `#[test]` functions in `src-tauri/src` less 14 that are
+    `cargo test --locked` (the 682 `src-tauri` unit tests that compile on the Linux
+    runner: 696 `#[test]` functions in `src-tauri/src` less 14 that are
     platform-gated — `find_mac` 10, `find_win` 2, `adblock_win` 2) →
     `cargo llvm-cov` + `node scripts/rust-coverage-ratchet.mjs` → a **BLOCKING**
     `cargo audit` over the crypto/keyring/TLS surface. Two things in there are not
@@ -126,13 +128,19 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
   no such flag), so **`Cargo.lock` is part of the gate**: a dependency change that is
   not committed with its manifest fails the build rather than silently resolving.
 
-  The Rust jobs also run with `RUSTFLAGS: -D warnings` **injected from outside this
-  repository** — it appears in every Rust job's environment but is in no workflow,
-  manifest, or `.cargo/config.toml` in the tree (the only `.cargo` dir is
-  `src-tauri/.cargo/`, and it holds just `audit.toml`). That is why a dead-code or
-  unused-import warning on the Windows/macOS/Android-only code turns CI red even
-  though `ci.yml` only spells out `-D warnings` for clippy. Treat "all three
-  cross-target surfaces are warning-clean" as a real requirement.
+  The Rust jobs do **NOT** get `-D warnings` from anywhere outside this file: every
+  warning gate in the tree is spelled out explicitly, `ci.yml` passes
+  `RUSTFLAGS="-D warnings"` as a per-step `env:` on its `clippy` invocations, and
+  `cross-target`'s step is a bare `cargo check --locked` with **no** warning gate —
+  so a dead-code or unused-import warning in the Windows/macOS/Android-only code
+  does not fail CI, it fails only when that platform is built with clippy
+  (`cargo clippy --locked --target <triple> --all-targets -- -D warnings`, which is
+  how it is verified locally). Treat "all three cross-target surfaces are
+  warning-clean" as a real requirement, but as a _local_ gate, not one CI enforces.
+  This paragraph used to assert the opposite — an env var that appears in no
+  workflow, manifest or `.cargo/config.toml` (the only `.cargo` dir is
+  `src-tauri/.cargo/`, and it holds just `audit.toml`). A doc that names a
+  mechanism that does not exist is worse than no doc: it makes a gap look covered.
 
 - **`tauri-build-check.yml`** (Tauri Build Check) — proves the app compiles, links,
   and bundles on real OSes and produces downloadable artifacts for on-device

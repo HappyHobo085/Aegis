@@ -170,7 +170,16 @@ jobs:
 
       - name: Build + publish (signed updater artifacts)
         id: publish
-        uses: tauri-apps/tauri-action@v0
+        # Pinned to a COMMIT, not the mutable `@v0` major tag every other action here used
+        # to follow. This is the one third-party action in the repo, and it is the one that
+        # runs in the job holding `contents: write` and the signing keys below — so a moved
+        # `v0` would execute someone else's code with the ability to publish a release and
+        # read those secrets. Every other `uses:` here is a first-party action; this is the
+        # third-party exception, and pinning is the reason it no longer needs to be.
+        # `84b9d35b5fc46c1e45415bdb6144030364f7ebc5` is what `refs/tags/v0` resolved to
+        # (tag object `fce9c610…`), and it is the commit released as `v0.6.2`.
+        # Bump with: git ls-remote https://github.com/tauri-apps/tauri-action refs/tags/v0^{}
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0.6.2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # macOS code signing. An unset secret falls back to ad-hoc ('-'), which is what
@@ -257,7 +266,13 @@ jobs:
 
   android:
     name: Android APK
-    needs: preflight
+    # `release` as well as `preflight`: the "Attach the APK to the release" step below is
+    # `gh release upload '${{ github.ref_name }}'`, and that draft release is created by the
+    # desktop matrix's tauri-action step, NOT by anything this job does. `needs: preflight`
+    # alone ran the two in PARALLEL, so the upload raced the creation and could 404 on a
+    # cold tag -- exactly what the comment on that step used to (and wrongly) claim could not
+    # happen. Serialising here is the fix; the comment on the step states the new invariant.
+    needs: [preflight, release]
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -330,8 +345,9 @@ jobs:
         shell: bash
         run: |
           set -eu
-          # The draft release already exists: this job `needs` the desktop matrix, whose
-          # tauri-action step creates it. --clobber makes a re-run idempotent.
+          # The draft release already exists because this job `needs: release` above (see the
+          # comment there): the desktop matrix's tauri-action step is what creates it, and
+          # this job could not have run before it did. --clobber makes a re-run idempotent.
           gh release upload '${{ github.ref_name }}' dist-apk/*.apk --clobber
 
       - name: Upload checksum fragment
