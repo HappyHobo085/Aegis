@@ -222,6 +222,64 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
     out
 }
 
+// --- bulk-data worker gate ---------------------------------------------------------
+//
+// `data.export` and `data.import` do unbounded work — flush two batched stores, walk every
+// store through a migration-capable load, re-stamp every row, `to_string_pretty` the whole
+// bundle and fsync it — and they used to do it INLINE, inside the synchronous `ipc`
+// command. That is the defect this gate exists to observe.
+//
+// "The reply came back before the work finished" is the whole claim, and it is NOT
+// observable from outside without help: by the time a test can look, a fast export has
+// already completed, and a slow one would just make the test flaky rather than decisive.
+// `BULK_GATE` is therefore a parking spot the worker must pass through BEFORE it does any
+// work. A test installs the gate, dispatches the channel, and then asserts two things while
+// the worker is still parked — that the reply is already in hand, and that the work has
+// provably not run — before releasing it.
+//
+// It is a `static`, not a `thread_local` like [`set_import_hook`], because the whole point
+// is that the worker is on a DIFFERENT thread. It is taken (not merely read) by the worker,
+// so exactly one bulk operation parks per install and a second one runs freely. Neither half
+// exists in a release build.
+#[cfg(test)]
+static BULK_GATE: std::sync::Mutex<
+    Option<(std::sync::mpsc::Sender<()>, std::sync::mpsc::Receiver<()>)>,
+> = std::sync::Mutex::new(None);
+
+/// Park the next background bulk-data worker, and hand back the two ends of the gate.
+///
+/// Hands back the TEST's two ends: `(parked, resume)`.
+///
+/// Recv on `parked` to learn that the worker has reached the gate — it is a zero-capacity
+/// channel, so the worker's park is itself the signal and there is no window in which the
+/// worker could have finished the work first. Send on `resume` to let the worker continue.
+/// The pair handed to the worker is the OTHER two ends (`reached` sender, `release`
+/// receiver); returning the wrong pair here would make this API unusable, so the directions
+/// are spelled out rather than implied.
+#[cfg(test)]
+pub fn set_bulk_gate() -> (std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+    let (reached_tx, reached_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let mut slot = BULK_GATE.lock().expect("bulk gate mutex");
+    *slot = Some((reached_tx, release_rx));
+    (reached_rx, release_tx)
+}
+
+/// Called by the bulk-data worker before it starts. Parks on the installed gate, if any.
+#[cfg(test)]
+pub fn bulk_gate_tick() {
+    // `take()` under the lock, so a second worker never waits on a gate that was installed
+    // for the first one — and a panicking `expect` here is a test-harness bug, not a product
+    // one, because nothing else holds this mutex.
+    let gate = BULK_GATE.lock().expect("bulk gate mutex").take();
+    if let Some((reached, release)) = gate {
+        // Tell the test we are parked. An error means the test gave up on us, which is the
+        // test's business, not a reason to stall a background thread forever.
+        let _ = reached.send(());
+        let _ = release.recv();
+    }
+}
+
 // --- import/flush interleave hook -------------------------------------------------
 //
 // `data.import` overwrites the `history` and `downloads` FILES while those two stores keep

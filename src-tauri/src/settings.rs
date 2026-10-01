@@ -1009,9 +1009,14 @@ pub(crate) fn validate_setting(key: &str, v: &Value) -> Result<(), String> {
                 }
             }
         }
-        // `proxy` is an object validated field-by-field in `proxy.rs::set_config` (it has its
-        // own, stricter rules incl. the host charset that keeps Windows arg injection out), so
-        // only its presence is checked here.
+        // `proxy` is an object whose fields are sanitised field-by-field in
+        // `proxy.rs::ProxyConfig::from_value` — the one place a `ProxyConfig` is ever built,
+        // and it applies its own stricter rules including the host charset that keeps Windows
+        // arg injection out — so only its presence is checked here. Note the value that
+        // reaches this validator is `serde_json::to_value` of that sanitised struct, never the
+        // caller's bytes verbatim; an object of the wrong shape is blanked to the "off" default
+        // rather than stored. (An earlier version of this comment named a `proxy.rs::set_config`
+        // that has never existed.)
         "proxy" => {
             if !v.is_object() {
                 return Err("proxy must be an object".into());

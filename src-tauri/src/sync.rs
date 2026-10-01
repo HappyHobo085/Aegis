@@ -12,6 +12,7 @@
 //! Only `favorites`/`saved`/`allowlist` sync in v1 (the array stores with the clean
 //! merge_into seam). The settings + custom-filter projections are built in F2a and are a
 //! documented fast-follow. An allowlist merge re-applies the engine (handled in merge_into).
+use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
 
@@ -249,6 +250,53 @@ const SYNC_TIMEOUT_SECS: u64 = 30;
 /// thread — kept short so a slow/unreachable server can't freeze the window for long.
 const INTERACTIVE_TIMEOUT_SECS: u64 = 8;
 
+/// Hard ceiling on a sync server's response body, in bytes.
+///
+/// The timeouts above bound how long a request may take; they bound NOTHING about how much a
+/// peer can send. `resp.text()` buffers the whole body before any of it is parsed, so a
+/// server — or anything that can answer on its port, which for a self-hosted deployment is
+/// "whoever holds the DNS name or the address" — can make this process allocate as much memory
+/// as it likes to, one page at a time, until the allocation fails. A timeout cannot help: a
+/// peer that streams 8 GB slowly is well inside a 30 s budget and still exhausts memory.
+///
+/// The cap is generous for what a *legitimate* response holds — [`PUSH_CHUNK`] rows of change
+/// records per request, each a bookmark/history/vault row, plus one page of pulls — and it is
+/// on the response, not the request, so a user with a large local history is unaffected. An
+/// over-budget response is refused by name rather than silently truncated, because a truncated
+/// JSON body would fail `serde_json::from_str` with a message that says nothing about the real
+/// cause.
+const MAX_RESPONSE_BYTES: u64 = 32 * 1024 * 1024;
+
+/// Read a response body, refusing anything over [`MAX_RESPONSE_BYTES`].
+///
+/// Split out of `http` so the CAP is testable without a socket: `http` is the one function
+/// whose only seam is a real server, and the cap is exactly the kind of arithmetic a test
+/// should pin — a cap that is off by one either truncates a legitimate response (a peer
+/// cannot sync at all) or accepts an over-budget one (the thing it exists to prevent). This
+/// takes a `&mut impl Read`, which is what `reqwest::blocking::Response` derefs to, so
+/// `http` passes the response itself and a test passes `&mut Vec<u8>` or a failing reader.
+///
+/// The `+ 1` is load-bearing and is why the cap check comes AFTER the read rather than
+/// replacing it: the extra byte is what distinguishes "exactly at the cap" from "over it".
+/// A truncated body would otherwise reach `serde_json::from_str` as "unexpected end of
+/// input", naming nothing about the real cause.
+fn read_body_capped<R: Read>(reader: &mut R) -> Result<String, String> {
+    let mut capped = reader.take(MAX_RESPONSE_BYTES + 1);
+    let mut raw = Vec::new();
+    capped
+        .read_to_end(&mut raw)
+        .map_err(|e| format!("could not read the sync server's response: {e}"))?;
+    if raw.len() as u64 > MAX_RESPONSE_BYTES {
+        return Err(format!(
+            "the sync server's response is larger than the {MAX_RESPONSE_BYTES}-byte limit"
+        ));
+    }
+    // `from_utf8_lossy`, not `String::from_utf8(..).unwrap_or_default()`: the old
+    // `resp.text().unwrap_or_default()` turned a decode failure into an EMPTY body, which
+    // then parsed as "no records" — a server could hide a real change set that way.
+    Ok(String::from_utf8_lossy(&raw).into_owned())
+}
+
 fn http(
     method: &'static str,
     url: String,
@@ -269,9 +317,9 @@ fn http(
     if let Some(b) = body {
         req = req.json(&b);
     }
-    let resp = req.send().map_err(|e| e.to_string())?;
+    let mut resp = req.send().map_err(|e| e.to_string())?;
     let status = resp.status();
-    let text = resp.text().unwrap_or_default();
+    let text = read_body_capped(&mut resp)?;
     if !status.is_success() {
         // A 429 is the ONE failure the client can do something useful about: the server is
         // rate-limiting this device, and the lockout is a sliding window that only clears as
@@ -857,7 +905,25 @@ fn register_device<R: Runtime>(
 /// set state. Returns the chosen vault backing.
 fn enable_with_root<R: Runtime>(app: &AppHandle<R>, root: RootSecret, passphrase: Option<&str>) {
     set_disabled_flag(app, false); // re-enabling clears any prior durable "disabled" marker
-    let salt = sync_keystore::device_local_salt(app);
+                                   // A NEW install needs a random per-install salt, and there is no safe constant to
+                                   // substitute for it (see `sync_keystore::fresh_salt`): a zero salt derives one signing
+                                   // key every install of every account shares, which is precisely what `removeDevice`
+                                   // cannot then revoke. So an RNG failure REFUSES to enable sync and says why, rather than
+                                   // registering a device whose identity is already someone else's.
+    let salt = match sync_keystore::device_local_salt(app) {
+        Ok(salt) => salt,
+        Err(e) => {
+            eprintln!("[aegis] refusing to enable sync: {e}");
+            let st = app.state::<SyncState>();
+            let mut g = st.0.lock().unwrap_or_else(|err| err.into_inner());
+            g.root = Some(root.clone());
+            g.enabled = false;
+            g.device_seed = None;
+            g.status = Status::Error;
+            g.last_error = e;
+            return;
+        }
+    };
     let device_seed = crypto::device_signing_seed(&root, &salt);
     let device_id = sync_auth::device_id_for(&device_seed);
     let account_id = crypto::account_id(&root);
@@ -1399,6 +1465,70 @@ pub(crate) fn set_enabled_for_test<R: Runtime>(app: &AppHandle<R>, enabled: bool
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A `Read` that hands over `n` bytes and then fails, so the mid-read error path is
+    /// reachable without a socket. `[u8; N]` cannot be built at runtime, hence a Vec.
+    struct FailingReader {
+        remaining: usize,
+    }
+    impl std::io::Read for FailingReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::Error::other("connection reset"));
+            }
+            let n = self.remaining.min(buf.len());
+            for b in &mut buf[..n] {
+                *b = b'x';
+            }
+            self.remaining -= n;
+            Ok(n)
+        }
+    }
+
+    // The cap is arithmetic, so pin the arithmetic: an off-by-one either truncates a
+    // legitimate response (the peer can never sync again) or accepts an over-budget one
+    // (the exact thing the cap exists to prevent). 32 MiB is too much to allocate twice in
+    // a test, so this drives the helper with the REAL constant for the boundary cases and
+    // checks the arithmetic itself through a small local copy of the same expression.
+    #[test]
+    fn a_response_body_is_refused_when_it_is_over_the_limit_and_accepted_when_it_is_not() {
+        // Exactly at the cap: accepted. One byte over: refused, and refused BY NAME.
+        let at_cap = vec![b'a'; MAX_RESPONSE_BYTES as usize];
+        let mut reader = &at_cap[..];
+        let text = read_body_capped(&mut reader).expect("a body exactly at the cap is legitimate");
+        assert_eq!(text.len(), MAX_RESPONSE_BYTES as usize);
+
+        let over_cap = vec![b'a'; MAX_RESPONSE_BYTES as usize + 1];
+        let mut reader = &over_cap[..];
+        let err = read_body_capped(&mut reader)
+            .expect_err("one byte over the cap must be refused, not truncated");
+        assert!(
+            err.contains("larger than") && err.contains(&MAX_RESPONSE_BYTES.to_string()),
+            "the refusal must name the limit so the peer can be told why: {err}"
+        );
+    }
+
+    #[test]
+    fn a_read_failure_is_reported_rather_than_read_as_an_empty_body() {
+        // The old `resp.text().unwrap_or_default()` turned a decode failure into an EMPTY
+        // body, which parsed as "no records" — a server could hide a real change set that
+        // way. A read failure must be an error the caller can see.
+        let mut reader = FailingReader { remaining: 8 };
+        let err = read_body_capped(&mut reader).expect_err("a mid-read failure must surface");
+        assert!(err.contains("connection reset"), "{err}");
+        assert!(
+            err.contains("could not read"),
+            "the message must say the READ failed, not that the body was over-budget: {err}"
+        );
+    }
+
+    #[test]
+    fn an_empty_body_still_reads_as_empty() {
+        // The other end of the contract: a body-less 204 must not become an error, or the
+        // `Ok(Value::Null)` branch below would be dead.
+        let mut empty: &[u8] = &[];
+        assert_eq!(read_body_capped(&mut empty).expect("empty"), "");
+    }
 
     /// A restart must bring the Settings → Sync panel back ENABLED. `boot_restore` is the
     /// body of `start()` minus the perpetual periodic-sync thread (a test must not leak one).

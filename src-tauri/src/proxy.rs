@@ -352,15 +352,25 @@ pub fn dispatch<R: Runtime>(
             } else {
                 ProxyConfig::from_value(payload.get("config").unwrap_or(&Value::Null))
             };
-            // Persist into settings.json's `proxy` key (exported/imported with data.export).
-            let mut s = crate::settings::all(app);
-            if let Some(o) = s.as_object_mut() {
-                o.insert(
-                    "proxy".into(),
-                    serde_json::to_value(&cfg).unwrap_or(Value::Null),
-                );
+            // Persist into settings.json's `proxy` key (exported/imported with data.export)
+            // through the SHARED local-edit region rather than a private load-mutate-write.
+            // That buys this arm three things it did not have:
+            //   * the settings store lock, so a concurrent settings form save, the sync
+            //     worker's `merge_remote`, or a `data.import` cannot revert the proxy write;
+            //   * `validate_setting`, so a non-object `proxy` is refused rather than stored;
+            //   * a per-key sync projection record, so the config reaches the user's other
+            //     paired devices like every other non-local-only setting.
+            // And a failed write comes back as `Err`: Tauri does not `catch_unwind` a command
+            // body, so the `.expect` this replaced aborted the process (a full disk, a
+            // read-only mount, or a directory at settings.json — reachable from the Apply,
+            // Turn-off and Test buttons in `ProxySettingsTab.tsx`).
+            let cfg_value = serde_json::to_value(&cfg).unwrap_or(Value::Null);
+            if let Err(e) = crate::settings::apply_local(
+                app,
+                &serde_json::json!({ "partial": { "proxy": cfg_value } }),
+            ) {
+                return Some(Err(e));
             }
-            crate::settings::write(app, &s).expect("settings fixture write");
             if let Some(st) = app.try_state::<ProxyState>() {
                 *st.0.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
             }
@@ -916,5 +926,163 @@ mod tests {
             "joined bypass list must contain no spaces"
         );
         assert!(!joined.contains(';') || joined.matches(';').count() == 4);
+    }
+
+    // ── `proxy.setConfig` / `proxy.clear` persistence ─────────────────────────
+    //
+    // The arm used to do its own `load` -> mutate -> `write` of the whole settings snapshot,
+    // outside the store lock, with no sync projection record, and ending in
+    // `settings::write(app, &s).expect("settings fixture write")` — a TEST-FIXTURE panic
+    // message left behind when the call site was mechanically converted when `settings::write`
+    // was flipped to `Result`. These four pin the replacement: route through
+    // `settings::apply_local`, the one documented locked local-edit region.
+
+    /// The regression: a settings write that cannot land used to panic.
+    ///
+    /// `settings::write` returns `Err` for a missing app-data dir (`settings.rs`) and
+    /// propagates `write_atomic`'s error, so a full disk, a read-only mount, or a directory
+    /// sitting where `settings.json` belongs all reached that `.expect`. Tauri does not
+    /// `catch_unwind` a command body — `tauri-macros`' `body_blocking` emits a plain
+    /// `let result = $path(args)` and propagates — so the panic unwound out of the GUI thread
+    /// and took the process down, from the Apply / Turn-off / Test buttons in
+    /// `ProxySettingsTab.tsx`.
+    ///
+    /// `block_store_file` puts a non-empty DIRECTORY at the store path. That is the portable
+    /// way to force this: `chmod 0500` is a no-op for a process running as root, which would
+    /// make the test silently vacuous (it would pass without the fix too).
+    #[test]
+    fn a_failed_settings_write_is_reported_rather_than_aborting_the_process() {
+        crate::test_support::with_tmp_app(|app| {
+            let blocked = crate::test_support::block_store_file(app, "settings.json");
+            let out = dispatch(
+                app,
+                "proxy.setConfig",
+                &json!({ "config": { "mode": "proxy", "scheme": "http",
+                                     "host": "127.0.0.1", "port": 8080 } }),
+            )
+            .expect("proxy.setConfig must be owned by this module");
+            // Unblock before asserting so a failure cannot leak the blocking directory.
+            crate::test_support::unblock_store_file(&blocked);
+
+            let err = out.expect_err(
+                "a settings write that cannot land must surface as Err, not abort the process",
+            );
+            assert!(
+                err.contains("settings"),
+                "the error must name the file that could not be written, got {err:?}"
+            );
+        });
+    }
+
+    /// The persisted bytes are `serde_json::to_value` of the SANITISED `ProxyConfig`, never
+    /// the caller's object.
+    ///
+    /// This is what routing through the shared region buys beyond the panic fix, and it is the
+    /// load-bearing half of the security story: the host is interpolated into
+    /// ` --proxy-server={uri}` inside Chromium's `additional_browser_args` on Windows, a
+    /// command line, so `1.2.3.4 --remote-debugging-port=9222` would inject a DevTools
+    /// endpoint into every content webview spawned afterwards. `ProxyConfig::from_value`
+    /// blanks the host, `is_active()` then requires a non-empty host, and that blanked struct
+    /// is what reaches the store. Reading it back off disk is the only honest check — the
+    /// `from_value` unit tests above can pass while the arm stores something else.
+    #[test]
+    fn the_persisted_proxy_is_the_sanitised_config_not_the_callers_bytes() {
+        crate::test_support::with_tmp_app(|app| {
+            dispatch(
+                app,
+                "proxy.setConfig",
+                &json!({ "config": { "mode": "proxy", "scheme": "http",
+                                     "host": "1.2.3.4 --remote-debugging-port=9222",
+                                     "port": 8080 } }),
+            )
+            .expect("proxy.setConfig must be owned by this module")
+            .expect("a rejected host is blanked into an inert config, not an error");
+
+            let stored = crate::settings::load(app);
+            let p = stored
+                .get("proxy")
+                .expect("the proxy key is persisted into settings.json");
+            assert_eq!(
+                p.get("host").and_then(Value::as_str),
+                Some(""),
+                "the blanked host is what was stored"
+            );
+            assert!(
+                !p.to_string().contains("remote-debugging-port"),
+                "no byte of the caller's host may reach settings.json, got {p}"
+            );
+        });
+    }
+
+    /// The owner-approved consequence of routing the arm through `apply_local`: a proxy change
+    /// now reaches the user's other paired devices, like every other non-local-only setting
+    /// (`proxy` is not in `LOCAL_ONLY_KEYS`). The arm rewrote `settings.json` without ever
+    /// calling `record_change`, so the projection held no `proxy` record at all and the config
+    /// never left the device that set it.
+    #[test]
+    fn a_proxy_change_becomes_a_sync_projection_record() {
+        crate::test_support::with_tmp_app(|app| {
+            dispatch(
+                app,
+                "proxy.setConfig",
+                &json!({ "config": { "mode": "proxy", "scheme": "http",
+                                     "host": "127.0.0.1", "port": 8080 } }),
+            )
+            .expect("proxy.setConfig must be owned by this module")
+            .expect("a well-formed config is saved");
+
+            let recs = crate::settings::sync_records_readonly(app);
+            let rec = recs
+                .iter()
+                .find(|r| r.get("key").and_then(Value::as_str) == Some("proxy"))
+                .expect("a proxy record exists in the sync projection");
+            assert_eq!(
+                rec.get("value")
+                    .and_then(|v| v.get("host"))
+                    .and_then(Value::as_str),
+                Some("127.0.0.1"),
+                "the record carries the sanitised value"
+            );
+            assert_eq!(
+                rec.get("deleted").and_then(Value::as_bool),
+                Some(false),
+                "a local edit is a live record, not a tombstone"
+            );
+        });
+    }
+
+    /// The happy path, end to end through the store: a set round-trips into `settings.json`,
+    /// and `proxy.clear` puts `mode: "off"` back — read back off disk, not from the returned
+    /// state object, so the persistence is what is being asserted.
+    #[test]
+    fn the_proxy_config_round_trips_through_the_store_and_clear_returns_to_off() {
+        crate::test_support::with_tmp_app(|app| {
+            dispatch(
+                app,
+                "proxy.setConfig",
+                &json!({ "config": { "mode": "proxy", "scheme": "socks5",
+                                     "host": "127.0.0.1", "port": 1080 } }),
+            )
+            .expect("owned")
+            .expect("saved");
+
+            let on = crate::settings::load(app)
+                .get("proxy")
+                .cloned()
+                .expect("persisted");
+            assert_eq!(on.get("mode").and_then(Value::as_str), Some("proxy"));
+            assert_eq!(on.get("scheme").and_then(Value::as_str), Some("socks5"));
+            assert_eq!(on.get("port").and_then(Value::as_u64), Some(1080));
+
+            dispatch(app, "proxy.clear", &json!({}))
+                .expect("owned")
+                .expect("cleared");
+
+            let off = crate::settings::load(app)
+                .get("proxy")
+                .cloned()
+                .expect("still persisted, now off");
+            assert_eq!(off.get("mode").and_then(Value::as_str), Some("off"));
+        });
     }
 }

@@ -1386,6 +1386,59 @@ mod tests {
         });
     }
 
+    /// A delete for a uuid THIS DEVICE NEVER HELD must still be durable.
+    ///
+    /// The ordinary case on a third device: the user deletes a credential on their laptop, and
+    /// this device never had it, so `records.retain(..)` removes nothing and `changed` comes
+    /// back empty. The pass therefore never rewrote the file, so the marker lived only in
+    /// memory — and `vault.lock` clears `g.tombstones` while `unlock_vault` rebuilds them from
+    /// `vault.json`, i.e. from a file that never held one. The delete was forgotten at the first
+    /// lock, and the peer's next pass (it still has the credential) put it back: exactly the
+    /// resurrection the tombstone design exists to prevent, for a delete that had already been
+    /// delivered and authenticated.
+    #[test]
+    fn a_delete_for_a_credential_this_device_never_held_survives_a_lock_and_unlock() {
+        with_tmp_app(|app| {
+            let vk = seeded_unlocked(app, &[]);
+            // Nothing local: this device has never held "ghost".
+            let tomb = vault::seal_tombstone(&vk, "ghost", 2_001).expect("seal tombstone");
+            let out = vault::merge_remote(app, &[tomb]).expect("merge delete");
+            assert!(
+                out.changed.is_empty(),
+                "there was no local record to remove, so `changed` must stay empty — which is \
+                 exactly why the write cannot be keyed on it"
+            );
+
+            // The property that must hold: lock and unlock round-trip the marker through the
+            // FILE, because the lock deliberately drops the in-memory copy.
+            vault::dispatch(app, "vault.lock", &json!({}))
+                .expect("lock channel")
+                .expect("lock ok");
+            vault::dispatch(app, "vault.unlock", &json!({ "masterPassword": PW }))
+                .expect("unlock channel")
+                .expect("unlock ok");
+
+            // The peer still holds the credential and re-pushes it, as it always will.
+            let c = cred("ghost", 2_000);
+            let out = vault::merge_remote(app, &[vault::seal_record(&vk, &c).unwrap()])
+                .expect("merge re-push");
+            assert!(
+                out.quarantined.is_empty(),
+                "the re-push is authentic, so it must be dropped as deleted, not quarantined"
+            );
+            assert_eq!(
+                out.changed,
+                Vec::<String>::new(),
+                "a delete that survived the restart must still veto the credential"
+            );
+            assert!(
+                listed_uuids(app).is_empty(),
+                "the credential must stay deleted: the tombstone was already on disk before \
+                 the lock, so losing it on lock is what let it come back"
+            );
+        });
+    }
+
     /// The authority is the SEALED BODY, never the cleartext `deleted` hint (the hint exists
     /// only so the server can prune without holding keys). A peer that flips the hint to
     /// `false` therefore still deletes — otherwise the hint would be load-bearing and a

@@ -39,14 +39,10 @@ pub fn session_blocked() -> u32 {
     SESSION_BLOCKED.load(Ordering::Relaxed)
 }
 
-/// The active tab's current-page blocked count. `getState` returns this so the chrome
-/// recovers the count on mount / tab-switch — live `adblock.blockedCount` events emitted
-/// before the chrome subscribed (e.g. the restored boot page) would otherwise be lost.
-fn active_page_blocked<R: Runtime>(app: &AppHandle<R>) -> u32 {
-    let id = app
-        .try_state::<crate::tabs::Tabs>()
-        .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
-        .unwrap_or(1);
+/// Tab `id`'s current-page blocked count. `getState` returns this so the chrome recovers
+/// the count on mount / tab-switch — live `adblock.blockedCount` events emitted before the
+/// chrome subscribed (e.g. the restored boot page) would otherwise be lost.
+fn page_blocked_for(id: u32) -> u32 {
     page_map()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -55,18 +51,39 @@ fn active_page_blocked<R: Runtime>(app: &AppHandle<R>) -> u32 {
         .unwrap_or(0)
 }
 
+/// The tab a payload addresses, defaulting to the active one when it carries no `viewId`.
+/// Mirrors `find::dispatch`'s resolver, and exists for the same reason: the chrome asks
+/// about a SPECIFIC view, and answering with the active tab's count is wrong whenever the
+/// two disagree — which is exactly the window a tab switch opens (the registry's
+/// `active_id` and the renderer's view are updated by different round-trips).
+fn target_view<R: Runtime>(app: &AppHandle<R>, payload: &Value) -> u32 {
+    payload
+        .get("viewId")
+        .and_then(Value::as_u64)
+        .map(|n| n as u32)
+        .unwrap_or_else(|| {
+            app.try_state::<crate::tabs::Tabs>()
+                .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
+                .unwrap_or(1)
+        })
+}
+
+/// The active tab's current-page blocked count, for callers that name no view.
+fn active_page_blocked<R: Runtime>(app: &AppHandle<R>) -> u32 {
+    let id = app
+        .try_state::<crate::tabs::Tabs>()
+        .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
+        .unwrap_or(1);
+    page_blocked_for(id)
+}
+
 /// Test-only reader for one tab's per-page count, so the close path can be asserted
 /// rather than assumed. `#[cfg(test)]` because production reads it through
-/// `active_page_blocked` (the active tab only) — the same shape as
-/// `nav::tab_has_content`, added for the same reason.
+/// `page_blocked_for` — the same shape as `nav::tab_has_content`, added for the
+/// same reason.
 #[cfg(test)]
 pub fn test_page_blocked(id: u32) -> u32 {
-    page_map()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .get(&id)
-        .copied()
-        .unwrap_or(0)
+    page_blocked_for(id)
 }
 
 /// Drop tab `id`'s per-page count entirely, rather than zeroing it.
@@ -330,14 +347,21 @@ pub fn seed_from_disk<R: Runtime>(app: &AppHandle<R>) {
     sync_engine(app);
 }
 
-fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
+/// `view` names the tab whose `pageBlocked` this state reports (see `target_view`);
+/// `None` means the active tab, which is right for the policy mutators — they are global
+/// and the chrome only re-reads `enabled`/`allowlistedHosts` from their reply.
+fn state_json<R: Runtime>(app: &AppHandle<R>, view: Option<u32>) -> Value {
+    let page = match view {
+        Some(id) => page_blocked_for(id),
+        None => active_page_blocked(app),
+    };
     match app.try_state::<AdblockState>() {
         Some(s) => {
             let g = s.0.lock().unwrap_or_else(|e| e.into_inner());
-            json!({ "enabled": g.enabled, "allowlistedHosts": g.allowlist, "sessionBlocked": session_blocked(), "pageBlocked": active_page_blocked(app) })
+            json!({ "enabled": g.enabled, "allowlistedHosts": g.allowlist, "sessionBlocked": session_blocked(), "pageBlocked": page })
         }
         None => {
-            json!({ "enabled": true, "allowlistedHosts": [], "sessionBlocked": session_blocked(), "pageBlocked": active_page_blocked(app) })
+            json!({ "enabled": true, "allowlistedHosts": [], "sessionBlocked": session_blocked(), "pageBlocked": page })
         }
     }
 }
@@ -382,7 +406,7 @@ pub fn dispatch<R: Runtime>(
     payload: &Value,
 ) -> Option<Result<Value, String>> {
     match channel {
-        "adblock.getState" => Some(Ok(state_json(app))),
+        "adblock.getState" => Some(Ok(state_json(app, Some(target_view(app, payload))))),
 
         "adblock.setEnabled" => {
             let enabled = payload
@@ -401,7 +425,7 @@ pub fn dispatch<R: Runtime>(
                 }
             }
             sync_engine(app);
-            Some(Ok(state_json(app)))
+            Some(Ok(state_json(app, None)))
         }
 
         "adblock.toggleAllowlist" | "adblock.removeAllowlist" => {
@@ -426,7 +450,7 @@ pub fn dispatch<R: Runtime>(
                 }
             }
             after_allowlist_change(app);
-            Some(Ok(state_json(app)))
+            Some(Ok(state_json(app, None)))
         }
 
         "adblock.clearAllowlist" => {
@@ -435,7 +459,7 @@ pub fn dispatch<R: Runtime>(
                 return Some(Err(e));
             }
             after_allowlist_change(app);
-            Some(Ok(state_json(app)))
+            Some(Ok(state_json(app, None)))
         }
 
         _ => None,
@@ -682,6 +706,56 @@ mod tests {
                 Some(0),
                 "per-page count is zero after reset_page"
             );
+        });
+    }
+
+    /// The chrome asks `getState` about a SPECIFIC view, and during a tab switch the
+    /// registry's active id and the renderer's view are updated by different round-trips.
+    /// Answering with the active tab instead makes the shield show the previous tab's
+    /// count, which is exactly what a fast switch did.
+    #[test]
+    fn get_state_reports_the_requested_views_page_count_not_the_active_tabs() {
+        with_tmp_app(|app| {
+            // Ask the registry which tab it considers active rather than assuming id 1 —
+            // the answer is the whole point of the second assertion.
+            let active = app
+                .state::<crate::tabs::Tabs>()
+                .reg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .active_id();
+            let asked = 9203u32;
+            assert_ne!(active, asked, "the asked-for tab is not the active one");
+            zero_page(active);
+            zero_page(asked);
+            bump_blocked(active);
+            let (_, active_page) = bump_blocked(active);
+            let (_, asked_page) = bump_blocked(asked);
+            assert_ne!(
+                active_page, asked_page,
+                "test precondition: the two tabs have different page counts"
+            );
+
+            let by_payload = dispatch(app, "adblock.getState", &json!({ "viewId": asked }))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                by_payload["pageBlocked"].as_u64(),
+                Some(asked_page as u64),
+                "getState answered with the requested view's count"
+            );
+
+            let by_active = dispatch(app, "adblock.getState", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                by_active["pageBlocked"].as_u64(),
+                Some(active_page as u64),
+                "a payload with no viewId still answers for the active tab"
+            );
+
+            forget_page_blocked(active);
+            forget_page_blocked(asked);
         });
     }
 

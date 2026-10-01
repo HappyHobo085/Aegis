@@ -339,10 +339,24 @@ pub(crate) fn open_kind(vk: &[u8; 32], w: &Value) -> Result<Opened, String> {
 /// Last-writer-wins on the timestamp. A delete is a synced record like any other, so it has to
 /// interleave correctly with the edits around it: a stale tombstone must not erase a credential
 /// that was re-saved afterwards, and a newer one must win.
-fn upsert_tombstone(list: &mut Vec<(String, i64)>, uuid: String, at: i64) {
+/// Record a deletion marker, keeping the NEWEST marker for a uuid. Returns whether the list
+/// actually changed, which the merge uses to decide the file must be rewritten.
+///
+/// Returning "changed" rather than "was called" is what makes an *absent* local record
+/// durable: a tombstone for a uuid this device never held is the normal case on a third
+/// device, and it is exactly the case with no `records.retain` to report, so nothing else in
+/// the pass would have triggered a write.
+fn upsert_tombstone(list: &mut Vec<(String, i64)>, uuid: String, at: i64) -> bool {
     match list.iter_mut().find(|(u, _)| *u == uuid) {
-        Some(slot) => slot.1 = slot.1.max(at),
-        None => list.push((uuid, at)),
+        Some(slot) if at > slot.1 => {
+            slot.1 = at;
+            true
+        }
+        Some(_) => false,
+        None => {
+            list.push((uuid, at));
+            true
+        }
     }
 }
 
@@ -667,6 +681,13 @@ pub(crate) fn merge_remote<R: Runtime>(
     let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
     let vk = g.key.clone().ok_or("vault is locked")?;
     let mut out = MergeOutcome::default();
+    // A tombstone that moved is itself a durable change, and it is the ONLY change a delete
+    // for a uuid this device never held makes: `records.retain` below removes nothing, so
+    // `changed` stays empty and — before this flag existed — `persist` was skipped and the
+    // marker was left in memory only. `vault.lock` then clears `g.tombstones` and
+    // `unlock_vault` rebuilds them from `vault.json`, so the delete was simply forgotten, and
+    // the credential the peer still holds came back the next time the user typed the password.
+    let mut tombstone_dirty = false;
 
     for r in remote {
         let Some(uuid) = r.get("uuid").and_then(Value::as_str) else {
@@ -682,7 +703,7 @@ pub(crate) fn merge_remote<R: Runtime>(
                     out.quarantined.push(uuid.to_string());
                     continue;
                 };
-                upsert_tombstone(&mut g.tombstones, uuid.to_string(), at);
+                tombstone_dirty |= upsert_tombstone(&mut g.tombstones, uuid.to_string(), at);
                 // The delete is authoritative: drop the local copy outright.
                 let before = g.records.len();
                 g.records.retain(|c| c.uuid != uuid);
@@ -719,7 +740,9 @@ pub(crate) fn merge_remote<R: Runtime>(
             continue;
         }
         // Genuinely newer than the delete ⇒ the credential was re-added after the delete, so the
-        // delete no longer applies to it.
+        // delete no longer applies to it. A pass that reaches here has already put `uuid` in
+        // `changed` below (it either replaces the record or adds it), so this retire is never
+        // the only durable change in the pass and does not need the flag.
         g.tombstones.retain(|(u, _)| *u != cred.uuid);
         match g.records.iter_mut().find(|c| c.uuid == cred.uuid) {
             Some(local) => {
@@ -735,7 +758,10 @@ pub(crate) fn merge_remote<R: Runtime>(
         }
     }
 
-    if !out.changed.is_empty() {
+    // `tombstone_dirty` is load-bearing, not belt-and-braces: it is the ONLY signal that a
+    // delete with no local copy — the ordinary case on a device that never held the credential
+    // — has to reach the file at all.
+    if !out.changed.is_empty() || tombstone_dirty {
         persist(app, &g)?;
     }
     Ok(out)

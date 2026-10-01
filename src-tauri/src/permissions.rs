@@ -56,8 +56,23 @@ fn remembered<R: Runtime>(app: &AppHandle<R>, origin: &str, permission: &str) ->
 #[cfg(any(target_os = "linux", target_os = "android", test))]
 /// Upsert a remembered (origin, permission) decision. Reached from the Linux permission
 /// handler (`linux_layout`) and, on Android, from `NativePermissions.remember`.
-fn persist<R: Runtime>(app: &AppHandle<R>, origin: &str, permission: &str, allow: bool) {
-    let mut items = list(app);
+///
+/// Reports a failed write rather than dropping it: the caller has just told the page its
+/// decision, so a save that did not land leaves the store disagreeing with the live policy
+/// and the user is re-prompted on the next load.
+///
+/// **This store has no serialization mechanism other than the write lock.** It is
+/// deliberately not an `HLC_CARRIER` (`sync_stores.rs` documents why: no `hlc` on its rows,
+/// plain `jsonstore::load`/`save`), so the lock is the ONLY thing keeping two tabs'
+/// read-modify-writes apart — and it is held across the load here for exactly that reason.
+fn persist<R: Runtime>(
+    app: &AppHandle<R>,
+    origin: &str,
+    permission: &str,
+    allow: bool,
+) -> Result<(), String> {
+    let mut items =
+        jsonstore::with_store_lock("permissions", || jsonstore::load(app, "permissions"));
     items.retain(|it| {
         !(it.get("origin").and_then(Value::as_str) == Some(origin)
             && it.get("permission").and_then(Value::as_str) == Some(permission))
@@ -66,7 +81,7 @@ fn persist<R: Runtime>(app: &AppHandle<R>, origin: &str, permission: &str, allow
         "origin": origin, "permission": permission,
         "decision": if allow { "allow" } else { "deny" },
     }));
-    let _ = jsonstore::save(app, "permissions", &items);
+    jsonstore::save(app, "permissions", &items)
 }
 
 /// scheme://host[:port] of a URL (the permission origin). Parsed with `Url` so the
@@ -136,6 +151,33 @@ fn classify(req: &webkit2gtk::PermissionRequest) -> String {
 /// Install the permission handler on a specific content webview by label (Linux):
 /// allow/deny from the remembered decision, else raise a prompt; deny unrecognized
 /// request types. Called per-tab at spawn so every tab handles its own requests.
+///
+/// # A KNOWN, DELIBERATELY UNFIXED LIMIT: the origin is the MAIN FRAME's
+///
+/// `connect_permission_request`'s callback gets a `WebView` handle, and the only URI
+/// available from it is `wv.uri()` — the webview's own address, i.e. the top-level
+/// document. A permission request raised by a **cross-origin IFRAME** is therefore
+/// attributed to the page that embedded it, and inherits that page's remembered
+/// decision: allow the camera on `example.com` once, and any third-party iframe
+/// embedded there can request a camera and be let straight through.
+///
+/// This is not fixable with the pinned `webkit2gtk` binding. `PermissionRequestExt`
+/// exposes only `allow()` and `deny()`; there is no per-request URI getter to read, so
+/// there is nothing to attribute the request to but the webview. Fixing it properly
+/// needs either a binding that surfaces the requesting frame's URI, or upstream
+/// WebKitGTK exposing it on `WebKitPermissionRequest`. Until one of those exists the
+/// honest options are (a) ignore a remembered decision whenever the requesting page has
+/// ever embedded a third-party frame — far too broad to ship, and it would also break
+/// the common single-origin case — or (b) state the limit, which is what this comment
+/// does. **Do not "fix" this by trusting `wv.uri()` more than it already is**: the
+/// `let origin = …` line below is the only signal available, and re-labelling it does
+/// not change what it answers.
+///
+/// The blast radius is bounded by what a frame can request and by what is remembered:
+/// `classify` refuses anything unrecognized, and the same stored decision is consulted
+/// on every platform, so a user who never allows camera access on a given origin is
+/// unaffected. Recorded here rather than in `AGENTS.md` only, because the comment must
+/// be read by anyone editing THIS line.
 #[cfg(target_os = "linux")]
 pub fn install_handler_label(app: &AppHandle, label: &str) {
     use webkit2gtk::{PermissionRequestExt, WebViewExt};
@@ -189,18 +231,31 @@ pub fn dispatch<R: Runtime>(
                 .get("permission")
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let mut items = list(app);
-            items.retain(|it| {
-                !(it.get("origin").and_then(Value::as_str) == Some(origin)
-                    && it.get("permission").and_then(Value::as_str) == Some(permission))
-            });
-            let _ = jsonstore::save(app, "permissions", &items);
-            Some(Ok(json!(items)))
+            // Load, mutate, save under the store lock, and REPORT the save. The old body
+            // answered `Some(Ok(json!(items)))` built from the IN-MEMORY list and threw the
+            // save's `Result` away, so a write that did not land reported success: the UI
+            // dropped the row, the file still held it, and a grant the user had just
+            // revoked came back on the next start. The `?` is the fix, and the lock is what
+            // stops a concurrent `persist` (a prompt answer on another tab) from being
+            // clobbered by this arm's save.
+            Some(jsonstore::with_store_lock("permissions", || {
+                let mut items = jsonstore::load(app, "permissions");
+                items.retain(|it| {
+                    !(it.get("origin").and_then(Value::as_str) == Some(origin)
+                        && it.get("permission").and_then(Value::as_str) == Some(permission))
+                });
+                jsonstore::save(app, "permissions", &items)?;
+                Ok(json!(items))
+            }))
         }
         "permissions.clear" => {
-            let empty: [Value; 0] = [];
-            let _ = jsonstore::save(app, "permissions", &empty);
-            Some(Ok(json!([])))
+            // Same obligation as `remove`: `let _ = …` here made "Clear all permissions"
+            // report success while the file kept every row.
+            Some(jsonstore::with_store_lock("permissions", || {
+                let empty: [Value; 0] = [];
+                jsonstore::save(app, "permissions", &empty)?;
+                Ok(json!([]))
+            }))
         }
         "permissions.resolve" => {
             let id = payload
@@ -239,7 +294,15 @@ pub fn dispatch<R: Runtime>(
                         req.deny();
                     }
                     if remember {
-                        persist(&app2, &origin, &permission, allow);
+                        // A save that did not land is a real failure: the page already has its
+                        // answer, so the store falling behind means the same prompt returns on
+                        // the next load. Log it — this runs inside `run_on_main_thread`, where
+                        // there is no caller left to return an `Err` to.
+                        if let Err(e) = persist(&app2, &origin, &permission, allow) {
+                            eprintln!(
+                                "[aegis-perm] could not remember {permission} for {origin}: {e}"
+                            );
+                        }
                     }
                 });
             }
@@ -379,8 +442,12 @@ pub extern "system" fn Java_com_aegis_browser_NativePermissions_remember(
     let Some(app) = crate::android_app() else {
         return;
     };
-    if crate::ffi_guard(|| persist(app, &origin, &permission, allow != 0)).is_none() {
-        eprintln!("[aegis-perm] remember panicked for {origin} {permission}");
+    match crate::ffi_guard(|| persist(app, &origin, &permission, allow != 0)) {
+        None => eprintln!("[aegis-perm] remember panicked for {origin} {permission}"),
+        Some(Err(e)) => {
+            eprintln!("[aegis-perm] could not remember {permission} for {origin}: {e}")
+        }
+        Some(Ok(())) => {}
     }
 }
 
@@ -480,14 +547,14 @@ mod tests {
             assert_eq!(verdict(app, "https://a.test", "camera"), "");
             assert_eq!(verdict(app, "https://a.test", "microphone"), "");
 
-            persist(app, "https://a.test", "camera", true);
+            persist(app, "https://a.test", "camera", true).unwrap();
             assert_eq!(verdict(app, "https://a.test", "camera"), "allow");
             // A decision is per (origin, permission): allowing the camera on one site says
             // nothing about the microphone, or about another site.
             assert_eq!(verdict(app, "https://a.test", "microphone"), "");
             assert_eq!(verdict(app, "https://b.test", "camera"), "");
 
-            persist(app, "https://a.test", "camera", false);
+            persist(app, "https://a.test", "camera", false).unwrap();
             assert_eq!(verdict(app, "https://a.test", "camera"), "deny");
         });
     }
@@ -497,8 +564,8 @@ mod tests {
         // The store is rendered as a list in SitePermissionsTab, so a duplicate row would
         // show the same site twice and remove one copy would leave the other in force.
         with_tmp_app(|app| {
-            persist(app, "https://a.test", "camera", true);
-            persist(app, "https://a.test", "camera", false);
+            persist(app, "https://a.test", "camera", true).unwrap();
+            persist(app, "https://a.test", "camera", false).unwrap();
             let rows = dispatch(app, "permissions.list", &json!({}))
                 .unwrap()
                 .unwrap();
@@ -516,7 +583,7 @@ mod tests {
         // Android shows up in the same SitePermissionsTab the desktop renders, and
         // removing it there takes effect for the next request.
         with_tmp_app(|app| {
-            persist(app, "https://a.test", "geolocation", true);
+            persist(app, "https://a.test", "geolocation", true).unwrap();
             let after = dispatch(
                 app,
                 "permissions.remove",
@@ -787,5 +854,90 @@ mod tests {
             "teardownTab must drop that tab's pending permission requests; a request left \
              open outlives the webview it belongs to: {teardown}"
         );
+    }
+
+    /// The store `permissions` has NO serialization mechanism other than the write lock:
+    /// it is deliberately not an `HLC_CARRIER` (no `hlc` on its rows, plain
+    /// `jsonstore::load`/`save`), so a read-modify-write here can interleave with another
+    /// tab's prompt answer and one of the two writes silently vanishes.
+    #[test]
+    fn a_revoked_permission_that_could_not_be_saved_is_reported_not_silently_lost() {
+        // The defect: `permissions.remove` loaded, mutated, then threw the save's `Result`
+        // away (`let _ = …`) and answered `Ok` built from the IN-MEMORY list. The UI dropped
+        // the row, the file kept it, and the grant the user had just revoked came back on the
+        // next start — a permission the user believes they took away, still in force.
+        with_tmp_app(|app| {
+            seed(app);
+            let blocked = crate::test_support::block_store_file(app, "permissions.json");
+            let reported = dispatch(
+                app,
+                "permissions.remove",
+                &json!({ "origin": "https://a.test", "permission": "camera" }),
+            );
+            let err = reported
+                .expect("the channel is handled")
+                .expect_err("a save that did not land must NOT report success");
+            assert!(
+                !err.is_empty(),
+                "the refusal must carry the reason, or the UI cannot show it"
+            );
+            crate::test_support::unblock_store_file(&blocked);
+            // And the row is genuinely still on disk — the point of the assertion is that the
+            // answer and the file agree.
+            let rows = dispatch(app, "permissions.list", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert!(
+                rows.as_array().unwrap().iter().any(|it| {
+                    it.get("origin").and_then(Value::as_str) == Some("https://a.test")
+                        && it.get("permission").and_then(Value::as_str) == Some("camera")
+                }),
+                "the unrevoked grant must still be on disk, so the refusal is honest: {rows:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn clearing_permissions_that_could_not_be_saved_is_reported_not_silently_lost() {
+        // The same `let _ = …` in the `clear` arm: "Clear all permissions" reported success
+        // with an empty list while the file kept every row. Same user-visible lie, same fix.
+        with_tmp_app(|app| {
+            seed(app);
+            let blocked = crate::test_support::block_store_file(app, "permissions.json");
+            let reported = dispatch(app, "permissions.clear", &json!({}));
+            assert!(
+                reported.expect("the channel is handled").is_err(),
+                "a clear that did not land must be reported, or the user sees an empty list \
+                 over a file that still grants every permission"
+            );
+            crate::test_support::unblock_store_file(&blocked);
+            let rows = dispatch(app, "permissions.list", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                rows.as_array().unwrap().len(),
+                3,
+                "all three seeded decisions are still on disk: {rows:?}"
+            );
+        });
+    }
+
+    #[test]
+    fn a_remembered_decision_that_could_not_be_saved_is_reported_to_the_caller() {
+        // The third `let _ = …`: `persist` is what both platform handlers reach (the Linux
+        // `run_on_main_thread` resolve, and Android's `NativePermissions.remember` JNI
+        // export). Both had nowhere to return an error to, so the refusal was dropped twice.
+        with_tmp_app(|app| {
+            let blocked = crate::test_support::block_store_file(app, "permissions.json");
+            let err = persist(app, "https://c.test", "camera", true)
+                .expect_err("a save that did not land must be reported");
+            assert!(!err.is_empty());
+            crate::test_support::unblock_store_file(&blocked);
+            assert_eq!(
+                verdict(app, "https://c.test", "camera"),
+                "",
+                "nothing may be remembered when the write failed"
+            );
+        });
     }
 }

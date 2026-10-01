@@ -55,6 +55,7 @@ fn is_cross_origin_http(current: &str, target: &str) -> bool {
 }
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 /// One expected app-initiated target URL per tab. The app records the URL it is
@@ -426,6 +427,15 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to
     true
 }
 
+/// One entry of [`NavActions`]: the redirect chain a navigation started in, whether that
+/// navigation was recorded as a top-frame one, and the process-global sequence number that
+/// makes "oldest" answerable in a `HashMap` (which has no order).
+///
+/// Named because the tuple appears in the map type, in `record_action`, in
+/// `take_action`, in `clear_tab_actions` and in two tests' readers — as a bare triple it was
+/// unreadable at every one of those sites, and clippy's `type_complexity` says so too.
+pub type ActionRecord = (ChainStart, bool, u64);
+
 /// Linux two-phase correlation: the gesture/redirect type live on `NavigationAction`,
 /// but reliable main-frame detection lives on `ResponsePolicyDecision`. We record the
 /// resolved `ChainStart` for each NavigationAction by (tab, normalized-url), then look
@@ -438,12 +448,38 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to
 /// and a consumed entry means `decide_at_response` returns `None`, i.e. the guard FAILS OPEN
 /// for a navigation it was supposed to police. Subframe entries are never consumed and never
 /// overwrite a main-frame one; `clear_tab` drops them.
+///
+/// The third field is a monotonic sequence stamp, read ONLY to evict the oldest entry when a
+/// tab exceeds [`MAX_ACTIONS_PER_TAB`]; it is never a decision.
 #[derive(Default)]
 #[cfg_attr(target_os = "android", allow(dead_code))]
 // The Linux (tab, url) -> action correlation map. Registered unconditionally in lib.rs so the
 // state shape is identical everywhere, but only the Linux two-phase path ever reads it.
 #[cfg_attr(target_os = "windows", allow(dead_code))]
-pub struct NavActions(pub Mutex<HashMap<(u32, String), (ChainStart, bool)>>);
+pub struct NavActions(pub Mutex<HashMap<(u32, String), ActionRecord>>);
+
+/// How many recorded NavigationActions one tab may hold before the oldest is evicted.
+///
+/// The map is otherwise emptied only by `clear_tab_actions`, and that runs on a top-frame
+/// main-resource Response — where it drops the WHOLE tab, once per finished top-level
+/// document. The one shape that grows without bound is therefore **a single long-lived
+/// top-level document that keeps loading subframes**: each records an action, and none has a
+/// main-frame Response to consume it. That is not hypothetical — a page under an ad-heavy
+/// third-party embed can drive hundreds of subframe navigations between two top-frame loads.
+///
+/// The cap is deliberately generous (32) so an ordinary page never notices it, and it is a
+/// BOUND rather than a decision point: an evicted navigation finds no entry, so `take_action`
+/// returns `None` and that ONE navigation fails OPEN (it is allowed). That trade is the point
+/// — an unbounded map is a leak that lasts as long as the tab, and a stale entry is worse than
+/// no entry anyway, because a decision stamped many navigations ago describes a navigation that
+/// has already finished. Deciding at RECORD time instead was rejected: it would cancel SUBFRAME
+/// navigations, which is exactly what `record_action`'s own doc forbids.
+pub const MAX_ACTIONS_PER_TAB: usize = 32;
+
+/// Stamps each recorded action so eviction can pick the oldest. Process-global, not per-tab, so
+/// the stamps are a total order; a plain atomic (not a lock) so recording stays cheap on the
+/// navigation hot path.
+static ACTION_SEQ: AtomicU64 = AtomicU64::new(0);
 
 /// Normalize a URL into a stable correlation key (ignore fragment / trailing slash, since the
 /// NavigationAction target and the Response URL can differ in those).
@@ -467,6 +503,16 @@ fn norm_key(url: &str) -> String {
 
 /// Record the `ChainStart` to apply at the Response for `target` (Linux two-phase).
 /// `main_frame` is the recording `NavigationAction`'s frame flag.
+///
+/// **On Linux that flag is always `true`, and the subframe guard below is therefore
+/// UNREACHABLE there.** `linux_layout`'s NavigationAction policy decision carries no frame
+/// flag at all — only `ResponsePolicyDecision` does, via `is_main_frame_main_resource()`,
+/// which is the RESPONSE path — so the single caller passes a hard-coded `true` as a
+/// deliberate fail-safe. The guard is kept because it is the correct rule the moment a real
+/// frame flag exists (or the flag is threaded through), and because it costs one map lookup;
+/// but it is NOT protecting anything on Linux today, and the subframe-vs-main-frame story in
+/// `NavActions`' doc describes the intent of the format rather than a distinction the Linux
+/// caller can currently make. Reads `false` only from a test that supplies one directly.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 #[cfg_attr(target_os = "windows", allow(dead_code))] // Linux-only; only `note_nav` (Linux) records.
 pub fn record_action<R: tauri::Runtime>(
@@ -480,10 +526,42 @@ pub fn record_action<R: tauri::Runtime>(
         let key = (tab, norm_key(target));
         let mut m = s.0.lock().unwrap_or_else(|e| e.into_inner());
         // A subframe must not clobber a main-frame entry that is still awaiting its Response.
-        if !main_frame && m.get(&key).is_some_and(|(_, mf)| *mf) {
+        if !main_frame && m.get(&key).is_some_and(|(_, mf, _)| *mf) {
             return;
         }
-        m.insert(key, (chain, main_frame));
+        // Re-recording an existing key REPLACES its stamp, so the freshest decision is also the
+        // last to be evicted — which is the same preference `insert` already gave it.
+        m.insert(
+            key,
+            (
+                chain,
+                main_frame,
+                ACTION_SEQ.fetch_add(1, Ordering::Relaxed),
+            ),
+        );
+        // Bound THIS tab (see `MAX_ACTIONS_PER_TAB`), not the map: `clear_tab_actions` already
+        // removes a tab wholesale, so a global cap would let one noisy tab evict another tab's
+        // in-flight decisions. Counting per tab is a full scan of the map, which is fine
+        // because this runs once per NavigationAction on a map bounded at
+        // (tabs x MAX_ACTIONS_PER_TAB).
+        let held = m.keys().filter(|(t, _)| *t == tab).count();
+        if held > MAX_ACTIONS_PER_TAB {
+            // Oldest-first. Ties are impossible: the stamp comes from a monotonic counter.
+            let mut aged: Vec<(String, u64)> = m
+                .iter()
+                .filter_map(|((t, k), (_, _, seq))| {
+                    if *t == tab {
+                        Some((k.clone(), *seq))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            aged.sort_by_key(|(_, seq)| *seq);
+            for (dropped, _) in aged.into_iter().take(held - MAX_ACTIONS_PER_TAB) {
+                m.remove(&(tab, dropped));
+            }
+        }
     }
 }
 
@@ -499,7 +577,7 @@ pub fn take_action<R: Runtime>(app: &AppHandle<R>, tab: u32, target: &str) -> Op
     let key = (tab, norm_key(target));
     let mut m = s.0.lock().unwrap_or_else(|e| e.into_inner());
     match m.get(&key) {
-        Some((_, true)) => m.remove(&key).map(|(c, _)| c),
+        Some((_, true, _)) => m.remove(&key).map(|(c, _, _)| c),
         _ => None,
     }
 }
@@ -545,6 +623,11 @@ pub fn take_action<R: Runtime>(app: &AppHandle<R>, tab: u32, target: &str) -> Op
 /// The second call site is kept deliberately: it costs one `retain` and removes a whole
 /// class of within-tab staleness that the Linux top-frame path only clears when a top-frame
 /// load actually resolves.
+///
+/// **Neither call site is a bound, which is why `record_action` also caps a tab at
+/// [`MAX_ACTIONS_PER_TAB`].** Both of these clear a tab only when a top-level document
+/// FINISHES loading (or closes), so the shape neither can reach is one long-lived top-level
+/// document accumulating subframe actions — see the cap's doc for the full argument.
 pub fn clear_tab_actions<R: Runtime>(app: &AppHandle<R>, tab: u32) {
     if let Some(s) = app.try_state::<NavActions>() {
         s.0.lock()
@@ -646,6 +729,128 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_openBlockedRed
 mod tests {
     use super::*;
     use crate::test_support::with_tmp_app;
+
+    // --- the recorded-NavigationAction map is bounded per tab ---
+
+    /// The bug this pins: `clear_tab_actions` is the only thing that empties `NavActions`, and
+    /// it runs on a top-frame main-resource Response (where it drops the WHOLE tab) or on tab
+    /// close. So a single long-lived top-level document that keeps loading subframes recorded
+    /// one entry per subframe navigation and nothing ever removed them — a leak that lasts as
+    /// long as the tab, driven entirely by a third-party embed.
+    ///
+    /// The drive is the production writer, `note_nav`, because a test that called
+    /// `record_action` directly would pass even if `note_nav` stopped recording. Each call is
+    /// a DISTINCT normalized url (a distinct embed), which is the shape that defeats
+    /// key-replacement — re-recording the same key keeps the map the same size, so a
+    /// count-only test would never notice the absence of the bound.
+    #[test]
+    fn a_long_lived_top_level_document_cannot_grow_the_action_map_without_bound() {
+        with_tmp_app(|app| {
+            let actions = app.state::<NavActions>();
+            let drive = 4 * MAX_ACTIONS_PER_TAB;
+            for hop in 0..drive {
+                note_nav(
+                    app,
+                    7,
+                    "https://page.test/host",
+                    &format!("https://embed.test/frame-{hop}"),
+                    /*scripted*/ true,
+                    /*is_redirect*/ true,
+                    /*main_frame*/ true,
+                );
+            }
+            {
+                let a = actions.0.lock().unwrap_or_else(|e| e.into_inner());
+                let held = a.keys().filter(|(t, _)| *t == 7).count();
+                assert_eq!(
+                    held, MAX_ACTIONS_PER_TAB,
+                    "{drive} subframe navigations on one tab must be capped at \
+                     MAX_ACTIONS_PER_TAB, not grow with the page"
+                );
+                // The eviction must be OLDEST-FIRST, not arbitrary: the newest decisions are
+                // the ones a pending Response is most likely to be asking about. Assert the
+                // SURVIVORS' identity — they must be exactly the tail of the drive — rather
+                // than their stamps. Stamp arithmetic cannot state this (and my first
+                // version of it measured `ACTION_SEQ - oldest`, which is the size of the
+                // SURVIVING window, not the number of stamps issued before it, so it passed
+                // only by accident and failed once the loop counted properly).
+                let mut survivors: Vec<String> = a
+                    .keys()
+                    .filter(|(t, _)| *t == 7)
+                    .map(|(_, k)| k.clone())
+                    .collect();
+                survivors.sort();
+                let mut expected: Vec<String> = (drive - MAX_ACTIONS_PER_TAB..drive)
+                    .map(|hop| norm_key(&format!("https://embed.test/frame-{hop}")))
+                    .collect();
+                expected.sort();
+                assert_eq!(
+                    survivors, expected,
+                    "the cap must keep the LAST MAX_ACTIONS_PER_TAB navigations and drop the \
+                     oldest, so the surviving window is the tail of the drive"
+                );
+                // And the ordering the eviction relies on must be a total order, or "oldest"
+                // is a guess: the stamp is process-global and monotonic.
+                let mut stamps: Vec<u64> = a.values().map(|(_, _, seq)| *seq).collect();
+                stamps.sort_unstable();
+                assert!(
+                    stamps.windows(2).all(|w| w[0] < w[1]),
+                    "stamps must be strictly increasing so 'oldest' is a total order"
+                );
+            }
+            // The most recent navigation is still honoured: a cap must not discard the entry
+            // the very next Response is going to ask about. `note_nav(…, is_redirect = true)`
+            // builds the chain itself, so assert on its `from`/`origin_target` rather than
+            // pinning a literal that would just restate the constructor.
+            let newest = format!("https://embed.test/frame-{}", drive - 1);
+            let chain = take_action(app, 7, &newest).expect(
+                "the newest recorded navigation must survive the cap — evicting it would \
+                 fail the next Response open",
+            );
+            assert_eq!(chain.from, "https://page.test/host");
+            assert_eq!(chain.origin_target, newest);
+        });
+    }
+
+    /// Another tab's decisions are not this tab's overflow, so the cap is per tab: a second tab
+    /// must keep its in-flight entry even while the first tab is at its cap.
+    #[test]
+    fn evicting_one_tabs_oldest_action_does_not_touch_another_tabs() {
+        with_tmp_app(|app| {
+            let actions = app.state::<NavActions>();
+            note_nav(
+                app,
+                1,
+                "https://a.test/",
+                "https://a.test/quiet",
+                true,
+                true,
+                true,
+            );
+            for hop in 0..(MAX_ACTIONS_PER_TAB + 5) {
+                note_nav(
+                    app,
+                    2,
+                    "https://b.test/",
+                    &format!("https://b.test/noisy-{hop}"),
+                    true,
+                    true,
+                    true,
+                );
+            }
+            {
+                let a = actions.0.lock().unwrap_or_else(|e| e.into_inner());
+                assert!(
+                    a.keys().any(|(t, _)| *t == 1),
+                    "another tab's entries must not be evicted as overflow"
+                );
+            }
+            assert!(
+                take_action(app, 1, "https://a.test/quiet").is_some(),
+                "the quiet tab's single decision must still resolve"
+            );
+        });
+    }
 
     // --- the redirect-tab budget: a hostile page must not drive unbounded tabs or writes ---
 

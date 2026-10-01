@@ -205,213 +205,317 @@ fn aggregate_saves(saves: Vec<(&str, usize, Result<(), String>)>) -> ImportOutco
 /// pasted text it read "the export"), so that path now resolves through [`latest_export`]
 /// instead — the fallback got a real meaning ("the most recent export") out of a real
 /// directory listing, instead of guessing one name.
+///
+/// [`bulk`] is the background hand-off; the two `_blocking` functions below are its workers.
 pub fn dispatch<R: Runtime>(
     app: &AppHandle<R>,
     channel: &str,
     payload: &Value,
 ) -> Option<Result<Value, String>> {
     match channel {
-        "data.export" => {
-            // History + downloads are batched in memory — flush them so the export reads the
-            // latest rows from disk, not a stale file.
-            crate::history::flush(app);
-            crate::downloads::flush(app);
-            let mut bundle = Map::new();
-            bundle.insert("version".into(), json!(2));
-            bundle.insert("settings".into(), crate::settings::all(app));
-            for s in STORES {
-                // Full arrays incl. tombstones + sync envelopes (load_synced migrates any
-                // not-yet-migrated rows first).
-                bundle.insert((*s).into(), json!(jsonstore::load_synced(app, s)));
-            }
-            bundle.insert(
-                "customFilters".into(),
-                json!(crate::customfilters::load(app)),
-            );
-
-            let path = export_path(app);
-            let txt = serde_json::to_string_pretty(&Value::Object(bundle)).unwrap_or_default();
-            // Durable write, but no `.bak` sidecar next to the user's export file.
-            match jsonstore::write_atomic_no_backup(&path, txt.as_bytes()) {
-                Ok(()) => Some(Ok(json!({ "ok": true, "path": path.to_string_lossy() }))),
-                Err(e) => Some(Ok(json!({ "ok": false, "error": e.to_string() }))),
-            }
-        }
-
-        "data.import" => {
-            // Source: pasted JSON text from the in-app field, else the backup file
-            // (the path the client passed, or the default in Downloads). No native
-            // file picker — that renders in the OS's light theme, clashing with the UI.
-            //
-            // Every refusal below carries the SAME shape as a partial import — `ok: false`
-            // plus an EMPTY `failed` — so a caller can ask "did a write fail?" without
-            // first having to know whether the bundle even parsed.
-            let bundle: Value = match payload
-                .get("text")
-                .and_then(Value::as_str)
-                .filter(|s| !s.trim().is_empty())
-            {
-                Some(t) => match serde_json::from_str(t) {
-                    Ok(v) => v,
-                    Err(_) => return Some(Ok(json!({ "ok": false, "failed": [] }))),
-                },
-                None => {
-                    // No pasted text: read the most recent export. This used to read one
-                    // FIXED filename, which was only ever correct because every export
-                    // overwrote the last one.
-                    let Some(path) = latest_export(app) else {
-                        return Some(Ok(json!({ "ok": false, "failed": [] })));
-                    };
-                    let Ok(txt) = std::fs::read_to_string(&path) else {
-                        return Some(Ok(json!({ "ok": false, "failed": [] })));
-                    };
-                    match serde_json::from_str::<Value>(&txt) {
-                        Ok(v) => v,
-                        Err(_) => return Some(Ok(json!({ "ok": false, "failed": [] }))),
-                    }
-                }
-            };
-            // `history` and `downloads` are BATCHED: their live rows sit in an in-memory
-            // cache and a background thread rewrites the file from that cache every three
-            // seconds (see history.rs "Write batching"). Drop both caches BEFORE writing
-            // anything, not after.
-            //
-            // Writing the file first left a window in which the cache still held the
-            // pre-import rows AND was still marked dirty, so a flush tick landing in that
-            // window wrote the OLD rows straight back over the just-imported file — and the
-            // import reported success. Invalidate first and a concurrent flush finds nothing
-            // loaded and nothing dirty, so it cannot write anything at all.
-            crate::history::invalidate(app);
-            crate::downloads::invalidate(app);
-            let mut saves: Vec<(&str, usize, Result<(), String>)> = Vec::new();
-            let node = crate::sync_identity::node_id(app);
-            for s in STORES {
-                if let Some(arr) = bundle.get(*s).and_then(Value::as_array) {
-                    // Fill any gaps (a v1 or hand-edited bundle) AND re-stamp every LIVE row to
-                    // now, so the import counts as a modification made here rather than
-                    // inheriting the exporting machine's timestamps.
-                    //
-                    // This is load-bearing, not cosmetic: last-writer-wins is decided purely by
-                    // `hlc`, so a bundle that keeps its old stamps silently LOSES to whatever
-                    // the server already holds. The 2026-09-26 recovery is the concrete case —
-                    // the server still carried 104 `saved` tombstones stamped later in the day
-                    // than the bundle, so re-importing without this would have re-deleted the
-                    // rows it was restoring. See `jsonstore::restamp_after_import`, which also
-                    // explains why tombstones are deliberately left at their original stamp.
-                    let mut migrated = arr.clone();
-                    for it in migrated.iter_mut() {
-                        jsonstore::restamp_after_import(it, &node);
-                        // `savedAt` is the time the reading list *displays*. Leaving it at the
-                        // export date would make a just-restored page look months old, so the
-                        // import re-stamps it too — an import means "this is saved now".
-                        if *s == "saved" && !jsonstore::is_deleted(it) {
-                            if let Some(o) = it.as_object_mut() {
-                                o.insert("savedAt".into(), json!(jsonstore::now_ms()));
-                            }
-                        }
-                        // `saveDir` is the directory a download was written to, and
-                        // `downloads::trusted_download_path` accepts a row whose file lives
-                        // inside its own recorded `saveDir` — which is what makes a row
-                        // still openable after the download folder setting changes, and what
-                        // makes Android's rows (Kotlin writes into its app-private
-                        // `getExternalFilesDir("downloads")`, never the setting's path)
-                        // openable at all. A bundle is the one place a stranger's bytes
-                        // reach that check, so an imported row must NOT get to choose its
-                        // own trusted base: drop the field and the row falls back to the
-                        // strict "is it under the current download folder" test. The
-                        // `downloads` namespace is not in `sync_stores::SYNCABLE`, so this
-                        // strip is the whole attack surface, not one of three paths.
-                        if *s == "downloads" {
-                            if let Some(o) = it.as_object_mut() {
-                                o.remove("saveDir");
-                            }
-                        }
-                    }
-                    // The result is COLLECTED, not discarded: a store that cannot be written
-                    // is reported by name below instead of being reported as imported.
-                    saves.push((*s, arr.len(), jsonstore::save(app, s, &migrated)));
-                    // Test seam: a test can run a real background flush HERE, between this
-                    // store's write and the end of the import. See `test_support`'s
-                    // import/flush interleave hook for why that is the only place a flush
-                    // race is observable.
-                    #[cfg(test)]
-                    crate::test_support::import_tick();
-                }
-            }
-            let mut outcome = aggregate_saves(saves);
-            // Drop the two batched caches AGAIN, now that the files are written. The
-            // pre-loop invalidation above is what stops a flush clobbering the import; this
-            // one discards a visit or download event that `record`/`on_requested` captured
-            // from the file in the meantime, which would otherwise leave a DIRTY cache
-            // holding the pre-import rows and put the clobber back one flush later. In
-            // replace-mode the in-flight row is lost either way — the import says "history is
-            // this bundle now" — and the alternative is silently restoring the old rows.
-            crate::history::invalidate(app);
-            crate::downloads::invalidate(app);
-            let mut refused_settings: Vec<String> = Vec::new();
-            if let Some(settings) = bundle.get("settings") {
-                // Merges over the current values (not a wholesale replace) and validates each
-                // key through the same allowlist `settings.set` uses — see
-                // `settings::apply_imported` for why both matter.
-                //
-                // `settings` is deliberately NOT a `STORES` entry: it is merged rather than
-                // replaced and validated per key, so the loop above cannot see it. A failed
-                // merge is the same silent loss from the user's side of the screen as a failed
-                // store write, so it joins the same `failed` list rather than inventing a
-                // second reporting channel that the renderer would have to learn.
-                match crate::settings::apply_imported(app, settings) {
-                    Ok(refused) => refused_settings = refused,
-                    Err(e) => {
-                        eprintln!("[aegis] settings import did not land: {e}");
-                        outcome.failed.push("settings".to_string());
-                    }
-                }
-            }
-            if let Some(cf) = bundle.get("customFilters").and_then(Value::as_str) {
-                // Also stamps the customFilters sync record, and reports whether it landed.
-                if let Err(e) = crate::customfilters::write(app, cf) {
-                    eprintln!("[aegis] custom filters import did not land: {e}");
-                    outcome.failed.push("customFilters".to_string());
-                }
-            }
-            // Re-seed the in-memory allowlist + engine from the imported allowlist store.
-            crate::adblock::seed_from_disk(app);
-            // Custom filters / subs may have changed → re-apply ad-block everywhere.
-            crate::adblock_refresh::refresh(app);
-            // The remaining steps run even when a store write failed: a partial restore that
-            // abandoned the stores which DID land would be worse than the one it replaces, and
-            // the names in `failed` say exactly what is still on disk. `ok: false` is what stops
-            // the renderer from reloading the chrome (and wiping the message naming the
-            // failures) on the strength of a partial import.
-            Some(Ok(json!({
-                // Recomputed from `failed` rather than reusing the store loop's own verdict,
-                // because settings and customFilters join that list after the loop ran. Still
-                // exactly equivalent for the loop's own failures — `aggregate_saves` sets `ok`
-                // false iff it pushed a name.
-                "ok": outcome.failed.is_empty(),
-                // Only the stores that landed. A count for a store whose file was never
-                // written is the same kind of lie as the `ok: true` that used to be
-                // unconditional.
-                "counts": Value::Object(outcome.counts),
-                // Empty on success, and empty on the parse/read refusals above too — so a
-                // caller can ask "did a write fail?" without also having to know whether the
-                // bundle parsed.
-                "failed": outcome.failed,
-                // Non-empty only when a setting was refused. Surfaced rather than swallowed so
-                // a poisoned or misspelled key in a bundle is visible to the user instead of
-                // the import looking complete when it wasn't.
-                "refusedSettings": refused_settings,
-            })))
-        }
-
+        "data.export" => Some(Ok(bulk(app, "data.export", payload.clone()))),
+        "data.import" => Some(Ok(bulk(app, "data.import", payload.clone()))),
         _ => None,
     }
+}
+
+/// Hand a bulk-data channel to a background thread and answer the caller at once.
+///
+/// The `ipc` command is SYNCHRONOUS and wry delivers its message on the UI thread, so doing
+/// either of these inline froze the whole window for as long as the work took: an export
+/// flushes two batched stores, loads every store through the migration-capable loader,
+/// pretty-prints the whole bundle and fsyncs it; an import does all of that plus a
+/// re-stamp and a write of every store. The duration was never measured, which is exactly
+/// why it went unnoticed.
+///
+/// So the reply is now an acknowledgement (`{"ok":true,"pending":true}`) and the real
+/// outcome arrives on the `data.bulkDone` event, which `ipcClient` bridges back into the
+/// same promise every caller already awaits. This mirrors `subs::update_now`, the crate's
+/// existing answer to "the `ipc` thread must not do slow work", down to the shape of its
+/// reply; the renderer seam it needs is `src/lib/updateResult.ts`'s `awaitUpdateResult`,
+/// which already exists for the filter-list case.
+///
+/// The event carries the channel as well as the result, because a restore and an export can
+/// be in flight at once and each must resolve its own promise.
+///
+/// `ms` is the worker's own wall-clock measurement. It is reported rather than guessed:
+/// "the export is fast" was never true for a large bundle and never measured.
+fn bulk<R: Runtime>(app: &AppHandle<R>, channel: &'static str, payload: Value) -> Value {
+    let app2 = app.clone();
+    let payload2 = payload.clone();
+    let result_channel = channel.to_string();
+    std::thread::spawn(move || {
+        // Test seam: park here before doing anything, so a test can observe that the
+        // caller already has its reply while the work has provably not started.
+        #[cfg(test)]
+        crate::test_support::bulk_gate_tick();
+        let started = std::time::Instant::now();
+        let result = if result_channel == "data.export" {
+            export_blocking(&app2)
+        } else {
+            import_blocking(&app2, &payload2)
+        };
+        let ms = started.elapsed().as_millis();
+        // Measured, not asserted: report it either way, because a background thread that
+        // reports nothing is indistinguishable from one that died.
+        eprintln!("[aegis] {result_channel} finished in {ms}ms");
+        crate::emit_event(
+            &app2,
+            "data.bulkDone",
+            serde_json::json!({ "channel": result_channel, "ms": ms, "result": result }),
+        );
+    });
+    json!({ "ok": true, "pending": true, "channel": channel })
+}
+
+/// Run a bulk channel's real worker body SYNCHRONOUSLY, for a test in another module.
+///
+/// `data.export` / `data.import` answer with an acknowledgement and report the outcome on
+/// `data.bulkDone`, so `dispatch` alone cannot tell a test what a restore actually DID. Two
+/// kinds of test need that, and they are different questions:
+///
+///   - "did the hand-off happen?" — owned by `data::tests`, which uses the `BULK_GATE` to
+///     park the worker and observe the ack and the event.
+///   - "did the restore LAND this row / was this row refused?" — owned by the module that
+///     owns the row (`downloads`, `subs`), which has no reason to care about the event at
+///     all and would otherwise have to re-derive the two-hop protocol to assert its own
+///     invariant. Those tests call this.
+///
+/// It therefore deliberately does NOT cover the spawn, the event, or the acknowledgement:
+/// it runs the same body the worker runs, so a change to the work itself reds both kinds
+/// of test, and a change to the plumbing reds only the `data::tests` gate tests.
+#[cfg(test)]
+pub(crate) fn run_blocking_for_test<R: Runtime>(
+    channel: &str,
+    app: &AppHandle<R>,
+    payload: &Value,
+) -> Value {
+    match channel {
+        "data.export" => export_blocking(app),
+        "data.import" => import_blocking(app, payload),
+        // An unknown channel cannot be "run", and returning a silent `ok` would let a
+        // typo turn a test into a no-op that passes for the wrong reason.
+        other => panic!("run_blocking_for_test: not a bulk channel ({other})"),
+    }
+}
+
+/// The real `data.export`. Blocking — only [`bulk`] may call it.
+fn export_blocking<R: Runtime>(app: &AppHandle<R>) -> Value {
+    // History + downloads are batched in memory — flush them so the export reads the
+    // latest rows from disk, not a stale file.
+    crate::history::flush(app);
+    crate::downloads::flush(app);
+    let mut bundle = Map::new();
+    bundle.insert("version".into(), json!(2));
+    bundle.insert("settings".into(), crate::settings::all(app));
+    for s in STORES {
+        // Full arrays incl. tombstones + sync envelopes (load_synced migrates any
+        // not-yet-migrated rows first).
+        bundle.insert((*s).into(), json!(jsonstore::load_synced(app, s)));
+    }
+    bundle.insert(
+        "customFilters".into(),
+        json!(crate::customfilters::load(app)),
+    );
+
+    let path = export_path(app);
+    let txt = serde_json::to_string_pretty(&Value::Object(bundle)).unwrap_or_default();
+    // Durable write, but no `.bak` sidecar next to the user's export file.
+    match jsonstore::write_atomic_no_backup(&path, txt.as_bytes()) {
+        Ok(()) => json!({ "ok": true, "path": path.to_string_lossy() }),
+        Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+/// The real `data.import`. Blocking — only [`bulk`] may call it.
+fn import_blocking<R: Runtime>(app: &AppHandle<R>, payload: &Value) -> Value {
+    // Source: pasted JSON text from the in-app field, else the backup file
+    // (the path the client passed, or the default in Downloads). No native
+    // file picker — that renders in the OS's light theme, clashing with the UI.
+    //
+    // Every refusal below carries the SAME shape as a partial import — `ok: false`
+    // plus an EMPTY `failed` — so a caller can ask "did a write fail?" without
+    // first having to know whether the bundle even parsed.
+    let bundle: Value = match payload
+        .get("text")
+        .and_then(Value::as_str)
+        .filter(|s| !s.trim().is_empty())
+    {
+        Some(t) => match serde_json::from_str(t) {
+            Ok(v) => v,
+            Err(_) => return json!({ "ok": false, "failed": [] }),
+        },
+        None => {
+            // No pasted text: read the most recent export. This used to read one
+            // FIXED filename, which was only ever correct because every export
+            // overwrote the last one.
+            let Some(path) = latest_export(app) else {
+                return json!({ "ok": false, "failed": [] });
+            };
+            let Ok(txt) = std::fs::read_to_string(&path) else {
+                return json!({ "ok": false, "failed": [] });
+            };
+            match serde_json::from_str::<Value>(&txt) {
+                Ok(v) => v,
+                Err(_) => return json!({ "ok": false, "failed": [] }),
+            }
+        }
+    };
+    // `history` and `downloads` are BATCHED: their live rows sit in an in-memory
+    // cache and a background thread rewrites the file from that cache every three
+    // seconds (see history.rs "Write batching"). Drop both caches BEFORE writing
+    // anything, not after.
+    //
+    // Writing the file first left a window in which the cache still held the
+    // pre-import rows AND was still marked dirty, so a flush tick landing in that
+    // window wrote the OLD rows straight back over the just-imported file — and the
+    // import reported success. Invalidate first and a concurrent flush finds nothing
+    // loaded and nothing dirty, so it cannot write anything at all.
+    crate::history::invalidate(app);
+    crate::downloads::invalidate(app);
+    let mut saves: Vec<(&str, usize, Result<(), String>)> = Vec::new();
+    let node = crate::sync_identity::node_id(app);
+    for s in STORES {
+        if let Some(arr) = bundle.get(*s).and_then(Value::as_array) {
+            // Fill any gaps (a v1 or hand-edited bundle) AND re-stamp every LIVE row to
+            // now, so the import counts as a modification made here rather than
+            // inheriting the exporting machine's timestamps.
+            //
+            // This is load-bearing, not cosmetic: last-writer-wins is decided purely by
+            // `hlc`, so a bundle that keeps its old stamps silently LOSES to whatever
+            // the server already holds. The 2026-09-26 recovery is the concrete case —
+            // the server still carried 104 `saved` tombstones stamped later in the day
+            // than the bundle, so re-importing without this would have re-deleted the
+            // rows it was restoring. See `jsonstore::restamp_after_import`, which also
+            // explains why tombstones are deliberately left at their original stamp.
+            let mut migrated = arr.clone();
+            for it in migrated.iter_mut() {
+                jsonstore::restamp_after_import(it, &node);
+                // `savedAt` is the time the reading list *displays*. Leaving it at the
+                // export date would make a just-restored page look months old, so the
+                // import re-stamps it too — an import means "this is saved now".
+                if *s == "saved" && !jsonstore::is_deleted(it) {
+                    if let Some(o) = it.as_object_mut() {
+                        o.insert("savedAt".into(), json!(jsonstore::now_ms()));
+                    }
+                }
+                // `saveDir` is the directory a download was written to, and
+                // `downloads::trusted_download_path` accepts a row whose file lives
+                // inside its own recorded `saveDir` — which is what makes a row
+                // still openable after the download folder setting changes, and what
+                // makes Android's rows (Kotlin writes into its app-private
+                // `getExternalFilesDir("downloads")`, never the setting's path)
+                // openable at all. A bundle is the one place a stranger's bytes
+                // reach that check, so an imported row must NOT get to choose its
+                // own trusted base: drop the field and the row falls back to the
+                // strict "is it under the current download folder" test. The
+                // `downloads` namespace is not in `sync_stores::SYNCABLE`, so this
+                // strip is the whole attack surface, not one of three paths.
+                if *s == "downloads" {
+                    if let Some(o) = it.as_object_mut() {
+                        o.remove("saveDir");
+                    }
+                }
+            }
+            // The result is COLLECTED, not discarded: a store that cannot be written
+            // is reported by name below instead of being reported as imported.
+            saves.push((*s, arr.len(), jsonstore::save(app, s, &migrated)));
+            // Test seam: a test can run a real background flush HERE, between this
+            // store's write and the end of the import. See `test_support`'s
+            // import/flush interleave hook for why that is the only place a flush
+            // race is observable.
+            #[cfg(test)]
+            crate::test_support::import_tick();
+        }
+    }
+    let mut outcome = aggregate_saves(saves);
+    // Drop the two batched caches AGAIN, now that the files are written. The
+    // pre-loop invalidation above is what stops a flush clobbering the import; this
+    // one discards a visit or download event that `record`/`on_requested` captured
+    // from the file in the meantime, which would otherwise leave a DIRTY cache
+    // holding the pre-import rows and put the clobber back one flush later. In
+    // replace-mode the in-flight row is lost either way — the import says "history is
+    // this bundle now" — and the alternative is silently restoring the old rows.
+    crate::history::invalidate(app);
+    crate::downloads::invalidate(app);
+    let mut refused_settings: Vec<String> = Vec::new();
+    if let Some(settings) = bundle.get("settings") {
+        // Merges over the current values (not a wholesale replace) and validates each
+        // key through the same allowlist `settings.set` uses — see
+        // `settings::apply_imported` for why both matter.
+        //
+        // `settings` is deliberately NOT a `STORES` entry: it is merged rather than
+        // replaced and validated per key, so the loop above cannot see it. A failed
+        // merge is the same silent loss from the user's side of the screen as a failed
+        // store write, so it joins the same `failed` list rather than inventing a
+        // second reporting channel that the renderer would have to learn.
+        match crate::settings::apply_imported(app, settings) {
+            Ok(refused) => refused_settings = refused,
+            Err(e) => {
+                eprintln!("[aegis] settings import did not land: {e}");
+                outcome.failed.push("settings".to_string());
+            }
+        }
+    }
+    if let Some(cf) = bundle.get("customFilters").and_then(Value::as_str) {
+        // Also stamps the customFilters sync record, and reports whether it landed.
+        if let Err(e) = crate::customfilters::write(app, cf) {
+            eprintln!("[aegis] custom filters import did not land: {e}");
+            outcome.failed.push("customFilters".to_string());
+        }
+    }
+    // Re-seed the in-memory allowlist + engine from the imported allowlist store.
+    crate::adblock::seed_from_disk(app);
+    // Custom filters / subs may have changed → re-apply ad-block everywhere.
+    crate::adblock_refresh::refresh(app);
+    // The remaining steps run even when a store write failed: a partial restore that
+    // abandoned the stores which DID land would be worse than the one it replaces, and
+    // the names in `failed` say exactly what is still on disk. `ok: false` is what stops
+    // the renderer from reloading the chrome (and wiping the message naming the
+    // failures) on the strength of a partial import.
+    json!({
+        // Recomputed from `failed` rather than reusing the store loop's own verdict,
+        // because settings and customFilters join that list after the loop ran. Still
+        // exactly equivalent for the loop's own failures — `aggregate_saves` sets `ok`
+        // false iff it pushed a name.
+        "ok": outcome.failed.is_empty(),
+        // Only the stores that landed. A count for a store whose file was never
+        // written is the same kind of lie as the `ok: true` that used to be
+        // unconditional.
+        "counts": Value::Object(outcome.counts),
+        // Empty on success, and empty on the parse/read refusals above too — so a
+        // caller can ask "did a write fail?" without also having to know whether the
+        // bundle parsed.
+        "failed": outcome.failed,
+        // Non-empty only when a setting was refused. Surfaced rather than swallowed so
+        // a poisoned or misspelled key in a bundle is visible to the user instead of
+        // the import looking complete when it wasn't.
+        "refusedSettings": refused_settings,
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::with_tmp_app;
+    use crate::test_support::{with_tmp_app, MockRuntime};
+    use tauri::Listener;
+
+    /// Run the export worker the way its thread runs it, and hand back its real result.
+    ///
+    /// `dispatch` deliberately no longer does the work inline: it parks a thread and answers
+    /// `{"ok":true,"pending":true}`. The tests of the export's own RESULT therefore call
+    /// [`export_blocking`] — the production worker body, not a copy of it — and the hand-off
+    /// itself is covered separately by
+    /// `an_export_answers_before_the_work_has_been_done`. Between the two, every line of the
+    /// export is still covered, and neither test can pass without the other existing.
+    fn export_now(app: &AppHandle<MockRuntime>) -> Value {
+        export_blocking(app)
+    }
+
+    /// [`export_now`] for the import half — same reasoning, same production body.
+    fn import_now(app: &AppHandle<MockRuntime>, payload: &Value) -> Value {
+        import_blocking(app, payload)
+    }
 
     /// The collision suffix is parsed as a NUMBER, and must order NEWEST-last even when the
     /// filenames say otherwise. A string comparison gets this backwards — `-2.json` sorts
@@ -549,9 +653,7 @@ mod tests {
                 "customFilters": "||bundle.test^\n",
                 "favorites": [{ "name": "F", "url": "https://fav.test/" }],
             });
-            let res = super::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                .expect("data.import is handled")
-                .expect("a partial import is Ok(json), not Err");
+            let res = import_now(app, &json!({ "text": bundle.to_string() }));
 
             assert_eq!(
                 res.get("ok").and_then(Value::as_bool),
@@ -606,9 +708,7 @@ mod tests {
                 "favorites": [{ "name": "F", "url": "https://fav.test/" }],
                 "history": [{ "url": "https://hist.test/", "title": "H" }],
             });
-            let res = super::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                .expect("data.import is handled")
-                .expect("a refused import is Ok(json), not Err");
+            let res = import_now(app, &json!({ "text": bundle.to_string() }));
 
             assert_eq!(
                 res.get("ok").and_then(Value::as_bool),
@@ -701,9 +801,7 @@ mod tests {
                     "state": "complete",
                 }],
             });
-            let res = super::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                .expect("data.import is handled")
-                .expect("an import is Ok(json), not Err");
+            let res = import_now(app, &json!({ "text": bundle.to_string() }));
             assert_eq!(
                 res.get("ok").and_then(Value::as_bool),
                 Some(true),
@@ -795,7 +893,7 @@ mod tests {
             seed_all(app);
             // No path is accepted from the payload any more, so read the target back
             // off the response — which is also what the Data tab shows the user.
-            let res = dispatch(app, "data.export", &json!({})).unwrap().unwrap();
+            let res = export_now(app);
             assert_eq!(res.get("ok").and_then(Value::as_bool), Some(true));
             let path = std::path::PathBuf::from(res.get("path").unwrap().as_str().unwrap());
             let txt = std::fs::read_to_string(&path).unwrap();
@@ -841,7 +939,7 @@ mod tests {
         // 1) Export from app A (seeded), capturing the bundle text.
         let bundle_text = with_tmp_app(|app| {
             seed_all(app);
-            let res = dispatch(app, "data.export", &json!({})).unwrap().unwrap();
+            let res = export_now(app);
             let path = std::path::PathBuf::from(res.get("path").unwrap().as_str().unwrap());
             std::fs::read_to_string(&path).unwrap()
         });
@@ -856,9 +954,7 @@ mod tests {
                 "fresh app must have empty favorites"
             );
 
-            let res = dispatch(app, "data.import", &json!({ "text": bundle_text }))
-                .unwrap()
-                .unwrap();
+            let res = import_now(app, &json!({ "text": bundle_text }));
             assert_eq!(
                 res.get("ok").and_then(Value::as_bool),
                 Some(true),
@@ -965,14 +1061,27 @@ mod tests {
         with_tmp_app(|app| {
             seed_all(app);
             let decoy = app.path().app_data_dir().unwrap().join("decoy.json");
-            let res = dispatch(
+            // Driven through `dispatch`, not through `export_now`, because the claim is about
+            // what the renderer can influence — and `export_now` takes no payload at all,
+            // which is the structural half of the same guarantee.
+            let (parked, resume) = crate::test_support::set_bulk_gate();
+            let ack = dispatch(
                 app,
                 "data.export",
                 &json!({ "path": decoy.to_string_lossy() }),
             )
             .unwrap()
             .unwrap();
-            assert_eq!(res.get("ok").and_then(Value::as_bool), Some(true));
+            assert_eq!(ack.get("pending").and_then(Value::as_bool), Some(true));
+            parked
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("the export worker never reached the gate");
+            // Subscribe BEFORE releasing the worker, or a fast export emits into nobody.
+            let rx = bulk_listener(app);
+            let _ = resume.send(());
+            let done = await_bulk(&rx, "data.export");
+            let res = done.get("result").expect("the event must carry the result");
+            assert_eq!(res.get("ok").and_then(Value::as_bool), Some(true), "{res}");
             let chosen = std::path::PathBuf::from(res.get("path").unwrap().as_str().unwrap());
             assert_ne!(
                 chosen, decoy,
@@ -987,9 +1096,7 @@ mod tests {
     #[test]
     fn import_of_garbage_text_returns_not_ok() {
         with_tmp_app(|app| {
-            let res = dispatch(app, "data.import", &json!({ "text": "{ not json" }))
-                .unwrap()
-                .unwrap();
+            let res = import_now(app, &json!({ "text": "{ not json" }));
             assert_eq!(
                 res.get("ok").and_then(Value::as_bool),
                 Some(false),
@@ -1011,9 +1118,7 @@ mod tests {
             crate::settings::write(app, &json!({ "homeUrl": "https://keepme.test/" }))
                 .expect("settings fixture write");
             let bundle = json!({ "settings": { "homeUrl": "file:///etc/passwd" } });
-            let res = dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                .unwrap()
-                .unwrap();
+            let res = import_now(app, &json!({ "text": bundle.to_string() }));
             assert_eq!(
                 res.get("ok").and_then(Value::as_bool),
                 Some(true),
@@ -1054,9 +1159,7 @@ mod tests {
             .expect("settings fixture write");
             // A bundle that mentions exactly one setting.
             let bundle = json!({ "settings": { "homeUrl": "https://imported.test/" } });
-            dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                .unwrap()
-                .unwrap();
+            import_now(app, &json!({ "text": bundle.to_string() }));
             let s = crate::settings::all(app);
             assert_eq!(
                 s.get("homeUrl").and_then(Value::as_str),
@@ -1102,9 +1205,7 @@ mod tests {
                     "savedAt": old,
                 }],
             });
-            let res = dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                .expect("data.import is owned by this module")
-                .expect("a well-formed bundle must import cleanly");
+            let res = import_now(app, &json!({ "text": bundle.to_string() }));
             assert_eq!(res.get("ok").and_then(Value::as_bool), Some(true));
             let row = &crate::jsonstore::load(app, "saved")[0];
             let hlc = crate::sync_envelope::from_value(row).expect("imported row must have an hlc");
@@ -1145,9 +1246,7 @@ mod tests {
                     "savedAt": old,
                 }],
             });
-            let res = dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                .expect("data.import is owned by this module")
-                .expect("a well-formed bundle must import cleanly");
+            let res = import_now(app, &json!({ "text": bundle.to_string() }));
             assert_eq!(res.get("ok").and_then(Value::as_bool), Some(true));
             let row = &crate::jsonstore::load(app, "saved")[0];
             assert!(
@@ -1174,9 +1273,7 @@ mod tests {
     fn import_refuses_an_unknown_setting_key() {
         with_tmp_app(|app| {
             let bundle = json!({ "settings": { "totallyNotASetting": "x" } });
-            let res = dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                .unwrap()
-                .unwrap();
+            let res = import_now(app, &json!({ "text": bundle.to_string() }));
             assert_eq!(
                 res.get("refusedSettings").and_then(Value::as_array),
                 Some(&vec![json!("totallyNotASetting")])
@@ -1201,9 +1298,7 @@ mod tests {
                 "favorites": [{ "id": 1, "url": "https://partial.test/", "name": "Partial" }],
                 "settings": { "homeUrl": "https://partial.test/" }
             });
-            let res = dispatch(app, "data.import", &json!({ "text": partial.to_string() }))
-                .unwrap()
-                .unwrap();
+            let res = import_now(app, &json!({ "text": partial.to_string() }));
             assert_eq!(
                 res.get("ok").and_then(Value::as_bool),
                 Some(true),
@@ -1226,6 +1321,313 @@ mod tests {
             assert!(
                 hist.as_array().unwrap().is_empty(),
                 "absent store (history) must stay empty after partial import"
+            );
+        });
+    }
+
+    /// Every backup/transfer domain the platform knows about, verbatim from
+    /// https://developer.android.com/guide/topics/data/autobackup ("Syntax for include and
+    /// exclude elements"). `path="."` is the whole domain, recursively. If a future Android
+    /// release adds a domain, this list must gain it: the platform's own fallback for an
+    /// unlisted domain is to INCLUDE it.
+    const BACKUP_DOMAINS: [&str; 9] = [
+        "root",
+        "file",
+        "database",
+        "sharedpref",
+        "external",
+        "device_root",
+        "device_file",
+        "device_database",
+        "device_sharedpref",
+    ];
+
+    /// The three transfer modes a backup rule set can govern. An ABSENT mode is a fully
+    /// ENABLED one ("if there are no rules for a particular backup mode … that mode is fully
+    /// enabled for all content except for no-backup and cache directories"), so each one has
+    /// to be spelled out rather than inferred from the other two.
+    const TRANSFER_MODES: [&str; 3] =
+        ["cloud-backup", "device-transfer", "cross-platform-transfer"];
+
+    fn read_android_res(rel: &str) -> String {
+        let path = format!("{}/{rel}", env!("CARGO_MANIFEST_DIR"));
+        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"))
+    }
+
+    /// Strip XML comments. Mandatory here, not optional: the manifest comment this test
+    /// pins QUOTES the very attributes being asserted, so a raw-text `contains` would match
+    /// the prose documenting the fix instead of the fix.
+    fn without_xml_comments(src: &str) -> String {
+        let mut out = String::with_capacity(src.len());
+        let mut rest = src;
+        loop {
+            match rest.find("<!--") {
+                None => {
+                    out.push_str(rest);
+                    return out;
+                }
+                Some(start) => {
+                    out.push_str(&rest[..start]);
+                    let after = &rest[start..];
+                    match after.find("-->") {
+                        Some(end) => rest = &after[end + 3..],
+                        None => return out,
+                    }
+                }
+            }
+        }
+    }
+
+    /// No store this app writes may leave the device through a platform backup or transfer.
+    ///
+    /// This is a STRUCTURAL pin, not a behavioural one, and the distinction matters: there
+    /// is no Kotlin/XML test source set, and whether a given manufacturer still honours
+    /// these rules is only knowable on that manufacturer's device. What this test does prove
+    /// is that both halves are present and complete — the `dataExtractionRules` attribute on
+    /// `<application>`, and an exclusion for every documented domain under every documented
+    /// transfer mode — which is precisely the pair that was previously incomplete.
+    ///
+    /// `android:allowBackup="false"` alone is NOT sufficient and is asserted here only as
+    /// the still-required pre-31 cloud half: Google documents that on some manufacturers'
+    /// devices it disables cloud backup but not device-to-device transfer.
+    #[test]
+    fn no_backup_or_device_transfer_transport_is_left_to_a_platform_default() {
+        let manifest = without_xml_comments(&read_android_res(
+            "gen/android/app/src/main/AndroidManifest.xml",
+        ));
+        let app_tag = manifest
+            .split_once("<application")
+            .and_then(|(_, after)| after.split_once('>').map(|(head, _)| head))
+            .unwrap_or_else(|| panic!("AndroidManifest.xml has no <application> element"));
+        assert!(
+            app_tag.contains("android:allowBackup=\"false\""),
+            "the pre-31 cloud path needs allowBackup=\"false\" on <application>: {app_tag}"
+        );
+        assert!(
+            app_tag.contains("android:dataExtractionRules=\"@xml/data_extraction_rules\""),
+            "<application> must carry android:dataExtractionRules, because allowBackup=\\\"false\\\" \
+             does not stop device-to-device transfer on every manufacturer's device: {app_tag}"
+        );
+
+        let rules = without_xml_comments(&read_android_res(
+            "gen/android/app/src/main/res/xml/data_extraction_rules.xml",
+        ));
+        for mode in TRANSFER_MODES {
+            let body = rules
+                .split_once(&format!("<{mode}"))
+                .and_then(|(_, after)| after.split_once(&format!("</{mode}>")))
+                .map(|(head, _)| head)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "<{mode}> is missing from data_extraction_rules.xml; an ABSENT mode \
+                             is a fully ENABLED one"
+                    )
+                });
+            let mut excluded: Vec<&str> = Vec::new();
+            for line in body.lines() {
+                if !line.contains("<exclude") {
+                    continue;
+                }
+                let after = line
+                    .split_once("domain=\"")
+                    .unwrap_or_else(|| panic!("an <exclude> in <{mode}> has no domain: {line}"))
+                    .1;
+                let end = after.find('"').unwrap_or_else(|| {
+                    panic!("an <exclude> in <{mode}> has an unclosed domain: {line}")
+                });
+                excluded.push(&after[..end]);
+            }
+            // Set equality, not "contains": a missing domain must red, and so must one that
+            // is not in the documented set, because that is either a typo the platform would
+            // silently ignore or a future domain nobody remembered to exclude.
+            let mut want: Vec<&str> = BACKUP_DOMAINS.to_vec();
+            let mut got = excluded.clone();
+            want.sort_unstable();
+            got.sort_unstable();
+            assert_eq!(
+                got, want,
+                "<{mode}> must exclude exactly every documented backup domain; the platform \
+                 includes anything not named"
+            );
+            // `domain` alone is not a rule: both attributes are required, and `path="."`
+            // is what makes the exclusion recursive over the whole domain.
+            let dotted = body.matches("path=\".\"").count();
+            assert_eq!(
+                dotted,
+                BACKUP_DOMAINS.len(),
+                "<{mode}> must give every exclusion path=\".\", or the rule names a domain \
+                 without covering it"
+            );
+        }
+    }
+
+    /// Install the ONE-SHOT listener for `data.bulkDone` and hand back its receiver.
+    ///
+    /// Split from the wait because ORDER is load-bearing and getting it wrong fails the test
+    /// for the wrong reason. The listener must exist BEFORE the worker is released from the
+    /// gate: a small export finishes in microseconds, so releasing first and subscribing
+    /// second loses the event into a subscription that did not exist yet, and the test then
+    /// fails by TIMING OUT rather than by proving anything. Production has the same ordering
+    /// requirement — `awaitUpdateResult` subscribes before it kicks — which is the other
+    /// reason the core emits the result instead of returning it.
+    fn bulk_listener<R: tauri::Runtime>(
+        app: &tauri::AppHandle<R>,
+    ) -> std::sync::mpsc::Receiver<Value> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _id = app.listen("data:bulkDone", move |e| {
+            let _ = tx.send(serde_json::from_str::<Value>(e.payload()).unwrap_or(Value::Null));
+        });
+        rx
+    }
+
+    /// Wait for the event `bulk_listener` is subscribed to. `channel` names the request in the
+    /// panic so a timeout says which of the pair was lost.
+    fn await_bulk(rx: &std::sync::mpsc::Receiver<Value>, channel: &str) -> Value {
+        rx.recv_timeout(std::time::Duration::from_secs(30))
+            .unwrap_or_else(|e| panic!("`{channel}` never reported its result: {e}"))
+    }
+
+    /// The export must be handed to a thread, not run inside the IPC call.
+    ///
+    /// The defect is a freeze, so the observable is ORDER: the caller has its answer while
+    /// the work is provably still pending. Timing alone could not decide that — a small
+    /// export finishes in microseconds, and a slow one would make a wall-clock assertion
+    /// flaky rather than decisive — so the worker is parked on `test_support`'s gate and the
+    /// assertions below are made while it is provably parked. Restoring the old inline body
+    /// makes this test fail on its first line, because the reply would then carry the FINISHED
+    /// result (a `path`, no `pending`) with the file already on disk.
+    #[test]
+    fn an_export_answers_before_the_work_has_been_done() {
+        with_tmp_app(|app| {
+            let (parked, resume) = crate::test_support::set_bulk_gate();
+            let path = export_path(app);
+            assert!(
+                !path.exists(),
+                "precondition: the export file must not exist yet — got {path:?}"
+            );
+
+            let res = dispatch(app, "data.export", &json!({}))
+                .expect("data.export is owned by this module")
+                .expect("the hand-off is Ok(ack), not Err");
+            assert_eq!(
+                res.get("ok").and_then(Value::as_bool),
+                Some(true),
+                "the caller must be told the request was taken"
+            );
+            assert_eq!(
+                res.get("pending").and_then(Value::as_bool),
+                Some(true),
+                "the reply must SAY it is an acknowledgement, or a caller cannot tell a \
+                 pending request from a finished one"
+            );
+            assert_eq!(
+                res.get("channel").and_then(Value::as_str),
+                Some("data.export"),
+                "the reply must name the channel, so a caller with two in flight can tell \
+                 which one this is"
+            );
+            assert!(
+                res.get("path").is_none(),
+                "the reply must not carry a path yet: nothing has been written"
+            );
+
+            // The worker parks HERE, before it touches anything. Seeing the park is what
+            // makes "the work has not been done" an observation instead of an assumption.
+            parked
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("the export worker never reached the gate — it is not running inline");
+            assert!(
+                !path.exists(),
+                "the export file must still not exist while the worker is parked"
+            );
+
+            // Subscribe BEFORE releasing the worker, or a fast export emits into nobody.
+            let rx = bulk_listener(app);
+            let _ = resume.send(());
+            let done = await_bulk(&rx, "data.export");
+            assert_eq!(
+                done.get("channel").and_then(Value::as_str),
+                Some("data.export"),
+                "the event must name the channel it is reporting on"
+            );
+            assert!(
+                done.get("ms").and_then(Value::as_u64).is_some(),
+                "the event must carry the worker's own measurement, not a guess"
+            );
+            let result = done.get("result").expect("the event must carry the result");
+            assert_eq!(
+                result.get("ok").and_then(Value::as_bool),
+                Some(true),
+                "the real export must succeed: {result}"
+            );
+            let written = std::path::PathBuf::from(result.get("path").unwrap().as_str().unwrap());
+            assert!(
+                written.exists(),
+                "the event must report a path that exists — {written:?}"
+            );
+        });
+    }
+
+    /// The same hand-off for an import, and additionally that the work really happened once
+    /// the event arrives. An import is the heavier of the two (it writes every store), so
+    /// "it is on a thread now" is the same claim and needs the same proof.
+    #[test]
+    fn an_import_answers_before_the_work_has_been_done() {
+        with_tmp_app(|app| {
+            // A minimal bundle with one favorite. Written by hand rather than exported: this
+            // test is about the HAND-OFF, and calling `with_tmp_app` inside it would take the
+            // process-global test lock twice (`with_tmp_app` is not reentrant) and deadlock.
+            let bundle = json!({
+                "version": 2,
+                "favorites": [{ "id": 1, "url": "https://bulk.test/", "name": "Bulk" }],
+            });
+
+            let (parked, resume) = crate::test_support::set_bulk_gate();
+            let res = dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
+                .expect("data.import is owned by this module")
+                .expect("the hand-off is Ok(ack), not Err");
+            assert_eq!(
+                res.get("pending").and_then(Value::as_bool),
+                Some(true),
+                "the caller must be told the import is pending, not finished"
+            );
+            assert_eq!(
+                res.get("channel").and_then(Value::as_str),
+                Some("data.import")
+            );
+            assert!(
+                jsonstore::live(jsonstore::load_synced(app, "favorites")).is_empty(),
+                "precondition: this app starts with no favorites of its own"
+            );
+
+            parked
+                .recv_timeout(std::time::Duration::from_secs(30))
+                .expect("the import worker never reached the gate — it is not running inline");
+            assert!(
+                jsonstore::live(jsonstore::load_synced(app, "favorites")).is_empty(),
+                "nothing may be written while the worker is parked"
+            );
+
+            // Subscribe BEFORE releasing the worker, or a fast export emits into nobody.
+            let rx = bulk_listener(app);
+            let _ = resume.send(());
+            let done = await_bulk(&rx, "data.import");
+            assert_eq!(
+                done.get("channel").and_then(Value::as_str),
+                Some("data.import")
+            );
+            assert_eq!(
+                done.get("result")
+                    .unwrap()
+                    .get("ok")
+                    .and_then(Value::as_bool),
+                Some(true),
+                "the real import must succeed: {}",
+                done.get("result").unwrap()
+            );
+            assert!(
+                !jsonstore::live(jsonstore::load_synced(app, "favorites")).is_empty(),
+                "the imported favorite must be on disk once the event has arrived"
             );
         });
     }

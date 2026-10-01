@@ -16,6 +16,8 @@
 //! Either path falls back to the passphrase-wrapped file, or in-memory-only
 //! if no passphrase is set, on any error.
 use crate::crypto::{hex, unhex, RootSecret};
+#[cfg(test)]
+use std::cell::RefCell;
 use tauri::{AppHandle, Manager, Runtime};
 use zeroize::Zeroize;
 // Only the DESKTOP keyring paths touch a `Zeroizing` (see `keyring_set`), and that fn is
@@ -152,9 +154,90 @@ fn salt_path<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::PathBuf> {
         .map(|d| d.join("sync-device-salt.json"))
 }
 
+/// 16 fresh random bytes for the per-install device salt.
+///
+/// The old code was `let _ = getrandom::getrandom(&mut salt);` on an all-zero array: an RNG
+/// failure was DISCARDED and the all-zero salt was persisted, and `crypto::device_signing_seed`
+/// then derived `HKDF(root, "device-sign:" + 16 zero bytes)` — an identity **every install of
+/// every account would share**, silently. That is exactly the property `removeDevice` exists
+/// to have: revoking one device would revoke all of them, or none.
+///
+/// So a failure must be an ERROR the caller can report, never a value. `getrandom` failing
+/// means the OS CSPRNG is unavailable, which is unrecoverable on every platform this ships
+/// to; there is no safe fallback that is not a constant. Retry once (a transient EAGAIN from
+/// `getrandom(2)` under early-boot entropy pressure is the realistic case), then say so.
+fn fresh_salt() -> Result<[u8; 16], String> {
+    let mut salt = [0u8; 16];
+    match rng_fill(&mut salt) {
+        Ok(()) => Ok(salt),
+        Err(first) => match rng_fill(&mut salt) {
+            Ok(()) => Ok(salt),
+            Err(second) => Err(format!(
+                "the system random number generator failed ({first}, then {second}), so this \
+                 install cannot be given a distinct identity — refusing to enable sync rather \
+                 than signing with a shared key"
+            )),
+        },
+    }
+}
+
+/// The CSPRNG, unless a test has poisoned it (see [`set_rng_hook`]).
+#[cfg(test)]
+fn rng_fill(buf: &mut [u8]) -> Result<(), String> {
+    RNG_HOOK.with(|h| match h.borrow_mut().as_mut() {
+        Some(f) => f(buf),
+        None => getrandom::getrandom(buf).map_err(|e| e.to_string()),
+    })
+}
+
+#[cfg(not(test))]
+fn rng_fill(buf: &mut [u8]) -> Result<(), String> {
+    getrandom::getrandom(buf).map_err(|e| e.to_string())
+}
+
+// The seam that makes "we REFUSE rather than sign with a shared key" testable: there is no
+// way to make the operating system's CSPRNG fail from a test, so the failure has to be
+// injectable. Without it, the contract above is a comment nobody can hold up — and the bug it
+// guards (an all-zero salt persisted, giving every install of every account the same signing
+// key) is exactly the kind that only shows up in production.
+//
+// Thread-local, mirroring `test_support::IMPORT_HOOK`: the caller needs no `Send`/`'static`
+// plumbing, and `with_tmp_app` serialises every AppHandle test on one lock, so the install
+// that draws the salt and the test that poisoned the RNG are the same thread. A hook must not
+// re-enter `rng_fill`, or the borrow would panic — none of them do.
+#[cfg(test)]
+type RngHook = Box<dyn FnMut(&mut [u8]) -> Result<(), String>>;
+
+#[cfg(test)]
+thread_local! {
+    static RNG_HOOK: RefCell<Option<RngHook>> = RefCell::new(None);
+}
+
+/// Make the CSPRNG call fail (or succeed) as `f` decides, until the returned guard is dropped.
+/// Replaces any previous hook. Test-only.
+#[cfg(test)]
+pub fn set_rng_hook(f: impl FnMut(&mut [u8]) -> Result<(), String> + 'static) -> RngHookGuard {
+    RNG_HOOK.with(|h| *h.borrow_mut() = Some(Box::new(f)));
+    RngHookGuard
+}
+
+/// Clears the hook on drop — see [`set_rng_hook`].
+#[cfg(test)]
+pub struct RngHookGuard;
+
+#[cfg(test)]
+impl Drop for RngHookGuard {
+    fn drop(&mut self) {
+        RNG_HOOK.with(|h| *h.borrow_mut() = None);
+    }
+}
+
 /// The per-install 16-byte salt (read-or-create) that makes this device's signing key
 /// distinct, so `removeDevice` can revoke exactly one install. Never exported.
-pub fn device_local_salt<R: Runtime>(app: &AppHandle<R>) -> Vec<u8> {
+///
+/// `Err` when a NEW salt is needed and the OS random number generator is unavailable; the
+/// caller must refuse to enable sync rather than proceed (see [`fresh_salt`]).
+pub fn device_local_salt<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, String> {
     if let Some(p) = salt_path(app) {
         if let Some(salt) = crate::jsonstore::read_with_backup(&p)
             .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
@@ -166,20 +249,17 @@ pub fn device_local_salt<R: Runtime>(app: &AppHandle<R>) -> Vec<u8> {
             .and_then(|s| unhex(&s))
             .filter(|s| s.len() == 16)
         {
-            return salt;
+            return Ok(salt);
         }
-        let mut salt = [0u8; 16];
-        let _ = getrandom::getrandom(&mut salt);
+        let salt = fresh_salt()?;
         let txt =
             serde_json::to_string(&serde_json::json!({ "salt": hex(&salt) })).unwrap_or_default();
         if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
             eprintln!("[aegis] failed to persist device salt: {e}");
         }
-        return salt.to_vec();
+        return Ok(salt.to_vec());
     }
-    let mut salt = [0u8; 16];
-    let _ = getrandom::getrandom(&mut salt);
-    salt.to_vec()
+    Ok(fresh_salt()?.to_vec())
 }
 
 // --- Android hardware Keystore (via the Kotlin AegisKeystore up-call) ---
@@ -608,6 +688,53 @@ pub fn clear_root<R: Runtime>(app: &AppHandle<R>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(test)]
+    use std::rc::Rc;
+
+    // The bug this pins: `let _ = getrandom::getrandom(&mut salt);` on an all-zero array
+    // discarded an RNG failure and returned the zeros, which were then PERSISTED. Every
+    // install of every account would derive the same device signing key from them — the
+    // per-install property `removeDevice` exists to have, gone silently.
+    //
+    // The observable is the salt: an all-zero one must never come out, and a device that
+    // cannot get a real one must REFUSE (see `sync::enable_with_root`) rather than proceed.
+    #[test]
+    fn an_unavailable_random_number_generator_never_yields_a_shared_salt() {
+        let _hook = set_rng_hook(|_buf| Err("no entropy source available".into()));
+        let err =
+            fresh_salt().expect_err("an RNG that cannot produce a salt must not be papered over");
+        assert!(
+            err.contains("random number generator failed") && err.contains("no entropy source"),
+            "the message must name both the cause and the consequence: {err}"
+        );
+    }
+
+    #[test]
+    fn a_transient_random_failure_is_retried_rather_than_surfaced() {
+        // The realistic failure is early-boot entropy pressure (a single EAGAIN), so one
+        // retry is what keeps a transient blip from refusing an install outright.
+        let attempts = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let seen = Rc::clone(&attempts);
+        let _hook = set_rng_hook(move |buf: &mut [u8]| {
+            let n = seen.get();
+            seen.set(n + 1);
+            if n == 0 {
+                return Err("temporarily unavailable".into());
+            }
+            buf.fill(0xAB);
+            Ok(())
+        });
+        let salt = fresh_salt().expect("a first-draw failure must be retried, not reported");
+        assert_eq!(
+            attempts.get(),
+            2,
+            "exactly one retry, then the salt is accepted"
+        );
+        assert!(
+            salt.iter().all(|b| *b == 0xAB),
+            "the salt must be what the successful draw produced"
+        );
+    }
 
     /// The keychain tests below all share ONE keyring entry (the real KEYRING_USER), so
     /// cargo's parallel test threads would clobber each other. They run in their own

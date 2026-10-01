@@ -909,16 +909,27 @@ mod tests {
                 .join("outside.txt");
             std::fs::write(&outside, "||marker-from-outside-the-cache-dir^\n").unwrap();
 
-            // Plant the row the way a pasted backup does: through the real import.
-            let bundle = json!({ "subs": [{
-                "listId": "../outside",
-                "url": "https://x.test/outside.txt",
-                "enabled": true,
-            }]});
-            let res =
-                crate::data::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                    .expect("data.import is handled")
-                    .expect("a refused import is Ok(json), not Err");
+            // A BENIGN row in the SAME bundle, with a real cache file inside the cache dir.
+            // Without it this test proves nothing on its own: "the imported text does not
+            // contain the outside marker" is also what an import that DID NOTHING produces.
+            // The control is what makes the absence mean "refused" rather than "never ran".
+            let inside = subs_dir(app).join("inside.txt");
+            std::fs::write(&inside, "||marker-from-inside-the-cache-dir^\n").unwrap();
+
+            // Plant the rows the way a pasted backup does: through the real import.
+            let bundle = json!({ "subs": [
+                { "listId": "../outside", "url": "https://x.test/outside.txt", "enabled": true },
+                { "listId": "inside", "url": "https://x.test/inside.txt", "enabled": true },
+            ]});
+            // `data.import` answers with an acknowledgement and reports the outcome on
+            // `data.bulkDone`, so a test that cares WHAT the restore did runs the worker's
+            // body directly instead of re-deriving the two-hop protocol. The hand-off is
+            // `data::tests`' subject, not this one's.
+            let res = crate::data::run_blocking_for_test(
+                "data.import",
+                app,
+                &json!({ "text": bundle.to_string() }),
+            );
             assert_eq!(
                 res.get("ok").and_then(Value::as_bool),
                 Some(true),
@@ -926,6 +937,11 @@ mod tests {
             );
 
             let text = enabled_text(app);
+            assert!(
+                text.contains("marker-from-inside-the-cache-dir"),
+                "POSITIVE CONTROL: the benign row from the same bundle must be read, or this \
+                 test cannot tell a refusal from an import that never ran"
+            );
             assert!(
                 !text.contains("marker-from-outside-the-cache-dir"),
                 "an enabled row must not pull filter text in from outside the cache dir \

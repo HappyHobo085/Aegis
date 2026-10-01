@@ -197,10 +197,49 @@ pub fn merge_into<R: Runtime>(app: &AppHandle<R>, name: &str, remote: &[Value]) 
 fn merge_into_locked<R: Runtime>(app: &AppHandle<R>, name: &str, remote: &[Value]) -> Vec<String> {
     let node = crate::sync_identity::node_id(app);
     let local = read_all(app, name);
-    let (mut merged, mut changed) = merge_records(local, remote, &node, crate::jsonstore::now_ms());
+    let (mut merged, changed) = merge_records(local, remote, &node, crate::jsonstore::now_ms());
+    // Which normalized keys this pass actually learned FROM A PEER — i.e. keys held by a row a
+    // remote record landed on. Captured before the dedup below appends its own losers, or the
+    // gate would be satisfied by the very act it guards.
+    //
+    // THIS GATE IS THE FIX for a silent data loss. `duplicate_losers` used to run
+    // unconditionally over the whole local array on every pass, including one where the server
+    // returned nothing. It groups LIVE rows by `normalize_url`, which drops the `#fragment` and
+    // any trailing slash, and `favorites.add` stored URLs verbatim with no dedup at all — so
+    // favoriting `https://x/p` from the address bar and `https://x/p#comments` from an in-page
+    // link created two rows that normalize alike. The next periodic pass (300 s by default)
+    // tombstoned one of them, the uuid went into `changed` so the tombstone was PUSHED, and the
+    // user's own bookmark vanished from `favorites.list` here and on every paired device. The
+    // comment below claimed "cross-device"; the code had no such condition. Requiring at least
+    // one member of the group to have come from a peer makes the claim true.
+    //
+    // Convergence is preserved: the tombstone is still a normal sync record, so a device that
+    // does collapse a peer-learned duplicate propagates the delete exactly as before. Two
+    // devices that each create the same pair locally now both keep both rows until one syncs —
+    // and then the receiving device sees both from a peer and collapses, which the origin then
+    // accepts. `places.rs`'s `favorites.add` refuses the near-duplicate at creation so that
+    // round trip is not needed in the first place.
+    let peer_keys: std::collections::HashSet<String> = merged
+        .iter()
+        .filter(|r| {
+            crate::jsonstore::uuid_of(r).is_some_and(|u| changed.iter().any(|c| c.as_str() == u))
+        })
+        .filter_map(|r| dedup_key(r, key_field_for(name)))
+        .collect();
     // Collapse cross-device duplicates (same normalized url/host): tombstone the losers so the
     // deletion converges across devices. Idempotent — tombstoned losers are skipped next pass.
-    let losers = duplicate_losers(&merged, key_field_for(name));
+    // Gated on `peer_keys` — see above; a group nobody but this device ever contributed to is
+    // left alone.
+    let losers: Vec<String> = duplicate_losers(&merged, key_field_for(name))
+        .into_iter()
+        .filter(|loser| {
+            merged.iter().any(|r| {
+                crate::jsonstore::uuid_of(r).is_some_and(|u| u == loser.as_str())
+                    && dedup_key(r, key_field_for(name)).is_some_and(|k| peer_keys.contains(&k))
+            })
+        })
+        .collect();
+    let mut changed = changed;
     if !losers.is_empty() {
         crate::jsonstore::tombstone(
             &mut merged,
@@ -296,7 +335,12 @@ pub fn gc_tombstones<R: Runtime>(app: &AppHandle<R>, name: &str, now_ms: i64) ->
 
 /// Normalize a favorites/saved URL for dup detection: drop the #fragment and trailing
 /// slashes, trim whitespace. Path + query preserved, no case-folding (so `?id=1` ≠ `?id=2`).
-fn normalize_url(u: &str) -> String {
+///
+/// `pub(crate)` because it is the dedup identity itself, not an implementation detail of the
+/// merge: `places.rs`'s `favorites.add` must ask the SAME question when deciding whether an add
+/// is a near-duplicate, or it would refuse exact duplicates while happily creating the
+/// fragment/slash variants that this function is what collapses.
+pub(crate) fn normalize_url(u: &str) -> String {
     let no_frag = u.split('#').next().unwrap_or("");
     no_frag.trim().trim_end_matches('/').to_string()
 }
@@ -1034,5 +1078,128 @@ mod tests {
         assert_eq!(key_field_for("allowlist"), "host");
         assert_eq!(key_field_for("favorites"), "url");
         assert_eq!(key_field_for("saved"), "url");
+    }
+
+    // ── The near-duplicate gate ─────────────────────────────────────────────
+    //
+    // `duplicate_losers` itself is pure and convergent, and the cases above pin exactly that.
+    // What they CANNOT pin is *when* it is allowed to run — and the original defect lived
+    // entirely in that: it ran unconditionally over the whole local array on every pass,
+    // including one where the server returned nothing, so two rows a single device had created
+    // itself were collapsed and the tombstone pushed to every paired device.
+    //
+    // The rows below are seeded straight into the store rather than through `favorites.add`,
+    // deliberately: `favorites.add` now refuses to create the pair in the first place (see
+    // `places::tests::favorites_add_refuses_a_url_that_normalizes_onto_a_live_bookmark`), so a
+    // store that already holds one is the reachable state — an older build wrote them, a peer
+    // predates the fix, or the rows were restored from a backup. Seeding it is how the real
+    // state is expressed, not a shortcut around the channel under test.
+
+    fn fav(uuid: &str, url: &str, wall: i64, node: &str) -> Value {
+        json!({
+            "id": 1,
+            "name": url,
+            "url": url,
+            "position": 0,
+            "uuid": uuid,
+            "hlc": { "wall_ms": wall, "counter": 0, "node": node },
+            "deleted": false,
+        })
+    }
+
+    fn live_favorites<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
+        crate::jsonstore::live(crate::jsonstore::load_synced(app, "favorites"))
+    }
+
+    /// A pass where the server returned NOTHING must not touch a pair this device created.
+    ///
+    /// This is the reported data loss verbatim: the periodic pass (300 s by default) ran
+    /// `duplicate_losers` over the full local array every time, so the very first pass after
+    /// favoriting a page and then a fragment of that page tombstoned one of the two, dropped
+    /// it from `favorites.list`, and — because the loser's uuid was appended to `changed` —
+    /// PUSHED that tombstone, deleting the bookmark on every paired device too. Nothing was
+    /// ever sent by a peer here.
+    #[test]
+    fn a_pass_that_learned_nothing_from_a_peer_leaves_a_local_near_duplicate_pair_alone() {
+        crate::test_support::with_tmp_app(|app| {
+            let now = crate::jsonstore::now_ms();
+            crate::jsonstore::save(
+                app,
+                "favorites",
+                &[
+                    fav("u-bar", "https://x.test/p", now, "local"),
+                    fav("u-hash", "https://x.test/p#comments", now + 1, "local"),
+                ],
+            )
+            .expect("seed the pair an older build could create");
+            assert_eq!(live_favorites(app).len(), 2, "both rows start live");
+
+            let changed = merge_into(app, "favorites", &[]);
+
+            assert!(
+                changed.is_empty(),
+                "an empty server response changed nothing, but it reported {changed:?}"
+            );
+            let after = live_favorites(app);
+            assert_eq!(
+                after.len(),
+                2,
+                "the pass deleted a bookmark the user created: {:?}",
+                after.iter().map(|r| r.get("url")).collect::<Vec<_>>()
+            );
+            // Not just "still on disk": LIVE, i.e. `favorites.list` still shows it.
+            assert!(after.iter().all(|r| !crate::jsonstore::is_deleted(r)));
+        });
+    }
+
+    /// The gate must not disable the feature it exists for: a peer-sent record that
+    /// normalizes onto a local one is still collapsed, and the loser's uuid is still returned
+    /// so the tombstone is pushed and the delete converges.
+    ///
+    /// Without this the gate would be "never collapse", which passes the case above.
+    #[test]
+    fn a_near_duplicate_that_arrived_from_a_peer_is_still_collapsed_and_pushed() {
+        crate::test_support::with_tmp_app(|app| {
+            let now = crate::jsonstore::now_ms();
+            crate::jsonstore::save(
+                app,
+                "favorites",
+                &[fav("u-local", "https://x.test/p", now, "local")],
+            )
+            .expect("seed the local row");
+
+            // The peer bookmarked the FRAGMENT form of the same page. Its stamp is newer, so
+            // it is the deterministic survivor and the local row is the loser.
+            let remote = vec![json!({
+                "id": 1,
+                "name": "from a peer",
+                "url": "https://x.test/p#comments",
+                "position": 0,
+                "uuid": "u-peer",
+                "hlc": { "wall_ms": now + 5_000, "counter": 0, "node": "peer" },
+                "deleted": false,
+            })];
+
+            let changed = merge_into(app, "favorites", &remote);
+
+            assert!(
+                changed.contains(&"u-local".to_string()),
+                "the loser's uuid must be returned so the tombstone is PUSHED, got {changed:?}"
+            );
+            let after = live_favorites(app);
+            assert_eq!(after.len(), 1, "the pair collapsed to one bookmark");
+            assert_eq!(
+                after[0].get("url").and_then(Value::as_str),
+                Some("https://x.test/p#comments"),
+                "the deterministic survivor is the peer's row (higher HLC)"
+            );
+            assert!(
+                crate::jsonstore::load_synced(app, "favorites")
+                    .iter()
+                    .any(|r| crate::jsonstore::uuid_of(r) == Some("u-local")
+                        && crate::jsonstore::is_deleted(r)),
+                "the loser is tombstoned, not deleted from disk"
+            );
+        });
     }
 }

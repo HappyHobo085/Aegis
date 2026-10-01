@@ -2041,4 +2041,59 @@ mod tests {
              and answer whether a tab was opened."
         );
     }
+
+    /// A page cannot open a tab on Android without a user gesture, and a find session
+    /// cannot outlive the tab that ran it.
+    ///
+    /// Both are Android-only Kotlin behaviour with no Rust seam, and there is NO Kotlin
+    /// test source set, so a source-text pin from `cargo test` is the only automated gate
+    /// either can have. `kotlin_fn_body` already strips `//` comment lines, which is
+    /// load-bearing here rather than hygiene: the guard's own comment QUOTES
+    /// `if (!isUserGesture) return false`, so a raw-text `contains` would match the prose
+    /// documenting the fix instead of the code.
+    ///
+    /// The gesture pin asserts ORDER as well as presence. `onCreateWindow` receives
+    /// `isUserGesture` and used to ignore it entirely, which meant any page could call
+    /// `window.open()` and get a real, ad-block-contexted tab — the shape an ad network
+    /// uses to open a background tab and then navigate it to a tracking pixel. Refusing
+    /// AFTER the capture WebView was built would still leave the popup's own navigation to
+    /// whatever `__aegisOpenTab` does, so a presence-only pin would pass a fix that does
+    /// not actually refuse. Hence: the guard must come before the `WebView` it avoids
+    /// constructing.
+    ///
+    /// The find pin exists because `findAllAsync` is ASYNCHRONOUS and Android's
+    /// `FindListener` never reports the query back, so the query is held in one
+    /// Activity-wide `@Volatile`. A tab closed mid-search left that value behind, and the
+    /// late `findAllAsync` callback then pushed a `__aegisFindState` naming a tab that no
+    /// longer existed, carrying a match count for highlights that had just been destroyed.
+    /// Clearing it in `teardownTab` is the only place that knows the tab is gone.
+    #[test]
+    fn the_android_popup_needs_a_user_gesture_and_a_find_session_dies_with_its_tab() {
+        let src = kotlin_main_activity();
+
+        let on_create_window = kotlin_fn_body(&src, "override fun onCreateWindow(");
+        assert!(
+            on_create_window.contains("if (!isUserGesture) return false"),
+            "MainActivity.kt's onCreateWindow must refuse a window.open() that had no user \
+             gesture, BEFORE it builds a capture WebView. A page can otherwise open tabs on \
+             demand — the shape an ad network uses to bury the page you asked for. Body was:\n\
+             {on_create_window}"
+        );
+        let guard_at = on_create_window.find("if (!isUserGesture) return false");
+        let webview_at = on_create_window.find("WebView(this@MainActivity)");
+        assert!(
+            webview_at.is_none() || guard_at < webview_at,
+            "the isUserGesture guard sits AFTER the capture WebView is constructed, so the \
+             refusal comes too late to avoid building it. Body was:\n{on_create_window}"
+        );
+
+        let teardown = kotlin_fn_body(&src, "private fun teardownTab(");
+        assert!(
+            teardown.contains("if (activeTabId == id) currentFindQuery = \"\""),
+            "MainActivity.kt's teardownTab must clear currentFindQuery. findAllAsync is \
+             asynchronous and never reports the query back, so a tab closed mid-search \
+             leaves the query set and the late callback pushes find state for a tab that no \
+             longer exists. Body was:\n{teardown}"
+        );
+    }
 }

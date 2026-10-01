@@ -861,10 +861,15 @@ mod tests {
                     "state": "completed",
                 }],
             });
-            let r =
-                crate::data::dispatch(app, "data.import", &json!({ "text": bundle.to_string() }))
-                    .unwrap()
-                    .unwrap();
+            // `data.import` now answers with an acknowledgement and reports the outcome on
+            // `data.bulkDone`, and what this test is about is what the RESTORE DID — so it
+            // runs the worker's body directly rather than re-deriving the two-hop protocol
+            // to get at the same row. The hand-off itself is `data::tests`' subject.
+            let r = crate::data::run_blocking_for_test(
+                "data.import",
+                app,
+                &json!({ "text": bundle.to_string() }),
+            );
             assert_eq!(
                 r.get("ok").and_then(Value::as_bool),
                 Some(true),

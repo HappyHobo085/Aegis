@@ -90,13 +90,39 @@ pub fn dispatch<R: Runtime>(
         "favorites.add" => {
             let mut items = id_keyed!(app, "favorites");
             let input = payload.get("input").cloned().unwrap_or_else(|| json!({}));
+            // Dedup against LIVE records using the SAME normalization the sync merge collapses
+            // on (`sync_stores::normalize_url`: no `#fragment`, no trailing slash).
+            //
+            // Exact-string comparison is not enough, and the reason is a real data loss rather
+            // than a tidy-up. `saved.add` checks `live_has_url` (verbatim); `favorites.add`
+            // checked nothing, so favoriting `https://x/p` from the address bar and then
+            // `https://x/p#comments` from an in-page link left two rows that normalize alike.
+            // The next periodic sync pass (300 s by default) tombstoned one of them and PUSHED
+            // the tombstone, so the user's own bookmark disappeared from `favorites.list` here
+            // and on every paired device. Refusing the second add is the honest outcome — the
+            // page is already bookmarked — and it loses nothing.
+            let url_str = input.get("url").and_then(Value::as_str).unwrap_or("");
+            let want = crate::sync_stores::normalize_url(url_str);
+            let already = !want.is_empty()
+                && items.iter().any(|it| {
+                    !jsonstore::is_deleted(it)
+                        && it
+                            .get("url")
+                            .and_then(Value::as_str)
+                            .map(crate::sync_stores::normalize_url)
+                            .as_deref()
+                            == Some(want.as_str())
+                });
+            if already {
+                return Some(Err("that page is already bookmarked".into()));
+            }
             let id = jsonstore::next_id(&items);
             // Position = end of the LIVE list (tombstones don't occupy a slot).
             let position = items.iter().filter(|it| !jsonstore::is_deleted(it)).count() as i64;
             let mut item = json!({
                 "id": id,
                 "name": input.get("name").and_then(Value::as_str).unwrap_or(""),
-                "url": input.get("url").and_then(Value::as_str).unwrap_or(""),
+                "url": url_str,
                 "position": position
             });
             jsonstore::stamp_new(&mut item, app);
@@ -687,6 +713,97 @@ mod tests {
                 .filter_map(Value::as_str)
                 .collect();
             assert_eq!(tags3, vec!["crab"]);
+        });
+    }
+
+    /// The CREATION half of the near-duplicate fix: `favorites.add` must refuse a URL that
+    /// NORMALIZES onto a live bookmark, not merely a byte-identical one.
+    ///
+    /// `https://x.test/p` (favorited from the address bar) and `https://x.test/p#comments`
+    /// (favorited from an in-page link) are the exact pair that used to be created locally and
+    /// then collapsed by the next sync pass — with the tombstone PUSHED, so the bookmark
+    /// vanished from `favorites.list` here and on every paired device. `saved.add` has always
+    /// guarded this with `live_has_url` (verbatim); this is that guard widened to the same
+    /// normalization the merge collapses on. The fragment is not even needed: a trailing slash
+    /// normalizes away too.
+    ///
+    /// Driven through the real `favorites.add` channel, because a test that writes the two rows
+    /// into the store directly would prove nothing about whether a user can create them — the
+    /// existing `dedup_normalizes_slash_and_fragment` case in `sync_stores` does exactly that
+    /// and so cannot catch this.
+    #[test]
+    fn favorites_add_refuses_a_url_that_normalizes_onto_a_live_bookmark() {
+        with_tmp_app(|app| {
+            dispatch(
+                app,
+                "favorites.add",
+                &json!({ "input": { "name": "P", "url": "https://x.test/p" } }),
+            )
+            .unwrap()
+            .unwrap();
+
+            for dup in [
+                "https://x.test/p#comments",
+                "https://x.test/p#",
+                "https://x.test/p/",
+                "  https://x.test/p  ",
+            ] {
+                let err = dispatch(
+                    app,
+                    "favorites.add",
+                    &json!({ "input": { "name": "dup", "url": dup } }),
+                )
+                .unwrap()
+                .expect_err(&format!("{dup:?} normalizes onto the live bookmark"));
+                assert!(
+                    err.contains("already bookmarked"),
+                    "the refusal must say why, got {err:?}"
+                );
+            }
+
+            let live = arr(dispatch(app, "favorites.list", &json!({})).unwrap());
+            assert_eq!(live.len(), 1, "no near-duplicate row was created");
+            assert_eq!(
+                live[0].get("url").and_then(Value::as_str),
+                Some("https://x.test/p"),
+                "the row the user actually added is untouched"
+            );
+
+            // The guard is "the SAME page", not "only one bookmark": a different path, and a
+            // different query on the same path (`normalize_url` deliberately preserves the
+            // query), are both distinct bookmarks and must still be accepted.
+            for other in ["https://x.test/q", "https://x.test/p?id=1"] {
+                dispatch(
+                    app,
+                    "favorites.add",
+                    &json!({ "input": { "name": "other", "url": other } }),
+                )
+                .unwrap()
+                .unwrap_or_else(|e| panic!("{other:?} is a distinct bookmark: {e}"));
+            }
+            assert_eq!(
+                arr(dispatch(app, "favorites.list", &json!({})).unwrap()).len(),
+                3
+            );
+
+            // Dedup is against LIVE rows only, so removing the bookmark frees the URL again —
+            // the same contract `saved_add_dedups_live_but_allows_readd_after_remove` pins.
+            let id = live[0].get("id").and_then(Value::as_i64).unwrap();
+            dispatch(app, "favorites.remove", &json!({ "id": id }))
+                .unwrap()
+                .unwrap();
+            dispatch(
+                app,
+                "favorites.add",
+                &json!({ "input": { "name": "P again", "url": "https://x.test/p#comments" } }),
+            )
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                arr(dispatch(app, "favorites.list", &json!({})).unwrap()).len(),
+                3,
+                "a removed bookmark's URL is available again"
+            );
         });
     }
 }
