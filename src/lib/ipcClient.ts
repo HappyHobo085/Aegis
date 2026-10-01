@@ -21,6 +21,7 @@ import {
   PermissionPrompt,
   DataImportResult,
   DataExportResult,
+  DataBulkDoneEvent,
   TabsState,
   TabShortcut,
   UpdateState,
@@ -46,6 +47,7 @@ import {
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call as rawCall, on } from './tauriInvoke';
+import { awaitUpdateResult } from './updateResult';
 import { clampZoom } from './zoom';
 
 /**
@@ -412,6 +414,59 @@ function remember(s: Settings): Settings {
   return s;
 }
 
+/**
+ * How long to wait for a bulk-data thread before declaring it lost.
+ *
+ * The same bound the filter-list refresh uses, and for the same reason: the work is a
+ * DETACHED thread whose result event is its last statement, so a panic before the emit
+ * kills the thread silently and the promise would otherwise never settle. The generous
+ * margin is deliberate — this catches a thread that will NEVER report, not a slow
+ * machine. An import on a large backup over a slow disk is minutes of real work.
+ */
+const BULK_RESULT_TIMEOUT_MS = 300_000;
+
+/**
+ * Call a bulk-data channel and resolve with its REAL outcome.
+ *
+ * `data.export` / `data.import` are done on a background thread in the core, so the IPC
+ * reply is only an acknowledgement and the result follows on the one-shot `data.bulkDone`
+ * event. This turns the pair back into the single promise the IPC surface promises, which
+ * is why no caller below had to change: `DataTab`, `App` and `MobileApp` still see
+ * `Promise<DataExportResult>` / `Promise<DataImportResult>` and never an in-flight marker.
+ *
+ * `channel` is threaded through the event, so an export and an import in flight at the
+ * same time each resolve their OWN promise and neither can be handed the other's result —
+ * the reason the event carries it at all.
+ *
+ * The settlement rules are `awaitUpdateResult`'s, the same helper `lists.updateNow` uses
+ * (and the same crate-side pattern `subs::update_now` follows); the timeout wording differs
+ * because a lost export is not a lost filter list.
+ */
+async function awaitBulkData<T extends DataExportResult | DataImportResult>(
+  channel: string,
+  payload: Record<string, unknown>,
+  expect: string,
+): Promise<T> {
+  const event = await awaitUpdateResult<DataBulkDoneEvent>(
+    (cb) =>
+      on<DataBulkDoneEvent>(IPC.evtDataBulkDone, (e) => {
+        // FILTER, do not settle: an export and an import can be in flight together and the
+        // helper settles on whichever event arrives first. Forwarding a result for another
+        // channel would resolve this caller's promise with the other request's outcome — so
+        // the export would report a written path for a RESTORE that had merely finished, or
+        // the restore would report success from an export. Only the event naming this
+        // caller's channel may settle it, which is why the core sends the channel at all.
+        if (e && e.channel === expect) cb(e);
+      }),
+    () => rawCall(channel, payload),
+    BULK_RESULT_TIMEOUT_MS,
+    'The backup never reported back. The core may have stopped part-way through, so ' +
+      'check that your backup file still exists before trusting it — nothing has been ' +
+      'reported as saved or restored.',
+  );
+  return event.result as T;
+}
+
 export const aegis: AegisApi = {
   nav: {
     navigate: (viewId, url) => {
@@ -542,7 +597,14 @@ export const aegis: AegisApi = {
     toggleAllowlist: (host) => dedupedCall<AdblockState>(IPC.adblockToggleAllowlist, { host }),
     removeAllowlist: (host) => dedupedCall<AdblockState>(IPC.adblockRemoveAllowlist, { host }),
     clearAllowlist: () => dedupedCall<AdblockState>(IPC.adblockClearAllowlist, undefined),
-    getState: () => dedupedCall<AdblockState>(IPC.adblockGetState, undefined),
+    // `{ viewId }`, not `undefined` — same reason as `nav.getState` above. `pageBlocked`
+    // is the ACTIVE tab's count (`adblock::state_json` reads `active_id()`), and this
+    // channel is deduped for 300 ms, so a payload-less call has ONE cache key: switching
+    // tabs inside that window answered the new tab's shield with the PREVIOUS tab's
+    // number, and nothing corrected it (the only other writer is a live `blockedCount`
+    // event, which a tab that blocks nothing never sends). Putting the id in the payload
+    // makes the dedup key per-tab, which is what the value actually means.
+    getState: (viewId) => dedupedCall<AdblockState>(IPC.adblockGetState, { viewId }),
     onBlockedCount: (cb) => {
       // Android has no Tauri event bus on the content side; MainActivity pushes
       // BlockedCount via window.__aegisBlockedCount (set up here), mirroring nav state.
@@ -633,14 +695,25 @@ export const aegis: AegisApi = {
     // No native save dialog (it renders in the OS's light theme, clashing with
     // Aegis's dark UI). The backend writes the backup to the Downloads dir and
     // returns the path, which the Data tab shows in a toast.
-    export: async () => dedupedCall<DataExportResult>(IPC.dataExport, {}),
+    //
+    // The core hands both of these to a background thread and answers AT ONCE with an
+    // acknowledgement (`{ok: true, pending: true, channel}`), because the `ipc` command is
+    // synchronous and runs on the UI thread: an export flushes two batched stores, loads
+    // every store through the migration-capable loader, pretty-prints the bundle and
+    // fsyncs it, and an import adds a re-stamp and a write of every store. Doing that
+    // inline froze the whole window. The real outcome arrives on `data.bulkDone`, so the
+    // promise this hands the UI is built by bridging the two — which is why every UI caller
+    // (`DataTab`, both shells) is unchanged and none of them ever sees the acknowledgement.
+    export: () => awaitBulkData(IPC.dataExport, {}, IPC.dataExport),
     // No native open dialog. Import from JSON pasted into the in-app field when
     // given; otherwise restore the last export from the Downloads dir.
     import: async (mode, source) => {
       const text = source?.text?.trim() ?? '';
-      const result = text
-        ? await dedupedCall<DataImportResult>(IPC.dataImport, { mode, text })
-        : await dedupedCall<DataImportResult>(IPC.dataImport, { mode });
+      const result = await awaitBulkData(
+        IPC.dataImport,
+        text ? { mode, text } : { mode },
+        IPC.dataImport,
+      );
       // Make the import live immediately — favorites/saved/settings hooks only fetch
       // on mount, so reload the chrome to re-read everything (no app restart). Delay
       // briefly so the success toast is visible first.

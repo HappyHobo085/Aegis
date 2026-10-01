@@ -25,9 +25,21 @@ export function FilterListsTab({ subs, setEnabled, add, remove, updateNow }: Fil
       setAddError(result.reason);
       return;
     }
-    void add(result.url);
-    setNewUrl('');
-    setAddError(null);
+    // `normalizeSavedUrl` above already refused a non-http(s) URL, so what is left that the
+    // core can still refuse is the cache id: `subs.rs::safe_list_id` rejects a URL whose
+    // last path segment is `.` or `..`. The draft is the user's work, so — as in
+    // `SearchTab`'s engine form — it is cleared only once the write is ACCEPTED. Wiping it on
+    // dispatch destroyed typing that was never stored, and because the promise was floating
+    // the refusal never reached the user at all: an unhandled rejection.
+    void (async () => {
+      try {
+        await add(result.url);
+        setNewUrl('');
+        setAddError(null);
+      } catch (e) {
+        setAddError(saveErrorText(e));
+      }
+    })();
   };
 
   const handleUpdateAll = (): void => {

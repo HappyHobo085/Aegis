@@ -47,6 +47,12 @@ import { aegis, setBackInterceptActive, setFullscreen, setBottomBarHidden } from
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
 const mockListen = listen as ReturnType<typeof vi.fn>;
 
+type BulkHandler = (e: { payload: unknown }) => void;
+
+/** Handlers captured from `listen`, so the bulk transport below can deliver an event to
+ *  the ONE subscriber `awaitBulkData` registered without second-guessing call order. */
+const bulkHandlers = new Map<string, BulkHandler>();
+
 const win = window as unknown as Record<string, unknown>;
 /** The Kotlin-push globals are installed by ipcClient at runtime, so they are not on
  *  Window's type; the pins that raise them cast through this alias. */
@@ -354,9 +360,9 @@ const REQUESTS: ContractRow[] = [
   },
   {
     name: 'adblock.getState',
-    run: () => aegis.adblock.getState(),
+    run: () => aegis.adblock.getState(1),
     channel: IPC.adblockGetState,
-    payload: {},
+    payload: { viewId: 1 },
   },
 
   // ---- lists (1) ----
@@ -855,6 +861,45 @@ describe('the renderer→core channel contract (desktop path)', () => {
     mockListen.mockClear();
     // The Android bridge must be absent for these rows: half of it would short-circuit.
     delete win.AegisAndroid;
+    // `data.export` / `data.import` are the only pair in this table answered by a
+    // FOLLOW-UP EVENT rather than by the invoke's own return value: the core runs them on a
+    // background thread and sends an acknowledgement, and `awaitBulkData` turns the pair
+    // back into one promise. These two rows therefore need a transport that actually
+    // delivers `data.bulkDone` — without one they would sit on the bridge's five-minute
+    // timeout and take the whole file down.
+    bulkHandlers.clear();
+    mockListen.mockImplementation((event: string, handler: BulkHandler) => {
+      bulkHandlers.set(event, handler);
+      return Promise.resolve(() => {});
+    });
+    mockInvoke.mockImplementation((command: string, args: unknown) => {
+      const payload = args as { channel?: string } | undefined;
+      if (
+        command !== 'ipc' ||
+        (payload?.channel !== IPC.dataExport && payload?.channel !== IPC.dataImport)
+      ) {
+        return Promise.resolve({ ok: false });
+      }
+      const channel = payload.channel as string;
+      return Promise.resolve({ ok: true, pending: true, channel }).then((ack) => {
+        // The core emits AFTER the acknowledgement lands, and the bridge subscribes
+        // BEFORE it kicks, so a microtask reproduces the real ordering without a timer.
+        queueMicrotask(() =>
+          bulkHandlers.get('data:bulkDone')?.({
+            payload: { channel, ms: 1, result: { ok: true } },
+          }),
+        );
+        return ack;
+      });
+    });
+  });
+  afterEach(() => {
+    // Both implementations would otherwise outlive this describe and answer the event-name
+    // contract below with the bulk transport.
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue({ ok: false });
+    mockListen.mockReset();
+    mockListen.mockResolvedValue(() => {});
   });
 
   describe.each(REQUESTS)('$name', (row) => {
@@ -1063,6 +1108,10 @@ describe('the event-name contract', () => {
       IPC.evtAdblockBlockedCount,
       IPC.evtFindState,
       IPC.evtZoomChanged,
+      // Subscribed by `awaitBulkData` itself rather than by an `on…` a component can call:
+      // it is the reply half of `data.export`/`data.import`, not something a caller listens
+      // to. It is still subscribed, which is all this set claims.
+      IPC.evtDataBulkDone,
     ]);
     const catalogEvents = Object.entries(IPC)
       .filter(([key]) => key.startsWith('evt'))

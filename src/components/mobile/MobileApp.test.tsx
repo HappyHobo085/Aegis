@@ -410,6 +410,108 @@ describe('MobileApp', () => {
     }
   });
 
+  // `places.rs`'s `favorites.add` refuses a url that normalizes onto a live bookmark, and a
+  // second tap on the favourites-bar "+" is exactly that (the same page, possibly reached
+  // with a different `#fragment` or trailing slash). The refusal used to escape a floating
+  // promise: an unhandled rejection and a button that appeared dead. It must reach the
+  // user, and the reason must be the CORE's sentence — a Rust `Err(String)` rejects with a
+  // bare string, which `err instanceof Error` would discard (see lib/saveError.ts).
+  it('toasts the core reason when the favourites-bar add is refused', async () => {
+    (aegis.favorites.add as ReturnType<typeof vi.fn>).mockRejectedValue(
+      'that page is already bookmarked',
+    );
+
+    const toasts: ToastItem[] = [];
+    const unsubscribe = subscribeToasts((next) => toasts.splice(0, toasts.length, ...next));
+
+    try {
+      render(<MobileApp />);
+      fireEvent.click(await screen.findByRole('button', { name: /add bookmark/i }));
+      await waitFor(() =>
+        expect(
+          toasts.some((t) => t.kind === 'error' && /already bookmarked/i.test(t.message)),
+        ).toBe(true),
+      );
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  // The same obligation for `permissions.remove`. The core refuses a revoke whose save did
+  // not land, and the mobile shell's `forgetSitePermissions` / `clearRememberedSiteData`
+  // fire-and-forgot it — so the "Cleared Aegis history and remembered permissions" toast
+  // printed the SUCCESS wording over a refusal, and the grant came back on the next start.
+  it('does not claim a site-data clear succeeded when the core refused a revoke', async () => {
+    (aegis.history.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (aegis.permissions.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { origin: 'https://example.com', permission: 'camera', decision: 'allow' },
+    ]);
+    (aegis.history.removeForOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(0);
+    // A Rust `Err(String)` rejects with a bare string; `err instanceof Error` would discard
+    // it, which is why the toast must go through saveErrorText.
+    (aegis.permissions.remove as ReturnType<typeof vi.fn>).mockRejectedValue(
+      'could not write the permissions store',
+    );
+
+    const toasts: ToastItem[] = [];
+    const unsubscribe = subscribeToasts((next) => toasts.splice(0, toasts.length, ...next));
+
+    try {
+      render(<MobileApp />);
+      fireEvent.click(await screen.findByRole('button', { name: /site information/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /clear remembered data/i }));
+
+      await waitFor(() =>
+        expect(
+          toasts.some(
+            (t) => t.kind === 'error' && /could not write the permissions store/i.test(t.message),
+          ),
+        ).toBe(true),
+      );
+      expect(
+        toasts.some((t) => /Cleared Aegis history and remembered permissions/i.test(t.message)),
+        'the success wording must NOT be printed over a refusal',
+      ).toBe(false);
+    } finally {
+      unsubscribe();
+    }
+  });
+
+  // The OTHER half of the same obligation: the per-site "forget permissions" path, which
+  // the test above only reaches through `clearRememberedSiteData`. It is a different code
+  // path — `Promise.allSettled` over the permissions for one origin, reporting the FIRST
+  // refusal and returning early when there is nothing to revoke — and it is the one the
+  // site-information panel's own button uses.
+  it('reports a REFUSED per-site permission revoke instead of dropping it', async () => {
+    (aegis.history.list as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (aegis.permissions.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { origin: 'https://example.com', permission: 'geolocation', decision: 'allow' },
+    ]);
+    (aegis.permissions.remove as ReturnType<typeof vi.fn>).mockRejectedValue(
+      'could not write the permissions store',
+    );
+
+    const toasts: ToastItem[] = [];
+    const unsubscribe = subscribeToasts((next) => toasts.splice(0, toasts.length, ...next));
+
+    try {
+      render(<MobileApp />);
+      fireEvent.click(await screen.findByRole('button', { name: /site information/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /forget permissions/i }));
+
+      await waitFor(() =>
+        expect(
+          toasts.some(
+            (t) => t.kind === 'error' && /could not write the permissions store/i.test(t.message),
+          ),
+        ).toBe(true),
+      );
+      expect(aegis.permissions.remove).toHaveBeenCalledWith('https://example.com', 'geolocation');
+    } finally {
+      unsubscribe();
+    }
+  });
+
   // The mobile content WebView is a NATIVE view stacked ON TOP of the chrome WebView,
   // so a full-window surface only becomes visible/tappable once the shell tells the
   // core to lower it. Surfaces that register through `useChromeSurface` (onboarding,

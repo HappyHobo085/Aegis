@@ -5,6 +5,7 @@ import type { NavCrashed, NavFailed } from '../shared/types';
 import { aegis } from './lib/ipcClient';
 import { applyTheme } from './lib/theme';
 import { confirm, toast } from './lib/toast';
+import { saveErrorText } from './lib/saveError';
 import { useChromeHeights } from './hooks/useChromeHeights';
 import { hostOf, originOf } from './lib/url';
 import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChromeSurfaces';
@@ -506,20 +507,43 @@ function DesktopApp() {
     showInFolder: downloads.showInFolder,
   });
 
-  const forgetSitePermissions = (origin: string): void => {
-    for (const permission of permissions.permissions.filter((p) => p.origin === origin)) {
-      void permissions.remove(permission.origin, permission.permission);
-    }
-  };
+  // Resolves `true` when every revoke landed, `false` when at least one was refused.
+  //
+  // The refusal is REPORTED HERE rather than left to the caller, because `AddressBar`'s prop
+  // type is `onForgetSitePermissions(origin): void` and its click handler discards the return
+  // value — a rejection handed back to it would be a silent unhandled rejection. So the
+  // handler swallows it, toasts the reason, and returns the boolean the OTHER caller needs
+  // to know not to print its success wording. Same reason the mobile shell shapes its copy of
+  // this the same way (it has the identical `void` prop).
+  const forgetSitePermissions = (origin: string): Promise<boolean> =>
+    Promise.all(
+      permissions.permissions
+        .filter((p) => p.origin === origin)
+        .map((permission) => permissions.remove(permission.origin, permission.permission)),
+    ).then(
+      () => true,
+      (e: unknown) => {
+        toast.error(saveErrorText(e));
+        return false;
+      },
+    );
 
   const clearRememberedSiteData = (origin: string): void => {
-    forgetSitePermissions(origin);
     // Core-side, over the WHOLE store: `history.entries` is only the last `list()` page
     // (200 of up to 5000 rows), so looping over it claimed to clear a site while most of
     // its history stayed on disk — and `history.search` filters the full snapshot, so the
     // user could search the "erased" rows straight back up.
     void history.removeForOrigin(origin);
-    toast.info('Cleared Aegis history and remembered permissions for this site.');
+    // `permissions.remove` REFUSES a revoke whose save did not land, and this handler used
+    // to fire-and-forget it, so the toast below claimed the permissions were cleared while
+    // the core had reported that it could not. `forgetSitePermissions` reports the refusal
+    // itself and answers `false`, so the success wording is printed ONLY when nothing was
+    // refused — one refusal must not be papered over by the other revoke having landed.
+    void forgetSitePermissions(origin).then((allLanded) => {
+      if (allLanded) {
+        toast.info('Cleared Aegis history and remembered permissions for this site.');
+      }
+    });
   };
 
   // Fullscreen render: ALL hooks above must run on every render (rule of hooks).
@@ -747,7 +771,12 @@ function DesktopApp() {
               <button type="button" onClick={() => void tabs.create(undefined, false, true)}>
                 New private tab
               </button>
-              <button type="button" onClick={() => void permissions.clear()}>
+              <button
+                type="button"
+                onClick={() => {
+                  void permissions.clear().catch((e: unknown) => toast.error(saveErrorText(e)));
+                }}
+              >
                 Clear permissions
               </button>
               <button type="button" onClick={() => void subscriptions.updateNow()}>
@@ -850,7 +879,11 @@ function DesktopApp() {
         onOpenSettings={() => openSettings()}
         onImportData={() => openSettings('data')}
       />
-      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} />
+      <CommandPalette
+        open={commandOpen}
+        viewId={tabs.activeId}
+        onClose={() => setCommandOpen(false)}
+      />
       <Toaster />
       <ConfirmDialog />
     </div>

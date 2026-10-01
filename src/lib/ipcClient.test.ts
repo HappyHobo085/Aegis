@@ -15,10 +15,12 @@ vi.mock('@tauri-apps/api/event', () => ({
 }));
 
 import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { aegis, AegisIpcError } from './ipcClient';
 import { IPC } from '../../shared/types';
 
 const mockInvoke = invoke as ReturnType<typeof vi.fn>;
+const mockListen = listen as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   mockInvoke.mockClear();
@@ -321,6 +323,44 @@ describe('ipc rejection boundary', () => {
     expect(mockInvoke).toHaveBeenCalledTimes(2);
   });
 
+  it('adblock.getState is deduped PER VIEW, not once globally', async () => {
+    // The defect: `adblock.getState` carried NO payload, so `dedupedCall` hashed it to one
+    // cache key shared by every caller for 300 ms. `pageBlocked` is the ACTIVE tab's count,
+    // so a tab switch inside that window was answered with the PREVIOUS tab's number and
+    // nothing later corrected it. The fix is the payload, so the payload is the contract.
+    mockInvoke.mockResolvedValueOnce({
+      enabled: true,
+      allowlistedHosts: [],
+      sessionBlocked: 0,
+      pageBlocked: 10,
+    });
+    mockInvoke.mockResolvedValueOnce({
+      enabled: true,
+      allowlistedHosts: [],
+      sessionBlocked: 0,
+      pageBlocked: 20,
+    });
+    const first = await aegis.adblock.getState(1);
+    const second = await aegis.adblock.getState(2);
+    expect(first.pageBlocked).toBe(10);
+    expect(second.pageBlocked).toBe(20);
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    // The payload is what keys the dedup cache, so it is the observable that matters.
+    expect(mockInvoke.mock.calls[0][1]).toEqual({
+      channel: IPC.adblockGetState,
+      payload: { viewId: 1 },
+    });
+    expect(mockInvoke.mock.calls[1][1]).toEqual({
+      channel: IPC.adblockGetState,
+      payload: { viewId: 2 },
+    });
+
+    // …and the optimization still applies: the SAME view twice inside the window is one
+    // invoke. Without this half, "stop deduping" would pass the test above.
+    await aegis.adblock.getState(2);
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+  });
+
   it('a RESOLVING dedupable call is still collapsed, so the optimization survives', async () => {
     // Guard against "fixing" the eviction by dropping dedup entirely: two identical
     // reads inside the window must still produce a single invoke.
@@ -333,6 +373,122 @@ describe('ipc rejection boundary', () => {
     await aegis.history.search('dedup-probe');
     await aegis.history.search('dedup-probe');
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Bulk data: the ack/event hand-off, and the channel it is keyed by
+// ---------------------------------------------------------------------------
+describe('aegis.data.* resolves on the event, not on the acknowledgement', () => {
+  // `data.export` / `data.import` run on a DETACHED thread in the core, so the invoke
+  // returns an acknowledgement and the real outcome arrives on the one-shot `data.bulkDone`
+  // event. `awaitBulkData` turns that pair back into the single promise the IPC surface
+  // promises — which is only honest if it waits for the EVENT. These tests pin the hand-off,
+  // and — the half that is easy to get wrong — that two requests in flight at once each
+  // resolve their OWN outcome.
+  type Handler = (e: { payload: unknown }) => void;
+  let handlers: Handler[];
+
+  beforeEach(() => {
+    handlers = [];
+    mockListen.mockImplementation((_event: string, handler: Handler) => {
+      handlers.push(handler);
+      return Promise.resolve(() => {});
+    });
+    // The acknowledgement carries `pending: true` and a `channel` but NO outcome: if a test
+    // below could pass on the ack, the whole hand-off would be untested.
+    mockInvoke.mockImplementation(() =>
+      Promise.resolve({ ok: true, pending: true, channel: 'whatever' }),
+    );
+  });
+
+  afterEach(() => {
+    mockListen.mockReset();
+    mockListen.mockResolvedValue(() => {});
+    mockInvoke.mockReset();
+    mockInvoke.mockResolvedValue({});
+  });
+
+  /** Deliver `data.bulkDone` to every subscriber registered so far. */
+  const deliver = (payload: unknown): void => {
+    for (const h of [...handlers]) h({ payload });
+  };
+
+  it('data.export resolves with the outcome carried by the event, never the ack', async () => {
+    const p = aegis.data.export();
+    // Nothing has been delivered yet, so the promise is genuinely still pending.
+    let settled = 'pending';
+    void p.then(
+      () => {
+        settled = 'resolved';
+      },
+      () => {
+        settled = 'rejected';
+      },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe('pending');
+
+    deliver({ channel: IPC.dataExport, ms: 12, result: { ok: true, path: '/tmp/x.json' } });
+    await expect(p).resolves.toEqual({ ok: true, path: '/tmp/x.json' });
+  });
+
+  it('an export and an import in flight together each resolve their OWN result', async () => {
+    // The whole reason the core sends `channel` in the event. `awaitUpdateResult` settles
+    // on the FIRST event it is handed, so a bridge that forwarded both would let the export
+    // resolve with the restore's counts — or, worse, report a written backup path for a
+    // finished RESTORE, which is a claim the user acts on.
+    const exported = aegis.data.export();
+    const imported = aegis.data.import('merge', { text: '{"saved":[]}' });
+
+    // The IMPORT finishes first, and the export must still be waiting.
+    deliver({
+      channel: IPC.dataImport,
+      ms: 3,
+      result: { ok: true, counts: { favorites: 1 } },
+    });
+    await expect(imported).resolves.toEqual({ ok: true, counts: { favorites: 1 } });
+    let exportSettled = 'pending';
+    void exported.then(
+      () => {
+        exportSettled = 'resolved';
+      },
+      () => {
+        exportSettled = 'rejected';
+      },
+    );
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(exportSettled).toBe('pending');
+
+    deliver({ channel: IPC.dataExport, ms: 9, result: { ok: true, path: '/tmp/y.json' } });
+    await expect(exported).resolves.toEqual({ ok: true, path: '/tmp/y.json' });
+  });
+
+  it('REJECTS instead of hanging when the core never reports back', async () => {
+    // A panic on the detached thread before its emit means no event, ever. Without the
+    // timeout the "Exported" button would spin for the rest of the session. Fake timers
+    // because the bound is five minutes.
+    vi.useFakeTimers();
+    try {
+      const p = aegis.data.export();
+      const rejection = p.then(
+        () => 'resolved',
+        (e: unknown) => (e instanceof Error ? e.message : String(e)),
+      );
+      await vi.advanceTimersByTimeAsync(300_001);
+      // The wording must tell the user nothing was reported as saved — the app reloads
+      // the page after a successful import, and silently pretending is worse than failing.
+      await expect(rejection).resolves.toContain('never reported back');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('REJECTS when the acknowledgement itself fails, instead of waiting five minutes', async () => {
+    mockInvoke.mockRejectedValueOnce('no app data directory');
+    await expect(aegis.data.export()).rejects.toThrow('no app data directory');
   });
 });
 

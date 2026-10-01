@@ -3,6 +3,7 @@ import { useId, useState } from 'react';
 import { Trash2, X } from 'lucide-react';
 import type { Favorite } from '../../shared/types';
 import { normalizeSavedUrl } from '../lib/addressParse';
+import { saveErrorText } from '../lib/saveError';
 import { useDialog } from '../hooks/useDialog';
 import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
@@ -108,10 +109,24 @@ export function FavoritesManager({
       setAddError(normalized.reason);
       return;
     }
-    void add({ name: newName.trim(), url: normalized.url });
-    setNewName('');
-    setNewUrl('');
-    setAddError(null);
+    // The core can REFUSE an add — `places.rs`'s `favorites.add` rejects a url that
+    // normalizes onto a live bookmark (same page, different `#fragment` or trailing slash),
+    // because two such rows used to be collapsed by the next sync pass, which tombstoned
+    // one and PUSHED the delete to every paired device. That refusal is the normal outcome
+    // of an ordinary double-tap, not an exceptional one, so it is reported here instead of
+    // escaping a floating promise as an unhandled rejection nobody sees. The draft is
+    // cleared only once the write is ACCEPTED: wiping it on dispatch destroyed typing the
+    // core rejected.
+    void (async () => {
+      try {
+        await add({ name: newName.trim(), url: normalized.url });
+        setNewName('');
+        setNewUrl('');
+        setAddError(null);
+      } catch (e) {
+        setAddError(saveErrorText(e));
+      }
+    })();
   };
 
   return (

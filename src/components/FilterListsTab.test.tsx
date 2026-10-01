@@ -84,6 +84,46 @@ describe('FilterListsTab', () => {
     expect(p.add).toHaveBeenCalledWith('https://lists.example/custom.txt');
   });
 
+  // The core can still REFUSE a URL that passed the form's own validation: `subs.rs`
+  // derives the cache file id from the URL's last segment and `safe_list_id` rejects one
+  // that is `.` or `..`. The old handler floated that promise and wiped the field on
+  // dispatch, so the user lost what they typed AND got nothing on screen.
+  //
+  // The rejection value is a BARE STRING: the core's `Err(String)` crosses the IPC bridge
+  // that way, and `saveErrorText` is what strips the channel prefix off it.
+  it('reports a REFUSED add with the core reason and KEEPS the typed URL', async () => {
+    const p = props({
+      add: vi.fn(async () => {
+        throw 'the subscription list id is not usable';
+      }),
+    });
+    render(<FilterListsTab {...p} />);
+    const form = screen.getByRole('group', { name: /add filter list/i });
+    const field = within(form).getByRole('textbox', { name: /list url/i });
+    await userEvent.type(field, 'lists.example/..');
+    await userEvent.click(within(form).getByRole('button', { name: /^add list$/i }));
+    await waitFor(() =>
+      expect(within(form).getByRole('alert')).toHaveTextContent(
+        'the subscription list id is not usable',
+      ),
+    );
+    // The draft is the user's work and it was never stored.
+    expect(field).toHaveValue('lists.example/..');
+  });
+
+  it('clears the URL field once the core ACCEPTS the add', async () => {
+    const p = props();
+    render(<FilterListsTab {...p} />);
+    const form = screen.getByRole('group', { name: /add filter list/i });
+    const field = within(form).getByRole('textbox', { name: /list url/i });
+    await userEvent.type(field, 'lists.example/accepted.txt');
+    await userEvent.click(within(form).getByRole('button', { name: /^add list$/i }));
+    // The other half of the same contract: a fix that always kept the field would pass the
+    // refusal test above, so the accept path has to be pinned too.
+    await waitFor(() => expect(p.add).toHaveBeenCalled());
+    await waitFor(() => expect(field).toHaveValue(''));
+  });
+
   it('shows an inline error and does NOT add on an empty URL', async () => {
     const p = props();
     render(<FilterListsTab {...p} />);

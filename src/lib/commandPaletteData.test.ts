@@ -49,6 +49,11 @@ import {
 } from './commandPaletteData';
 import { aegis } from './ipcClient';
 
+// A deliberately NON-default view id for `getActionResults`: the ad-block action must ask
+// the core about the view it was handed, because `adblock.getState` is deduped by payload
+// — a hard-coded 1 would share one cache key with every other tab's request.
+const VIEW = 7;
+
 const mockTabs = aegis.tabs as unknown as {
   list: ReturnType<typeof vi.fn>;
   activate: ReturnType<typeof vi.fn>;
@@ -208,12 +213,12 @@ describe('getHistoryResults', () => {
 
 describe('getActionResults', () => {
   it('returns all actions when query is empty', () => {
-    const results = getActionResults('');
+    const results = getActionResults('', VIEW);
     expect(results.length).toBeGreaterThan(0);
   });
 
   it('filters actions by title', () => {
-    const results = getActionResults('zoom');
+    const results = getActionResults('zoom', VIEW);
     expect(results.length).toBe(3); // zoom in, zoom out, reset zoom
     expect(results.map((r) => r.id)).toContain('action.zoomIn');
     expect(results.map((r) => r.id)).toContain('action.zoomOut');
@@ -221,13 +226,13 @@ describe('getActionResults', () => {
   });
 
   it('filters actions by subtitle', () => {
-    const results = getActionResults('incognito');
+    const results = getActionResults('incognito', VIEW);
     expect(results.length).toBe(1);
     expect(results[0].id).toBe('action.newPrivateTab');
   });
 
   it('all actions have required fields', () => {
-    const results = getActionResults('');
+    const results = getActionResults('', VIEW);
     for (const r of results) {
       expect(r.id).toBeTruthy();
       expect(r.title).toBeTruthy();
@@ -237,7 +242,7 @@ describe('getActionResults', () => {
   });
 
   it('includes all requested actions', () => {
-    const results = getActionResults('');
+    const results = getActionResults('', VIEW);
     const ids = results.map((r) => r.id);
     expect(ids).toContain('action.newTab');
     expect(ids).toContain('action.newPrivateTab');
@@ -265,7 +270,7 @@ describe('getActionResults', () => {
     };
     window.addEventListener('aegis:openSidebar', h);
     try {
-      const results = getActionResults('');
+      const results = getActionResults('', VIEW);
       await results.find((r) => r.id === 'action.openSidebarHistory')!.action();
       await results.find((r) => r.id === 'action.openSidebarSaved')!.action();
     } finally {
@@ -277,7 +282,7 @@ describe('getActionResults', () => {
   });
 
   it('toggleAdblock action calls setEnabled with toggled state', async () => {
-    const results = getActionResults('ad-block');
+    const results = getActionResults('ad-block', VIEW);
     const toggleResult = results.find((r) => r.id === 'action.toggleAdblock');
     expect(toggleResult).toBeDefined();
     await toggleResult!.action();
@@ -286,7 +291,7 @@ describe('getActionResults', () => {
 
   it('zoomIn action reads current factor and increments', async () => {
     mockZoom.get.mockResolvedValue({ viewId: 1, factor: 1.2 });
-    const results = getActionResults('zoom in');
+    const results = getActionResults('zoom in', VIEW);
     const zoomInResult = results.find((r) => r.id === 'action.zoomIn');
     expect(zoomInResult).toBeDefined();
     await zoomInResult!.action();
@@ -403,7 +408,7 @@ describe('getSettingsResults', () => {
 // ---------------------------------------------------------------------------
 describe('every action does what its title promises', () => {
   const byId = (id: string) => {
-    const action = getActionResults('').find((a) => a.id === id);
+    const action = getActionResults('', VIEW).find((a) => a.id === id);
     if (!action) throw new Error(`no such palette action: ${id}`);
     return action;
   };

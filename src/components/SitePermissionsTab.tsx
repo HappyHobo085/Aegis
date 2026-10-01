@@ -1,6 +1,8 @@
 // src/components/SitePermissionsTab.tsx
+import { useState } from 'react';
 import type { SitePermission } from '../../shared/types';
 import { confirm } from '../lib/toast';
+import { saveErrorText } from '../lib/saveError';
 
 /** Title-case a raw enum value as a sensible fallback (e.g. "midi-sysex" → "Midi Sysex"). */
 function titleCase(raw: string): string {
@@ -48,9 +50,32 @@ export interface SitePermissionsTabProps {
 }
 
 export function SitePermissionsTab({ permissions, remove, clear }: SitePermissionsTabProps) {
+  // The core REFUSES a revoke or a clear whose save did not land (it used to answer
+  // `ok` from its in-memory list and throw the write's Result away, so a revoked
+  // permission came back on the next start with no word to the user). These handlers were
+  // `void remove(...)` / `void clear()`, so the refusal became an unhandled rejection and
+  // the row simply stayed — indistinguishable from a click that did nothing. Report it,
+  // and keep the list driven by the core rather than by optimism.
+  const [error, setError] = useState<string | null>(null);
+
   const handleClear = async (): Promise<void> => {
     const ok = await confirm('Clear all remembered site permissions?', { destructive: true });
-    if (ok) void clear();
+    if (!ok) return;
+    setError(null);
+    try {
+      await clear();
+    } catch (e) {
+      setError(saveErrorText(e));
+    }
+  };
+
+  const handleRevoke = async (origin: string, permission: string): Promise<void> => {
+    setError(null);
+    try {
+      await remove(origin, permission);
+    } catch (e) {
+      setError(saveErrorText(e));
+    }
   };
 
   return (
@@ -65,6 +90,11 @@ export function SitePermissionsTab({ permissions, remove, clear }: SitePermissio
           Clear all
         </button>
       </div>
+      {error !== null && (
+        <p className="site-permissions-tab__error" role="alert">
+          {error}
+        </p>
+      )}
       {permissions.length === 0 ? (
         <p className="site-permissions-tab__empty">No remembered site permissions.</p>
       ) : (
@@ -79,7 +109,7 @@ export function SitePermissionsTab({ permissions, remove, clear }: SitePermissio
               <button
                 type="button"
                 aria-label={`Revoke ${permissionLabel(p.permission)} for ${p.origin}`}
-                onClick={() => void remove(p.origin, p.permission)}
+                onClick={() => void handleRevoke(p.origin, p.permission)}
               >
                 Revoke
               </button>

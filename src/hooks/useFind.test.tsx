@@ -118,6 +118,32 @@ describe('useFind', () => {
     expect(result.current.open).toBe(false);
   });
 
+  // Escape reaches `close()` with no query check (`FindBar`'s key handler), so a query typed
+  // <120ms before the bar was dismissed used to leave a debounced `find.start` armed. It
+  // fired AFTER `find.close`, opening a live find session WITH highlights on a page whose
+  // find bar was gone — invisible, and with nothing on screen to clear them. The tab-switch
+  // effect already cancelled the same timer; `close()` was the path that did not.
+  it('close() cancels a PENDING debounced start, so Escape cannot leave a live find session', async () => {
+    const { result } = renderHook(() => useFind(PRIMARY_VIEW_ID));
+    act(() => result.current.show());
+    act(() => result.current.setQuery('needle'));
+
+    // Not yet fired — this is the whole hazard: the timer is armed.
+    act(() => {
+      vi.advanceTimersByTime(50);
+    });
+    expect(findStart).not.toHaveBeenCalled();
+
+    act(() => result.current.close());
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    // The close happened…
+    expect(findClose).toHaveBeenCalledWith(PRIMARY_VIEW_ID);
+    // …and the search that would have re-opened the session behind it never did.
+    expect(findStart).not.toHaveBeenCalled();
+  });
+
   it('onState updates exposed state when viewId matches', () => {
     const { result } = renderHook(() => useFind(PRIMARY_VIEW_ID));
 

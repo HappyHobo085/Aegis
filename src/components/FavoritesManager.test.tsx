@@ -1,6 +1,6 @@
 // src/components/FavoritesManager.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Favorite } from '../../shared/types';
 import { FavoritesManager } from './FavoritesManager';
@@ -76,6 +76,46 @@ describe('FavoritesManager', () => {
     await userEvent.click(screen.getByRole('button', { name: /^add bookmark$/i }));
     expect(p.add).not.toHaveBeenCalled();
     expect(screen.getByRole('alert')).toBeInTheDocument();
+  });
+
+  // `places.rs`'s `favorites.add` rejects a url that normalizes onto a live bookmark, which
+  // is what a second add of the same page is. Before the catch this promise was floating:
+  // the rejection was an unhandled rejection and the form silently wiped the draft.
+  it('reports a refused add with the core reason and KEEPS the typed draft', async () => {
+    const p = props({
+      add: vi.fn(async () => {
+        throw 'that page is already bookmarked';
+      }),
+    });
+    render(<FavoritesManager {...p} />);
+    await userEvent.type(screen.getByRole('textbox', { name: /new bookmark name/i }), 'Gamma');
+    await userEvent.type(
+      screen.getByRole('textbox', { name: /new bookmark url/i }),
+      'https://gamma.example/page#comments',
+    );
+    await userEvent.click(screen.getByRole('button', { name: /^add bookmark$/i }));
+    // The STRING form is what a Rust `Err(String)` rejects with — `err instanceof Error`
+    // would be false and would drop the core's sentence. See lib/saveError.ts.
+    expect(await screen.findByRole('alert')).toHaveTextContent(/already bookmarked/i);
+    expect(screen.getByRole('textbox', { name: /new bookmark name/i })).toHaveValue('Gamma');
+    expect(screen.getByRole('textbox', { name: /new bookmark url/i })).toHaveValue(
+      'https://gamma.example/page#comments',
+    );
+  });
+
+  it('clears the add form once the core accepts the add', async () => {
+    const p = props();
+    render(<FavoritesManager {...p} />);
+    await userEvent.type(screen.getByRole('textbox', { name: /new bookmark name/i }), 'Gamma');
+    await userEvent.type(
+      screen.getByRole('textbox', { name: /new bookmark url/i }),
+      'https://gamma.example/',
+    );
+    await userEvent.click(screen.getByRole('button', { name: /^add bookmark$/i }));
+    await waitFor(() => {
+      expect(screen.getByRole('textbox', { name: /new bookmark name/i })).toHaveValue('');
+    });
+    expect(screen.getByRole('textbox', { name: /new bookmark url/i })).toHaveValue('');
   });
 
   it('clears the add error once the user edits a field', async () => {

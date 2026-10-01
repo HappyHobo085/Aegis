@@ -19,6 +19,7 @@ import {
   getSettingsResults,
 } from '../lib/commandPaletteData';
 import type { PaletteResult } from '../lib/commandPaletteData';
+import type { ViewId } from '../../shared/types';
 
 // ── Backward-compatible legacy type (App.tsx / MobileApp.tsx may still import) ─
 
@@ -36,6 +37,11 @@ export interface CommandAction {
 
 export interface CommandPaletteProps {
   open: boolean;
+  /**
+   * The ACTIVE tab. Needed by `getActionResults`, whose ad-block action reads
+   * `adblock.getState` — a view-scoped, payload-deduped channel.
+   */
+  viewId: ViewId;
   /** @deprecated Pass nothing — results are fetched from commandPaletteData. */
   actions?: CommandAction[];
   onClose(): void;
@@ -103,13 +109,19 @@ type FlatEntry = FlatRow | FlatItem;
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function CommandPalette({ open, onClose }: CommandPaletteProps) {
+export function CommandPalette({ open, viewId, onClose }: CommandPaletteProps) {
   useChromeSurface('commandPalette', open);
 
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [recentIds, setRecentIds] = useState<string[]>(() => getRecent());
   const titleId = useId();
+  // The listbox and each of its options need stable ids so the search box can point at them.
+  // `aria-activedescendant` is the only way a text field announces which row the arrow keys
+  // moved to — the field never holds focus while the palette is open, so it cannot use focus
+  // itself, and without this the movement is announced as nothing. Same pairing as
+  // `AddressBar`'s omnibox (`aria-controls` -> the list, `aria-activedescendant` -> the row).
+  const listId = `${titleId}-list`;
   const inputRef = useRef<HTMLInputElement | null>(null);
   const listRef = useRef<HTMLUListElement | null>(null);
   const dialogRef = useDialog<HTMLDivElement>(onClose, { initialFocus: inputRef }, open);
@@ -120,7 +132,7 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
   const [bookmarkResults, setBookmarkResults] = useState<PaletteResult[]>([]);
   const [historyResults, setHistoryResults] = useState<PaletteResult[]>([]);
 
-  const actionResults = useMemo(() => getActionResults(query), [query]);
+  const actionResults = useMemo(() => getActionResults(query, viewId), [query, viewId]);
   const settingsResults = useMemo(() => getSettingsResults(query), [query]);
 
   // Fire async fetchers on each query change (debounced 200ms)
@@ -327,6 +339,23 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
 
   // ── Render ────────────────────────────────────────────────────────────────
 
+  // `selectedIndex` counts ITEM entries only — the arrow keys and Enter's arm below both
+  // walk `flatEntries` skipping the section headers, and `itemCounter` below advances only
+  // for an item. Indexing `flatEntries` with it directly would point at the WRONG row
+  // whenever the palette renders a header, so this counts the same way the keys do.
+  let selectedOptionId: string | undefined;
+  if (itemCount > 0 && selectedIndex < itemCount) {
+    let seen = 0;
+    for (const entry of flatEntries) {
+      if (entry.kind !== 'item') continue;
+      if (seen === selectedIndex) {
+        selectedOptionId = `${listId}-opt-${seen}`;
+        break;
+      }
+      seen += 1;
+    }
+  }
+
   // Build a mapping from flatIndex → item entry for quick look-up during rendering
   let itemCounter = 0;
 
@@ -351,6 +380,8 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             aria-label="Search commands"
             placeholder="Search commands, tabs, and settings"
             value={query}
+            aria-controls={listId}
+            aria-activedescendant={selectedOptionId}
             onChange={(e) => {
               setQuery(e.target.value);
               setSelectedIndex(0);
@@ -358,7 +389,13 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             onKeyDown={handleKeyDown}
           />
         </div>
-        <ul className="command-palette__list" role="listbox" aria-label="Commands" ref={listRef}>
+        <ul
+          className="command-palette__list"
+          id={listId}
+          role="listbox"
+          aria-label="Commands"
+          ref={listRef}
+        >
           {flatEntries.map((entry) => {
             if (entry.kind === 'header') {
               return (
@@ -373,9 +410,15 @@ export function CommandPalette({ open, onClose }: CommandPaletteProps) {
             const { result, matches } = entry;
 
             return (
-              <li key={entry.key}>
+              // `role="presentation"` is LOAD-BEARING: a `listbox` may only own `option`
+              // (or `group`) children, and an unroled `<li>` in between — whose implicit
+              // role is `listitem` — breaks that association, so a screen reader stops
+              // reading the list as options at all. The wrapper is a styling hook only. The
+              // section headers above already do this for the same reason.
+              <li key={entry.key} role="presentation">
                 <button
                   type="button"
+                  id={`${listId}-opt-${flatIdx}`}
                   data-palette-item="true"
                   className={`command-palette__item${isSelected ? ' command-palette__item--active' : ''}`}
                   role="option"

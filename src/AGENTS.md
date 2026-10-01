@@ -215,6 +215,27 @@ height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open`
   bare `invoke` and a Rust `Err(String)` rejects with that string, not an `Error` — so the
   usual `err instanceof Error ? err.message : …` is false for every real refusal and
   would silently discard the core's reason. A draft is never cleared by a refusal.
+  The consumers are `HomeTab`, `MyFiltersTab`, `SearchTab`, **`FavoritesManager`
+  (whose `favorites.add` the core now refuses when the url normalizes onto a live
+  bookmark, so an ordinary double-tap is a refusal)**, **`FilterListsTab` — and
+  there the reachable arm is NOT the URL at all**: its `normalizeSavedUrl` already
+  refused anything that is not http(s), so the only core refusal left is
+  `subs.rs::safe_list_id` rejecting a URL whose LAST SEGMENT is `.` or `..`.
+  That is worth naming because a test that typed a plausible bad URL would never
+  reach it**, **`SitePermissionsTab`
+  (whose revoke/clear now propagate a failed save — the core used to answer `ok`
+  while the file kept the revoked grant)**, the **mobile favourites bar's `+`** and
+  the **mobile "Forget this site's permissions"** in `MobileApp` — every one of
+  these would otherwise turn the refusal into an unhandled rejection plus a wiped
+  form / a dead button.
+  **The success wording must not print when a sibling call was REFUSED.\*\* Clearing
+  remembered site data is several `favorites.remove` / `history.clear` / `permissions.clear`
+  promises in a `Promise.all` / `allSettled`, so "Cleared Aegis history for this
+  site" was printed even when the permissions revoke had just been refused and
+  would reappear on the next start; the `.then(ok, refused)` shape (desktop) and the
+  `allSettled` + `refused.length` check (mobile, where `AddressBar`'s
+  `onForgetSitePermissions(origin): void` prop type leaves nowhere to return to)
+  both gate the toast on a clean sweep.
   `saveError.test.ts` covers all four shapes it accepts — the core's sentence, an
   `Error`'s message, a rejection with no text at all, and a blank one — because the
   last two are the only things standing between a refusal and an empty toast.
@@ -245,10 +266,44 @@ canceled`) passed because of the defect and named a "canceled" state the flow
   the user gave up cannot re-settle the promise. The consumer needs a `.catch` for the
   same reason: `.finally` alone re-enables the button with no explanation.
   `onResult`/`kick` are injected so a test can supply a transport that never answers.
+- **The same helper now carries `data.export` / `data.import`, and it is GENERIC for a
+  reason.** Those two channels do unbounded serialize+fsync work, so the core moved them
+  onto a detached thread; `ipc` is synchronous and runs on the UI thread, so doing that
+  work inline froze the window for the whole pass. The reply is now only an
+  ACKNOWLEDGEMENT (`{ok: true, pending: true, channel}`) and the outcome arrives on a
+  one-shot `data.bulkDone`. `awaitUpdateResult` was made generic over the result type with
+  an optional `timeoutMessage` (defaulting to the filter-list wording verbatim, so
+  `lists.updateNow` and its six tests are untouched) rather than a second copy of the
+  settle-once bookkeeping, which would be a second copy to drift. `awaitBulkData` in
+  `ipcClient` restores the promise the IPC surface promises, so `DataTab`, `App` and
+  `MobileApp` needed **no** change — and in particular `DataTab`'s `onImport` success path
+  still reloads the page, because it only ever sees a RESOLVED promise.
+- **A one-shot event must be FILTERED on whatever makes two of them distinguishable.**
+  `awaitUpdateResult` settles on the first event it is handed, and the bulk worker's event
+  carries the channel precisely so an export and a restore in flight together cannot
+  resolve each other — the export reporting a written path for a finished RESTORE is a
+  claim the user acts on. The core's own `pushNavState`-style fan-out has the same hazard.
+  The backup bound is `BULK_RESULT_TIMEOUT_MS` (300 s, five times the filter-list bound)
+  and its wording says **nothing was reported as saved** rather than "try again".
+  `ipcClient.test.ts` drives the real module with a fake `listen`, so it can deliver the
+  event by hand — including the cross-resolve case and the never-arrives case.
 - **`hooks/useFind`** — owns find-in-page UI state for the active view. Subscribes to
   `aegis.find.onState` (filtering by `viewId`), debounces `find.start` calls ~120 ms,
   issues `find.close` on tab switch so highlights don't linger on background tabs.
   Returns `{ open, state, show, setQuery, next, prev, close }` consumed by `FindBar`.
+  **EVERY path that ends the session must cancel the pending debounce, and there were two
+  such paths, not one.** The tab-switch effect has always done it, with a comment naming the
+  hazard: a `find.start` queued <120 ms before a switch fires AFTER `find.close(prev)` and
+  re-opens a session on a background tab. `close()` reached the identical hazard and did
+  not take it — and `FindBar`'s key handler routes Escape straight to `close()` with **no
+  query check**, so Escape within 120 ms of typing used to call `find.close(activeViewId)`
+  and then start a live find session **with highlights** on a bar the user had already
+  dismissed, with nothing left on screen to clear them. The rule for this hook: a timer
+  that can outlive the thing it acts on belongs to _every_ terminator of that thing, not
+  the one that is easiest to remember.
+  `useFind.test.tsx` pins the Escape case by advancing the clock to prove the timer is
+  armed BEFORE `close()`, not by asserting a call count — a test that only checked
+  `findStart` was never called would also pass if `setQuery` had never armed anything.
 - **`hooks/useHistory`** — the renderer's history list is a **PAGE, not the store**:
   `aegis.history.list()` is called with no options, so the core returns the newest 200
   rows of up to 5000. Anything that must touch "all of it" therefore has to be a core
@@ -513,6 +568,56 @@ now?)` (`just now` → `12 min ago` → `3 h ago` → `Yesterday, 14:32` → `Tu
   `AdblockShield.test.tsx` drives the real UI for the refused case, for both still-allowed
   cases, and for the both-listed case. (The `farble.rs:370` / `SecurityTab.tsx:223` pair looks
   like the same bug and is **not** — it is exact on BOTH sides, so read and write agree.)
+- **A view-scoped `getState` MUST carry its `viewId`, because the dedup cache is keyed by
+  payload.** `ipcClient`'s `dedupedCall` hashes the payload into the cache key, so a
+  payload-less call on a channel in `DEDUP_WINDOWS` has **ONE key shared by every caller**.
+  `adblock.getState` is such a channel (300 ms) and its `pageBlocked` is a per-TAB number,
+  so `getState: () => dedupedCall(…, undefined)` meant a tab switch inside the window handed
+  the new tab the PREVIOUS tab's count, uncorrectable for the rest of the session (the only
+  other writer is a live `blockedCount` event, which a tab that blocks nothing never sends).
+  It now takes `viewId: ViewId` and passes `{ viewId }`, like `nav.getState` above; the core
+  resolves the target with `adblock::target_view` (payload `viewId`, else `active_id()`).
+  **The renderer-side consequence: a view id is not always available where the value is.**
+  `commandPaletteData.ts` is deliberately pure and cannot read the active tab, so
+  `getActionResults(query, viewId)` takes it as a parameter, `CommandPalette` gained a
+  `viewId` prop, and both shells pass `tabs.activeId` — even though the palette's action reads
+  only the global `enabled`, because the CHANNEL is view-scoped.
+- **A `listbox` must OWN its options, and an unroled `<li>` between them breaks the
+  ownership.** `CommandPalette` put `role="listbox"` on the `<ul>` and `role="option"` on a
+  `<button>` **two elements deeper** — the option's `<li>` wrapper carries no role, so its
+  implicit role is `listitem`, which a `listbox` is not allowed to own. Assistive tech
+  therefore saw no options in that list at all. The header `<li>` was already
+  `role="presentation"`; the option wrapper was the one that was missed. Every option now has
+  `role="presentation"` on the wrapper, and the `<ul>` itself is `id`'d.
+  **And a text field that owns a list must NAME it, because `aria-activedescendant` is the
+  only channel that announces the row the arrow keys landed on** — there is no focus, since
+  focus stays in the input. So the input carries `aria-controls={listId}` (pointing at the
+  list) and `aria-activedescendant` (pointing at the selected row's id), the same pairing
+  `AddressBar`'s omnibox uses for the identical widget; `OmniboxDropdown.tsx:112-140` is
+  the model for giving each row an id. The input's role is left as the implicit
+  `searchbox`, which supports `aria-activedescendant`, so no `aria-expanded` /
+  `aria-haspopup` obligation comes with it.
+  **Two non-obvious traps in writing the tests, both of which produced a wrong precondition
+  rather than a wrong fix.** (1) `selectedIndex` counts **items only** — the Enter arm and
+  the id generator both skip section headers, so indexing the flat entry list by it points at
+  the wrong row the moment a query matches anything under a header. The id is computed by
+  walking the entries the same way the keys are generated, not by indexing. (2) **A nonsense
+  query does NOT empty the list**: the two getters (`getActionResults`, `getSettingsResults`)
+  are synchronous and answer from their fixtures whatever the text is, so a test that typed
+  `zzzznope` and waited for zero options would have hung; the tests empty every getter
+  instead. And the ownership assertion is made over the **DOM** (`box.children` filtered for
+  unroled `LI`), not over a role query — a role query is the thing the bug was about, so
+  asking it whether the roles are right cannot fail.
+- **A mock that omits a field the real channel always sends makes that whole bug class
+  untestable.** `aegisMock.ts`'s `adblock.getState` resolved
+  `{ enabled, allowlistedHosts, sessionBlocked }` with **no `pageBlocked`**, so
+  `setPage(s.pageBlocked ?? 0)` read 0 in every test and no test could have expressed "tab A
+  blocked 7, tab B blocked 0" — the defect above was invisible to the suite _because_ of the
+  fixture. The mock now carries `pageBlocked`, keyed by the requested view, with
+  `setMockPageBlocked` / `resetMockPageBlocked` test-only helpers; its `nav.getState` is
+  likewise view-aware (it used to return one fixed `baseState` for every argument).
+  `ipcClient.test.ts` pins the dedup shape (two views ⇒ two invokes, same view ⇒ one) and
+  `useAdblock.test.tsx` pins the tab switch.
 - **The badges must not overstate protection.** `protectionSummary` takes `webrtc:
 WebrtcExemptState` as a **REQUIRED** option (an optional field with a default would fail
   OPEN to "not exempt" for any caller that forgot it — which is exactly the bug class
@@ -953,9 +1058,10 @@ then counts both. One render per test.
 `src/main.tsx` (the `createRoot` entry point), `src/vite-env.d.ts`, and
 `src/testFixtures/**` (a mock). The measured totals, the ratchet and the full gap
 decomposition live in the **root** `AGENTS.md`. The `src/`-only view, for when you want it
-without opening the other file: `src/` is at **90.92%** statements (5797/6376, 579 uncovered)
+without opening the other file: `src/` is at **91.31%** statements (5822/6376, 554 uncovered)
 and the debt is concentrated in `src/components/` (353, of which 147 is `mobile/`) and the
 `App.tsx` root (121 of 344); the hooks sit at 38 uncovered statements out of 1412, and
 `shared/` is at 0. Every figure here is recomputed from `coverage/coverage-summary.json`
 when it is touched — the previous revision of this paragraph said 88.0% / 736 uncovered /
-479 / 152 / 42-of-1350, none of which the report yields any more.
+479 / 152 / 42-of-1350, and another said 90.92% / 5797 / 579 uncovered, none of which the
+report yields any more.

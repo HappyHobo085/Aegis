@@ -6,6 +6,7 @@
 import { aegis } from './ipcClient';
 import { TAB_ORDER } from '../components/SettingsModal';
 import type { SettingsTab } from '../components/SettingsModal';
+import type { ViewId } from '../../shared/types';
 import { fuzzyMatch } from './fuzzySearch';
 
 export interface PaletteResult {
@@ -111,7 +112,13 @@ export async function getHistoryResults(query: string): Promise<PaletteResult[]>
 // Action results (static, always available)
 // ---------------------------------------------------------------------------
 
-export function getActionResults(query: string): PaletteResult[] {
+/// `viewId` is the ACTIVE tab, passed in rather than read from a module global because this
+/// file is deliberately pure (see the comment in App.tsx). The palette's ad-block action
+/// reads only the global `enabled` flag, but `adblock.getState` also reports the view's
+/// `pageBlocked` and is deduped by payload — so it must be told which view it is asking
+/// about rather than send a payload-less call that shares one cache key with every other
+/// caller.
+export function getActionResults(query: string, viewId: ViewId): PaletteResult[] {
   const actions: PaletteResult[] = [
     // Tab actions
     {
@@ -235,7 +242,7 @@ export function getActionResults(query: string): PaletteResult[] {
       subtitle: 'Enable or disable ad blocking',
       category: 'actions',
       action: async () => {
-        const state = await aegis.adblock.getState();
+        const state = await aegis.adblock.getState(viewId);
         await aegis.adblock.setEnabled(!state.enabled);
       },
       icon: '🛡️',

@@ -42,6 +42,7 @@ vi.mock('./lib/theme', () => ({
 }));
 
 import { App } from './App';
+import { subscribeToasts } from './lib/toast';
 
 beforeEach(async () => {
   vi.clearAllMocks();
@@ -100,6 +101,73 @@ beforeEach(async () => {
 });
 
 describe('App', () => {
+  // The desktop shell's half of the permission-refusal obligation. `permissions.remove`
+  // REFUSES a revoke whose save did not land, and both handlers here used to fire-and-
+  // forget it — so the "Cleared Aegis history and remembered permissions" toast printed the
+  // SUCCESS wording over a refusal and the grant came back on the next start. This is a
+  // separate code path from `SitePermissionsTab.test.tsx` (which covers the settings panel)
+  // and from the mobile shell's equivalent in `MobileApp.test.tsx`.
+  //
+  // The real `toast` module is used (not a mock) so this only ADDS an observer; mocking it
+  // here would change what every other test in this file sees.
+  const withToasts = async (drive: () => Promise<void>): Promise<string[]> => {
+    const seen: string[] = [];
+    const unsubscribe = subscribeToasts((next) =>
+      seen.push(...next.map((t) => `${t.kind}:${t.message}`)),
+    );
+    try {
+      await drive();
+    } finally {
+      unsubscribe();
+    }
+    return seen;
+  };
+
+  it('does not claim a site-data clear succeeded when the core refused a revoke', async () => {
+    const { aegis } = await import('./lib/ipcClient');
+    (aegis.permissions.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { origin: 'https://example.com', permission: 'camera', decision: 'allow' },
+    ]);
+    (aegis.history.removeForOrigin as ReturnType<typeof vi.fn>).mockResolvedValue(1);
+    // A Rust `Err(String)` rejects with a BARE STRING; `err instanceof Error` would discard
+    // it, which is why the toast must go through `saveErrorText`.
+    (aegis.permissions.remove as ReturnType<typeof vi.fn>).mockRejectedValue(
+      'could not write the permissions store',
+    );
+
+    const seen = await withToasts(async () => {
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: /open site information/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /clear remembered data/i }));
+      await waitFor(() => expect(aegis.permissions.remove).toHaveBeenCalled());
+    });
+
+    expect(seen.some((t) => /could not write the permissions store/.test(t))).toBe(true);
+    expect(
+      seen.some((t) => /Cleared Aegis history and remembered permissions/.test(t)),
+      'the success wording must NOT be printed over a refusal',
+    ).toBe(false);
+  });
+
+  it('reports a REFUSED per-site permission revoke instead of dropping it', async () => {
+    const { aegis } = await import('./lib/ipcClient');
+    (aegis.permissions.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { origin: 'https://example.com', permission: 'geolocation', decision: 'allow' },
+    ]);
+    (aegis.permissions.remove as ReturnType<typeof vi.fn>).mockRejectedValue(
+      'could not write the permissions store',
+    );
+
+    const seen = await withToasts(async () => {
+      render(<App />);
+      fireEvent.click(await screen.findByRole('button', { name: /open site information/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /forget permissions/i }));
+      await waitFor(() => expect(aegis.permissions.remove).toHaveBeenCalled());
+    });
+
+    expect(seen.some((t) => /could not write the permissions store/.test(t))).toBe(true);
+  });
+
   it('renders the toolbar address bar', async () => {
     render(<App />);
     await waitFor(() =>

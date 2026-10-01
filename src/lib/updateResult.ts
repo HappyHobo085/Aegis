@@ -17,6 +17,11 @@ import type { ListUpdateResult } from '../../shared/types';
  */
 export const UPDATE_RESULT_TIMEOUT_MS = 60_000;
 
+/** The default timeout rejection — the filter-list wording, kept verbatim for `lists`. */
+const LIST_TIMEOUT_MESSAGE =
+  'The filter-list refresh never reported back. The core may have stopped ' +
+  'mid-update; your lists are unchanged, so it is safe to try again.';
+
 /**
  * Await the core's one-shot refresh result, settling on whichever of three things
  * happens first:
@@ -38,13 +43,21 @@ export const UPDATE_RESULT_TIMEOUT_MS = 60_000;
  * `onResult` and `kick` are injected rather than imported so this is testable without
  * a mocked IPC surface — and so a test can pass a transport that never answers, which
  * is the whole failure being guarded.
+ *
+ * Generic over the result type, and the timeout message is a parameter, because the SAME
+ * hand-off is now used by a second pair of channels: `data.export` / `data.import` are
+ * also answered by a detached thread whose outcome arrives on a one-shot event
+ * (`data.bulkDone`). Two copies of the settle-once bookkeeping would be two copies to
+ * drift; `timeoutMessage` defaults to the filter-list wording, so the original caller and
+ * its tests are unchanged.
  */
-export function awaitUpdateResult(
-  onResult: (cb: (r: ListUpdateResult) => void) => () => void,
+export function awaitUpdateResult<T = ListUpdateResult>(
+  onResult: (cb: (r: T) => void) => () => void,
   kick: () => Promise<unknown>,
   timeoutMs: number,
-): Promise<ListUpdateResult> {
-  return new Promise<ListUpdateResult>((resolve, reject) => {
+  timeoutMessage = LIST_TIMEOUT_MESSAGE,
+): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
     let settled = false;
     // The unsubscribe handle and the timer handle are mutually referential: `finish`
     // needs the timer to clear it, and the timer's callback needs `finish`. They are
@@ -63,18 +76,7 @@ export function awaitUpdateResult(
       settle();
     };
     io.off = onResult((r) => finish(() => resolve(r)));
-    io.timer = setTimeout(
-      () =>
-        finish(() =>
-          reject(
-            new Error(
-              'The filter-list refresh never reported back. The core may have stopped ' +
-                'mid-update; your lists are unchanged, so it is safe to try again.',
-            ),
-          ),
-        ),
-      timeoutMs,
-    );
+    io.timer = setTimeout(() => finish(() => reject(new Error(timeoutMessage))), timeoutMs);
     void kick().catch((e: unknown) =>
       finish(() => reject(e instanceof Error ? e : new Error(String(e)))),
     );

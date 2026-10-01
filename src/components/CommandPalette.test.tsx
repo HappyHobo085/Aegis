@@ -130,12 +130,12 @@ beforeEach(() => {
 
 describe('CommandPalette — visibility and dialog semantics', () => {
   it('renders nothing at all when closed', () => {
-    const { container } = render(<CommandPalette open={false} onClose={vi.fn()} />);
+    const { container } = render(<CommandPalette open={false} viewId={1} onClose={vi.fn()} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it('exposes a modal dialog labelled "Command palette"', () => {
-    render(<CommandPalette open onClose={vi.fn()} />);
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
     const dialog = screen.getByRole('dialog');
     expect(dialog).toHaveAttribute('aria-modal', 'true');
     // aria-labelledby must resolve to the sr-only heading, not dangle.
@@ -145,7 +145,7 @@ describe('CommandPalette — visibility and dialog semantics', () => {
   });
 
   it('names the search field and the list for assistive tech', () => {
-    render(<CommandPalette open onClose={vi.fn()} />);
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
     expect(input()).toBeInTheDocument();
     expect(screen.getByRole('listbox', { name: 'Commands' })).toBeInTheDocument();
   });
@@ -158,7 +158,7 @@ describe('CommandPalette — results and grouping', () => {
     getTabResults.mockResolvedValue([]);
     getBookmarkResults.mockResolvedValue([]);
     getHistoryResults.mockResolvedValue([]);
-    render(<CommandPalette open onClose={vi.fn()} />);
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
     expect(screen.getByText('No results.')).toBeInTheDocument();
     // `getAllByRole` throws on zero matches, so the zero case needs the
     // `query*` variant.
@@ -166,7 +166,7 @@ describe('CommandPalette — results and grouping', () => {
   });
 
   it('groups results under one header per section, in the fixed section order', async () => {
-    render(<CommandPalette open onClose={vi.fn()} />);
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
     await typeQuery('e');
     // Query by class, not by role: the scrim and the <li> wrappers around each
     // option also resolve to `presentation`, so `getAllByRole` over-counts.
@@ -177,7 +177,7 @@ describe('CommandPalette — results and grouping', () => {
   });
 
   it('debounces the three async getters but not the two synchronous ones', async () => {
-    render(<CommandPalette open onClose={vi.fn()} />);
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
     // On mount the two SYNC getters have already run; the three async ones are
     // still waiting on their 200 ms debounce timer.
     expect(getActionResults).toHaveBeenCalled();
@@ -191,7 +191,7 @@ describe('CommandPalette — results and grouping', () => {
   });
 
   it('marks up the fuzzy-matched characters only for a non-empty query', async () => {
-    render(<CommandPalette open onClose={vi.fn()} />);
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
     // An empty query matches everything with NO match positions, so there is
     // deliberately nothing to highlight.
     await settle();
@@ -207,9 +207,77 @@ describe('CommandPalette — results and grouping', () => {
   });
 });
 
+// The palette is a modal dialog whose search field never loses focus, so `aria-activedescendant`
+// is the ONLY channel by which a screen reader can be told which row the arrow keys moved to.
+// The listbox also has to OWN its options directly: an unroled `<li>` in between (implicit role
+// `listitem`) breaks that association, which is why each wrapper is `role="presentation"`.
+describe('CommandPalette — the listbox is reachable from the search field', () => {
+  it('points the field at the listbox, and announces the row the arrow keys land on', async () => {
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
+    await typeQuery('e');
+    const box = screen.getByRole('listbox', { name: 'Commands' });
+
+    expect(input()).toHaveAttribute('aria-controls', box.id);
+    expect(box.id).not.toBe('');
+
+    // The FIRST option is selected on an empty query, and the field names exactly that row.
+    expect(input().getAttribute('aria-activedescendant')).toBe(options()[0].id);
+
+    await act(async () => {
+      fireEvent.keyDown(input(), { key: 'ArrowDown' });
+    });
+    expect(selected()).toBe(options()[1]);
+    // Not merely "some row": it must be the row `aria-selected` just moved to, or the
+    // announcement and the highlight disagree.
+    expect(input().getAttribute('aria-activedescendant')).toBe(options()[1].id);
+    expect(document.getElementById(input().getAttribute('aria-activedescendant')!)).toBe(
+      options()[1],
+    );
+  });
+
+  it('announces nothing while there is nothing to announce', async () => {
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
+    await typeQuery('e');
+    await act(async () => {
+      fireEvent.keyDown(input(), { key: 'ArrowDown' });
+      fireEvent.keyDown(input(), { key: 'ArrowDown' });
+    });
+    expect(input().hasAttribute('aria-activedescendant')).toBe(true);
+
+    // Now empty every section. A nonsense query would NOT do: the two SYNC getters answer
+    // from their fixtures whatever the text is, so the list would still hold their rows.
+    getActionResults.mockReturnValue([]);
+    getSettingsResults.mockReturnValue([]);
+    getTabResults.mockResolvedValue([]);
+    getBookmarkResults.mockResolvedValue([]);
+    getHistoryResults.mockResolvedValue([]);
+    await act(async () => {
+      fireEvent.change(input(), { target: { value: 'zzz' } });
+    });
+    await waitFor(() => expect(screen.queryAllByRole('option')).toHaveLength(0));
+    // A stale id here would make a screen reader jump to a row that no longer exists.
+    expect(input().hasAttribute('aria-activedescendant')).toBe(false);
+  });
+
+  it('gives every option a distinct id, and owns them directly', async () => {
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
+    await typeQuery('e');
+    const ids = options().map((o) => o.id);
+    expect(ids.every((id) => id !== '')).toBe(true);
+    expect(new Set(ids).size).toBe(ids.length);
+
+    // Direct ownership, asserted over the DOM rather than the role query: the wrappers are
+    // `<li role="presentation">`, so an `li` left unroled here would be a `listitem` child
+    // of a `listbox`, which the ARIA listbox pattern does not allow.
+    const box = screen.getByRole('listbox', { name: 'Commands' });
+    const unroled = [...box.children].filter((c) => c.tagName === 'LI' && !c.getAttribute('role'));
+    expect(unroled).toHaveLength(0);
+  });
+});
+
 describe('CommandPalette — keyboard navigation', () => {
   it('starts on the first option and wraps in both directions', async () => {
-    render(<CommandPalette open onClose={vi.fn()} />);
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
     await typeQuery('e');
     expect(selected()).toBe(options()[0]);
 
@@ -227,7 +295,7 @@ describe('CommandPalette — keyboard navigation', () => {
   });
 
   it('selects an option on hover, mirroring what Enter would run', async () => {
-    render(<CommandPalette open onClose={vi.fn()} />);
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
     await typeQuery('e');
     const third = options()[2];
     expect(third).toHaveAttribute('aria-selected', 'false');
@@ -248,7 +316,7 @@ describe('CommandPalette — activation', () => {
     getBookmarkResults.mockResolvedValue([]);
     getHistoryResults.mockResolvedValue([]);
     getSettingsResults.mockReturnValue([]);
-    render(<CommandPalette open onClose={onClose} />);
+    render(<CommandPalette open viewId={1} onClose={onClose} />);
     await typeQuery('Reload');
 
     // "Reload" is the only match, so it is selected by default.
@@ -274,7 +342,7 @@ describe('CommandPalette — activation', () => {
 
   it('closes on Escape without running anything', async () => {
     const onClose = vi.fn();
-    render(<CommandPalette open onClose={onClose} />);
+    render(<CommandPalette open viewId={1} onClose={onClose} />);
     await typeQuery('e');
     await act(async () => {
       fireEvent.keyDown(input(), { key: 'Escape' });
@@ -290,7 +358,7 @@ describe('CommandPalette — activation', () => {
 
   it('closes on a scrim click but NOT on a click inside the dialog', async () => {
     const onClose = vi.fn();
-    const { container } = render(<CommandPalette open onClose={onClose} />);
+    const { container } = render(<CommandPalette open viewId={1} onClose={onClose} />);
     const dialog = screen.getByRole('dialog');
 
     await act(async () => {
@@ -305,7 +373,7 @@ describe('CommandPalette — activation', () => {
   });
 
   it('keeps Tab inside the dialog instead of walking out of it', async () => {
-    render(<CommandPalette open onClose={vi.fn()} />);
+    render(<CommandPalette open viewId={1} onClose={vi.fn()} />);
     await settle();
     input().focus();
     const event = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });

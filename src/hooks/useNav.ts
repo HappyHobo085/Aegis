@@ -101,5 +101,4 @@ export function useNav(viewId: ViewId): {
   return { state, navigate, back, forward, reloadOrStop, home, searchTemplate };
 }
 
-export const DEFAULT_VIEW_ID = PRIMARY_VIEW_ID;
 export { PRIMARY_VIEW_ID } from '../../shared/types';

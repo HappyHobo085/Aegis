@@ -6,6 +6,7 @@ import { PRIMARY_VIEW_ID } from '../../shared/types';
 import type {
   AegisApi,
   NavState,
+  ViewId,
   Settings,
   FingerprintState,
   WebrtcExemptState,
@@ -37,6 +38,25 @@ const baseSettings: Settings = {
   antiFingerprint: 'off',
 };
 
+/// Per-view `pageBlocked` counts the mocked core reports, so a test can express "this
+/// tab blocked N things, that one blocked M" — the shape the real `PAGE_BLOCKED` map has.
+/// Test-only: nothing in `src/` outside a `*.test.*` file sets it.
+const pageBlockedByView = new Map<ViewId, number>();
+
+function adblockPageBlocked(viewId: ViewId): number {
+  return pageBlockedByView.get(viewId) ?? 0;
+}
+
+/// Test-only override for the mocked core's per-tab blocked count.
+export function setMockPageBlocked(viewId: ViewId, page: number): void {
+  pageBlockedByView.set(viewId, page);
+}
+
+/// Test-only reset, so one test's tab counts cannot leak into the next.
+export function resetMockPageBlocked(): void {
+  pageBlockedByView.clear();
+}
+
 /// The mock is annotated as `AegisApi` on purpose: it is the stand-in for the real IPC
 /// surface in every jsdom test, so if it drifts from the contract the tests will happily
 /// pass against a shape the core never produces. `satisfies` (rather than a cast) is what
@@ -61,7 +81,10 @@ export function aegisMockModule() {
         forward: vi.fn(async () => {}),
         reloadOrStop: vi.fn(async () => {}),
         home: vi.fn(async () => {}),
-        getState: vi.fn(async () => baseState),
+        // View-aware: the real channel answers about the view it was ASKED about, so a
+        // mock that echoed one fixed `viewId` let every view-scoped nav assertion pass
+        // against a core that could never have produced it.
+        getState: vi.fn(async (viewId: ViewId) => ({ ...baseState, viewId })),
         onState: vi.fn().mockReturnValue(() => {}),
         onFailed: vi.fn().mockReturnValue(() => {}),
         onCrashed: vi.fn().mockReturnValue(() => {}),
@@ -88,9 +111,17 @@ export function aegisMockModule() {
         set: vi.fn(async () => ''),
       },
       adblock: {
-        getState: vi
-          .fn()
-          .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),
+        // `pageBlocked` is PRESENT here on purpose. The real `adblock.getState` always
+        // sends it, and omitting it from the fixture made `setPage(s.pageBlocked ?? 0)`
+        // read 0 in EVERY test — so the entire class "the shield shows the previous tab's
+        // count" was untestable here. It is keyed by the view the caller asked about,
+        // matching the core, so a tab switch is expressible in a test at all.
+        getState: vi.fn().mockImplementation(async (viewId: ViewId) => ({
+          enabled: true,
+          allowlistedHosts: [],
+          sessionBlocked: 0,
+          pageBlocked: adblockPageBlocked(viewId),
+        })),
         setEnabled: vi
           .fn()
           .mockResolvedValue({ enabled: true, allowlistedHosts: [], sessionBlocked: 0 }),

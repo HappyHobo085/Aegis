@@ -2,7 +2,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { renderHook, act, waitFor } from '@testing-library/react';
 import { PRIMARY_VIEW_ID } from '../../shared/types';
-import type { AdblockState, BlockedCount } from '../../shared/types';
+import type { AdblockState, BlockedCount, ViewId } from '../../shared/types';
 
 const getState = vi.fn();
 const setEnabled = vi.fn();
@@ -48,6 +48,30 @@ describe('useAdblock', () => {
     await waitFor(() => expect(result.current.state.enabled).toBe(true));
     expect(getState).toHaveBeenCalledTimes(1);
     expect(result.current.state.allowlistedHosts).toEqual([]);
+  });
+
+  it('asks the core about the VIEW it is mounted for, so a tab switch cannot show the old tab count', async () => {
+    // The defect this pins: the seed fetch was `aegis.adblock.getState()` with NO argument,
+    // so `dedupedCall` hashed it to ONE cache key shared by every tab for 300 ms. Switching
+    // tabs inside that window handed the new tab the PREVIOUS tab's `pageBlocked`, and
+    // nothing corrected it for the rest of the session (the only other writer is a live
+    // blockedCount event). Asserting the ARGUMENT is the load-bearing half — the values
+    // below differ per view, so a shared cache key would also fail, but an assertion on
+    // values alone would not prove the payload is what separates them.
+    const pageFor = (viewId: number) => ({ ...baseState, pageBlocked: viewId * 10 });
+    getState.mockImplementation(async (viewId: number) => pageFor(viewId));
+
+    const { result, rerender } = renderHook(
+      ({ viewId }: { viewId: number }) => useAdblock(viewId as ViewId, 'https://example.com/'),
+      { initialProps: { viewId: PRIMARY_VIEW_ID } },
+    );
+    await waitFor(() => expect(result.current.page).toBe(PRIMARY_VIEW_ID * 10));
+    expect(getState).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID);
+
+    // The switch happens immediately — well inside the 300 ms dedup window.
+    rerender({ viewId: PRIMARY_VIEW_ID + 1 });
+    await waitFor(() => expect(result.current.page).toBe((PRIMARY_VIEW_ID + 1) * 10));
+    expect(getState).toHaveBeenLastCalledWith(PRIMARY_VIEW_ID + 1);
   });
 
   it('subscribes to onBlockedCount and updates page for the matching viewId', async () => {

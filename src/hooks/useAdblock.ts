@@ -45,7 +45,11 @@ export function useAdblock(
         prev.sessionBlocked === c.session ? prev : { ...prev, sessionBlocked: c.session },
       );
     });
-    void aegis.adblock.getState().then((s) => {
+    // The viewId MUST ride along: `pageBlocked` is the ACTIVE tab's count, so a
+    // payload-less call shares one dedup cache key with every other caller and a tab
+    // switch inside the 300ms window would serve the previous tab's number. Passing it
+    // keys the cache per view (same as `nav.getState`).
+    void aegis.adblock.getState(viewId).then((s) => {
       if (!active) return;
       setState(s);
       // Recover the active page's count on mount / tab-switch (live blockedCount events
@@ -54,7 +58,7 @@ export function useAdblock(
     });
     // The allowlist is syncable — refetch state (incl. allowlistedHosts) when sync merges it.
     const offSync = onSyncChange('allowlist', () => {
-      void aegis.adblock.getState().then((s) => {
+      void aegis.adblock.getState(viewId).then((s) => {
         if (active) setState(s);
       });
     });

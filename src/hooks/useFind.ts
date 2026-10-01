@@ -79,6 +79,18 @@ export function useFind(activeViewId: ViewId): {
   }, []);
 
   const close = useCallback(() => {
+    // Cancel a pending debounced `find.start` FIRST, for the same reason the tab-switch
+    // effect above does. Escape goes straight to `close()` (`FindBar`'s key handler, with
+    // no query check), so pressing it within 120 ms of typing used to call
+    // `find.close(activeViewId)` and then, 120 ms later, `find.start(activeViewId, q)` —
+    // starting a live find session WITH highlights on a bar the user had already dismissed,
+    // with nothing left on screen to clear them. The tab-switch effect already carries this
+    // comment and this fix; `close()` was the one path that reached the same hazard and did
+    // not take it.
+    if (debounceRef.current !== null) {
+      clearTimeout(debounceRef.current);
+      debounceRef.current = null;
+    }
     setOpen(false);
     void aegis.find.close(activeViewId);
   }, [activeViewId]);

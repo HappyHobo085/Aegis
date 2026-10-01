@@ -52,6 +52,7 @@ import { Toaster } from '../Toaster';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { Onboarding } from '../Onboarding';
 import { toast } from '../../lib/toast';
+import { saveErrorText } from '../../lib/saveError';
 import { MobileTopBar } from './MobileTopBar';
 import { MobileBottomBar } from './MobileBottomBar';
 import { MobileMenuSheet } from './MobileMenuSheet';
@@ -224,20 +225,48 @@ function MobileShell() {
     showInFolder: downloads.showInFolder,
   });
 
+  // `AddressBar`'s prop types this `(origin: string) => void`, so the rejections are handled
+  // HERE rather than by returning a promise the caller cannot await. `permissions.remove`
+  // refuses a revoke whose save did not land; fire-and-forget turned that into an
+  // unhandled rejection with no word to the user. `allSettled` so one refusal does not hide
+  // the others, and the reason is reported once.
   const forgetSitePermissions = (siteOrigin: string): void => {
-    for (const permission of permissions.permissions.filter((p) => p.origin === siteOrigin)) {
-      void permissions.remove(permission.origin, permission.permission);
-    }
+    const pending = permissions.permissions
+      .filter((p) => p.origin === siteOrigin)
+      .map((permission) => permissions.remove(permission.origin, permission.permission));
+    if (pending.length === 0) return;
+    void Promise.allSettled(pending).then((outcomes) => {
+      const refused = outcomes.find((o) => o.status === 'rejected');
+      if (refused !== undefined && refused.status === 'rejected') {
+        toast.error(saveErrorText(refused.reason));
+      }
+    });
   };
 
   const clearRememberedSiteData = (siteOrigin: string): void => {
-    forgetSitePermissions(siteOrigin);
     // Core-side, over the WHOLE store: `history.entries` is only the last `list()` page
     // (200 of up to 5000 rows), so looping over it claimed to clear a site while most of
     // its history stayed on disk — and `history.search` filters the full snapshot, so the
     // user could search the "erased" rows straight back up.
     void history.removeForOrigin(siteOrigin);
-    toast.info('Cleared Aegis history and remembered permissions for this site.');
+    const pending = permissions.permissions
+      .filter((p) => p.origin === siteOrigin)
+      .map((permission) => permissions.remove(permission.origin, permission.permission));
+    // The success wording is only printed when no revoke was refused — `forgetSitePermissions`
+    // above reported the reason already, and claiming "cleared" over a refusal is the lie this
+    // whole item is about.
+    if (pending.length === 0) {
+      toast.info('Cleared Aegis history and remembered permissions for this site.');
+      return;
+    }
+    void Promise.allSettled(pending).then((outcomes) => {
+      const refused = outcomes.find((o) => o.status === 'rejected');
+      if (refused === undefined) {
+        toast.info('Cleared Aegis history and remembered permissions for this site.');
+      } else if (refused.status === 'rejected') {
+        toast.error(saveErrorText(refused.reason));
+      }
+    });
   };
 
   const shield = (
@@ -297,7 +326,18 @@ function MobileShell() {
           onOpen={(url: string) => void nav.navigate(url)}
           onAdd={
             host !== null
-              ? () => void favorites.add({ name: nav.state.title || host, url: nav.state.url })
+              ? () => {
+                  // The core REFUSES a bookmark that normalizes onto a live one (the same
+                  // page reached with a different `#fragment` or a trailing slash), which is
+                  // what a second tap on this button is. Reported rather than swallowed: a
+                  // `void` promise that rejects is an unhandled rejection and a button that
+                  // appears dead.
+                  void favorites
+                    .add({ name: nav.state.title || host, url: nav.state.url })
+                    .catch((e: unknown) => {
+                      toast.error(saveErrorText(e));
+                    });
+                }
               : undefined
           }
         />
@@ -420,7 +460,12 @@ function MobileShell() {
               <button type="button" onClick={() => void tabs.create(undefined, false, true)}>
                 New private tab
               </button>
-              <button type="button" onClick={() => void permissions.clear()}>
+              <button
+                type="button"
+                onClick={() => {
+                  void permissions.clear().catch((e: unknown) => toast.error(saveErrorText(e)));
+                }}
+              >
                 Clear permissions
               </button>
               <button type="button" onClick={() => void subscriptions.updateNow()}>
@@ -528,7 +573,11 @@ function MobileShell() {
         onOpenSettings={() => openSettings()}
         onImportData={() => openSettings('data')}
       />
-      <CommandPalette open={commandOpen} onClose={() => setCommandOpen(false)} />
+      <CommandPalette
+        open={commandOpen}
+        viewId={tabs.activeId}
+        onClose={() => setCommandOpen(false)}
+      />
       <Toaster />
       <ConfirmDialog />
     </div>

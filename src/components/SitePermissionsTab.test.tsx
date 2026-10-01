@@ -1,6 +1,6 @@
 // src/components/SitePermissionsTab.test.tsx
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { SitePermission } from '../../shared/types';
 import { SitePermissionsTab } from './SitePermissionsTab';
@@ -116,5 +116,50 @@ describe('SitePermissionsTab', () => {
   it('disables Clear all when empty', () => {
     render(<SitePermissionsTab {...props()} />);
     expect(screen.getByRole('button', { name: /clear all site permissions/i })).toBeDisabled();
+  });
+
+  // The core REFUSES a revoke or clear whose save did not land, and used to answer `ok`
+  // anyway. These two tests are the renderer half of that fix: with the old `void remove(…)`
+  // the rejection was an unhandled rejection and the row just sat there, indistinguishable
+  // from a click that did nothing — so a user who revoked a camera permission on a
+  // read-only store had no way to learn it was still in force.
+  it('reports a REFUSED revoke with the core reason and keeps the row', async () => {
+    const p = props({
+      permissions: [perm({ origin: 'https://c.test', permission: 'camera' })],
+      // A Rust `Err(String)` crosses the bridge as a bare string, so reject with that shape.
+      remove: vi.fn().mockRejectedValue('could not write the permissions store'),
+    });
+    render(<SitePermissionsTab {...p} />);
+    await userEvent.click(
+      screen.getByRole('button', { name: /revoke camera for https:\/\/c\.test/i }),
+    );
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('could not write the permissions store');
+    // The list is driven by the core, and the core still holds the row — so the row must
+    // still be on screen. That is what makes this honest rather than merely reported.
+    expect(screen.getByText('https://c.test')).toBeInTheDocument();
+  });
+
+  it('reports a REFUSED clear with the core reason', async () => {
+    const p = props({
+      permissions: [perm()],
+      clear: vi.fn().mockRejectedValue('no app data dir'),
+    });
+    render(<SitePermissionsTab {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /clear all site permissions/i }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('no app data dir');
+  });
+
+  it('clears the reported error once a later revoke succeeds', async () => {
+    // The error must not be sticky: a failed revoke followed by a working one has to leave
+    // the tab clean, or the tab permanently shows a stale "could not save".
+    const remove = vi.fn().mockRejectedValueOnce('disk full').mockResolvedValueOnce(undefined);
+    const p = props({ permissions: [perm({ origin: 'https://d.test' })], remove });
+    render(<SitePermissionsTab {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /revoke location for/i }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('disk full');
+    await userEvent.click(screen.getByRole('button', { name: /revoke location for/i }));
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
 });

@@ -27,6 +27,7 @@ export const IPC = {
   adblockGetState: 'adblock.getState',
   listsUpdateNow: 'lists.updateNow',
   evtListsUpdateResult: 'lists.updateResult',
+  evtDataBulkDone: 'data.bulkDone',
   // favorites (chrome -> main)
   favoritesList: 'favorites.list',
   favoritesAdd: 'favorites.add',
@@ -321,6 +322,18 @@ export interface DataExportResult {
   ok: boolean;
   path?: string;
   error?: string;
+  /**
+   * The core hands this channel to a background thread and answers at once, so `pending`
+   * is the acknowledgement's own field: `ipcClient` subscribes to `data.bulkDone`, waits for
+   * the event carrying this same `channel`, and resolves the caller's promise with the REAL
+   * result. A caller therefore never sees a `pending: true` value — it is on this interface
+   * only so a raw `invoke` caller can tell "taken" from "finished".
+   *
+   * `channel` exists for the same reason: an export and an import can be in flight at once
+   * and each must resolve its own promise.
+   */
+  pending?: boolean;
+  channel?: string;
 }
 /**
  * The core's `data.import` reply.
@@ -338,6 +351,25 @@ export interface DataImportResult {
   ok: boolean;
   counts?: unknown;
   failed?: string[];
+  /** See [`DataExportResult.pending`] — this reply is an acknowledgement, not an outcome. */
+  pending?: boolean;
+  channel?: string;
+}
+
+/**
+ * The core's `data.bulkDone` event: the real outcome of a `data.export` or `data.import`.
+ *
+ * It exists because those two channels are handed to a background thread — the `ipc`
+ * command is synchronous and runs on the UI thread, and doing the work inline froze the
+ * whole window for its duration. `channel` says which request finished, `ms` is the
+ * worker's OWN measurement (reported, not guessed — "the export is fast" was never true
+ * for a large bundle and never measured), and `result` is the untouched reply the caller
+ * would have got from the old inline path.
+ */
+export interface DataBulkDoneEvent {
+  channel: string;
+  ms: number;
+  result: DataExportResult | DataImportResult;
 }
 export interface ContentInset {
   top: number;
@@ -717,7 +749,7 @@ export interface AegisApi {
     toggleAllowlist(host: string): Promise<AdblockState>;
     removeAllowlist(host: string): Promise<AdblockState>;
     clearAllowlist(): Promise<AdblockState>;
-    getState(): Promise<AdblockState>;
+    getState(viewId: ViewId): Promise<AdblockState>;
     onBlockedCount(cb: (c: BlockedCount) => void): () => void;
   };
   lists: {
