@@ -108,9 +108,9 @@ committed `coverage-baseline.json` (**recompute these, do not carry them forward
 | Metric     | Measured               | Gap |
 | ---------- | ---------------------- | --- |
 | lines      | 4586/5162 = **88.84%** | 576 |
-| statements | 6049/6926 = **87.34%** | 877 |
-| functions  | 1237/1424 = **86.87%** | 187 |
-| branches   | 3658/4483 = **81.60%** | 825 |
+| statements | 6049/6926 = **87.33%** | 877 |
+| functions  | 1237/1424 = **86.86%** | 187 |
+| branches   | 3658/4483 = **81.59%** | 825 |
 
 48 of the 120 measured files are at 100% statements. The 877 uncovered statements decompose
 as:
