@@ -91,19 +91,34 @@ GitHub Actions workflows and Dependabot config for Aegis.
     so that adding one later is picked up without editing CI, and today it accepts
     nothing.
   - **`cross-target`** (matrix, `cargo check --locked` only — no link, no test, no
-    bundle): `x86_64-pc-windows-gnu` + `aarch64-linux-android` on ubuntu (mingw-w64 /
-    the Android NDK supply the cross toolchain) and `x86_64-apple-darwin` on a
+    bundle): `x86_64-pc-windows-gnu` + `aarch64-linux-android` on ubuntu (a mingw-w64
+    cross toolchain / the Android NDK supply it) and `x86_64-apple-darwin` on a
     **macOS-15** runner, because objc2's build script needs a macOS C toolchain and
     cannot be cross-compiled from Linux. Its `apt:` lists are deliberately minimal —
-    `mingw-w64` for Windows and **nothing at all** for Android (the NDK clang is
-    already on the runner) — because a non-host target never builds `webkit2gtk`.
-    Measured: 0 webkit/gtk-family crates in both non-Linux graphs against 17 on the
-    host, no pkg-config/webkit reference in `tauri-build`'s build script, and a
+    `gcc-mingw-w64-x86-64-posix` for Windows and **nothing at all** for Android (the
+    NDK clang is already on the runner) — because a non-host target never builds
+    `webkit2gtk`, and because cc-rs maps `x86_64-pc-windows-gnu` to the single tool
+    prefix `x86_64-w64-mingw32`, so one gcc and one ar is the whole requirement. The
+    `mingw-w64` meta-package is four complete cross toolchains (i686 + x86-64, each
+    posix AND win32, each gcc + g++ + binutils): **277 MB / 25 packages against
+    66.4 MB / 10** for the single gcc, measured by apt on 2026-10-01. Do not widen it
+    back. Measured: 0 webkit/gtk-family crates in both non-Linux graphs against 17 on
+    the host, no pkg-config/webkit reference in `tauri-build`'s build script, and a
     from-cold check that invokes `pkg-config` zero times. This leg used to install the
     same five webkit/appindicator/rsvg/xdo packages as the `rust` job, on the belief
-    that "tauri-build compiles on the host regardless of the target triple"; that cost
-    ~2m at best and blew this job's 45-minute budget twice on 2026-10-01, cancelling
-    `cargo check` before it ever ran. Do not add them back without re-measuring.
+    that "tauri-build compiles on the host regardless of the target triple"; do not add
+    them back without re-measuring. **This leg is ~99% `apt-get` by wall time** —
+    `cargo check` itself is seconds — so it is the download size, not the build, that
+    decides whether it passes. Over the last 40 runs every one of its 27 jobs finished
+    in 69s-339s except two cancellations on 2026-10-01, and only one of those reached
+    the 45-minute job timeout (run 36906070752: 45m09s inside `apt-get`, `cargo check`
+    left `skipped`); the other was cancelled from outside the workflow at 16m29s. Both
+    were in the same mirror-throughput collapse (3.95 MB/s at 17:00, 0.13 at 19:55,
+    0.22 at 21:00, same mirror and same region on 2026-10-01, against 9.80 MB/s on
+    2026-09-30), which is why the byte counts are the lever and the timeout is only
+    the thing that reports it. At the ~0.13 MB/s that run averaged (362 MB in 45m09s)
+    the old five-webkit-plus-`mingw-w64` list killed the job, the meta-package's 277 MB
+    alone would land near 34 minutes, and 66.4 MB near 8.
     This is the only job that compiles
     `nav_url_win.rs`, `nav_url_mac.rs`, `zoom_win.rs`, `zoom_mac.rs` and the JNI /
     `sync_keystore` / `ffi_guard` block. The other platform-gated modules are

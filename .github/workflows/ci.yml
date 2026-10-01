@@ -428,11 +428,30 @@ jobs:
           # Windows: the GNU cross-check the repo docs already treat as the canonical
           # "does adblock_win/find_win/zoom_win still compile" command
           # (src-tauri/AGENTS.md gotcha 18/20), run here on every PR instead of on
-          # demand. mingw-w64 is the ONLY apt package this leg needs. `cargo check`
-          # does not link, so no NASM/CMake (aws-lc-sys) is needed, but ring's build
-          # script DOES compile C for the target even under `cargo check` — the objects
-          # it leaves are `x86-64 COFF`, not ELF — so a windows-targeting compiler is
-          # genuinely required.
+          # demand. `cargo check` does not link, so no NASM/CMake (aws-lc-sys) is
+          # needed, but ring's build script DOES compile C for the target even under
+          # `cargo check` — the objects it leaves are `x86-64 COFF`, not ELF — so a
+          # windows-targeting compiler is genuinely required.
+          #
+          # That compiler is named EXACTLY below, never as a meta-package. cc-rs maps
+          # `x86_64-pc-windows-gnu` to the single tool prefix `x86_64-w64-mingw32`
+          # (cc-1.2.64 src/lib.rs), so this leg needs one gcc and one ar for ONE
+          # architecture and ONE threading model. The `mingw-w64` meta-package instead
+          # pulls four complete cross toolchains — i686 and x86-64, each posix AND
+          # win32, each gcc + g++ + binutils — which apt measured on 2026-10-01 at 25
+          # packages / 277 MB of archives, against 10 packages / 66.4 MB for the single
+          # gcc below. Verified in a real noble container: installing only that package
+          # still registers the unversioned alternatives links `x86_64-w64-mingw32-gcc`
+          # (auto mode, pointing at the posix variant) and `x86_64-w64-mingw32-ar`, and
+          # a compiled object begins `64 86` (COFF AMD64), not `7f 45 4c 46` (ELF).
+          # Do NOT widen this back to `mingw-w64`. This leg is ~99% apt by wall time
+          # (`cargo check` itself is seconds), so the download size, not the build,
+          # decides whether it passes. The runner's throughput to the Ubuntu mirror
+          # fell from 3.95 MB/s to 0.13 MB/s within one day (2026-10-01, same mirror,
+          # same region), and the byte counts above are what that gets spent on: at
+          # 0.13 MB/s the old five-webkit-plus-mingw-w64 list took 45m09s and killed
+          # this job; the meta-package's 277 MB alone would land near 34 minutes, and
+          # 66.4 MB near 8.
           #
           # This leg used to install the same five webkit/appindicator/rsvg/xdo
           # packages as the `rust` job, on the claim that "tauri-build compiles on the
@@ -440,13 +459,21 @@ jobs:
           # windows-gnu graph contains ZERO webkit/gtk-family crates (the host graph has
           # 17), tauri-build's build.rs and lib.rs contain no pkg-config/webkit/gtk
           # reference, and a logging pkg-config shim on PATH recorded ZERO invocations
-          # across a from-cold check. Those five packages cost ~2m on a good day and
-          # blew the 45-minute job budget twice on 2026-10-01, cancelling the gate
-          # before it ever ran. If a future bump does reintroduce a pkg-config need, a
-          # fast clear build error beats a silent 45-minute hang.
+          # across a from-cold check. Do not add them back without re-measuring. If a
+          # future bump does reintroduce a pkg-config need, a fast clear build error
+          # beats a silent 45-minute hang.
+          #
+          # Measured job durations for this leg over the last 40 runs (27 of them):
+          # everything is 69s-339s except two cancellations on 2026-10-01, and only
+          # ONE of those hit the 45-minute budget — run 36906070752, which spent 45m09s
+          # inside `apt-get` and was killed by this job's own timeout with `cargo check`
+          # left `skipped`. The other (36925658104) was cancelled from outside the
+          # workflow at 16m29s, nowhere near the timeout. Both fell in the same
+          # mirror-throughput collapse, so treat the byte counts above as the lever
+          # and the timeout as the thing that reports it.
           - target: x86_64-pc-windows-gnu
             os: ubuntu-latest
-            apt: 'mingw-w64'
+            apt: 'gcc-mingw-w64-x86-64-posix'
           # Android: the JNI/sync_keystore/ffi_guard block. NO apt packages — the NDK
           # clang is already on the runner at ANDROID_NDK_LATEST_HOME (the step below
           # points the build scripts at it), and a from-cold check of this leg also
