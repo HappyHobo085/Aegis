@@ -6,7 +6,12 @@ import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { auditReportProblem, evaluateAudit } from './auditCheck.mjs';
+import {
+  allowlistReadProblem,
+  auditReportProblem,
+  evaluateAudit,
+  parseAllowlist,
+} from './auditCheck.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ALLOWLIST_PATH = join(__dirname, '..', '.audit-allowlist.json');
@@ -23,38 +28,27 @@ function runAuditJson() {
   }
 }
 
+// The two decisions that make a broken allowlist loud instead of reading as an empty one
+// live in ./auditCheck.mjs, not here. Both reasons are that this file is a subprocess entry
+// point: v8 earns no coverage credit for anything in it, so a policy written here has no unit
+// test, and adding lines to it moves the renderer coverage ratio DOWN without adding a single
+// uncovered line of real logic. See `allowlistReadProblem` / `parseAllowlist`.
 function loadAllowlist() {
   let text;
   try {
     text = readFileSync(ALLOWLIST_PATH, 'utf8');
   } catch (err) {
-    // A missing allowlist is the ordinary "nothing is allowed" case, and it is
-    // the only read failure that may mean that. Every other one — a permissions
-    // error, a wrong path, the file being a directory — used to collapse into
-    // the same `{ allow: [] }`, which is indistinguishable from a deliberately
-    // empty allowlist. The gate still failed CLOSED either way, so this was
-    // never a silent pass; the cost was diagnosability, because the report then
-    // named the advisory ("3 new blocking advisories") and never the file that
-    // was actually broken.
-    if (err && err.code === 'ENOENT') return { allow: [] };
-    console.error(
-      `[check-npm-audit] could not read ${ALLOWLIST_PATH}:`,
-      err instanceof Error ? err.message : err,
-    );
+    const problem = allowlistReadProblem(err);
+    if (problem === null) return { allow: [] };
+    console.error(`[check-npm-audit] could not read ${ALLOWLIST_PATH}:`, problem);
     process.exit(1);
   }
-  try {
-    return JSON.parse(text);
-  } catch (err) {
-    // A one-character typo in the allowlist is not "no advisories are allowed".
-    // Say which file is malformed, and stop: auditing against a silently
-    // emptied allowlist turns a typo into an unrelated wall of red.
-    console.error(
-      `[check-npm-audit] ${ALLOWLIST_PATH} is not valid JSON:`,
-      err instanceof Error ? err.message : err,
-    );
+  const parsed = parseAllowlist(text);
+  if (parsed.problem) {
+    console.error(`[check-npm-audit] ${ALLOWLIST_PATH} is not valid JSON:`, parsed.problem);
     process.exit(1);
   }
+  return parsed.value;
 }
 
 function main() {

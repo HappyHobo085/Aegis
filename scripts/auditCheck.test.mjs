@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
+  allowlistReadProblem,
+  parseAllowlist,
   auditReportProblem,
   collectBlockingAdvisories,
   isAllowlisted,
@@ -163,5 +165,65 @@ describe('auditReportProblem', () => {
     for (const bad of [null, undefined, 42, 'nope', []]) {
       expect(auditReportProblem(bad)).toBeTruthy();
     }
+  });
+});
+
+// ── the allowlist-read decision ────────────────────────────────────────────
+//
+// These two used to live inline in `check-npm-audit.mjs`, which is a subprocess entry point:
+// v8 earns no coverage credit for it, so a decision that can silently EMPTY the allowlist
+// had no unit test at all and only ever ran through `cliGates.test.mjs`'s sandboxed `npm` and
+// `git` shims. Moving them here is what makes each direction assertable on its own.
+
+describe('allowlistReadProblem', () => {
+  it('treats a missing file as "nothing is allowed", the one benign read failure', () => {
+    // ENOENT is the ordinary case: the operator has not allowlisted anything.
+    expect(allowlistReadProblem({ code: 'ENOENT' })).toBeNull();
+    const enoent = Object.assign(new Error('no such file'), { code: 'ENOENT' });
+    expect(allowlistReadProblem(enoent)).toBeNull();
+  });
+
+  it('refuses every OTHER read failure, because they are not an empty allowlist', () => {
+    // Each of these used to collapse into `{ allow: [] }`.
+    for (const code of ['EACCES', 'EISDIR', 'ELOOP', 'EPERM']) {
+      const problem = allowlistReadProblem(Object.assign(new Error(code), { code }));
+      expect(problem).toBeTruthy();
+    }
+    expect(allowlistReadProblem(new Error('permission denied'))).toContain('permission denied');
+  });
+
+  it('still reports something for a thrown non-Error', () => {
+    expect(allowlistReadProblem('a string')).toBe('a string');
+    expect(allowlistReadProblem(undefined)).toBe('undefined');
+  });
+});
+
+describe('parseAllowlist', () => {
+  it('returns the parsed value for a well-formed allowlist', () => {
+    expect(parseAllowlist('{"allow":[1,2]}')).toEqual({ value: { allow: [1, 2] } });
+  });
+
+  it('names the problem for a one-character typo instead of reading as empty', () => {
+    // A stray comma is the realistic case: it used to be read as "no advisories allowed".
+    const bad = parseAllowlist('{"allow":[1,2,]}');
+    expect(bad.value).toBeUndefined();
+    expect(bad.problem).toBeTruthy();
+  });
+
+  it('reports a problem for a file that is not JSON at all', () => {
+    // `'null'` is deliberately NOT here: it is valid JSON, and the case below pins that it
+    // parses. Putting it in this list is how I wrote a test that contradicted the next one.
+    for (const text of ['', 'not json', '[1,2', '{"allow":', '  ']) {
+      expect(parseAllowlist(text).problem).toBeTruthy();
+    }
+  });
+
+  it('does NOT treat a JSON null or an array as a usable allowlist without complaint', () => {
+    // These PARSE, so they are the caller's problem, not the parser's — but they must not
+    // silently look like an empty allowlist either. `evaluateAudit` copes with a missing
+    // `allow`, so this documents that the parse layer passes them through rather than
+    // inventing a shape of its own.
+    expect(parseAllowlist('null')).toEqual({ value: null });
+    expect(parseAllowlist('[]')).toEqual({ value: [] });
   });
 });

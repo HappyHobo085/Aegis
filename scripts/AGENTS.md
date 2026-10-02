@@ -94,8 +94,17 @@ that path is `src-tauri/.cargo/audit.toml`.
   (auditReportVersion 2) report and partitions high/critical advisories into
   `{ blocking, allowed }` using an allowlist. Key exports:
   `BLOCKING_SEVERITIES` (`['high','critical']`), `collectBlockingAdvisories`,
-  `isAllowlisted`, `evaluateAudit`. Advisories are deduped by `source` (npm
+  `isAllowlisted`, `evaluateAudit`, plus the two allowlist-read decisions
+  `allowlistReadProblem` / `parseAllowlist`. Advisories are deduped by `source` (npm
   advisory id), falling back to `url`.
+  **The allowlist-read decisions live HERE, not in the wrapper, and that placement is
+  load-bearing twice over.** v8 instruments only the test worker's own runtime, so a
+  spawned subprocess earns zero coverage credit — logic written in `check-npm-audit.mjs`
+  is invisible to the report _and_ has no unit test, while every line it adds lowers all
+  four renderer ratios. A pure decision about whether a broken allowlist means "nothing is
+  allowed" is exactly the kind that must not live there. Moving these two in is what let
+  each direction be asserted on its own (`ENOENT` alone is benign; every other read error
+  and any malformed JSON is fatal).
 - **`check-npm-audit.mjs`** — the CLI wrapper. Spawns `npm audit --json` (recovering
   stdout when npm exits non-zero), loads the allowlist from `../.audit-allowlist.json`,
   calls `evaluateAudit()`, and **exits non-zero if any blocking advisory remains**.
@@ -105,7 +114,7 @@ that path is `src-tauri/.cargo/audit.toml`.
   exits non-zero naming the file. Collapsing all of them into an empty allowlist
   still failed _closed_, but reported the advisory rather than the cause, and on a
   clean report it printed "OK — no blocking advisories" while auditing against an
-  allowlist nobody had declared.
+  allowlist nobody had declared. Both decisions are the pure functions named above.
 - **`auditCheck.test.mjs`** — unit tests for the pure logic above.
 - **`check-bundle-size.mjs`**, **`check-android-versioncode.mjs`** — the other two
   CI gates (gzipped `dist/assets` vs `BUDGETS`; Android `versionCode` monotonicity
