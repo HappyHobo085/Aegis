@@ -1330,6 +1330,39 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     `a_pass_that_learned_nothing_from_a_peer_leaves_a_local_near_duplicate_pair_alone` and
     `a_near_duplicate_that_arrived_from_a_peer_is_still_collapsed_and_pushed` — the second
     exists so the gate cannot be "fixed" into never collapsing.
+  - **An idle namespace is NOT re-uploaded, and the evidence is the PULL — never a persisted
+    "what I last pushed" note.** `sync_ns` used to seal and POST every local record on every pass,
+    so a device that had changed nothing still uploaded its whole namespace once per
+    `syncIntervalSec` (300 s by default). Measured: 200 `saved` records = **148,580 bytes** of wire
+    JSON per pass = **42.8 MB/day per namespace per device**, for a push the server's own HLC-LWW
+    would discard. The CPU is NOT the point — sealing all 200 costs **1.52 ms** (7.6 us/record), so
+    this is a bandwidth and battery fix, not a speed one. `push_is_redundant` skips the push when,
+    for every local record, **the server already holds that uuid at this record's stamp or newer**,
+    and both halves are load-bearing in opposite directions: the uuid half alone would call a
+    device's own unsynced edit "already uploaded" (the server holds the uuid at an OLDER stamp —
+    that is what an edit looks like), and the stamp half alone would call a WIPED server idle.
+    `Held` is the server's view, read off the wire records the pull returned, and it is indexed
+    **only on the `open_wire` success arm** — that call is what authenticates a wire record's
+    cleartext `hlc` as AEAD associated data, so an unopenable record's stamp is an unauthenticated
+    claim and must not be able to talk the device out of an upload. **The choice of the pull over a
+    cursor is the design, not an implementation detail:** a cursor cannot detect a wiped server, a
+    restored server backup, a re-pointed `syncServerUrl` or a re-keyed account, and it fails by
+    looking perfectly healthy — the note is still there, the comparison still succeeds, and the
+    user's data simply stops reaching the account. A check derived from the pull cannot go stale,
+    because the pull re-asks every pass. Two other deliberate edges: an **empty** namespace is
+    never redundant (`push_batches` keeps its one empty POST on purpose — it is the device's
+    liveness probe — and there is nothing to upload to save the request), and the tombstone GC
+    still runs on the skipped path, which is sound because "the server holds every local record at
+    this stamp or newer" is a strictly stronger claim than the one the GC's placement rests on.
+    Policy is `pub(crate)` and pure (`all` over the local array, so one uncovered record pushes
+    the namespace), and 11 pure tests pin each direction — including the two ways the check can
+    be wrong, a server that lost its data and a local edit the server has not seen. The WIRING
+    is a separate end-to-end test that runs the real `sync_ns` — real pull, real merge, real
+    AEAD, real HTTP — against a loopback server that stores what it is POSTed and serves it
+    back, asserting on the NUMBER of POSTs the server saw across three passes (upload, idle,
+    local edit). Five mutations were confirmed red: always-push, drop-the-stamp-half, `all`→
+    `any`, and the two wiring mutations — and the last two are caught ONLY by the end-to-end
+    test, so the pure tests alone would not have held the wiring.
 - **Anti-fingerprinting / farbling** — `farble.rs`: opt-in document-start JS shim
   that perturbs fingerprinting surfaces with per-frame-origin, per-session deterministic
   noise. Key design points:

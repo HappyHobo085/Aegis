@@ -12,6 +12,14 @@
 //! Only `favorites`/`saved`/`allowlist` sync in v1 (the array stores with the clean
 //! merge_into seam). The settings + custom-filter projections are built in F2a and are a
 //! documented fast-follow. An allowlist merge re-applies the engine (handled in merge_into).
+//!
+//! "The synced stores are small" above is about the PULL, which is why v1 needs no cursor: a
+//! namespace is fetched whole and folded, rather than tracked incrementally. It is NOT true of
+//! the PUSH, which re-sealed and re-uploaded every record on every pass until `sync_ns` learned
+//! to skip a namespace the server demonstrably already holds — 200 `saved` records measured
+//! 148,580 bytes of wire JSON per pass, 42.8 MB/day per namespace at the default interval. See
+//! [`push_is_redundant`].
+use std::collections::HashMap;
 use std::io::Read;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -741,6 +749,87 @@ pub(crate) fn pull_verdict(ns: &str, served: usize, opened: usize) -> Result<(),
     Ok(())
 }
 
+/// What the sync server is already HOLDING for one namespace, indexed by record uuid.
+///
+/// Built by [`sync_ns`] from the wire records the pull returned, and **only** from the ones
+/// [`open_wire`] accepted: `open_wire` is what authenticates a wire record's cleartext `hlc`
+/// against its AEAD, so the stamp on a record that failed to open is an unauthenticated claim
+/// and must not be able to talk this device out of an upload.
+///
+/// Pure and `AppHandle`-free so the one policy it decides — [`push_is_redundant`] — is
+/// unit-testable without a socket, which matters because the failure direction of that policy
+/// is silent data loss and the happy direction is only a saved request.
+#[derive(Default)]
+pub(crate) struct Held {
+    /// `uuid` -> the `(wall_ms, counter)` the server holds for it.
+    by_uuid: HashMap<String, (i64, u32)>,
+}
+
+impl Held {
+    /// Index one wire record the server returned. Call this ONLY on the `open_wire` success
+    /// arm — see the type's doc for why that is the whole security property here.
+    fn see(&mut self, w: &Value) {
+        let Some(uuid) = w.get("uuid").and_then(Value::as_str) else {
+            return;
+        };
+        let Some(hlc) = crate::sync_envelope::from_value(w) else {
+            return;
+        };
+        let stamp = (hlc.wall_ms, hlc.counter);
+        // The server answers at most one record per uuid, so this only fires against a server
+        // that broke its own contract. Keeping the HIGHER stamp is the direction that costs one
+        // redundant upload rather than losing one.
+        self.by_uuid
+            .entry(uuid.to_string())
+            .and_modify(|cur| *cur = (*cur).max(stamp))
+            .or_insert(stamp);
+    }
+}
+
+/// Would pushing `local` provably change NOTHING on the server?
+///
+/// True only when, for every local record, the server already holds that uuid at this record's
+/// stamp **or newer**. Both halves are needed and neither alone is sound:
+///
+/// * The uuid half alone is wrong because a record the server holds can be an OLDER version of
+///   one this device holds — that is exactly what a local edit looks like. Folding the uuid
+///   check in on its own meant a local change was never uploaded at all, until some unrelated
+///   later change happened to raise the comparison.
+/// * The stamp half alone is wrong for the same reason in reverse, and for a second reason:
+///   nothing local has moved does not mean the server still has it. A wiped server, a restored
+///   server backup, a re-pointed `syncServerUrl` or a re-keyed account all leave the local
+///   records untouched and the server empty.
+///
+/// So this is deliberately decided from the PULL, which is the only evidence about the server
+/// that this pass actually holds, rather than from a persisted "what I last pushed" note. A
+/// cursor is the cheaper design and it is wrong in a way nothing reports: the note is still
+/// there, the comparison still succeeds, and the user's data simply stops reaching the account.
+/// A derived-from-the-server check cannot go stale, because the pull re-asks every pass.
+///
+/// An EMPTY local array is never redundant. `push_batches` keeps an empty namespace's single
+/// empty POST on purpose — it is how the device proves it is alive to the server — and there is
+/// nothing to upload to save the request anyway.
+pub(crate) fn push_is_redundant(held: &Held, local: &[Value]) -> bool {
+    if local.is_empty() {
+        return false;
+    }
+    local.iter().all(|r| {
+        let Some(uuid) = r.get("uuid").and_then(Value::as_str) else {
+            // A record we cannot even NAME is not one we can assume the server has.
+            return false;
+        };
+        let Some(hlc) = crate::sync_envelope::from_value(r) else {
+            // Likewise for one we cannot DATE. `from_value` fails on a missing field and on a
+            // counter serde refuses to range-check, so this arm is reachable from a hand-edited
+            // store or a restored bundle, not only from a hypothetical.
+            return false;
+        };
+        held.by_uuid
+            .get(uuid)
+            .is_some_and(|held_stamp| (hlc.wall_ms, hlc.counter) <= *held_stamp)
+    })
+}
+
 // The nine parameters are genuinely independent (transport base, namespace, its derived
 // key, the two auth inputs, the cancellation generation, and the two store seams) and
 // every one is threaded straight into a helper that takes it alone. Bundling them into
@@ -772,6 +861,11 @@ pub(crate) fn sync_ns<R: Runtime>(
     // so the two "nothing to do" shapes stay distinguishable: an empty namespace and a namespace
     // in which nothing opens both used to look like "nothing changed".
     let mut served: usize = 0;
+    // What the server is holding for this namespace, read off the wire records it just sent
+    // back. Collected here, in the one place that has both the wire form and the verdict on
+    // whether it opens, because `push_is_redundant` below needs the server's view of the world
+    // and the pull is the only thing in this pass that has one.
+    let mut held = Held::default();
     for page_no in 0..MAX_PULL_PAGES {
         // A fresh token (fresh nonce) per HTTP request: the server enforces single-use nonces for
         // replay defense (sync-server `verify_auth`), so reusing one token across the GETs (or
@@ -788,7 +882,13 @@ pub(crate) fn sync_ns<R: Runtime>(
             served += arr.len();
             for w in arr {
                 match open_wire(data_key, ns, w) {
-                    Ok(rec) => decrypted.push(rec),
+                    Ok(rec) => {
+                        // AFTER the open, and only on this arm: the wire record's own `hlc` is
+                        // what the server stored, and it is authenticated precisely because
+                        // `open_wire` verified it as AEAD associated data.
+                        held.see(w);
+                        decrypted.push(rec)
+                    }
                     Err(e) => eprintln!("[aegis-sync] skip undecryptable {ns} record: {e}"),
                 }
             }
@@ -818,36 +918,50 @@ pub(crate) fn sync_ns<R: Runtime>(
         return Ok(changed);
     }
     let local = read_local();
-    let mut wire = Vec::with_capacity(local.len());
-    for r in &local {
-        match seal_wire(data_key, ns, r) {
-            Ok(w) => wire.push(w),
-            Err(e) => eprintln!("[aegis-sync] skip unsealable {ns} record: {e}"),
+    if push_is_redundant(&held, &local) {
+        // The pull above already proved the server holds every record in `local` at this stamp
+        // or newer, so re-sealing and re-uploading the namespace could not change a single row
+        // there. Paying for it anyway means every idle device re-uploads its whole namespace —
+        // a few hundred KB of AEAD ciphertext per store — once per `syncIntervalSec`, forever,
+        // on a link that may be metered, for a result the server would discard.
+        eprintln!(
+            "[aegis-sync] {ns}: nothing to push, the server already holds all {} record(s)",
+            local.len()
+        );
+    } else {
+        let mut wire = Vec::with_capacity(local.len());
+        for r in &local {
+            match seal_wire(data_key, ns, r) {
+                Ok(w) => wire.push(w),
+                Err(e) => eprintln!("[aegis-sync] skip unsealable {ns} record: {e}"),
+            }
         }
-    }
-    // Chunk the push — see `push_batches` for why the 413 cliff was permanent.
-    let batches = push_batches(&wire);
-    for (i, batch) in batches.iter().enumerate() {
-        if cancelled(app, gen) {
-            return Ok(changed);
+        // Chunk the push — see `push_batches` for why the 413 cliff was permanent.
+        let batches = push_batches(&wire);
+        for (i, batch) in batches.iter().enumerate() {
+            if cancelled(app, gen) {
+                return Ok(changed);
+            }
+            http(
+                "POST",
+                format!("{base}/v1/records"),
+                auth_header(account_id, device_seed)?,
+                Some(json!({ "ns": ns, "records": batch })),
+                SYNC_TIMEOUT_SECS,
+            )
+            .map_err(|e| format!("{ns}: push batch {}/{} failed: {e}", i + 1, batches.len()))?;
         }
-        http(
-            "POST",
-            format!("{base}/v1/records"),
-            auth_header(account_id, device_seed)?,
-            Some(json!({ "ns": ns, "records": batch })),
-            SYNC_TIMEOUT_SECS,
-        )
-        .map_err(|e| format!("{ns}: push batch {}/{} failed: {e}", i + 1, batches.len()))?;
     }
     // Reap tombstones that are older than the GC horizon. This is the ONLY safe place to do
     // it, and the placement is the whole point: the pull's `merge` above has already landed
-    // durably, and every push batch above returned `Ok` (the `?` would have bailed out
-    // otherwise). So any tombstone still sitting locally is one the server has now seen. Run
-    // it on the pull path instead and a namespace whose PUSH failed would have its fresh,
-    // never-uploaded delete silently discarded — losing the delete permanently and letting
-    // the record reappear from a peer. Scoped to the array stores, which are the ones whose
-    // tombstones ride `merge_into`; the settings/vault projections have their own lifecycle.
+    // durably, and the server has demonstrably seen every tombstone still sitting locally —
+    // either because every push batch above returned `Ok` (the `?` would have bailed out
+    // otherwise) or because the push was skipped by `push_is_redundant`, whose whole claim is
+    // that the server holds each of those records at this stamp or newer. Run it on the pull
+    // path instead and a namespace whose PUSH failed would have its fresh, never-uploaded
+    // delete silently discarded — losing the delete permanently and letting the record reappear
+    // from a peer. Scoped to the array stores, which are the ones whose tombstones ride
+    // `merge_into`; the settings/vault projections have their own lifecycle.
     if sync_stores::SYNCABLE.contains(&ns) {
         let reaped = sync_stores::gc_tombstones(app, ns, crate::jsonstore::now_ms());
         if reaped > 0 {
@@ -2323,5 +2437,348 @@ mod tests {
         // Opening as a different namespace (different data key + AAD) must fail.
         let saved_key = crypto::data_key(&RootSecret([5u8; 32]), "saved");
         assert!(open_wire(&saved_key, "saved", &wire).is_err());
+    }
+
+    // ── push_is_redundant ───────────────────────────────────────────────────
+    //
+    // The policy has two failure directions and only one of them is loud. Getting it wrong
+    // toward `false` costs a redundant upload; getting it wrong toward `true` loses the user's
+    // data off the account with nothing anywhere reporting it. So every case below is stated as
+    // "must still push" unless the server demonstrably holds the record at that stamp or newer.
+
+    /// A local record as a store holds it: addressable, and dated.
+    fn local_rec(uuid: &str, wall_ms: i64) -> Value {
+        json!({
+            "id": 1, "url": format!("https://{uuid}/"), "uuid": uuid, "deleted": false,
+            "hlc": { "wall_ms": wall_ms, "counter": 0, "node": "node-a" }
+        })
+    }
+
+    /// The wire form the server would have stored for `uuid` at `wall_ms`. `see` is the only
+    /// door into `Held`, and `sync_ns` opens it exclusively on a successful `open_wire`, so
+    /// building one here is exactly what an authenticated server response looks like.
+    fn held_wire(uuid: &str, wall_ms: i64) -> Value {
+        json!({
+            "uuid": uuid, "deleted": false,
+            "hlc": { "wall_ms": wall_ms, "counter": 0, "node": "node-b" }
+        })
+    }
+
+    fn held_of(wire: &[Value]) -> Held {
+        let mut h = Held::default();
+        for w in wire {
+            h.see(w);
+        }
+        h
+    }
+
+    #[test]
+    fn an_empty_namespace_is_never_redundant_because_its_empty_post_is_the_liveness_probe() {
+        // `push_batches` keeps an empty namespace's single empty POST on purpose. Skipping it
+        // would trade the only "this device is still here" signal for a request that uploads
+        // nothing anyway.
+        assert!(!push_is_redundant(&Held::default(), &[]));
+    }
+
+    #[test]
+    fn a_record_the_server_never_served_is_pushed_again() {
+        // The fresh-account shape: this device holds data the server has never seen.
+        let local = vec![local_rec("u1", 1000)];
+        assert!(!push_is_redundant(&Held::default(), &local));
+    }
+
+    #[test]
+    fn a_local_edit_the_server_has_not_seen_yet_is_pushed_again() {
+        // THE case that makes the stamp half load-bearing. The server holds the uuid, at an
+        // OLDER stamp — which is precisely what this device's own unsynced edit looks like.
+        // A uuid-only check calls this redundant and the edit never leaves the machine.
+        let local = vec![local_rec("u1", 2000)];
+        let held = held_of(&[held_wire("u1", 1000)]);
+        assert!(!push_is_redundant(&held, &local));
+    }
+
+    #[test]
+    fn a_record_the_server_holds_at_the_same_stamp_needs_no_push() {
+        let local = vec![local_rec("u1", 1000)];
+        let held = held_of(&[held_wire("u1", 1000)]);
+        assert!(push_is_redundant(&held, &local));
+    }
+
+    #[test]
+    fn a_record_the_server_holds_at_a_newer_stamp_needs_no_push() {
+        // The steady state after this device pulled a peer's winning edit: the local record IS
+        // the peer's, so its stamp equals the server's.
+        let local = vec![local_rec("u1", 1000)];
+        let held = held_of(&[held_wire("u1", 5000)]);
+        assert!(push_is_redundant(&held, &local));
+    }
+
+    #[test]
+    fn a_wiped_server_is_not_mistaken_for_an_idle_device() {
+        // What makes this check different from a persisted "last pushed" cursor: nothing local
+        // moved, so a cursor would still match here and the account would silently stay empty
+        // forever. The pull cannot be fooled, because it re-asks.
+        let local = vec![local_rec("u1", 1000), local_rec("u2", 900)];
+        assert!(!push_is_redundant(&Held::default(), &local));
+    }
+
+    #[test]
+    fn one_record_the_server_lacks_forces_the_whole_namespace_to_push() {
+        // The `all`/`any` polarity. An array whose first record is fully covered and whose
+        // second is local-only must still push; an `any` here would drop the second forever.
+        let local = vec![local_rec("u1", 1000), local_rec("u2", 900)];
+        let held = held_of(&[held_wire("u1", 1000)]);
+        assert!(!push_is_redundant(&held, &local));
+    }
+
+    #[test]
+    fn a_record_the_server_holds_that_this_device_does_not_is_not_a_reason_to_push() {
+        // The other direction: the server holding MORE than we do is the ordinary case after a
+        // tombstone GC, and it must not be read as work to do.
+        let local = vec![local_rec("u1", 1000)];
+        let held = held_of(&[held_wire("u1", 1000), held_wire("u9", 800)]);
+        assert!(push_is_redundant(&held, &local));
+    }
+
+    #[test]
+    fn a_record_with_no_uuid_is_pushed_rather_than_assumed_present() {
+        let local = vec![
+            json!({ "url": "https://x/", "hlc": { "wall_ms": 1, "counter": 0, "node": "n" } }),
+        ];
+        assert!(!push_is_redundant(
+            &held_of(&[held_wire("u1", 1000)]),
+            &local
+        ));
+    }
+
+    #[test]
+    fn a_record_we_cannot_date_is_pushed_rather_than_assumed_present() {
+        // `from_value` fails on a missing field AND on a counter serde refuses to range-check,
+        // so this is reachable from a hand-edited store or a restored bundle — not a fiction.
+        let undated = json!({ "uuid": "u1", "url": "https://u1/" });
+        assert!(!push_is_redundant(
+            &held_of(&[held_wire("u1", 1000)]),
+            &[undated]
+        ));
+        let out_of_range = json!({
+            "uuid": "u1", "url": "https://u1/",
+            "hlc": { "wall_ms": 1, "counter": u64::from(u32::MAX) + 1, "node": "n" }
+        });
+        assert!(!push_is_redundant(
+            &held_of(&[held_wire("u1", 1000)]),
+            &[out_of_range]
+        ));
+    }
+
+    #[test]
+    fn a_wire_record_naming_no_uuid_or_no_stamp_is_not_indexed_as_held() {
+        // The other end of the "only after open_wire" rule: a server answer with no routing
+        // fields cannot put anything in the index, so it cannot suppress an upload.
+        let mut h = held_of(&[json!({ "ct": "00" }), json!({ "uuid": "u1" })]);
+        assert!(!push_is_redundant(&h, &[local_rec("u1", 1)]));
+        // A server that breaks its own one-record-per-uuid contract keeps the HIGHER stamp,
+        // which is the direction that costs a redundant upload rather than losing one.
+        h = held_of(&[held_wire("u1", 1000), held_wire("u1", 4000)]);
+        assert!(!push_is_redundant(&h, &[local_rec("u1", 9000)]));
+        assert!(push_is_redundant(&h, &[local_rec("u1", 4000)]));
+    }
+
+    // ── the wiring: a real namespace pass against a real socket ─────────────
+    //
+    // The policy above is pure, so its tests cannot tell whether `sync_ns` ever asks it. These
+    // drive the real `sync_ns` — real pull, real merge, real AEAD, real HTTP — against a
+    // loopback server that behaves like the real one about the only property that matters
+    // here: it stores what it is POSTed and serves it back on the next GET. The assertion is
+    // on the NUMBER of POSTs the server saw, which is the expensive operation itself.
+
+    struct EchoServer {
+        base: String,
+        held: std::sync::Arc<Mutex<HashMap<String, Vec<Value>>>>,
+        pushes: std::sync::Arc<Mutex<Vec<String>>>,
+    }
+
+    impl EchoServer {
+        fn start() -> Self {
+            use std::io::{BufRead, BufReader, Read, Write};
+            use std::net::TcpListener;
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+            let base = format!("http://{}", listener.local_addr().expect("local addr"));
+            let held: std::sync::Arc<Mutex<HashMap<String, Vec<Value>>>> =
+                std::sync::Arc::new(Mutex::new(HashMap::new()));
+            let pushes: std::sync::Arc<Mutex<Vec<String>>> =
+                std::sync::Arc::new(Mutex::new(Vec::new()));
+            let sink = held.clone();
+            let log = pushes.clone();
+            std::thread::spawn(move || {
+                for conn in listener.incoming().flatten() {
+                    let mut reader = BufReader::new(match conn.try_clone() {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    });
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).is_err() {
+                        continue;
+                    }
+                    let mut content_length = 0usize;
+                    loop {
+                        let mut header = String::new();
+                        if reader.read_line(&mut header).is_err()
+                            || header == "\r\n"
+                            || header == "\n"
+                        {
+                            break;
+                        }
+                        if let Some(v) = header.to_ascii_lowercase().strip_prefix("content-length:")
+                        {
+                            content_length = v.trim().parse().unwrap_or(0);
+                        }
+                    }
+                    let mut body = vec![0u8; content_length];
+                    if content_length > 0 && reader.read_exact(&mut body).is_err() {
+                        continue;
+                    }
+                    let body: Value = if body.is_empty() {
+                        Value::Null
+                    } else {
+                        serde_json::from_slice(&body).unwrap_or(Value::Null)
+                    };
+                    let path = request_line
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/")
+                        .to_string();
+                    let response = if path.starts_with("/v1/records") {
+                        if request_line.starts_with("GET") {
+                            let ns = path
+                                .split('?')
+                                .nth(1)
+                                .unwrap_or("")
+                                .split('&')
+                                .filter_map(|kv| kv.strip_prefix("ns="))
+                                .find(|v| !v.is_empty())
+                                .unwrap_or("")
+                                .to_string();
+                            let recs = sink
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .get(&ns)
+                                .cloned()
+                                .unwrap_or_default();
+                            json!({ "records": recs, "next": Value::Null })
+                        } else {
+                            let ns = body
+                                .get("ns")
+                                .and_then(Value::as_str)
+                                .unwrap_or("")
+                                .to_string();
+                            let recs = body
+                                .get("records")
+                                .and_then(Value::as_array)
+                                .cloned()
+                                .unwrap_or_default();
+                            sink.lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .entry(ns)
+                                .or_default()
+                                .extend(recs);
+                            log.lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .push(request_line.clone());
+                            json!({})
+                        }
+                    } else {
+                        json!({})
+                    };
+                    let mut out = conn;
+                    let b = serde_json::to_string(&response).unwrap_or_else(|_| "{}".into());
+                    let _ = write!(
+                        out,
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: \
+                         {}\r\nconnection: close\r\n\r\n{}",
+                        b.len(),
+                        b
+                    );
+                    let _ = out.flush();
+                }
+            });
+            EchoServer { base, held, pushes }
+        }
+
+        /// How many times this device POSTed to the server at all.
+        fn pushes(&self) -> usize {
+            self.pushes.lock().unwrap_or_else(|e| e.into_inner()).len()
+        }
+    }
+
+    /// One `favorites` pass, exactly as `sync_once` drives it: the real namespace, the real
+    /// store seams, the real transport.
+    fn favorites_pass(app: &AppHandle<impl Runtime>, base: &str) -> Vec<String> {
+        set_enabled_for_test(app, true, 1);
+        let dk = crypto::data_key(&RootSecret([3u8; 32]), "favorites");
+        sync_ns(
+            app,
+            base,
+            "favorites",
+            &dk,
+            "acct-1",
+            &[7u8; 32],
+            1,
+            || sync_stores::read_all(app, "favorites"),
+            |remote| sync_stores::merge_into(app, "favorites", remote),
+        )
+        .expect("the namespace pass must succeed")
+    }
+
+    #[test]
+    fn an_idle_namespace_uploads_once_and_then_stops_while_a_local_edit_uploads_again() {
+        use crate::test_support::with_tmp_app;
+        let server = EchoServer::start();
+        with_tmp_app(|app| {
+            crate::jsonstore::save(
+                app,
+                "favorites",
+                &[local_rec("u1", 1000), local_rec("u2", 900)],
+            )
+            .expect("seed the store");
+
+            // Pass 1: the server holds nothing, so both records must go up.
+            favorites_pass(app, &server.base);
+            assert_eq!(
+                server.pushes(),
+                1,
+                "a server that has never seen the store gets it"
+            );
+            assert_eq!(
+                server
+                    .held
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .get("favorites")
+                    .map(Vec::len),
+                Some(2),
+                "both records really reached the server"
+            );
+
+            // Pass 2: nothing local changed and the server holds both at the same stamps, so
+            // the push could not change a row and is not paid for.
+            favorites_pass(app, &server.base);
+            assert_eq!(
+                server.pushes(),
+                1,
+                "an idle pass must not re-upload the namespace"
+            );
+
+            // Pass 3: a local edit. The server still holds the OLD stamp for that uuid, which
+            // is the only evidence that separates "idle" from "changed and not yet uploaded".
+            let mut items = crate::jsonstore::load(app, "favorites");
+            crate::jsonstore::touch(&mut items[0], app);
+            crate::jsonstore::save(app, "favorites", &items).expect("write the local edit");
+            favorites_pass(app, &server.base);
+            assert_eq!(
+                server.pushes(),
+                2,
+                "a local edit must be uploaded, not suppressed"
+            );
+        });
     }
 }

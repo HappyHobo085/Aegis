@@ -1162,6 +1162,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 - `url.originOf` now returns `null` for an opaque origin (`about:`, `data:`) instead of
   the literal string `"null"`, which had been silently defeating every
   `origin === null` guard in the app.
+- **Sync no longer re-uploads everything you already synced, every few minutes, forever.**
+  Each pass pushed the whole namespace whether or not anything had changed, so a device you
+  had not touched still sent its entire bookmarks and saved-pages list to the server once per
+  interval — about 43 MB a day per store at the default setting, on a connection that may be
+  metered, for a copy the server was going to throw away. A pass now skips the upload when the
+  server demonstrably already holds everything, and a real change is still uploaded the moment
+  it happens. The check is made against what the server just sent back rather than a note on
+  this device saying what it last sent, so a sync server that loses its data is noticed and
+  re-filled instead of being quietly left empty.
 
 ## [0.1.0] — unreleased
 
