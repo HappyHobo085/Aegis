@@ -606,8 +606,16 @@ mod tests {
             match_count_for(CACHE_PROBE_URL) > warm,
             "the post-reload query must have re-run the match, i.e. the cache was cleared"
         );
-        // Leave the process-wide engine as we found it for the other tests.
+        // Leave the process-wide engine as we found it for the other tests — and WAIT for
+        // that rebuild. See `settle_after_reload`: returning with one outstanding is how a
+        // test breaks a test that is not even its own.
         reload_lists(vec![]);
+        settle_after_reload(
+            CACHE_PROBE_URL,
+            CACHE_PROBE_PAGE,
+            "other",
+            "the cache probe's own filter must not survive into the next test",
+        );
     }
 
     // The blank/script-scheme shells are dropped without consulting the engine, so those
@@ -736,6 +744,35 @@ mod tests {
         }
     }
 
+    /// Wait until a `reload_lists` that was just requested has DEMONSTRABLY landed, by
+    /// asserting that `probe` is allowed again.
+    ///
+    /// `reload_lists` is asynchronous and coalescing: it parks the texts in
+    /// `PENDING_RELOAD` and returns. A test whose last statement is one of those hands the
+    /// NEXT test a FIFO queue whose ~20 MB parse can outlast `QUERY_TIMEOUT` — and a
+    /// timed-out query fails OPEN, so the next test sees a perfectly working engine answer
+    /// "allow" for a domain it must block. That is the "a known ad/tracker domain must be
+    /// blocked" failure this file documents at length, and it is attributed to whichever
+    /// test happened to run first rather than to the one that caused it. Two tests used to
+    /// end on a bare `reload_lists(vec![])`; both now settle here.
+    ///
+    /// `verdict_of` is what makes the assertion non-vacuous in one direction (it retries
+    /// until a real verdict, not a timeout) and `match_count_for` in the other (a timeout
+    /// runs no match at all, so an unchanged count would prove the `false` came from a
+    /// fail-open rather than from the rebuilt engine).
+    fn settle_after_reload(probe: &str, source: &str, rtype: &str, why: &str) {
+        let matches_before = match_count_for(probe);
+        assert!(
+            !verdict_of(probe, source, rtype),
+            "{why}: the probe domain must be allowed again once the rebuild has landed"
+        );
+        assert!(
+            match_count_for(probe) > matches_before,
+            "{why}: the probe must have been re-matched, so the `false` above came from the \
+             rebuilt engine and not from a fail-open timeout"
+        );
+    }
+
     /// THE REGRESSION TEST for the bug this file's `seq` protocol exists to prevent.
     ///
     /// A `should_block` that times out leaves its answer sitting in the thread's reused
@@ -846,6 +883,12 @@ mod tests {
             }
         }
         reload_lists(vec![]);
+        settle_after_reload(
+            "https://superseded-0.example/x",
+            "https://site.example",
+            "script",
+            "a burst filter must not survive into the next test",
+        );
     }
 
     /// The flag the warm-up helper reads is the whole reason it can tell "the engine said
