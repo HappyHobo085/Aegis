@@ -153,19 +153,41 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
   no such flag), so **`Cargo.lock` is part of the gate**: a dependency change that is
   not committed with its manifest fails the build rather than silently resolving.
 
-  The Rust jobs do **NOT** get `-D warnings` from anywhere outside this file: every
-  warning gate in the tree is spelled out explicitly, `ci.yml` passes
-  `RUSTFLAGS="-D warnings"` as a per-step `env:` on its `clippy` invocations, and
-  `cross-target`'s step is a bare `cargo check --locked` with **no** warning gate —
-  so a dead-code or unused-import warning in the Windows/macOS/Android-only code
-  does not fail CI, it fails only when that platform is built with clippy
-  (`cargo clippy --locked --target <triple> --all-targets -- -D warnings`, which is
-  how it is verified locally). Treat "all three cross-target surfaces are
-  warning-clean" as a real requirement, but as a _local_ gate, not one CI enforces.
-  This paragraph used to assert the opposite — an env var that appears in no
+  The Rust jobs get `-D warnings` from **two** places, and neither of them is a
+  variable in `ci.yml`. The `rust` job spells it out on its own clippy invocation.
+  The other jobs reach it through `actions-rust-lang/setup-rust-toolchain@v1`,
+  whose `rustflags` input **defaults to `"-D warnings"`** (its `action.yml:72-75`)
+  and whose setup step writes that value into `$GITHUB_ENV` whenever `RUSTFLAGS` is
+  not already set (`action.yml:141-142`). `ci.yml` passes no `rustflags:` to that
+  action and sets no `RUSTFLAGS` of its own — `grep -n RUSTFLAGS
+  .github/workflows/*.yml` returns nothing — so the default is what applies.
+  `cross-target` therefore gets `RUSTFLAGS="-D warnings"` on all three legs, but
+  that answers only half of "is it gated?". The other half is **which linter the
+  step runs**: `cross-target`'s step is `cargo check --locked` (ci.yml:421, :535),
+  not `cargo clippy`. `cargo check` runs rustc's lints and no clippy lints at all,
+  so the surface splits in half. **rustc lints are gated** — `dead_code`,
+  `unused_imports`, `unused_variables` in the Windows/macOS/Android-only `#[cfg]`
+  code fail CI. **Clippy lints are not gated**: nothing in CI runs clippy against
+  those three targets, so a clippy-only lint there stays invisible until someone
+  builds that platform locally.
+  That second half is not hypothetical. `history.rs` carried
+  `clippy::empty_line_after_doc_comments` on the Android-only
+  `Java_com_aegis_browser_NativeHistory_recordVisit` export — a doc block orphaned
+  from its item by a blank line — and `cargo check --locked --target
+  aarch64-linux-android` passed it while `cargo clippy --locked --target
+  aarch64-linux-android -- -D warnings` failed on it. Fixed, but the hole is
+  structural: verify a `#[cfg]`-gated change with `cargo clippy --locked --target
+  <triple> -- -D warnings` locally, because CI will not.
+  This paragraph has now been wrong three times, and each correction came from
+  checking one axis and assuming the other. It claimed `ci.yml` passes
+  `RUSTFLAGS="-D warnings"` as a per-step `env:` — a variable that appears in no
   workflow, manifest or `.cargo/config.toml` (the only `.cargo` dir is
-  `src-tauri/.cargo/`, and it holds just `audit.toml`). A doc that names a
-  mechanism that does not exist is worse than no doc: it makes a gap look covered.
+  `src-tauri/.cargo/`, and it holds just `audit.toml`). Grepping the repository to
+  fix that produced "no warning gate on `cross-target`", which is also false: a
+  grep cannot see a third-party action's input default. A doc that names a
+  mechanism which does not exist is worse than no doc; a doc that denies a gate
+  which does exist is worse still, because it sends the next session off to fix a
+  non-problem.
 
 - **`tauri-build-check.yml`** (Tauri Build Check) — proves the app compiles, links,
   and bundles on real OSes and produces downloadable artifacts for on-device
