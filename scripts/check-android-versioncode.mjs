@@ -77,11 +77,28 @@ const readAtRef = (ref) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-/** Parse `version` out of tauri.conf.json without pulling in a JSONC parser. */
+/** Read `version` out of tauri.conf.json with a real parse.
+ *
+ * This used to be `/"version"\s*:\s*"([^"]+)"/`, which matches the FIRST
+ * `"version"` key anywhere in the file at ANY nesting depth — so a nested object
+ * preceding the top-level key would silently supply the app version, and the
+ * gate would compare the wrong string. A version check is exactly the kind of
+ * gate that must not fail in the "looks fine" direction. The stated reason for
+ * the regex ("without pulling in a JSONC parser") never applied: `tauri.conf.json`
+ * is machine-generated config that Tauri itself reads, not JSONC.
+ */
 function versionOf(jsonText, label) {
-  const m = /"version"\s*:\s*"([^"]+)"/.exec(jsonText);
-  if (!m) fail(`${label}: no "version" field found in ${CONF_REL}.`);
-  return m[1];
+  let parsed;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch (err) {
+    fail(`${label}: ${CONF_REL} is not valid JSON: ${err.message}`);
+  }
+  const version = parsed && typeof parsed === 'object' ? parsed.version : undefined;
+  if (typeof version !== 'string') {
+    fail(`${label}: no "version" field found in ${CONF_REL}.`);
+  }
+  return version;
 }
 
 /** Tauri/android versionCode = major * 1_000_000 + minor * 1_000 + patch. */

@@ -103,7 +103,7 @@ that path is `src-tauri/.cargo/audit.toml`.
   missing file (`ENOENT`) is the one failure that means "nothing is allowed", so it
   falls back to `{ allow: [] }`. Every other read error — and any malformed JSON —
   exits non-zero naming the file. Collapsing all of them into an empty allowlist
-  still failed *closed*, but reported the advisory rather than the cause, and on a
+  still failed _closed_, but reported the advisory rather than the cause, and on a
   clean report it printed "OK — no blocking advisories" while auditing against an
   allowlist nobody had declared.
 - **`auditCheck.test.mjs`** — unit tests for the pure logic above.
@@ -111,6 +111,13 @@ that path is `src-tauri/.cargo/audit.toml`.
   CI gates (gzipped `dist/assets` vs `BUDGETS`; Android `versionCode` monotonicity
   vs `AEGIS_BASE_REF`). They are top-level CLIs like `check-npm-audit.mjs`, with
   the same "one implementation, wired into both `npm run` and `ci.yml`" shape.
+  **`check-android-versioncode.mjs` reads `version` with `JSON.parse`, never a
+  regex.** The old `/"version"\s*:\s*"([^"]+)"/` took the first match at any
+  nesting depth, so a nested object above the top-level key supplied the version
+  and the gate compared the wrong string — failing in the "looks unchanged, nothing
+  to do" direction, which is the one that silently skips a release. The original
+  comment justified the regex as avoiding a JSONC parser, but `tauri.conf.json` is
+  machine-generated config Tauri itself reads; it is not JSONC.
   **`check-bundle-size.mjs`'s per-kind emptiness is a POLICY, not a uniform rule.**
   `MAY_BE_ABSENT` says only `css: true` — no CSS is a legitimate Vite build (nothing
   imports a stylesheet yet), but this renderer ALWAYS emits an entry `.js` chunk, so a

@@ -343,6 +343,22 @@ describe('check-android-versioncode.mjs (the Android bump gate)', () => {
     expect(status).toBe(0);
   });
 
+  it('reads the TOP-LEVEL version even when a nested object carries one of its own', () => {
+    // The gate used to run /"version"\s*:\s*"([^"]+)"/ over the whole file, which
+    // takes the FIRST match at ANY nesting depth. A nested key written above the
+    // top-level one therefore supplied the version. The dangerous direction is
+    // the one that reads as fine: a wrong-but-equal-looking version reports
+    // "unchanged from main" and the release is silently skipped.
+    write(
+      join(box.root, 'src-tauri', 'tauri.conf.json'),
+      '{\n  "bundle": { "version": "0.0.1" },\n  "productName": "Aegis",\n  "version": "9.9.9"\n}\n',
+    );
+    const { status, out } = RUN();
+    expect(out).toContain('9.9.9');
+    expect(out).not.toContain('0.0.1');
+    expect(status).toBe(0);
+  });
+
   it('passes an increased version and reports the derived versionCode pair', () => {
     box.setVersion('1.3.0');
     const { status, out } = RUN();
