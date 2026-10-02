@@ -454,15 +454,22 @@ impl Registry {
 
     /// Make `id` active. Returns Some(url) if its webview must be (re)spawned.
     pub fn activate(&mut self, id: ViewId, now_ms: u64) -> Option<String> {
-        if id == self.active_id || self.idx(id).is_none() {
+        if id == self.active_id {
             return None;
         }
+        // Resolved ONCE and carried down. This used to be a guard
+        // (`self.idx(id).is_none()`) followed by `self.idx(id).unwrap()` several
+        // lines later, so a production `.unwrap()` was safe only because nothing
+        // between the two mutated `self.tabs` — an invariant this function does
+        // not state and a future edit could break silently. Neither `idx` below
+        // nor the `last_active` write nor the `active_id` assignment touches a
+        // tab's `id`, so hoisting the lookup is behaviour-identical.
+        let i = self.idx(id)?;
         // Update the previously active tab's last_active
         if let Some(prev_i) = self.idx(self.active_id) {
             self.tabs[prev_i].last_active = now_ms;
         }
         self.active_id = id;
-        let i = self.idx(id).unwrap();
         let tab = &mut self.tabs[i];
         // Mark this tab as now active: update its last_active and clear background_creation flag
         // (if it was a background-created tab, after first activation it becomes a normal tab)
