@@ -28,6 +28,7 @@
 //                       workflow provides it, and then the gate SKIPS itself
 //                       loudly. See below — this is not a nit, it is the whole
 //                       gate.
+import { compareVersions, versionCodeOf, versionOf } from './versioncodeCheck.mjs';
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
@@ -77,47 +78,18 @@ const readAtRef = (ref) =>
     stdio: ['ignore', 'pipe', 'pipe'],
   });
 
-/** Read `version` out of tauri.conf.json with a real parse.
- *
- * This used to be `/"version"\s*:\s*"([^"]+)"/`, which matches the FIRST
- * `"version"` key anywhere in the file at ANY nesting depth — so a nested object
- * preceding the top-level key would silently supply the app version, and the
- * gate would compare the wrong string. A version check is exactly the kind of
- * gate that must not fail in the "looks fine" direction. The stated reason for
- * the regex ("without pulling in a JSONC parser") never applied: `tauri.conf.json`
- * is machine-generated config that Tauri itself reads, not JSONC.
+/**
+ * The gate's `version` reader. The PARSE is `versionOf` in ./versioncodeCheck.mjs — it
+ * used to live here, where v8 earns no coverage credit for it and a decision that can
+ * silently compare the wrong string had no unit test. Only the exit is ours.
  */
-function versionOf(jsonText, label) {
-  let parsed;
-  try {
-    parsed = JSON.parse(jsonText);
-  } catch (err) {
-    fail(`${label}: ${CONF_REL} is not valid JSON: ${err.message}`);
+function versionAt(jsonText, label) {
+  const parsed = versionOf(jsonText);
+  if (parsed.problem === 'not-json') {
+    fail(`${label}: ${CONF_REL} is not valid JSON: ${parsed.detail}`);
   }
-  const version = parsed && typeof parsed === 'object' ? parsed.version : undefined;
-  if (typeof version !== 'string') {
-    fail(`${label}: no "version" field found in ${CONF_REL}.`);
-  }
-  return version;
-}
-
-/** Tauri/android versionCode = major * 1_000_000 + minor * 1_000 + patch. */
-function versionCodeOf(version, label) {
-  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
-  if (!m) return null;
-  return Number(m[1]) * 1_000_000 + Number(m[2]) * 1_000 + Number(m[3]);
-}
-
-/** Semver-ish ordering: only comparable when both sides are MAJOR.MINOR.PATCH. */
-function compare(a, b) {
-  const pa = /^(\d+)\.(\d+)\.(\d+)$/.exec(a);
-  const pb = /^(\d+)\.(\d+)\.(\d+)$/.exec(b);
-  if (!pa || !pb) return null;
-  for (let i = 1; i <= 3; i++) {
-    const d = Number(pa[i]) - Number(pb[i]);
-    if (d !== 0) return d < 0 ? -1 : 1;
-  }
-  return 0;
+  if (parsed.problem) fail(`${label}: no "version" field found in ${CONF_REL}.`);
+  return parsed.version;
 }
 
 let headText;
@@ -126,11 +98,11 @@ try {
 } catch {
   fail(`Cannot read ${CONF_REL}.`);
 }
-const head = versionOf(headText, 'HEAD');
+const head = versionAt(headText, 'HEAD');
 
 let base;
 try {
-  base = versionOf(readAtRef(BASE_REF), BASE_REF);
+  base = versionAt(readAtRef(BASE_REF), BASE_REF);
 } catch {
   fail(
     `Cannot read ${CONF_REL} at ${BASE_REF}. The gate needs the default branch to ` +
@@ -138,7 +110,7 @@ try {
   );
 }
 
-const headCode = versionCodeOf(head, 'HEAD');
+const headCode = versionCodeOf(head);
 if (headCode === null) {
   fail(
     `"version": "${head}" in ${CONF_REL} is not MAJOR.MINOR.PATCH, so the derived ` +
@@ -146,7 +118,7 @@ if (headCode === null) {
   );
 }
 
-const cmp = compare(head, base);
+const cmp = compareVersions(head, base);
 if (cmp === null) {
   fail(`Cannot compare version "${head}" against "${base}" on ${BASE_REF} as semver.`);
 }
@@ -161,7 +133,7 @@ if (cmp === 0) {
       'means Android will refuse the install as a downgrade.',
   );
 } else {
-  const baseCode = versionCodeOf(base, BASE_REF);
+  const baseCode = versionCodeOf(base);
   if (baseCode !== null && headCode <= baseCode) {
     fail(`versionCode did not increase: ${baseCode} (${BASE_REF}) -> ${headCode}.`);
   }

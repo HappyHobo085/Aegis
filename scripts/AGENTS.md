@@ -116,6 +116,19 @@ that path is `src-tauri/.cargo/audit.toml`.
   clean report it printed "OK — no blocking advisories" while auditing against an
   allowlist nobody had declared. Both decisions are the pure functions named above.
 - **`auditCheck.test.mjs`** — unit tests for the pure logic above.
+- **`versioncodeCheck.mjs`** — pure logic for the Android bump gate: `versionOf`
+  (a REAL parse of `tauri.conf.json`, not a regex), `versionCodeOf`, `compareVersions`.
+  `versionOf` returns machine-readable reason codes (`not-json`, `not-an-object`,
+  `no-version`) rather than prose, because the operator-facing wording is part of this
+  gate's contract — `cliGates.test.mjs` pins both messages the gate prints, so moving the
+  logic must not reword what an operator reads. The parse used to be
+  `/"version"\s*:\s*"([^"]+)"/`, which matches the first `"version"` at ANY nesting depth,
+  so a nested object could silently supply the app version and the gate would compare the
+  wrong string; that case now has its own unit test.
+- **`versioncodeCheck.test.mjs`** — unit tests for the above. Listed in the
+  `sandbox(...)` call in `cliGates.test.mjs` too: without it the CLI cannot resolve the
+  module from the temp dir it was copied into, and every case fails on an import error
+  instead of on the behaviour it is testing.
 - **`check-bundle-size.mjs`**, **`check-android-versioncode.mjs`** — the other two
   CI gates (gzipped `dist/assets` vs `BUDGETS`; Android `versionCode` monotonicity
   vs `AEGIS_BASE_REF`). They are top-level CLIs like `check-npm-audit.mjs`, with

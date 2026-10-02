@@ -22,9 +22,12 @@ const REPO_ROOT = join(SCRIPTS_DIR, '..');
 // WHY SUBPROCESSES. All three gates under test are top-level CLIs: they read
 // their inputs at module load and call `process.exit()`. Importing one would run
 // it and kill the test worker, so there is no in-process seam to assert against.
-// `auditCheck.mjs` is the exception the repo already made — it holds the pure
-// logic, `check-npm-audit.mjs` the I/O — and `auditCheck.test.mjs` covers that
-// side. What is untested is the decision each CLI makes from a real audit report
+// `auditCheck.mjs` and `versioncodeCheck.mjs` are the exceptions the repo makes —
+// they hold the pure logic, `check-npm-audit.mjs` / `check-android-versioncode.mjs`
+// the I/O — and `auditCheck.test.mjs` / `versioncodeCheck.test.mjs` cover that side.
+// Those modules must be listed in the `sandbox(...)` call below, or the CLI cannot
+// resolve them from the temp dir it was copied into and every case fails on an import
+// error rather than on the behaviour it is testing. What is untested is the decision each CLI makes from a real audit report
 // / a real dist/ / a real git ref, which is exactly the part that once failed
 // OPEN. So: spawn, assert the exit code AND the operator-facing message.
 //
@@ -67,7 +70,7 @@ afterAll(() => {
 
 /** A `git init`-ed sandbox whose `main` holds a committed tauri.conf.json. */
 function gitSandbox(version) {
-  const root = sandbox('check-android-versioncode.mjs');
+  const root = sandbox('check-android-versioncode.mjs', 'versioncodeCheck.mjs');
   const conf = join(root, 'src-tauri', 'tauri.conf.json');
   const setVersion = (v) => write(conf, `{\n  "productName": "Aegis",\n  "version": "${v}"\n}\n`);
   const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8' }).stdout;
