@@ -253,7 +253,7 @@ pub fn record_page_finished<R: Runtime>(app: &AppHandle<R>, tab_id: u32, url: &s
 /// `downloads`' Android bridge needs the same handle, and this module's own doc
 /// already predicted it — "expect the next native feature to want one too". Two
 /// features that both need it must not make one of them depend on the other.
-
+///
 /// JNI bridge for Android's `NativeHistory.recordVisit`, called from each content
 /// WebView's `onPageFinished`. Same pattern (and same `ffi_guard` obligation) as
 /// `safety.rs` / `adblock_engine.rs`; lives in libapp_lib.so.
