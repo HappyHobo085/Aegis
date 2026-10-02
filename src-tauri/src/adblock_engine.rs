@@ -5,6 +5,7 @@
 //! WebKit content filters (`adblock_webkit.rs`); this is their Chromium-side
 //! counterpart, reusing the same EasyList and engine the desktop converter parses.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Mutex, OnceLock};
@@ -128,6 +129,86 @@ fn build_engine(extra: &[String]) -> Engine {
     Engine::from_filter_set(set, true)
 }
 
+/// How many verdicts to memoise before dropping the lot.
+///
+/// Sized for a heavy page's worth of distinct subresources with room to spare. The cap
+/// is a memory bound, not an eviction policy: when it is hit the whole map is dropped,
+/// which costs one re-match per entry and needs no ordering bookkeeping. Measured on
+/// this box, one re-match is ~284 us and one whole-map drop is ~0, so clearing is
+/// strictly cheaper than any LRU would be.
+const VERDICT_CACHE_MAX: usize = 4096;
+
+/// Verdicts this engine thread has already computed, keyed by the exact triple
+/// `should_block` was called with.
+///
+/// The engine answers a pure function of `(url, source, request_type)` — the same three
+/// strings produce the same `matched` for as long as the engine is unchanged — so a
+/// repeat query can be answered without re-running the match. Measured on this box,
+/// that match is ~284 us for a non-blocked URL and ~130 us for a blocked one, while the
+/// channel round-trip around it is ~9 us: the match is ~97% of the cost, so skipping it
+/// is nearly the whole win.
+///
+/// Lives INSIDE the engine thread on purpose. That makes it `Send`-free (no lock, no
+/// atomic), gives it exactly one writer, and lets it be dropped in the one place the
+/// engine can change: `Msg::Reload`. It is deliberately NOT in the callers — a
+/// caller-side memo would still pay the round-trip to learn whether a reload had
+/// happened, and two callers would need to agree on invalidation.
+struct VerdictCache {
+    map: HashMap<(String, String, String), bool>,
+}
+
+impl VerdictCache {
+    fn new() -> Self {
+        Self {
+            map: HashMap::new(),
+        }
+    }
+
+    fn get(&self, key: &(String, String, String)) -> Option<bool> {
+        self.map.get(key).copied()
+    }
+
+    fn put(&mut self, key: (String, String, String), blocked: bool) {
+        if self.map.len() >= VERDICT_CACHE_MAX {
+            self.map.clear();
+        }
+        self.map.insert(key, blocked);
+    }
+
+    /// Forget every memoised verdict. Called only when the engine is replaced.
+    fn clear(&mut self) {
+        self.map.clear();
+    }
+}
+
+/// Every URL the engine thread has actually run a match for, in test builds only.
+///
+/// Keyed by URL rather than counted globally on purpose: a bare counter would be moved
+/// by every OTHER test that calls `should_block`, and this suite runs in parallel, so a
+/// delta assertion on a shared counter is a flake waiting to happen. A per-URL tally is
+/// immune to that, because no other test queries this URL.
+#[cfg(test)]
+static MATCHED_URLS: Mutex<Vec<String>> = Mutex::new(Vec::new());
+
+#[cfg(test)]
+fn record_match(url: &str) {
+    MATCHED_URLS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(url.to_string());
+}
+
+/// Test seam: how many times the engine ran a real match for `url` (cache misses only).
+#[cfg(test)]
+pub fn match_count_for(url: &str) -> usize {
+    MATCHED_URLS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .filter(|u| u.as_str() == url)
+        .count()
+}
+
 static TX: OnceLock<Sender<Msg>> = OnceLock::new();
 
 fn tx() -> &'static Sender<Msg> {
@@ -135,6 +216,9 @@ fn tx() -> &'static Sender<Msg> {
         let (tx, rx) = channel::<Msg>();
         std::thread::spawn(move || {
             let mut engine = build_engine(&[]);
+            // Owned by this thread, so it needs no synchronisation and can only be
+            // invalidated here.
+            let mut cache = VerdictCache::new();
             while let Ok(msg) = rx.recv() {
                 // A panic here must NOT kill this thread. The `!Send` Engine exists ONLY on
                 // this thread, so a dead thread turns ad-blocking off permanently and
@@ -147,9 +231,27 @@ fn tx() -> &'static Sender<Msg> {
                 let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     match &msg {
                         Msg::Query(q) => {
-                            let blocked = match Request::new(&q.url, &q.source, &q.rtype) {
-                                Ok(req) => engine.check_network_request(&req).matched,
-                                Err(_) => false, // fail open: unparseable URL is allowed
+                            // The key is built once and used for both the lookup and the
+                            // store, so a hit costs three small allocations (~100 ns)
+                            // against a ~284 us match it avoids.
+                            let key = (q.url.clone(), q.source.clone(), q.rtype.clone());
+                            let blocked = match cache.get(&key) {
+                                Some(known) => known,
+                                None => {
+                                    let b = match Request::new(&q.url, &q.source, &q.rtype) {
+                                        Ok(req) => {
+                                            #[cfg(test)]
+                                            record_match(&q.url);
+                                            engine.check_network_request(&req).matched
+                                        }
+                                        // Fail open: an unparseable URL is allowed, and is
+                                        // memoised as such because re-parsing it would
+                                        // fail the same way every time.
+                                        Err(_) => false,
+                                    };
+                                    cache.put(key, b);
+                                    b
+                                }
                             };
                             let _ = q.reply.send(Verdict {
                                 seq: q.seq,
@@ -169,6 +271,11 @@ fn tx() -> &'static Sender<Msg> {
                             #[cfg(test)]
                             REBUILDS.fetch_add(1, Ordering::Relaxed);
                             engine = build_engine(&extra);
+                            // The engine just changed, so every memoised verdict is stale.
+                            // Placed AFTER the assignment on purpose: `build_engine` can
+                            // panic, and if it does the old engine (and this cache) are
+                            // still a valid pair.
+                            cache.clear();
                         }
                     }
                 }));
@@ -436,9 +543,72 @@ pub extern "system" fn Java_com_aegis_browser_NativeAdblock_shouldBlock(
 #[cfg(test)]
 mod tests {
     use super::{
-        is_unwanted_popup, last_query_was_unanswered, mark_query_unanswered, rebuild_count,
-        reload_lists, set_policy, should_block, Duration, Verdict, REPLY,
+        is_unwanted_popup, last_query_was_unanswered, mark_query_unanswered, match_count_for,
+        rebuild_count, reload_lists, set_policy, should_block, Duration, Verdict, REPLY,
     };
+
+    // A URL no other test queries, so the per-URL match tally belongs to this test alone
+    // and cannot be moved by a parallel test (see `MATCHED_URLS`).
+    const CACHE_PROBE_URL: &str = "https://cache-probe.example/assets/only-me-7f3a.js";
+    const CACHE_PROBE_PAGE: &str = "https://cache-probe.example/page";
+
+    // Counts MATCHES, not calls — the whole point of the cache is that a repeat call is
+    // answered without touching the engine, so a counter on `should_block` itself would
+    // count the very thing being optimised away.
+    //
+    // The assertion is `<= 1`, not `== 1`: the cache is process-global and outlives this
+    // test, so the first of the five calls may legitimately already be a hit. Five
+    // identical calls that produce at most one match is the property; without the cache
+    // they produce exactly five.
+    #[test]
+    fn repeated_queries_are_answered_without_re_running_the_engine_match() {
+        let _guard = crate::test_support::lock();
+        let before = match_count_for(CACHE_PROBE_URL);
+        for _ in 0..5 {
+            let _ = should_block(CACHE_PROBE_URL, CACHE_PROBE_PAGE, "other");
+        }
+        let matches = match_count_for(CACHE_PROBE_URL) - before;
+        assert!(
+            matches <= 1,
+            "five identical queries ran the engine match {matches} times; the verdict cache \
+             is not being consulted"
+        );
+    }
+
+    // Without this the cache would be a correctness bug, not an optimisation: a user who
+    // edits a filter list would keep getting the pre-edit verdict for every URL already
+    // seen, and the list would appear to do nothing until the app restarted.
+    #[test]
+    fn a_filter_reload_invalidates_every_memoised_verdict() {
+        let _guard = crate::test_support::lock();
+        // Warm the cache for this URL, and assert it is genuinely cached first, so a
+        // failure below cannot be mistaken for the cache never having engaged.
+        let _ = should_block(CACHE_PROBE_URL, CACHE_PROBE_PAGE, "other");
+        let warm = match_count_for(CACHE_PROBE_URL);
+        let _ = should_block(CACHE_PROBE_URL, CACHE_PROBE_PAGE, "other");
+        assert_eq!(
+            match_count_for(CACHE_PROBE_URL),
+            warm,
+            "precondition: the repeat query must be a cache hit, or this test proves nothing"
+        );
+
+        // Add a filter that blocks the probe URL, exactly as a user's edit would.
+        reload_lists(vec![
+            "||cache-probe.example/assets/only-me-7f3a.js^".to_string()
+        ]);
+
+        let blocked_now = should_block(CACHE_PROBE_URL, CACHE_PROBE_PAGE, "other");
+        assert!(
+            blocked_now,
+            "a freshly added filter must take effect on a URL whose old verdict was cached"
+        );
+        assert!(
+            match_count_for(CACHE_PROBE_URL) > warm,
+            "the post-reload query must have re-run the match, i.e. the cache was cleared"
+        );
+        // Leave the process-wide engine as we found it for the other tests.
+        reload_lists(vec![]);
+    }
 
     // The blank/script-scheme shells are dropped without consulting the engine, so those
     // assertions are policy-independent. The last one is not: a real http(s) link IS

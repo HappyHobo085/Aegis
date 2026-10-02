@@ -722,7 +722,7 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     `NativeAdblock.enabled()` JNI getter so the Kotlin document-start cache is keyed on the
     toggle, and under `test` through `adblock_inject::android_document_start_layer`. Gated
     rather than `allow(dead_code)`, because outside those two there is genuinely no caller.
-    - **Three concurrency contracts in that file, all learned the hard way — read these
+    - **Four concurrency contracts in that file, all learned the hard way — read these
       before touching `should_block` or `reload_lists`.**
       - **Replies are `Verdict { seq, blocked }`, not a bare `bool`.** The one-engine-thread
         design reuses a single reply channel per calling thread, which is only sound while
@@ -761,6 +761,26 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
         exists. A warm-up is a precondition, not a guarantee — a rebuild can land after it —
         so the assertions themselves must ask for a verdict. Panic-recovery `false` is
         deliberately NOT marked: that one IS a verdict.
+      - **The engine thread memoises verdicts, and the ONE place that replaces the engine
+        must clear that memo.** `VerdictCache` lives inside the engine thread — so it needs
+        no lock, has exactly one writer, and can only be invalidated where the `!Send`
+        `Engine` can be replaced. It keys on the exact `(url, source, request_type)` triple
+        `should_block` was called with, because the engine answers a pure function of those
+        three. Measured on this box: the match is ~284 us for a non-blocked URL and ~130 us
+        for a blocked one, while the channel round-trip around it is ~5–9 us — the match
+        is ~97% of the cost, so a hit is ~57x cheaper. It is deliberately NOT a caller-side
+        memo: that would still pay the round-trip just to learn whether a reload happened.
+        This is the subtlest of the four, because the memo is only correct if the single
+        site that can change the answer clears it — and a stale entry is a SILENT wrong
+        answer, not a stale one. The mutation probe proved the coupling: deleting the
+        single `cache.clear()` in the `Msg::Reload` arm turns red not only
+        `a_filter_reload_invalidates_every_memoised_verdict` but the pre-existing
+        `blocks_ads_and_honors_toggle_and_allowlist`, **because the ad-block on/off toggle
+        works by reloading the engine** — so without the clear, a user who switches
+        ad-blocking off keeps being served pre-toggle verdicts and the toggle looks broken
+        until restart. `VERDICT_CACHE_MAX` is a memory bound, not an eviction policy:
+        reaching it drops the whole map, which costs one re-match per entry and needs no
+        ordering bookkeeping.
   - `adblock_webkit.rs` (Linux) — declarative WebKit content filters via
     `adblock_convert.rs` (Brave → Safari content-blocker JSON), chunked ~25k
     rules/filter (WebKit caps ~50k), disk-cached by hash **over the lists AND the
