@@ -99,7 +99,13 @@ that path is `src-tauri/.cargo/audit.toml`.
 - **`check-npm-audit.mjs`** — the CLI wrapper. Spawns `npm audit --json` (recovering
   stdout when npm exits non-zero), loads the allowlist from `../.audit-allowlist.json`,
   calls `evaluateAudit()`, and **exits non-zero if any blocking advisory remains**.
-  Allowlisted ones are logged and ignored.
+  Allowlisted ones are logged and ignored. **Loading the allowlist is strict**: a
+  missing file (`ENOENT`) is the one failure that means "nothing is allowed", so it
+  falls back to `{ allow: [] }`. Every other read error — and any malformed JSON —
+  exits non-zero naming the file. Collapsing all of them into an empty allowlist
+  still failed *closed*, but reported the advisory rather than the cause, and on a
+  clean report it printed "OK — no blocking advisories" while auditing against an
+  allowlist nobody had declared.
 - **`auditCheck.test.mjs`** — unit tests for the pure logic above.
 - **`check-bundle-size.mjs`**, **`check-android-versioncode.mjs`** — the other two
   CI gates (gzipped `dist/assets` vs `BUDGETS`; Android `versionCode` monotonicity

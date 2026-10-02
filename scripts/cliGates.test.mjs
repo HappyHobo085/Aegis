@@ -293,11 +293,29 @@ describe('check-npm-audit.mjs (the advisory gate)', () => {
     expect(status).toBe(1);
   });
 
-  it('treats an unparseable allowlist as empty, so advisories still block', () => {
+  it('FAILS on an unparseable allowlist and names the file, rather than auditing as empty', () => {
+    // A one-character typo in `.audit-allowlist.json` is not the same fact as a
+    // deliberately empty one. The gate used to collapse both into `{allow:[]}`,
+    // which stayed fail-CLOSED on a report that had advisories — so this test
+    // used to assert the advisory count and pass — but on a CLEAN report it
+    // exited 0 and reported "OK — no blocking advisories" while auditing against
+    // an allowlist nobody had actually declared. The failure mode was a silently
+    // wrong gate, and the message always named the advisory, never the file.
+    const { root, env } = withNpm(CLEAN, { allowlist: '{ this is not json' });
+    const { status, out } = run(root, 'check-npm-audit.mjs', { env });
+    expect(status).toBe(1);
+    expect(out).toContain('.audit-allowlist.json');
+    expect(out).toContain('not valid JSON');
+    expect(out).not.toContain('OK — no blocking');
+  });
+
+  it('still fails CLOSED when the allowlist is missing AND there are advisories', () => {
+    // The safety property the previous test really cared about, kept explicit so
+    // the new "fail loudly" path can never be mistaken for "fail open".
     const { root, env } = withNpm(HIGH, { allowlist: '{ this is not json' });
     const { status, out } = run(root, 'check-npm-audit.mjs', { env });
-    expect(out).toContain('1 blocking high/critical advisory(ies)');
     expect(status).toBe(1);
+    expect(out).toContain('not valid JSON');
   });
 });
 
