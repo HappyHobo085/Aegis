@@ -379,7 +379,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Collect every leg's checksum fragment
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           pattern: aegis-checksums-*
           merge-multiple: false
