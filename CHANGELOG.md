@@ -9,7 +9,7 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
-- **Cloudflare's "Just a moment…" check never completed on Linux.** The verification
+- **Cloudflare's verification never completed on Linux.** The verification
   spinner ran forever on Cloudflare-protected sites. The content webview was claiming a
   Chrome 148 User-Agent while actually running WebKitGTK, and Cloudflare compares the
   claimed browser against what the engine actually exposes; the mismatch made it treat
@@ -17,9 +17,15 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   The browser now presents a User-Agent matching the engine it really runs — Safari on
   WebKit, Chrome on Chromium (Windows and Android are unchanged, where the claim was
   already true). Measured in a bare WebKitGTK webview with none of Aegis's code
-  involved, which also ruled out the ad-block filter lists, the injected scripts and the
-  navigation policy: the native WebKit User-Agent fails too, because it reports Safari 15
-  from 2021 against a much newer engine.
+  involved, which ruled out the ad-block filter lists and the injected scripts: the native
+  WebKit User-Agent fails too, because it reports Safari 15 from 2021 against a much newer
+  engine. **That turned out to be only the first of two causes.** With the browser
+  identifying itself honestly, the verification still hung one step later: its widget is
+  built in a sandboxed frame, and the navigation policy refused that scheme — so the
+  widget was cancelled before it could render. A page may now load such a frame, while
+  the policy still refuses to _remember_ one, so a saved or restored tab can never become
+  a blank frame. Allowing that one scheme made the same build load the page in under six
+  seconds instead of hanging indefinitely.
 - **On a phone, any page could open as many tabs as it liked.** A page that asked for a new
   window without you tapping anything — the shape an ad network uses to bury the page you
   asked for — was handed a real tab in the background. Popups now open only for an actual

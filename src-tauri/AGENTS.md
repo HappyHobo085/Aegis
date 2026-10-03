@@ -121,16 +121,46 @@ dotted event name.
   be a real network fault, while every other code is still reported. Without this the
   error overlay told the user to "check the address and your network connection" for a
   navigation the address and the network were fine for.
-  **ONE scheme policy: `is_navigable` (http/https/`about:blank`).** `decide_navigation` now
-  consults it as its FIRST check, before the overlay, malware, ad-block and HTTPS-Only
-  checks — every one of which reads the destination as an ordinary web address. It
-  previously ended in `return true` with no scheme test at all, so a page-initiated
-  `location = 'file:///…'` was not refused by the navigation policy, which is what made
-  the `tabs::on_tab_url` hole below reachable. `require_navigable`/`parse_navigable` are
-  the fallible spellings (they name the refused scheme for the error toast) and the ONLY
-  list — a second list is how `file:` reached `tabs.json` in the first place. Callers:
-  `decide_navigation`, `tabs::on_tab_url`, the `tabs.recordNav` arm,
+  **ONE scheme policy, in TWO scopes: `is_navigable` (http/https/`about:blank`) records an
+  address; `is_page_navigable` is that plus `about:srcdoc` and is the LOAD gate.**
+  `decide_navigation` consults the latter as its FIRST check, before the overlay, malware,
+  ad-block and HTTPS-Only checks — every one of which reads the destination as an ordinary
+  web address. It previously ended in `return true` with no scheme test at all, so a
+  page-initiated `location = 'file:///…'` was not refused by the navigation policy, which is
+  what made the `tabs::on_tab_url` hole below reachable. `require_navigable`/`parse_navigable`
+  are the fallible spellings of the RECORDING list (they name the refused scheme for the
+  error toast), and a second list is how `file:` reached `tabs.json` in the first place.
+  Recording callers: `tabs::on_tab_url`, the `tabs.recordNav` arm,
   `open_redirect_background`, `nav.home`, `tabs.create` and `safety.proceed`.
+  **Why `about:srcdoc` is load-only, and why that is safe.** Cloudflare's Turnstile builds
+  its widget inside a sandboxed iframe loaded via `about:srcdoc`, and WebKitGTK surfaces
+  that as a `decide-policy` navigation — so the strict gate cancelled it and the challenge
+  spun on `Just a moment...` forever (measured: the honest-UA build still hung, and allowing
+  this one scheme made the SAME binary load the page in under 6 s). The widening grants
+  **no capability**, which is the distinction that matters: the scheme that actually
+  mattered here was `file:`, because it gave a page something new — a local filesystem read.
+  `about:srcdoc` gives nothing, because its content comes from the frame's own `srcdoc`
+  ATTRIBUTE, so identical markup was already renderable with no navigation at all; it cannot
+  read the filesystem, and the content webview cannot reach the IPC chokepoint
+  (`withGlobalTauri` off ⇒ `window.__TAURI__` undefined, which is why `vault_inject` is
+  inert). **It is deliberately NOT in `is_navigable`,** so `tabs.recordNav` cannot persist
+  one — a sandboxed `about:srcdoc` frame has no `src` and nothing can fetch the URL, so it
+  would be a blank entry in `tabs.json` that session restore re-spawns every launch.
+  **Android deliberately does NOT mirror the load widening** (`isLoadableUrl` stays strict,
+  and `nav::tests` still pins it to `is_navigable`): WebView does not route an
+  `about:srcdoc` iframe document through `shouldOverrideUrlLoading` at all, and Turnstile
+  completes there today, so Android is simply the more restrictive of the two.
+  `decide_navigation` has **no frame flag** (gotcha 13), so this cannot be narrowed to
+  subframes — the only frame-aware hook fires after the request went out.
+  Four tests hold the split (`a_page_may_load_about_srcdoc_but_it_is_never_recorded`,
+  `about_srcdoc_is_the_only_thing_the_page_gate_widens`,
+  `the_page_gate_admits_exactly_the_recorded_set_plus_a_bare_srcdoc`,
+  `the_page_navigation_gate_is_the_one_decide_navigation_consults`), all mutation-verified:
+  reverting the gate to `is_navigable` reds only the wiring pin; dropping the srcdoc arm
+  or **widening `is_navigable` itself** each red the load/record pair; smuggling a SECOND
+  widening (`data:`) into `is_page_navigable` reds only the "only thing" test. The wiring
+  pin is a `rust_production_source` text pin because `decide_navigation` takes a concrete
+  `&AppHandle` and no `MockRuntime` test can reach it.
   **Android now enforces that same list instead of a second one wearing a prefix
   test's clothes.** `makeContentClient(id)`'s `shouldOverrideUrlLoading` read
   `if (!raw.startsWith("http")) return false`, and in `WebViewClient` returning

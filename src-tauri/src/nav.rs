@@ -161,7 +161,11 @@ fn should_autoclose_popunder(tab_id: u32, active_id: u32, has_content: bool) -> 
     tab_id != active_id && !has_content
 }
 
-/// Whether a URL is a scheme the content webview may be asked to load.
+/// Whether a URL is an address Aegis will **RECORD** — the scheme policy for anything
+/// that becomes a real navigable URL: the address bar, history, `tabs.recordNav`,
+/// `tabs.on_tab_url`, session restore, `open_redirect_background`, `nav.home`,
+/// `tabs.create` and `safety.proceed`. A PAGE may navigate to a slightly wider set;
+/// see [`is_page_navigable`].
 ///
 /// This mirrors two helpers that already exist and are NOT a substitute for it:
 /// the renderer's `isAllowedNavigationUrl` (`src/lib/schemes.ts`) and the Android
@@ -180,6 +184,11 @@ fn should_autoclose_popunder(tab_id: u32, active_id: u32, has_content: bool) -> 
 ///   local-file read on *every subsequent launch*, not just the current one.
 /// * `javascript:` — script injection into a webview that can reach the IPC chokepoint.
 /// * `data:`/`blob:`/custom schemes — a page-controlled origin we have no policy for.
+/// * `about:srcdoc` — **even though a page is allowed to LOAD it** (see
+///   [`is_page_navigable`]). A sandboxed `about:srcdoc` frame carries no `src` of its
+///   own and nothing can fetch the URL, so there is no address to record: persisting
+///   one would write a blank entry into `tabs.json` that session restore then re-spawns
+///   on every launch.
 pub fn is_navigable(u: &Url) -> bool {
     match u.scheme() {
         "http" | "https" => true,
@@ -188,6 +197,38 @@ pub fn is_navigable(u: &Url) -> bool {
         "about" => u.path() == "blank",
         _ => false,
     }
+}
+
+/// Whether a **page-initiated** navigation may proceed: the same list as
+/// [`is_navigable`], plus `about:srcdoc`.
+///
+/// Widened for Cloudflare's Turnstile, whose widget is built inside a sandboxed iframe
+/// loaded via `about:srcdoc`. WebKitGTK surfaces that as a `decide-policy` navigation,
+/// so `decide_navigation` cancelled it and the widget never rendered — measured against
+/// comix.to, the page sat on `Just a moment...` indefinitely, and allowing this one
+/// scheme made the same binary load the page in under 6 s.
+///
+/// **This adds NO capability, and that distinction is the whole argument.** The scheme
+/// that actually mattered in this policy was `file:`, because it granted something
+/// genuinely new: a local filesystem read. `about:srcdoc` grants nothing — its content
+/// comes from the frame's own `srcdoc` attribute, so byte-identical markup is already
+/// renderable with no navigation at all, it cannot reach the filesystem, and the content
+/// webview cannot reach the IPC chokepoint (`withGlobalTauri` is off, so
+/// `window.__TAURI__` is undefined — which is exactly why `vault_inject` is inert).
+/// Refusing the navigation blocked content the page could already display.
+///
+/// **Load-only, on purpose.** [`is_navigable`] stays strict so this never reaches
+/// `tabs.json` — see its doc for why recording it would be worse than allowing it.
+///
+/// **Desktop-only, and Android deliberately does not mirror it.** Android's equivalent
+/// gate is `MainActivity.isLoadableUrl`, and Android WebView does not route an
+/// `about:srcdoc` iframe document through `shouldOverrideUrlLoading` at all (Turnstile
+/// completes there today), so there is nothing to widen. Keeping Kotlin strict keeps
+/// Android the more restrictive of the two; `nav::tests` still pins it to
+/// [`is_navigable`].
+#[cfg(any(desktop, test))]
+pub fn is_page_navigable(u: &Url) -> bool {
+    is_navigable(u) || (u.scheme() == "about" && u.path() == "srcdoc")
 }
 
 /// [`is_navigable`] as a fallible check, naming the refused scheme so the renderer (and
@@ -486,16 +527,19 @@ pub(crate) fn emit_nav_crashed(app: &AppHandle, id: u32, reason: &str) {
 #[cfg(desktop)]
 pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
     // Scheme gate, FIRST, before anything that reasons about the destination.
-    // `is_navigable` is the app's single definition of a browsable scheme
-    // (http/https + about:blank) and it is already consulted by `tabs.create`,
-    // `tabs.recordNav`, `open_redirect_background` and `nav.home` — but NOT
-    // here, which is the gate every PAGE-initiated navigation passes through.
-    // Without it, `location = 'file:///…'` or `javascript:…` from a page was not
-    // refused by the navigation policy at all: the overlay, malware, ad-block
-    // and https-only checks all read the destination as an ordinary web address
-    // and then `return true`. That is what made the per-page-load writer
+    // `is_page_navigable` is the gate every PAGE-initiated navigation passes through;
+    // it is `is_navigable` (http/https + about:blank) plus `about:srcdoc`, which a
+    // sandboxed iframe legitimately loads and which nothing can fetch — see its doc for
+    // why the widening grants no capability. The RECORDING list is deliberately the
+    // stricter `is_navigable`, consulted by `tabs.create`, `tabs.recordNav`,
+    // `open_redirect_background`, `tabs::on_tab_url` and `nav.home`, so a page-loaded
+    // `about:srcdoc` never reaches `tabs.json`.
+    // Without a scheme gate here at all, `location = 'file:///…'` or `javascript:…`
+    // from a page was not refused by the navigation policy: the overlay, malware,
+    // ad-block and https-only checks all read the destination as an ordinary web
+    // address and then `return true`. That is what made the per-page-load writer
     // (`tabs::on_tab_url`) able to persist a `file:` url into `tabs.json`.
-    if !is_navigable(u) {
+    if !is_page_navigable(u) {
         if std::env::var_os("AEGIS_NAV_DEBUG").is_some() {
             eprintln!("[aegis-nav] REFUSE scheme {}: {}", u.scheme(), u.as_str());
         }
@@ -1123,12 +1167,12 @@ pub fn dispatch<R: Runtime>(
 mod tests {
     use super::{
         content_ua, content_ua_for, dispatch, forget_tab_content, forget_tab_loading, is_navigable,
-        mark_tab_has_content, note_tab_loading, parse_navigable, reload_or_stop,
+        is_page_navigable, mark_tab_has_content, note_tab_loading, parse_navigable, reload_or_stop,
         reload_or_stop_action, require_navigable, should_autoclose_popunder, tab_is_loading,
         tabs_with_content, ContentEngine, ReloadOrStop,
     };
     use crate::test_support::with_tmp_app;
-    use crate::test_support::{kotlin_fn_body, kotlin_source};
+    use crate::test_support::{kotlin_fn_body, kotlin_source, rust_production_source};
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use tauri::{AppHandle, Manager, Runtime, Url};
@@ -1283,6 +1327,120 @@ mod tests {
             let Ok(u) = Url::parse(raw) else { continue };
             assert!(!is_navigable(&u), "{raw} must not be navigable");
         }
+    }
+
+    #[test]
+    fn a_page_may_load_about_srcdoc_but_it_is_never_recorded() {
+        // The two halves of the split, asserted together because the BUG is the
+        // combination: a page must be able to load a sandboxed `about:srcdoc` frame
+        // (Cloudflare's Turnstile widget; refusing it hangs the challenge forever), and
+        // it must NOT be recordable as a tab address, or session restore re-spawns a
+        // blank tab on every launch.
+        let u = Url::parse("about:srcdoc").expect("about:srcdoc parses");
+        assert!(
+            is_page_navigable(&u),
+            "a page must be able to load about:srcdoc"
+        );
+        assert!(
+            !is_navigable(&u),
+            "about:srcdoc must stay out of the RECORDING list (tabs.recordNav, \
+             tabs::on_tab_url, session restore) or tabs.json grows a blank tab"
+        );
+        assert!(
+            require_navigable(&u).is_err(),
+            "require_navigable is the user/programmatic address check, so it must refuse \
+             about:srcdoc and name it"
+        );
+    }
+
+    #[test]
+    fn about_srcdoc_is_the_only_thing_the_page_gate_widens() {
+        // `is_page_navigable` must be `is_navigable` and NOT ONE SCHEME MORE, so every
+        // member the recorded gate refuses must stay refused — including the `about:`
+        // lookalikes, which are how a future edit would smuggle a second widening in.
+        let still_refused = [
+            "about:config",
+            "about:srcdocx",
+            "about:srcdocs",
+            "about:",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "blob:https://example.com/abc",
+            "content://com.example/x",
+            "chrome://settings",
+            "intent://scan/#Intent;scheme=zxing;end",
+            "ftp://example.com/",
+            "aegis-internal://thing",
+        ];
+        for raw in still_refused {
+            let u = Url::parse(raw).expect(raw);
+            assert!(
+                !is_page_navigable(&u),
+                "{raw} must NOT be page-navigable — the only widening is a bare about:srcdoc"
+            );
+        }
+    }
+
+    #[test]
+    fn the_page_gate_admits_exactly_the_recorded_set_plus_a_bare_srcdoc() {
+        // The other half of the partition, so the test above cannot pass on a page gate
+        // that refuses EVERYTHING (which would satisfy it just as well).
+        for raw in [
+            "http://ok.test/",
+            "https://ok.test/",
+            "about:blank",
+            // A fragment is not part of `path()`, so `about:blank#x` passes today and
+            // `about:srcdoc#frag` must behave the same way — the existing precedent is
+            // deliberate, not an oversight.
+            "about:blank#x",
+            "about:srcdoc#frag",
+        ] {
+            let u = Url::parse(raw).expect(raw);
+            let recorded = is_navigable(&u);
+            let paged = is_page_navigable(&u);
+            assert!(
+                paged,
+                "{raw} must be page-navigable; the page gate must never be NARROWER than \
+                 the recorded set"
+            );
+            if raw != "about:srcdoc#frag" {
+                assert!(recorded, "{raw} must also stay recordable");
+            }
+        }
+        // A bare `about:srcdoc` is the single admitted difference, and it is load-only.
+        let srcdoc = Url::parse("about:srcdoc").expect("parses");
+        assert!(is_page_navigable(&srcdoc) && !is_navigable(&srcdoc));
+    }
+
+    #[test]
+    fn the_page_navigation_gate_is_the_one_decide_navigation_consults() {
+        // WIRING. `decide_navigation` takes a concrete `&AppHandle`, so no `MockRuntime`
+        // test can reach it (unlike the `R: Runtime` dispatchers), and the observable —
+        // "a page may load about:srcdoc" — lives entirely in which list the guard reads.
+        // Read through `rust_production_source` so this pin cannot be satisfied by its own
+        // literal or by the surrounding prose: comments and the test module are both cut.
+        let prod = rust_production_source(include_str!("nav.rs"));
+        assert!(
+            prod.contains("if !is_page_navigable(u)"),
+            "decide_navigation's scheme guard no longer reads is_page_navigable, so a \
+             Cloudflare Turnstile about:srcdoc frame is cancelled again and the challenge \
+             hangs forever."
+        );
+        // …and the RECORDING list must stay the strict one everywhere it is consulted, or
+        // tabs.json grows a blank about:srcdoc tab on every launch.
+        for (owner, needle) in [
+            ("tabs.recordNav", "require_navigable"),
+            ("nav.home", "require_navigable"),
+            ("safety.proceed", "require_navigable"),
+        ] {
+            assert!(prod.contains(needle), "{owner} no longer consults {needle}");
+        }
+        assert!(
+            !prod.contains("is_page_navigable(u) &&"),
+            "is_page_navigable is only meaningful as the LOAD gate; do not spread it into \
+             the recording paths."
+        );
     }
 
     #[test]
