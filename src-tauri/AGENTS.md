@@ -828,8 +828,18 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     pass through (native `on_new_window` vets those). Trade-off: legit cross-origin scripted
     popups (e.g. OAuth) are blocked too; real `<a target=_blank>` links still open.
     `adblock_layer(block)` is the single seam gating the guard + the heavy body, used by
-    desktop `compose` and by Android's `NativeInject.documentStartScript(host)` JNI getter
-    alike. `block` = **enabled AND not allowlisted** — the two independent ways a user says
+    both composition paths — desktop `compose` and Android's
+    `NativeInject.documentStartScript(host)` JNI getter — which now share ONE ordering rule
+    in `compose_layers(gestures, webrtc, adblock, farble)`.
+    **The link-gesture layer is composed FIRST and is NEVER gated on `block`** (see
+    `link_gestures.rs`): it reads the page's native `window.open` at document-start, which
+    it can only do before the guard replaces it, and a user affordance must not vanish
+    because ad-blocking was switched off for the site. The consequence, which replaces an
+    invariant this file previously held: **the document-start script is no longer EMPTY on
+    any page on any platform** — an all-exempt page now carries exactly the gesture layer.
+    So anything that decided "injection unavailable" by emptiness (`MainActivity`'s
+    `script.isNotEmpty()`) no longer decides that for the gesture layer.
+    `block` = **enabled AND not allowlisted** — the two independent ways a user says
     "show me this site's ads". The guard travels with the body deliberately: it is the ad
     pop-under defence, there is no second UI control that would release it, and a user who
     switches ad-blocking off has asked for their pop-unders back.
@@ -1441,6 +1451,36 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     This is NOT engine-level farbling and the docs never claim parity with Brave's in-Blink tier.
   - **Runtime verify** — vitest `farbleShim.test.ts` (authoritative for shim behavior; passes).
     Live farble-a-real-page, Android device, Win/macOS GUI **PENDING** user.
+- **Link gestures** — `link_gestures.rs` + `link_gestures.js`: **Ctrl/Cmd+click,
+  middle-click and Shift+click on a link open it in a new BACKGROUND tab** instead of
+  navigating the tab you are reading. A document-start layer (`include_str!`'d, run via
+  `initialization_script_for_all_frames` on desktop and `addDocumentStartJavaScript` on
+  Android), composed FIRST by `adblock_inject::compose_layers` — **ordering is
+  correctness, not preference**: it reads the page's native `window.open` at document-start,
+  which it can only do before `POPUP_GUARD` replaces it, and the guard refuses exactly the
+  cross-origin open a Ctrl+click is. Injected on every frame, so an in-frame link honours it
+  too (the `on_new_window` gate is per-request, so it still applies).
+  **No IPC channel and no new bridge exist for this.** On a gesture it calls the native
+  `window.open`, so the request lands on the same `nav::on_new_window` /
+  `MainActivity.onCreateWindow` handler a `target=_blank` click already uses and inherits
+  the identical gates (`is_unwanted_popup`, `is_navigable`). Shift+click maps to a tab
+  because Aegis is single-window and has no window to create.
+  **`isTrusted` is the whole security argument**: the layer lives in the page's world, so
+  page script could otherwise `dispatchEvent` its way to mint tabs; every branch requires
+  `isTrusted`, which the engine sets for real input and leaves `false` for script. The layer
+  never REASSIGNS `window.open` — only reads it — so the pop-under guard stays armed for
+  scripted popups. Non-http(s) schemes (`mailto:`/`tel:`/`javascript:`) fall through to the
+  engine. A refused popup falls back to navigating this tab, so a gesture is never a silent
+  no-op. The native reference stays in the IIFE closure: the only thing published on `window`
+  is a non-enumerable, non-writable idempotence marker (a top-level var would leak to the
+  page's global and become a cross-site super-cookie handle — the `farble` rule).
+  Authority for the JS is the vitest runtime test `src/lib/linkGestures.test.ts`, which
+  executes these exact shipped bytes in true global scope. **Its limit, stated because it is
+  the interesting part:** jsdom cannot produce a trusted event, so the test captures the
+  handlers off the layer's real `addEventListener` calls and invokes them directly. That
+  proves the wiring, the `isTrusted` BRANCH, href/scheme resolution and `preventDefault`; it
+  CANNOT prove that page script cannot set `isTrusted` — that is a browser platform
+  guarantee, not a jsdom one.
 - **WebRTC IP-leak defense** — `webrtc_shim.rs`: the `webrtcPolicy` setting
   (`default`/`public-only`(default)/`disable`) as a document-start JS shim that wraps
   `RTCPeerConnection` to filter local/private ICE candidates (the `icecandidate` event,

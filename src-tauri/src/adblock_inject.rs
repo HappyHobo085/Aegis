@@ -186,9 +186,14 @@ fn adblock_layer(block: bool) -> String {
 /// rather than `allow(dead_code)`, because here the absence of a caller is the truth.
 #[cfg(any(target_os = "android", test))]
 pub(crate) fn android_document_start_layer(host: &str) -> String {
-    adblock_layer(
+    let adblock = adblock_layer(
         crate::adblock_engine::enabled() && !crate::adblock_engine::host_is_allowlisted(host),
-    )
+    );
+    // Same `compose_layers` ordering rule as desktop, and for the same reason. Android's
+    // `onCreateWindow` already refuses an `isUserGesture = false` request, so this does not
+    // widen the Android popup surface: it only lets a REAL modifier-click REACH that gate
+    // instead of being stubbed out before the engine ever sees it.
+    compose_layers(crate::link_gestures::script(), "", &adblock, "")
 }
 
 /// Compose the document-start script from the (already-built) WebRTC shim prefix + the
@@ -205,10 +210,39 @@ pub(crate) fn android_document_start_layer(host: &str) -> String {
 /// with farbling off yields a genuinely empty script instead of two newlines.
 #[cfg_attr(target_os = "android", allow(dead_code))]
 fn compose(webrtc: &str, farble: &str, adblock_block: bool) -> String {
-    let adblock = adblock_layer(adblock_block);
-    let parts: Vec<&str> = [webrtc, adblock.as_str(), farble]
+    compose_layers(
+        crate::link_gestures::script(),
+        webrtc,
+        &adblock_layer(adblock_block),
+        farble,
+    )
+}
+
+/// Concatenate the document-start layers into the ONE order they may ship in. Both
+/// composition paths go through this — desktop [`compose`] and [`android_document_start_layer`]
+/// — because the ordering is a correctness property, not a per-platform preference, and two
+/// hand-maintained copies of it is how they drift.
+///
+/// **The link-gesture layer goes FIRST, unconditionally.** `link_gestures.js` reads the
+/// page's native `window.open` at document-start, so it must run before the ad-block layer
+/// swaps in `POPUP_GUARD`'s stub: that guard refuses cross-origin opens, which is exactly
+/// what a Ctrl+click to another site is, so a gesture composed after it does nothing on the
+/// DEFAULT configuration (ad-blocking on, page not allowlisted). Putting it ahead also
+/// leaves every other layer's relative order untouched, so the existing `farble after guard`
+/// pin still holds.
+///
+/// It is deliberately NOT gated on the ad-block policy: a gesture is a user affordance, so it
+/// must not disappear because the user turned ad-blocking off — globally or for this host.
+/// The consequence, stated plainly because it changes an invariant this file used to hold, is
+/// that the document-start script is no longer EMPTY on any page on any platform: an
+/// all-exempt page now carries exactly this layer and nothing else.
+///
+/// Empty layers are dropped (not joined as blanks) so a page with only the gesture layer
+/// yields exactly that layer's bytes, with no stray newline for Kotlin to cache and register.
+fn compose_layers(gestures: &str, webrtc: &str, adblock: &str, farble: &str) -> String {
+    let parts: Vec<&str> = [gestures, webrtc, adblock, farble]
         .into_iter()
-        .filter(|p| !p.is_empty())
+        .filter(|p| !p.trim().is_empty())
         .collect();
     parts.join("\n")
 }
@@ -406,24 +440,29 @@ mod tests {
     #[test]
     fn android_js_layer_follows_the_enabled_toggle() {
         let _guard = crate::test_support::lock();
+        // The claim is "the AD-BLOCK LAYER follows the toggle". These assertions used to read
+        // the whole SCRIPT's emptiness as a proxy for that, which the unconditional
+        // link-gesture layer made false on every page: the script is now never empty. So the
+        // proxy is replaced by the thing it stood for — the pop-under guard, which is the
+        // part of the ad-block layer the toggle governs.
         crate::adblock_engine::set_policy(false, &[]);
         assert!(
-            super::android_document_start_layer("site.example").is_empty(),
-            "with ad-block OFF the Android document-start script must carry no ad-block layer"
+            !super::android_document_start_layer("site.example").contains("__aegisBlocked"),
+            "with ad-block OFF the Android document-start script must carry no pop-under guard"
         );
         crate::adblock_engine::set_policy(true, &[]);
         assert!(
-            !super::android_document_start_layer("site.example").is_empty(),
+            super::android_document_start_layer("site.example").contains("__aegisBlocked"),
             "re-enabling must restore the Android ad-block layer"
         );
         // The allowlist still vetoes per host, independently of the toggle.
         crate::adblock_engine::set_policy(true, &["site.example".to_string()]);
         assert!(
-            super::android_document_start_layer("site.example").is_empty(),
+            !super::android_document_start_layer("site.example").contains("__aegisBlocked"),
             "an allowlisted page must get no Android ad-block layer even with the toggle on"
         );
         assert!(
-            !super::android_document_start_layer("other.example").is_empty(),
+            super::android_document_start_layer("other.example").contains("__aegisBlocked"),
             "the allowlist is per host, so an unrelated page is unaffected"
         );
         crate::adblock_engine::set_policy(true, &[]);
@@ -461,8 +500,18 @@ mod tests {
         // host, where the heavy ad-block injection is otherwise skipped. compose() with an
         // empty WebRTC prefix, empty farble and ad-blocking allowed is the default case.
         assert!(super::compose("", "", true).contains("__aegisBlocked"));
-        // The WebRTC shim is prepended ahead of the guard when present.
-        assert!(super::compose("/*shim*/", "", true).starts_with("/*shim*/"));
+        // The WebRTC shim is composed ahead of the guard when present. Asserted as an ORDER
+        // rather than a prefix: the link-gesture layer now leads the script (see
+        // `link_gestures_precede_the_popup_guard`), so "starts_with" would pin the wrong thing.
+        let s = super::compose("/*shim*/", "", true);
+        let shim_pos = s.find("/*shim*/").expect("webrtc shim must be present");
+        let guard_pos = s
+            .find("__aegisBlocked")
+            .expect("popup guard must be present");
+        assert!(
+            shim_pos < guard_pos,
+            "the WebRTC shim must be composed ahead of the guard: shim@{shim_pos} guard@{guard_pos}"
+        );
     }
 
     #[test]
@@ -528,29 +577,90 @@ mod tests {
             !s.contains("__aegisBlocked"),
             "ad-block layer must still be gated: {s}"
         );
-        assert!(
-            s.contains("/*farble*/") && s == "/*farble*/",
-            "the farble shim must survive on an allowlisted page (and be the whole \
-             script when the WebRTC shim is also absent): {s}"
+        // The farble shim survives an ad-block-allowlisted page, and the ONLY other layer
+        // present is the link-gesture layer (which is unconditional by design — a user
+        // affordance is not an ad-block tier, so it must not vanish because ads were
+        // exempted). The exact shape is pinned so a new unconditioned layer cannot slip in
+        // here unnoticed.
+        assert_eq!(
+            s,
+            format!("{}\n/*farble*/", crate::link_gestures::script()),
+            "farble must survive on an allowlisted page with nothing but the gesture \
+             layer ahead of it: {s}"
         );
-        // ...and the WebRTC shim is keyed on the SAME ad-block allowlist (it is the
-        // per-site WebRTC escape hatch), so it is absent too.
-        assert!(
-            super::compose("/*webrtc*/", "", false) == "/*webrtc*/",
-            "an allowlisted page is 'trusted', so the WebRTC shim must not be injected"
+        // ...and the WebRTC shim is passed in by the caller already keyed on the SAME
+        // ad-block allowlist (it is the per-site WebRTC escape hatch). `compose` concatenates
+        // what it is handed — the gating lives in `script()` — so with `false` the shim
+        // argument is still emitted, and the gesture layer leads it.
+        assert_eq!(
+            super::compose("/*webrtc*/", "", false),
+            format!("{}\n/*webrtc*/", crate::link_gestures::script()),
+            "an allowlisted page gets no ad-block layer, only the gesture layer + the \
+             shim it was handed"
         );
     }
 
-    /// An allowlisted page with no farbling and no WebRTC shim must produce a genuinely
-    /// empty script, not stray newlines. Kotlin caches and registers whatever string comes
-    /// back, and `MainActivity` decides "injection unavailable" by emptiness.
+    /// With every OPTIONAL layer absent, the script must be exactly the link-gesture layer
+    /// and nothing else — no stray newlines, no blank layer.
+    ///
+    /// This test used to assert the script was EMPTY, and its doc claimed Kotlin relies on
+    /// that emptiness to mean "injection unavailable". That invariant is deliberately gone:
+    /// the link-gesture layer is unconditional, so the script is now never empty on any
+    /// platform or any page. That is the intended consequence — Ctrl+click must keep working
+    /// on an ad-block-exempt page, where there is no pop-under guard to work around — and
+    /// `MainActivity`'s emptiness check simply stops being the deciding factor for this
+    /// layer (it still is for the rest).
     #[test]
-    fn all_layers_absent_yields_an_empty_script_not_blank_lines() {
-        assert_eq!(super::compose("", "", false), "");
+    fn with_every_optional_layer_absent_the_script_is_exactly_the_gesture_layer() {
+        let gestures = crate::link_gestures::script();
+        assert_eq!(
+            super::compose("", "", false),
+            gestures,
+            "an ad-block-exempt page with no shims must get the gesture layer and nothing \
+             else: no blank lines, no empty joins"
+        );
         assert_eq!(
             super::compose("", "", true),
-            super::POPUP_GUARD,
-            "with only the ad-block layer present the script is exactly the guard"
+            format!("{gestures}\n{}", super::POPUP_GUARD),
+            "with only the ad-block layer present the script is the gesture layer + the guard"
         );
+        // The gesture layer is composed FIRST, so the guard follows it — this is the whole
+        // reason the layer is unconditional and leading.
+        assert!(
+            super::compose("", "", true).find(gestures)
+                < super::compose("", "", true).find("__aegisBlocked"),
+            "the gesture layer must be composed before the guard that would otherwise stub \
+             out the open it captured"
+        );
+    }
+
+    /// The Android JNI tier composes the same two layers in the same order, so a Ctrl+click
+    /// on a phone is not swallowed by the pop-under guard either. `ENABLED`/`ALLOWLIST` are
+    /// process globals (the tier has no `AppHandle`), so this takes the test lock and pins
+    /// the policy it asserts on rather than inheriting whatever another test left behind.
+    #[test]
+    fn link_gestures_precede_the_popup_guard_on_the_android_path() {
+        let _guard = crate::test_support::lock();
+        crate::adblock_engine::set_policy(true, &[]);
+        let s = super::android_document_start_layer("site.example");
+        let gestures_pos = s
+            .find("__aegis_link_gestures__")
+            .expect("the link-gesture layer must be injected on Android too");
+        let guard_pos = s
+            .find("__aegisBlocked")
+            .expect("the pop-under guard must be present when ad-blocking is on");
+        assert!(
+            gestures_pos < guard_pos,
+            "Android must inject the gesture layer before the guard: gestures@{gestures_pos} \
+             guard@{guard_pos}"
+        );
+        // And it survives the exempt case, same reason as the desktop path.
+        crate::adblock_engine::set_policy(false, &[]);
+        assert_eq!(
+            super::android_document_start_layer("site.example"),
+            crate::link_gestures::script(),
+            "with ad-blocking off, Android still gets the gesture layer alone"
+        );
+        crate::adblock_engine::set_policy(true, &[]);
     }
 }

@@ -64,6 +64,12 @@ mod adblock_inject;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod adblock_webkit;
+/// Link gestures (Ctrl/Cmd+click, middle-click, Shift+click -> new background tab), injected
+/// at document-start on EVERY platform and AHEAD of the ad-block layer: it reads the native
+/// `window.open` that `adblock_inject`'s pop-under guard would otherwise replace, which is
+/// what stops the guard from swallowing every cross-origin modifier-click. See the module
+/// doc for why the layer needs no IPC channel.
+mod link_gestures;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod linux_layout;

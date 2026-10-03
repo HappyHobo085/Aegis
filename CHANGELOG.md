@@ -7,6 +7,18 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Added
+
+- **Ctrl+click, middle-click and Shift+click now open a link in a new tab.** Clicking a link
+  with any of those — the gesture every other browser has — replaced the page you were
+  reading instead of opening a second tab. It now opens a background tab and leaves your
+  current page alone. Shift+click opens a tab rather than a window, because Aegis is a
+  single-window browser and has no window to create.
+  This adds no new capability to the page you are on: it reuses the same path a
+  `target="_blank"` click already took, so the same pop-up-ad and link-scheme checks apply
+  to it, and a link that is not a web page (`mailto:`, `tel:`, `javascript:`) is still
+  handled by the browser as before. Page scripts cannot trigger it — only real clicks can.
+
 ### Fixed
 
 - **Cloudflare's verification never completed on Linux.** The verification
