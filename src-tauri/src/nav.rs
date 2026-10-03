@@ -254,16 +254,116 @@ pub fn active_webview<R: Runtime>(app: &AppHandle<R>) -> Option<tauri::Webview<R
 /// Refined by view.setContentInset (renderer reports actual DOM measurement).
 pub const DEFAULT_INSET_TOP: f64 = 164.0;
 
-/// Present a mainstream Chrome user-agent to browsed sites (anti-fingerprint /
-/// fewer "unsupported browser" walls) instead of the default WebKitGTK string,
-/// mirroring the Electron app. Platform-specific so the OS token is honest.
-#[cfg(target_os = "macos")]
-const CONTENT_UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
-#[cfg(target_os = "windows")]
-const CONTENT_UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
-#[cfg(not(any(target_os = "macos", target_os = "windows")))]
-#[cfg_attr(target_os = "android", allow(dead_code))]
-const CONTENT_UA: &str = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36";
+/// The engine Aegis actually runs on, per platform.
+///
+/// This exists so the user-agent below is ONE pure function instead of three
+/// `#[cfg]`-selected constants. A `cfg`-gated constant is invisible to every other
+/// target's test run, so a wrong UA on macOS or Windows would go unnoticed from a
+/// Linux checkout — which is exactly how the previous arrangement shipped the same
+/// Chrome string for all three.
+///
+/// The per-variant `cfg_attr`s are honest platform tiering, not a papered-over lint: a
+/// variant is *constructed* only by the `content_ua()` arm for its own platform (a
+/// `match` destructures all three but constructs one), so each is dead on the other two.
+/// They keep `dead_code` live everywhere the variant IS built, which a blanket allow
+/// would not. Under `cfg(test)` every variant is constructed by the `ENGINES` table, so
+/// the attributes are simply redundant there.
+#[cfg(any(desktop, test))]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ContentEngine {
+    /// WebKitGTK, Linux.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    WebKitLinux,
+    /// WKWebView, macOS. Same engine family as Safari.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    WebKitMac,
+    /// WebView2, Windows. Chromium — so a Chromium UA is HONEST here.
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+    Chromium,
+}
+
+/// The `User-Agent` sent to browsed sites, chosen to MATCH the engine we really run.
+///
+/// **This used to claim `Chrome/148` on every desktop, and that broke Cloudflare on
+/// both WebKit platforms.** Cloudflare's bot scoring compares the claimed UA against
+/// the engine's observable traits (TLS/JA3, HTTP/2 SETTINGS, JS feature surface, the
+/// presence of `navigator.userAgentData` / `window.chrome`). Claiming Chromium over
+/// WebKit fails that comparison, so CF served an interactive Turnstile challenge that
+/// never resolved — `Just a moment...` spinning forever — instead of the page.
+///
+/// Measured on comix.to with a bare WebKitGTK 2.52.5 webview and zero Aegis code, so
+/// this is the ENGINE's behaviour, not our filtering, injection or nav policy:
+///
+/// | UA presented                                                | result |
+/// |------------------------------------------------------------|--------|
+/// | WebKitGTK native (`Version/60.5`)                           | stuck  |
+/// | `Chrome/148`                                                | stuck  |
+/// | `Chrome/148` + faked `userAgentData`/`window.chrome`        | stuck  |
+/// | honest `Version/26.0 Safari/605.1.15`                       | **passed** |
+///
+/// Three things that table settles, each of which was a plausible fix on its own and
+/// is NOT one:
+///
+/// 1. **Faking the missing surfaces does not help.** Installing `userAgentData` and
+///    `window.chrome` to match the Chrome claim still hung. The signal is deeper than
+///    two globals.
+/// 2. **Dropping the override and using the native UA does not help either.**
+///    WebKitGTK's own string claims `Version/60.5` — Safari 15, from 2021 — over a
+///    Safari-26-era engine, so it is internally inconsistent on the *version* axis
+///    where the Chrome string was inconsistent on the *brand* axis. The `native` and
+///    `safari-ua` arms differed only in that one token and the outcome flipped.
+/// 3. **A stale version token is not a neutral default**, and it cannot be caught by a
+///    numeric bound: `Version/60.5` has a HIGHER major than the working `Version/26.0`,
+///    so "major >= 26" would accept the broken string. `every_engines_user_agent_is_
+///    pinned_exactly` is therefore the only thing holding it, which is why it pins the
+///    whole string rather than parsing it.
+///
+/// Windows is the opposite case and keeps Chromium: WebView2 genuinely IS Chromium,
+/// so there is no inconsistency to fix and Chromium is what it should claim. Android
+/// is untouched for the same reason — its `CHROME_UA` over the Chromium WebView is
+/// already truthful.
+///
+/// **Maintenance:** the WebKitGTK↔Safari correspondence is the part that goes stale.
+/// `Version/26.0` matches WebKitGTK 2.52.x; bump BOTH when WebKitGTK moves a major
+/// version. A stale token reproduces the `Version/60.5` failure exactly, and it fails
+/// loudly (CF-protected sites stop loading) rather than silently.
+#[cfg(any(desktop, test))]
+pub(crate) fn content_ua_for(engine: ContentEngine) -> &'static str {
+    match engine {
+        // WebKitGTK 2.52.5's own UA reported Safari 15 here, which is what a
+        // challenge loop looks like. 26.0 is the Safari-era equivalent of that engine.
+        ContentEngine::WebKitLinux => {
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 \
+             (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+        }
+        ContentEngine::WebKitMac => {
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) \
+             AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15"
+        }
+        ContentEngine::Chromium => {
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
+             AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36"
+        }
+    }
+}
+
+/// The UA this build actually sends. A `cfg` arm can only pick the engine; the string
+/// itself comes from [`content_ua_for`] so a test can audit every platform at once.
+#[cfg(any(desktop, test))]
+pub(crate) fn content_ua() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        content_ua_for(ContentEngine::WebKitLinux)
+    }
+    #[cfg(target_os = "macos")]
+    {
+        content_ua_for(ContentEngine::WebKitMac)
+    }
+    #[cfg(target_os = "windows")]
+    {
+        content_ua_for(ContentEngine::Chromium)
+    }
+}
 
 #[cfg_attr(target_os = "android", allow(dead_code))]
 fn is_local_host(url: &Url) -> bool {
@@ -536,7 +636,7 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
     // `mut` is only needed on Windows (additional_browser_args below); harmless elsewhere.
     #[allow(unused_mut)]
     let mut builder = tauri::webview::WebviewBuilder::new(&label, WebviewUrl::External(url))
-        .user_agent(CONTENT_UA)
+        .user_agent(content_ua())
         // PRIVATE TAB: ephemeral data partition — cookies/localStorage/IndexedDB/cache
         // live only in memory and vanish when the webview closes. Verified API:
         // `WebviewBuilder::incognito(bool)` at tauri-2.11.2/src/webview/mod.rs:997.
@@ -1022,16 +1122,104 @@ pub fn dispatch<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        dispatch, forget_tab_content, forget_tab_loading, is_navigable, mark_tab_has_content,
-        note_tab_loading, parse_navigable, reload_or_stop, reload_or_stop_action,
-        require_navigable, should_autoclose_popunder, tab_is_loading, tabs_with_content,
-        ReloadOrStop,
+        content_ua, content_ua_for, dispatch, forget_tab_content, forget_tab_loading, is_navigable,
+        mark_tab_has_content, note_tab_loading, parse_navigable, reload_or_stop,
+        reload_or_stop_action, require_navigable, should_autoclose_popunder, tab_is_loading,
+        tabs_with_content, ContentEngine, ReloadOrStop,
     };
     use crate::test_support::with_tmp_app;
     use crate::test_support::{kotlin_fn_body, kotlin_source};
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use tauri::{AppHandle, Manager, Runtime, Url};
+
+    /// Every platform's UA at once, which is the whole point of routing the string
+    /// through `content_ua_for` instead of a `#[cfg]`-selected constant.
+    const ENGINES: [ContentEngine; 3] = [
+        ContentEngine::WebKitLinux,
+        ContentEngine::WebKitMac,
+        ContentEngine::Chromium,
+    ];
+
+    #[test]
+    fn the_content_webview_presents_an_honest_user_agent() {
+        // THE defect, as an invariant: a UA may claim Chromium only where Chromium IS
+        // the engine. Claiming Chrome over WebKit is what made Cloudflare serve an
+        // interactive challenge that never resolved (see `content_ua_for`'s table).
+        for engine in ENGINES {
+            let ua = content_ua_for(engine);
+            let claims_chrome = ua.contains("Chrome/");
+            let is_chromium = engine == ContentEngine::Chromium;
+            assert_eq!(
+                claims_chrome, is_chromium,
+                "{engine:?} sends {ua:?}, which disagrees with its engine \
+                 (claims_chrome={claims_chrome})"
+            );
+        }
+    }
+
+    #[test]
+    fn a_webkit_engine_advertises_a_safari_version() {
+        // SHAPE only, deliberately: the token's VALUE cannot be bounded numerically,
+        // because WebKitGTK's stale `Version/60.5` has a higher major (60) than the
+        // working `Version/26.0`. So a ">= 26" check here would accept the broken
+        // string; `every_engines_user_agent_is_pinned_exactly` is what catches that,
+        // and this test is only here to catch a UA that stops being Safari-shaped.
+        for engine in [ContentEngine::WebKitLinux, ContentEngine::WebKitMac] {
+            let ua = content_ua_for(engine);
+            assert!(
+                ua.contains("Version/") && ua.contains("Safari/"),
+                "{engine:?} sends {ua:?}: a WebKit engine must present a Safari version"
+            );
+            // WebKitGTK's frozen AppleWebKit build number, not Chromium's 537.36.
+            assert!(
+                ua.contains("AppleWebKit/605.1.15"),
+                "{engine:?} sends {ua:?}: expected the WebKit AppleWebKit build number"
+            );
+        }
+        let chromium = content_ua_for(ContentEngine::Chromium);
+        assert!(
+            !chromium.contains("Version/"),
+            "a Chromium UA must not carry a Safari version token: {chromium:?}"
+        );
+    }
+
+    #[test]
+    fn every_engines_user_agent_is_pinned_exactly() {
+        // The literal strings, so a silent edit (or a WebKitGTK bump that forgets the
+        // Safari token) is a red test rather than a live regression.
+        for (engine, expected) in [
+            (
+                ContentEngine::WebKitLinux,
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/605.1.15 \
+                 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+            ),
+            (
+                ContentEngine::WebKitMac,
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 \
+                 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+            ),
+            (
+                ContentEngine::Chromium,
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 \
+                 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
+            ),
+        ] {
+            assert_eq!(content_ua_for(engine), expected, "{engine:?}");
+        }
+    }
+
+    #[test]
+    fn this_build_sends_the_user_agent_for_the_engine_it_actually_runs() {
+        // The wiring half: catches a `#[cfg]` arm pointing at the wrong engine, which is
+        // precisely how one Chrome string shipped for all three platforms before.
+        #[cfg(target_os = "linux")]
+        assert_eq!(content_ua(), content_ua_for(ContentEngine::WebKitLinux));
+        #[cfg(target_os = "macos")]
+        assert_eq!(content_ua(), content_ua_for(ContentEngine::WebKitMac));
+        #[cfg(target_os = "windows")]
+        assert_eq!(content_ua(), content_ua_for(ContentEngine::Chromium));
+    }
 
     #[test]
     fn autoclose_only_nonactive_blank_tabs() {

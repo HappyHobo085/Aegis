@@ -241,7 +241,8 @@ wrap/unwrap hardware verify is **PENDING** user (phone session). **Anti-fingerpr
 `strict`). `standard` perturbs canvas (`getImageData`/`toDataURL`/`toBlob`), audio
 (`getFloatFrequencyData`/`getChannelData`), and navigator/UA-CH
 (`hardwareConcurrency`/`deviceMemory`/`userAgentData.brands` kept consistent with the
-Chrome-148 UA). `strict` adds WebGL (`getParameter` UNMASKED\_\*/`readPixels`/
+UA where that UA claims Chromium — on WebKit the surface does not exist and the patch is
+a deliberate no-op). `strict` adds WebGL (`getParameter` UNMASKED\_\*/`readPixels`/
 `getSupportedExtensions`/`getShaderPrecisionFormat`). Shipped on all four platforms:
 desktop via `adblock_inject::script` document-start (same injection path as the WebRTC
 shim), Android via `NativeFarble` JNI getter + `MainActivity.createTabWebView`
@@ -258,8 +259,7 @@ super-cookie). Seed is baked INSIDE the IIFE closure, not a top-level `var`/`win
 (a top-level var leaks to `window` = cross-site super-cookie; shim runtime tests run
 in true global scope via indirect eval to catch this). Per-spawn: level/allowlist apply
 to newly created/reloaded tabs only. Honest limits: a same-world JS shim is detectable
-(default-off for this reason); on WebKit the Chrome-148 UA already lies about the engine;
-per-frame-origin seeding (not Brave's per-top-eTLD+1).
+(default-off for this reason); per-frame-origin seeding (not Brave's per-top-eTLD+1).
 `vitest src/lib/farbleShim.test.ts` is authoritative for shim runtime behavior and passes
 (23 tests; the tree has 1825 tests in 123 files in total, verified on vitest
 4.1.9 and 4.1.11 — run `npm test` for the full count). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify

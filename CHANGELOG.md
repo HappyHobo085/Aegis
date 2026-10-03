@@ -9,6 +9,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Cloudflare's "Just a moment…" check never completed on Linux.** The verification
+  spinner ran forever on Cloudflare-protected sites. The content webview was claiming a
+  Chrome 148 User-Agent while actually running WebKitGTK, and Cloudflare compares the
+  claimed browser against what the engine actually exposes; the mismatch made it treat
+  the browser as automated and serve an interactive challenge that could never resolve.
+  The browser now presents a User-Agent matching the engine it really runs — Safari on
+  WebKit, Chrome on Chromium (Windows and Android are unchanged, where the claim was
+  already true). Measured in a bare WebKitGTK webview with none of Aegis's code
+  involved, which also ruled out the ad-block filter lists, the injected scripts and the
+  navigation policy: the native WebKit User-Agent fails too, because it reports Safari 15
+  from 2021 against a much newer engine.
 - **On a phone, any page could open as many tabs as it liked.** A page that asked for a new
   window without you tapping anything — the shape an ad network uses to bury the page you
   asked for — was handed a real tab in the background. Popups now open only for an actual

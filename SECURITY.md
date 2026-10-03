@@ -53,8 +53,10 @@ browsing untrusted web content:
   - **Malicious-site blocking (MalwareGuard):** navigations and subresources are
     checked against a bundled URLhaus host blocklist; matches are blocked with a
     warning, with an opt-in session bypass.
-- **Anti-fingerprinting:** the content webview presents a stock Chrome User-Agent
-  rather than leaking the embedder/runtime identity.
+- **Anti-fingerprinting:** the content webview presents a User-Agent matching the engine
+  it actually runs — a stock Chrome UA on Chromium (Windows/Android) and a Safari UA on
+  WebKit (Linux/macOS) — rather than leaking the embedder/runtime identity or claiming an
+  engine it does not have.
 - **Permissions:** site permission requests (geolocation, camera, microphone,
   notifications, pointer-lock) are denied by default and prompted on first use;
   the decision is remembered per origin and is revocable in Settings.

@@ -1401,8 +1401,11 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     content-webview creation. Toggling level or fp-allowlist applies only to newly
     spawned/reloaded tabs; in-tab SPA navigations to a different host are not re-evaluated.
   - **Honest limits** — a same-world JS shim is detectable (Proxy/toString probing, pristine
-    iframe comparison); hence default-off + per-site escape hatch. On WebKit (Linux/macOS) the
-    Chrome-148 UA already lies about the engine — engine-quirk detection defeats any shim.
+    iframe comparison); hence default-off + per-site escape hatch. On WebKit (Linux/macOS)
+    the UA is now an HONEST Safari string rather than a Chrome claim (it claimed
+    `Chrome/148` until 2026-10-03, which is what broke Cloudflare — see `nav::content_ua_for`
+    for the measured four-arm table), so that one inconsistency is gone; the shim remains
+    detectable by the engine quirks it does not touch.
     Seeding is per-frame-origin (weaker than Brave's per-top-eTLD+1 — a cross-origin iframe
     can't read `window.top.origin`). `strict`/WebGL is highest-risk and opt-in-within-opt-in.
     This is NOT engine-level farbling and the docs never claim parity with Brave's in-Blink tier.
