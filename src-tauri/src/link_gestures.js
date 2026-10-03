@@ -51,20 +51,27 @@
       return null;
     }
 
+    // Requests the new tab and NOTHING ELSE. Deliberately does not inspect window.open's
+    // return value and does not fall back to navigating this tab.
+    //
+    // A return value cannot distinguish success from refusal here, so any check on it is
+    // wrong. TWO independent reasons make it null on the SUCCESSFUL path:
+    //   1. 'noopener' in the features string makes window.open return null BY SPEC, even
+    //      when the window opened.
+    //   2. Aegis never lets the engine create the popup: `nav::on_new_window` returns
+    //      NewWindowResponse::Deny and opens the background tab itself, so there is no
+    //      WindowProxy to hand back even on the happy path.
+    // An earlier version treated null as "refused" and navigated this tab as a fallback,
+    // which meant EVERY modifier-click opened a new tab AND replaced the page you were
+    // reading — the exact behaviour this layer exists to prevent.
+    //
+    // So there is no fallback: `preventDefault()` above has already cancelled the
+    // navigation, and the request either produces a background tab or produces nothing.
+    // Refusing to open a link is a far better failure than opening one twice.
     function openInNewTab(url) {
-      var opened = null;
       try {
-        // 'noopener' because a modifier-click must not hand the new page a live
-        // window.opener to navigate the opener with (window.open abuse).
-        opened = nativeOpen.call(window, url, '_blank', 'noopener');
+        nativeOpen.call(window, url, '_blank', 'noopener');
       } catch (e) {}
-      if (!opened) {
-        // The engine refused the popup. Navigate THIS tab instead, so a modifier-click is
-        // never silently a no-op — degrade to today's behaviour rather than to nothing.
-        try {
-          window.location.href = url;
-        } catch (e) {}
-      }
     }
 
     function onGesture(e) {

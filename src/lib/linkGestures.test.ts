@@ -47,8 +47,17 @@ const registrations: Array<{ type: string; capture: boolean }> = [];
 /** Every `window.open` call the layer (or the guard) routed to the "native" function. */
 const opened: Array<{ url: string; name: string; features: unknown }> = [];
 
-/** What the captured native `window.open` returns; swapped per test to model a refusal. */
-const nativeResult: { result: () => unknown } = { result: () => ({ closed: false }) };
+/**
+ * What the captured native `window.open` returns.
+ *
+ * The DEFAULT IS `null`, and that is the whole point: it is the value a real engine returns
+ * on the SUCCESSFUL path here (`noopener` in the features string makes it null by spec, and
+ * Aegis denies the popup in `on_new_window`, so no WindowProxy is returned either way). An
+ * earlier version of this stub returned a truthy object, which hid the double-navigation bug
+ * completely — the layer branched on a success value that never occurs in production. Model
+ * the real thing, not the convenient thing.
+ */
+const nativeResult: { result: () => unknown } = { result: () => null };
 
 const NATIVE_OPEN = function nativeOpen(url: unknown, name: unknown, features: unknown) {
   opened.push({ url: String(url), name: String(name), features });
@@ -90,7 +99,7 @@ afterAll(() => {
 
 beforeEach(() => {
   opened.length = 0;
-  nativeResult.result = () => ({ closed: false });
+  nativeResult.result = () => null;
   // The layer never re-reads window.open, so restoring it here only makes the file
   // order-independent for the guard test, which installs the real guard over it.
   window.open = NATIVE_OPEN as unknown as typeof window.open;
@@ -287,31 +296,38 @@ describe('everything that must NOT become a background tab', () => {
   );
 });
 
-describe('a refused popup degrades to navigating this tab, never to nothing', () => {
-  // The layer captured NATIVE_OPEN at document-start and holds that reference forever, so
-  // re-assigning `window.open` in a test would NOT change what the layer calls — a test that
-  // did that would be vacuous. The captured reference is the SAME function object here, so
-  // its return value is what gets varied: `refuseNative` makes the engine refuse the popup,
-  // which is exactly the case the fallback exists for.
-  it('navigates this tab when the engine blocks the new window', () => {
+describe('this tab is NEVER navigated, whatever window.open returns', () => {
+  // THE REGRESSION. This layer used to read `window.open`'s return value and navigate this
+  // tab when it came back null. But null IS the success value here, for two independent
+  // reasons: `noopener` in the features string makes window.open return null by spec, and
+  // Aegis denies the popup in `on_new_window` (opening the background tab itself) so no
+  // WindowProxy is returned anyway. The fallback therefore fired on EVERY modifier-click,
+  // and a Ctrl+click both opened a new tab and replaced the page you were reading.
+  //
+  // Both return values are exercised, and neither may touch `location.href`. The stub's
+  // default is now null — the faithful value — which is what makes this suite able to catch
+  // the bug at all: the old stub returned a truthy object, so the null branch never ran.
+  it.each([
+    ['null (the faithful value: noopener + a denied popup)', null],
+    ['a WindowProxy (the value an engine returns if it ever did create one)', { closed: false }],
+  ])('opens the background tab and leaves this tab on the page: %s', (_label, ret) => {
+    nativeResult.result = () => ret;
     const a = anchor('https://other.example/page');
-    nativeResult.result = () => null;
     expect(fire({ ctrl: true, target: a })).toBe(true);
-    // It still tried to open a background tab first...
+    // The new tab is requested exactly once...
     expect(targets()).toEqual(['https://other.example/page']);
-    // ...and the refusal is not a silent no-op: this tab goes to the target.
-    expect((globalThis as { location: { href: string } }).location.href).toBe(
-      'https://other.example/page',
-    );
+    // ...and the page you were reading is still there. This is the assertion that failed.
+    expect((globalThis as { location: { href: string } }).location.href).toBe(PAGE);
   });
 
-  it('leaves this tab alone when the popup succeeds', () => {
+  it('the request is made exactly once, with noopener, for every gesture', () => {
+    nativeResult.result = () => null;
     const a = anchor('https://other.example/page');
-    nativeResult.result = () => ({ closed: false });
-    expect(fire({ ctrl: true, target: a })).toBe(true);
-    expect(targets()).toEqual(['https://other.example/page']);
-    // No fallback navigation, so the page you were reading is not replaced behind the new tab.
-    expect((globalThis as { location: { href: string } }).location.href).toBe(PAGE);
+    fire({ ctrl: true, target: a });
+    expect(opened).toHaveLength(1);
+    // 'noopener' so the opened page cannot reach back through window.opener. It is also why
+    // the return value is null on success — which is exactly why nothing may branch on it.
+    expect(opened[0].features).toBe('noopener');
   });
 });
 

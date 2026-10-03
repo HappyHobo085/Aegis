@@ -121,14 +121,46 @@ mod tests {
         );
     }
 
-    /// If the engine refuses the popup, the gesture must degrade to navigating this tab. A
-    /// silent no-op would make Ctrl+click look broken rather than blocked.
+    /// The gesture must request the new tab and NOTHING ELSE — no fallback that navigates
+    /// this tab when `window.open` returns nothing.
+    ///
+    /// This is the regression that shipped: the layer used to read `window.open`'s return
+    /// value and, on a null result, assign `location.href`. But the return value is null on
+    /// the SUCCESSFUL path for two independent reasons — `noopener` in the features string
+    /// makes it null by spec, and `nav::on_new_window` denies the popup (opening the tab
+    /// itself) so no `WindowProxy` is ever returned. So the fallback fired on every click:
+    /// a new tab opened AND the page you were reading was replaced.
+    ///
+    /// `preventDefault()` already cancels the navigation, so a refusal must stay a no-op —
+    /// refusing to open a link beats opening it twice.
     #[test]
-    fn a_refused_popup_falls_back_to_navigating_this_tab() {
+    fn the_gesture_never_navigates_this_tab_itself() {
         let js = script();
+        // Scoped to ASSIGNMENT (`location.href =`), not the bare property name: the layer
+        // legitimately READS `window.location.href` as the base for resolving a relative
+        // href. An earlier version of this assertion banned the bare name and would have
+        // failed on that correct read — which is the doc's own point about asserting the
+        // observable rather than the mechanism.
         assert!(
-            js.contains("window.location.href = url;"),
-            "the refused-popup fallback must navigate this tab"
+            !js.contains("location.href ="),
+            "the layer must never ASSIGN location.href: a null window.open result is the \\
+             SUCCESS case here, so a location fallback fires on every modifier-click and \\
+             replaces the page behind the new tab"
+        );
+        // And it must not navigate by any other spelling of the same move.
+        assert!(
+            !js.contains("location.assign(") && !js.contains("location.replace("),
+            "location.assign/replace would navigate this tab the same way an assignment does"
+        );
+        // And it must not branch on the open's return value at all.
+        assert!(
+            !js.contains("if (!opened)"),
+            "the layer must not treat a null window.open result as a refusal — see the doc"
+        );
+        // The request itself is unconditional: one call, no success check.
+        assert!(
+            js.contains("nativeOpen.call(window, url, '_blank', 'noopener');"),
+            "the new tab is requested unconditionally"
         );
     }
 

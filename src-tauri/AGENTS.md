@@ -1465,6 +1465,16 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   `MainActivity.onCreateWindow` handler a `target=_blank` click already uses and inherits
   the identical gates (`is_unwanted_popup`, `is_navigable`). Shift+click maps to a tab
   because Aegis is single-window and has no window to create.
+  **Never branch on `window.open`'s RETURN VALUE in this layer — it is null on SUCCESS,
+  twice over.** (1) `noopener` in the features string makes the spec return null even when
+  the window opened; (2) `nav::on_new_window` answers `NewWindowResponse::Deny` and opens
+  the background tab ITSELF, so no `WindowProxy` is ever handed back. An early version read
+  the return value and navigated this tab when it came back null, which meant EVERY
+  modifier-click opened a new tab AND replaced the page behind it. `preventDefault()`
+  already cancels the navigation, so a refusal must stay a no-op: refusing to open a link
+  beats opening it twice. `link_gestures.rs::the_gesture_never_navigates_this_tab_itself`
+  pins it, and the vitest stub's DEFAULT return value is `null` — modelling the convenient
+  truthy object is exactly what hid the bug the first time.
   **`isTrusted` is the whole security argument**: the layer lives in the page's world, so
   page script could otherwise `dispatchEvent` its way to mint tabs; every branch requires
   `isTrusted`, which the engine sets for real input and leaves `false` for script. The layer
