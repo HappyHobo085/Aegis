@@ -790,8 +790,12 @@ pub fn run() {
             let _ = window.set_min_size(Some(tauri::LogicalSize::new(420.0, 320.0)));
             let handle = app.handle().clone();
             window.on_window_event(move |event| {
-                if let tauri::WindowEvent::Resized(_) = event {
-                    view::apply_inset(&handle);
+                // `on_window_resized` — not `apply_inset` — because tao emits `Resized` for
+                // EVERY configure, including the pure moves a window DRAG is made of, so an
+                // unguarded handler re-ran the whole GTK layout once per drag frame. See
+                // `view::on_window_resized`.
+                if let tauri::WindowEvent::Resized(size) = event {
+                    view::on_window_resized(&handle, (size.width, size.height));
                 }
             });
         }
@@ -1160,6 +1164,35 @@ mod tests {
             vec![1, 2],
             "only the two module-level allows count: the per-item attribute, the cfg_attr, the \
              line comment, the block comment and the unrelated module allow are all not one"
+        );
+    }
+
+    /// The window-resize handler must NOT run the layout on every configure event.
+    ///
+    /// tao 0.35.3 emits `WindowEvent::Resized` from its `connect_configure_event` handler with
+    /// **no comparison against the previous size** — a ConfigureNotify whose position changed
+    /// but whose size did not still arrives as `Resized`. So the unguarded `Resized => apply_inset`
+    /// this replaces ran `layout()` once per frame of a window DRAG, and each of those ran
+    /// `linux_layout::size_fixed_children`, which collapsed the content webview to 1x1 and
+    /// re-expanded it (WebKit re-laying-out the whole page twice per frame). That is the
+    /// "the content flickers continuously while I move the window" report, and the collapse
+    /// itself is pinned in `linux_layout`'s tests.
+    #[test]
+    fn the_resize_handler_does_not_re_run_the_layout_for_a_configure_that_only_moved() {
+        let src = crate::test_support::rust_production_source(include_str!("lib.rs"));
+        let handler = src
+            .split("window.on_window_event")
+            .nth(1)
+            .and_then(|rest| rest.split("});").next())
+            .expect("lib.rs still registers window.on_window_event");
+        assert!(
+            handler.contains("on_window_resized"),
+            "the Resized arm still calls the layout unconditionally; tao sends Resized for EVERY \
+             configure, so a pure window move re-runs layout() once per drag frame"
+        );
+        assert!(
+            !handler.contains("view::apply_inset"),
+            "the Resized arm bypasses the size-unchanged check (on_window_resized owns it)"
         );
     }
 

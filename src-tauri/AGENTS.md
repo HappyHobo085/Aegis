@@ -2891,20 +2891,67 @@ widget above native WebKit windows.
           example.com / just now". Only the JNI seam needed proving; the hook itself was
           always correct.
 
-e. **Size the webviews via `size_allocate`, NOT `set_size_request` — or the window
-can't shrink.** In a `GtkFixed`, `set_size_request(w, h)` sets each child's
-_minimum_ size, which GTK propagates up as the **window's** minimum — so sizing
-the chrome/content webviews to the window size pins the window's minimum to its
-current size: it can grow but never shrink ("can't make the window smaller").
-Fix: the webviews carry a `(0,0)` size request (no pin) and are sized via
-`size_allocate` from `size_fixed_children`, connected `after=true` on the
-canonical `GtkFixed`'s "size-allocate" so it runs _after_ GtkFixed clobbers
-children to their 0×0 request (it reads each child's current x,y + the live Fixed
-allocation, and never calls `move_`/`queue_resize`, so it can't loop). The
-effective insets are published by `layout()` into managed `LayoutInsets`. A sane
-floor is set via Tauri `set_min_size` (now effective — only because the webviews
-no longer pin the minimum). Live-verified: the window resizes to 600×400 and
-clamps at the 420×320 minimum.
+e. **A webview's size request must stay (0,0), and that is load-bearing in BOTH directions — the
+window cannot shrink otherwise, and a GtkFixed collapses a (0,0) child to 1×1.** The two facts
+are in tension and the tie was broken by measurement, not taste.
+
+- **A window's minimum comes from its children's requests.** In a `GtkFixed`,
+`set_size_request(w, h)` sets each child's _minimum_ size, which GTK propagates up as the
+**window's** minimum — so sizing the webviews to the window pins it to its current size: it
+grows, never shrinks. The webviews therefore carry a `(0,0)` request and are sized with
+`size_allocate` from `size_fixed_children`, connected `after=true` on the canonical `GtkFixed`'s
+"size-allocate". The effective insets come from managed `LayoutInsets`; the floor comes from
+Tauri `set_min_size`.
+
+- **`GtkFixed` allocates every child to that child's size REQUEST, and a WebKit webview's request
+is GTK's default 1×1** (`webview size_request (min) : 1x1`, MEASURED). With the (0,0) request,
+every "size-allocate" collapses both webviews to 1×1 and `size_fixed_children` re-expands them:
+two full-page re-layouts of the content per pass. Measured on 10 WM driven resizes:
+`fixed_passes=10 collapsed1x1=20/20`, `pre = [("chrome",1,1),("content",1,1)]`.
+
+- **★ The collapse CANNOT be fixed by writing the webviews' real geometry into their requests.
+Tried, measured, shipped, reverted.** It does work — a probe against real GTK went from
+`collapsed1x1=20/20` to `0`, with a steady-state pass doing nothing (`passes=0 reallocs=0`) — and
+it made the window completely unshrinkable, which the owner reported and no test could catch. A
+four-arm probe (`examples/winmin.rs`, deleted) measured it against real GTK:
+
+| arm | GtkFixed's minimum | `resize(320,240)` |
+| --- | ------------------ | ---------------- |
+| webviews at `(0,0)` — the shipped code | `(1, 1)` | **SHRANK ok** |
+| webviews at their real size | `(900, 900)` | **BLOCKED** |
+| … plus `fixed.set_size_request(0, 0)` | `(900, 900)` | **BLOCKED** |
+| … plus the same on the toplevel / on the Box | `(900, 900)` | **BLOCKED** |
+
+The last two arms are the whole point: **GTK3 will not let a `set_size_request` LOWER a
+container's minimum below what its children demand.** The override is genuinely stored
+(`fixed.size_request()` reads `(1, 1)`) and clearing it on the Fixed, the Box or the toplevel
+does nothing; re-asserting it on every sizing pass does nothing either. So the webviews' OWN
+minimum is the only thing that can be kept small. Pinned by
+`linux_layout::tests::the_webviews_keep_a_zero_size_request_so_the_window_can_still_shrink`,
+mutation-verified (re-adding `child.set_size_request(w, h)` to `size_fixed_children` reds it).
+
+- **So the RESIZE flicker is still open by necessity, and the honest next step is a container
+that sizes children to the CONTAINER's allocation rather than to their requests.** `GtkOverlay`
+does exactly that — its children always get the overlay's allocation, so neither webview needs a
+size request and the window stays shrinkable — but it has no arbitrary x/y, so it cannot express
+this file's two use of position: parking a background tab at (-10000, -10000) (which must keep
+the webview VISIBLE, because `set_visible(false)` backgrounds the page) and pinning the
+fullscreen-exit button to the top-right corner. A custom `Container` subclass, or `GtkOverlay`
+wrapping a positioned child, is the real fix. Do not attempt it without re-measuring shrink and
+collapse together in one probe.
+
+f. **tao emits `WindowEvent::Resized` for EVERY ConfigureNotify — with no comparison against the
+previous size — so a window DRAG re-ran the whole GTK layout once per frame.** `tao-0.35.3/src/
+platform_impl/linux/event_loop.rs`, `connect_configure_event`: it reads `event.size()` and sends
+`Resized` unconditionally, alongside `Moved`. A drag is a stream of ConfigureNotify whose
+position changes and whose size does not, so `Resized => view::apply_inset` fired once per drag
+frame. `lib.rs`'s handler now calls `view::on_window_resized`, which remembers the last physical
+size it laid out for and skips an unchanged one, so a drag does no layout work at all. That is
+the shipped fix for the reported move flicker, and it is why the 1×1 collapse above does not fire
+while dragging. **The GTK layer alone cannot see this** — a `GtkFixed` "size-allocate" fires ZERO
+times on a pure move (measured in all three probe runs), so probing only GTK "refutes" the layout
+path and sends you into the wrong layer. Read the EVENT layer, not the signal layer, for anything
+driven by a window event.
 
 26. **Most `#[allow(dead_code)]` in this crate hide LIVE code, not dead code — audit by
     STRIPPING and re-compiling, never by reading the comment.** (Full audit,

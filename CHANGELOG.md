@@ -21,6 +21,12 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The page flickered continuously while the window was being moved on Linux.** Dragging the
+  window re-laid-out the whole page again and again — once per frame of the drag, so the
+  content area flashed rather than moving. Tauri's window backend reports every window-position
+  change as a _resize_, so a drag was handled as a continuous stream of resizes, and each of
+  those re-ran the page layout. An unchanged window size is now ignored.
+
 - **Cloudflare's verification never completed on Linux.** The verification
   spinner ran forever on Cloudflare-protected sites. The content webview was claiming a
   Chrome 148 User-Agent while actually running WebKitGTK, and Cloudflare compares the

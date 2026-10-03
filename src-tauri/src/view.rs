@@ -93,6 +93,44 @@ fn apply_visibility<R: Runtime>(app: &AppHandle<R>, lay: Layout) {
     }
 }
 
+/// The last window size a layout pass ran for, as PHYSICAL pixels — the same units
+/// `WindowEvent::Resized` carries. `None` until the first one.
+static LAST_WINDOW_SIZE: Mutex<Option<(u32, u32)>> = Mutex::new(None);
+
+/// The window-resize path, deduplicated. Returns whether it re-ran the layout.
+///
+/// **tao emits `WindowEvent::Resized` for EVERY ConfigureNotify, with no comparison against the
+/// previous size** (`tao-0.35.3/src/platform_impl/linux/event_loop.rs`, `connect_configure_event`:
+/// it reads `event.size()` and sends `Resized` unconditionally). A window DRAG is a stream of
+/// ConfigureNotify whose position changes and whose size does not, so an unguarded
+/// `Resized => apply_inset` re-ran the entire GTK layout once per frame of the drag — and on
+/// Linux each of those passes collapsed the content webview to 1x1 and re-expanded it (see
+/// `linux_layout::size_fixed_children`), re-laying-out the page twice per frame. That is the
+/// "the content flickers continuously while I move the window" report.
+///
+/// Remembering the size we last laid out for is therefore not an optimisation, it is the fix.
+/// Limit, stated rather than hidden: the key is the PHYSICAL size, so a scale-factor change that
+/// left the physical size untouched would not re-apply. That is not a regression — the previous
+/// code only re-applied on a configure too — and a scale change in practice comes with a resize.
+pub fn on_window_resized<R: Runtime>(app: &AppHandle<R>, size: (u32, u32)) -> bool {
+    {
+        let mut last = LAST_WINDOW_SIZE.lock().unwrap_or_else(|e| e.into_inner());
+        if *last == Some(size) {
+            return false;
+        }
+        *last = Some(size);
+    }
+    apply_inset(app);
+    true
+}
+
+/// Drop the remembered window size. Test-only: the value is process-global, so a test that
+/// cares about "the first event" has to be able to start from the state a fresh process has.
+#[cfg(test)]
+pub(crate) fn forget_last_window_size() {
+    *LAST_WINDOW_SIZE.lock().unwrap_or_else(|e| e.into_inner()) = None;
+}
+
 /// Resize/reposition the content webview to fill the window below the top inset and
 /// left of the right inset (or the whole window in fullscreen).
 #[allow(unused_variables)]
@@ -356,7 +394,8 @@ pub fn dispatch<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        content_visible, dispatch, should_capture_saved, ContentInset, Layout, SIDEBAR_WIDTH,
+        content_visible, dispatch, forget_last_window_size, on_window_resized,
+        should_capture_saved, ContentInset, Layout, SIDEBAR_WIDTH,
     };
     use crate::test_support::with_tmp_app;
     use serde_json::json;
@@ -671,6 +710,53 @@ mod tests {
             // (visible is the protective default: `unwrap_or(true)`), which on a mock
             // is unobservable — but the call must still succeed rather than error.
             view_call(app, "view.setContentVisible", json!({}));
+        });
+    }
+
+    /// The DEDUP half of `on_window_resized`, driven through the production entry point.
+    ///
+    /// tao sends `WindowEvent::Resized` for every ConfigureNotify whether or not the size
+    /// changed, and a window drag is a stream of ConfigureNotify with an unchanged size — so this
+    /// is what stops the layout (and, on Linux, the content webview's 1x1 collapse) from running
+    /// once per frame of a drag. The return value is the honest observable: "did it re-run?".
+    #[test]
+    fn a_configure_that_only_moved_the_window_does_not_re_run_the_layout() {
+        with_tmp_app(|app| {
+            forget_last_window_size();
+            assert!(
+                on_window_resized(app, (1280, 800)),
+                "the FIRST event must always apply, or a fresh launch never lays the webviews out"
+            );
+            for _ in 0..60 {
+                assert!(
+                    !on_window_resized(app, (1280, 800)),
+                    "an unchanged size re-ran the layout, which is the per-frame drag flicker"
+                );
+            }
+            assert!(
+                on_window_resized(app, (1281, 800)),
+                "a real one-pixel resize was swallowed, so the content webview would not track \
+                 the window"
+            );
+        });
+    }
+
+    /// The dedup must key on the WHOLE size, not one axis: dragging the window's bottom edge
+    /// changes height alone, and that is exactly the drag that resizes the content webview.
+    #[test]
+    fn the_dedup_notices_a_resize_on_either_axis() {
+        with_tmp_app(|app| {
+            forget_last_window_size();
+            assert!(on_window_resized(app, (800, 600)));
+            assert!(
+                on_window_resized(app, (800, 601)),
+                "a height-only resize was swallowed"
+            );
+            assert!(
+                on_window_resized(app, (801, 601)),
+                "a width-only resize was swallowed"
+            );
+            assert!(!on_window_resized(app, (801, 601)));
         });
     }
 }

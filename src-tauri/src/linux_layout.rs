@@ -953,6 +953,67 @@ pub fn layout<R: Runtime>(
 mod tests {
     use super::*;
 
+    /// The webviews' size REQUEST must stay (0,0). This is load-bearing in the opposite
+    /// direction from what it looks like, and it was measured, not reasoned about — an earlier
+    /// version of this file wrote each webview's real geometry into its request (to stop
+    /// GtkFixed collapsing it to 1x1, see `size_fixed_children`) and **the window stopped being
+    /// able to shrink at all**.
+    ///
+    /// A four-arm probe (`examples/winmin.rs`, since deleted) built this exact tree, put the
+    /// webviews' size into their requests, and tried `gtk_window_resize(320, 240)`:
+    ///
+    /// | arm                                   | GtkFixed's minimum | resize(320,240) |
+    /// | ------------------------------------- | ------------------ | --------------- |
+    /// | webviews at (0,0)  — the shipped code  | `(1, 1)`           | **SHRANK ok**   |
+    /// | webviews at their real size           | `(900, 900)`       | **BLOCKED**     |
+    /// | … plus `fixed.set_size_request(0, 0)` | `(900, 900)`       | **BLOCKED**     |
+    /// | … plus the same on the toplevel / Box | `(900, 900)`       | **BLOCKED**     |
+    ///
+    /// The last two arms are why this is pinned rather than documented: clearing the request on
+    /// a PARENT does not help, and the override really is stored (`fixed.size_request()` reads
+    /// `(1, 1)`) — GTK3 simply will not let a `set_size_request` LOWER a container's minimum
+    /// below what its children demand. Re-asserting it on every sizing pass changed nothing
+    /// either. So the webviews' own minimum is the only thing that can be kept small, and that
+    /// is why they carry (0,0) and are sized with `size_allocate` instead.
+    ///
+    /// The cost is real and is not hidden: GtkFixed allocates each child to its request, so a
+    /// (0,0) request means every pass collapses the webview to 1x1 before `size_fixed_children`
+    /// expands it again — two full-page re-layouts per genuine resize. Fixing that needs a
+    /// container that sizes children to the CONTAINER's allocation rather than to their requests
+    /// (`GtkOverlay` does; `GtkFixed` does not), which cannot express this file's offscreen
+    /// parking or the corner-positioned fullscreen button. Left alone deliberately.
+    #[test]
+    fn the_webviews_keep_a_zero_size_request_so_the_window_can_still_shrink() {
+        let src = include_str!("linux_layout.rs");
+        let layout = {
+            let prod = crate::test_support::rust_production_source(src);
+            let start = prod
+                .find("pub fn layout<R: Runtime>")
+                .expect("linux_layout still has `layout`");
+            let open = prod[start..].find('{').expect("layout has a body") + start;
+            prod[open..open + 4000].to_string()
+        };
+        assert!(
+            layout.contains("child.set_size_request(0, 0)"),
+            "layout() no longer pins each webview to a (0,0) request. If the webviews carry their \
+             real geometry instead, GtkFixed's minimum becomes the window's minimum and the \
+             window cannot be made smaller at all — measured: fixed_min=(900,900), \
+             resize(320,240) BLOCKED, against (1,1)/SHRANK for the (0,0) request",
+        );
+        assert!(
+            !crate::test_support::rust_production_source(src)
+                .split("fn size_fixed_children")
+                .nth(1)
+                .unwrap_or_default()
+                .split("\nfn ")
+                .next()
+                .unwrap_or_default()
+                .contains("set_size_request"),
+            "size_fixed_children writes a webview's size REQUEST, which is the change that made \
+             the window unshrinkable",
+        );
+    }
+
     /// Every WebKitGTK error code `webkit_error_code` can decode, with the values read out of
     /// `webkit2gtk-sys` 2.0.2's constants rather than written from memory.
     const POLICY: &[(i32, &str)] = &[
