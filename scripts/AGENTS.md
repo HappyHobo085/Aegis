@@ -344,9 +344,27 @@ Convenience wrappers around the release builds (each resolves the repo root via
   Flags: `--universal` (all ABIs), `--reinstall` (uninstall first on a signing-key
   mismatch — wipes that app's data).
 - **`build-appimage.sh`** — the release AppImage. Mirrors the CI `aegis-linux-appimage`
-  job: `tauri build --bundles appimage --config src-tauri/tauri.appimage-mediaframework.conf.json`
-  (the media-framework override ships matched GStreamer plugins — see `src-tauri/AGENTS.md`
-  gotcha 12). Output under `src-tauri/target/release/bundle/appimage/*.AppImage`.
+  job: `tauri build --bundles appimage --config src-tauri/tauri.appimage-mediaframework.conf.json`,
+  then calls `repack-appimage-gstreamer.sh` on the artifact. Output under
+  `$CARGO_TARGET_DIR/release/bundle/appimage/*.AppImage` (default
+  `src-tauri/target/…`; the env var is honoured because cargo bundles there, so a
+  hardcoded `src-tauri/target` path misses the artifact entirely when it is set).
+- **`repack-appimage-gstreamer.sh`** — **required for a working AppImage**, run by
+  `build-appimage.sh` after `tauri build`. It repairs three defects linuxdeploy leaves in
+  the bundle (all measured; `src-tauri/AGENTS.md` gotcha 12): the hook's
+  `GST_PLUGIN_SCANNER_1_0` points at a scanner that was never bundled (~300 failed helper
+  execs, a 2.5s first-open stall, repeated every launch), `GST_REGISTRY_REUSE_PLUGIN_SCANNER=no`
+  prevents the registry cache, and on a **multilib** build host linuxdeploy ships the **i686**
+  plugin set — ELFCLASS32 plugins against a 64-bit `libgstreamer`, so every plugin is
+  rejected and `appsink` never resolves (HTML5 media dead). It swaps in the host's 64-bit
+  set (`file -b` ELF-checked, because `/usr/lib/gstreamer-1.0` is the _i686_ dir on Fedora),
+  bundles a matching scanner, rewrites the hook, and repacks with `appimagetool`
+  (`ARCH=x86_64` is required — the AppDir keeps 32-bit leftovers). It exits 3 with a warning
+  rather than half-fixing when the host has no 64-bit plugins, and refuses to write a bundle
+  whose bundled plugin is not 64-bit. `appimagetool` is cached in `$AEGIS_APPIMAGETOOL_CACHE`
+  (default `~/.cache/aegis-tools`) and fetched on first use. Cannot be done in
+  `tauri.appimage-mediaframework.conf.json`: `bundle.linux.appimage.files` is a
+  destination→source map with **no glob support**, so ~263 host plugins can't be listed.
 - **`build-windows-portable.ps1`** — **run on a Windows host** (MSVC + NASM + CMake). Mirrors
   the CI `aegis-windows-portable` job: `tauri build --no-bundle` then copy
   `src-tauri/target/release/app.exe` → `Aegis_x64_portable.exe`. The canonical

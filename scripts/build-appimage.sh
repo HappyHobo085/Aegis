@@ -22,9 +22,17 @@ echo ">> building release AppImage (full Rust release build — takes several mi
 npm run tauri -- build --bundles appimage \
   --config src-tauri/tauri.appimage-mediaframework.conf.json
 
-APP=$(find src-tauri/target/release/bundle/appimage -name '*.AppImage' -printf '%T@ %p\n' 2>/dev/null \
+# Honour CARGO_TARGET_DIR: cargo writes the bundle under it, not src-tauri/target, so the
+# old hardcoded path missed the artifact entirely whenever the env var was set.
+TARGET_DIR="${CARGO_TARGET_DIR:-$PWD/src-tauri/target}"
+APP=$(find "$TARGET_DIR/release/bundle/appimage" -name '*.AppImage' -printf '%T@ %p\n' 2>/dev/null \
         | sort -rn | head -1 | cut -d' ' -f2-)
-[ -n "$APP" ] || { echo "ERROR: no .AppImage produced under src-tauri/target/release/bundle/appimage" >&2; exit 1; }
+[ -n "$APP" ] || { echo "ERROR: no .AppImage produced under $TARGET_DIR/release/bundle/appimage" >&2; exit 1; }
+
+# linuxdeploy ships the WRONG-ARCH GStreamer plugin set on a multilib host and points
+# GStreamer at a scanner it never bundled — that is the ~2.5s first-open stall and the
+# dead appsink. Fix it here so a plain build ships a working bundle.
+bash scripts/repack-appimage-gstreamer.sh "$APP"
 
 echo ">> AppImage: $APP"
 echo ">> size:     $(du -h "$APP" | cut -f1)"
