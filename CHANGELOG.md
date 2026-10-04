@@ -30,9 +30,25 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   build host, so all 253 plugins were rejected by the 64-bit `libgstreamer` with "wrong ELF
   class". The scanner path is now repaired at startup, and the bundle carries the host's
   64-bit plugin set plus a matching scanner, so GStreamer scans once and caches. Measured on
-  the built AppImage: first open 2449ms → 72ms, GStreamer warnings 758 → 0, and
-  `appsink` now resolves — **HTML5 video/audio, which never worked in the AppImage, now can**.
-  Note the bundle fix is a post-build repack and is not yet automated; see `src-tauri/AGENTS.md`.
+  the built AppImage: first open 2449ms → 72ms and GStreamer warnings 758 → 0. See
+  `src-tauri/AGENTS.md` gotcha 12; the bundle repair is automated as
+  `scripts/repack-appimage-gstreamer.sh`.
+
+- **HTML5 video and audio never worked in the AppImage, and the packaging fix above was not
+  what unblocked them.** GStreamer looked for its plugins and could not use a single one, so
+  every `<video>`/`<audio>` sat on a permanent spinner. Two causes, and the second one is why
+  the first fix did not help on its own: the bundle's plugin set was the wrong architecture
+  (253 i686 plugins against a 64-bit `libgstreamer`), and the packaging hook also told
+  GStreamer not to trust its plugin scanner, which stops the in-process fallback from
+  recovering when a wrong-architecture directory is on the search path. Aegis now resolves its
+  own plugins at startup — it prefers a bundled set only when that set is the right
+  architecture, otherwise it searches the host's directories, dropping any it cannot load, and
+  it clears the scanner-trust override once a real scanner is in place. **A plain build of the
+  AppImage now plays video**, with the bundle left exactly as the packager produced it:
+  measured on the built AppImage, "appsink not found" 4 → 0, "wrong ELF class" 253 → 0, the
+  GStreamer registry 450 616 → 1 517 550 bytes, and a test page reporting decoded frames
+  (`readyState=4`, non-zero `videoWidth`, playback clock advancing). The bundle repair remains
+  as a fallback for a machine with no GStreamer plugins installed at all.
 
 - **The page flickered continuously while the window was being moved on Linux.** Dragging the
   window re-laid-out the whole page again and again — once per frame of the drag, so the

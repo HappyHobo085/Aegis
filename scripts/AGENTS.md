@@ -349,14 +349,21 @@ Convenience wrappers around the release builds (each resolves the repo root via
   `$CARGO_TARGET_DIR/release/bundle/appimage/*.AppImage` (default
   `src-tauri/target/…`; the env var is honoured because cargo bundles there, so a
   hardcoded `src-tauri/target` path misses the artifact entirely when it is set).
-- **`repack-appimage-gstreamer.sh`** — **required for a working AppImage**, run by
-  `build-appimage.sh` after `tauri build`. It repairs three defects linuxdeploy leaves in
-  the bundle (all measured; `src-tauri/AGENTS.md` gotcha 12): the hook's
+- **`repack-appimage-gstreamer.sh`** — **a fallback for a machine with no host-arch GStreamer
+  plugins, not the fix for dead media**; run by `build-appimage.sh` after `tauri build`. Aegis
+  resolves its own plugins at startup (`choose_gst_plugin_dirs` +
+  `repoint_gst_plugin_scanner` in `lib.rs`), so a **plain** `tauri build` now ships working
+  HTML5 media on any host that has a host-arch plugin set — measured on the un-repacked
+  AppImage: "appsink not found" 4 → 0, "wrong ELF class" 253 → 0, registry 450 616 → 1 517 550
+  bytes, decoded frames playing. What the script still buys is a bundle that carries its own
+  plugins, for a stripped distro with none installed. It repairs the three defects
+  linuxdeploy leaves in the bundle (all measured; `src-tauri/AGENTS.md` gotcha 12): the hook's
   `GST_PLUGIN_SCANNER_1_0` points at a scanner that was never bundled (~300 failed helper
   execs, a 2.5s first-open stall, repeated every launch), `GST_REGISTRY_REUSE_PLUGIN_SCANNER=no`
-  prevents the registry cache, and on a **multilib** build host linuxdeploy ships the **i686**
-  plugin set — ELFCLASS32 plugins against a 64-bit `libgstreamer`, so every plugin is
-  rejected and `appsink` never resolves (HTML5 media dead). It swaps in the host's 64-bit
+  makes GStreamer distrust the scanner's output (which is what actually left `appsink`
+  unresolvable once a wrong-architecture dir is on the search path), and on a **multilib**
+  build host linuxdeploy ships the **i686** plugin set — ELFCLASS32 plugins against a 64-bit
+  `libgstreamer`, so every plugin is rejected. It swaps in the host's 64-bit
   set (`file -b` ELF-checked, because `/usr/lib/gstreamer-1.0` is the _i686_ dir on Fedora),
   bundles a matching scanner, rewrites the hook, and repacks with `appimagetool`
   (`ARCH=x86_64` is required — the AppDir keeps 32-bit leftovers). It exits 3 with a warning

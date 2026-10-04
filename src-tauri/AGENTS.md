@@ -2426,11 +2426,12 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     draws its swipe arrow / refresh spinner in `dispatchDraw()` after `super.dispatchDraw()`,
     which renders on top. (Same class of bug as the earlier "chrome overlay rendered behind
     the native content view.")
-12. **AppImage HTML5 video — GStreamer plugins are dlopen-ed, and the bundled set was the
-    WRONG ARCH.** WebKitGTK decodes `<video>`/`<audio>` via GStreamer, which `dlopen`s its
-    plugin modules (incl. `appsink`, how WebKit pulls frames) from
-    `GST_PLUGIN_SYSTEM_PATH_1_0`; linuxdeploy bundles `libgstreamer` (a _linked_ dep) but not
-    the plugins themselves. Measured on the built AppImage, THREE separate defects stacked:
+12. **AppImage HTML5 video — GStreamer plugins are dlopen-ed, and the bundle's set is
+    resolved at RUNTIME now (the repack is a fallback, not the fix).** WebKitGTK decodes
+    `<video>`/`<audio>` via GStreamer, which `dlopen`s its plugin modules (incl. `appsink`,
+    how WebKit pulls frames) from `GST_PLUGIN_SYSTEM_PATH_1_0`; linuxdeploy bundles
+    `libgstreamer` (a _linked_ dep) but not the plugins themselves. Measured on the built
+    AppImage, FOUR separate defects stacked:
     (a) linuxdeploy's hook exports `GST_PLUGIN_SCANNER_1_0` pointing at
     `$APPDIR/usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner`, a path the bundle does
     not contain, so GStreamer forked a missing helper once per plugin — ~300 failed execs
@@ -2439,21 +2440,55 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     fixes it; note only the `_1_0`-suffixed name matters (it outranks the un-suffixed one).
     (b) The hook also set `GST_REGISTRY_REUSE_PLUGIN_SCANNER=no`, forcing a respawn per
     plugin, and since the scan never succeeded no registry cache was written — so the stall
-    repeated on EVERY launch, not just the first. (c) **linuxdeploy-plugin-gstreamer pulled
-    the i686 plugin set on a multilib build host**: the bundle's 253 plugins are `ELFCLASS32`
-    while `libgstreamer` and the only available `gst-plugin-scanner` are 64-bit, so every
-    plugin is rejected with "wrong ELF class: ELFCLASS32" and no element ever registers —
-    "GStreamer element appsink not found", permanent spinner, no playback (the streamex.sh
-    symptom). Note this host has BOTH `/usr/lib64/gstreamer-1.0` (263, 64-bit) and
-    `/usr/lib/gstreamer-1.0` (253, i686), and `tauri.appimage-mediaframework.conf.json`
-    cannot fix it: `bundle.linux.appimage.files` is a destination→source map with NO glob
-    support (literal `exists()` check), so the set is replaced by a post-build repack with
-    `appimagetool` (`ARCH=x86_64` is required, the AppDir holds 32-bit leftovers). **The
-    repack is MANUAL — a plain `tauri build` reintroduces all three defects**, so verify
-    `file -b` on a bundled plugin returns `ELF 64-bit` before trusting a build. `lib.rs`
-    appends the host's plugin dir(s) ONLY in the non-AppImage branch; the AppImage branch sets
-    the bundled dir alone, and `is_host_elf64()` keeps a 32-bit dir from being chosen if one
-    is ever mapped in alongside. Harmless for the `.deb`/dev (host dirs are already default).
+    repeated on EVERY launch, not just the first.
+    (c) **linuxdeploy-plugin-gstreamer pulled the i686 plugin set on a multilib build host**:
+    the bundle's 253 plugins are `ELFCLASS32` while `libgstreamer` and the only available
+    `gst-plugin-scanner` are 64-bit, so every plugin is rejected with "wrong ELF class:
+    ELFCLASS32" and no element ever registers — "GStreamer element appsink not found",
+    permanent spinner, no playback (the streamex.sh symptom). Note this host has BOTH
+    `/usr/lib64/gstreamer-1.0` (263, 64-bit) and `/usr/lib/gstreamer-1.0` (253, i686).
+    (d) **THE ONE THAT ACTUALLY KILLED MEDIA, and it was invisible until it was measured
+    separately.** (b) is not only a performance setting: `no` tells GStreamer not to trust
+    the plugin scanner's output, so it loads plugins in-process instead — and with the
+    wrong-architecture directory still on the search path that fallback does **not** recover.
+    Isolated with `gst-inspect-1.0 appsink` against the bundle's own `libgstreamer`:
+    `appsink` resolves with the variable unset (registry 1 516 726 B) and **does not resolve
+    with it set** (registry 454 664 B). The un-repacked AppImage wrote a 450 616 B registry and
+    printed "GStreamer element appsink not found" — the same failure. So the correct reading of
+    (b) is "the hook's scanner workaround is still in force", and restoring a real scanner has
+    to restore the setting too. `repoint_gst_plugin_scanner()` now does both and returns
+    whether a scanner resolved; its `honoured` arm sets it as well, because that early return
+    is exactly where a fix gets skipped (the hook sets the variable on the same launch whatever
+    scanner we end up with).
+
+    **The runtime policy is `choose_gst_plugin_dirs`, and it REPLACES the inherited value
+    rather than appending to it — that replacement is the fix for (c).** The inherited
+    `GST_PLUGIN_SYSTEM_PATH_1_0` under an AppImage *is* linuxdeploy's, and it names the i686
+    dir, so appending to it (what this did before) kept all 253 dead plugins in the search
+    path. The policy is: a bundled dir of the right architecture wins **alone** (it is
+    version-matched with the bundled `libgstreamer` that `LD_LIBRARY_PATH` forces this
+    process to load, so host plugins beside it can only fail to load); otherwise every
+    **usable** entry of the inherited value, then the well-known host locations — where
+    "usable" is an ELF check on `libgstcoreelements.so`, not `is_dir()`, because `is_dir()` is
+    what let `/usr/lib/gstreamer-1.0` (the i686 dir on Fedora multilib) through. The predicate
+    is a parameter so the policy is testable with no GStreamer installed; six tests hold it,
+    all mutation-verified. `GST_PLUGIN_PATH_1_0` is **removed**, not rewritten: the same hook
+    points it at the rejected dir, so leaving it scans the whole dead set a second time
+    (measured: 253 rejections become 506, 253 scanner processes become 506).
+
+    **Measured after the fix, on a plain `tauri build` with the bundle left un-repacked:**
+    `appsink not found` 4→**0**, `wrong ELF class` 253→**0**, `External plugin loader failed`
+    **0**, registry 450 616→**1 517 550** B, and a local `<video>`/`<audio>` page reports
+    `readyState=4`, `videoWidth=64` and `currentTime` advancing — i.e. frames actually decode.
+    **`tauri.appimage-mediaframework.conf.json` still cannot bundle the right set**:
+    `bundle.linux.appimage.files` is a destination→source map with NO glob support (literal
+    `exists()` check). So `scripts/repack-appimage-gstreamer.sh` stays, and stays in
+    `build-appimage.sh`: it is now a **fallback for a host with no host-arch plugins at all**
+    (a stripped distro), not the mechanism that makes media work — with it, the bundled dir is
+    right-architecture and wins outright, verified to play with all three markers 0. It is NOT
+    manual, and a plain `tauri build` no longer ships broken media; verify either way with
+    `file -b` on a bundled plugin plus the three marker counts, not by size. Harmless for the
+    `.deb`/dev (host dirs are already GStreamer's default).
 13. **`on_navigation` fires for subframes; don't drive the URL bar from it.** wry wires
     Tauri's `on_navigation` to WebKitGTK `decide-policy` (NavigationAction) with NO
     main-frame filter, so cross-site iframe/embedded-player loads call it too — and it

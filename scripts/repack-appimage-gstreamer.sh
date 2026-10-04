@@ -1,23 +1,32 @@
 #!/usr/bin/env bash
-# Repair a linuxdeploy-built AppImage in place so its GStreamer plugin set actually loads.
+# Repair a linuxdeploy-built AppImage in place so it carries its own GStreamer plugin set.
 #
-# WHY THIS EXISTS — three stacked defects, all measured on a built AppImage
+# SCOPE - read this before assuming a plain build is broken. Aegis now resolves its own
+# plugins at runtime (`choose_gst_plugin_dirs` + `repoint_gst_plugin_scanner` in
+# src-tauri/src/lib.rs), so a plain `tauri build` ships working HTML5 media on any host that
+# HAS a host-arch plugin set. What this script adds is a bundle that does not DEPEND on the
+# host having one, which is the case for a stripped distro. Both were measured on the built
+# AppImage (see src-tauri/AGENTS.md gotcha 12); keep the repack for that reason, not because
+# a plain build is broken.
+#
+# WHY IT EXISTS - three stacked defects, all measured on a built AppImage
 # (see src-tauri/AGENTS.md gotcha 12). None of them is app logic:
 #   1. The bundled apprun-hooks/linuxdeploy-plugin-gstreamer.sh exports
 #      GST_PLUGIN_SCANNER_1_0 at "$APPDIR/usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner",
 #      a path the bundle does not contain -> GStreamer forks a missing helper once per
 #      plugin (~300 failed execs), blocking the renderer in do_wait for ~2.5s on the first
 #      sidebar/Settings open.
-#   2. The same hook sets GST_REGISTRY_REUSE_PLUGIN_SCANNER=no, so the scan never caches
-#      and the stall repeats on EVERY launch.
+#   2. The same hook sets GST_REGISTRY_REUSE_PLUGIN_SCANNER=no, so GStreamer does not trust
+#      the scanner's output. That is not only a caching decision: with a wrong-architecture
+#      plugin dir on the search path the in-process fallback does NOT recover, and appsink
+#      never resolves even when the host's 64-bit plugins are on the path.
 #   3. On a multilib build host linuxdeploy pulls the i686 plugin set, so the bundle's
 #      plugins are ELFCLASS32 while libgstreamer and the only available scanner are 64-bit.
-#      Every plugin is rejected ("wrong ELF class"), nothing registers, and appsink never
-#      resolves -> HTML5 video/audio silently never work.
+#      Every plugin is rejected ("wrong ELF class") and nothing registers.
 #
-# tauri.appimage-mediaframework.conf.json cannot express this: bundle.linux.appimage.files
-# is a destination->source map with NO glob support (it does a literal exists() check), so
-# it cannot pull in ~263 host plugins. Hence the post-build repack.
+# tauri.appimage-mediaframework.conf.json cannot express the repair: its
+# bundle.linux.appimage.files is a destination->source map with NO glob support (a literal
+# exists() check), so it cannot pull in ~263 host plugins. Hence the post-build repack.
 #
 # Usage: bash scripts/repack-appimage-gstreamer.sh <path/to/AppImage>
 set -euo pipefail

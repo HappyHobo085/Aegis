@@ -433,7 +433,72 @@ const GST_SCANNER_CANDIDATES: [&str; 4] = [
     "/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner",
 ];
 
-/// Point GStreamer at a plugin scanner that actually exists on disk.
+/// The host-arch GStreamer plugin directories, in preference order. `/usr/lib/gstreamer-1.0`
+/// is the generic (Arch) location but is ALSO the i686 directory on a Fedora multilib host,
+/// which is why membership is decided by [`is_gst_plugin_dir`] (an ELF check) and not by
+/// `is_dir()` — `is_dir()` is what let the wrong-architecture set onto the search path.
+#[cfg(target_os = "linux")]
+const HOST_GST_PLUGIN_DIRS: [&str; 3] = [
+    "/usr/lib64/gstreamer-1.0",                // Fedora/RHEL/SUSE x86_64
+    "/usr/lib/x86_64-linux-gnu/gstreamer-1.0", // Debian/Ubuntu x86_64
+    "/usr/lib/gstreamer-1.0",                  // Arch, and the i686 dir on Fedora multilib
+];
+
+/// Whether `dir` is a GStreamer plugin directory this process can actually use, i.e. it
+/// exists and the `libgstcoreelements.so` inside it is host-arch. GStreamer's own rejection
+/// of a wrong-arch module is a WARNING it recovers from by ignoring that one file, so a
+/// wrong-arch dir on the search path is not harmless: it costs one scanner process per
+/// plugin and, measured on the built AppImage, costs the host-arch plugins that follow it
+/// their registry entry (see `repoint_gst_plugin_scanner`).
+#[cfg(target_os = "linux")]
+fn is_gst_plugin_dir(dir: &std::path::Path) -> bool {
+    dir.is_dir() && is_host_elf64(&dir.join("libgstcoreelements.so"))
+}
+
+/// The GStreamer plugin search path to install, in priority order.
+///
+/// The policy, in one place so it is testable without a real GStreamer (hence the `usable`
+/// seam rather than an inline `is_gst_plugin_dir`):
+///
+/// 1. A usable *bundled* dir wins outright. It is version-matched with the bundled
+///    libgstreamer that `LD_LIBRARY_PATH` forces this process to load, so host plugins
+///    beside it can only fail to load — and they would each cost a scan.
+/// 2. Otherwise every **usable** directory among the inherited `GST_PLUGIN_SYSTEM_PATH_1_0`
+///    first (so a deliberate user or launcher setting survives) and then the well-known host
+///    locations. *Unusable* inherited entries are DROPPED, and that is the load-bearing half:
+///    under an AppImage the inherited value is linuxdeploy's, and it names the bundle's
+///    wrong-architecture directory, so keeping it — which the previous version did by
+///    appending to it — is precisely what left 253 dead plugins in the search path.
+///    Duplicates are collapsed, so a dir that is both inherited and well-known is scanned once.
+#[cfg(target_os = "linux")]
+fn choose_gst_plugin_dirs<F>(
+    bundled: Option<&std::path::Path>,
+    inherited: &str,
+    usable: F,
+) -> Vec<std::path::PathBuf>
+where
+    F: Fn(&std::path::Path) -> bool,
+{
+    if let Some(b) = bundled.filter(|b| usable(b)) {
+        return vec![b.to_path_buf()];
+    }
+    let candidates = inherited
+        .split(':')
+        .filter(|s| !s.is_empty())
+        .map(std::path::PathBuf::from)
+        .chain(HOST_GST_PLUGIN_DIRS.iter().map(std::path::PathBuf::from));
+    candidates
+        .filter(|p| usable(p))
+        .fold(Vec::new(), |mut acc: Vec<std::path::PathBuf>, p| {
+            if !acc.contains(&p) {
+                acc.push(p);
+            }
+            acc
+        })
+}
+
+/// Point GStreamer at a plugin scanner that actually exists on disk, and undo the other half
+/// of the same linuxdeploy hook.
 ///
 /// The AppImage's bundled `linuxdeploy-plugin-gstreamer.sh` (sourced by AppRun on EVERY
 /// launch) exports `GST_PLUGIN_SCANNER_1_0` pointing at
@@ -451,24 +516,43 @@ const GST_SCANNER_CANDIDATES: [&str; 4] = [
 /// Only the `_1_0`-suffixed name needs correcting: it takes precedence over the
 /// un-suffixed `GST_PLUGIN_SCANNER`, and it is the one AppRun actually sets — so the
 /// un-suffixed-only repair that used to live in the non-AppImage branch could never fix
-/// this. No-op when `_1_0` already names a file that exists. If no scanner is found we leave
-/// things as they are rather than making it worse.
+/// this. The *path* is left alone when `_1_0` already names a file that exists, but the
+/// registry-trust variable below is corrected on that path too. If no scanner is found we
+/// leave everything as it is rather than making it worse.
+///
+/// `GST_REGISTRY_REUSE_PLUGIN_SCANNER=no` is the SECOND half of the same hook, and it is the
+/// one that silently killed media. `no` tells GStreamer not to trust the plugin scanner's
+/// output, so it falls back to loading plugins in-process — and with a wrong-architecture
+/// directory still on the search path the fallback does not recover: measured with
+/// `gst-inspect-1.0 appsink` against the bundle's own libgstreamer, the scan succeeds and
+/// `appsink` resolves with the variable unset (registry 1 516 726 B), and fails to resolve
+/// with it set (registry 454 664 B) — the same ~450 KB registry the AppImage wrote, and the
+/// same "GStreamer element appsink not found" at playback. It was set for the same missing
+/// scanner this function now supplies, so restoring the scanner restores the setting.
+///
+/// Returns whether a scanner is now in place, so a caller can tell "repaired" from "nothing
+/// better to point at".
 #[cfg(target_os = "linux")]
-fn repoint_gst_plugin_scanner() {
-    if std::env::var_os("GST_PLUGIN_SCANNER_1_0")
+fn repoint_gst_plugin_scanner() -> bool {
+    let honoured = std::env::var_os("GST_PLUGIN_SCANNER_1_0")
         .map(|s| std::path::Path::new(&s).exists())
-        .unwrap_or(false)
-    {
-        return;
+        .unwrap_or(false);
+    if honoured {
+        // Already a real file. The `no` below still has to be undone: linuxdeploy set it on
+        // the same launch regardless of what we then found.
+        std::env::set_var("GST_REGISTRY_REUSE_PLUGIN_SCANNER", "yes");
+        return true;
     }
     for scanner in GST_SCANNER_CANDIDATES {
         if std::path::Path::new(scanner).exists() {
             // Both names: `_1_0` wins, the plain one keeps non-1.0 lookups consistent.
             std::env::set_var("GST_PLUGIN_SCANNER_1_0", scanner);
             std::env::set_var("GST_PLUGIN_SCANNER", scanner);
-            return;
+            std::env::set_var("GST_REGISTRY_REUSE_PLUGIN_SCANNER", "yes");
+            return true;
         }
     }
+    false
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -529,64 +613,49 @@ pub fn run() {
         }
         // WebKitGTK plays HTML5 <video>/<audio> through GStreamer, which dlopens its
         // plugins — `appsink` (how WebKit pulls decoded frames) plus the codecs — from
-        // GST_PLUGIN_SYSTEM_PATH_1_0. With `bundleMediaFramework` the AppImage now ships
-        // version-matched plugins under usr/lib/<arch>/gstreamer-1.0 (on LD_LIBRARY_PATH);
-        // use THOSE. The host's system plugins are built against the host's libgstreamer,
-        // NOT the bundled one, so on a cross-distro AppImage they're rejected ("GStreamer
-        // element ... not found") and a stream fails/crashes on load. Outside the AppImage
-        // (.deb / `tauri dev`) nothing is bundled, so fall back to the host's plugin dirs
-        // (there the system libgstreamer matches the system plugins).
+        // GST_PLUGIN_SYSTEM_PATH_1_0. A bundle that ships a HOST-ARCH plugin set under
+        // usr/lib/gstreamer-1.0 (on LD_LIBRARY_PATH) is version-matched with the bundled
+        // libgstreamer, so use THOSE and nothing else: the host's system plugins are built
+        // against the host's libgstreamer, not the bundled one, so adding them there only
+        // adds failed loads. When the bundle ships the WRONG architecture — which is what
+        // `bundleMediaFramework` does on a multilib build host, because
+        // linuxdeploy-plugin-gstreamer pulls the i686 set — those plugins are dead weight
+        // (every one rejected with "wrong ELF class", one scanner process each) and the
+        // host's own arch-correct dirs are the only usable ones. The same holds outside the
+        // AppImage (.deb / `tauri dev`), where nothing is bundled at all.
+        // choose_gst_plugin_dirs is the whole policy; measured on the built AppImage.
         {
             let bundled = std::env::var_os("LD_LIBRARY_PATH").and_then(|ld| {
                 std::env::split_paths(&ld)
-                    // `gstreamer-1.0-x64` is where tauri.appimage-mediaframework.conf.json
-                    // puts the HOST-arch plugin set. The stock `bundleMediaFramework` path is
-                    // unusable on a multilib build host: linuxdeploy-plugin-gstreamer pulls
-                    // the i686 set, so the bundle's 253 plugins are ELFCLASS32 while the
-                    // bundled libgstreamer and the only available scanner are 64-bit — every
-                    // plugin is rejected with "wrong ELF class" and no element (appsink!)
-                    // ever registers. The ELF-check still matters: it rejects a 32-bit dir
-                    // if one is ever mapped in alongside.
                     .map(|d| d.join("gstreamer-1.0"))
-                    // libgstcoreelements is in every GStreamer; ELF-check picks the host
-                    // arch (multilib LD_LIBRARY_PATH lists the 32-bit dir first).
-                    .find(|d| is_host_elf64(&d.join("libgstcoreelements.so")))
+                    // libgstcoreelements is in every GStreamer, so this both proves the dir
+                    // is a plugin dir at all and picks the host arch (multilib
+                    // LD_LIBRARY_PATH lists the 32-bit dir first).
+                    .find(|d| is_gst_plugin_dir(d))
             });
-            if let Some(gst) = bundled {
-                std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &gst);
-                // The bundle's plugin set is the WRONG ARCHITECTURE on a multilib build host:
-                // linuxdeploy-plugin-gstreamer pulls the i686 set, so its 253 plugins are
-                // ELFCLASS32 while the bundled libgstreamer and the only available scanner are
-                // 64-bit. Every plugin is rejected with "wrong ELF class", so no element ever
-                // registers (appsink included) and each plugin still costs a scanner spawn.
-                // Verified on the extracted bundle; fixing it needs 64-bit plugins bundled,
-                // which tauri.appimage-mediaframework.conf.json cannot express (its `files`
-                // map takes no globs). See repoint_gst_plugin_scanner.
-                repoint_gst_plugin_scanner();
-            } else {
-                let mut dirs: Vec<&str> = vec![
-                    "/usr/lib64/gstreamer-1.0",                // Fedora/RHEL/SUSE x86_64
-                    "/usr/lib/x86_64-linux-gnu/gstreamer-1.0", // Debian/Ubuntu x86_64
-                ];
-                // `/usr/lib/gstreamer-1.0` is generic (Arch) but the i686 dir on Fedora
-                // multilib — only fall back to it when no arch-specific dir exists.
-                if !std::path::Path::new("/usr/lib64/gstreamer-1.0").is_dir()
-                    && !std::path::Path::new("/usr/lib/x86_64-linux-gnu/gstreamer-1.0").is_dir()
-                {
-                    dirs.push("/usr/lib/gstreamer-1.0");
+            let inherited = std::env::var("GST_PLUGIN_SYSTEM_PATH_1_0").unwrap_or_default();
+            let dirs = choose_gst_plugin_dirs(bundled.as_deref(), &inherited, is_gst_plugin_dir);
+            if !dirs.is_empty() {
+                let joined = std::env::join_paths(&dirs).expect("no dir in the list has a ':'");
+                if joined.as_os_str() != std::path::Path::new(&inherited) {
+                    std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &joined);
                 }
-                let current = std::env::var("GST_PLUGIN_SYSTEM_PATH_1_0").unwrap_or_default();
-                let mut paths: Vec<&str> = current.split(':').filter(|s| !s.is_empty()).collect();
-                for dir in dirs {
-                    if std::path::Path::new(dir).is_dir() && !paths.contains(&dir) {
-                        paths.push(dir);
-                    }
-                }
-                if !paths.is_empty() {
-                    std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", paths.join(":"));
-                }
-                repoint_gst_plugin_scanner();
             }
+            // `GST_PLUGIN_PATH_1_0` is the *app's own* plugin path and the same linuxdeploy
+            // hook points it at the very directory the search path just rejected, so
+            // GStreamer scans the whole wrong-architecture set a SECOND time (measured: 253
+            // rejected plugins become 506, and 253 scanner processes become 506). Nothing in
+            // the bundle ships an app-private plugin dir, so clearing it is the honest fix.
+            std::env::remove_var("GST_PLUGIN_PATH_1_0");
+            eprintln!(
+                "[aegis] GStreamer plugin path -> {} ({} bundled)",
+                dirs.iter()
+                    .map(|d| d.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(":"),
+                if bundled.is_some() { "1" } else { "0" },
+            );
+            repoint_gst_plugin_scanner();
         }
         // glib's TLS backend — glib-networking's `libgiognutls.so` GIO module — is what
         // lets the webview speak HTTPS. The AppImage bundles it, but the bundled glib
@@ -968,6 +1037,137 @@ pub fn run() {
 mod tests {
     use super::ffi_guard;
 
+    /// Pretend only these dirs hold host-arch plugins. Names are fake on purpose: the policy
+    /// must be decidable without a real GStreamer, which is the whole reason the usability
+    /// check is a seam.
+    #[cfg(target_os = "linux")]
+    fn usable_only(usable: &[&str]) -> impl Fn(&std::path::Path) -> bool {
+        let owned: Vec<std::path::PathBuf> = usable.iter().map(std::path::PathBuf::from).collect();
+        move |p: &std::path::Path| owned.iter().any(|u| u == p)
+    }
+
+    /// A bundled plugin dir of the right architecture is the whole search path: it is
+    /// version-matched with the bundled libgstreamer that LD_LIBRARY_PATH forces this process
+    /// to load, so every host dir added beside it is a plugin set built against a DIFFERENT
+    /// libgstreamer — one failed load each, and one scanner process each.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_usable_bundled_plugin_dir_is_used_alone() {
+        let got = super::choose_gst_plugin_dirs(
+            Some(std::path::Path::new("/app/usr/lib/gstreamer-1.0")),
+            "",
+            usable_only(&["/app/usr/lib/gstreamer-1.0", "/usr/lib64/gstreamer-1.0"]),
+        );
+        assert_eq!(
+            got,
+            vec![std::path::PathBuf::from("/app/usr/lib/gstreamer-1.0")],
+            "a usable bundled dir must be used alone, with no host dir appended"
+        );
+    }
+
+    /// THE regression this function exists for. Under an AppImage the inherited value is
+    /// linuxdeploy's, and it names the bundle's WRONG-architecture plugin dir (i686 against a
+    /// 64-bit libgstreamer on a multilib build host). The previous version appended to that
+    /// inherited value, so all 253 dead plugins stayed on the search path — measured on the
+    /// built AppImage as 253 "wrong ELF class" rejections, 253 scanner processes, and (with
+    /// the scanner's output distrusted) an `appsink` that never resolved.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_unusable_inherited_plugin_dir_is_dropped_rather_than_kept() {
+        let bundle = "/app/usr/lib/gstreamer-1.0";
+        let host = "/usr/lib64/gstreamer-1.0";
+        let got = super::choose_gst_plugin_dirs(
+            None,
+            &format!("{bundle}:"),
+            usable_only(&[host]), // the bundle dir is NOT host-arch
+        );
+        assert!(
+            !got.iter().any(|d| d.to_string_lossy() == bundle),
+            "a dir this process cannot load must never reach the search path, got {got:?}"
+        );
+        assert_eq!(
+            got,
+            vec![std::path::PathBuf::from(host)],
+            "the host's arch-correct dir must be what is left"
+        );
+    }
+
+    /// The other half of the same trade: an inherited entry that IS usable is somebody's
+    /// deliberate setting (a launcher, a distro, a user), and dropping it would be a
+    /// regression in the other direction. It also keeps its position ahead of the well-known
+    /// locations, which is what "inherited first" has to mean for the ordering to be a search
+    /// order rather than a set — and a dir that is BOTH inherited and well-known appears once,
+    /// because a repeated entry costs a second scan of the same plugins.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn a_usable_inherited_plugin_dir_is_kept_searched_first_and_never_repeated() {
+        let mine = "/opt/mine/gstreamer-1.0";
+        let got = super::choose_gst_plugin_dirs(
+            None,
+            // listed twice, and the second copy is also one of the well-known locations.
+            &format!("{mine}:/usr/lib/gstreamer-1.0:{mine}"),
+            usable_only(&[mine, "/usr/lib/gstreamer-1.0"]),
+        );
+        assert_eq!(
+            got,
+            vec![
+                std::path::PathBuf::from(mine),
+                std::path::PathBuf::from("/usr/lib/gstreamer-1.0"),
+            ],
+            "a usable inherited dir must survive once, ahead of the well-known ones"
+        );
+    }
+
+    /// A bundled dir that is NOT host-arch is not a bundled dir — `bundleMediaFramework` on a
+    /// multilib build host produces exactly that — so it must fall through to the host rather
+    /// than short-circuit the search. This is the arm that separates `bundled.is_some()` from
+    /// "usable", which is the mistake the caller could otherwise make on its own.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn an_unusable_bundled_plugin_dir_falls_through_to_the_host() {
+        let got = super::choose_gst_plugin_dirs(
+            Some(std::path::Path::new("/app/usr/lib/gstreamer-1.0")),
+            "",
+            usable_only(&["/usr/lib64/gstreamer-1.0"]),
+        );
+        assert_eq!(
+            got,
+            vec![std::path::PathBuf::from("/usr/lib64/gstreamer-1.0")],
+            "a wrong-architecture bundled dir must not win the search"
+        );
+    }
+
+    /// The invariant the whole function exists to hold, asserted over the REAL host rather
+    /// than a fake predicate: every directory it hands GStreamer is one this process can
+    /// actually load, and none is scanned twice. This is the one test that would have caught
+    /// the i686 directory by name if the machine running it is multilib, and it is vacuously
+    /// true (not false) on a host with no GStreamer at all.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn no_unusable_or_duplicate_directory_reaches_the_real_search_path() {
+        let got = super::choose_gst_plugin_dirs(None, "", super::is_gst_plugin_dir);
+        for dir in &got {
+            assert!(
+                super::is_gst_plugin_dir(dir),
+                "{dir:?} is on the search path but is not a host-arch plugin dir"
+            );
+        }
+        let mut sorted = got.clone();
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted.len(), got.len(), "a dir is searched twice: {got:?}");
+        let first_usable = super::HOST_GST_PLUGIN_DIRS
+            .iter()
+            .find(|d| super::is_gst_plugin_dir(std::path::Path::new(d)));
+        if let Some(expected) = first_usable {
+            assert_eq!(
+                got.first().map(|d| d.to_string_lossy().into_owned()),
+                Some((*expected).to_string()),
+                "the first usable host dir must lead the search path, got {got:?}"
+            );
+        }
+    }
+
     /// The first sidebar/Settings open froze the app for ~2.5s because the AppImage's
     /// linuxdeploy hook points the scanner GStreamer actually honours at a path the bundle
     /// does not contain, so GStreamer forked a missing helper once per plugin. The whole
@@ -976,6 +1176,7 @@ mod tests {
     /// the assertion is conditioned on whether a scanner was findable rather than assuming
     /// one is.
     #[test]
+    #[cfg(target_os = "linux")]
     fn the_honoured_scanner_name_is_never_left_pointing_at_a_missing_file() {
         let _guard = crate::test_support::lock();
         const K1: &str = concat!("GST_PLUGIN_SCANNER", "_1_0");
@@ -1021,6 +1222,7 @@ mod tests {
     /// A scanner path that already resolves must be left completely alone — the repair is
     /// for phantom paths only, and must not churn a working configuration.
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_valid_scanner_path_is_left_untouched() {
         let _guard = crate::test_support::lock();
         const K1: &str = concat!("GST_PLUGIN_SCANNER", "_1_0");
@@ -1038,6 +1240,82 @@ mod tests {
             after,
             real.to_string_lossy().into_owned(),
             "an existing scanner path must not be rewritten"
+        );
+    }
+
+    /// The silent half of the same linuxdeploy hook, and the one that actually killed HTML5
+    /// media: `GST_REGISTRY_REUSE_PLUGIN_SCANNER=no` makes GStreamer distrust the plugin
+    /// scanner's output, and with a wrong-architecture dir still on the search path it does
+    /// not recover — `appsink` never resolves and the registry is written at a third of its
+    /// size (measured: 454 664 B vs 1 516 726 B, and the AppImage wrote 450 616 B). It was set
+    /// for the missing scanner this function supplies, so a resolved scanner must clear it.
+    ///
+    /// The `honoured` arm is the one that used to return early, and it is asserted separately
+    /// because that early return is exactly where a fix would be skipped: the hook sets the
+    /// variable on the same launch no matter which scanner we end up with.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn restoring_the_scanner_also_restores_the_registry_scanner_trust() {
+        let _guard = crate::test_support::lock();
+        const REUSE: &str = "GST_REGISTRY_REUSE_PLUGIN_SCANNER";
+        const K1: &str = concat!("GST_PLUGIN_SCANNER", "_1_0");
+        let saved = (
+            std::env::var_os(REUSE),
+            std::env::var_os(K1),
+            std::env::var_os("GST_PLUGIN_SCANNER"),
+        );
+        let any_scanner = super::GST_SCANNER_CANDIDATES
+            .iter()
+            .any(|p| std::path::Path::new(p).exists());
+        if !any_scanner {
+            return; // nothing to point at; the early return is the documented behaviour
+        }
+
+        std::env::set_var(REUSE, "no");
+        std::env::set_var(K1, "/nonexistent/aegis-gst/no-such-scanner");
+        let repaired = super::repoint_gst_plugin_scanner();
+        let after_repaired = std::env::var(REUSE).unwrap_or_default();
+
+        // Same launch, but a scanner path that already resolves: the old early return.
+        std::env::set_var(REUSE, "no");
+        std::env::set_var(K1, std::env::current_exe().expect("test binary path"));
+        let honoured = super::repoint_gst_plugin_scanner();
+        let after_honoured = std::env::var(REUSE).unwrap_or_default();
+
+        match saved {
+            (Some(r), Some(a), Some(b)) => {
+                std::env::set_var(REUSE, r);
+                std::env::set_var(K1, a);
+                std::env::set_var("GST_PLUGIN_SCANNER", b);
+            }
+            _ => {
+                std::env::remove_var(REUSE);
+                match saved.1 {
+                    Some(a) => std::env::set_var(K1, a),
+                    None => std::env::remove_var(K1),
+                }
+                match saved.2 {
+                    Some(b) => std::env::set_var("GST_PLUGIN_SCANNER", b),
+                    None => std::env::remove_var("GST_PLUGIN_SCANNER"),
+                }
+            }
+        }
+
+        assert!(
+            repaired,
+            "a scanner exists on this machine, so one must have been found"
+        );
+        assert!(
+            honoured,
+            "an already-resolvable scanner must count as resolved"
+        );
+        assert_ne!(
+            after_repaired, "no",
+            "a repaired scanner must stop GStreamer distrusting scanner output"
+        );
+        assert_ne!(
+            after_honoured, "no",
+            "an already-honoured scanner must clear it too — the hook set it on this launch"
         );
     }
 
