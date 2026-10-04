@@ -423,6 +423,54 @@ fn is_host_elf64(path: &std::path::Path) -> bool {
         && b[4] == 2
 }
 
+/// Where a GStreamer plugin scanner may live, best-first. Shared with the test so the two
+/// cannot drift apart.
+#[cfg(target_os = "linux")]
+const GST_SCANNER_CANDIDATES: [&str; 4] = [
+    "/usr/libexec/gstreamer-1.0/gst-plugin-scanner",
+    "/usr/lib/gstreamer-1.0/gst-plugin-scanner",
+    "/usr/bin/gst-plugin-scanner",
+    "/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner",
+];
+
+/// Point GStreamer at a plugin scanner that actually exists on disk.
+///
+/// The AppImage's bundled `linuxdeploy-plugin-gstreamer.sh` (sourced by AppRun on EVERY
+/// launch) exports `GST_PLUGIN_SCANNER_1_0` pointing at
+/// `$APPDIR/usr/lib/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner` — a path the bundle does
+/// NOT contain; the real bundled layout is `usr/lib/gstreamer-1.0/`. It also sets
+/// `GST_REGISTRY_REUSE_PLUGIN_SCANNER=no`.
+///
+/// GStreamer therefore forks that missing helper once per plugin on every launch. Measured
+/// on the built AppImage: ~300 failed execs, the renderer's main thread spinning in `R`
+/// inside `do_wait` at 50-110% of a core, and a burst of "External plugin loader failed"
+/// warnings spanning 2.5s — which is the whole of the ~2.5s freeze on the first sidebar /
+/// Settings open. It never caches a registry because the scan never succeeds, so it repeats
+/// every launch.
+///
+/// Only the `_1_0`-suffixed name needs correcting: it takes precedence over the
+/// un-suffixed `GST_PLUGIN_SCANNER`, and it is the one AppRun actually sets — so the
+/// un-suffixed-only repair that used to live in the non-AppImage branch could never fix
+/// this. No-op when `_1_0` already names a file that exists. If no scanner is found we leave
+/// things as they are rather than making it worse.
+#[cfg(target_os = "linux")]
+fn repoint_gst_plugin_scanner() {
+    if std::env::var_os("GST_PLUGIN_SCANNER_1_0")
+        .map(|s| std::path::Path::new(&s).exists())
+        .unwrap_or(false)
+    {
+        return;
+    }
+    for scanner in GST_SCANNER_CANDIDATES {
+        if std::path::Path::new(scanner).exists() {
+            // Both names: `_1_0` wins, the plain one keeps non-1.0 lookups consistent.
+            std::env::set_var("GST_PLUGIN_SCANNER_1_0", scanner);
+            std::env::set_var("GST_PLUGIN_SCANNER", scanner);
+            return;
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // webkit2gtk's DMABUF renderer paints a blank/white window on many Linux GPU
@@ -433,6 +481,18 @@ pub fn run() {
     {
         if std::env::var_os("WEBKIT_DISABLE_DMABUF_RENDERER").is_none() {
             std::env::set_var("WEBKIT_DISABLE_DMABUF_RENDERER", "1");
+        }
+        // Even with DMABUF and compositing disabled, WebKit still tries to create a GL
+        // context, and on this class of machine Mesa cannot get a DRI2 screen: it logs
+        // "pci id for fd N: 10de:..., driver (null)" then "egl: failed to create dri2 screen"
+        // and "DRI2: failed to create screen", repeatedly, once per context. That is real
+        // wasted work, not just console noise. Point GL at llvmpipe instead of letting it
+        // fail — measured on the built AppImage, those warnings drop from ~8 to 1. Since
+        // the app already forces software rendering (WEBKIT_DISABLE_COMPOSITING_MODE), this
+        // gives up no acceleration that was ever actually in use. Guarded, so a user whose
+        // GL works — or who wants to try the accelerated path — keeps control.
+        if std::env::var_os("LIBGL_ALWAYS_SOFTWARE").is_none() {
+            std::env::set_var("LIBGL_ALWAYS_SOFTWARE", "1");
         }
         // The bundled GTK ignores the system theme, and the prefer-dark hint is a no-op
         // on themes (e.g. KDE Breeze) whose dark form is a *separate* theme — so native
@@ -479,6 +539,14 @@ pub fn run() {
         {
             let bundled = std::env::var_os("LD_LIBRARY_PATH").and_then(|ld| {
                 std::env::split_paths(&ld)
+                    // `gstreamer-1.0-x64` is where tauri.appimage-mediaframework.conf.json
+                    // puts the HOST-arch plugin set. The stock `bundleMediaFramework` path is
+                    // unusable on a multilib build host: linuxdeploy-plugin-gstreamer pulls
+                    // the i686 set, so the bundle's 253 plugins are ELFCLASS32 while the
+                    // bundled libgstreamer and the only available scanner are 64-bit — every
+                    // plugin is rejected with "wrong ELF class" and no element (appsink!)
+                    // ever registers. The ELF-check still matters: it rejects a 32-bit dir
+                    // if one is ever mapped in alongside.
                     .map(|d| d.join("gstreamer-1.0"))
                     // libgstcoreelements is in every GStreamer; ELF-check picks the host
                     // arch (multilib LD_LIBRARY_PATH lists the 32-bit dir first).
@@ -486,9 +554,15 @@ pub fn run() {
             });
             if let Some(gst) = bundled {
                 std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", &gst);
-                // bundleMediaFramework also bundles gst-plugin-scanner and points
-                // GST_PLUGIN_SCANNER at it — leave that alone (a host scanner would be the
-                // wrong version for the bundled plugins).
+                // The bundle's plugin set is the WRONG ARCHITECTURE on a multilib build host:
+                // linuxdeploy-plugin-gstreamer pulls the i686 set, so its 253 plugins are
+                // ELFCLASS32 while the bundled libgstreamer and the only available scanner are
+                // 64-bit. Every plugin is rejected with "wrong ELF class", so no element ever
+                // registers (appsink included) and each plugin still costs a scanner spawn.
+                // Verified on the extracted bundle; fixing it needs 64-bit plugins bundled,
+                // which tauri.appimage-mediaframework.conf.json cannot express (its `files`
+                // map takes no globs). See repoint_gst_plugin_scanner.
+                repoint_gst_plugin_scanner();
             } else {
                 let mut dirs: Vec<&str> = vec![
                     "/usr/lib64/gstreamer-1.0",                // Fedora/RHEL/SUSE x86_64
@@ -511,21 +585,7 @@ pub fn run() {
                 if !paths.is_empty() {
                     std::env::set_var("GST_PLUGIN_SYSTEM_PATH_1_0", paths.join(":"));
                 }
-                let scanner_ok = std::env::var_os("GST_PLUGIN_SCANNER")
-                    .map(|s| std::path::Path::new(&s).exists())
-                    .unwrap_or(false);
-                if !scanner_ok {
-                    for scanner in [
-                        "/usr/libexec/gstreamer-1.0/gst-plugin-scanner",
-                        "/usr/lib/x86_64-linux-gnu/gstreamer1.0/gstreamer-1.0/gst-plugin-scanner",
-                        "/usr/lib/gstreamer-1.0/gst-plugin-scanner",
-                    ] {
-                        if std::path::Path::new(scanner).exists() {
-                            std::env::set_var("GST_PLUGIN_SCANNER", scanner);
-                            break;
-                        }
-                    }
-                }
+                repoint_gst_plugin_scanner();
             }
         }
         // glib's TLS backend — glib-networking's `libgiognutls.so` GIO module — is what
@@ -907,6 +967,79 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::ffi_guard;
+
+    /// The first sidebar/Settings open froze the app for ~2.5s because the AppImage's
+    /// linuxdeploy hook points the scanner GStreamer actually honours at a path the bundle
+    /// does not contain, so GStreamer forked a missing helper once per plugin. The whole
+    /// fix is "never leave that name pointing at a file that isn't there", which is what
+    /// this asserts — and it must hold on a machine with no GStreamer installed at all, so
+    /// the assertion is conditioned on whether a scanner was findable rather than assuming
+    /// one is.
+    #[test]
+    fn the_honoured_scanner_name_is_never_left_pointing_at_a_missing_file() {
+        let _guard = crate::test_support::lock();
+        const K1: &str = concat!("GST_PLUGIN_SCANNER", "_1_0");
+        const K2: &str = "GST_PLUGIN_SCANNER";
+        let saved = (std::env::var_os(K1), std::env::var_os(K2));
+        let any_scanner = super::GST_SCANNER_CANDIDATES
+            .iter()
+            .any(|p| std::path::Path::new(p).exists());
+
+        std::env::set_var(K1, "/nonexistent/aegis-gst/no-such-scanner");
+        super::repoint_gst_plugin_scanner();
+        let after = std::env::var(K1).unwrap_or_default();
+        let now_exists = std::path::Path::new(&after).exists();
+
+        match saved {
+            (Some(a), Some(b)) => {
+                std::env::set_var(K1, a);
+                std::env::set_var(K2, b);
+            }
+            (Some(a), None) => {
+                std::env::set_var(K1, a);
+                std::env::remove_var(K2);
+            }
+            (None, Some(b)) => {
+                std::env::remove_var(K1);
+                std::env::set_var(K2, b);
+            }
+            (None, None) => {
+                std::env::remove_var(K1);
+                std::env::remove_var(K2);
+            }
+        }
+
+        // A scanner on this machine => the phantom MUST have been replaced. No scanner
+        // anywhere => there is nothing better to point at, so leaving it is correct.
+        assert_eq!(
+            now_exists, any_scanner,
+            "with a scanner present={any_scanner}, {K1} ended as {after:?} \
+             (exists={now_exists}); it must be repointed at a real file"
+        );
+    }
+
+    /// A scanner path that already resolves must be left completely alone — the repair is
+    /// for phantom paths only, and must not churn a working configuration.
+    #[test]
+    fn a_valid_scanner_path_is_left_untouched() {
+        let _guard = crate::test_support::lock();
+        const K1: &str = concat!("GST_PLUGIN_SCANNER", "_1_0");
+        let saved = std::env::var_os(K1);
+        // The test binary is a real, existing file, which is all this check needs.
+        let real = std::env::current_exe().expect("test binary path");
+        std::env::set_var(K1, &real);
+        super::repoint_gst_plugin_scanner();
+        let after = std::env::var(K1).unwrap_or_default();
+        match saved {
+            Some(v) => std::env::set_var(K1, v),
+            None => std::env::remove_var(K1),
+        }
+        assert_eq!(
+            after,
+            real.to_string_lossy().into_owned(),
+            "an existing scanner path must not be rewritten"
+        );
+    }
 
     /// The needle for a module-level allow attribute, assembled at two halves on purpose.
     /// Written as one literal it would sit in this file's own source, and this file is one

@@ -21,6 +21,19 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Opening Settings or the sidebar froze the AppImage for ~2.5 seconds on first open, on every
+  launch.** Three stacked packaging faults in the bundle, not app logic: the linuxdeploy hook
+  pointed GStreamer at a plugin-scanner binary that was never bundled, so GStreamer forked a
+  missing helper once per plugin (~300 failed execs) and blocked the renderer's main thread;
+  the hook also disabled scanner reuse, so the scan never produced a cached registry and the
+  cost repeated every launch; and linuxdeploy had pulled the **i686** plugin set on a multilib
+  build host, so all 253 plugins were rejected by the 64-bit `libgstreamer` with "wrong ELF
+  class". The scanner path is now repaired at startup, and the bundle carries the host's
+  64-bit plugin set plus a matching scanner, so GStreamer scans once and caches. Measured on
+  the built AppImage: first open 2449ms → 72ms, GStreamer warnings 758 → 0, and
+  `appsink` now resolves — **HTML5 video/audio, which never worked in the AppImage, now can**.
+  Note the bundle fix is a post-build repack and is not yet automated; see `src-tauri/AGENTS.md`.
+
 - **The page flickered continuously while the window was being moved on Linux.** Dragging the
   window re-laid-out the whole page again and again — once per frame of the drag, so the
   content area flashed rather than moving. Tauri's window backend reports every window-position
