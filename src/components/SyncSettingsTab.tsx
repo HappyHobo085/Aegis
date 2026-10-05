@@ -92,9 +92,9 @@ function TransportSection({
 }) {
   const insecure = isInsecureRemoteUrl(url);
   return (
-    <div className="sync-tab__transport">
-      <h3>Transport security</h3>
-      <p className="sync-tab__status">This connection is {transportLabel(url)}.</p>
+    <section className="settings-section" aria-label="Transport security">
+      <h3 className="settings-section__title">Transport security</h3>
+      <p className="settings-hint">This connection is {transportLabel(url)}.</p>
       {insecure && (
         <p className="sync-tab__error" role="alert">
           {allowInsecure
@@ -102,21 +102,23 @@ function TransportSection({
             : 'This server is unencrypted and not on this machine, so nothing has been sent to it. Tick the box below to allow it anyway.'}
         </p>
       )}
-      <label className="sync-tab__check">
+      <label className="settings-row">
         <input
           type="checkbox"
           checked={allowInsecure}
           onChange={(e) => onToggle(e.target.checked)}
         />
-        Allow an unencrypted HTTP sync server (insecure)
+        <span className="settings-row__label">
+          Allow an unencrypted HTTP sync server (insecure)
+        </span>
       </label>
-      <p className="sync-tab__hint">
+      <p className="settings-hint">
         Off by default. Your bookmarks, history and settings stay end-to-end encrypted either way
         &mdash; this only waives encryption of the connection to the server, so its address, timing
         and traffic volume are visible, and it can be blocked or replayed. This choice applies to
         this device only; it is never synced to your other devices.
       </p>
-    </div>
+    </section>
   );
 }
 
@@ -255,46 +257,50 @@ export function SyncSettingsTab({
 
   if (!state.enabled) {
     return (
-      <div className="sync-tab">
-        <h3>Sync server</h3>
-        <p>
-          End-to-end encrypted sync across your devices. The server only ever stores encrypted data
-          &mdash; it can&apos;t read your bookmarks, saved items, or allowlist.
-        </p>
-        <label className="sync-tab__field">
-          <span>Server URL</span>
-          <input
-            type="url"
-            value={serverUrl}
-            placeholder="https://your-sync-server.example"
-            aria-label="Sync server URL"
-            onChange={(e) => {
-              setServerUrl(e.target.value);
-              setTestStatus('');
-            }}
-            onBlur={() => void commitServerUrl()}
-          />
-        </label>
-        <button
-          type="button"
-          disabled={busy || serverUrl.trim().length === 0}
-          onClick={() =>
-            void run(async () => {
-              const url = await commitServerUrl();
-              const r = await sync.testConnection(url);
-              setTestStatus(
-                r.ok ? `Connected — ${r.latencyMs} ms` : `Failed: ${r.error ?? 'unreachable'}`,
-              );
-            })
-          }
-        >
-          Test connection
-        </button>
-        {testStatus && (
-          <p className="sync-tab__status" role="status">
-            {testStatus}
+      <div className="settings-panel sync-tab">
+        <section className="settings-section" aria-label="Sync server">
+          <h3 className="settings-section__title">Sync server</h3>
+          <p className="settings-hint">
+            End-to-end encrypted sync across your devices. The server only ever stores encrypted
+            data &mdash; it can&apos;t read your bookmarks, saved items, or allowlist.
           </p>
-        )}
+          <label className="settings-row">
+            <span className="settings-row__label">Server URL</span>
+            <input
+              type="url"
+              value={serverUrl}
+              placeholder="https://your-sync-server.example"
+              aria-label="Sync server URL"
+              onChange={(e) => {
+                setServerUrl(e.target.value);
+                setTestStatus('');
+              }}
+              onBlur={() => void commitServerUrl()}
+            />
+          </label>
+          <div className="settings-actions">
+            <button
+              type="button"
+              disabled={busy || serverUrl.trim().length === 0}
+              onClick={() =>
+                void run(async () => {
+                  const url = await commitServerUrl();
+                  const r = await sync.testConnection(url);
+                  setTestStatus(
+                    r.ok ? `Connected — ${r.latencyMs} ms` : `Failed: ${r.error ?? 'unreachable'}`,
+                  );
+                })
+              }
+            >
+              Test connection
+            </button>
+          </div>
+          {testStatus && (
+            <p className="settings-hint" role="status">
+              {testStatus}
+            </p>
+          )}
+        </section>
 
         <TransportSection
           url={serverUrl}
@@ -303,32 +309,41 @@ export function SyncSettingsTab({
         />
 
         {phrase ? (
-          <div className="sync-tab__phrase" role="alert">
-            <h3>Your recovery phrase</h3>
-            <p>
+          <section className="sync-tab__phrase" aria-label="Your recovery phrase">
+            <h3 className="settings-section__title">Your recovery phrase</h3>
+            <p className="settings-hint">
               Write these 24 words down and keep them safe. They are the ONLY way to recover your
               synced data &mdash; no one (including us) can reset them.
             </p>
             <code className="sync-tab__phrase-words">{phrase}</code>
-            <button
-              type="button"
-              onClick={() => void copyPhrase(phrase)}
-              aria-label="Copy recovery phrase"
-            >
-              Copy
-            </button>
-            <button type="button" onClick={() => setPhrase(null)}>
-              I&apos;ve saved it
-            </button>
-          </div>
+            <div className="settings-actions">
+              <button
+                type="button"
+                className="settings-btn settings-btn--primary"
+                onClick={() => void copyPhrase(phrase)}
+                aria-label="Copy recovery phrase"
+              >
+                Copy
+              </button>
+              <button
+                type="button"
+                className="settings-btn settings-btn--quiet"
+                onClick={() => setPhrase(null)}
+              >
+                I&apos;ve saved it
+              </button>
+            </div>
+          </section>
         ) : (
           <>
             {state.hasStoredRoot && (
-              <>
-                <h3>Unlock sync</h3>
-                <p>A sync vault is saved on this device. Enter its passphrase to resume syncing.</p>
-                <label className="sync-tab__field">
-                  <span>Sync passphrase</span>
+              <section className="settings-section" aria-label="Unlock sync">
+                <h3 className="settings-section__title">Unlock sync</h3>
+                <p className="settings-hint">
+                  A sync vault is saved on this device. Enter its passphrase to resume syncing.
+                </p>
+                <label className="settings-row">
+                  <span className="settings-row__label">Sync passphrase</span>
                   <input
                     type="password"
                     value={unlockPassphrase}
@@ -338,67 +353,86 @@ export function SyncSettingsTab({
                     onChange={(e) => setUnlockPassphrase(e.target.value)}
                   />
                 </label>
-                <button
-                  type="button"
-                  disabled={busy || unlockPassphrase.trim().length === 0}
-                  onClick={() =>
-                    void run(unlock, (e) =>
-                      e instanceof Error && e.message
-                        ? e.message
-                        : "Couldn't unlock sync — check the passphrase.",
-                    )
-                  }
-                >
-                  Unlock sync
-                </button>
-              </>
+                <div className="settings-actions">
+                  <button
+                    type="button"
+                    className="settings-btn settings-btn--primary"
+                    disabled={busy || unlockPassphrase.trim().length === 0}
+                    onClick={() =>
+                      void run(unlock, (e) =>
+                        e instanceof Error && e.message
+                          ? e.message
+                          : "Couldn't unlock sync — check the passphrase.",
+                      )
+                    }
+                  >
+                    Unlock sync
+                  </button>
+                </div>
+              </section>
             )}
 
-            <h3>Set up sync</h3>
-            <label className="sync-tab__field">
-              <span>Sync passphrase (optional)</span>
-              <input
-                type="password"
-                value={setupPassphrase}
-                placeholder="Protect keys if the device keychain is unavailable"
-                aria-label="Sync passphrase optional"
-                autoComplete="new-password"
-                onChange={(e) => setSetupPassphrase(e.target.value)}
-              />
-            </label>
-            <p className="sync-tab__status">
-              Recommended if your device keychain is unavailable; otherwise sync keys may only last
-              until the app closes.
-            </p>
-            <button type="button" disabled={busy} onClick={() => void run(enableNew)}>
-              Start new sync
-            </button>
+            <section className="settings-section" aria-label="Set up sync">
+              <h3 className="settings-section__title">Set up sync</h3>
+              <label className="settings-row">
+                <span className="settings-row__label">Sync passphrase (optional)</span>
+                <input
+                  type="password"
+                  value={setupPassphrase}
+                  placeholder="Protect keys if the device keychain is unavailable"
+                  aria-label="Sync passphrase optional"
+                  autoComplete="new-password"
+                  onChange={(e) => setSetupPassphrase(e.target.value)}
+                />
+              </label>
+              <p className="settings-hint">
+                Recommended if your device keychain is unavailable; otherwise sync keys may only
+                last until the app closes.
+              </p>
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="settings-btn settings-btn--primary"
+                  disabled={busy}
+                  onClick={() => void run(enableNew)}
+                >
+                  Start new sync
+                </button>
+              </div>
+            </section>
 
-            <h3>Restore from a recovery phrase</h3>
-            <textarea
-              value={restore}
-              aria-label="Recovery phrase"
-              placeholder="Enter your 24-word recovery phrase"
-              onChange={(e) => setRestore(e.target.value)}
-            />
-            <label className="sync-tab__field">
-              <span>Sync passphrase (if used)</span>
-              <input
-                type="password"
-                value={restorePassphrase}
-                placeholder="Enter the passphrase for this sync vault"
-                aria-label="Sync passphrase for restore"
-                autoComplete="current-password"
-                onChange={(e) => setRestorePassphrase(e.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              disabled={busy || restore.trim().length === 0}
-              onClick={() => void run(enableFromPhrase)}
-            >
-              Restore
-            </button>
+            <section className="settings-section" aria-label="Restore from phrase controls">
+              <h3 className="settings-section__title">Restore from a recovery phrase</h3>
+              <label className="settings-row">
+                <textarea
+                  value={restore}
+                  aria-label="Recovery phrase"
+                  placeholder="Enter your 24-word recovery phrase"
+                  onChange={(e) => setRestore(e.target.value)}
+                />
+              </label>
+              <label className="settings-row">
+                <span className="settings-row__label">Sync passphrase (if used)</span>
+                <input
+                  type="password"
+                  value={restorePassphrase}
+                  placeholder="Enter the passphrase for this sync vault"
+                  aria-label="Sync passphrase for restore"
+                  autoComplete="current-password"
+                  onChange={(e) => setRestorePassphrase(e.target.value)}
+                />
+              </label>
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="settings-btn settings-btn--primary"
+                  disabled={busy || restore.trim().length === 0}
+                  onClick={() => void run(enableFromPhrase)}
+                >
+                  Restore
+                </button>
+              </div>
+            </section>
           </>
         )}
         {error && (
@@ -411,34 +445,43 @@ export function SyncSettingsTab({
   }
 
   return (
-    <div className="sync-tab">
-      <h3>Sync</h3>
-      <p>
-        Status: {statusLabel(state.status)}
-        {state.lastError ? ` — ${state.lastError}` : ''}
-      </p>
-      <p>Key storage: {vaultBackingLabel(state.vaultBacking)}</p>
-      {/*
-        A rejected vault write is the ONLY signal the user gets that a peer tried to write to
-        their vault and the core refused it: the record is quarantined rather than merged, and
-        the sync pass itself still SUCCEEDS, because a forged record is a security outcome and
-        not a sync failure. So it is reported here as its own alert rather than folded into
-        `state.lastError` — folding it in would make a successful pass look like a failed one.
-        `role="alert"` so a screen reader announces it; the count is pluralised so "1 record" is
-        not copy-pasted into "1 records".
-      */}
-      {sync.quarantined && (
-        <p className="sync-tab__error" role="alert">
-          {sync.quarantined.count === 1
-            ? 'A password record from another device failed its integrity check and was rejected. Nothing was changed.'
-            : `${sync.quarantined.count} password records from another device failed their integrity check and were rejected. Nothing was changed.`}{' '}
-          If you did not just add those records on another device, someone may have tried to change
-          your vault — your existing passwords are unaffected.
+    <div className="settings-panel sync-tab">
+      <section className="settings-section" aria-label="Sync status">
+        <h3 className="settings-section__title">Sync</h3>
+        <p className="settings-hint">
+          Status: {statusLabel(state.status)}
+          {state.lastError ? ` — ${state.lastError}` : ''}
         </p>
-      )}
-      <button type="button" disabled={busy} onClick={() => void run(() => sync.syncNow())}>
-        Sync now
-      </button>
+        <p className="settings-hint">Key storage: {vaultBackingLabel(state.vaultBacking)}</p>
+        {/*
+          A rejected vault write is the ONLY signal the user gets that a peer tried to write to
+          their vault and the core refused it: the record is quarantined rather than merged, and
+          the sync pass itself still SUCCEEDS, because a forged record is a security outcome and
+          not a sync failure. So it is reported here as its own alert rather than folded into
+          `state.lastError` — folding it in would make a successful pass look like a failed one.
+          `role="alert"` so a screen reader announces it; the count is pluralised so "1 record" is
+          not copy-pasted into "1 records".
+        */}
+        {sync.quarantined && (
+          <p className="sync-tab__error" role="alert">
+            {sync.quarantined.count === 1
+              ? 'A password record from another device failed its integrity check and was rejected. Nothing was changed.'
+              : `${sync.quarantined.count} password records from another device failed their integrity check and were rejected. Nothing was changed.`}{' '}
+            If you did not just add those records on another device, someone may have tried to
+            change your vault — your existing passwords are unaffected.
+          </p>
+        )}
+        <div className="settings-actions">
+          <button
+            type="button"
+            className="settings-btn settings-btn--primary"
+            disabled={busy}
+            onClick={() => void run(() => sync.syncNow())}
+          >
+            Sync now
+          </button>
+        </div>
+      </section>
 
       <TransportSection
         url={state.serverUrl}
@@ -446,134 +489,159 @@ export function SyncSettingsTab({
         onToggle={setAllowInsecure}
       />
 
-      <h3>Password vault</h3>
-      <p>
-        Off by default. When on, your password vault syncs too &mdash; still end&#8209;to&#8209;end
-        encrypted, and readable on your other devices only with the same master password. A device
-        holding just the recovery phrase can neither read these records nor write new ones.
-      </p>
-      <label className="sync-tab__check">
-        <input
-          type="checkbox"
-          checked={settings.syncVault === true}
-          onChange={(e) => {
-            const on = e.target.checked;
-            update({ syncVault: on });
-            if (on) toast.info('Unlocking the vault will join it to this account.');
-            refreshVaultState();
-          }}
-        />
-        Sync my password vault
-      </label>
-      {settings.syncVault === true && vaultState && !vaultState.syncEnabled && (
-        <p className="sync-tab__hint">
-          Not syncing yet. The vault joins this account the next time you unlock it &mdash; its
-          records are re-encrypted under a key every paired device can derive.
-          {vaultState.undecryptable > 0 &&
-            ` This vault has ${vaultState.undecryptable} undecryptable record(s), so joining is held back rather than dropping them.`}
+      <section className="settings-section" aria-label="Password vault sync">
+        <h3 className="settings-section__title">Password vault</h3>
+        <p className="settings-hint">
+          Off by default. When on, your password vault syncs too &mdash; still
+          end&#8209;to&#8209;end encrypted, and readable on your other devices only with the same
+          master password. A device holding just the recovery phrase can neither read these records
+          nor write new ones.
         </p>
-      )}
+        <label className="settings-row">
+          <input
+            type="checkbox"
+            checked={settings.syncVault === true}
+            onChange={(e) => {
+              const on = e.target.checked;
+              update({ syncVault: on });
+              if (on) toast.info('Unlocking the vault will join it to this account.');
+              refreshVaultState();
+            }}
+          />
+          <span className="settings-row__label">Sync my password vault</span>
+        </label>
+        {settings.syncVault === true && vaultState && !vaultState.syncEnabled && (
+          <p className="settings-hint">
+            Not syncing yet. The vault joins this account the next time you unlock it &mdash; its
+            records are re-encrypted under a key every paired device can derive.
+            {vaultState.undecryptable > 0 &&
+              ` This vault has ${vaultState.undecryptable} undecryptable record(s), so joining is held back rather than dropping them.`}
+          </p>
+        )}
+      </section>
 
-      <h3>Recovery phrase</h3>
-      {phrase ? (
-        <div className="sync-tab__phrase" role="alert">
-          <code className="sync-tab__phrase-words">{phrase}</code>
-          <button
-            type="button"
-            onClick={() => void copyPhrase(phrase)}
-            aria-label="Copy recovery phrase"
-          >
-            Copy
-          </button>
-          <button type="button" onClick={() => setPhrase(null)}>
-            Hide
-          </button>
-        </div>
-      ) : (
-        <button
-          type="button"
-          disabled={busy}
-          onClick={() =>
-            // The core refuses `sync.getRecoveryPhrase` unless `confirm: true`, and the hook
-            // no longer hardcodes that flag — so the user has to actually say yes. This is
-            // the highest-sensitivity value in the app; a single click that silently reveals
-            // 24 words is not a confirmation.
-            void (async () => {
-              if (
-                await confirm(
-                  'Show your recovery phrase? Anyone who sees it can restore — and read — every item synced to this account. Make sure nobody can see your screen.',
-                )
-              ) {
-                void run(async () => setPhrase(await syncRef.current.getRecoveryPhrase(true)));
-              }
-            })()
-          }
-        >
-          Show recovery phrase
-        </button>
-      )}
-
-      <h3>Devices</h3>
-      <p>
-        Restoring from your phrase adds a new device entry each time &mdash; remove any you no
-        longer use. Removing one is permanent: it is revoked on the server and cannot sync again,
-        even with your recovery phrase.
-      </p>
-      <ul className="sync-tab__devices">
-        {devices.map((d) => (
-          <li key={d.deviceId}>
-            <span>
-              {d.label}
-              {d.isThisDevice ? ' (this device)' : ''}
-            </span>
-            {!d.isThisDevice && (
+      <section className="settings-section" aria-label="Recovery phrase controls">
+        <h3 className="settings-section__title">Recovery phrase</h3>
+        {phrase ? (
+          <div className="sync-tab__phrase">
+            <code className="sync-tab__phrase-words">{phrase}</code>
+            <div className="settings-actions">
               <button
                 type="button"
-                disabled={busy}
-                onClick={() =>
-                  void (async () => {
-                    if (
-                      await confirm(
-                        `Remove “${d.label}” from your synced devices? This revokes it permanently — ` +
-                          `it cannot sync again, even with your recovery phrase.`,
-                        { destructive: true },
-                      )
-                    ) {
-                      void run(async () => setDevices(await sync.removeDevice(d.deviceId)));
-                    }
-                  })()
-                }
+                className="settings-btn settings-btn--primary"
+                onClick={() => void copyPhrase(phrase)}
+                aria-label="Copy recovery phrase"
               >
-                Remove
+                Copy
               </button>
-            )}
-          </li>
-        ))}
-      </ul>
+              <button
+                type="button"
+                className="settings-btn settings-btn--quiet"
+                onClick={() => setPhrase(null)}
+              >
+                Hide
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="settings-actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                // The core refuses `sync.getRecoveryPhrase` unless `confirm: true`, and the hook
+                // no longer hardcodes that flag — so the user has to actually say yes. This is
+                // the highest-sensitivity value in the app; a single click that silently reveals
+                // 24 words is not a confirmation.
+                void (async () => {
+                  if (
+                    await confirm(
+                      'Show your recovery phrase? Anyone who sees it can restore — and read — every item synced to this account. Make sure nobody can see your screen.',
+                    )
+                  ) {
+                    void run(async () => setPhrase(await syncRef.current.getRecoveryPhrase(true)));
+                  }
+                })()
+              }
+            >
+              Show recovery phrase
+            </button>
+          </div>
+        )}
+      </section>
 
-      <h3>Disable sync</h3>
-      <label className="sync-tab__field">
-        <input type="checkbox" checked={forget} onChange={(e) => setForget(e.target.checked)} />
-        <span>Also forget the encryption keys on this device</span>
-      </label>
-      <button
-        type="button"
-        disabled={busy}
-        onClick={() =>
-          void (async () => {
-            if (
-              await confirm(
-                'Disable sync and forget the encryption keys on this device? You will need your recovery phrase to re-enable.',
-                { destructive: true },
-              )
-            ) {
-              void run(() => sync.disable(forget));
+      <section className="settings-section" aria-label="Devices">
+        <h3 className="settings-section__title">Devices</h3>
+        <p className="settings-hint">
+          Restoring from your phrase adds a new device entry each time &mdash; remove any you no
+          longer use. Removing one is permanent: it is revoked on the server and cannot sync again,
+          even with your recovery phrase.
+        </p>
+        <ul className="settings-list sync-tab__devices">
+          {devices.map((d) => (
+            <li key={d.deviceId} className="settings-list__row">
+              <span className="settings-list__main">
+                {d.label}
+                {d.isThisDevice ? ' (this device)' : ''}
+              </span>
+              {!d.isThisDevice && (
+                <button
+                  type="button"
+                  className="settings-btn settings-btn--quiet"
+                  disabled={busy}
+                  onClick={() =>
+                    void (async () => {
+                      if (
+                        await confirm(
+                          `Remove “${d.label}” from your synced devices? This revokes it permanently — ` +
+                            `it cannot sync again, even with your recovery phrase.`,
+                          { destructive: true },
+                        )
+                      ) {
+                        void run(async () => setDevices(await sync.removeDevice(d.deviceId)));
+                      }
+                    })()
+                  }
+                >
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* Destructive, so it is visually separated from everything above it: "disable and
+          forget the keys" is not an action anyone should reach by muscle memory. */}
+      <section className="settings-section settings-section--danger" aria-label="Disable sync">
+        <h3 className="settings-section__title">Disable sync</h3>
+        <label className="settings-row">
+          <input type="checkbox" checked={forget} onChange={(e) => setForget(e.target.checked)} />
+          <span className="settings-row__label">
+            Also forget the encryption keys on this device
+          </span>
+        </label>
+        <div className="settings-actions">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() =>
+              void (async () => {
+                if (
+                  await confirm(
+                    'Disable sync and forget the encryption keys on this device? You will need your recovery phrase to re-enable.',
+                    { destructive: true },
+                  )
+                ) {
+                  void run(() => sync.disable(forget));
+                }
+              })()
             }
-          })()
-        }
-      >
-        Disable sync
-      </button>
+          >
+            Disable sync
+          </button>
+        </div>
+      </section>
       {error && (
         <p className="sync-tab__error" role="alert">
           {error}

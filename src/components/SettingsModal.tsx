@@ -5,19 +5,26 @@ import { X } from 'lucide-react';
 import { useDialog } from '../hooks/useDialog';
 import { useHorizontalWheel } from '../hooks/useHorizontalWheel';
 import { useChromeSurface } from '../hooks/useChromeSurfaces';
-import { PrivacyDashboard } from './PrivacyDashboard';
+
 import { FilterListsTab } from './FilterListsTab';
 import { VaultSettingsTab } from './VaultSettingsTab';
 import { MyFiltersTab } from './MyFiltersTab';
 import { SyncSettingsTab } from './SyncSettingsTab';
 import { ProxySettingsTab } from './ProxySettingsTab';
 import { SecurityTab } from './SecurityTab';
+import type { SecurityTabProps } from './SecurityTab';
+import { HttpsTab } from './HttpsTab';
+import { WebrtcTab } from './WebrtcTab';
+import { FingerprintTab } from './FingerprintTab';
 import type { FilterListsTabProps } from './FilterListsTab';
 import type { MyFiltersTabProps } from './MyFiltersTab';
 import type { ProxySettingsTabProps } from './ProxySettingsTab';
+import type { HttpsTabProps } from './HttpsTab';
+import type { WebrtcTabProps } from './WebrtcTab';
+import type { FingerprintTabProps } from './FingerprintTab';
 import type { UseVault } from '../hooks/useVault';
 import type { UseSync } from '../hooks/useSync';
-import type { FingerprintState, Settings, WebrtcExemptState } from '../../shared/types';
+import type { Settings } from '../../shared/types';
 import type { ProtectionSummary } from '../lib/protectionSummary';
 import type { AdblockState } from '../../shared/types';
 
@@ -40,13 +47,22 @@ export type SettingsTab =
   | 'allowlist'
   | 'downloads'
   | 'sitePermissions'
+  // `security` is the Security section's OVERVIEW. The id was deliberately kept (and only
+  // the label changed) so `openSettings('security')` — the padlock menu's "Privacy
+  // settings" in both shells — keeps landing on the protection summary with no call-site
+  // change. The three controls that used to share this tab now have their own ids.
   | 'security'
+  | 'https'
+  | 'webrtc'
+  | 'fingerprint'
   | 'proxy'
   | 'vault'
   | 'sync'
   | 'data';
 
-const TAB_LABELS: Record<SettingsTab, string> = {
+/** Exported so a test can derive the rail's accessible names from the declaration
+ *  instead of hand-listing them — see `SettingsModal.test.tsx`. */
+export const TAB_LABELS: Record<SettingsTab, string> = {
   appearance: 'Appearance',
   search: 'Search',
   home: 'Home',
@@ -56,14 +72,17 @@ const TAB_LABELS: Record<SettingsTab, string> = {
   allowlist: 'Allowlist',
   downloads: 'Downloads',
   sitePermissions: 'Site permissions',
-  security: 'Security',
+  security: 'Overview',
+  https: 'HTTPS',
+  webrtc: 'WebRTC',
+  fingerprint: 'Fingerprinting',
   proxy: 'Proxy',
   vault: 'Passwords',
   sync: 'Sync',
   data: 'Data',
 };
 
-const TAB_SUMMARIES: Record<SettingsTab, string> = {
+export const TAB_SUMMARIES: Record<SettingsTab, string> = {
   appearance: 'Theme, accent, and visual preferences',
   search: 'Default search behavior',
   home: 'Home page and start destination',
@@ -73,7 +92,10 @@ const TAB_SUMMARIES: Record<SettingsTab, string> = {
   allowlist: 'Sites exempt from ad blocking',
   downloads: 'File download behavior',
   sitePermissions: 'Camera, microphone, and site access',
-  security: 'Safety, WebRTC, and fingerprinting',
+  security: 'Your overall protection status',
+  https: 'Force a secure connection',
+  webrtc: 'Local IP leak protection',
+  fingerprint: 'Anti-fingerprinting noise',
   proxy: 'Network proxy routing',
   vault: 'Saved passwords and vault lock',
   sync: 'Encrypted sync across devices',
@@ -89,10 +111,13 @@ export interface SettingsGroup {
 
 export const TAB_GROUPS: SettingsGroup[] = [
   { title: 'Appearance', tabs: ['appearance', 'home', 'search', 'tabs'] },
-  { title: 'Privacy', tabs: ['security', 'sitePermissions', 'vault'] },
+  { title: 'Privacy', tabs: ['sitePermissions'] },
+  { title: 'Security', tabs: ['security', 'https', 'webrtc', 'fingerprint'] },
   { title: 'Blocking', tabs: ['filterLists', 'myFilters', 'allowlist'] },
   { title: 'Network', tabs: ['proxy', 'sync'] },
-  { title: 'Data', tabs: ['downloads', 'data'] },
+  // Passwords live here rather than under Privacy: a credential store is not a privacy
+  // control, and leaving it filed under a privacy heading mislabels what it holds.
+  { title: 'Data', tabs: ['downloads', 'data', 'vault'] },
 ];
 
 export const TAB_ORDER: SettingsTab[] = TAB_GROUPS.flatMap((g) => g.tabs);
@@ -106,33 +131,21 @@ const DATA_DRIVEN_TABS: ReadonlySet<SettingsTab> = new Set([
   'filterLists',
   'myFilters',
   'security',
+  'https',
+  'webrtc',
+  'fingerprint',
   'proxy',
   'vault',
   'sync',
 ]);
 
-/** Combined data props for the security panel (PrivacyDashboard + SecurityTab). */
-export interface SecurityPanelProps {
-  // PrivacyDashboard
-  protection: ProtectionSummary;
-  adblockState: AdblockState;
-  blockedHere: number;
-  onHarden(): void;
-  onOpenProxy(): void;
-  // SecurityTab
-  settings: Settings;
-  update: (patch: Partial<Settings>) => void;
-  listExceptions: () => Promise<string[]>;
-  removeException: (host: string) => void;
-  fingerprintState: FingerprintState;
-  toggleFingerprintAllowlist: (host: string) => void;
-  removeFingerprintAllowlist: (host: string) => void;
-  // The WebRTC exemption list — a SEPARATE, never-synced store from the ad-block
-  // allowlist, so it needs its own three props rather than a shared list.
-  webrtcExempt: WebrtcExemptState;
-  toggleWebrtcExempt: (host: string) => void;
-  removeWebrtcExempt: (host: string) => void;
-}
+/**
+ * Props for the Security section's Overview tab — the protection summary plus the
+ * always-on malicious-site note. This type used to be a 14-field bundle covering all
+ * four Security tabs; the split gave each tab its own props, so a panel now receives
+ * only the stores it actually reads.
+ */
+export type { HttpsTabProps, WebrtcTabProps, FingerprintTabProps };
 
 /** Data props for the sync panel. */
 export interface SyncPanelProps {
@@ -161,7 +174,10 @@ export interface SettingsModalProps {
   // Data-driven tabs — need these props, rendered only when selected
   filterLists: FilterListsTabProps;
   myFilters: MyFiltersTabProps;
-  security: SecurityPanelProps;
+  security: SecurityTabProps;
+  https: HttpsTabProps;
+  webrtc: WebrtcTabProps;
+  fingerprint: FingerprintTabProps;
   proxy: ProxySettingsTabProps;
   vault: UseVault;
   sync: SyncPanelProps;
@@ -182,6 +198,9 @@ export function SettingsModal({
   filterLists,
   myFilters,
   security,
+  https,
+  webrtc,
+  fingerprint,
   proxy,
   vault,
   sync,
@@ -266,6 +285,9 @@ export function SettingsModal({
   const downloadsTabId = useId();
   const sitePermissionsTabId = useId();
   const securityTabId = useId();
+  const httpsTabId = useId();
+  const webrtcTabId = useId();
+  const fingerprintTabId = useId();
   const proxyTabId = useId();
   const vaultTabId = useId();
   const syncTabId = useId();
@@ -283,6 +305,9 @@ export function SettingsModal({
     downloads: downloadsTabId,
     sitePermissions: sitePermissionsTabId,
     security: securityTabId,
+    https: httpsTabId,
+    webrtc: webrtcTabId,
+    fingerprint: fingerprintTabId,
     proxy: proxyTabId,
     vault: vaultTabId,
     sync: syncTabId,
@@ -319,29 +344,10 @@ export function SettingsModal({
       <>
         {tab === 'filterLists' && <FilterListsTab {...filterLists} />}
         {tab === 'myFilters' && <MyFiltersTab {...myFilters} />}
-        {tab === 'security' && (
-          <>
-            <PrivacyDashboard
-              protection={security.protection}
-              adblock={security.adblockState}
-              blockedHere={security.blockedHere}
-              onHarden={security.onHarden}
-              onOpenProxy={security.onOpenProxy}
-            />
-            <SecurityTab
-              settings={security.settings}
-              update={security.update}
-              listExceptions={security.listExceptions}
-              removeException={security.removeException}
-              fingerprintState={security.fingerprintState}
-              toggleFingerprintAllowlist={security.toggleFingerprintAllowlist}
-              removeFingerprintAllowlist={security.removeFingerprintAllowlist}
-              webrtcExempt={security.webrtcExempt}
-              toggleWebrtcExempt={security.toggleWebrtcExempt}
-              removeWebrtcExempt={security.removeWebrtcExempt}
-            />
-          </>
-        )}
+        {tab === 'security' && <SecurityTab {...security} />}
+        {tab === 'https' && <HttpsTab {...https} />}
+        {tab === 'webrtc' && <WebrtcTab {...webrtc} />}
+        {tab === 'fingerprint' && <FingerprintTab {...fingerprint} />}
         {tab === 'proxy' && <ProxySettingsTab {...proxy} />}
         {tab === 'vault' && <VaultSettingsTab vault={vault} />}
         {tab === 'sync' && <SyncSettingsTab {...sync} />}

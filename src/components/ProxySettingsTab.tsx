@@ -5,6 +5,15 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ProxyConfig, ProxyState } from '../../shared/types';
 
+/**
+ * The connection form's two fields that only make sense as a pair: a host with no
+ * port, or a port with no host, is not a proxy address. They share one row so the
+ * pair reads as one address.
+ */
+function ConnectionRow({ children }: { children: React.ReactNode }) {
+  return <div className="settings-row settings-row--split">{children}</div>;
+}
+
 export interface ProxySettingsTabProps {
   state: ProxyState;
   setConfig(cfg: ProxyConfig): Promise<ProxyState>;
@@ -121,148 +130,164 @@ export function ProxySettingsTab({
   }
 
   return (
-    <div className="proxy-tab">
-      <h3>Proxy</h3>
-
-      <label className="proxy-tab__field">
-        <span>Mode</span>
-        <select
-          aria-label="Proxy mode"
-          value={mode}
-          onChange={(e) => void handleModeChange(e.target.value as 'off' | 'proxy')}
-        >
-          <option value="off">Off — direct connection</option>
-          <option value="proxy">Use a proxy</option>
-        </select>
-      </label>
+    <div className="settings-panel proxy-tab">
+      <section className="settings-section" aria-label="Proxy mode">
+        <h3 className="settings-section__title">Proxy</h3>
+        <label className="settings-row">
+          <span className="settings-row__label">Mode</span>
+          <select
+            aria-label="Proxy mode"
+            value={mode}
+            onChange={(e) => void handleModeChange(e.target.value as 'off' | 'proxy')}
+          >
+            <option value="off">Off — direct connection</option>
+            <option value="proxy">Use a proxy</option>
+          </select>
+        </label>
+      </section>
 
       {mode === 'proxy' && (
         <>
-          <label className="proxy-tab__field">
-            <span>Protocol</span>
-            <select
-              aria-label="Proxy scheme"
-              value={scheme}
-              onChange={(e) => setScheme(e.target.value as 'http' | 'socks5')}
-            >
-              <option value="http">HTTP</option>
-              <option value="socks5">SOCKS5</option>
-            </select>
-          </label>
+          <section className="settings-section" aria-label="Proxy connection">
+            <h3 className="settings-section__title">Connection</h3>
+            <label className="settings-row">
+              <span className="settings-row__label">Protocol</span>
+              <select
+                aria-label="Proxy scheme"
+                value={scheme}
+                onChange={(e) => setScheme(e.target.value as 'http' | 'socks5')}
+              >
+                <option value="http">HTTP</option>
+                <option value="socks5">SOCKS5</option>
+              </select>
+            </label>
 
-          <label className="proxy-tab__field">
-            <span>Host</span>
-            <input
-              type="text"
-              aria-label="Proxy host"
-              value={host}
-              placeholder="e.g. 127.0.0.1"
-              onChange={(e) => setHost(e.target.value)}
-            />
-          </label>
+            <ConnectionRow>
+              <label className="settings-row">
+                <span className="settings-row__label">Host</span>
+                <input
+                  type="text"
+                  aria-label="Proxy host"
+                  value={host}
+                  placeholder="e.g. 127.0.0.1"
+                  onChange={(e) => setHost(e.target.value)}
+                />
+              </label>
+              <label className="settings-row settings-row--port">
+                <span className="settings-row__label">Port</span>
+                <input
+                  type="number"
+                  aria-label="Proxy port"
+                  value={port}
+                  min={1}
+                  max={65535}
+                  onChange={(e) => setPort(Number(e.target.value))}
+                />
+              </label>
+            </ConnectionRow>
 
-          <label className="proxy-tab__field">
-            <span>Port</span>
-            <input
-              type="number"
-              aria-label="Proxy port"
-              value={port}
-              min={1}
-              max={65535}
-              onChange={(e) => setPort(Number(e.target.value))}
-            />
-          </label>
-
-          <label className="proxy-tab__field">
-            <span>Bypass hosts</span>
-            <input
-              type="text"
-              aria-label="Proxy bypass hosts"
-              value={bypassRaw}
-              placeholder="e.g. localhost, 192.168.0.0/24"
-              onChange={(e) => setBypassRaw(e.target.value)}
-            />
-            <small>Comma-separated hostnames or CIDRs that bypass the proxy.</small>
-          </label>
-
-          <div className="proxy-tab__actions">
-            <button
-              type="button"
-              aria-label="Apply proxy settings"
-              onClick={() => void handleApply()}
-            >
-              Apply
-            </button>
-            <button
-              type="button"
-              aria-label="Turn off proxy"
-              onClick={() => void handleModeChange('off')}
-            >
-              Turn off
-            </button>
-            <button
-              type="button"
-              aria-label="Test proxy connection"
-              disabled={busy || host.trim().length === 0}
-              onClick={() => void handleTest()}
-            >
-              Test connection
-            </button>
-          </div>
-
-          {dirty && (
-            <p className="proxy-tab__dirty" role="status">
-              Unsaved changes — Apply to use.
-            </p>
-          )}
-
-          {testStatus && (
-            <p className="proxy-tab__status" role="status">
-              {testStatus}
-            </p>
-          )}
-
-          <div className="proxy-tab__status-row">
-            <small>
-              {state.active
-                ? // The chrome can't reliably tell desktop OSes apart because the browser UA is
-                  // intentionally normalized. Give a conservative platform-parity hint.
-                  typeof window !== 'undefined' && 'AegisAndroid' in window
-                  ? 'Applies to all tabs (and the app).'
-                  : 'Active. Linux applies live; Windows needs a tab reload; macOS saves this for future proxy support.'
-                : 'Not active yet — click Apply.'}
-            </small>
-            {state.active && onReloadActiveTab && (
+            <div className="settings-actions settings-actions--split">
               <button
                 type="button"
-                className="proxy-tab__reload"
-                onClick={() => onReloadActiveTab()}
+                className="settings-btn settings-btn--primary"
+                aria-label="Apply proxy settings"
+                onClick={() => void handleApply()}
               >
-                Reload active tab
+                Apply
               </button>
+              <div className="settings-actions">
+                <button
+                  type="button"
+                  className="settings-btn settings-btn--quiet"
+                  aria-label="Turn off proxy"
+                  onClick={() => void handleModeChange('off')}
+                >
+                  Turn off
+                </button>
+                <button
+                  type="button"
+                  className="settings-btn"
+                  aria-label="Test proxy connection"
+                  disabled={busy || host.trim().length === 0}
+                  onClick={() => void handleTest()}
+                >
+                  Test connection
+                </button>
+              </div>
+            </div>
+
+            {dirty && (
+              <p className="settings-hint" role="status">
+                Unsaved changes — Apply to use.
+              </p>
             )}
-          </div>
+            {testStatus && (
+              <p className="settings-hint" role="status">
+                {testStatus}
+              </p>
+            )}
+
+            <div className="settings-row settings-row--inline settings-row--between">
+              <span className="settings-hint">
+                {state.active
+                  ? // The chrome can't reliably tell desktop OSes apart because the browser UA is
+                    // intentionally normalized. Give a conservative platform-parity hint.
+                    typeof window !== 'undefined' && 'AegisAndroid' in window
+                    ? 'Applies to all tabs (and the app).'
+                    : 'Active. Linux applies live; Windows needs a tab reload; macOS saves this for future proxy support.'
+                  : 'Not active yet — click Apply.'}
+              </span>
+              {state.active && onReloadActiveTab && (
+                <button
+                  type="button"
+                  className="settings-btn settings-btn--quiet"
+                  onClick={() => onReloadActiveTab()}
+                >
+                  Reload active tab
+                </button>
+              )}
+            </div>
+          </section>
+
+          <section className="settings-section" aria-label="Bypass hosts">
+            <h3 className="settings-section__title">Bypass hosts</h3>
+            <label className="settings-row">
+              <input
+                type="text"
+                aria-label="Proxy bypass hosts"
+                value={bypassRaw}
+                placeholder="e.g. localhost, 192.168.0.0/24"
+                onChange={(e) => setBypassRaw(e.target.value)}
+              />
+              <span className="settings-hint">
+                Comma-separated hostnames or CIDRs that bypass the proxy.
+              </span>
+            </label>
+          </section>
         </>
       )}
 
-      {/* ── Honest limits copy (Global Constraint 1) ── */}
-      <div className="proxy-tab__notice" role="note" aria-label="Proxy honest limits notice">
-        <p>
+      {/* ── Honest limits copy ──
+          `ProxySettingsTab.test.tsx` asserts the FIRST `h3` in the container is the Proxy
+          heading, so the mode section's title stays the first heading in the panel. */}
+      <section className="settings-section" role="note" aria-label="Proxy honest limits notice">
+        <h3 className="settings-section__title">What this does not cover</h3>
+        <p className="settings-hint">
           <strong>Proxy, not VPN.</strong> This proxy routes browsed pages only — not other apps,
           the OS, or Aegis&apos;s own updates and filter-list fetches. It does not stop WebRTC, DNS,
           or QUIC leaks — to hide your local IP, set WebRTC IP protection to &ldquo;Public
-          only&rdquo; in the Security tab. <strong>This is not a VPN.</strong>
+          only&rdquo; in the WebRTC tab. <strong>This is not a VPN.</strong>
         </p>
-        <p>
+        <p className="settings-hint">
           <strong>macOS:</strong> No proxy support yet — the macOS content-webview back-end does not
           expose a proxy API in this version. Settings saved here will apply when macOS support
           lands.
         </p>
-        <p>
+        <p className="settings-hint">
           <strong>Windows:</strong> Existing tabs must be reloaded after changing the proxy. Newly
           opened tabs use the latest applied setting.
         </p>
-      </div>
+      </section>
     </div>
   );
 }

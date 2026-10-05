@@ -3,7 +3,13 @@ import { describe, it, expect, vi } from 'vitest';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { Settings } from '../../shared/types';
-import { SettingsModal } from './SettingsModal';
+import {
+  SettingsModal,
+  TAB_GROUPS,
+  TAB_LABELS,
+  TAB_ORDER,
+  type SettingsTab,
+} from './SettingsModal';
 
 // Mock the heavy lazy-loaded tab components so tests don't trigger code-split chunks.
 // `SettingsModal` imports each tab as a NAMED export (it stopped `lazy()`-importing
@@ -45,8 +51,23 @@ vi.mock('./ProxySettingsTab', () => ({
 // them), so the mock has to provide that binding. `default` is kept because the
 // dynamic-import shape is the one these mocks were originally written for.
 vi.mock('./SecurityTab', () => ({
-  SecurityTab: () => <div data-testid="panel-security">SECURITY</div>,
-  default: () => <div data-testid="panel-security">SECURITY</div>,
+  SecurityTab: () => <div data-testid="panel-security">SECURITY OVERVIEW</div>,
+  default: () => <div data-testid="panel-security">SECURITY OVERVIEW</div>,
+}));
+// The three tabs the Security tab was split into. Each gets its own mock so a test can
+// assert that selecting one renders THAT panel and not the others — which is the whole
+// observable of the split.
+vi.mock('./HttpsTab', () => ({
+  HttpsTab: () => <div data-testid="panel-https">HTTPS</div>,
+  default: () => <div data-testid="panel-https">HTTPS</div>,
+}));
+vi.mock('./WebrtcTab', () => ({
+  WebrtcTab: () => <div data-testid="panel-webrtc">WEBRTC</div>,
+  default: () => <div data-testid="panel-webrtc">WEBRTC</div>,
+}));
+vi.mock('./FingerprintTab', () => ({
+  FingerprintTab: () => <div data-testid="panel-fingerprint">FINGERPRINTING</div>,
+  default: () => <div data-testid="panel-fingerprint">FINGERPRINTING</div>,
 }));
 
 const lightPanels = () => ({
@@ -78,10 +99,25 @@ const heavyData = {
     blockedHere: 0,
     onHarden: vi.fn(),
     onOpenProxy: vi.fn(),
+  } as never,
+  // The three split tabs carry their own props bundles. Before the split all of these
+  // rode inside `security`; now each panel receives only the stores it reads.
+  https: {
     settings: {} as never,
     update: vi.fn(),
     listExceptions: vi.fn(),
     removeException: vi.fn(),
+  } as never,
+  webrtc: {
+    settings: {} as never,
+    update: vi.fn(),
+    webrtcExempt: { exemptHosts: [] as string[] },
+    toggleWebrtcExempt: vi.fn(),
+    removeWebrtcExempt: vi.fn(),
+  } as never,
+  fingerprint: {
+    settings: {} as never,
+    update: vi.fn(),
     fingerprintState: { level: 'off' as const, allowlistedHosts: [] as string[] },
     toggleFingerprintAllowlist: vi.fn(),
     removeFingerprintAllowlist: vi.fn(),
@@ -160,27 +196,76 @@ describe('SettingsModal', () => {
     expect(dialog).toHaveAccessibleName(/settings/i);
   });
 
-  it('renders a tablist with all thirteen tabs', () => {
+  // DERIVED from `TAB_GROUPS`, not hand-listed. The hand-written version of this test
+  // enumerated thirteen names while the rail carried fourteen — it had silently dropped
+  // `proxy` — and `src/AGENTS.md` then documented it as the test that "walks every tab".
+  // A list that has to be updated by hand is a list that goes stale; deriving it means a
+  // new tab (or a dropped one) shows up as a failure here instead of silence.
+  it('renders a tab for every tab in every group, and nothing else', () => {
     render(<SettingsModal {...props()} />);
     const tablist = screen.getByRole('tablist', { name: /settings sections/i });
     expect(tablist).toBeInTheDocument();
-    for (const name of [
-      /appearance/i,
-      /search/i,
-      /^home$/i,
-      /^tabs$/i,
-      /filter lists/i,
-      /my filters/i,
-      /allowlist/i,
-      /^downloads$/i,
-      /site permissions/i,
-      /^security$/i,
-      /^passwords$/i,
-      /^sync$/i,
-      /^data$/i,
-    ]) {
-      expect(screen.getByRole('tab', { name })).toBeInTheDocument();
+    const declared = TAB_ORDER.map((t) => TAB_LABELS[t]);
+    const rendered = screen.getAllByRole('tab').map((t) => t.getAttribute('aria-label'));
+    // Equal as SETS and as LENGTHS: no undeclared tab in the rail, and no declared tab
+    // missing from it. Either half alone would pass on a duplicated name.
+    expect([...rendered].sort()).toEqual([...declared].sort());
+  });
+
+  // The comparison above CANNOT catch a tab dropped from `TAB_GROUPS` — both sides are
+  // derived from it, so removing a tab removes it from both and they stay equal. Proved
+  // by mutation: deleting `'vault'` from the Data group left that assertion green.
+  //
+  // `TAB_LABELS` is `Record<SettingsTab, string>`, so its KEYS are the whole `SettingsTab`
+  // union — a second, INDEPENDENT declaration. Every one of those keys must appear in
+  // `TAB_ORDER`, which is what "no tab was dropped from the rail" actually means. It
+  // still cannot catch a tab missing from BOTH declarations — but that is a compile
+  // error, because `TAB_LABELS`' value type names the union member.
+  it('no tab declared in TAB_LABELS is missing from the rail', () => {
+    const inRail = new Set(TAB_ORDER);
+    const missing = Object.keys(TAB_LABELS).filter((t) => !inRail.has(t as SettingsTab));
+    expect(missing).toEqual([]);
+  });
+
+  // The Security split: each of the three former sub-controls is its own tab, and the
+  // Overview keeps the id `security` so `openSettings('security')` still resolves.
+  it('splits the Security tab into Overview, HTTPS, WebRTC and Fingerprinting', async () => {
+    render(<SettingsModal {...props()} />);
+    expect(screen.getByRole('tab', { name: /^overview$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^https$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^webrtc$/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /^fingerprinting$/i })).toBeInTheDocument();
+    // No tab may still be called plain "Security" — that was the pre-split name.
+    expect(screen.queryByRole('tab', { name: /^security$/i })).toBeNull();
+
+    // Each selects its OWN panel, and only its own.
+    for (const [tabName, testId] of [
+      [/^overview$/i, 'panel-security'],
+      [/^https$/i, 'panel-https'],
+      [/^webrtc$/i, 'panel-webrtc'],
+      [/^fingerprinting$/i, 'panel-fingerprint'],
+    ] as const) {
+      await userEvent.click(screen.getByRole('tab', { name: tabName }));
+      await waitFor(() => {
+        expect(screen.getByTestId(testId)).toBeInTheDocument();
+      });
+      expect(screen.getAllByTestId(/^panel-/).map((n) => n.getAttribute('data-testid'))).toEqual([
+        testId,
+      ]);
     }
+  });
+
+  it('groups the Security tabs under one Security section', () => {
+    render(<SettingsModal {...props()} />);
+    const groups = Array.from(document.querySelectorAll('.settings-modal__tab-group-label')).map(
+      (n) => n.textContent,
+    );
+    expect(groups).toEqual(TAB_GROUPS.map((g) => g.title));
+    // The four Security tabs are consecutive in the flat order, i.e. same group.
+    const at = (t: string) => TAB_ORDER.indexOf(t as never);
+    expect(at('https') - at('security')).toBe(1);
+    expect(at('webrtc') - at('https')).toBe(1);
+    expect(at('fingerprint') - at('webrtc')).toBe(1);
   });
 
   it('renders settings search as its own row outside the tablist', () => {
@@ -243,6 +328,10 @@ describe('SettingsModal', () => {
 describe('SettingsModal roving tabindex and search', () => {
   const tab = (name: RegExp): HTMLElement => screen.getByRole('tab', { name });
   const searchBox = (): HTMLElement => screen.getByPlaceholderText(/search settings/i);
+  /** A matcher for whatever `TAB_ORDER` says the last tab is, so the wrap assertions
+   *  below cannot drift out of date when the rail is regrouped. */
+  const lastLabel = (): RegExp =>
+    new RegExp(`^${TAB_LABELS[TAB_ORDER[TAB_ORDER.length - 1]]}$`, 'i');
 
   it('moves the selection and the focus with the arrow keys, wrapping at both ends', () => {
     render(<SettingsModal {...props()} />);
@@ -267,8 +356,9 @@ describe('SettingsModal roving tabindex and search', () => {
     expect(appearance).toHaveAttribute('aria-selected', 'true');
     expect(screen.getAllByRole('tab')[0]).toBe(appearance); // precondition: it is the first
     fireEvent.keyDown(appearance, { key: 'ArrowUp' });
-    expect(tab(/^data$/i)).toHaveAttribute('aria-selected', 'true');
-    expect(tab(/^data$/i)).toHaveFocus();
+    const lastTab = tab(lastLabel());
+    expect(lastTab).toHaveAttribute('aria-selected', 'true');
+    expect(lastTab).toHaveFocus();
   });
 
   it('jumps to the ends with Home and End', () => {
@@ -276,11 +366,20 @@ describe('SettingsModal roving tabindex and search', () => {
     const appearance = tab(/^appearance$/i);
     appearance.focus();
     fireEvent.keyDown(appearance, { key: 'End' });
-    expect(tab(/^data$/i)).toHaveAttribute('aria-selected', 'true');
-    expect(tab(/^data$/i)).toHaveFocus();
-    fireEvent.keyDown(tab(/^data$/i), { key: 'Home' });
+    expect(tab(lastLabel())).toHaveAttribute('aria-selected', 'true');
+    expect(tab(lastLabel())).toHaveFocus();
+    fireEvent.keyDown(tab(lastLabel()), { key: 'Home' });
     expect(appearance).toHaveAttribute('aria-selected', 'true');
     expect(appearance).toHaveFocus();
+  });
+
+  // The rail's LAST tab is Passwords, not Data: `vault` moved into the Data group when
+  // Privacy stopped filing a credential store as a privacy control. These two tests used
+  // to hard-code `data`, which is exactly the kind of literal that goes stale on a
+  // reorder — they are now written against `TAB_ORDER`'s own tail.
+  it('ends the rail on Passwords', () => {
+    render(<SettingsModal {...props()} />);
+    expect(screen.getAllByRole('tab').at(-1)).toBe(tab(/^passwords$/i));
   });
 
   it('cancels the default action for every key it claims, so the page does not scroll too', () => {
@@ -334,5 +433,40 @@ describe('SettingsModal roving tabindex and search', () => {
     expect(
       screen.getByText(/try searching for privacy, downloads, proxy, sync, or tabs/i),
     ).toBeInTheDocument();
+  });
+
+  // The hint is copy the user reads, and it names sections by their OLD names — "privacy"
+  // no longer holds the protection controls, and there is no longer a tab called
+  // "Security". A hint that points at a tab that has been renamed is the same class of
+  // dead pointer as the Proxy tab's "in the Security tab".
+  it('names topics that exist in the current rail', async () => {
+    render(<SettingsModal {...props()} />);
+    await userEvent.type(searchBox(), 'zzzz');
+    const hint = screen.getByText(/try searching for/i).textContent ?? '';
+    // "Try searching for privacy, downloads, proxy, sync, or tabs." — the topics after
+    // "for" are how a user with no result is told where to look. Each must be findable:
+    // the settings search matches a tab by its LABEL, so a topic naming a tab that has
+    // been renamed is a dead pointer. It is the same defect as the Proxy tab's old
+    // "in the Security tab" copy, in the one place every stalled search is guaranteed to
+    // read. Derived from `TAB_LABELS`, so renaming a tab reds this instead of rotting.
+    const topics = hint
+      .replace(/^.*\bfor\b\s*/i, '')
+      .split(/,|\bor\b/i)
+      .map((t) => t.trim().replace(/[.?]$/, '').toLowerCase())
+      .filter(Boolean);
+    expect(topics.length).toBeGreaterThanOrEqual(4);
+    const labels = TAB_ORDER.map((t) => TAB_LABELS[t].toLowerCase());
+    const groupTitles = TAB_GROUPS.map((g) => g.title.toLowerCase());
+    for (const topic of topics) {
+      // Reachable means: a group title OR a tab label. NOT the summary — the filter
+      // substring-matches the title and the label only, so a hint naming a topic that
+      // appears only in a summary would send the user nowhere.
+      const asGroup = groupTitles.some((g) => g.startsWith(topic) || topic.startsWith(g));
+      const asLabel = labels.some((l) => l.startsWith(topic) || topic.startsWith(l));
+      expect(
+        asGroup || asLabel,
+        `the no-results hint names "${topic}", which is neither a section title nor a tab label`,
+      ).toBe(true);
+    }
   });
 });

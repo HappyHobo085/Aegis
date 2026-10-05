@@ -135,7 +135,7 @@ as:
 - **554 statements of real, measurable test debt** spread across 62 of the 120 files (the
   `scripts/` files above are counted separately), concentrated in a handful: `App.tsx` 121
   of 344, `mobile/MobileApp.tsx` 73, `ipcClient.ts` 29, `mobile/MobileMenuSheet.tsx` 25,
-  `PrivacyDashboard.tsx` 21, `mobile/MobileSheet.tsx` 19, `Toolbar.tsx` 18,
+  `SecurityDashboard.tsx` 21, `mobile/MobileSheet.tsx` 19, `Toolbar.tsx` 18,
   `commandPaletteData.ts` 1, `TabStrip.tsx` 13, `SettingsModal.tsx` 2, `Sidebar.tsx` 1.
   By directory: `src/` 554 (components 206, mobile 147, hooks 38, lib 42, top level 121),
   `shared/` **0**.
@@ -151,6 +151,19 @@ while the covered count _rose_ from 5507 to 5601. The ratchet guards the ratio, 
 is what CI can cheaply compare; the absolute counts in the table above are the honest
 companion number, and the two tables in this repo (`coverage-baseline.json` plus this one)
 are the reason to read both.
+
+**The baseline's measured FILE LIST is part of its meaning, so a rename is a lowering.**
+`2bc14e2` (the popover surface) added 11 renderer files and deleted `useChromePopover.tsx` /
+`useMeasuredHeight.tsx` without regenerating `coverage-baseline.json`, which still dated from
+`1de355c` — so the ratchet was **already red on `main`** before any later change, naming three
+files as "dropped out of the report" and failing statements (87.61 → 87.28) and branches
+(81.96 → 81.33). Regenerating is the prescribed fix (a baseline from a run that predates new
+files is simply wrong), but a lowering needs `COVERAGE_ALLOW_BASELINE_LOWER=1` plus the reason
+in the commit message. **When a lowering is mostly not yours, that reason must say whose it
+is:** of the 102 newly-uncovered statements, **65 came from the 11 popover files and 37 from
+the 4 files the settings work added**, so the settings change accounts for 36% of the debt it
+appeared to create. Itemise it with `Object.keys(pre.files)` vs `Object.keys(post.files)`
+rather than attributing the whole delta.
 
 **Branches (81.37%, 835 uncovered) is the weakest metric and where the next effort belongs.**
 The Rust side has its own measured numbers and its own structural ceiling — see the

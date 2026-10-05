@@ -537,3 +537,148 @@ describe('the sync server must start unattended, and must be able to report that
     expect(wait).toContain('has_addr');
   });
 });
+
+/**
+ * Every settings panel the modal renders must carry the SHARED `settings-panel` class.
+ *
+ * This exists because seven panels had no styling of their own: `.security-tab` and
+ * `.sync-tab` matched ZERO rules in `index.css`, `.proxy-tab` three and `.vault-tab`
+ * four — so their inputs and buttons fell through to the bare global `input {}` /
+ * `button {}` (no padding, no width) while the nine tabs enumerated in the input rules
+ * rendered correctly. Nothing in the suite could see that: jsdom does not load
+ * `index.css`, so every one of those panels was "correct" as far as any test was
+ * concerned. The gap was only visible by reading the stylesheet.
+ *
+ * The panel list is DERIVED from `SettingsModal`'s own local component imports, so a
+ * tab cannot join the modal unstyled without failing here.
+ *
+ * **Mutation recipe:** drop `settings-panel` from one panel's root className — the
+ * guard must go red and NAME that file.
+ */
+describe('every settings panel the modal renders is styled by the shared vocabulary', () => {
+  const modal = readFileSync(join(COMPONENTS, 'SettingsModal.tsx'), 'utf8');
+
+  /** The component files `SettingsModal` imports from its own directory, by name. */
+  function modalPanelFiles(): string[] {
+    const names = new Set<string>();
+    for (const m of modal.matchAll(/^import \{[^}]*\} from '\.\/([A-Za-z0-9_]+)';/gm)) {
+      // `SecurityDashboard` is rendered BY `SecurityTab`, not by the modal directly.
+      if (m[1] === 'SecurityDashboard') continue;
+      names.add(`${m[1]}.tsx`);
+    }
+    return [...names].filter((f) => existsSync(join(COMPONENTS, f))).sort();
+  }
+
+  const panels = modalPanelFiles();
+
+  it('derives a non-empty panel set from the modal itself', () => {
+    // Anti-vacuity: a scan that found nothing would make every assertion below pass.
+    expect(panels.length).toBeGreaterThanOrEqual(7);
+    expect(panels).toContain('SecurityTab.tsx');
+    expect(panels).toContain('VaultSettingsTab.tsx');
+  });
+
+  it('names every panel that is missing the shared root class', () => {
+    const unstyled = panels.filter((f) => {
+      const src = readFileSync(join(COMPONENTS, f), 'utf8');
+      return !/className="[^"]*\bsettings-panel\b/.test(src);
+    });
+    expect(unstyled).toEqual([]);
+  });
+
+  it('defines the shared vocabulary in the stylesheet the renderer actually loads', () => {
+    const css = readFileSync(INDEX_CSS, 'utf8');
+    // Each class a panel uses must have a rule, or the class name is decorative.
+    // `.settings-btn` is deliberately NOT in this list: it is only ever used as a
+    // MODIFIER (`.settings-btn settings-btn--primary` / `--quiet`) and is styled
+    // through `.settings-panel button`, which the next test checks directly. Requiring
+    // a bare `.settings-btn { }` rule would be requiring a rule nothing uses.
+    for (const cls of [
+      '.settings-panel',
+      '.settings-section',
+      '.settings-section__title',
+      '.settings-row',
+      '.settings-row__label',
+      '.settings-hint',
+      '.settings-list',
+      '.settings-list__row',
+      '.settings-list__main',
+      '.settings-actions',
+      '.settings-btn--primary',
+      '.settings-btn--quiet',
+      '.settings-section--danger',
+    ]) {
+      // Escape the leading dot only; the rest is literal class-name text. Built with
+      // `String.raw` so `\.` reaches the RegExp as an escaped dot rather than as a
+      // literal backslash followed by any character.
+      const selector = String.raw`\.${cls.slice(1)}[\s,{:]`;
+      expect(css, `no CSS rule selects ${cls}`).toMatch(new RegExp(selector, 'm'));
+    }
+  });
+
+  it('gives a settings-panel control real padding (the defect this guard exists for)', () => {
+    const css = readFileSync(INDEX_CSS, 'utf8');
+    // The global `button` rule sets a border and a radius but no padding, so an
+    // unstyled control was ~24px tall. Asserting only that a `padding:` DECLARATION
+    // exists is the weak form of this check — `padding: 0` satisfies it while being
+    // exactly the defect — so the declared value is parsed and required to be non-zero
+    // on BOTH axes, which is what "has real padding" means.
+    const rule = css.match(/\.settings-panel button \{([^}]*)\}/);
+    expect(rule, 'no `.settings-panel button` rule in index.css').toBeTruthy();
+    const padding = rule![1].match(/padding:\s*([^;]+);/);
+    expect(padding, '`.settings-panel button` declares no padding').toBeTruthy();
+    const parts = padding![1].trim().split(/\s+/);
+    expect(parts.length, 'padding must set both axes').toBeGreaterThanOrEqual(2);
+    for (const axis of parts) {
+      expect(Number.parseFloat(axis)).toBeGreaterThan(0);
+    }
+  });
+});
+
+/**
+ * The three centred, scrollable dialog cards share ONE width token.
+ *
+ * Settings, Downloads and Manage-bookmarks each carried their own `max-width` literal —
+ * 780px, 640px and 640px — so three cards that are on screen at the same time were three
+ * different widths, and only the settings one had a reason for its number (its panel
+ * needs ~520px once the 220px rail and 20px of padding are taken off). There was nothing
+ * to stop the other two drifting again, and nothing in any test could see it: jsdom does
+ * not load `index.css`.
+ *
+ * **Mutation recipe:** put a literal `max-width` back on `.downloads-modal`, or change
+ * `--modal-w` — the guard must go red and name the rule.
+ */
+describe('the dialog cards share one width token', () => {
+  const css = readFileSync(INDEX_CSS, 'utf8');
+  const CARDS = ['.settings-modal__content', '.downloads-modal', '.favorites-manager'];
+
+  it('every dialog card takes its width from --modal-w, not a literal', () => {
+    const literal: string[] = [];
+    for (const card of CARDS) {
+      const rule = css.match(new RegExp(String.raw`^${card.replace('.', '\\.')} \{([^}]*)\}`, 'm'));
+      expect(rule, `no \`${card} { … }\` rule in index.css`).toBeTruthy();
+      const body = rule![1];
+      if (!/max-width:\s*var\(--modal-w\)/.test(body)) {
+        literal.push(`${card} => ${body.match(/max-width:[^;]*/)?.[0] ?? 'no max-width'}`);
+      }
+    }
+    expect(literal).toEqual([]);
+  });
+
+  it('defines --modal-w exactly once, on :root so both themes inherit it', () => {
+    const definitions = css.match(/--modal-w\s*:/g) ?? [];
+    expect(definitions).toHaveLength(1);
+    // `[data-theme='light']` must NOT redefine it: the token is geometry, not a colour.
+    const light = css.match(/\[data-theme='light'\] \{([^}]*)\}/);
+    expect(light![1]).not.toContain('--modal-w');
+  });
+
+  it('no bare 640px/780px card width survives anywhere', () => {
+    // The specific numbers this replaced. A new card copying one of them is the exact
+    // regression being guarded, so the literals themselves are the assertion.
+    for (const card of CARDS) {
+      const rule = css.match(new RegExp(String.raw`^${card.replace('.', '\\.')} \{([^}]*)\}`, 'm'));
+      expect(rule![1]).not.toMatch(/max-width:\s*\d+px/);
+    }
+  });
+});

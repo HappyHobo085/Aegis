@@ -1,7 +1,7 @@
 import type { AdblockState } from '../../shared/types';
 import type { ProtectionSummary } from '../lib/protectionSummary';
 
-export interface PrivacyDashboardProps {
+export interface SecurityDashboardProps {
   protection: ProtectionSummary;
   adblock: AdblockState;
   blockedHere: number;
@@ -23,23 +23,23 @@ function statusOf(
   return 'Relaxed';
 }
 
-export function PrivacyDashboard({
+export function SecurityDashboard({
   protection,
   adblock,
   blockedHere,
   onHarden,
   onOpenProxy,
-}: PrivacyDashboardProps) {
+}: SecurityDashboardProps) {
   const status = statusOf(protection, adblock);
   return (
-    <section className="privacy-dashboard" aria-label="Privacy dashboard">
+    <section className="security-dashboard" aria-label="Security dashboard">
       <div
-        className={`privacy-dashboard__status privacy-dashboard__status--${status.toLowerCase()}`}
+        className={`security-dashboard__status security-dashboard__status--${status.toLowerCase()}`}
       >
         <span>Current protection</span>
         <strong>{status}</strong>
       </div>
-      <div className="privacy-dashboard__grid">
+      <div className="security-dashboard__grid">
         <div>
           <span>Ad blocking</span>
           <strong>{adblock.enabled ? `${blockedHere} blocked here` : 'Off'}</strong>
@@ -67,7 +67,7 @@ export function PrivacyDashboard({
           <strong>{protection.proxyActive ? 'Active' : 'Off'}</strong>
         </div>
       </div>
-      <div className="privacy-dashboard__actions">
+      <div className="security-dashboard__actions">
         <button type="button" onClick={onHarden}>
           Harden this session
         </button>

@@ -820,16 +820,26 @@ function DesktopApp() {
                 antiFingerprint: 'strict',
               }),
             onOpenProxy: () => openSettings('proxy'),
+          }}
+          https={{
             settings: settings.settings,
             update: settings.update,
             listExceptions: aegis.safety.listExceptions,
             removeException: (h: string) => void aegis.safety.removeException(h),
-            fingerprintState: fingerprint.state,
-            toggleFingerprintAllowlist: fingerprint.toggleAllowlist,
-            removeFingerprintAllowlist: fingerprint.removeAllowlist,
+          }}
+          webrtc={{
+            settings: settings.settings,
+            update: settings.update,
             webrtcExempt: webrtcExempt.state,
             toggleWebrtcExempt: webrtcExempt.toggleExempt,
             removeWebrtcExempt: webrtcExempt.removeExempt,
+          }}
+          fingerprint={{
+            settings: settings.settings,
+            update: settings.update,
+            fingerprintState: fingerprint.state,
+            toggleFingerprintAllowlist: fingerprint.toggleAllowlist,
+            removeFingerprintAllowlist: fingerprint.removeAllowlist,
           }}
           proxy={{
             state: proxy.state,

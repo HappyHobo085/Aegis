@@ -35,9 +35,13 @@ vi.mock('./ipcClient', () => ({
   },
 }));
 
-// Mock SettingsModal to control TAB_ORDER
+// Mock SettingsModal to control TAB_ORDER.
+// Every id in the mock MUST exist as a key in `commandPaletteData`'s three
+// `Record<SettingsTab, …>` tables. It does not have to be every tab — but a tab that is
+// in one and not the other would fail the type check at build time, so this mock cannot
+// silently fall behind a rename the way a hand-written expectation list did.
 vi.mock('../components/SettingsModal', () => ({
-  TAB_ORDER: ['appearance', 'search', 'security', 'vault'],
+  TAB_ORDER: ['appearance', 'search', 'security', 'https', 'webrtc', 'fingerprint', 'vault'],
 }));
 
 import {
@@ -303,15 +307,35 @@ describe('getActionResults', () => {
 describe('getSettingsResults', () => {
   it('returns matching settings tabs', () => {
     const results = getSettingsResults('sec');
-    // 'sec' matches 'security' (contains) and 'search' (fuzzy: s,e,c)
-    expect(results.length).toBe(2);
-    expect(results.map((r) => r.title)).toContain('Security');
+    // 'sec' matches 'search' (fuzzy: s,e,c). The Security section's Overview tab is
+    // labelled "Overview", so 'sec' does NOT match it any more — the section split
+    // renamed that tab, and this expectation had encoded the old label.
+    expect(results.map((r) => r.title)).toContain('Search');
+    expect(results.map((r) => r.title)).not.toContain('Security');
     expect(results[0].category).toBe('settings');
+  });
+
+  // Each Security tab is separately reachable by name. `fuzzyMatch` is applied to the
+  // LABEL only, so a tab whose label was renamed silently stops being findable — which is
+  // why the section split needs this rather than a count.
+  it('finds each split Security tab by its own name', () => {
+    for (const [query, title] of [
+      ['overview', 'Overview'],
+      ['https', 'HTTPS'],
+      ['webrtc', 'WebRTC'],
+      ['fingerprint', 'Fingerprinting'],
+    ] as const) {
+      const hits = getSettingsResults(query);
+      expect(
+        hits.map((r) => r.title),
+        `query "${query}"`,
+      ).toContain(title);
+    }
   });
 
   it('returns all settings when query is empty', () => {
     const results = getSettingsResults('');
-    expect(results.length).toBe(4); // mocked TAB_ORDER has 4 entries
+    expect(results.length).toBe(7); // mocked TAB_ORDER has 7 entries
   });
 
   it('all results have required fields', () => {
@@ -376,9 +400,18 @@ describe('getSettingsResults', () => {
     // silently open the WRONG settings tab rather than failing. Assert the emitted
     // detail is a real tab id for every tab the palette can offer.
     //
-    // NOTE: this file mocks SettingsModal, so TAB_ORDER is the 4-entry mock above
-    // (not the app's real 15). `getSettingsResults` takes a fuzzy LABEL query, not a
-    // tab id — querying by id returns nothing.
+    // NOTE: this file mocks SettingsModal, so TAB_ORDER is the 7-entry mock above
+    // (not the app's real 17-tab rail). `getSettingsResults` takes a fuzzy LABEL query,
+    // not a tab id — querying by id returns nothing.
+    const MOCKED_TAB_ORDER = [
+      'appearance',
+      'search',
+      'security',
+      'https',
+      'webrtc',
+      'fingerprint',
+      'vault',
+    ];
     const detail: string[] = [];
     const h = (e: Event): void => {
       detail.push((e as CustomEvent<{ tab?: string }>).detail?.tab ?? '');
@@ -387,13 +420,13 @@ describe('getSettingsResults', () => {
     try {
       // An empty query yields every settings tab, so this covers all of them at once.
       const all = getSettingsResults('');
-      expect(all.length).toBe(4);
+      expect(all.length).toBe(MOCKED_TAB_ORDER.length);
       for (const r of all) {
         r.action();
       }
       expect(new Set(detail).size).toBe(all.length);
       for (const id of detail) {
-        expect(['appearance', 'search', 'security', 'vault']).toContain(id);
+        expect(MOCKED_TAB_ORDER).toContain(id);
       }
     } finally {
       window.removeEventListener('aegis:openSettings', h);

@@ -34,6 +34,45 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     No protocol, storage or auth behaviour changed, and existing data volumes are untouched.
     The default loopback bind needed none of this and still does not wait.
 
+### Changed
+
+- **Settings is regrouped into six sections, and the Security tab is split three ways.**
+  The rail is now **Appearance / Privacy / Security / Blocking / Network / Data**, and
+  **Passwords** moved out of Privacy into Data — a credential store is not a privacy
+  control. The single `Security` tab became four: **Overview** (the protection summary),
+  **HTTPS** (HTTPS-Only + the HTTP exception list), **WebRTC** (policy + IP-leak
+  exemptions) and **Fingerprinting** (level + its allowlist). Each tab now receives only
+  the stores it reads; before the split all three concerns rode one 14-field props
+  bundle, so the HTTPS panel was handed the fingerprint allowlist and the WebRTC
+  exemption list, neither of which it ever touched. The `security` tab id was **kept** and
+  only relabelled, so the padlock menu's "Privacy settings" still opens the protection
+  summary. `PrivacyDashboard` is now `SecurityDashboard` — it is the Security section's
+  overview, and it was never about privacy alone (its verdict reads ad blocking, private
+  mode and the proxy too).
+- **Seven settings panels were rendering with no styling at all, and are now consistent
+  with the other ten.** `.security-tab` and `.sync-tab` matched **zero** rules in
+  `index.css`, `.proxy-tab` three and `.vault-tab` four, and none of them appeared in the
+  input padding rules the other nine tabs are enumerated in — so their inputs and buttons
+  fell through to the bare global `input {}` / `button {}` (no padding, no width) and
+  read as cramped label-over-tiny-input stacks. They now share one vocabulary
+  (`.settings-panel` / `.settings-section` / `.settings-row` / `.settings-actions` /
+  `.settings-list` / `.settings-hint`), the settings modal is 780px wide instead of 640px
+  (its panel had ~380px of inner width, too narrow for a host+port row or a password
+  record with four actions), and the vault's per-record warnings and the sync panel's
+  rejected-record alert are typed as alerts instead of unstyled prose.
+- **`PrivacyDashboard` → `SecurityDashboard`**, including its landmark label. jsdom does
+  not load `index.css`, so no component test could see any of the styling above;
+  `platformContract.drift.test.ts` now derives the panel list from `SettingsModal` and
+  fails, naming the file, if a panel root stops carrying the shared class.
+
+- **The Settings, Downloads and Manage-bookmarks dialogs are now one width.** Each of the
+  three cards carried its own `max-width` literal — 780px, 640px, 640px — so three dialogs
+  that can be on screen at the same time were three different widths, and only Settings had
+  a reason for its number. They share one `--modal-w` token now, and a drift guard fails if
+  any of them goes back to a literal. (Manage-bookmarks still has no phone layout, so on
+  Android it remains a centred card while Settings and Downloads go full-screen — a
+  pre-existing difference this change does not alter.)
+
 ### Added
 
 - **Ctrl+click, middle-click and Shift+click now open a link in a new tab.** Clicking a link

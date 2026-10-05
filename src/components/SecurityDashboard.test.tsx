@@ -1,4 +1,4 @@
-// src/components/PrivacyDashboard.test.tsx
+// src/components/SecurityDashboard.test.tsx
 //
 // The dashboard derives a three-level verdict from six independent signals, and the
 // derivation is the part worth pinning: `statusOf` collapses them into
@@ -16,7 +16,7 @@ import type {
   WebrtcExemptState,
 } from '../../shared/types';
 import { protectionSummary } from '../lib/protectionSummary';
-import { PrivacyDashboard } from './PrivacyDashboard';
+import { SecurityDashboard } from './SecurityDashboard';
 
 const settings = (over: Partial<Settings> = {}): Settings =>
   ({ httpsOnly: true, webrtcPolicy: 'public-only', ...over }) as Settings;
@@ -71,7 +71,7 @@ function renderDashboard(
     host: over.host === undefined ? 'example.com' : over.host,
   });
   render(
-    <PrivacyDashboard
+    <SecurityDashboard
       protection={protection}
       adblock={over.adblock ?? adblock()}
       blockedHere={over.blockedHere ?? 12}
@@ -84,7 +84,7 @@ function renderDashboard(
 const status = () =>
   screen.getByText('Current protection').parentElement?.querySelector('strong')?.textContent;
 
-describe('PrivacyDashboard', () => {
+describe('SecurityDashboard', () => {
   describe('the status verdict', () => {
     it('is Standard when every baseline is on and nothing is extra', () => {
       renderDashboard();
@@ -238,6 +238,6 @@ describe('PrivacyDashboard', () => {
 
   it('is a labelled landmark region', () => {
     renderDashboard();
-    expect(screen.getByRole('region', { name: 'Privacy dashboard' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Security dashboard' })).toBeInTheDocument();
   });
 });

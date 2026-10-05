@@ -523,20 +523,30 @@ function MobileShell() {
                 antiFingerprint: 'strict',
               }),
             onOpenProxy: () => openSettings('proxy'),
+          }}
+          https={{
             settings: settings.settings,
             update: settings.update,
             // Pass the module function itself. A fresh arrow here is a new identity on every
-            // MobileApp render, and SecurityTab lists this in its effect deps — so every nav
+            // MobileApp render, and HttpsTab lists this in its effect deps — so every nav
             // state / tabs.state / blockedCount update re-fetched and re-rendered the tab.
             // Desktop already passes the stable function (App.tsx).
             listExceptions: aegis.safety.listExceptions,
             removeException: (h: string) => void aegis.safety.removeException(h),
-            fingerprintState: fingerprint.state,
-            toggleFingerprintAllowlist: fingerprint.toggleAllowlist,
-            removeFingerprintAllowlist: fingerprint.removeAllowlist,
+          }}
+          webrtc={{
+            settings: settings.settings,
+            update: settings.update,
             webrtcExempt: webrtcExempt.state,
             toggleWebrtcExempt: webrtcExempt.toggleExempt,
             removeWebrtcExempt: webrtcExempt.removeExempt,
+          }}
+          fingerprint={{
+            settings: settings.settings,
+            update: settings.update,
+            fingerprintState: fingerprint.state,
+            toggleFingerprintAllowlist: fingerprint.toggleAllowlist,
+            removeFingerprintAllowlist: fingerprint.removeAllowlist,
           }}
           proxy={{
             state: proxy.state,

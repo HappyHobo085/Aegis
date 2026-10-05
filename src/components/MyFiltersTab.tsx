@@ -45,7 +45,7 @@ export function MyFiltersTab({ text, save }: MyFiltersTabProps) {
 
   return (
     <form
-      className="my-filters-tab"
+      className="settings-panel my-filters-tab"
       onSubmit={(e) => {
         e.preventDefault();
         handleSave();

@@ -763,8 +763,55 @@ data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
   (the flattened group order IS `TAB_ORDER`) rendered as a vertical left rail with
   roving arrow-key navigation; on `.aegis-mobile`/`.aegis-narrow` the rail becomes a
   horizontal strip. Adding a settings tab still means: add to `SettingsTab`,
-  `TAB_LABELS`, `TAB_GROUPS`, the `SettingsModalProps`/`panels` wiring, AND a case in
-  `SettingsModal.test.tsx` that walks every tab.
+  `TAB_LABELS`, `TAB_SUMMARIES`, `TAB_GROUPS`, the `SettingsModalProps`/`panels` wiring,
+  the three `Record<SettingsTab, …>` tables in `lib/commandPaletteData.ts`, AND a case in
+  `SettingsModal.test.tsx`.
+  - **The rail is 6 sections / 17 tabs, and `security` is NOT a section** — it is the
+    Security section's **Overview** tab. The id was kept when the label changed so
+    `openSettings('security')` (the padlock menu's "Privacy settings", in BOTH shells) kept
+    resolving with no call-site change; the tab's controls then split out into `https`,
+    `webrtc` and `fingerprint`, each with its own props bundle. `vault` (Passwords) sits
+    under **Data**, not Privacy: a credential store is not a privacy control.
+  - **A tab list can be stale in BOTH directions, and no single self-consistent assertion
+    catches both.** `SettingsModal.test.tsx` used to hand-write thirteen names for a
+    fourteen-tab rail — it had silently dropped `proxy`, and this file then documented it as
+    "a case that walks every tab". It is now **derived**, but deriving from `TAB_GROUPS`
+    alone is NOT enough: both sides of `expect(rendered).toEqual(declared)` come from
+    `TAB_GROUPS`, so deleting a tab deletes it from both and they stay equal (proved by
+    mutation). The complement is `Object.keys(TAB_LABELS)` — a `Record<SettingsTab, …>`, so
+    its keys ARE the union and are a second, independent declaration — checked to be a
+    subset of `TAB_ORDER`. Keep BOTH assertions; each covers exactly what the other cannot.
+- **Every settings panel root carries `settings-panel`, and that is enforced.** One shared
+  vocabulary in `index.css` (`.settings-panel` / `.settings-section` / `.settings-row` /
+  `.settings-actions` / `.settings-list` / `.settings-hint` / `.settings-btn--*` /
+  `.settings-section--danger`) styles all seven panels the modal renders. It exists because
+  seven had no styling of their own — `.security-tab` and `.sync-tab` matched **zero**
+  rules, `.proxy-tab` three, `.vault-tab` four — so their inputs fell back to the bare
+  global `input {}` (no padding, no width) and rendered as cramped label-over-tiny-input
+  stacks while the nine tabs enumerated in `index.css`'s input rules looked correct.
+  **jsdom does not load `index.css`, so no component test can see any of this** — the gap
+  was only visible by reading the stylesheet. `platformContract.drift.test.ts` derives the
+  panel list from `SettingsModal`'s own imports and fails, naming the file, if a root lacks
+  the class. Its padding check parses the declared value and requires **non-zero on both
+  axes**: asserting only that a `padding:` declaration exists is satisfied by `padding: 0`,
+  which is the defect itself.
+- **The three centred dialog cards share ONE width token, `--modal-w` (`index.css`).**
+  `.settings-modal__content`, `.downloads-modal` and `.favorites-manager` each carried their
+  own `max-width` literal — 780px / 640px / 640px — so three cards visible at the same time
+  were three widths, and only the settings one had a reason for its number (its panel needs
+  ~520px once the 220px rail and 20px of padding come off). The token lives on `:root`, not
+  in `[data-theme='light']`, because it is geometry rather than a colour. **`platformContract.drift.test.ts`
+  fails if any of the three goes back to a literal, or if `--modal-w` is defined twice.**
+  Note `.favorites-manager` has **no `.aegis-mobile` override** while the other two go
+  full-screen — a pre-existing inconsistency, deliberately not "fixed" here because an
+  Android layout change is not verifiable on this host.
+- **The old `*__field` / `*__hint` / `*__status` class names are gone from the panels that
+  used them**, replaced by the shared vocabulary, and their CSS rules were deleted with
+  them — a rule matching nothing is how a later edit "restores" a class the markup no longer
+  has. `__error` / `__warning` / `__phrase-words` / `__add` were the opposite case: they
+  were in the markup with **no rule at all**, so the "N passwords could not be decrypted"
+  warning and the rejected-vault-record alert rendered as unstyled prose. Alerts are now
+  `.settings-panel [role='alert']`.
 - **`components/Onboarding`** is the first-run welcome modal (replaced the one-line
   `WelcomeHint`): surfaces the signature features + a default-search-engine picker,
   rendered by both shells. It is localStorage-gated (`ONBOARDING_STORAGE_KEY`) and

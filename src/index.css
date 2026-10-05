@@ -88,6 +88,14 @@
   --ease: cubic-bezier(0.4, 0, 0.2, 1);
   --spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --duration: 0.2s;
+  /* Width of the centred, scrollable dialog cards: the Settings modal, the Downloads
+     modal and the Manage-bookmarks dialog. They were each carrying their own `max-width`
+     literal (780px / 640px / 640px), which is how three cards that sit on screen at the
+     same time came to be three different widths. One token so they stay one family.
+     It is 780px because the Settings modal's PANEL — the card minus its 220px left rail
+     and 20px of padding — needs ~520px to hold a label-left control row or a password
+     record carrying four actions; 640px left it ~380px and both wrapped. */
+  --modal-w: 780px;
   --chrome-top-height: 48px;
 }
 
@@ -538,6 +546,20 @@ body.aegis-fullscreen {
 
 .bookmark-button[aria-pressed='true']:hover:not(:disabled) {
   background: rgba(99, 102, 241, 0.15);
+  color: var(--accent);
+}
+
+/* Element picker armed — same pressed idiom as the bookmark button, because it is the
+   same kind of state: a mode the toolbar button is currently in, not a completed
+   action. Without it the toggle has no visible state at all, since `aria-pressed`
+   carries it only to assistive tech. */
+.toolbar__picker[aria-pressed='true'] {
+  color: var(--accent);
+  background: rgba(59, 130, 246, 0.18);
+}
+
+.toolbar__picker[aria-pressed='true']:hover:not(:disabled) {
+  background: rgba(59, 130, 246, 0.26);
   color: var(--accent);
 }
 
@@ -2625,7 +2647,7 @@ body.aegis-fullscreen {
   border: 1px solid var(--glass-border);
   border-radius: var(--r-lg);
   box-shadow: var(--shadow-3);
-  max-width: 640px;
+  max-width: var(--modal-w);
   max-height: 80vh;
   width: 90%;
   display: flex;
@@ -2761,7 +2783,7 @@ body.aegis-fullscreen {
   font-size: var(--font-size-2);
 }
 
-.privacy-dashboard {
+.security-dashboard {
   display: grid;
   gap: 12px;
   margin-bottom: 20px;
@@ -2771,7 +2793,7 @@ body.aegis-fullscreen {
   background: var(--bg-input);
 }
 
-.privacy-dashboard__status {
+.security-dashboard__status {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2780,43 +2802,43 @@ body.aegis-fullscreen {
   border-bottom: 1px solid var(--border-2);
 }
 
-.privacy-dashboard__status span,
-.privacy-dashboard__grid span {
+.security-dashboard__status span,
+.security-dashboard__grid span {
   color: var(--fg-muted);
   font-size: var(--font-size-2);
 }
 
-.privacy-dashboard__status strong {
+.security-dashboard__status strong {
   padding: 4px 10px;
   border-radius: var(--radius-pill);
   background: color-mix(in srgb, var(--success) 18%, transparent);
   color: var(--success);
 }
 
-.privacy-dashboard__status--relaxed strong {
+.security-dashboard__status--relaxed strong {
   background: color-mix(in srgb, var(--danger) 14%, transparent);
   color: var(--danger);
 }
 
-.privacy-dashboard__grid {
+.security-dashboard__grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
   gap: 8px;
 }
 
-.privacy-dashboard__grid div {
+.security-dashboard__grid div {
   display: grid;
   gap: 3px;
   min-width: 0;
 }
 
-.privacy-dashboard__actions {
+.security-dashboard__actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
 }
 
-.privacy-dashboard__actions button {
+.security-dashboard__actions button {
   padding: 7px 12px;
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -2967,7 +2989,7 @@ body.aegis-fullscreen {
   border: 1px solid var(--border);
   border-radius: var(--radius-4);
   box-shadow: var(--shadow-modal);
-  max-width: 640px;
+  max-width: var(--modal-w);
   max-height: 80vh;
   width: 90%;
   display: flex;
@@ -3024,6 +3046,257 @@ body.aegis-fullscreen {
   padding: 20px;
 }
 
+/* ─── Settings panel vocabulary (shared by every settings tab) ───
+   ONE definition of the panel / section / row / list / action shapes, so a settings
+   tab cannot join the modal unstyled. It exists because seven panels had NO rules of
+   their own at all — `.security-tab` and `.sync-tab` had zero, `.proxy-tab` three and
+   `.vault-tab` four — so their inputs fell back to the bare `input {}` base (no
+   padding, no width) and rendered as cramped label-over-tiny-input stacks, while the
+   nine tabs enumerated in the rules below looked correct. A panel root MUST carry
+   `settings-panel`; `platformContract.drift.test.ts` derives the list of panels from
+   `SettingsModal` and fails if one is missing it, so the class cannot quietly rot off. */
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* A titled block inside a panel. The border + surface is what makes a group of
+   controls read as one unit rather than a flat run of headings. */
+.settings-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-3);
+  background: var(--bg-input);
+}
+
+.settings-section__title {
+  margin: 0;
+  font-size: var(--font-size-2);
+  font-weight: 700;
+  color: var(--fg);
+}
+
+/* Label + control. `--inline` puts them side by side (used for a host input + its Add
+   button); the default stacks them, which is what the ~520px panel can hold cleanly. */
+.settings-row {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-row--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-row--inline input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Two fields that are one value: a proxy host with no port is not an address. The port
+   column is sized to its content (a 5-digit number) and stops growing there, so the
+   host keeps the rest of the row instead of the two inputs being 50/50. */
+.settings-row--split {
+  flex-direction: row;
+  align-items: flex-end;
+  gap: 10px;
+}
+
+.settings-row--split > .settings-row {
+  flex: 1;
+}
+
+.settings-row--port {
+  flex: 0 0 120px;
+}
+
+.settings-row--between {
+  justify-content: space-between;
+  align-items: center;
+}
+
+.settings-row--between .settings-hint {
+  flex: 1;
+  min-width: 0;
+}
+
+/* The panel's affirmative action. One per panel, so "which button commits this" is
+   answerable without reading the labels. */
+.settings-btn--primary {
+  background: var(--accent-color);
+  color: var(--text-on-accent);
+  border-color: transparent;
+}
+
+.settings-btn--primary:hover:not(:disabled) {
+  background: var(--accent-color);
+  filter: brightness(1.12);
+}
+
+.settings-row__label {
+  font-size: var(--font-size-3);
+  color: var(--fg);
+  line-height: 1.4;
+}
+
+/* A checkbox row: the control leads, the label explains it. */
+.settings-row input[type='checkbox'] {
+  width: auto;
+  align-self: flex-start;
+}
+
+/* Explanatory prose. Deliberately muted and small — the panels carry a lot of honest
+   limitation copy, and at body size it reads as content the user has to act on. */
+.settings-hint {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--font-size-2);
+  line-height: 1.55;
+}
+
+.settings-hint strong {
+  color: var(--fg);
+}
+
+/* A bordered list of host rows (HTTP exceptions, WebRTC exemptions, the fingerprint
+   allowlist, vault records). Each row is `main` + actions, actions pinned right. */
+.settings-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-list__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-elevated);
+  min-width: 0;
+}
+
+.settings-list__main {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-3);
+  color: var(--fg);
+}
+
+/* A row of buttons. `--end` right-aligns it; `--split` justifies between the first
+   and the rest, which is what a "primary action + quiet actions" row wants. */
+.settings-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.settings-actions--end {
+  justify-content: flex-end;
+}
+
+.settings-actions--split {
+  justify-content: space-between;
+}
+
+/* Buttons inside a settings panel get real padding. The global `button` rule sets a
+   border and a radius but no padding, so an unstyled control was ~24px tall. */
+/* Alerts inside a settings panel. `__error` is a refusal the user must see, `__warning`
+   is a degraded-but-working state, so they are tinted rather than merely coloured —
+   these were class names in the markup with NO rule at all, which is why the vault's
+   "N passwords could not be decrypted" and the sync panel's rejected-record alert both
+   rendered as unstyled body text indistinguishable from the prose around them. */
+.settings-panel [role='alert'] {
+  margin: 0;
+  padding: 9px 12px;
+  border-radius: var(--r-sm);
+  border: 1px solid color-mix(in srgb, var(--danger) 40%, transparent);
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
+  color: var(--fg);
+  font-size: var(--font-size-2);
+  line-height: 1.55;
+}
+
+.vault-tab__warning {
+  border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+}
+
+/* The recovery phrase: the single most sensitive string in the app. It is a code block
+   so the 24 words stay legible as words, and it wraps — the phrase is one unbroken
+   string from the core, so it must not overflow the panel. */
+.sync-tab__phrase-words {
+  display: block;
+  padding: 12px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-sm);
+  background: var(--bg-input);
+  color: var(--fg);
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-size-3);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+/* The add-entry disclosure. Styled as a section header the user can open, not a bare
+   browser triangle. */
+.vault-tab__add > summary {
+  cursor: pointer;
+  font-size: var(--font-size-3);
+  font-weight: 700;
+  color: var(--fg);
+  padding: 4px 0;
+}
+
+.vault-tab__add > summary:hover {
+  color: var(--accent-color);
+}
+
+.vault-tab__add[open] > summary {
+  margin-bottom: 10px;
+}
+
+.settings-panel button {
+  padding: 7px 14px;
+  font-size: var(--font-size-3);
+  font-weight: 600;
+}
+
+.settings-btn--quiet {
+  background: transparent;
+  color: var(--fg-muted);
+  font-weight: 500;
+}
+
+.settings-btn--quiet:hover:not(:disabled) {
+  background: var(--glass-1);
+  color: var(--fg);
+}
+
+/* A danger zone: the destructive controls of a panel, separated from the rest so
+   "Disable sync and forget the keys" cannot be mistaken for an ordinary action. */
+.settings-section--danger {
+  border-color: color-mix(in srgb, var(--danger) 40%, var(--border));
+}
+
+.settings-section--danger .settings-section__title {
+  color: var(--danger);
+}
+
 /* ─── Settings tab: shared form controls ─────────────────────────── */
 
 /* Generic label inside any settings tab */
@@ -3035,7 +3308,13 @@ body.aegis-fullscreen {
 .allowlist-tab label,
 .downloads-tab label,
 .site-permissions-tab label,
-.data-tab label {
+.security-tab label,
+.https-tab label,
+.webrtc-tab label,
+.fingerprint-tab label,
+.vault-tab label,
+.proxy-tab label,
+.sync-tab label {
   color: var(--fg-muted);
   font-size: 14px;
 }
@@ -3049,7 +3328,13 @@ body.aegis-fullscreen {
 .allowlist-tab input[type='text'],
 .downloads-tab input[type='text'],
 .site-permissions-tab input[type='text'],
-.data-tab input[type='text'] {
+.security-tab input[type='text'],
+.https-tab input[type='text'],
+.webrtc-tab input[type='text'],
+.fingerprint-tab input[type='text'],
+.vault-tab input[type='text'],
+.proxy-tab input[type='text'],
+.sync-tab input[type='text'] {
   background: var(--bg-input);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -3067,7 +3352,13 @@ body.aegis-fullscreen {
 .allowlist-tab input[type='text']:focus,
 .downloads-tab input[type='text']:focus,
 .site-permissions-tab input[type='text']:focus,
-.data-tab input[type='text']:focus {
+.security-tab input[type='text']:focus,
+.https-tab input[type='text']:focus,
+.webrtc-tab input[type='text']:focus,
+.fingerprint-tab input[type='text']:focus,
+.vault-tab input[type='text']:focus,
+.proxy-tab input[type='text']:focus,
+.sync-tab input[type='text']:focus {
   border-color: var(--accent-color);
   outline: none;
 }
@@ -4004,7 +4295,7 @@ body.aegis-fullscreen {
 
 /* Dialog card — normal flex child of the scrim */
 .favorites-manager {
-  max-width: 640px;
+  max-width: var(--modal-w);
   max-height: 80vh;
   width: 90%;
   display: flex;
@@ -4347,30 +4638,12 @@ body.aegis-fullscreen {
   margin-top: 4px;
 }
 
-/* Proxy "unsaved changes" hint. */
-.proxy-tab__dirty {
-  color: var(--fg-muted);
-  font-size: var(--font-size-2);
-  font-style: italic;
-  margin-top: 6px;
-}
-
-.proxy-tab__status-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.proxy-tab__reload {
-  flex: 0 0 auto;
-  padding: 5px 10px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--border);
-  background: var(--bg-input);
-  color: var(--fg);
-  cursor: pointer;
-}
+/* The Proxy panel's "unsaved changes" / test-result / platform hints used to carry
+   `.proxy-tab__dirty`, `.proxy-tab__status-row` and `.proxy-tab__reload`. All three were
+   removed when the panel moved to the shared vocabulary (`.settings-hint`,
+   `.settings-row--between`, `.settings-btn--quiet`) — keeping the rules would have left
+   three selectors matching nothing, which is how a later edit "restores" a class the
+   markup no longer has. */
 
 /* Failed/cancelled download state label. */
 .downloads-panel__state--error {
@@ -5972,6 +6245,69 @@ a:focus-visible {
 }
 
 /* ── Vault sync status ──────────────────────────────────────────────────── */
+/* A saved-password row: identity (site over username), the masked value, then the
+   four actions on one line. The actions are the reason this is its own block — a row
+   that tried to fit site + username + password + four buttons on one line wrapped
+   into an unreadable two-row jumble at every width the panel had. */
+.vault-row {
+  flex-wrap: wrap;
+  align-items: flex-start;
+  row-gap: 6px;
+}
+
+.vault-row__identity {
+  flex: 1 1 40%;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.vault-row__site {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: var(--fg);
+  font-size: var(--font-size-3);
+}
+
+.vault-row__username {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--fg-muted);
+  font-size: var(--font-size-2);
+}
+
+/* A revealed secret is monospaced so its character count is readable, and it is the
+   one thing on the row allowed to take the full width. */
+.vault-row__password {
+  flex: 1 1 100%;
+  font-family: ui-monospace, monospace;
+  font-size: var(--font-size-2);
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
+.vault-row__password[data-revealed='true'] {
+  color: var(--fg);
+}
+
+.vault-row__actions {
+  flex: 1 1 100%;
+  justify-content: flex-end;
+}
+
+.vault-row__notes {
+  flex: 1 1 100%;
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: var(--font-size-2);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
 .vault-tab__sync {
   display: flex;
   align-items: center;

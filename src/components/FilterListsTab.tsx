@@ -56,7 +56,7 @@ export function FilterListsTab({ subs, setEnabled, add, remove, updateNow }: Fil
   };
 
   return (
-    <div className="filter-lists-tab">
+    <div className="settings-panel filter-lists-tab">
       <div className="filter-lists-tab__actions">
         <button type="button" disabled={updating} onClick={handleUpdateAll}>
           Update all
