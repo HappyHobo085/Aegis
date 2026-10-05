@@ -91,18 +91,39 @@ mod imp {
             // `(-1, -1, 1, 1)`, so the window's paint pass finds nothing to draw — and
             // `GtkFixed` never runs its own child allocation at all.
             //
-            // Calling it FIRST and then overwriting each child with its role rectangle keeps this
-            // a SINGLE pass. That is the whole difference from the deleted `size_fixed_children`,
-            // which did the same overriding from a SEPARATE `size-allocate` signal handler and
-            // therefore cost two full page layouts per pass.
-            self.parent_size_allocate(allocation);
-
+            // Calling it FIRST is not by itself enough, and an earlier version of this comment
+            // claimed it was — it was WRONG IN EFFECT, and the owner found it as a dead toolbar
+            // plus visible flicker. MEASURED on the running app (build 567e3e2d), immediately
+            // after this call and before the loop below:
+            //
+            //     AFTER-PARENT alloc=(0, 0, 1, 1) native=(0,0 1x1)     (every child, every pass)
+            //
+            // `parent_size_allocate` IS `GtkFixed`'s own child allocation, and it allocates each
+            // child to its SIZE REQUEST — which is GTK's default 1x1 for a WebKit webview. So
+            // every pass moved each child's NATIVE GdkWindow to 1x1 at the origin and then back:
+            // a 1x1 window at (0,0) sits on the toolbar and eats clicks meant for settings,
+            // downloads and fullscreen, and the 1x1 -> real resize cycle is the flicker.
+            //
+            // THE FIX: tell GTK the answer BEFORE delegating. Writing each child's request to its
+            // role rectangle means GTK's single pass lands it at the right SIZE, so the loop
+            // below only corrects POSITION and no child is ever resized through 1x1. Note the
+            // direction: this WRITES the request (telling GTK the answer). It never READS one to
+            // derive a rectangle — that is the thing that collapses a webview, and it is what
+            // `size_allocate_never_reads_a_childs_size_request` still forbids.
             let size = (allocation.width(), allocation.height());
             let insets = *self.insets.borrow();
             // Clone the registry and drop the borrow: `child.size_allocate` must never be
             // able to re-enter this method against a live `RefCell` borrow.
             let registered: Vec<(gtk::Widget, Role)> =
                 self.roles.borrow().iter().cloned().collect();
+
+            for (child, role) in &registered {
+                if let Some(r) = rect_for(*role, size, insets) {
+                    child.set_size_request(r.w, r.h);
+                }
+            }
+
+            self.parent_size_allocate(allocation);
 
             for (child, role) in registered {
                 match rect_for(role, size, insets) {
@@ -275,11 +296,19 @@ mod tests {
         );
     }
 
-    /// THE collapse. `size_allocate` must hand each child its ROLE's rectangle and must
-    /// never consult `size_request`, which is 1x1 for a WebKit webview and is what collapsed
-    /// both webviews on every layout pass.
+    /// THE collapse. `size_allocate` must hand each child its ROLE's rectangle and must never
+    /// DERIVE a rectangle from `size_request`, which is 1x1 for a WebKit webview and is what
+    /// collapsed both webviews on every layout pass.
+    ///
+    /// **Reading and WRITING are different, and only one of them is the bug.** Reading a request
+    /// to decide how big a child should be makes 1x1 the answer. Writing a request is *telling
+    /// GTK the answer* so its own allocation pass agrees with us — and omitting that write is what
+    /// cost the owner a dead toolbar and visible flicker (measured: `AFTER-PARENT
+    /// alloc=(0, 0, 1, 1) native=(0,0 1x1)` on every child on every pass, build 567e3e2d).
+    /// So this forbids the READ and requires the WRITE, both in the same place, because the
+    /// difference between them is exactly the whole fix.
     #[test]
-    fn size_allocate_never_reads_a_childs_size_request() {
+    fn size_allocate_writes_the_role_rect_into_each_childs_request_and_never_reads_one() {
         let src = production();
         let start = src
             .find("fn size_allocate(&self, allocation: &gtk::Rectangle)")
@@ -287,12 +316,47 @@ mod tests {
         // The body runs to the end of the `impl WidgetImpl` block.
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").unwrap_or(body.len())];
+
+        // The WRITE, required: it is what stops the 1x1 collapse.
         assert!(
-            !body.contains("size_request"),
-            "size_allocate reads a child's size REQUEST. A WebKit webview's request is GTK's \
-             default 1x1, so this reintroduces the 1x1 collapse — the amplifier behind the \
-             measured ~57 Hz layout loop."
+            body.contains("set_size_request"),
+            "size_allocate no longer writes each child's size request before delegating. Without \
+             it `parent_size_allocate` allocates every child to its SIZE REQUEST, which is 1x1 \
+             for a WebKit webview — MEASURED as native=(0,0 1x1) on every pass — so the toolbar \
+             eats its own clicks and every webview resizes through 1x1 (the flicker)."
         );
+
+        // The READ, forbidden, in every form a rectangle could be derived from.
+        for forbidden in [
+            ".size_request()",
+            ".requested_width()",
+            ".requested_height()",
+            ".minimum_width()",
+            ".minimum_height()",
+        ] {
+            assert!(
+                !body.contains(forbidden),
+                "size_allocate consults `{forbidden}` to size a child. A WebKit webview's \
+                 request is GTK's default 1x1, so that reintroduces the 1x1 collapse — the \
+                 amplifier behind the measured ~57 Hz layout loop."
+            );
+        }
+
+        // …and the write must come BEFORE the delegation, or it changes nothing.
+        let write = body
+            .find("set_size_request")
+            .expect("the write is required, so it must be locatable");
+        let delegate = body.find("parent_size_allocate").expect(
+            "size_allocate no longer delegates to GtkFixed, so the container never \
+                     records its own allocation and nothing paints",
+        );
+        assert!(
+            write < delegate,
+            "the size-request write must come BEFORE `parent_size_allocate`. After it, GtkFixed \
+             has already collapsed every child to 1x1 and the write lands too late to prevent \
+             anything."
+        );
+
         assert!(
             body.contains("rect_for"),
             "size_allocate no longer resolves roles through `rect_for`; the geometry rules in \

@@ -140,6 +140,17 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   which of the two it is in. It also stops claiming to be on after you press Escape or make a
   pick, which it previously had no way of learning about.
 
+- **Clicking Settings, Downloads, Fullscreen and some other toolbar buttons did nothing, and the
+  window flickered.** Both were one defect, and it was a regression from the popover change
+  below: every time the window re-laid-out, each webview was first resized to a single pixel at
+  the top-left corner and only then restored, so a one-pixel window sat on the toolbar swallowing
+  those clicks while the webview visibly shrank and grew. The container now tells GTK each webview's
+  real size before GTK does its own layout pass, so nothing passes through that one-pixel state.
+- **The browser window painted nothing at all — a black rectangle where the whole UI should be.**
+  Reported by the owner ("running it only shows a black window"). The window's container was never
+  being told how large it was, so the window had no area to draw in. Everything else kept working,
+  which is why it was survivable and why nothing in the automated tests caught it.
+
 - **Typing in the address bar made the whole window flash and the page keep jumping.** The
   omnibox dropdown pushed the page down, and that displacement fed straight back into its own
   input: the dropdown's height is measured from its content, the content webview is resized to

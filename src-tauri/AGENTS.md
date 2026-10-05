@@ -3069,10 +3069,27 @@ CHILD, never the container, because queueing the container re-enters `size_alloc
     rectangles — the vfunc is *handed* the real allocation, so every rect-based measurement
     (`setContentInset top=156`, the omnibox rect, the pick round-trip) reads healthy while
     nothing is on screen. **A RECT IS NOT A PAINT.** The fix is one line, called FIRST:
-    `self.parent_size_allocate(allocation);` then overwrite each child with its role rectangle,
-    which keeps it a SINGLE pass — still the difference from the deleted
-    `size_fixed_children`, which did the same overriding from a separate `after=true` signal
-    handler and cost two full page layouts per pass.
+    `self.parent_size_allocate(allocation);` then overwrite each child with its role rectangle.
+    ⚠️ **That one line is NECESSARY BUT NOT SUFFICIENT, and the claim that it "keeps this a
+    single pass" was WRONG — it is two allocations per child per pass, and the first is the
+    1×1 collapse.** `parent_size_allocate` IS `GtkFixed`'s own child allocation and it sizes each
+    child by its SIZE REQUEST, which is GTK's default **1×1** for a WebKit webview. MEASURED in
+    the running app (build `567e3e2d`), immediately after the delegation and before the
+    overriding loop: `AFTER-PARENT alloc=(0, 0, 1, 1) native=(0,0 1x1)` on every child, every
+    pass. The owner reported it as **"clicking settings, downloads, fullscreen and some other
+    buttons don't work"** plus **"display flickering too much sometimes"** — one cause, both
+    symptoms: a 1×1 *native* window at (0,0) sits exactly on the toolbar and eats those clicks,
+    and every webview is resized 1×1→real on every pass.
+    **THE FIX (shipped): write each child's size request to its ROLE rectangle BEFORE
+    delegating**, so GTK's single pass lands it at the right SIZE and the overriding loop only
+    corrects POSITION — no child is ever resized through 1×1 again.
+    **Reading and writing that request are different and only one is the bug.** Reading it to
+    DERIVE a rectangle makes 1×1 the answer (that is the collapse, and it is still forbidden);
+    writing it *tells GTK the answer* so its own pass agrees. Both halves are pinned, and the
+    ordering matters — a write after the delegation lands too late to prevent anything.
+    Shrinkability is why this was not simply obvious: `preferred_width/height` return `(0,0)`,
+    so no child's request can become the window's minimum (measured `MIN=0` with a role-rect
+    request in place).
     **Nothing in the jsdom suite, the drift pins, or the AppImage gate could have caught this:**
     jsdom has no layout, the pins read source text, and every Rust-side measurement reads a
     rect. It took a human running the app and a screenshot. See the "no pixels" claim below —
