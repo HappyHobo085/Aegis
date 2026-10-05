@@ -1,5 +1,5 @@
 // src/components/mobile/MobileApp.test.tsx
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { NavState, Settings } from '../../../shared/types';
 import { PRIMARY_VIEW_ID } from '../../../shared/types';
@@ -418,31 +418,101 @@ describe('MobileApp', () => {
     }
   });
 
-  // `places.rs`'s `favorites.add` refuses a url that normalizes onto a live bookmark, and a
-  // second tap on the favourites-bar "+" is exactly that (the same page, possibly reached
-  // with a different `#fragment` or trailing slash). The refusal used to escape a floating
-  // promise: an unhandled rejection and a button that appeared dead. It must reach the
-  // user, and the reason must be the CORE's sentence — a Rust `Err(String)` rejects with a
-  // bare string, which `err instanceof Error` would discard (see lib/saveError.ts).
-  it('toasts the core reason when the favourites-bar add is refused', async () => {
+  // The favourites-bar "+" used to call `favorites.add` DIRECTLY, bookmarking the current
+  // page in one tap. That made the mobile shell the only place a bookmark could be CREATED
+  // and the only place it could never be EDITED or DELETED: `FavoritesManager` is a desktop
+  // modal, `MobileApp` never rendered it, and no other mobile surface could rename or remove
+  // a row. The owner asked for desktop parity, so the "+" now opens the same modal.
+  it('opens the bookmarks manager from the favourites-bar "+" instead of adding directly', async () => {
+    render(<MobileApp />);
+    fireEvent.click(await screen.findByRole('button', { name: /add bookmark/i }));
+
+    expect(await screen.findByRole('dialog', { name: /manage bookmarks/i })).toBeInTheDocument();
+    // The whole point of the change: the tap must NOT have silently written anything. The
+    // user names and URLs the bookmark themselves.
+    expect(aegis.favorites.add).not.toHaveBeenCalled();
+  });
+
+  it('edits a bookmark through the mobile manager, not just adds one', async () => {
+    (aegis.favorites.list as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: 7, name: 'Docs', url: 'https://docs.test/', position: 0 },
+    ]);
+    render(<MobileApp />);
+    fireEvent.click(await screen.findByRole('button', { name: /add bookmark/i }));
+    await screen.findByRole('dialog', { name: /manage bookmarks/i });
+
+    // REMOVE is the operation the one-tap add made unreachable, and the only one that can
+    // prove a bookmark is manageable rather than merely creatable.
+    fireEvent.click(screen.getByRole('button', { name: /remove bookmark Docs/i }));
+    await waitFor(() => expect(aegis.favorites.remove).toHaveBeenCalledWith(7));
+  });
+
+  // Both dismissals. The Close button is the modal's own; the native BACK gesture only
+  // closes it because the modal is routed through `sheet` (the BACK precedence is
+  // `sheet !== null` -> `setSheet(null)`), which is the reason it was put there rather than
+  // in a separate boolean. A modal opened by a chrome button that BACK cannot dismiss is the
+  // bug the shell's BACK-precedence comment warns about: arming the gesture and swallowing
+  // it is worse than not arming it.
+  it('closes the bookmarks manager from its Close button and from the native BACK gesture', async () => {
+    localStorage.setItem(ONBOARDING_STORAGE_KEY, '1');
+    render(<MobileApp />);
+
+    // Close button.
+    fireEvent.click(await screen.findByRole('button', { name: /add bookmark/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /^close$/i }));
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /manage bookmarks/i })).toBeNull(),
+    );
+
+    // Native BACK. Not `userEvent.keyboard` — this shell exposes a direct hook
+    // (`window.__aegisMobileBack`) that `MainActivity.kt` calls, and that hook is the thing
+    // under test.
+    fireEvent.click(screen.getByRole('button', { name: /add bookmark/i }));
+    expect(await screen.findByRole('dialog', { name: /manage bookmarks/i })).toBeInTheDocument();
+    await waitFor(() => expect(setBackInterceptActive).toHaveBeenLastCalledWith(true));
+    // `act` because this calls the handler the way the NATIVE side does — a plain function
+    // call, not a dispatched event — and it drives React state (the find-bar test below
+    // reaches for it the same way).
+    const back = (window as unknown as { __aegisMobileBack?: () => void }).__aegisMobileBack;
+    expect(typeof back).toBe('function');
+    act(() => back!());
+    await waitFor(() =>
+      expect(screen.queryByRole('dialog', { name: /manage bookmarks/i })).toBeNull(),
+    );
+    // And the gesture goes back to the browser, so BACK is not swallowed.
+    await waitFor(() => expect(setBackInterceptActive).toHaveBeenLastCalledWith(false));
+  });
+
+  // `places.rs`'s `favorites.add` refuses a url that normalizes onto a live bookmark, and
+  // adding a page you already saved is exactly that (the same page, possibly reached with a
+  // different `#fragment` or trailing slash). The refusal must reach the user and the reason
+  // must be the CORE's sentence — a Rust `Err(String)` rejects with a bare string, which
+  // `err instanceof Error` would discard (see lib/saveError.ts). `FavoritesManager` owns
+  // that reporting in its own `role="alert"`, so the mobile shell only has to REACH it.
+  it('surfaces the core reason when a bookmark add is refused', async () => {
     (aegis.favorites.add as ReturnType<typeof vi.fn>).mockRejectedValue(
       'that page is already bookmarked',
     );
+    render(<MobileApp />);
+    fireEvent.click(await screen.findByRole('button', { name: /add bookmark/i }));
+    await screen.findByRole('dialog', { name: /manage bookmarks/i });
 
-    const toasts: ToastItem[] = [];
-    const unsubscribe = subscribeToasts((next) => toasts.splice(0, toasts.length, ...next));
+    // Scoped to the dialog: the favourites bar's "+" is ALSO named "Add bookmark", and the
+    // modal is an overlay, so the bar is still mounted underneath it. An unscoped query
+    // throws on the second match rather than testing either button.
+    const manager = await screen.findByRole('dialog', { name: /manage bookmarks/i });
+    fireEvent.change(screen.getByLabelText(/new bookmark name/i), {
+      target: { value: 'Docs' },
+    });
+    fireEvent.change(screen.getByLabelText(/new bookmark url/i), {
+      target: { value: 'https://docs.test/' },
+    });
+    fireEvent.click(within(manager).getByRole('button', { name: /^add bookmark$/i }));
 
-    try {
-      render(<MobileApp />);
-      fireEvent.click(await screen.findByRole('button', { name: /add bookmark/i }));
-      await waitFor(() =>
-        expect(
-          toasts.some((t) => t.kind === 'error' && /already bookmarked/i.test(t.message)),
-        ).toBe(true),
-      );
-    } finally {
-      unsubscribe();
-    }
+    expect(
+      await screen.findByText(/that page is already bookmarked/i),
+      'the CORE sentence, not a generic failure',
+    ).toBeInTheDocument();
   });
 
   // The same obligation for `permissions.remove`. The core refuses a revoke whose save did

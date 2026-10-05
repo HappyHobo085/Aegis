@@ -15,6 +15,7 @@ import { join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const COMPONENTS = join(ROOT, 'src', 'components');
+const SRC = join(ROOT, 'src');
 const INDEX_CSS = join(ROOT, 'src', 'index.css');
 const MAIN_ACTIVITY = join(
   ROOT,
@@ -680,5 +681,108 @@ describe('the dialog cards share one width token', () => {
       const rule = css.match(new RegExp(String.raw`^${card.replace('.', '\\.')} \{([^}]*)\}`, 'm'));
       expect(rule![1]).not.toMatch(/max-width:\s*\d+px/);
     }
+  });
+});
+
+/**
+ * Every modal BOTH shells render must go full-screen on mobile, and must consume the four
+ * Android system insets.
+ *
+ * `.settings-modal__content` and `.downloads-modal` did; `.favorites-manager` did NOT, so
+ * the favourites modal rendered as a centred `width: 90% / max-height: 80vh` card with no
+ * safe-area padding — its header row would sit under the Android status bar. That was a
+ * documented deliberate omission ("an Android layout change is not verifiable on this host")
+ * and it stopped being one when the mobile shell began rendering the modal at all: a
+ * pre-existing inconsistency became a reachable one.
+ *
+ * The list is DERIVED from `MobileApp`'s own imports, so a modal the mobile shell starts
+ * rendering cannot join this class without being given the full-screen treatment — which is
+ * the whole point, because nothing else can see it. jsdom does not load `index.css`, so no
+ * component test can.
+ *
+ * **Mutation recipe:** delete the `.aegis-mobile .favorites-manager` block, or drop one of
+ * its four inset vars — the guard must go red and name the rule.
+ */
+describe('every modal the mobile shell renders goes full-screen and pads for the system bars', () => {
+  const css = readFileSync(INDEX_CSS, 'utf8');
+  const mobileApp = readFileSync(join(SRC, 'components', 'mobile', 'MobileApp.tsx'), 'utf8');
+
+  /** Modal components `MobileApp` imports from `../` (i.e. not the mobile folder). */
+  function mobileModals(): string[] {
+    return [
+      ...new Set(
+        [...mobileApp.matchAll(/^import \{ ([A-Za-z0-9_]+) \} from '\.\.\/[A-Za-z0-9_]+';/gm)].map(
+          (m) => m[1],
+        ),
+      ),
+    ]
+      .filter((n) => n.endsWith('Modal') || n.endsWith('Manager'))
+      .sort();
+  }
+
+  const modals = mobileModals();
+
+  it('derives a non-empty modal set from the mobile shell itself', () => {
+    expect(modals).toContain('FavoritesManager');
+    expect(modals.length).toBeGreaterThanOrEqual(3);
+  });
+
+  for (const modal of modals) {
+    it(`${modal} is rendered by the mobile shell (guards this loop against nothing)`, () => {
+      expect(mobileApp).toContain(`<${modal}`);
+    });
+  }
+
+  it('each modal card is forced full-width on mobile, off the centred desktop size', () => {
+    const missing: string[] = [];
+    for (const selector of ['.settings-modal__content', '.downloads-modal', '.favorites-manager']) {
+      const rule = css.match(
+        new RegExp(String.raw`^\.aegis-mobile ${selector.replace(/\./g, '\\.')} \{([^}]*)\}`, 'm'),
+      );
+      if (!rule) {
+        missing.push(`${selector}: no \`.aegis-mobile ${selector}\` rule at all`);
+        continue;
+      }
+      const body = rule[1];
+      const wants = {
+        width: /width:\s*100%/,
+        height: /height:\s*100%/,
+        'max-width: none': /max-width:\s*none/,
+        'max-height: none': /max-height:\s*none/,
+        'border-radius: 0': /border-radius:\s*0/,
+      };
+      for (const [what, re] of Object.entries(wants)) {
+        if (!re.test(body)) missing.push(`${selector}: missing ${what}`);
+      }
+    }
+    expect(
+      missing,
+      missing.length
+        ? `these cards stay a centred desktop-sized box on a phone, and sit under the status/nav ` +
+            `bars. Add a \`.aegis-mobile <selector>\` rule with width/height 100%, max-* none and ` +
+            `border-radius 0.`
+        : '',
+    ).toEqual([]);
+  });
+
+  it('each modal card consumes all four Android system insets', () => {
+    const missing: string[] = [];
+    for (const selector of ['.settings-modal__content', '.downloads-modal', '.favorites-manager']) {
+      const rule = css.match(
+        new RegExp(String.raw`^\.aegis-mobile ${selector.replace(/\./g, '\\.')} \{([^}]*)\}`, 'm'),
+      );
+      for (const side of ['top', 'right', 'bottom', 'left']) {
+        if (!rule?.[1].includes(`--aegis-inset-${side}`)) {
+          missing.push(`${selector}: does not pad var(--aegis-inset-${side})`);
+        }
+      }
+    }
+    expect(
+      missing,
+      missing.length
+        ? `an unpadded edge renders under the Android status or nav bar — MainActivity.kt pushes ` +
+            `the REAL system bars in as these vars (env(safe-area-inset-*) is only the display cutout).`
+        : '',
+    ).toEqual([]);
   });
 });

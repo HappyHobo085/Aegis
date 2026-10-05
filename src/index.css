@@ -5926,6 +5926,21 @@ a:focus-visible {
     var(--aegis-inset-bottom, env(safe-area-inset-bottom))
     var(--aegis-inset-left, env(safe-area-inset-left));
 }
+/* FavoritesManager: outer scrim=.favorites-manager__scrim, dialog card=.favorites-manager */
+.aegis-mobile .favorites-manager__scrim {
+  inset: 0;
+}
+.aegis-mobile .favorites-manager {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  border-radius: 0;
+  padding: var(--aegis-inset-top, env(safe-area-inset-top))
+    var(--aegis-inset-right, env(safe-area-inset-right))
+    var(--aegis-inset-bottom, env(safe-area-inset-bottom))
+    var(--aegis-inset-left, env(safe-area-inset-left));
+}
 /* DownloadsModal: outer scrim=.downloads-modal__scrim, dialog card=.downloads-modal */
 .aegis-mobile .downloads-modal__scrim {
   inset: 0;

@@ -311,10 +311,15 @@ width })` so the page insets from the right and stays visible. There is no
   That is worth naming because a test that typed a plausible bad URL would never
   reach it**, **`SitePermissionsTab`
   (whose revoke/clear now propagate a failed save — the core used to answer `ok`
-  while the file kept the revoked grant)**, the **mobile favourites bar's `+`** and
-  the **mobile "Forget this site's permissions"** in `MobileApp` — every one of
+  while the file kept the revoked grant)**, and the **mobile "Forget this site's
+  permissions"** in `MobileApp` — every one of
   these would otherwise turn the refusal into an unhandled rejection plus a wiped
   form / a dead button.
+  **The mobile favourites bar's `+` used to be listed here as a consumer of its own; it no
+  longer is.** It now opens `FavoritesManager` instead of calling `favorites.add` inline
+  (see the mobile shell section), so the refused-add case is reached *inside* the modal and
+  reported by the modal's own `role="alert"` — the desktop behaviour, and one consumer
+  instead of two that could disagree.
   **The success wording must not print when a sibling call was REFUSED.\*\* Clearing
   remembered site data is several `favorites.remove` / `history.clear` / `permissions.clear`
   promises in a `Promise.all` / `allSettled`, so "Cleared Aegis history for this
@@ -802,9 +807,17 @@ data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
   ~520px once the 220px rail and 20px of padding come off). The token lives on `:root`, not
   in `[data-theme='light']`, because it is geometry rather than a colour. **`platformContract.drift.test.ts`
   fails if any of the three goes back to a literal, or if `--modal-w` is defined twice.**
-  Note `.favorites-manager` has **no `.aegis-mobile` override** while the other two go
-  full-screen — a pre-existing inconsistency, deliberately not "fixed" here because an
-  Android layout change is not verifiable on this host.
+  **All three now go full-screen on `.aegis-mobile`, including `.favorites-manager`.** It
+  used to be the one card with no mobile override — a deliberate omission recorded here
+  ("an Android layout change is not verifiable on this host"), which was correct while the
+  modal was desktop-only and stopped being correct the moment the mobile shell began
+  rendering it, because a pre-existing inconsistency became a _reachable_ one: a centred
+  `width: 90% / max-height: 80vh` card with no safe-area padding puts its header row under
+  the Android status bar. A second drift guard now derives the modal set from `MobileApp`'s
+  own imports and requires each card to be `width/height: 100%`, `max-*: none`,
+  `border-radius: 0` **and** to consume all four `--aegis-inset-*` vars — because jsdom does
+  not load `index.css` and nothing else here can see it. (The owner's call, 2026-10-05:
+  match Settings/Downloads rather than leave it centred.)
 - **The old `*__field` / `*__hint` / `*__status` class names are gone from the panels that
   used them**, replaced by the shared vocabulary, and their CSS rules were deleted with
   them — a rule matching nothing is how a later edit "restores" a class the markup no longer
@@ -863,6 +876,30 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
 - **`MobileTopBar`** — slim address bar (reused `AddressBar`) + reload/stop + a 24dp
   favourites strip (`MobileFavourites`), plus a **bottom-bar toggle** (chevron) and an
   **Enter fullscreen** (Maximize) button.
+- **The favourites strip's `+` opens the desktop `FavoritesManager` MODAL, and is routed
+  through `sheet` rather than a separate boolean.** It used to call `favorites.add`
+  directly — bookmarking the current page in one tap — which made the mobile shell the only
+  place a bookmark could be **created** and the only place it could never be **edited or
+  deleted**: `MobileApp` did not render `FavoritesManager` at all, so no mobile surface
+  could rename or remove a row. Desktop parity is `onOpenManager` → `managerOpen` →
+  `FavoritesManager`. On mobile it is `'favorites'` in the `Sheet` union, which buys three
+  things a separate `useState` would not: the existing `overlayOpen` term lowers the native
+  content (`sheet !== null`), the existing BACK precedence closes it
+  (`__aegisMobileBack` → `setSheet(null)`), and it sits beside `DownloadsModal` /
+  `SettingsModal`, which are already modals rather than `MobileSheet`s. The tap must NOT
+  write anything by itself any more — the user names and URLs the bookmark in the modal —
+  and the refused-add reporting moves from a `toast.error(saveErrorText(e))` in
+  `MobileApp` to `FavoritesManager`'s own inline `role="alert"`, which is the same
+  `saveErrorText` call and is already covered by `FavoritesManager.test.tsx`. A test
+  asserts `favorites.add` was **not** called on the tap, because "opens a modal" and
+  "adds silently" are the same code path to a user and only one of them is the fix. Both
+  dismissals are covered — the modal's own Close button and the native BACK hook
+  (`window.__aegisMobileBack`, called as a plain function like `MainActivity.kt` calls it) —
+  because a modal opened by a chrome button that BACK cannot dismiss is exactly the failure
+  the shell's BACK-precedence comment warns about. That test also happened to move the
+  coverage ratchet: `MobileApp`'s remaining uncovered statements are almost entirely these
+  `onClose={() => setSheet(null)}` / `onX={() => void …}` prop arrows on sheets no test
+  opens.
 - **`MobileBottomBar`** — Saved / History / **Tabs (live count)** / shield / menu
   (thumb-reachable). Saved + History open their sheets directly; Tabs opens the switcher.
 - **`MobileMenuSheet` / `MobileSheet`** — the ☰ drawer (now Back / Forward / Home /

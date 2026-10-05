@@ -35,6 +35,7 @@ import { AdblockShield } from '../AdblockShield';
 import { FindBar } from '../FindBar';
 import { HistoryPanel } from '../HistoryPanel';
 import { SavedPanel } from '../SavedPanel';
+import { FavoritesManager } from '../FavoritesManager';
 import { DownloadsModal } from '../DownloadsModal';
 import { SettingsModal } from '../SettingsModal';
 import type { SettingsTab } from '../SettingsModal';
@@ -67,7 +68,7 @@ declare global {
   }
 }
 
-type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | 'tabs' | null;
+type Sheet = 'menu' | 'history' | 'saved' | 'downloads' | 'settings' | 'tabs' | 'favorites' | null;
 
 /** The mobile shell, wrapped in the surface registry.
  *
@@ -333,22 +334,7 @@ function MobileShell() {
         <MobileFavourites
           favorites={favorites.favorites}
           onOpen={(url: string) => void nav.navigate(url)}
-          onAdd={
-            host !== null
-              ? () => {
-                  // The core REFUSES a bookmark that normalizes onto a live one (the same
-                  // page reached with a different `#fragment` or a trailing slash), which is
-                  // what a second tap on this button is. Reported rather than swallowed: a
-                  // `void` promise that rejects is an unhandled rejection and a button that
-                  // appears dead.
-                  void favorites
-                    .add({ name: nav.state.title || host, url: nav.state.url })
-                    .catch((e: unknown) => {
-                      toast.error(saveErrorText(e));
-                    });
-                }
-              : undefined
-          }
+          onAdd={() => setSheet('favorites')}
         />
       )}
       <div className="content-anchor" />
@@ -446,6 +432,16 @@ function MobileShell() {
             }}
           />
         </MobileSheet>
+      )}
+
+      {sheet === 'favorites' && (
+        <FavoritesManager
+          favorites={favorites.favorites}
+          onClose={() => setSheet(null)}
+          add={favorites.add}
+          update={favorites.update}
+          remove={favorites.remove}
+        />
       )}
 
       {sheet === 'downloads' && (

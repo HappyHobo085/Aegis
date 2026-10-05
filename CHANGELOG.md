@@ -9,6 +9,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Bookmarks can be renamed and deleted on Android.** The mobile favourites bar's `+`
+  bookmarked the current page in one tap and did nothing else: the bookmarks manager is a
+  desktop modal that the Android shell never rendered, so a bookmark could be created on a
+  phone but never edited or removed there. The `+` now opens the same **Manage bookmarks**
+  modal desktop uses, which adds, renames and removes. It goes full-screen with the same
+  status/nav-bar padding as Settings and Downloads, so its header is not under the system
+  bars. Tapping `+` no longer saves anything by itself — you name and address the bookmark
+  in the dialog.
 - **The self-hosted sync server now survives a reboot, and can no longer report itself
   healthy while unreachable.** Docker publishes the server's port by binding
   `AEGIS_SYNC_BIND` **on the host**, so if that address does not exist yet the container
