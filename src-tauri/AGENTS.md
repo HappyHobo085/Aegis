@@ -1761,7 +1761,45 @@ syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserv
     `a_proxy_change_becomes_a_sync_projection_record`, and
     `the_proxy_config_round_trips_through_the_store_and_clear_returns_to_off`.
 - **Misc** — `picker.rs` (element picker, **desktop-only**: Linux/Windows/macOS each inject
-  the overlay natively; Android has no tier and `picker.start` answers `{ok:false}`),
+  the overlay natively; Android has no tier and `picker.start` answers `{ok:false, active:false}`),
+  **★ and it is TWO channels, because a picker with only an on switch cannot be turned off.**
+  The owner reported "clicking it only enables picking; you need to restart the app to
+  disable it", and the cause was structural rather than a missing flag: every exit the overlay
+  had was page-side (`teardown()` is called from a pick and from Escape, both inside the IIFE),
+  and the overlay's opening line `if (window.__aegisPicking) return;` turned every later
+  injection into a **silent no-op**. So there was nothing for a second click to call. Three
+  parts, all load-bearing — the obvious two-part version ships a button that lies:
+  1. **`picker.stop`** injects `STOP_JS`, which calls the ONE handle the overlay publishes
+     (`window.__aegisPickStop`) and then **revokes the session**. Revocation is the part that
+     matters for safety and it is separate from the injection: the nonce is already in the
+     running overlay's closure, so `clear_session()` is what stops a sentinel the page might
+     still fire, while the injection only removes listeners. The handle exists because
+     `teardown` is closure-local and therefore unreachable from a second injection. It is a
+     **control function, not data** — no cross-site identifier is derivable from it (unlike the
+     farble seed, which is why that one stays in the closure), and `teardown` deletes it so it
+     cannot outlive its session. `STOP_JS` deliberately sends **no** sentinel: `stop` is the
+     core asking, so it emits `picker.state` itself.
+  2. **`picker.state {active}`** is emitted on every transition. Escape is why the overlay
+     reports itself — it sends `{cancelled:true}` down the same nonce-gated title sentinel a
+     pick uses, so a page can forge neither. Without that report the core never learns the
+     session ended, the button stays pressed, and the user's next click calls `picker.stop` at
+     a picker that is no longer armed — **the same dead button, one click later.**
+  3. **A matched nonce ends the session whatever the payload is**, so `on_picked` emits the
+     state **before it branches**. A duplicate rule, a malformed payload, an over-cap file and
+     a failed write all return without emitting `picker.picked`, and the page has already torn
+     itself down in every one of them — an emit on the success path leaves the button stuck on
+     for exactly the outcomes that report nothing.
+  **The `cancelled` arm earns its place against a payload carrying BOTH flags**, which is the
+  only thing it changes: `{cancelled:true, selector:"#x", host:"evil.test"}` has a real nonce
+  and passes every `build_rule` validator, so without the explicit arm Escape would be the
+  cheapest way to write an arbitrary filter. A bare `{cancelled:true}` is refused by
+  `build_rule` anyway, which is why `an_escape_reports_the_cancel_and_writes_no_rule` does
+  **not** pin the arm (it pins the observable) — deleting the arm left that test green, and
+  `a_cancelled_payload_cannot_smuggle_a_rule_past_the_picker` is the test that reds.
+  `inject()` is the shared per-platform injection both channels call, so the four engine arms
+  exist once; `start`/`stop` report `active` from whether the injection found a webview rather
+  than a literal, because with no content webview (Android) or no active tab there is no
+  session and a button claiming otherwise is a control that lies.
   `form.rs` (**a seam, not a mechanism — NEITHER detection mode works, and the module
   header says so**; `form.detectLoginForm` used to eval a script and block a
   SYNCHRONOUS `ipc` on a 5 s oneshot, answering a `{hasLoginForm:false}` the renderer

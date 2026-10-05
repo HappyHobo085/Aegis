@@ -39,6 +39,8 @@ import {
   WebrtcExemptState,
   ProxyConfig,
   ProxyState,
+  PickerStartResult,
+  PickerState,
   FormLoginDetectedResult,
   FormState,
   FormWillSubmit,
@@ -731,8 +733,12 @@ export const aegis: AegisApi = {
     },
   },
   picker: {
-    start: () => dedupedCall<{ ok: boolean }>(IPC.pickerStart, undefined),
+    // NOT deduped: `start` mints a fresh session nonce and `stop` revokes one, so two
+    // clicks a second apart are two different operations and must not share a cache entry.
+    start: () => call<PickerStartResult>(IPC.pickerStart),
+    stop: () => call<PickerStartResult>(IPC.pickerStop),
     onPicked: (cb) => on<{ rule: string }>(IPC.evtPickerPicked, cb),
+    onState: (cb) => on<PickerState>(IPC.evtPickerState, cb),
   },
   update: {
     getState: () => dedupedCall<UpdateState>(IPC.updateGetState, undefined),

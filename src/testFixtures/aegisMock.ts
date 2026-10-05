@@ -220,8 +220,13 @@ export function aegisMockModule() {
         import: vi.fn().mockResolvedValue({ ok: false }),
       },
       picker: {
-        start: vi.fn().mockResolvedValue({ ok: false }),
+        // `active` is part of the reply, not derived by the caller: it reports whether an
+        // overlay was actually injected. A mock omitting it would make `active` undefined,
+        // which is falsy — so a test could never express "the picker is armed".
+        start: vi.fn().mockResolvedValue({ ok: false, active: false }),
+        stop: vi.fn().mockResolvedValue({ ok: false, active: false }),
         onPicked: vi.fn(() => () => undefined),
+        onState: vi.fn(() => () => undefined),
       },
       update: {
         getState: vi

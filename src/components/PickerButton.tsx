@@ -6,6 +6,12 @@ import { toast } from '../lib/toast';
 
 export function PickerButton() {
   const [busy, setBusy] = useState(false);
+  // Whether a picking session is armed. This is the CORE's answer, not this component's
+  // optimism: a session also ends inside the page (a pick, or Escape), and a button that
+  // only tracked its own clicks would sit there pressed after either — leaving the user
+  // clicking a `stop` at a picker that is no longer armed, which is the dead button this
+  // toggle exists to remove.
+  const [picking, setPicking] = useState(false);
 
   // The rule arrives as an EVENT, not as `start()`'s return value. `start()` only
   // injects the picking overlay and returns straight away; the pick itself happens
@@ -21,12 +27,22 @@ export function PickerButton() {
     [],
   );
 
-  // `busy` only covers the round trip that injects the overlay, not the pick
-  // itself — the button must be re-clickable while the user is still choosing.
-  const handlePick = async (): Promise<void> => {
+  // Every transition is announced, including the two that happen in the page. A pick
+  // clears the button through this and NOT through the `picker.picked` handler above,
+  // which is subscribed for the toast and must not own picker state.
+  useEffect(() => aegis.picker.onState(({ active }) => setPicking(active)), []);
+
+  // `busy` only covers the round trip that injects (or tears down) the overlay, not the
+  // pick itself — the button must be re-clickable while the user is still choosing.
+  const handleClick = async (): Promise<void> => {
     setBusy(true);
     try {
-      await aegis.picker.start();
+      const res = picking ? await aegis.picker.stop() : await aegis.picker.start();
+      // The reply is the authority, not the branch above: `active` reports whether an
+      // overlay is armed in the page, which is false whenever the core had nowhere to
+      // inject (Android, or no active tab). Adopting it is what stops the button
+      // claiming to be armed over a picker that does not exist.
+      setPicking(res.active);
     } finally {
       setBusy(false);
     }
@@ -37,9 +53,13 @@ export function PickerButton() {
       type="button"
       className="toolbar__picker"
       aria-label="Pick element to hide"
-      title="Pick element to hide"
+      title={picking ? 'Stop picking (Esc also cancels)' : 'Pick element to hide'}
+      // The toggle's state, exposed the way a toggle button exposes it. The label is
+      // deliberately UNCHANGED when pressed: it names the feature, and the pressed state
+      // is what says whether it is running.
+      aria-pressed={picking}
       disabled={busy}
-      onClick={() => void handlePick()}
+      onClick={() => void handleClick()}
     >
       <SquareMousePointer size={18} aria-hidden="true" />
     </button>

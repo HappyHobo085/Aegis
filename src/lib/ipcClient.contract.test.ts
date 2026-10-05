@@ -509,8 +509,9 @@ const REQUESTS: ContractRow[] = [
     payload: { mode: 'replace' },
   },
 
-  // ---- picker (1) ----
+  // ---- picker (2) ----
   { name: 'picker.start', run: () => aegis.picker.start(), channel: IPC.pickerStart, payload: {} },
+  { name: 'picker.stop', run: () => aegis.picker.stop(), channel: IPC.pickerStop, payload: {} },
 
   // ---- update (3) ----
   {
@@ -1101,6 +1102,14 @@ const EVENTS: { name: string; run: () => () => void; event: string }[] = [
     name: 'picker.onPicked',
     run: () => aegis.picker.onPicked(NOOP),
     event: IPC.evtPickerPicked,
+  },
+  {
+    // The toggle's state channel. `PickerButton`'s pressed state is a claim about the
+    // core, so it is driven by this event rather than by the button's own clicks — a
+    // session also ends inside the page (a pick, or Escape).
+    name: 'picker.onState',
+    run: () => aegis.picker.onState(NOOP),
+    event: IPC.evtPickerState,
   },
   { name: 'subs.onChanged', run: () => aegis.subs.onChanged(NOOP), event: IPC.evtSubsChanged },
 ];

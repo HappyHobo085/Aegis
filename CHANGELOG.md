@@ -132,6 +132,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The "Pick element to hide" button could be switched on but never off.** Once you started
+  picking an element to hide, the only ways out were picking something or pressing Escape,
+  both of which happen on the page itself, and clicking the button again did nothing at all
+  — the page had to be reloaded (in practice, restarting the app) to pick something
+  differently. The button is now a real toggle: click it again to stop picking, and it shows
+  which of the two it is in. It also stops claiming to be on after you press Escape or make a
+  pick, which it previously had no way of learning about.
+
 - **Typing in the address bar made the whole window flash and the page keep jumping.** The
   omnibox dropdown pushed the page down, and that displacement fed straight back into its own
   input: the dropdown's height is measured from its content, the content webview is resized to

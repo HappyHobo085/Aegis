@@ -312,7 +312,12 @@ describe('shared/types — Phase 5 additions', () => {
       onPrompt: true,
     };
     const dataShape: Record<keyof DataApi, true> = { export: true, import: true };
-    const pickerShape: Record<keyof PickerApi, true> = { start: true, onPicked: true };
+    const pickerShape: Record<keyof PickerApi, true> = {
+      start: true,
+      stop: true,
+      onPicked: true,
+      onState: true,
+    };
     expect(Object.keys(downloadsShape).sort()).toEqual([
       'cancel',
       'clear',
@@ -330,7 +335,7 @@ describe('shared/types — Phase 5 additions', () => {
       'resolve',
     ]);
     expect(Object.keys(dataShape).sort()).toEqual(['export', 'import']);
-    expect(Object.keys(pickerShape)).toEqual(['start', 'onPicked']);
+    expect(Object.keys(pickerShape)).toEqual(['start', 'stop', 'onPicked', 'onState']);
   });
 });
 

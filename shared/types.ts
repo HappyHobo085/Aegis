@@ -84,8 +84,10 @@ export const IPC = {
   dataImport: 'data.import',
   // element picker (Phase 5, chrome -> main)
   pickerStart: 'picker.start',
+  pickerStop: 'picker.stop',
   // events (Phase 5, main -> chrome renderer)
   evtPickerPicked: 'picker.picked',
+  evtPickerState: 'picker.state',
   evtSubsChanged: 'subs.changed',
   evtDownloadsChanged: 'downloads.changed',
   evtPermissionsPrompt: 'permissions.prompt',
@@ -734,6 +736,25 @@ export interface FindState {
 }
 
 /** Exposed on window.aegis by chromePreload via contextBridge. */
+/**
+ * The reply to both `picker.start` and `picker.stop`.
+ *
+ * `active` is deliberately a field rather than something the caller infers from `ok`: it
+ * reports whether an overlay is armed IN THE PAGE, which is not the same question as whether
+ * the core accepted the call. A start with no content webview (Android) or no active tab
+ * answers `ok: false, active: false`, and a caller that derived `active` from `ok` would show
+ * an armed picker that does not exist.
+ */
+export interface PickerStartResult {
+  ok: boolean;
+  active: boolean;
+}
+
+/** Payload of the `picker.state` event. See `aegis.picker.onState`. */
+export interface PickerState {
+  active: boolean;
+}
+
 export interface AegisApi {
   nav: {
     navigate(viewId: ViewId, url: string): Promise<void>;
@@ -875,7 +896,14 @@ export interface AegisApi {
     import(mode: ImportMode, source?: { text?: string }): Promise<DataImportResult>;
   };
   picker: {
-    start(): Promise<{ ok: boolean }>;
+    start(): Promise<PickerStartResult>;
+    /**
+     * Turn the picker OFF. This is not the same as pressing Escape: Escape ends the session
+     * inside the page, and without this channel the button could arm the picker and never
+     * disarm it without reloading the page. Revokes the session nonce as well as tearing the
+     * overlay down, so a sentinel the page already holds cannot still write a rule.
+     */
+    stop(): Promise<PickerStartResult>;
     /**
      * Fires with the rule the user just picked. This CANNOT be the return value of
      * `start()`: `start` injects the picking overlay and returns immediately, and
@@ -883,6 +911,14 @@ export interface AegisApi {
      * `rule` is always present on this event.
      */
     onPicked(cb: (picked: { rule: string }) => void): () => void;
+    /**
+     * Whether a picking session is armed. The toolbar button's pressed state is a CLAIM
+     * about the core, so it is driven by this rather than by clicks: a session also ends
+     * inside the page (a pick, or Escape), and a button that only tracked its own clicks
+     * would stay pressed after either — leaving the user clicking a `stop` at a picker
+     * that is no longer armed.
+     */
+    onState(cb: (state: PickerState) => void): () => void;
   };
   update: {
     getState(): Promise<UpdateState>;
