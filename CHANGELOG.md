@@ -7,6 +7,33 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Fixed
+
+- **The self-hosted sync server now survives a reboot, and can no longer report itself
+  healthy while unreachable.** Docker publishes the server's port by binding
+  `AEGIS_SYNC_BIND` **on the host**, so if that address does not exist yet the container
+  start fails with `cannot assign requested address` — and `restart: unless-stopped` cannot
+  recover, because the failure happens before the container's process exists. On a
+  Tailscale deployment that is the normal state at boot, and the server was measured down
+  for **23 hours** after a reboot while `docker ps` reported `healthy`.
+  Two independent defects, both fixed:
+  - **A boot unit now waits for the address** (`sync-server/systemd/`) and then recreates
+    the container. Ordering after `tailscaled.service` would not have been enough: that unit
+    is `Type=notify` and was already active twelve seconds before the bind failed, so the
+    wait is on the address itself, and it fails loudly rather than proceeding.
+  - **The healthcheck now distinguishes "serving" from "isolated."** A container whose
+    endpoint setup failed has only a loopback interface, so the old loopback `/healthz`
+    probe passed on a server nothing could reach — which is why the outage was invisible
+    behind a green status. `docker ps` reporting `healthy` now means the container is
+    serving _and_ networked; it was never a proof of reachability from any given host.
+  - **The boot unit fails loudly instead of latching a green "active."** Because
+    `systemctl start` on an already-started unit does nothing at all, the new unit also
+    verifies the published port really answers and reports `failed` when it does not — so
+    "started" and "reachable" stop being the same claim. Use `systemctl restart` to re-run
+    it, never `start`.
+    No protocol, storage or auth behaviour changed, and existing data volumes are untouched.
+    The default loopback bind needed none of this and still does not wait.
+
 ### Added
 
 - **Ctrl+click, middle-click and Shift+click now open a link in a new tab.** Clicking a link

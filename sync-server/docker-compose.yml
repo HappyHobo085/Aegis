@@ -22,8 +22,22 @@ services:
       - AEGIS_SYNC_DATA=/data/aegis-sync.json
     volumes:
       - aegis-sync-data:/data
+    # The `ip` clause is load-bearing, not decoration. The bare `/healthz` probe
+    # runs INSIDE the container against loopback, and a container whose endpoint
+    # setup failed has only `lo` — so it answers /healthz perfectly while nothing
+    # outside can reach it. Measured on this host: `docker ps` reported `healthy`
+    # with `NetworkSettings.Networks={}` and every host-side curl refused. Docker
+    # reports such a container as running-and-healthy, so the healthcheck is the
+    # only signal that can distinguish "serving" from "isolated"; without this
+    # clause a failed restore is indistinguishable from a healthy server.
+    #
+    # `scope global` is what excludes loopback (`lo` is `scope host`). The exit
+    # status of `ip` itself is 0 either way, so the discriminator is `grep -q .`
+    # finding a line, not `ip`'s status.
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8787/healthz"]
+      test:
+        - CMD-SHELL
+        - ip -o -4 addr show scope global | grep -q . && wget -qO- http://127.0.0.1:8787/healthz >/dev/null
       interval: 30s
       timeout: 3s
       retries: 3

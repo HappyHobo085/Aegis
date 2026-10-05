@@ -194,6 +194,58 @@ shape). Change one, change the other in the same commit.
 running it and putting a reverse proxy in front for HTTPS. The container serves plain HTTP;
 TLS is the operator's reverse proxy.
 
+### Startup: the published port is bound on the HOST, so a missing address is fatal
+
+`ports: "${AEGIS_SYNC_BIND}:…"` means Docker `bind()`s `AEGIS_SYNC_BIND` **on the host**
+during endpoint setup. If that address does not exist, the start fails with `cannot
+assign requested address` — and `restart: unless-stopped` **cannot recover**, because the
+failure precedes the container process, so there is no process for the restart manager.
+Measured: down 23 h after a reboot while `docker ps` said `healthy`.
+
+- **`systemd/aegis-sync-server.service` + `systemd/wait-for-bind-address.sh`** fix the
+  recurrence. The unit waits for the address to actually exist, then runs
+  `docker compose up -d --force-recreate`. Four things there are load-bearing, each
+  because the obvious alternative fails *silently*:
+  - **It must be a SYSTEM unit.** A `systemctl --user` unit only starts at login (so the
+    server is down on a headless boot) and cannot resolve the system `docker.service`
+    (`systemd-analyze`: "Unit docker.service not found").
+  - **The wait is on the ADDRESS, not on `tailscaled.service`.** `tailscaled` is
+    `Type=notify` and was already `active` **12 s before** the bind failed — "active"
+    means the daemon started, not that the tailnet IP landed.
+  - **`--force-recreate`,** because a container left by a failed restore keeps its stale
+    networkless endpoint and a plain `up -d` merely *starts* it again (measured:
+    `Networks={}`, every host-side curl refused).
+  - **`RequiresMountsFor` in `[Unit]`,** not `[Service]` — systemd ignores it in
+    `[Service]` with only a `systemd-analyze` warning.
+  - `@SYNC_SERVER_DIR@` is a placeholder (a unit needs an absolute path; the file is
+    tracked), substituted by the documented `sed`. Both readers of the address —
+    compose's interpolation and the wait script — default to `127.0.0.1`, so the safe
+    default needs no wait and the two cannot disagree.
+  - **The unit's own "active" is a LATCH, not a liveness signal, and that was measured.**
+    `RemainAfterExit=yes` + `Type=oneshot` means `systemctl start` on an
+    already-active unit is a **no-op** — observed returning 0 and logging nothing while
+    the container was down and unreachable — so the operator must use `restart`.
+    `RemainAfterExit` is kept anyway: without it the unit reports `inactive (dead)`
+    immediately, i.e. a false RED while the server is healthy, and `is-active` is the
+    state an operator is likelier to act on. The unit therefore carries an
+    **`ExecStartPost`** that connects to the PUBLISHED address and **fails the unit** if
+    nothing answers, so "started" and "reachable" stop being the same claim. It uses
+    `bash`'s **`/dev/tcp`**, not `wget`/`curl`: `rpm -q wget` reports *not installed* on
+    this host (busybox supplies it), so a wget probe would fail on any host without
+    busybox — a failure indistinguishable from the outage it exists to catch.
+- **The healthcheck's `ip -o -4 addr show scope global | grep -q .` clause is a
+  correctness fix, not hardening.** A failed endpoint leaves only `lo`, so a bare
+  `/healthz` loopback probe passes on an unreachable container — which is exactly how this
+  outage was invisible behind a green `docker ps`. `scope global` excludes `lo` (`scope
+  host`), and the discriminator is `grep -q .` finding a line, **not `ip`'s exit status**,
+  which is 0 either way. Health therefore means "serving AND networked", still not
+  "reachable from any given host" — curl the published address for that.
+- `src/lib/platformContract.drift.test.ts` pins all of the above, with a mutation recipe
+  per claim. Its two traps, both hit while writing it: pin **anchored directives**
+  (`^ExecStartPre=`), because the unit's comment block names `wait-for-bind-address` and
+  `docker compose up` in prose and a bare `indexOf` matches the comment; and do not
+  anchor `After=` to end-of-line, since the real value carries a second unit.
+
 ## Test
 
 `cargo test` (run from this folder, or `cargo test --manifest-path sync-server/Cargo.toml`

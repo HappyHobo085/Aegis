@@ -424,3 +424,116 @@ describe('the two React roots must share one stylesheet', () => {
     expect(css).toEqual(['index.css']);
   });
 });
+
+// A deployment contract, in a renderer test file, because the failure it prevents is
+// invisible to every other gate. The sync server's published port binds to a Tailscale
+// address; when the host does not have that address yet, Docker's endpoint setup fails
+// BEFORE the container process starts, so `restart: unless-stopped` has nothing to
+// restart and the server stays down until a human intervenes. Measured on the deploy
+// host: down for 23 hours after a reboot, with `docker ps` reporting `healthy`.
+//
+// Two halves, and BOTH are needed. The unit stops the outage recurring; the healthcheck
+// is what stops it being INVISIBLE, because the old probe ran against loopback inside
+// the container and passed on a container that nothing outside could reach.
+//
+// MUTATION RECIPES (each must go red, and only the relevant one):
+//   1. drop `--force-recreate` from the unit's ExecStart -> the 'recreates' test
+//      (a plain `up -d` only STARTS the stale networkless container back up).
+//   2. revert the healthcheck to a bare `/healthz` probe -> the 'healthcheck' test.
+describe('the sync server must start unattended, and must be able to report that it did not', () => {
+  const SYNC = join(ROOT, 'sync-server');
+  const compose = readFileSync(join(SYNC, 'docker-compose.yml'), 'utf8');
+  const unit = readFileSync(join(SYNC, 'systemd', 'aegis-sync-server.service'), 'utf8');
+  const wait = readFileSync(join(SYNC, 'systemd', 'wait-for-bind-address.sh'), 'utf8');
+
+  /** Index of a real DIRECTIVE line, anchored at line start. */
+  const at = (text: string, re: RegExp): number => {
+    const m = re.exec(text);
+    if (!m) throw new Error(`no line matching ${re} — is the directive gone or unanchored?`);
+    return m.index;
+  };
+
+  it('the boot unit waits for the bind address and then recreates the container', () => {
+    // The wait must come BEFORE the `up`, or the bind is attempted before the address
+    // exists — which is the outage.
+    //
+    // These are matched as ANCHORED DIRECTIVES, not as bare substrings. The unit's
+    // comment block names both `wait-for-bind-address` and `docker compose up` in prose
+    // (explaining the failure they prevent), so a plain `indexOf('docker compose up')`
+    // finds the COMMENT and orders the comparison backwards. A text pin must key on the
+    // directive it means; that trap is what this first version of the test fell into.
+    const waitAt = at(unit, /^ExecStartPre=.*wait-for-bind-address\.sh$/m);
+    const upAt = at(unit, /^ExecStart=docker compose up -d --force-recreate$/m);
+    expect(waitAt).toBeLessThan(upAt);
+
+    // `--force-recreate` is load-bearing, not hygiene: a container left behind by the
+    // failed restore keeps its stale networkless endpoint, and a plain `up -d` starts
+    // that same container again rather than re-running endpoint setup. MEASURED.
+    expect(unit).toContain('docker compose up -d --force-recreate');
+  });
+
+  it('the unit orders after docker AND declares the mount it runs from', () => {
+    // `After=docker.service network-online.target` — the directive carries more than the
+    // one unit name, so anchor the NAME with a word boundary rather than to end-of-line.
+    expect(unit).toMatch(/^After=.*\bdocker\.service\b.*$/m);
+    // And it must be a real dependency, not just a comment: `Requires=` means the unit
+    // fails loudly if docker is absent instead of racing it.
+    expect(unit).toMatch(/^Requires=docker\.service$/m);
+    // `RequiresMountsFor` is a [Unit] directive. In [Service] systemd IGNORES it
+    // silently (verified: systemd-analyze warns "Unknown key ... ignoring"), which
+    // would leave the unit racing the mount as quietly as it raced the tailnet.
+    // Section boundaries are likewise matched as ANCHORED HEADERS for the same reason
+    // as above — `[Service]` appears in the comment block too.
+    const serviceAt = at(unit, /^\[Service\]$/m);
+    expect(unit.slice(0, serviceAt)).toMatch(/^RequiresMountsFor=@SYNC_SERVER_DIR@$/m);
+    expect(unit.slice(serviceAt)).not.toMatch(/^RequiresMountsFor=/m);
+  });
+
+  it('the unit verifies reachability itself, because its "active" is a latch', () => {
+    // MEASURED false green: with `RemainAfterExit=yes`, the unit latches
+    // `active (exited)` and a later `systemctl start` is a NO-OP — it returned 0 and
+    // logged nothing while the container was down and unreachable. So `is-active`
+    // cannot mean "the server is up", and the unit must not leave that as the only
+    // signal. An `ExecStartPost` that curls the PUBLISHED port makes the unit fail
+    // loudly instead, which is the difference between "claims to have started" and
+    // "did start".
+    expect(unit).toMatch(/^ExecStartPost=/m);
+    // It has to probe the PUBLISHED address, which is the address compose binds and
+    // the one clients connect to, and never a hardcoded loopback: a loopback probe is
+    // green for a container with no network at all.
+    expect(unit).toMatch(/^ExecStartPost=.*\$\$\{AEGIS_SYNC_BIND:-127\.0\.0\.1\}\/8787/m);
+    // `bash` /dev/tcp, not wget or curl: `rpm -q wget` reports "not installed" on the
+    // host this was written on (busybox supplies it), so a wget probe would make the
+    // unit fail on any host without busybox — a failure that looks like the outage.
+    expect(unit).toMatch(/^ExecStartPost=\/bin\/bash /m);
+    expect(unit).toMatch(/^ExecStartPost=.*\/dev\/tcp\//m);
+    expect(unit).not.toMatch(/^ExecStartPost=.*\bwget\b/m);
+  });
+
+  it('the healthcheck can tell "serving" from "isolated"', () => {
+    // A loopback-only probe passes on a container with no network at all, because a
+    // failed endpoint leaves `lo` and nothing else. The `scope global` clause is what
+    // excludes `lo` (it is `scope host`), and the discriminator is `grep -q .` finding a
+    // line — `ip` itself exits 0 either way, so an exit-status check would be vacuous.
+    expect(compose).toMatch(/ip -o -4 addr show scope global \| grep -q \./);
+    expect(compose).toContain('/healthz');
+  });
+
+  it('the wait reads the same variable compose interpolates, and fails LOUDLY', () => {
+    // Two independent readers of one setting is two things that can drift; the shared
+    // variable name plus a matching default is what keeps them in agreement.
+    expect(compose).toContain('${AEGIS_SYNC_BIND:-127.0.0.1}');
+    expect(wait).toContain('AEGIS_SYNC_BIND:-127.0.0.1');
+    // A silent success here IS the bug: the caller would proceed to `docker compose up`,
+    // the bind would fail, and the unit would claim to have started.
+    expect(wait).toMatch(/exit 1/);
+    // Always-satisfiable binds must not add startup latency to the safe default.
+    expect(wait).toMatch(/127\.\*.*exit 0/s);
+  });
+
+  it('anti-vacuity: the scan found the real files, not empty ones', () => {
+    expect(compose.length).toBeGreaterThan(0);
+    expect(unit).toContain('[Unit]');
+    expect(wait).toContain('has_addr');
+  });
+});

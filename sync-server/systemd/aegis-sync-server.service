@@ -1,0 +1,131 @@
+# Aegis sync server — start the container only once the host actually has the
+# address its published port binds to.
+#
+# INSTALL (this is a SYSTEM unit, and must be one):
+#   sudo sed "s|@SYNC_SERVER_DIR@|$PWD|g" \
+#     sync-server/systemd/aegis-sync-server.service \
+#     | sudo tee /etc/systemd/system/aegis-sync-server.service >/dev/null
+#   sudo chmod 644 /etc/systemd/system/aegis-sync-server.service
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now aegis-sync-server.service
+#
+# The `chmod` is not fussiness: systemd warns "marked executable" for an executable
+# unit, and this repo may live on a vfat mount, which stores no permission bits and
+# so reports every file as 0755 no matter what you chmod it to. The copy under
+# /etc is on a normal filesystem, where the mode is real.
+#
+# A *user* unit (`systemctl --user`, ~/.config/systemd/user) does NOT work here,
+# for two independent reasons: it only starts when that user logs in, so the
+# server stays down on a headless boot — the exact case this unit exists to fix —
+# and a user unit cannot see the system `docker.service`, so `After=docker.service`
+# cannot be resolved at all (verified: systemd-analyze reports "Unit
+# docker.service not found"). Both are silent failures, which is why the file is
+# shipped as a system unit.
+#
+# WHY THIS UNIT EXISTS. `docker.service` restores containers on boot, but the
+# sync server's published port is bound to a Tailscale address (`AEGIS_SYNC_BIND`
+# in .env). Docker `bind()`s that address on the HOST during endpoint setup, and
+# `tailscale0` does not have its tailnet IP yet when the docker daemon restores
+# containers, so the start fails with `cannot assign requested address` and
+# `restart: unless-stopped` cannot recover: the failure precedes the container
+# process, so there is no process for the restart manager to restart. Measured on
+# this host: the server was down for 23 hours after a reboot on 2026-10-04.
+#
+# WHY `After=tailscaled.service` IS NOT ENOUGH. tailscaled is `Type=notify`; it
+# was already `active` TWELVE SECONDS before the bind failed, because "active"
+# only means the daemon started, not that the tailnet IP has landed on the
+# interface. Only polling for the address is a real condition. And the wait has to
+# wrap `docker compose up`, because docker's own restore is what races the
+# tailnet — ordering docker.service after tailscaled would not sequence it.
+#
+# `@SYNC_SERVER_DIR@` is a placeholder because a systemd unit needs an ABSOLUTE
+# path and this file is tracked in git, so it cannot hardcode one host's layout.
+# The install command above substitutes it; every path below comes from the same
+# substitution so they cannot drift apart.
+
+[Unit]
+Description=Aegis sync server (Docker)
+Documentation=file:@SYNC_SERVER_DIR@/DOCKER.md
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+# The repo may live on a `nofail` mount, so it can be absent early in boot.
+# This is a [Unit] directive: in [Service] systemd silently IGNORES it (verified —
+# `systemd-analyze verify` warns "Unknown key 'RequiresMountsFor' in section
+# [Service], ignoring"), which would leave the unit racing the mount as silently
+# as it used to race the tailnet.
+RequiresMountsFor=@SYNC_SERVER_DIR@
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+
+# `RemainAfterExit=yes` is what makes this a FALSE GREEN, and it was measured, not
+# theorised. With it, the unit latches `active (exited)` after the first successful
+# run, and systemd then treats a later `systemctl start` on an already-active unit as
+# a NO-OP: observed here as `systemctl start` returning 0 and logging nothing at all
+# while the container was down and unreachable. So `systemctl is-active` answering
+# `active` did not mean the server was up — the same defect as the loopback-only
+# healthcheck, one layer up, and `systemctl restart` was the only thing that worked.
+#
+# It is kept anyway, and the reason is that the alternative is worse: without it the
+# unit goes `inactive (dead)` the moment the oneshot returns, so `is-active` would
+# report `inactive` while the server is perfectly healthy — a false RED, and the state
+# an operator is far more likely to act on. `enabled` + `multi-user.target` is what
+# actually makes it run at boot; `RemainAfterExit` only decides what the unit reports
+# afterwards.
+#
+# SO: treat `systemctl is-active` as "the last start attempt succeeded", never as
+# "the server is reachable". The reachability check is the curl in DOCKER.md, and the
+# reachability SIGNAL is the container healthcheck. To re-run after a manual change,
+# use `systemctl restart` (never `start`, which no-ops once latched).
+
+WorkingDirectory=@SYNC_SERVER_DIR@
+
+# compose interpolates AEGIS_SYNC_BIND from this same file, so the address waited
+# for below is by construction the address compose will bind. The `-` makes a
+# missing .env non-fatal: the documented default (loopback) needs no wait, and
+# compose then falls back to its own identical default.
+EnvironmentFile=-@SYNC_SERVER_DIR@/.env
+
+# Fail LOUDLY and do not proceed. Without the address the `up` below fails during
+# endpoint setup anyway, and a silently-skipped wait reproduces the exact outage
+# this unit prevents — with a unit that claims to have started.
+ExecStartPre=@SYNC_SERVER_DIR@/systemd/wait-for-bind-address.sh
+
+# `--force-recreate` is load-bearing, not hygiene. A container left behind by the
+# failed restore keeps its stale, networkless endpoint, and a plain
+# `docker compose up -d` only STARTS that container again — measured: still
+# `Networks={}`, still unreachable from every host-side curl. Recreating is what
+# re-runs endpoint setup.
+ExecStart=docker compose up -d --force-recreate
+
+# Prove the server is actually REACHABLE, and fail the unit if it is not.
+#
+# `docker compose up -d` returns 0 as soon as the container is started, and the unit
+# latches `active` (see RemainAfterExit above), so without this the ONLY signals after
+# a failed start are `is-active` — which lies — and the container healthcheck, which
+# takes up to 90s to turn red. This polls the PUBLISHED address instead of loopback,
+# because a loopback probe is green for a container with no network at all, and it is
+# the same address the phone and the desktop actually connect to.
+#
+# It polls rather than connects once because the listener is up before the first accept
+# in any meaningful sense; a short bounded poll is not a sleep-for-a-fixed-time, it exits
+# the instant the port accepts.
+#
+# `bash`'s /dev/tcp, not wget or curl: it needs no external binary, and `wget` is NOT a
+# safe assumption on the host — on the machine this was written on, `rpm -q wget`
+# reports "not installed" (busybox provides it), so a wget-based probe would make this
+# unit fail on any host without busybox. `bash` is already a hard requirement here
+# because the ExecStartPre script is bash, and /dev/tcp costs nothing extra.
+ExecStartPost=/bin/bash -c 'i=0; while [ $$i -lt 30 ]; do (exec 3<>/dev/tcp/$${AEGIS_SYNC_BIND:-127.0.0.1}/8787) 2>/dev/null && exit 0; i=$$((i+1)); sleep 1; done; echo "aegis-sync-server: NOT reachable on $${AEGIS_SYNC_BIND:-127.0.0.1}:8787 after 30s" >&2; exit 1'
+
+# Stop without removing, so `systemctl stop` is not destructive to the named
+# volume and a later `start` is cheap.
+ExecStop=docker compose stop
+
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target
