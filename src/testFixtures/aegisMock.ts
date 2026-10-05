@@ -533,6 +533,13 @@ export function aegisMockModule() {
         onState: vi.fn(() => () => {}),
         onShortcut: vi.fn(() => () => {}),
       },
+      // The popover surface's chrome-side seam. `set` is NOT deduped in the real client
+      // (a popover's rect moves with the caret), so the mock records every call — a test that
+      // asserts "sent once" is asserting the hook's change guard, not the transport.
+      popover: {
+        set: vi.fn(() => Promise.resolve()),
+        onPicked: vi.fn(() => () => {}),
+      },
     } satisfies AegisApi,
   };
 }

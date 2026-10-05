@@ -390,7 +390,16 @@ pub(crate) fn content_ua_for(engine: ContentEngine) -> &'static str {
 
 /// The UA this build actually sends. A `cfg` arm can only pick the engine; the string
 /// itself comes from [`content_ua_for`] so a test can audit every platform at once.
-#[cfg(any(desktop, test))]
+///
+/// Gated `desktop`, NOT `any(desktop, test)`: the body's arms below are all
+/// `target_os`-selected, so a gate that admitted a platform the arms do not cover would
+/// compile the function with an EMPTY body there. `test` alone did exactly that — a mobile
+/// `--all-targets` lib-test build compiled this with no arm, so the implicit `()` failed
+/// `E0308` against the declared `&'static str`. `desktop` is `!(ios || android)`
+/// (`tauri-build`), which is exactly the platform set the arms cover, and a desktop *test*
+/// build keeps it, so `this_build_sends_the_user_agent_for_the_engine_it_actually_runs`
+/// still runs everywhere it is meaningful.
+#[cfg(desktop)]
 pub(crate) fn content_ua() -> &'static str {
     #[cfg(target_os = "linux")]
     {
@@ -1166,11 +1175,15 @@ pub fn dispatch<R: Runtime>(
 #[cfg(test)]
 mod tests {
     use super::{
-        content_ua, content_ua_for, dispatch, forget_tab_content, forget_tab_loading, is_navigable,
+        content_ua_for, dispatch, forget_tab_content, forget_tab_loading, is_navigable,
         is_page_navigable, mark_tab_has_content, note_tab_loading, parse_navigable, reload_or_stop,
         reload_or_stop_action, require_navigable, should_autoclose_popunder, tab_is_loading,
         tabs_with_content, ContentEngine, ReloadOrStop,
     };
+    // `content_ua` does not exist off `desktop` (see its `cfg` gate), so an unconditional
+    // `use` would be an unresolved import there and a dead one here.
+    #[cfg(desktop)]
+    use super::content_ua;
     use crate::test_support::with_tmp_app;
     use crate::test_support::{kotlin_fn_body, kotlin_source, rust_production_source};
     use serde_json::{json, Value};
@@ -1263,6 +1276,46 @@ mod tests {
         assert_eq!(content_ua(), content_ua_for(ContentEngine::WebKitMac));
         #[cfg(target_os = "windows")]
         assert_eq!(content_ua(), content_ua_for(ContentEngine::Chromium));
+    }
+
+    #[test]
+    fn a_cfg_gate_never_admits_a_platform_whose_body_arm_is_missing() {
+        // THE defect, as an invariant: `content_ua` was gated `any(desktop, test)` while every
+        // one of its body arms is `target_os`-selected. `test` alone therefore admitted a mobile
+        // `--all-targets` lib-test build, which compiled the function with NO arm — so the
+        // implicit `()` body failed `E0308` against the declared `&'static str`. No Linux build
+        // can see that, and CI's cross-target leg does not pass `--all-targets`, so this pin is
+        // the only automated guard.
+        let src = rust_production_source(include_str!("nav.rs"));
+        let lines: Vec<&str> = src.lines().collect();
+        let sig = lines
+            .iter()
+            .position(|l| l.contains("pub(crate) fn content_ua() -> &'static str"))
+            .expect("content_ua is defined in nav.rs's production source");
+        let gate = lines[..sig]
+            .iter()
+            .rev()
+            .find(|l| l.trim_start().starts_with("#[cfg("))
+            .expect("content_ua's signature is governed by a #[cfg(..)] gate");
+        assert!(
+            !gate.contains("test"),
+            "content_ua's gate admits `test`, which on a mobile --all-targets build compiles it \
+             with no body arm and fails E0308. Found: {gate}"
+        );
+        // The other half: every platform `desktop` admits needs an arm, or it compiles empty.
+        let body: Vec<&str> = lines[sig..]
+            .iter()
+            .take_while(|l| **l != "}")
+            .copied()
+            .collect();
+        for arm in ["linux", "macos", "windows"] {
+            assert!(
+                body.iter()
+                    .any(|l| l.contains(&format!("target_os = \"{arm}\""))),
+                "content_ua has no #[cfg(target_os = \"{arm}\")] arm, so {arm} compiles an \
+                 empty body. Body: {body:?}"
+            );
+        }
     }
 
     #[test]

@@ -826,7 +826,107 @@ body.aegis-fullscreen {
   scroll-margin: 4px;
 }
 
+/* The CHROME's copy of the omnibox, once the popover surface renders the visible one.
+   It is not a "measuring twin" that something went wrong and left behind: the chrome keeps
+   it because (a) `useMeasuredRect` measures it to place the surface exactly over it, and
+   (b) `aria-activedescendant` cannot cross a document boundary, so the address input must
+   keep pointing at a listbox in ITS OWN document — see the accessibility section of
+   docs/superpowers/specs/2026-10-04-popover-surface-design.md.
+
+   `opacity: 0` rather than `visibility: hidden` or `display: none`, because both of those
+   remove the element from the ACCESSIBILITY TREE and would leave the input's `aria-controls`
+   pointing at nothing. `opacity: 0` keeps it measurable, announced and laid out. It was
+   already invisible in practice — the content webview is opaque and covers everything below
+   the chrome bands, which is exactly why `useChromePopoverInset` used to exist — but `opacity`
+   makes that independent of the webview stack, so the copy cannot appear even in a state
+   where the content webview is hidden. `pointer-events: none` so it can never intercept a
+   click that belongs to the surface's copy. */
+/* Every chrome popover keeps a hidden copy of itself once the surface renders the visible one.
+   One copy per popover, for the SAME two reasons: `useMeasuredRect` measures it to place the
+   surface over it, and it is the copy the KEYBOARD and assistive tech reach — the surface is
+   `aria-hidden` and focus cannot cross a webview boundary at all.
+
+   `opacity: 0` rather than `visibility: hidden` or `display: none`, because both of those
+   remove the element from the ACCESSIBILITY TREE, which would leave the omnibox input's
+   `aria-controls`/`aria-activedescendant` pointing at nothing and strip the shield/zoom/site
+   dialogs' buttons from the tab order entirely. `opacity` keeps it measurable, announced and
+   laid out. `pointer-events: none` so it can never intercept a click that belongs to the
+   surface's copy.
+
+   KNOWN COST, accepted and recorded in the popover-surface spec: the three dialog popovers keep
+   their focus trap and their tab stops on this invisible copy, so keyboard activation works but
+   there is no visible focus ring (WCAG 2.4.7). The omnibox is unaffected — its rows are
+   `<div role="option">` with no tab stop at all. */
+.address-bar__omnibox-source,
+.site-identity,
+.adblock-shield__popover,
+.zoom-indicator__popover {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* …and NOT on mobile, where there is no surface at all: the Android shell is a single webview
+   whose native content view is lowered with `view.setChromeOverlay`, so the chrome's own copy
+   IS the visible popover. Applying the rule there would delete the omnibox dropdown AND all
+   three dialogs on Android — a regression no desktop test can see, and the reason this
+   override is pinned. */
+.aegis-mobile .address-bar__omnibox-source,
+.aegis-mobile .site-identity,
+.aegis-mobile .adblock-shield__popover,
+.aegis-mobile .zoom-indicator__popover {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+/* ★ THE SURFACE'S OWN COPY OF THAT RULE, AND IT IS LOAD-BEARING IN BOTH DIRECTIONS.
+   The panels under `src/popover/` deliberately reuse the chrome's class names, so the
+   appearance (padding, border, row layout, theme tokens) has ONE source of truth instead of a
+   second stylesheet that can drift. That reuse is also a hazard, and this block is what undoes
+   it:
+
+   1. The hidden-copy rule ABOVE matches those same names, so on the surface every panel came
+      out at `opacity: 0; pointer-events: none` — invisible and mouse-dead.
+   2. Their chrome positioning resolves against chrome wrappers (`.address-bar__field`,
+      `.adblock-shield`, `.zoom-indicator`) that do not exist in the surface document, so
+      `top: calc(100% + Npx)` fell back to the surface webview's own viewport and pushed the
+      panel BELOW its bottom edge.
+
+   Together those made every popover an opaque, correctly-sized, empty rectangle over the page —
+   which is exactly what the app did before this whole feature existed, reached by a different
+   route. It survived because jsdom has no layout, because the drift pin below checks the
+   SELECTOR LIST rather than computed style, and because the AppImage gate measures a Rust-side
+   rect and drives a JS `.click()`: neither can see `opacity`, `pointer-events` or where the box
+   actually painted.
+
+   Here the webview IS the rect, so the panel's job is simply to fill it. */
+.aegis-surface .address-bar__omnibox-source,
+.aegis-surface .omnibox,
+.aegis-surface .site-identity,
+.aegis-surface .adblock-shield__popover,
+.aegis-surface .zoom-indicator__popover {
+  position: static;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  left: auto;
+  z-index: auto;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  opacity: 1;
+  pointer-events: auto;
+}
+
 .omnibox__row--active {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+/* The pointer highlight, so hovering a row on the surface is instant rather than waiting for
+   the round trip that tells the chrome which row the pointer is over. The round trip still
+   happens — `activeIndex` is the single source of truth, and it is what makes Enter open the
+   hovered row — so the two agree; this only removes the latency. */
+.omnibox__row:hover {
   background: color-mix(in srgb, var(--accent) 16%, transparent);
 }
 
@@ -6087,4 +6187,53 @@ a:focus-visible {
 /* ── Hide workspace switcher on mobile ── */
 .aegis-mobile .workspace-switcher {
   display: none;
+}
+
+/* ── the popover surface webview ────────────────────────────────────────────────
+   A SECOND React root, in its own webview, rendering one popover over the page inside
+   a rect the chrome measured. Both entries import this one file, so these variables and
+   `var(--bg-elevated)` etc. are identical in both roots — a duplicated stylesheet is how
+   two roots drift apart on theming, and there is a test for that.
+
+   The surface paints an OPAQUE background (spec §6.5). That is what removes the riskiest
+   part of the design — suppressing WebKitWebView's default opaque background via
+   `draw-background` — and it is why three of the four popovers are already solid. The
+   fourth (the ad-block shield) becomes solid in Phase 4 for the same reason. */
+.aegis-surface body {
+  background: var(--bg-elevated);
+}
+
+/* The surface's own box: the webview IS the popover's rect, so no positioning here — a
+   `position: absolute` box would only risk a second coordinate space between the rect Rust
+   placed the webview at and the box the panel draws in. */
+.popover {
+  padding: 8px;
+  color: var(--fg);
+  font-family: var(--font);
+  font-size: 14px;
+}
+
+.popover--test {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.popover__test-header {
+  font-weight: 600;
+  color: var(--fg-muted);
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.popover__test-payload {
+  margin: 0;
+  max-height: 200px;
+  overflow: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  color: var(--fg);
+  white-space: pre-wrap;
+  word-break: break-word;
 }

@@ -1,6 +1,8 @@
 // src/components/AdblockShield.test.tsx
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { render, screen, within, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { AdblockState } from '../../shared/types';
 import type { ProtectionSummary } from '../lib/protectionSummary';
@@ -415,5 +417,86 @@ describe('AdblockShield count honesty', () => {
     await userEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
     const note = within(screen.getByRole('dialog')).getByText(/lower bound/i);
     expect(note).toBeInTheDocument();
+  });
+});
+
+describe('AdblockShield — picks reported by the popover surface', () => {
+  function emitPick(pick: unknown): void {
+    const hit = vi.mocked(listen).mock.calls.find(([n]) => n === 'popover:picked');
+    expect(hit, 'the chrome must subscribe to popover.picked').toBeTruthy();
+    hit![1]({ payload: pick } as never);
+  }
+
+  beforeEach(() => {
+    vi.mocked(listen).mockClear();
+    vi.mocked(invoke).mockClear();
+  });
+
+  it('runs its OWN handlers for the actions the surface reports', () => {
+    const setEnabled = vi.fn();
+    const toggleAllowlist = vi.fn();
+    const onReload = vi.fn();
+    render(
+      <AdblockShield
+        {...props()}
+        setEnabled={setEnabled}
+        toggleAllowlist={toggleAllowlist}
+        onReload={onReload}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    emitPick({ id: 'adblock-shield', action: 'toggle-enabled' });
+    emitPick({ id: 'adblock-shield', action: 'toggle-allowlist' });
+    emitPick({ id: 'adblock-shield', action: 'reload' });
+    // The toggle is the chrome's own negation of its own state, not a level from the payload.
+    expect(setEnabled).toHaveBeenCalledWith(!props().state.enabled);
+    expect(toggleAllowlist).toHaveBeenCalledTimes(1);
+    expect(onReload).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores a pick addressed to a different popover', () => {
+    const setEnabled = vi.fn();
+    render(<AdblockShield {...props()} setEnabled={setEnabled} toggleAllowlist={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+    emitPick({ id: 'zoom-indicator', action: 'toggle-enabled' });
+    expect(setEnabled).not.toHaveBeenCalled();
+  });
+
+  it('sends the allowlist asymmetry as DATA, so the surface cannot re-derive it wrongly', () => {
+    // jsdom has NO LAYOUT, so every rect is 0x0 — which makes `usePopoverSurface` treat the
+    // popover as unmeasurable and send NOTHING at all. Without this stub the whole payload path
+    // is unexercised while the suite stays green.
+    const rect = vi
+      .spyOn(Element.prototype, 'getBoundingClientRect')
+      .mockReturnValue({ x: 8, y: 40, width: 300, height: 380 } as DOMRect);
+    try {
+      // `www.example.com` is covered by a PARENT entry, so unchecking cannot be expressed
+      // through the control at all. If the surface derived this itself it would offer a checkbox
+      // that silently adds a redundant (syncable) entry — the bug the rule exists to prevent.
+      render(
+        <AdblockShield
+          {...props()}
+          state={{ ...baseState, allowlistedHosts: ['example.com'] }}
+          host="www.example.com"
+        />,
+      );
+      fireEvent.click(screen.getByRole('button', { name: /ad blocking/i }));
+      // Read the ENVELOPE's nested `payload`. This is exactly the shape mismatch that shipped in
+      // Phase 2 (`width`/`height` read off the envelope instead of off `rect`), so a test that
+      // reaches into the wrong level reads `undefined` and looks like a product failure.
+      const envelope = vi
+        .mocked(invoke)
+        .mock.calls.map(
+          ([, a]) => a as { channel?: string; payload?: { payload?: Record<string, unknown> } },
+        )
+        .filter((a) => a.channel === 'popover.set')
+        .at(-1)?.payload;
+      const payload = envelope?.payload ?? {};
+      expect(payload.allowlisted).toBe(true);
+      expect(payload.canUnallowHere).toBe(false);
+      expect(payload.coveringEntries).toEqual(['example.com']);
+    } finally {
+      rect.mockRestore();
+    }
   });
 });

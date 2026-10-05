@@ -90,7 +90,7 @@ describe('OmniboxDropdown', () => {
       renderDropdown([suggestion()], -1, { onPick });
       fireEvent.mouseDown(screen.getByRole('option'));
       expect(onPick).toHaveBeenCalledTimes(1);
-      expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ id: 'history:1' }));
+      expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ id: 'history:1' }), 0);
     });
 
     it('prevents the default mousedown so the input keeps focus', () => {
@@ -103,7 +103,10 @@ describe('OmniboxDropdown', () => {
       const onPick = vi.fn();
       renderDropdown([suggestion({ id: 'a' }), suggestion({ id: 'b' })], -1, { onPick });
       fireEvent.mouseDown(screen.getAllByRole('option')[1]);
-      expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ id: 'b' }));
+      // The index is the SECOND argument, and it is what the popover surface reports to Rust
+      // (which bounds-checks it). The suggestion stays first so the chrome, which owns the
+      // array, keeps its existing one-argument signature.
+      expect(onPick).toHaveBeenCalledWith(expect.objectContaining({ id: 'b' }), 1);
     });
 
     it('reports the hovered index', () => {

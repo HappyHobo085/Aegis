@@ -190,7 +190,82 @@ export const IPC = {
   workspaceReorder: 'workspace.reorder',
   // event (main -> chrome): workspace list + active workspace
   evtWorkspaceState: 'workspace.state',
+  // popover surface. `popover.set` positions + fills the surface webview (see
+  // src-tauri/src/popover.rs); `popover.picked` is what the surface reports back.
+  popoverSet: 'popover.set',
+  // main -> surface: the payload for whichever popover is open. Sent with a TARGETED emit,
+  // never broadcast: it carries browsing-history titles.
+  evtPopoverPayload: 'popover.payload',
+  // surface -> main: what the user picked. Rust re-validates it before re-emitting to the
+  // chrome, so `onPicked` only ever sees a pick that matched the open popover.
+  evtPopoverPicked: 'popover.picked',
 } as const;
+
+/** A popover's rectangle in window coordinates, in whole CSS pixels.
+ *
+ * The chrome webview fills the window at (0,0), so chrome-webview client coordinates ARE
+ * window coordinates and no scale conversion is needed. Rust clamps this to 4096px on a
+ * side, so a wildly wrong measurement degrades to a too-small popover rather than a
+ * 20000px webview. */
+export interface PopoverRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** One open popover, as the surface receives it.
+ *
+ * `payload` is rendered by whichever panel `kind` names; the four real kinds are
+ * `address-omnibox`, `address-site`, `adblock-shield` and `zoom-indicator`, plus `test`,
+ * which exists so the surface can be proven to render something before any real popover has
+ * been moved onto it. `activeIndex` is the chrome's own selection state: keyboard focus never
+ * leaves the address input, so ↑/↓ are handled in the chrome and merely RENDERED here. */
+export interface PopoverSurfacePayload {
+  id: PopoverId;
+  rect: PopoverRect;
+  payload: {
+    kind: PopoverKind;
+    [key: string]: unknown;
+  };
+}
+
+/** Which popover is showing. One surface serves all of them, so the id is what tells the
+ *  surface (and Rust's pick validation) which popover a pick refers to. */
+export type PopoverId =
+  | 'address-omnibox'
+  | 'address-site'
+  | 'adblock-shield'
+  | 'zoom-indicator'
+  | 'test';
+
+export type PopoverKind = PopoverId;
+
+/** What the surface reports when the user acts on a row or a control.
+ *
+ * `index` is bounds-checked in Rust against the `itemCount` the chrome declared, and
+ * `action` against the per-popover allowlist it declared — so a surface that reports a row
+ * number that was never rendered cannot make the chrome pick it. The chrome then checks the
+ * index against its OWN array again before acting. */
+export interface PopoverPick {
+  id: PopoverId;
+  index?: number;
+  action?: string;
+  value?: unknown;
+}
+
+/** What `aegis.popover.set` takes. A null/absent `payload` CLOSES the surface, so a popover
+ *  cannot get stuck open by forgetting a separate hide call. */
+export interface PopoverSetArgs {
+  id: PopoverId;
+  rect: PopoverRect;
+  payload: { kind: PopoverKind; [key: string]: unknown } | null;
+  /** How many items the chrome is rendering. Rust bounds-checks a pick's `index` against
+   *  this rather than counting rows in `payload`, which Rust cannot interpret. */
+  itemCount: number;
+  /** The action names this popover accepts. A pick naming anything else is dropped. */
+  actions: string[];
+}
 
 export interface NavState {
   viewId: ViewId;
@@ -894,6 +969,18 @@ export interface AegisApi {
       config: ProxyConfig,
     ): Promise<{ ok: boolean; latencyMs?: number; error?: string }>;
     onState(cb: (s: ProxyState) => void): () => void;
+  };
+  /** The popover surface: one extra webview that renders popovers OVER the page.
+   *
+   * The chrome still OWNS each popover's state, IPC and actions; this namespace only
+   * positions and fills the surface, and reports what the user picked there. `payload: null`
+   * closes it. */
+  popover: {
+    set(args: PopoverSetArgs): Promise<void>;
+    /** Only picks Rust accepted: it bounds-checks `index` and the `action` allowlist
+     *  against what the chrome last declared, so this never fires for a stale or forged
+     *  row. */
+    onPicked(cb: (p: PopoverPick) => void): () => void;
   };
   workspace: {
     /** The full workspace state, not a bare array — `list` returns `WorkspaceState` because the

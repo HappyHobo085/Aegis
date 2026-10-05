@@ -7,6 +7,11 @@
 // Hierarchy before:  GtkApplicationWindow → GtkBox → [chrome, content]
 // Hierarchy after:   GtkApplicationWindow → GtkBox → GtkFixed → [chrome@(0,0), content@(left,top)]
 use gtk::prelude::*;
+// Linux-only container: the `GtkFixed` subclass that sizes each child to its role's rectangle
+// instead of to its size request, which is what removes the 1x1 collapse (and with it the
+// measured ~57 Hz layout feedback loop). See `aegis_container.rs`.
+use crate::aegis_container::AegisFixed;
+use crate::aegis_layout::Role;
 // `Error::code()` is NOT generic: `glib::ErrorDomain` is implemented per error-domain ENUM, and
 // the crate-root `glib::ErrorDomain` is the same-named *derive macro* (re-exported from
 // glib_macros), so the trait must be imported from `glib::error::`.
@@ -664,47 +669,52 @@ const FS_EXIT_NAME: &str = "aegis-fs-exit";
 /// GTK widget name stamped on every content (tab) webview so `layout()` can tell
 /// content webviews apart from the chrome webview without per-frame `with_webview`.
 const CONTENT_WIDGET_NAME: &str = "aegis-content";
+/// …and on the popover surface, whose GEOMETRY `popover.rs` owns. Naming it is what stops
+/// `assign_roles`' fall-through from classifying it as the chrome and sizing it to the whole
+/// window — which would paint a blank white surface over the page.
+pub const POPOVER_WIDGET_NAME: &str = "aegis-popover-surface";
 /// Floating exit button box size (px).
 const FS_EXIT_SIZE: i32 = 34;
 /// Its margin from the top-right corner (px).
 const FS_EXIT_MARGIN: i32 = 8;
 
-/// The effective content insets (left, top, right) from the most recent `layout()` pass.
-/// `size_fixed_children` reads them to re-size the chrome + content webviews when GTK
-/// re-allocates the canonical GtkFixed (e.g. on a window resize) — see the SIZING NOTE on
-/// `layout()`. Managed Tauri state (registered in `lib.rs`).
-#[derive(Default)]
-pub struct LayoutInsets(pub std::sync::Mutex<(i32, i32, i32)>);
-
-/// Connect the canonical GtkFixed's "size-allocate" handler exactly once.
-static FIXED_SIZE_HANDLER: std::sync::Once = std::sync::Once::new();
-
-/// Size the chrome (fill) + content (inset) webviews to the GtkFixed's CURRENT allocation
-/// via `size_allocate`, so no `set_size_request` pins the window's minimum size. Positions
-/// come from each child's existing allocation (set by `layout()`'s `move_`), so a parked
-/// background tab stays offscreen and the active tab stays inset. Connected with `after=true`
-/// so it runs AFTER GtkFixed's own size-allocate (which sizes children to their 0×0 request);
-/// it does NOT call `move_`/`queue_resize`, so it can't loop. The fullscreen-exit button keeps
-/// its own small request and is positioned by `layout()`.
-fn size_fixed_children<R: Runtime>(app: &AppHandle<R>, fixed: &gtk::Fixed) {
-    let (left, top, right) = app
-        .try_state::<LayoutInsets>()
-        .map(|s| *s.0.lock().unwrap_or_else(|e| e.into_inner()))
-        .unwrap_or((0, 0, 0));
-    let a = fixed.allocation();
-    let (fw, fh) = (a.width(), a.height());
+/// Size the chrome (fill) + content (inset) webviews to the canonical container's CURRENT
+/// allocation by telling each child its ROLE. `AegisFixed::size_allocate` resolves the role
+/// against the live allocation, so there is no compensator, no `after=true`
+/// `size-allocate` connection, and no window in which a child sits at its 1×1 request.
+///
+/// The fullscreen-exit button is `Role::Passthrough`: the container never resizes it, so it
+/// keeps its natural size instead of being collapsed like everything else.
+fn assign_roles(
+    fixed: &AegisFixed,
+    insets: (i32, i32, i32),
+    active: &gtk::Widget,
+    active_visible: bool,
+) {
+    fixed.set_insets(insets);
     for child in fixed.children() {
         let name = child.widget_name();
-        if name == FS_EXIT_NAME {
-            continue;
-        }
-        let ca = child.allocation();
-        let (w, h) = if name == CONTENT_WIDGET_NAME {
-            ((fw - left - right).max(0), (fh - top).max(0)) // content: inset (full in fullscreen)
+        let role = if name == FS_EXIT_NAME {
+            Role::Passthrough
+        } else if name == CONTENT_WIDGET_NAME {
+            Role::Content {
+                shown: child.as_ptr() == active.as_ptr() && active_visible,
+            }
+        } else if name == POPOVER_WIDGET_NAME {
+            // The surface's position is the thing being RENDERED, so it is not derivable from
+            // the window and the insets — `popover.set` measured it. Its current registration
+            // is therefore preserved verbatim, including the closed case (parked).
+            //
+            // Without this arm the surface fell through to `Role::Chrome` and was sized to the
+            // whole window: a blank white rectangle painted over the page whenever a popover
+            // opened. That is the bug this arm prevents, so it is pinned by a test.
+            fixed
+                .registered_role(&child)
+                .unwrap_or(Role::Surface { rect: None })
         } else {
-            (fw.max(0), fh.max(0)) // chrome: fill the window behind the content
+            Role::Chrome
         };
-        child.size_allocate(&gtk::gdk::Rectangle::new(ca.x(), ca.y(), w, h));
+        fixed.set_role(&child, role);
     }
 }
 
@@ -713,7 +723,7 @@ fn size_fixed_children<R: Runtime>(app: &AppHandle<R>, fixed: &gtk::Fixed) {
 /// over the opaque, edge-to-edge content (a shrunk WebKit chrome wouldn't repaint on
 /// the NVIDIA/X11 path) and needs no transparency/compositing (the GPU path that
 /// crashes the NVIDIA WebKit web process). Styled via the CSS provider in lib.rs.
-fn fs_exit_button<R: Runtime>(fixed: &gtk::Fixed, app: &AppHandle<R>) -> gtk::Widget {
+fn fs_exit_button<R: Runtime>(fixed: &AegisFixed, app: &AppHandle<R>) -> gtk::Widget {
     if let Some(w) = fixed
         .children()
         .into_iter()
@@ -737,27 +747,28 @@ fn fs_exit_button<R: Runtime>(fixed: &gtk::Fixed, app: &AppHandle<R>) -> gtk::Wi
     ebox.upcast()
 }
 
-/// Reparent (once, idempotent) into a GtkFixed and lay out the chrome (full window,
+/// Reparent (once, idempotent) into an `AegisFixed` and lay out the chrome (full window,
 /// behind) and the N content webviews. Called for the initial layout and on every
 /// window resize; all coordinates in logical px (scale handled by the caller).
 ///
-/// Drives off the ACTIVE tab's webview to find the GtkFixed parent (reparenting from
-/// the GtkBox on the first call). The active content webview is positioned in the
-/// inset area and shown; every OTHER content webview is hidden and parked offscreen;
-/// the chrome webview is stretched full-window behind it.
+/// Drives off the ACTIVE tab's webview to find the container parent (reparenting from
+/// the GtkBox on the first call). The active content webview is shown in the inset area;
+/// every OTHER content webview is hidden and parked offscreen; the chrome webview is
+/// stretched full-window behind it.
 ///
 /// Normal: chrome fills the window behind the active content, which is inset so the
 /// toolbar shows in the gap above it. Fullscreen: the active content fills the whole
 /// window edge-to-edge and a native floating exit button (`fs_exit_button`) is raised
 /// on top in the top-right corner — no top strip, and no WebKit compositing for it.
 ///
-/// SIZING NOTE: the chrome + content webviews are sized via `size_allocate` (in
-/// `size_fixed_children`, run from the Fixed's "size-allocate" handler), NOT via
-/// `set_size_request`. In a GtkFixed, `set_size_request(w, h)` sets each child's MINIMUM
-/// size, which GTK propagates up as the WINDOW's minimum — pinning the window to its current
-/// size so it can only ever grow, never shrink (the "can't make the window smaller" bug).
-/// Keeping a (0,0) size request removes that pin; the real size is applied by `size_allocate`.
-#[allow(clippy::too_many_arguments)] // mirrors the GtkFixed geometry call shape; a struct wrap would add churn without clarity
+/// SIZING: each child is given a ROLE (`aegis_layout::Role`) and the container resolves it
+/// against its own current allocation. That is the whole point of the subclass: a
+/// `GtkFixed` allocates every child to that child's size REQUEST, and a WebKit webview's
+/// request is 1×1, so a plain Fixed collapsed both webviews on every pass and re-expanded
+/// them — the measured ~57 Hz feedback loop. The webviews therefore still carry a (0,0)
+/// size request (it costs nothing and keeps them from pinning anything), but that request
+/// is now never what sizes them.
+#[allow(clippy::too_many_arguments)] // mirrors the container geometry call shape; a struct wrap would add churn without clarity
 pub fn layout<R: Runtime>(
     app: &AppHandle<R>,
     left: i32,
@@ -770,12 +781,6 @@ pub fn layout<R: Runtime>(
     fullscreen: bool,
     content_visible: bool,
 ) {
-    // Publish the effective insets so the Fixed's size-allocate handler can re-size the
-    // webviews on a window resize (they carry a 0×0 size request so they don't pin the
-    // window minimum — see the SIZING NOTE above).
-    if let Some(s) = app.try_state::<LayoutInsets>() {
-        *s.0.lock().unwrap_or_else(|e| e.into_inner()) = (left, top, right);
-    }
     let active_label = crate::nav::active_content_label(app);
     let Some(active) = app.get_webview(&active_label) else {
         return;
@@ -802,24 +807,24 @@ pub fn layout<R: Runtime>(
             return;
         };
 
-        // Resolve THE single canonical GtkFixed that must hold the chrome + every content
+        // Resolve THE single canonical container that must hold the chrome + every content
         // webview. The active webview's parent is either the window's GtkBox (this webview is
-        // a stray just add_child'd) or the canonical GtkFixed (already reparented). Find the
-        // GtkBox, find-or-create the one Fixed beneath it, then pull any stray webviews from
-        // the Box into it. This prevents the nested-Fixed bug where new tabs land in a sibling
-        // Fixed and never get hidden.
+        // a stray just add_child'd) or the canonical container (already reparented). Find the
+        // GtkBox, find-or-create the one container beneath it, then pull any stray webviews
+        // from the Box into it. This prevents the nested-container bug where new tabs land in
+        // a sibling container and never get hidden.
         let box_: gtk::Box;
-        let fixed: gtk::Fixed;
-        if let Some(f) = parent.dynamic_cast_ref::<gtk::Fixed>() {
+        let fixed: AegisFixed;
+        if let Some(f) = parent.dynamic_cast_ref::<AegisFixed>() {
             let Some(b) = f.parent().and_then(|p| p.downcast::<gtk::Box>().ok()) else { return; };
             box_ = b;
             fixed = f.clone();
         } else if let Some(b) = parent.dynamic_cast_ref::<gtk::Box>() {
-            let existing = b.children().into_iter().find_map(|c| c.downcast::<gtk::Fixed>().ok());
+            let existing = b.children().into_iter().find_map(|c| c.downcast::<AegisFixed>().ok());
             fixed = match existing {
                 Some(f) => f,
                 None => {
-                    let f = gtk::Fixed::new();
+                    let f = AegisFixed::new();
                     b.pack_start(&f, true, true, 0);
                     f.show();
                     f
@@ -831,13 +836,13 @@ pub fn layout<R: Runtime>(
             return;
         }
         // Pull every stray webview still parented to the Box (the chrome on the first call;
-        // each newly add_child'd tab on later calls) INTO the canonical Fixed. Skip the Fixed
-        // itself. Use show() per widget — NOT show_all(), which would re-reveal the hidden
-        // fullscreen-exit button.
+        // each newly add_child'd tab on later calls) INTO the canonical container. Skip the
+        // container itself. Use show() per widget — NOT show_all(), which would re-reveal the
+        // hidden fullscreen-exit button.
         let mut moved = 0;
         for child in box_.children() {
-            if child.dynamic_cast_ref::<gtk::Fixed>().is_some() {
-                continue; // the canonical Fixed
+            if child.dynamic_cast_ref::<AegisFixed>().is_some() {
+                continue; // the canonical container
             }
             box_.remove(&child);
             fixed.put(&child, 0, 0);
@@ -846,27 +851,16 @@ pub fn layout<R: Runtime>(
         }
         if moved > 0 {
             eprintln!(
-                "[aegis-gtk] reparented {moved} stray webview(s) into the canonical fixed; it now has {} children",
+                "[aegis-gtk] reparented {moved} stray webview(s) into the canonical container; it now has {} children",
                 fixed.children().len()
             );
         }
 
-        // Re-size the webviews whenever GTK re-allocates the Fixed (window resize) — they
-        // carry a 0×0 size request (so they never pin the window minimum) and are sized by
-        // `size_allocate` here instead. Connected once, AFTER GtkFixed's own size-allocate.
-        FIXED_SIZE_HANDLER.call_once(|| {
-            let app_h = app2.clone();
-            let fixed_h = fixed.clone();
-            fixed.connect_local("size-allocate", true, move |_| {
-                size_fixed_children(&app_h, &fixed_h);
-                None
-            });
-        });
-
         // The active content fills the window in fullscreen (left/top/right all 0), else it's
-        // inset and the chrome shows in the gap. Sizes are applied by `size_fixed_children`
-        // (above); here we only set the 0×0 request (no window-min pin) + position via `move_`.
-        // The floating exit button is positioned/raised separately below.
+        // inset and the chrome shows in the gap. Each child is given a ROLE here and the
+        // container resolves it against its own current allocation on every size-allocate —
+        // there is no compensator and no "size-allocate" handler to connect, which is what
+        // removed the 1x1 collapse. The floating exit button is positioned/raised below.
         let mut active_window = None;
         let mut chrome_window = None;
         for child in fixed.children() {
@@ -882,34 +876,27 @@ pub fn layout<R: Runtime>(
                 // the same mechanism that reliably hides background tabs below. Visible +
                 // offscreen = not backgrounded (no redirect) and not covering the chrome.
                 child.set_visible(true);
-                child.set_size_request(0, 0); // no window-min pin; sized by size_fixed_children
-                if active_visible {
-                    fixed.move_(&child, left, top);
-                } else {
-                    fixed.move_(&child, -10000, -10000);
-                }
+                child.set_size_request(0, 0); // never what sizes it; kept so it pins nothing
                 active_window = child.window();
             } else if name == FS_EXIT_NAME {
                 // handled below
             } else if name == CONTENT_WIDGET_NAME {
                 // a background tab's webview: hide it and park it offscreen.
                 child.set_visible(false);
-                fixed.move_(&child, -10000, -10000);
+                // Positioned by the role below, not by `move_`: the container resolves
+                // `Content { shown: false }` to the park coordinates.
             } else {
                 // the chrome webview: fill the window behind the active content.
-                child.set_size_request(0, 0); // no window-min pin; sized by size_fixed_children
-                fixed.move_(&child, 0, 0);
+                child.set_size_request(0, 0); // never what sizes it; kept so it pins nothing
                 chrome_window = child.window();
             }
         }
-        // Resize children to match the current insets. Normally driven by the GtkFixed's
-        // "size-allocate" signal (window resize), but when the inset changes without a
-        // window resize (e.g. FindBar opening/closing adds FIND_BAR_H to the top inset),
-        // the signal doesn't fire and the content widget retains its stale height.
-        // Re-allocate here so the content's native window geometry matches its GTK
-        // position before we raise it — without this, raise() stacks a stale-sized
-        // native window that can paint over the chrome gap above the content.
-        size_fixed_children(&app2, &fixed);
+        // Tell the container what every child is. This re-resolves against its CURRENT
+        // allocation, so it also covers the case the old "size-allocate" handler missed: an
+        // inset change with no window resize (FindBar opening adds to the top inset), where
+        // the content's native geometry would otherwise stay stale and raise() would stack a
+        // stale-sized window over the chrome gap above it.
+        assign_roles(&fixed, (left, top, right), &active_widget, active_visible);
 
         // Z-order: when the active content is shown, raise it on top; when it's hidden (a full
         // overlay is up, or the tab is at home), raise the CHROME instead. Crucially we must
@@ -929,12 +916,16 @@ pub fn layout<R: Runtime>(
         // pinned to the top-right corner. Raised after the content so it stays on top.
         let btn = fs_exit_button(&fixed, &app2);
         if fullscreen {
-            // Content webviews added after the button sit above it in the Fixed's child
+            // Content webviews added after the button sit above it in the container's child
             // stacking, and GdkWindow.raise() alone doesn't reliably lift a GTK widget above
             // WebKit's native windows. Re-add the button LAST so it's the topmost child.
             fixed.remove(&btn);
             fixed.put(&btn, (win_w - FS_EXIT_SIZE - FS_EXIT_MARGIN).max(0), FS_EXIT_MARGIN);
             btn.show_all();
+            // Re-assert the role: the remove+put above re-registered the child, and the
+            // container sizes `Passthrough` children to their natural size at their `put`
+            // position. Without this the button could keep a stale rect from a previous pass.
+            fixed.set_role(&btn, Role::Passthrough);
             if btn.window().is_none() {
                 btn.realize();
             }
@@ -943,6 +934,30 @@ pub fn layout<R: Runtime>(
             }
         } else {
             btn.hide();
+        }
+
+        // The popover surface must be the TOPMOST child for the same reason the exit button
+        // is re-registered above: on X11 the container's child order IS the stacking order,
+        // and `GdkWindow::raise()` does not reliably lift a widget above WebKit's native
+        // windows. Probed and mutation-verified for two WEBVIEWS (spec §6.4) — the case the
+        // exit-button rule did not cover.
+        //
+        // Its GEOMETRY is not re-derived here: `popover.set` owns it, and re-deriving it from
+        // the window would be wrong in a way a resize would then have to undo. Only the
+        // ORDERING is re-asserted, so a future change that breaks the order degrades to a
+        // re-registration rather than to a popover painted underneath the page.
+        if let Some(surface) = fixed
+            .children()
+            .into_iter()
+            .find(|c| c.widget_name() == POPOVER_WIDGET_NAME)
+        {
+            let role = fixed
+                .registered_role(&surface)
+                .unwrap_or(Role::Surface { rect: None });
+            fixed.remove(&surface);
+            fixed.put(&surface, 0, 0);
+            surface.show();
+            fixed.set_role(&surface, role);
         }
         // No show_all here: re-showing every layout call would override the hidden
         // background tabs and the content webview's hide (view.setChromeOverlay).
@@ -953,64 +968,159 @@ pub fn layout<R: Runtime>(
 mod tests {
     use super::*;
 
-    /// The webviews' size REQUEST must stay (0,0). This is load-bearing in the opposite
-    /// direction from what it looks like, and it was measured, not reasoned about — an earlier
-    /// version of this file wrote each webview's real geometry into its request (to stop
-    /// GtkFixed collapsing it to 1x1, see `size_fixed_children`) and **the window stopped being
-    /// able to shrink at all**.
+    /// The COMPENSATOR is gone, and this must fail LOUDLY if it ever comes back.
     ///
-    /// A four-arm probe (`examples/winmin.rs`, since deleted) built this exact tree, put the
-    /// webviews' size into their requests, and tried `gtk_window_resize(320, 240)`:
+    /// `size_fixed_children` re-sized the webviews from a GtkFixed "size-allocate" handler
+    /// connected `after=true`. It existed only to undo GtkFixed's collapse of every child to
+    /// its size request, and undoing it there still cost two full-page re-layouts per pass —
+    /// which is what closed the feedback loop with the omnibox (measured ~57 Hz). The
+    /// container now allocates children their role's rectangle directly, so there is nothing
+    /// to compensate for.
     ///
-    /// | arm                                   | GtkFixed's minimum | resize(320,240) |
-    /// | ------------------------------------- | ------------------ | --------------- |
-    /// | webviews at (0,0)  — the shipped code  | `(1, 1)`           | **SHRANK ok**   |
-    /// | webviews at their real size           | `(900, 900)`       | **BLOCKED**     |
-    /// | … plus `fixed.set_size_request(0, 0)` | `(900, 900)`       | **BLOCKED**     |
-    /// | … plus the same on the toplevel / Box | `(900, 900)`       | **BLOCKED**     |
-    ///
-    /// The last two arms are why this is pinned rather than documented: clearing the request on
-    /// a PARENT does not help, and the override really is stored (`fixed.size_request()` reads
-    /// `(1, 1)`) — GTK3 simply will not let a `set_size_request` LOWER a container's minimum
-    /// below what its children demand. Re-asserting it on every sizing pass changed nothing
-    /// either. So the webviews' own minimum is the only thing that can be kept small, and that
-    /// is why they carry (0,0) and are sized with `size_allocate` instead.
-    ///
-    /// The cost is real and is not hidden: GtkFixed allocates each child to its request, so a
-    /// (0,0) request means every pass collapses the webview to 1x1 before `size_fixed_children`
-    /// expands it again — two full-page re-layouts per genuine resize. Fixing that needs a
-    /// container that sizes children to the CONTAINER's allocation rather than to their requests
-    /// (`GtkOverlay` does; `GtkFixed` does not), which cannot express this file's offscreen
-    /// parking or the corner-positioned fullscreen button. Left alone deliberately.
+    /// This replaces a pin that had gone VACUOUS rather than red: it looked for
+    /// `set_size_request` inside `size_fixed_children`, and with the function deleted the
+    /// `split(..).nth(1)` it searched returned nothing, so the assertion passed on an absent
+    /// function. A pin that cannot fail is worse than no pin, because it reports the property
+    /// as held. The assertion below is the inverse — the function must NOT exist — so deleting
+    /// the guard makes it red instead of green.
     #[test]
-    fn the_webviews_keep_a_zero_size_request_so_the_window_can_still_shrink() {
+    fn the_size_allocate_compensator_is_gone() {
         let src = include_str!("linux_layout.rs");
-        let layout = {
-            let prod = crate::test_support::rust_production_source(src);
-            let start = prod
-                .find("pub fn layout<R: Runtime>")
-                .expect("linux_layout still has `layout`");
-            let open = prod[start..].find('{').expect("layout has a body") + start;
-            prod[open..open + 4000].to_string()
-        };
+        let prod = crate::test_support::rust_production_source(src);
         assert!(
-            layout.contains("child.set_size_request(0, 0)"),
-            "layout() no longer pins each webview to a (0,0) request. If the webviews carry their \
-             real geometry instead, GtkFixed's minimum becomes the window's minimum and the \
-             window cannot be made smaller at all — measured: fixed_min=(900,900), \
-             resize(320,240) BLOCKED, against (1,1)/SHRANK for the (0,0) request",
+            !prod.contains("size_fixed_children"),
+            "size_fixed_children is back. Re-sizing webviews from a GtkFixed 'size-allocate' \
+             handler re-introduces the 1x1 collapse: the child is sized to its 1x1 request and \
+             then re-expanded, so every pass re-lays-out the whole page and re-measures the \
+             omnibox. The container's size_allocate owns this now."
         );
         assert!(
-            !crate::test_support::rust_production_source(src)
-                .split("fn size_fixed_children")
-                .nth(1)
-                .unwrap_or_default()
-                .split("\nfn ")
-                .next()
-                .unwrap_or_default()
-                .contains("set_size_request"),
-            "size_fixed_children writes a webview's size REQUEST, which is the change that made \
-             the window unshrinkable",
+            !prod.contains("FIXED_SIZE_HANDLER"),
+            "the 'size-allocate' re-sizer is back (FIXED_SIZE_HANDLER). Geometry must come from \
+             `assign_roles`, which resolves each child's role against the live allocation."
+        );
+    }
+
+    /// The container must be reached through `assign_roles` on EVERY layout pass, because a
+    /// role is what carries a child's geometry. The old compensator ran off GTK's
+    /// "size-allocate" signal, which never fires when an inset changes without a window resize
+    /// (FindBar opening adds to the top inset) — so `layout()` has to do it itself.
+    #[test]
+    fn layout_assigns_every_child_a_role_on_every_pass() {
+        let src = include_str!("linux_layout.rs");
+        let prod = crate::test_support::rust_production_source(src);
+        let start = prod
+            .find("pub fn layout<R: Runtime>")
+            .expect("linux_layout still has `layout`");
+        // To the END of the production source, not a fixed-length window: a hard-coded slice
+        // runs off the end of the file and panics instead of reporting anything.
+        let body = &prod[start..];
+        assert!(
+            body.contains("assign_roles(&fixed"),
+            "layout() no longer calls assign_roles, so nothing tells the container what each \
+             child is and every webview keeps a stale rectangle."
+        );
+        // The insets must reach the container, or every role resolves against (0,0,0) and the
+        // page is never inset below the toolbar.
+        assert!(
+            prod.contains("fixed.set_insets(insets)"),
+            "the container is never told the window insets; every role would resolve against \
+             zero insets and the content webview would sit under the chrome."
+        );
+    }
+
+    /// The webviews still carry a (0,0) size request. This is now DEFENCE IN DEPTH rather
+    /// than the thing that makes the window shrinkable — the container reports its own (0,0)
+    /// minimum, so the request is no longer what a child's minimum propagates through (see
+    /// `aegis_container`'s `the_container_reports_its_own_zero_minimum_not_a_childs`). It is
+    /// kept because a non-zero request on a webview is the single change that made the window
+    /// unshrinkable, and that regression was invisible to every gate but a live window.
+    #[test]
+    fn the_webviews_keep_a_zero_size_request_as_defence_in_depth() {
+        let src = include_str!("linux_layout.rs");
+        let prod = crate::test_support::rust_production_source(src);
+        let start = prod
+            .find("pub fn layout<R: Runtime>")
+            .expect("linux_layout still has `layout`");
+        let body = &prod[start..];
+        assert!(
+            body.contains("child.set_size_request(0, 0)"),
+            "layout() no longer pins each webview to a (0,0) request. The container no longer \
+             depends on it, but a real geometry here is the change that historically made the \
+             window impossible to shrink — measured: fixed_min=(900,900), resize(320,240) \
+             BLOCKED, against (1,1)/SHRANK for the (0,0) request."
+        );
+    }
+
+    /// The popover surface must never be classified as the chrome.
+    ///
+    /// `assign_roles` classifies by widget name, and its fall-through is `Role::Chrome`. A
+    /// surface with an unrecognised name therefore gets sized to the whole window — a blank
+    /// white rectangle painted over the page every time a popover opens. This is the defect
+    /// this arm prevents, and the arm is invisible to a behavioural test because it only
+    /// runs inside the GTK closure, which no headless test reaches.
+    #[test]
+    fn the_popover_surface_keeps_its_own_role_instead_of_falling_through_to_the_chrome() {
+        let src = include_str!("linux_layout.rs");
+        let prod = crate::test_support::rust_production_source(src);
+        let start = prod
+            .find("fn assign_roles(")
+            .expect("assign_roles still exists");
+        // Length-delta extraction, NOT `prod[start..len]`: the `find` returns an offset
+        // relative to `prod[start..]`, so using it as an end index slices a range from a
+        // different base entirely.
+        let end = prod[start..]
+            .find("\n}\n")
+            .expect("assign_roles must close");
+        let body = &prod[start..start + end];
+        assert!(
+            body.contains("POPOVER_WIDGET_NAME"),
+            "assign_roles no longer names the popover surface, so it falls through to \
+             Role::Chrome and is sized to the whole window — a blank white surface over the \
+             page."
+        );
+        assert!(
+            body.contains("registered_role"),
+            "assign_roles must PRESERVE the surface's existing Surface role. Re-deriving it \
+             from the window and the insets cannot reproduce a rect the chrome measured, so a \
+             window resize would move the popover and every popover would drift."
+        );
+    }
+
+    /// The surface is re-registered LAST on every layout pass, because on X11 the container's
+    /// child order is the stacking order and `raise()` does not reliably lift a widget above
+    /// WebKit's native windows (spec §6.2/§6.4 — probed, with a control arm and a mutation).
+    #[test]
+    fn every_layout_pass_re_registers_the_surface_last() {
+        let src = include_str!("linux_layout.rs");
+        let prod = crate::test_support::rust_production_source(src);
+        let start = prod
+            .find("pub fn layout<R: Runtime>")
+            .expect("layout still exists");
+        let tail = &prod[start..];
+        let idx = tail
+            .find("POPOVER_WIDGET_NAME")
+            .expect("layout no longer re-registers the surface");
+        let window = &tail[idx..];
+        assert!(
+            window.contains("fixed.remove(&surface)"),
+            "re-registering the surface must remove it first: `put` appends, so a `put` \
+             without a `remove` leaves the child where it already was and the z-order \
+             guarantee is silently lost."
+        );
+        assert!(
+            window.contains("fixed.put(&surface, 0, 0)"),
+            "the surface must be re-`put` after the exit button so it becomes the topmost \
+             child."
+        );
+        // …and it must come after the exit-button block, or fullscreen would bury it.
+        let btn = tail
+            .find("let btn = fs_exit_button(&fixed, &app2)")
+            .expect("layout still places the exit button");
+        assert!(
+            btn < idx,
+            "the surface is re-registered BEFORE the exit button, so in fullscreen the button \
+             ends up on top of the popover"
         );
     }
 

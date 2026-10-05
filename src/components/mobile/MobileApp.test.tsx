@@ -64,6 +64,14 @@ vi.mock('../../lib/ipcClient', () => ({
       onChanged: vi.fn(() => () => undefined),
     },
     picker: { onPicked: vi.fn(() => () => undefined) },
+    // This file hand-rolls its own partial `ipcClient` (see src/AGENTS.md), so a channel the
+    // shared `aegisMock` grows does NOT arrive here — and `useOmnibox` subscribes to
+    // `popover.onPicked` on mount, which is why every test in this file was reading
+    // `undefined.onPicked` rather than failing on its own subject.
+    popover: {
+      set: vi.fn(() => Promise.resolve()),
+      onPicked: vi.fn(() => () => undefined),
+    },
     customFilters: {
       get: vi.fn(async () => ''),
       set: vi.fn(async () => ''),

@@ -151,7 +151,6 @@ fn fresh_tmp() -> PathBuf {
 /// - `history::HistoryStore`
 /// - `downloads::DownloadsStore`
 /// - `tabs::Tabs` (from a fresh single-tab Registry with `"about:blank"` as home)
-/// - `linux_layout::LayoutInsets` (Linux only, `#[cfg(target_os = "linux")]`)
 ///
 /// Note: `tabs::Tabs` wraps a `tab_registry::Registry` with an "about:blank" home URL.
 // The mock never spawns real webviews, so dispatchers that call `spawn_tab` or touch
@@ -170,8 +169,6 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
     std::env::set_var("XDG_CONFIG_HOME", &tmp);
 
     // Build the mock app with all managed state that lib.rs registers (builder + setup).
-    // #[cfg] attributes cannot appear mid-chain, so the Linux-only LayoutInsets is added
-    // after build() via app.manage() — Tauri allows manage() on the built App too.
     let app = mock_builder()
         // --- builder-time managed state (mirrors lib.rs .manage() calls) ---
         .manage(crate::view::ContentInset::default())
@@ -190,6 +187,7 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
         .manage(crate::settings::SettingsCache::default())
         .manage(crate::history::HistoryStore::default())
         .manage(crate::downloads::DownloadsStore::default())
+        .manage(crate::popover::Registry::default())
         // --- setup()-time managed state ---
         // tabs::Tabs: lib.rs adds this in setup() after loading/restoring the session.
         // In tests we construct a minimal single-tab registry (home = "about:blank") so
@@ -199,11 +197,6 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
         ))
         .build(mock_context(noop_assets()))
         .expect("mock app builds");
-
-    // linux_layout::LayoutInsets: lib.rs adds this in setup() under #[cfg(target_os="linux")].
-    // Registered separately after build so the cfg gate doesn't break the method chain.
-    #[cfg(target_os = "linux")]
-    app.manage(crate::linux_layout::LayoutInsets::default());
 
     // The OS keychain has no per-app namespace — one entry (service "com.aegis.browser",
     // user "sync-root") is shared by the whole machine. Point this app at a private entry
@@ -506,10 +499,6 @@ mod tests {
                 .try_state::<crate::downloads::DownloadsStore>()
                 .is_some());
             assert!(app.try_state::<crate::history::HistoryStore>().is_some());
-            #[cfg(target_os = "linux")]
-            assert!(app
-                .try_state::<crate::linux_layout::LayoutInsets>()
-                .is_some());
         });
     }
 

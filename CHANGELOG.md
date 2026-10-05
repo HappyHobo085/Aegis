@@ -19,7 +19,76 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   to it, and a link that is not a web page (`mailto:`, `tel:`, `javascript:`) is still
   handled by the browser as before. Page scripts cannot trigger it — only real clicks can.
 
+- **Every popover now floats above the page instead of pushing it down.** The address-bar
+  suggestions, the site-information panel, the ad-block shield popover and the page-zoom controls
+  all render in a dedicated second webview that the app positions as an overlay, so opening one
+  no longer resizes the page. That second webview is owned by the app, rendered by its own small
+  React entry point, and its geometry comes from a rectangle the chrome measured; it is the last
+  child of the window's container, which is what puts it on top.
+  **The address-bar suggestions are the visible part of this.** They used to push the page down
+  as they grew, and that displacement fed straight back into their own measurement — the
+  dropdown's height is measured from its content, the content view is resized to make room, the
+  resize re-lays-out the chrome, which re-measured the dropdown. Two stable points (its natural
+  height against its capped height) made that a limit cycle, so the app ran at roughly **57
+  layout passes per second** for as long as the dropdown was open, never settling. Measured on
+  the built AppImage, with the suggestion list open and being typed into: the content inset was
+  written **twice in the whole session, both at startup**, against **five** writes and a
+  **120-pixel** page displacement with the old behaviour in place.
+  Two properties of the boundary are worth stating plainly, because both are changes in their
+  own right. The surface is a **separate webview with its own capability**: it can receive a
+  popover payload and report that a row was chosen, and it can reach nothing else — not
+  settings, not navigation, not any other app command. And the app now has an explicit
+  permission manifest for its own commands, which it did not have before: without one, Tauri
+  skipped the permission check entirely for commands called from the app's own pages. The
+  capability lists were also corrected to be scoped by **webview** rather than by window —
+  content pages share the window with the chrome, so the old scope would have granted the
+  chrome's full command access to every page in every tab. Previously nothing checked, so that
+  scope could never have mattered; it matters now.
+  **One accepted regression.** A screen-reader user can no longer move the focus ring into the
+  site-information, ad-block or zoom popovers: those three keep their focus trap and their
+  buttons in the browser's own window, where they are invisible but still operable, because the
+  surface cannot hold keyboard focus at all. Arrow keys, Enter and Escape still work; you just
+  cannot see where focus is while it is inside one of those three. The address-bar list is
+  unaffected. Fixing it properly means handing focus into the surface, which is a larger piece
+  of work than this change.
+  Design and the measurements behind it: `docs/superpowers/specs/2026-10-04-popover-surface-design.md`.
+  Two properties of that boundary are worth stating plainly, because both are changes in their
+  own right. The surface is a **separate webview with its own capability**: it can receive a
+  popover payload and report that a row was chosen, and it can reach nothing else — not
+  settings, not navigation, not any other app command. And the app now has an explicit
+  permission manifest for its own commands, which it did not have before: without one, Tauri
+  skipped the permission check entirely for commands called from the app's own pages. The
+  capability lists were also corrected to be scoped by **webview** rather than by window —
+  content pages share the window with the chrome, so the old scope would have granted the
+  chrome's full command access to every page in every tab. Previously nothing checked, so that
+  scope could never have mattered; it matters now.
+  Design and the measurements behind it: `docs/superpowers/specs/2026-10-04-popover-surface-design.md`.
+
 ### Fixed
+
+- **Typing in the address bar made the whole window flash and the page keep jumping.** The
+  omnibox dropdown pushed the page down, and that displacement fed straight back into its own
+  input: the dropdown's height is measured from its content, the content webview is resized to
+  make room for it, and the resize re-laid-out the chrome — which re-measured the dropdown. On
+  top of that, every single layout pass collapsed both webviews to a 1×1 pixel and immediately
+  re-expanded them, because a GTK `Fixed` sizes each child to that child's _requested_ size and
+  a webview's request is 1×1. Two stable points (the dropdown's natural height against its
+  capped height) made it a limit cycle, so the app ran at roughly **57 layout passes per second**
+  for as long as the dropdown was open, never settling.
+
+  Both halves are fixed. The webviews now live in a small container that sizes each one to the
+  rectangle it is supposed to occupy, so the collapse is gone rather than compensated for — and
+  because that container also reports its own minimum size instead of deriving one from its
+  children, the window stays freely resizable (an earlier attempt fixed the collapse by writing
+  each webview's real size into its size request, which worked and was reverted: it pinned the
+  window so it could only ever grow).
+
+  This is the first of two steps, and the second is now here: the address-bar suggestions float
+  **above** the page instead of pushing it down (see the entry above). Measured on the built
+  AppImage: with the dropdown open and being typed into, the content inset is written **zero**
+  times and never leaves 156 px — where the old behaviour moved it to 276 px, exactly the
+  dropdown's own height. The site-info panel, the ad-block shield and the zoom popover still
+  render in the chrome; they move next.
 
 - **Opening Settings or the sidebar froze the AppImage for ~2.5 seconds on first open, on every
   launch.** Three stacked packaging faults in the bundle, not app logic: the linuxdeploy hook

@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "surface",
+  "description": "The popover surface webview, matched by WEBVIEW label and not by window label: it is a CHILD webview of the `main` window (`window.add_child`), and Tauri resolves a capability's `windows` list against the WINDOW label and its `webviews` list against the WEBVIEW label (tauri `ipc/authority.rs::resolve_access`). A `windows: [\"surface:popover\"]` therefore matched nothing at all and every grant below was inert — the surface could not listen, could not report a pick, and could not handshake. The surface webview. It may LISTEN for its payload, REPORT a pick through popover_picked, and announce readiness through popover_ready. It is deliberately NOT granted `ipc`, which is what keeps it out of settings.set / nav.navigate and every other app command, and it is deliberately NOT granted core:event:allow-emit, so it cannot forge an event any listener acts on. popover_ready is the handshake: the surface says its listener is registered and Rust replays whatever popover is open. Without it the first payload of every session is emitted before any listener exists and is lost permanently — measured on the built AppImage, which placed the surface at the right rect and delivered the payload to nobody.",
+  "webviews": ["surface:popover"],
+  "permissions": [
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
+    "allow-popover-picked",
+    "allow-popover-ready"
+  ]
+}

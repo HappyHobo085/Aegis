@@ -64,6 +64,19 @@ mod adblock_inject;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod adblock_webkit;
+/// Linux-only webview container (`AegisFixed`, a `GtkFixed` subclass). Gated on the OS, not
+/// on `test`: unlike `aegis_layout` below it cannot even be COMPILED off Linux (every item in
+/// it is a gtk-rs subclass), and CI builds the Windows and macOS targets with `-D warnings`,
+/// where an ungated module is a build failure rather than a warning.
+#[cfg(target_os = "linux")]
+mod aegis_container;
+/// Pure webview-container geometry (no GTK, no Tauri, so it is unit-testable headlessly).
+/// Gated `any(linux, test)`: only the Linux container consumes it, so on Windows and macOS it
+/// is genuinely dead and `cargo check` on those targets would warn — and CI builds those
+/// targets with `-D warnings`, which turns a warning into a build failure. The `test` arm
+/// keeps its unit tests running on every platform, the same shape `adblock_convert` uses.
+#[cfg(any(target_os = "linux", test))]
+mod aegis_layout;
 /// Link gestures (Ctrl/Cmd+click, middle-click, Shift+click -> new background tab), injected
 /// at document-start on EVERY platform and AHEAD of the ad-block layer: it reads the native
 /// `window.open` that `adblock_inject`'s pop-under guard would otherwise replace, which is
@@ -73,6 +86,12 @@ mod link_gestures;
 #[cfg(target_os = "linux")]
 #[allow(unsafe_code)] // FFI/platform glue; see the deny(unsafe_code) in lib.rs
 mod linux_layout;
+/// The popover surface (spec `docs/superpowers/specs/2026-10-04-popover-surface-design.md`).
+/// Compiled on EVERY platform, though only DESKTOP uses it: `create_surface`/`place_webview`
+/// are no-ops on mobile, and `popover.set` there is accepted and ignored. That is deliberate —
+/// it lets a chrome component call the hook unconditionally instead of branching on platform,
+/// and Android's in-chrome popovers keep working exactly as before.
+mod popover;
 /// Per-host WebRTC IP-leak exemptions. LOCAL-ONLY store — see the module doc for why
 /// this is not the ad-block allowlist.
 mod webrtc_exempt;
@@ -284,6 +303,9 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         return result;
     }
     if let Some(result) = proxy::dispatch(&app, &channel, &payload) {
+        return result;
+    }
+    if let Some(result) = popover::dispatch(&app, &channel, &payload) {
         return result;
     }
     match channel.as_str() {
@@ -721,7 +743,12 @@ pub fn run() {
         .manage(proxy::ProxyState::default())
         .manage(settings::SettingsCache::default())
         .manage(history::HistoryStore::default())
-        .manage(downloads::DownloadsStore::default());
+        .manage(downloads::DownloadsStore::default())
+        // What the chrome last told the surface it was showing. Registered HERE, at builder
+        // time, not in `setup()`: `popover.set` can arrive from the renderer before
+        // `setup()` has finished, and `set()` returns an Err rather than panicking on a
+        // missing state — but an Err would mean the surface silently never opens.
+        .manage(popover::Registry::default());
 
     // Tab keyboard shortcuts arrive as menu events on Win/macOS (Linux uses a GTK key
     // hook). Menus are a desktop-only Tauri feature, so this handler is desktop-gated;
@@ -870,6 +897,16 @@ pub fn run() {
         );
         tabs::start_idle_sweep(app.handle());
 
+        // The popover surface: one webview created ONCE at boot, parked and zero-sized so it
+        // cannot paint over anything until the first `popover.set`. Created here — after the
+        // first tab, so it is registered LAST and therefore paints on top (child order is
+        // z-order on X11, spec §6.4) — and not lazily, because a webview's first paint is the
+        // expensive part and paying it on the first omnibox keystroke is the stall this whole
+        // design exists to remove.
+        if let Err(e) = popover::create_surface(app.handle()) {
+            log::warn!("[aegis] popover surface could not be created: {e}");
+        }
+
         // Sync: auto-unlock from the OS keychain if a seed is stored, and start syncing.
         //
         // ORDERING: this MUST run after every `.manage()` above — in particular after
@@ -907,12 +944,10 @@ pub fn run() {
 
         // Tauri child-webview auto-resize is incomplete; recompute bounds on
         // window resize so the content view keeps filling the area below the chrome.
-        // Linux: the content/chrome webviews are sized via size_allocate (not
-        // set_size_request, which pins the window's minimum to its current size so it can't
-        // shrink — see linux_layout's SIZING NOTE). Register the insets state the sizing
-        // handler reads before the first layout pass below.
-        #[cfg(target_os = "linux")]
-        app.manage(linux_layout::LayoutInsets::default());
+        // Linux: the content/chrome webviews are sized by the AegisFixed container from each
+        // child's ROLE (not set_size_request, which pins the window's minimum to its current
+        // size so it can't shrink — see linux_layout's SIZING note). The insets now live on
+        // the container itself, so there is no managed state to register here any more.
         if let Some(window) = app.get_window("main") {
             // A sane floor so the window can shrink (the bug was it couldn't at all) without
             // collapsing to an unusable size. Effective now that the webviews no longer pin it.
@@ -1026,7 +1061,11 @@ pub fn run() {
         );
         Ok(())
     });
-    let builder = builder.invoke_handler(tauri::generate_handler![ipc]);
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        ipc,
+        popover::popover_picked,
+        popover::popover_ready
+    ]);
 
     builder
         .run(tauri::generate_context!())
@@ -1339,11 +1378,23 @@ mod tests {
     /// `allow-*` permissions over window geometry, menu and tray construction, and
     /// filesystem path resolution. The renderer reaches none of them: it imports from
     /// `@tauri-apps/api` in exactly two files, `tauriInvoke.ts:1-2`, for `invoke`
-    /// (the app's own `ipc` command, which is not ACL-gated) and `listen`. So the
-    /// capability names precisely the one set those two need, and dropping `core:default`
-    /// removes 92 reachable-by-mistake grants.
+    /// and `listen`.
+    ///
+    /// **CHANGED 2026-10-04: `allow-ipc` joined the list, and the reason it was absent
+    /// before was a security hole, not a style choice.** This capability previously granted
+    /// ONLY `core:event:default`, and `ipc` was reachable from every webview because the app
+    /// had no ACL manifest at all — Tauri ACL-checks a non-plugin command only
+    /// `if plugin_command.is_some() || has_app_acl_manifest || !is_local`, and with no
+    /// manifest a *local-origin* webview reaches any custom command unchecked. Content
+    /// webviews were stopped by their remote origin, but the new popover surface is a
+    /// local-origin webview and so would have inherited full `ipc`. `build.rs` now declares
+    /// the app manifest, which makes `ipc` a gated command, and the surface's own capability
+    /// withholds it. See `popover::tests::the_app_has_an_acl_manifest_covering_both_custom_commands`.
+    ///
+    /// So the set is still exactly what the renderer needs and nothing more — the list simply
+    /// now names the grant instead of relying on its absence.
     #[test]
-    fn the_renderer_capability_grants_only_the_event_permission() {
+    fn the_renderer_capability_grants_only_what_the_renderer_calls() {
         let path = format!("{}/capabilities/default.json", env!("CARGO_MANIFEST_DIR"));
         let raw =
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
@@ -1357,17 +1408,35 @@ mod tests {
             .collect();
         assert_eq!(
             perms,
-            vec!["core:event:default"],
-            "the renderer capability must name ONLY core:event:default — widen it here and in \
-             the same commit add the code that needs the new permission, with a test"
+            vec!["core:event:default", "allow-ipc"],
+            "the renderer capability must name EXACTLY these two: `core:event:default` for \
+             `listen`, and `allow-ipc` for the app's own command. Widen it here and in the \
+             same commit add the code that needs the new permission, with a test."
         );
-        // The identifier and window scope are what make this the *only* capability, so
-        // assert them too: a second file in capabilities/ would grant a second surface
-        // and this test would keep passing.
+        // The identifier and window scope are what make this the *only* capability for the
+        // chrome, so assert them too: a second file in capabilities/ would grant a second
+        // surface and this test would keep passing.
         assert_eq!(v["identifier"], "default", "the identifier must not change");
+        // Scoped by `webviews`, NOT `windows` — and that changed on 2026-10-04 for a security
+        // reason, not a tidiness one. Every content webview is a CHILD webview of the `main`
+        // window, and Tauri matches a capability's `windows` list against the WINDOW label
+        // (`ipc/authority.rs::resolve_access`). So `windows: ["main"]` matched every tab as
+        // well as the chrome. That was harmless while there was no app ACL manifest — a custom
+        // command from a remote origin was refused outright — and would have granted every
+        // page in every tab the chrome's `ipc` the moment the manifest was added. `webviews`
+        // is matched against the webview's own label, and a content webview's is `content:<id>`.
         assert_eq!(
-            v["windows"][0], "main",
-            "the capability must stay bound to `main`"
+            v["webviews"],
+            serde_json::json!(["main"]),
+            "the capability must stay bound to the CHROME webview alone. It is scoped by \
+             `webviews` rather than `windows` because content webviews share the `main` \
+             WINDOW: a `windows` list would hand every tab the chrome's full privileges."
+        );
+        assert!(
+            v.get("windows").is_none(),
+            "a `windows` entry in capabilities/default.json matches the `main` WINDOW, which \
+             every content webview shares with the chrome — it would grant each tab everything \
+             this file grants. Scope by `webviews`."
         );
     }
 

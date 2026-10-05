@@ -15,14 +15,33 @@ import type { HistoryEntry } from '../../shared/types';
 const historySearch = vi.fn();
 const historyList = vi.fn();
 
+// The popover surface reports a row the user pressed by name and index. The handlers are
+// captured so a test can deliver one the way the backend would.
+const pickHandlers: Array<(p: any) => void> = [];
+const onPicked = vi.fn((cb: (p: any) => void) => {
+  pickHandlers.push(cb);
+  return () => {
+    const i = pickHandlers.indexOf(cb);
+    if (i >= 0) pickHandlers.splice(i, 1);
+  };
+});
+
 vi.mock('../lib/ipcClient', () => ({
   aegis: {
     history: {
       search: (...a: any[]) => historySearch(...a),
       list: (...a: any[]) => historyList(...a),
     },
+    popover: { onPicked: (cb: (p: any) => void) => onPicked(cb) },
   },
 }));
+
+/** Deliver `popover.picked` to every live subscriber, as the backend would. */
+function emitPick(p: unknown): void {
+  act(() => {
+    pickHandlers.forEach((cb) => cb(p));
+  });
+}
 
 import { useOmnibox, type UseOmniboxArgs } from './useOmnibox';
 
@@ -44,6 +63,7 @@ const args = (over: Partial<UseOmniboxArgs> = {}): UseOmniboxArgs => ({
   saved: [],
   searchTemplate: 'https://search.test/?q=%s',
   dismissed: false,
+  onPickSuggestion: () => {},
   ...over,
 });
 
@@ -464,5 +484,143 @@ describe('useOmnibox — the arrow-key cursor', () => {
     });
     expect(result.current.suggestions.length).toBeGreaterThan(position);
     expect(result.current.activeIndex).toBe(position);
+  });
+});
+
+describe('useOmnibox — picks reported by the popover surface', () => {
+  beforeEach(() => {
+    pickHandlers.length = 0;
+    onPicked.mockClear();
+    historySearch.mockResolvedValue([
+      entry({ id: 1, title: 'Example', url: 'https://example.com/' }),
+    ]);
+  });
+
+  /** Mounted with rows loaded, so an index refers to a real suggestion. */
+  async function mounted(over: Partial<UseOmniboxArgs> = {}) {
+    const onPickSuggestion = vi.fn();
+    const r = renderHook(() => useOmnibox(args({ onPickSuggestion, ...over })));
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    await act(async () => {});
+    return { ...r, onPickSuggestion };
+  }
+
+  it("picks the chrome's OWN suggestion for the index the surface reported", async () => {
+    const { onPickSuggestion, result } = await mounted();
+    const rows = result.current.suggestions;
+    expect(rows.length).toBeGreaterThan(1);
+    emitPick({ id: 'address-omnibox', index: 0 });
+    expect(onPickSuggestion).toHaveBeenCalledTimes(1);
+    // Object identity, not a deep equal: the point is that the chrome picked from its own
+    // array, so a poisoned title on the surface cannot become the thing that is navigated to.
+    expect(onPickSuggestion.mock.calls[0][0]).toBe(rows[0]);
+  });
+
+  it('ignores an index outside its own rows, even though Rust already bounds-checked it', async () => {
+    const { onPickSuggestion, result } = await mounted();
+    emitPick({ id: 'address-omnibox', index: result.current.suggestions.length + 5 });
+    expect(onPickSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('ignores a negative index', async () => {
+    const { onPickSuggestion } = await mounted();
+    emitPick({ id: 'address-omnibox', index: -1 });
+    expect(onPickSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('ignores a pick for a DIFFERENT popover', async () => {
+    const { onPickSuggestion } = await mounted();
+    emitPick({ id: 'zoom-indicator', index: 0 });
+    expect(onPickSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('ignores a pick with no index at all', async () => {
+    const { onPickSuggestion } = await mounted();
+    emitPick({ id: 'address-omnibox' });
+    expect(onPickSuggestion).not.toHaveBeenCalled();
+  });
+
+  // Hover is a real behaviour, not a nicety: without it, hovering a row on the surface and
+  // pressing Enter would open the keyboard-highlighted row instead of the one under the pointer.
+  it('moves the keyboard cursor when the surface reports a hover', async () => {
+    const { result } = await mounted();
+    emitPick({ id: 'address-omnibox', action: 'hover', index: 1 });
+    expect(result.current.activeIndex).toBe(1);
+  });
+
+  it('does not treat a hover as a pick', async () => {
+    const { onPickSuggestion, result } = await mounted();
+    emitPick({ id: 'address-omnibox', action: 'hover', index: 1 });
+    expect(onPickSuggestion).not.toHaveBeenCalled();
+    expect(result.current.activeIndex).toBe(1);
+  });
+
+  it('ignores an out-of-range hover rather than leaving the cursor on a row that is gone', async () => {
+    const { result } = await mounted();
+    emitPick({ id: 'address-omnibox', action: 'hover', index: 999 });
+    expect(result.current.activeIndex).toBe(-1);
+  });
+
+  it('ignores an action it does not know', async () => {
+    const { onPickSuggestion, result } = await mounted();
+    emitPick({ id: 'address-omnibox', action: 'obliterate', index: 0 });
+    expect(onPickSuggestion).not.toHaveBeenCalled();
+    expect(result.current.activeIndex).toBe(-1);
+  });
+
+  it('unsubscribes on unmount, so a pick after teardown reaches nothing', async () => {
+    const { unmount, onPickSuggestion } = await mounted();
+    unmount();
+    expect(pickHandlers).toHaveLength(0);
+    emitPick({ id: 'address-omnibox', index: 0 });
+    expect(onPickSuggestion).not.toHaveBeenCalled();
+  });
+
+  it('subscribes exactly once, however much the query changes', async () => {
+    const { rerender } = renderHook(({ q }: { q: string }) => useOmnibox(args({ query: q })), {
+      initialProps: { q: 'a' },
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    rerender({ q: 'ab' });
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    rerender({ q: 'abc' });
+    expect(onPicked).toHaveBeenCalledTimes(1);
+  });
+
+  it('picks against the rows live AT THE TIME, not the rows it mounted with', async () => {
+    const onPickSuggestion = vi.fn();
+    const { rerender, result } = renderHook(
+      ({ q }: { q: string }) => useOmnibox(args({ query: q, onPickSuggestion })),
+      {
+        initialProps: { q: 'ex' },
+      },
+    );
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    await act(async () => {});
+    // The query CHANGES, so the rows genuinely change: a stale closure would hand back the
+    // first query's suggestion for an index that now means something else.
+    historySearch.mockResolvedValue([
+      entry({ id: 2, title: 'Second', url: 'https://second.test/' }),
+    ]);
+    rerender({ q: 'second' });
+    await act(async () => {
+      vi.advanceTimersByTime(200);
+    });
+    await act(async () => {});
+    const live = result.current.suggestions;
+    expect(live[0].title).toBe('Second');
+
+    emitPick({ id: 'address-omnibox', index: 0 });
+    expect(onPickSuggestion).toHaveBeenCalledTimes(1);
+    // Object identity against the CURRENT array — a stale ref would fail this exactly.
+    expect(onPickSuggestion.mock.calls[0][0]).toBe(live[0]);
   });
 });

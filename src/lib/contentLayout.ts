@@ -9,8 +9,9 @@
 //    panel — but ONLY when no full overlay is covering it (a full overlay wins).
 //
 // Chrome POPOVERS (omnibox, site info, ad-block shield, zoom) are deliberately NOT
-// here: they need a height, not a flag, and they must leave the page visible. They
-// ride the content-top inset instead — see useChromePopover.
+// here, and are not a `contentTop` term either: they need a height, not a flag, and
+// they must leave the page visible. They render on the popover SURFACE instead — see
+// `usePopoverSurface`.
 
 export interface ContentLayoutState {
   /** Any full-window, content-hiding surface is open (settings, downloads, dialogs, ...). */

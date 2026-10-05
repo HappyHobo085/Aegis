@@ -4,17 +4,22 @@ import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { RefObject } from 'react';
 import { formatZoom } from '../lib/zoom';
 import { useDialog } from '../hooks/useDialog';
-import { useChromePopoverInset } from '../hooks/useChromePopover';
-import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
+import { useMeasuredRect } from '../hooks/useMeasuredRect';
+import { usePopoverSurface } from '../hooks/usePopoverSurface';
+import { aegis } from '../lib/ipcClient';
+
+/** The only actions the zoom surface may report. Module-level so `usePopoverSurface` does not
+ *  re-send on every render (it keys its effect on the serialised list). */
+const ZOOM_ACTIONS: readonly string[] = ['zoom-out', 'zoom-in', 'reset'];
 
 export interface ZoomIndicatorProps {
   factor: number;
   zoomIn(): void;
   zoomOut(): void;
   reset(): void;
-  /** Called when the popover opens or closes. The desktop compositor no longer needs
-   *  this (the popover registers its own measured inset, see useChromePopover); the
-   *  mobile shell still uses it to lower its native content view. */
+  /** Called when the popover opens or closes. The desktop compositor never needed this; the
+   *  mobile shell still uses it to lower its native content view — and on mobile there is no
+   *  surface, so the chrome's own copy is the visible popover. */
   onOpenChange?(open: boolean): void;
 }
 
@@ -91,15 +96,38 @@ export function ZoomIndicator({
 }: ZoomIndicatorProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
-  // Self-registering: a popover that renders is a popover that reserves its space,
-  // so the content webview can never sit on top of it.
-  const [popoverRef, popoverHeight] = useMeasuredHeight<HTMLDivElement>(open);
-  useChromePopoverInset('zoom-indicator', popoverHeight);
+  // Measured as a RECT now, and no longer reserving a content-top inset: the popover renders
+  // on the surface, which floats over the page. The element measured here is this component's
+  // own copy, which stays mounted (hidden) because `useDialog`'s focus trap and these three
+  // buttons have to live in a document the keyboard can reach.
+  const [popoverRef, popoverRect] = useMeasuredRect<HTMLDivElement>(open);
+  usePopoverSurface({
+    id: 'zoom-indicator',
+    active: open,
+    rect: popoverRect,
+    itemCount: 0,
+    actions: ZOOM_ACTIONS,
+    payload: open ? { factor } : null,
+  });
 
   const handleOpenChange = (next: boolean): void => {
     setOpen(next);
     onOpenChange?.(next);
   };
+
+  // The surface reports an ACTION NAME, never a factor: it does not know the ladder, and
+  // stepping from the chrome's own state is the only way a zoom level stays consistent with
+  // what the toolbar shows.
+  useEffect(
+    () =>
+      aegis.popover.onPicked((pick) => {
+        if (pick.id !== 'zoom-indicator') return;
+        if (pick.action === 'zoom-in') zoomIn();
+        else if (pick.action === 'zoom-out') zoomOut();
+        else if (pick.action === 'reset') reset();
+      }),
+    [zoomIn, zoomOut, reset],
+  );
 
   return (
     <div ref={wrapperRef} className="zoom-indicator">

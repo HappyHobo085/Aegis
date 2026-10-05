@@ -39,6 +39,7 @@ import { listen } from '@tauri-apps/api/event';
 import {
   IPC,
   type ContentInset,
+  type PopoverSetArgs,
   type ProxyConfig,
   type VaultRecordInput,
 } from '../../shared/types';
@@ -71,6 +72,16 @@ const CFG: ProxyConfig = {
   bypassHosts: ['localhost', 'tauri.localhost'],
 };
 const REC: VaultRecordInput = { site: 'https://site.test', username: 'u', password: 'p' };
+const POPOVER_SET: PopoverSetArgs = {
+  id: 'address-omnibox',
+  rect: { x: 120, y: 44, width: 640, height: 312 },
+  payload: { kind: 'address-omnibox', items: [{ title: 'a' }, { title: 'b' }] },
+  // Both are load-bearing on the Rust side and neither is derivable from `payload`: Rust
+  // bounds-checks a pick's `index` against `itemCount` and its `action` against `actions`,
+  // and it cannot count rows or read an allowlist inside a payload it does not interpret.
+  itemCount: 2,
+  actions: ['pick'],
+};
 
 // ---------------------------------------------------------------------------
 // 1. Requests: aegis method -> invoke('ipc', { channel, payload })
@@ -85,6 +96,16 @@ interface ContractRow {
 }
 
 const REQUESTS: ContractRow[] = [
+  // ---- popover surface ----
+  {
+    name: 'popover.set',
+    run: () => aegis.popover.set(POPOVER_SET),
+    channel: IPC.popoverSet,
+    // `payload: null` is the CLOSE signal, and it is a first-class part of the contract
+    // rather than a sentinel: it travels in the same object as the rect, so a popover cannot
+    // be left open by forgetting a second hide channel. See `popover.rs::parse_set`.
+    payload: POPOVER_SET,
+  },
   // ---- nav (5 requests + getState) ----
   {
     name: 'nav.navigate',
@@ -1005,6 +1026,11 @@ const NOOP = (): void => {};
 
 const EVENTS: { name: string; run: () => () => void; event: string }[] = [
   { name: 'nav.onFailed', run: () => aegis.nav.onFailed(NOOP), event: IPC.evtNavFailed },
+  {
+    name: 'popover.onPicked',
+    run: () => aegis.popover.onPicked(NOOP),
+    event: IPC.evtPopoverPicked,
+  },
   { name: 'nav.onCrashed', run: () => aegis.nav.onCrashed(NOOP), event: IPC.evtNavCrashed },
   { name: 'tabs.onState', run: () => aegis.tabs.onState(NOOP), event: IPC.evtTabsState },
   { name: 'tabs.onShortcut', run: () => aegis.tabs.onShortcut(NOOP), event: IPC.evtTabsShortcut },
@@ -1092,6 +1118,12 @@ const UNSUBSCRIBED: Record<string, string> = {
   [IPC.evtAdblockBlockedCount]: 'Android: __aegisBlockedCount. Desktop: adblock.onBlockedCount.',
   [IPC.evtFindState]: 'Android: __aegisFindState. Desktop: find.onState.',
   [IPC.evtZoomChanged]: 'Android: __aegisZoomChanged. Desktop: zoom.onChanged.',
+  // Subscribed by the POPOVER SURFACE's own entry point, not by the chrome: it is a
+  // targeted `emit_to` aimed at the surface's label, and the surface deliberately has no
+  // `ipc` permission, so this transport cannot be the one that carries it (that is
+  // `src/lib/surfaceApi.ts`). Pinned in `surfaceApi.test.ts`, which asserts the wire name
+  // `popover:payload`.
+  [IPC.evtPopoverPayload]: 'Surface webview: src/lib/surfaceApi.ts onPayload.',
 };
 
 describe('the event-name contract', () => {
@@ -1112,6 +1144,11 @@ describe('the event-name contract', () => {
       // it is the reply half of `data.export`/`data.import`, not something a caller listens
       // to. It is still subscribed, which is all this set claims.
       IPC.evtDataBulkDone,
+      // Subscribed by the POPOVER SURFACE (src/lib/surfaceApi.ts), which is a real
+      // subscriber reached through `on()` — just not through this transport. It is listed
+      // here rather than only in `UNSUBSCRIBED` because "not accounted for" and "has no
+      // subscriber" are different claims, and only the first is true.
+      IPC.evtPopoverPayload,
     ]);
     const catalogEvents = Object.entries(IPC)
       .filter(([key]) => key.startsWith('evt'))

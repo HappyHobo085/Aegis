@@ -44,6 +44,8 @@ import {
   FormWillSubmit,
   Workspace,
   WorkspaceState,
+  PopoverPick,
+  PopoverSetArgs,
 } from '../../shared/types';
 import { IPC } from '../../shared/types';
 import { call as rawCall, on } from './tauriInvoke';
@@ -967,6 +969,14 @@ export const aegis: AegisApi = {
     reorder: (ids: string[]) => dedupedCall<WorkspaceState>(IPC.workspaceReorder, { ids }),
     onState: (cb: (workspaces: WorkspaceState) => void) =>
       on<WorkspaceState>(IPC.evtWorkspaceState, cb),
+  },
+  popover: {
+    // NOT deduped, deliberately. `view.setContentInset` is deduped because the same inset
+    // twice is the same layout twice; a popover's rect moves with the mouse, the caret and
+    // the window, and the surface must be told every time. Suppressing a "duplicate" would
+    // leave the surface at a stale rect with a fresh payload.
+    set: (args: PopoverSetArgs) => rawCall(IPC.popoverSet, { ...args }),
+    onPicked: (cb) => on<PopoverPick>(IPC.evtPopoverPicked, cb),
   },
 };
 

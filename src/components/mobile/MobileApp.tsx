@@ -150,8 +150,17 @@ function MobileShell() {
 
   // The address-bar suggestion list is a chrome overlay too: the native content
   // WebView sits on top of the chrome WebView, so it must be lowered for the
-  // dropdown to be visible (the desktop shell insets by the measured height
-  // instead — see useChromePopover; a single WebView has nothing to inset).
+  // dropdown to be visible. Desktop does NOT do this: there the popover renders on
+  // the popover surface, which floats over the page, so nothing is inset (see
+  // `usePopoverSurface`); a single WebView has nothing to place a surface on.
+  //
+  // HONEST ABOUT WHAT ANDROID STILL PAYS FOR THE SURFACE: `AddressBar` calls
+  // `usePopoverSurface` unconditionally, so on Android every omnibox keystroke parses a
+  // payload and attempts a `popover:payload` emit at a webview label that does not exist
+  // there (the emit fails into a sink), then discards the registry entry. It is cheap and it
+  // is NOT a security concern — the target is `surface:popover`, never created on Android —
+  // but it is a real per-keystroke cost, not a compile-time no-op, so do not describe the
+  // mobile path as if the surface code were not running.
   //
   // `surfaceCount` covers everything that registers through `useChromeSurface`
   // rather than through one of the three states above. Without the

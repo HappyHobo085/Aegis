@@ -39,12 +39,29 @@ export default defineConfig(async () => {
       ...analyzePlugins,
     ],
     clearScreen: false,
-    // Port is overridable via VITE_DEV_PORT so a second dev server can run on its own
-    // port (e.g. 5199) alongside a normal `tauri dev` on 5174 without colliding.
-    server: { port: Number(process.env.VITE_DEV_PORT) || 5174, strictPort: true },
     build: {
       outDir: resolve(__dirname, 'dist'),
       emptyOutDir: true,
+      // TWO entries, because the app has two React roots.
+      //
+      // `index.html` is the chrome: toolbar, sidebar, modals — it fills the window behind the
+      // content webview. `popover.html` is the popover surface: one extra webview that renders
+      // a popover OVER the page inside a rect the chrome measured, in a webview with its own
+      // capability and no `ipc` (src-tauri/capabilities/surface.json). Without a second entry
+      // the surface would have no document to load, and `WebviewUrl::App("popover.html")` in
+      // popover.rs would 404 into a blank rect.
+      //
+      // Named explicitly rather than globbed: a glob would silently start building a third
+      // entry if anyone dropped an .html into src/, and Tauri serves only what it is told to.
+      rollupOptions: {
+        input: {
+          index: resolve(__dirname, 'src/index.html'),
+          popover: resolve(__dirname, 'src/popover.html'),
+        },
+      },
     },
+    // Port is overridable via VITE_DEV_PORT so a second dev server can run on its own
+    // port (e.g. 5199) alongside a normal `tauri dev` on 5174 without colliding.
+    server: { port: Number(process.env.VITE_DEV_PORT) || 5174, strictPort: true },
   };
 });

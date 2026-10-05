@@ -9,7 +9,6 @@ import { saveErrorText } from './lib/saveError';
 import { useChromeHeights } from './hooks/useChromeHeights';
 import { hostOf, originOf } from './lib/url';
 import { ChromeSurfaceProvider, useChromeSurfaceRegistry } from './hooks/useChromeSurfaces';
-import { ChromePopoverProvider, useChromePopoverRegistry } from './hooks/useChromePopover';
 import { computeContentLayout } from './lib/contentLayout';
 import { protectionSummary } from './lib/protectionSummary';
 import { useDownloadToasts } from './hooks/useDownloadToasts';
@@ -230,23 +229,19 @@ function DesktopApp() {
     };
   }, [openSettings]);
 
-  // The tallest open chrome popover (omnibox / site info / shield / zoom). Each
-  // registers its own measured height; the compositor turns the tallest into the
-  // extra content-top inset below.
-  const { inset: popoverInset } = useChromePopoverRegistry();
-
   // Report measured chrome inset to Rust so the content webview sits below it.
   // The FindBar is the one dynamic chrome ELEMENT — it appears/disappears after
   // mount — but `useChromeHeights` now re-measures whenever a chrome element's
   // PRESENCE changes, so `.find-bar` is already in `chrome.topInset`. Adding
   // FIND_BAR_H here as well used to be the only way to make it work (the hook
   // measured exactly once), and would now double-count it to 80px.
-  // Chrome popovers (omnibox, site info, shield, zoom) are different: they hang
-  // BELOW the chrome and are taller than nothing, so each registers its own
-  // measured height and the tallest one is added here. That insets the opaque
-  // content webview just far enough to reveal the popover while the page stays
-  // visible behind it — see useChromePopover.
-  const contentTop = chrome.topInset + popoverInset;
+  // Chrome popovers (omnibox, site info, shield, zoom) add NOTHING here. They used to register
+  // a measured height and the tallest one was added to this inset, which meant opening one
+  // displaced the page — and for the omnibox that fed straight back into its own measurement,
+  // which is what ran the layout ~57 times a second while typing. They now render on the
+  // popover surface, a sibling webview that floats over the page, so there is no inset to
+  // reserve and no feedback path to close.
+  const contentTop = chrome.topInset;
   useContentInset(tabs.activeId, contentTop);
 
   // Sync the content-top CSS variable so fixed-position chrome surfaces (sidebar, scrim)
@@ -894,9 +889,7 @@ export function App() {
   if (getIsMobile()) return <MobileApp />;
   return (
     <ChromeSurfaceProvider>
-      <ChromePopoverProvider>
-        <DesktopApp />
-      </ChromePopoverProvider>
+      <DesktopApp />
     </ChromeSurfaceProvider>
   );
 }

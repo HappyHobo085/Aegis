@@ -5,8 +5,9 @@ import { EyeOff, Fingerprint, Lock, Network, Shield, ShieldOff, Video } from 'lu
 import type { LucideIcon } from 'lucide-react';
 import type { AdblockState } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
-import { useChromePopoverInset } from '../hooks/useChromePopover';
-import { useMeasuredHeight } from '../hooks/useMeasuredHeight';
+import { useMeasuredRect } from '../hooks/useMeasuredRect';
+import { usePopoverSurface } from '../hooks/usePopoverSurface';
+import { aegis } from '../lib/ipcClient';
 import type { ProtectionSummary } from '../lib/protectionSummary';
 import { hostCovered } from '../lib/url';
 
@@ -17,9 +18,9 @@ export interface AdblockShieldProps {
   host: string | null;
   setEnabled(enabled: boolean): void;
   toggleAllowlist(): void;
-  /** Notified when the popover opens/closes. The desktop compositor no longer needs
-   *  this (the popover registers its own measured inset, see useChromePopover); the
-   *  mobile shell still uses it to lower its native content view. */
+  /** Notified when the popover opens/closes. The desktop compositor never needed this; the
+   *  mobile shell still uses it to lower its native content view — and on mobile there is no
+   *  surface, so the chrome's own copy is the visible popover. */
   onOpenChange?(open: boolean): void;
   /** When provided, the popover shows a "Reload to apply" button next to the
    *  "Applies on reload" copy. The coordinator (App) wires this to reload the
@@ -28,7 +29,15 @@ export interface AdblockShieldProps {
   protection?: ProtectionSummary;
 }
 
-function protectionRows(protection: ProtectionSummary): Array<{
+/**
+ * The protection rows, as a pure function of the summary.
+ *
+ * EXPORTED because the popover surface renders the same list from the same payload: it needs
+ * the `LucideIcon` components, which cannot cross the IPC boundary, so the only way both
+ * documents agree on these rows is to run this ONE function twice rather than to serialise
+ * rows (which would need an icon-name table that can drift from the imports above).
+ */
+export function protectionRows(protection: ProtectionSummary): Array<{
   key: string;
   label: string;
   value: string;
@@ -96,15 +105,24 @@ function Popover({
   host,
   setEnabled,
   toggleAllowlist,
-  onReload,
   protection,
   onClose,
   wrapperRef,
   popoverRef,
+  allowlisted,
+  coveringEntries,
+  canUnallowHere,
+  allowLabel,
+  onReload,
 }: AdblockShieldProps & {
   onClose: () => void;
   wrapperRef: RefObject<HTMLElement | null>;
   popoverRef: RefObject<HTMLDivElement | null>;
+  // Derived by the parent — see the comment at its call site.
+  allowlisted: boolean;
+  coveringEntries: string[];
+  canUnallowHere: boolean;
+  allowLabel: string;
 }) {
   const labelId = useId();
   const dialogRef = useDialog<HTMLDivElement>(onClose);
@@ -137,8 +155,6 @@ function Popover({
   // from EVERY blocking tier. An exact test here made this row's checkbox show
   // "not allowlisted" for a subdomain the core is already exempting — the same
   // disagreement the `hostCovered` helper was extracted to end.
-  const allowlisted = hostCovered(state.allowlistedHosts, host);
-  const allowLabel = host ? `Allow ads on ${host}` : 'Allow ads on this site';
 
   // Which entries cover THIS host, and does unchecking have any chance of working?
   //
@@ -156,13 +172,6 @@ function Popover({
   // be expressed through this control at all: removing the parent is a different, broader
   // action (it un-allows every other address of that site too), so it is not something to
   // do implicitly behind a checkbox. The control says so instead of silently misfiring.
-  const coveringEntries =
-    host === null || host === ''
-      ? []
-      : state.allowlistedHosts.filter((entry) => entry !== '' && hostCovered([entry], host));
-  const canUnallowHere =
-    !allowlisted || (coveringEntries.length === 1 && coveringEntries[0] === host);
-
   const rows = protection ? protectionRows(protection) : [];
 
   return (
@@ -260,13 +269,18 @@ function Popover({
   );
 }
 
+/** The only actions the shield surface may report. Module-level so `usePopoverSurface` does
+ *  not re-send on every render. */
+const SHIELD_ACTIONS: readonly string[] = ['toggle-enabled', 'toggle-allowlist', 'reload'];
+
 export function AdblockShield(props: AdblockShieldProps) {
   const [open, setOpen] = useState(false);
   const wrapperRef = useRef<HTMLDivElement | null>(null);
-  // Self-registering: a popover that renders is a popover that reserves its space,
-  // so the content webview can never sit on top of it.
-  const [popoverRef, popoverHeight] = useMeasuredHeight<HTMLDivElement>(open);
-  useChromePopoverInset('adblock-shield', popoverHeight);
+  // Measured as a RECT and placed on the surface, so the page is no longer displaced when this
+  // opens. The element measured is this component's own copy, which stays mounted (hidden)
+  // because `useDialog`'s focus trap and these controls must live in a document the keyboard
+  // can reach — the surface is `aria-hidden`.
+  const [popoverRef, popoverRect] = useMeasuredRect<HTMLDivElement>(open);
   const changeOpen = (v: boolean) => {
     setOpen(v);
     props.onOpenChange?.(v);
@@ -285,6 +299,64 @@ export function AdblockShield(props: AdblockShieldProps) {
   const blockingActive = props.state.enabled && !allowlisted;
   const ShieldIcon = blockingActive ? Shield : ShieldOff;
   const page = props.page;
+  const host = props.host;
+
+  // Computed HERE rather than in `Popover`, because the surface needs them too and two
+  // derivations of the allowlist asymmetry are two things that can drift. `Popover` already
+  // had its own copy of `allowlisted`, identical to the line above — now there is one.
+  const allowLabel = host ? `Allow ads on ${host}` : 'Allow ads on this site';
+  // Which entries cover THIS host, and does unchecking have any chance of working?
+  //
+  // The core WRITES the allowlist with EXACT equality, so a host covered only by a PARENT
+  // entry is not itself listed, and un-checking used to send `www.example.com`, which the core
+  // read as "not listed" and ADDED — the checkbox then snapped straight back on having done
+  // nothing but grow a SYNCABLE list. So unchecking can only mean "block ads on this site"
+  // when this host is not allowlisted, or when its own exact entry is the ONLY thing covering
+  // it; otherwise the request cannot be expressed through this control at all, and the
+  // control says so instead of silently misfiring.
+  const coveringEntries =
+    host === null || host === ''
+      ? []
+      : props.state.allowlistedHosts.filter((entry) => entry !== '' && hostCovered([entry], host));
+  const canUnallowHere =
+    !allowlisted || (coveringEntries.length === 1 && coveringEntries[0] === host);
+
+  // Everything DECIDED goes to the surface as plain data, so the panel derives nothing and the
+  // two copies cannot disagree — `canUnallowHere` above most of all.
+  usePopoverSurface({
+    id: 'adblock-shield',
+    active: open,
+    rect: popoverRect,
+    itemCount: 0,
+    actions: SHIELD_ACTIONS,
+    payload: open
+      ? {
+          enabled: props.state.enabled,
+          sessionBlocked: props.state.sessionBlocked,
+          page,
+          host,
+          allowlisted,
+          canUnallowHere,
+          coveringEntries,
+          allowLabel,
+          hasReload: Boolean(props.onReload),
+          protection: props.protection ?? null,
+        }
+      : null,
+  });
+
+  // The surface reports an ACTION NAME and the chrome runs its own handlers, so a poisoned
+  // payload cannot pick a level or an allowlist entry of its own choosing.
+  useEffect(
+    () =>
+      aegis.popover.onPicked((pick) => {
+        if (pick.id !== 'adblock-shield') return;
+        if (pick.action === 'toggle-enabled') props.setEnabled(!props.state.enabled);
+        else if (pick.action === 'toggle-allowlist') props.toggleAllowlist();
+        else if (pick.action === 'reload') props.onReload?.();
+      }),
+    [props.setEnabled, props.toggleAllowlist, props.onReload, props.state.enabled],
+  );
 
   return (
     <div ref={wrapperRef} className="adblock-shield">
@@ -314,6 +386,12 @@ export function AdblockShield(props: AdblockShieldProps) {
           onClose={() => changeOpen(false)}
           wrapperRef={wrapperRef}
           popoverRef={popoverRef}
+          // Derived by the parent, because the surface payload needs the same values and two
+          // derivations of the allowlist rule can drift.
+          allowlisted={allowlisted}
+          coveringEntries={coveringEntries}
+          canUnallowHere={canUnallowHere}
+          allowLabel={allowLabel}
         />
       )}
     </div>

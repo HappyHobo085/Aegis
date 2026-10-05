@@ -1541,8 +1541,35 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   `AdblockShield.tsx` consumes it, so a host whose WebRTC protection is off reports off
   instead of claiming "public-only". An earlier revision of this file listed it as a
   second control-that-lies instance; no follow-up is outstanding.
+- **`aegis_layout.rs` + `aegis_container.rs`** — the Linux webview container. The pure half
+  (`aegis_layout.rs`: `Role`, `rect_for`, `PARK_X/Y`) holds every sizing rule and is unit-tested
+  headlessly; the GTK half (`aegis_container.rs`) is a **`GtkFixed` subclass** that applies them
+  in `size_allocate` and reports its own `(0, 0)` minimum. Subclassing `gtk::Container` instead
+  accepts NO children — see gotcha (e), which records the whole measurement and why the two
+  requirements that looked contradictory turned out not to be. Nine tests in `aegis_layout.rs`,
+  six source pins in `aegis_container.rs`, all mutation-verified.
+- **`popover.rs`** — the popover surface: a second child webview (`surface:popover`) that renders
+  popovers **above** the page instead of displacing it, from its own frontend entry
+  (`src/popover.html` → `src/popover.tsx` → `src/popover/PopoverPanel.tsx`). Compiled on every
+  platform; `create_surface`/`place_webview` are no-ops on mobile and `popover.set` there is
+  accepted and ignored, so a chrome component can call the hook unconditionally. `Role::Surface`
+  in `aegis_layout.rs` carries its rect, and `AegisFixed` registers it in `assign_roles` while
+  preserving it across every layout pass — **child order is the z-order**, so the surface must
+  stay the LAST child (`linux_layout::POPOVER_WIDGET_NAME` re-registers it for exactly that
+  reason). **ALL FOUR popovers are on it** — the address-bar suggestions (`address-omnibox`), site
+  information (`address-site`), the ad-block shield (`adblock-shield`) and page zoom
+  (`zoom-indicator`) — so the surface is no longer speculative and the content-top inset path is
+  gone (gotcha (i)): with the omnibox open the content inset is written **zero** times
+  and the page does not move, where the old inset path moved it by exactly the dropdown's own
+  height. Four things about it are not obvious from the code and are each pinned by a test:
+  the payload goes out with **`emit_to`**, never `emit` (it carries history titles), and so does
+  the reply (`CHROME_LABEL = "main"`); the surface has **no `emit` permission at all** and
+  reports a pick through the `popover_picked` command, because `core:event` has no scope support
+  in Tauri 2.11.3; it **handshakes** with `popover_ready` because `emit_to` is fire-and-forget
+  and the first payload of every session would otherwise be lost forever; and both capability
+  files are scoped by **webview** label, not window label. See gotchas (g), (h) and (i).
 - **Linux** — `linux_layout.rs`: works around **tauri#10420** by reparenting
-  webkit2gtk widgets GtkBox → GtkFixed; title-changed signal feeds history +
+  webkit2gtk widgets GtkBox → `AegisFixed` (`aegis_container.rs`); title-changed signal feeds history +
   routes the element-picker sentinel; Esc-exits-fullscreen; GTK key hook
   handles Ctrl+T/W/Shift+T tab shortcuts (accelerator menus used on Win/macOS).
   `connect_block_counter` counts ads for the badge via `resource-load-started`.
@@ -2814,10 +2841,13 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
 
 These apply when there is more than one content webview (i.e. multiple tabs):
 
-a. **One canonical GtkFixed.** Every content webview must live in the same
-`GtkFixed` container. New `add_child`-ed tabs land in the `GtkBox` and must
-be re-parented into the `GtkFixed` each layout pass; leaving them in a nested
-`GtkFixed` breaks the hide-others logic.
+a. **One canonical `AegisFixed`.** Every content webview must live in the same
+`AegisFixed` container (`aegis_container.rs`, a `GtkFixed` subclass — it replaces the
+plain `GtkFixed` this bullet used to name, and gotcha (e) records why). New
+`add_child`-ed tabs land in the `GtkBox` and must
+be re-parented into the `AegisFixed` each layout pass; leaving them in a nested
+`GtkFixed` breaks the hide-others logic. The popover surface is a child of that same
+container and must stay registered LAST, because child order is its z-order (gotcha (h)).
 
 b. **Classify by GTK widget name, not pointer.** Content webviews are identified
 in `layout()` by a GTK widget name set via `mark_content_label`
@@ -2962,6 +2992,43 @@ every "size-allocate" collapses both webviews to 1×1 and `size_fixed_children` 
 two full-page re-layouts of the content per pass. Measured on 10 WM driven resizes:
 `fixed_passes=10 collapsed1x1=20/20`, `pre = [("chrome",1,1),("content",1,1)]`.
 
+- **★ RESOLVED (2026-10-04): the two requirements were never actually in tension, because a
+container can decline to derive its preferred size from its children.** `aegis_container.rs`
+is a **`gtk::Fixed` subclass** (not a `gtk::Container` subclass — see below) whose
+`size_allocate` hands each child the rectangle its `Role` implies, resolved against the
+container's CURRENT allocation. `size_fixed_children` and its `after=true` `size-allocate`
+connection are **deleted**, along with the `LayoutInsets` managed state they shared. Geometry
+now travels one way: `layout()` → `assign_roles()` → `set_role()`, and `set_role` queues the
+CHILD, never the container, because queueing the container re-enters `size_allocate`.
+
+  The pure rules live in `aegis_layout.rs` (`Role`, `rect_for`, `PARK_X/Y`), deliberately free
+  of GTK and Tauri so they are unit-testable headlessly — `aegis_container.rs` cannot be, since
+  instantiating a widget needs a display. Nine tests there, including the two that pin the
+  trade-off: a shown webview sits at the inset, and a parked one keeps its SIZE so un-parking
+  is a pure move.
+
+  **Subclass `GtkFixed`, never `gtk::Container`.** A `Container` subclass cannot accept a
+  single child here: `ContainerImpl::add` chains to `parent_add`, which calls the **base**
+  `GtkContainer` class's `add` vfunc, and GTK3's is `gtk_container_add_real`, a `g_warning`
+  stub — so GTK logs `GtkContainerClass::add not implemented`, `PARENTED=0`, while the Rust
+  `add` still appears to run. `GtkFixed` never routes through it: `gtk_fixed_put` parents a
+  child with `gtk_widget_set_parent` directly. `FixedImpl` requires `ContainerImpl` as a
+  supertrait, so that trait is implemented too — every method keeps its default and none is
+  reached. **This is not a gtk-rs bug and needs no upstream fix.**
+
+  **The webviews still carry a (0,0) request, but that is now defence in depth, not the reason
+  the window shrinks** — the container reports `(0, 0)` for itself. It is kept because a
+  non-zero request on a webview is the exact change that historically made the window
+  impossible to shrink, and no automated gate here can see a live window's resize behaviour.
+
+  Six source pins in `aegis_container.rs` hold the vtable contract, all mutation-verified:
+  reverting either `preferred_*` arm to `parent_preferred_*` reds the minimum test; adding
+  `size_request` to `size_allocate` reds the collapse test; dropping `request_mode` reds the
+  constant-size test; calling `queue_resize`/`set_role` inside `size_allocate` reds the
+  non-re-entry test; `type ParentType = gtk::Container` reds the `Fixed` test. They are source
+  pins because a headless `cargo test` cannot instantiate the widget at all — the vtable
+  INSTALL is measured, not asserted (`PARENTED=2`, or the probe run aborts).
+
 - **★ The collapse CANNOT be fixed by writing the webviews' real geometry into their requests.
 Tried, measured, shipped, reverted.** It does work — a probe against real GTK went from
 `collapsed1x1=20/20` to `0`, with a steady-state pass doing nothing (`passes=0 reallocs=0`) — and
@@ -3005,6 +3072,119 @@ while dragging. **The GTK layer alone cannot see this** — a `GtkFixed` "size-a
 times on a pure move (measured in all three probe runs), so probing only GTK "refutes" the layout
 path and sends you into the wrong layer. Read the EVENT layer, not the signal layer, for anything
 driven by a window event.
+
+g. **★ A Tauri capability's `windows` list matches the WINDOW label and `webviews` matches the
+WEBVIEW label — and until 2026-10-04 this app had NO app ACL manifest at all, so `capabilities/`
+was not a control.** Three facts, each verified, that together decide what a new webview may do:
+
+   1. `resolve_access` matches `windows` against the **window** label and `webviews` against the
+      **webview** label (`tauri-2.11.3/src/ipc/authority.rs:439`). `popover.rs`'s surface is a
+      **child webview of `main`**, so a capability reading `windows: ["surface:popover"]`
+      matched **nothing at all** — every grant was dead, the surface could not listen or report
+      a pick, and **nothing errored anywhere.** It is invisible by construction: an inert
+      capability is indistinguishable from a missing one at runtime.
+   2. Tauri ACL-checks a non-plugin command only
+      `if plugin_command.is_some() || has_app_acl_manifest || !is_local`
+      (`tauri-2.11.3/src/webview/mod.rs:1817`). With no app manifest, **any local-origin
+      webview could invoke `ipc`** — hence `settings.set`, `nav.navigate`, every channel — with
+      no check. Content webviews were excluded only because they load a REMOTE origin, which is
+      an accident of where they load from, not a capability decision. `build.rs` now declares
+      `AppManifest::new().commands(&["ipc", "popover_picked", "popover_ready"])`, which is what
+      makes `allow-ipc` exist at all; a command in `generate_handler!` but not in that list has
+      no permission, so no capability can grant it and it is callable by nobody.
+   3. **Therefore `default.json`'s old `windows: ["main"]` was a live hole the moment the
+      manifest appeared**: content webviews share the `main` *window*, so the old scope would
+      have handed every page in every tab the chrome's full `ipc`. It is now `webviews: ["main"]`.
+      The same wrong axis was inert in one direction and a hole in the other, which is why
+      "it was never a problem" is not the same claim as "it is not a problem now".
+
+   Both files are pinned by `both_capabilities_are_scoped_by_webview_label_not_window_label` and
+   `the_chrome_and_the_surface_are_disjoint_webview_scopes`, and `surface.json` grants **no
+   `emit` at all** (see (h)). **Residual, recorded not papered over:** `core:event:allow-listen`
+   cannot be scoped either, so the surface *could* subscribe to any event; that is mitigated by
+   the surface's CSP (`connect-src` — no egress) and by it loading only our own bundle, not by
+   the capability.
+
+h. **★ `core:event` has NO scope support in Tauri 2.11.3, so a second webview that must not emit
+   gets a COMMAND instead — and `emit_to` is fire-and-forget, so it needs a readiness handshake.**
+   `gen/schemas/acl-manifests.json` gives `core:event` a `global_scope_schema: null` and every
+   one of its permissions is a bare `commands: {allow, deny}`;
+   `permissions/event/autogenerated/reference.md` says in words that it works "without any
+   pre-configured scope". So "scope the emit to our event names" is **unimplementable** — there
+   is no scoped variant to name. The popover surface therefore has **no `emit` permission at
+   all**: it receives via `emit_to(SURFACE_LABEL, …)` (never `app.emit`, which would broadcast
+   history titles to every untrusted content webview) and reports a pick by invoking
+   `popover_picked`, which re-checks the caller's webview label **in code**, not only in the
+   capability.
+
+   **Both directions are targeted, and the reply direction is a real tightening rather than
+   symmetry for its own sake.** `popover.picked` went out with `crate::emit_event` (`app.emit`)
+   until Phase 3. Read `filter_target` (`tauri-2.11.3/src/manager/mod.rs:604`) against a
+   webview's `listen` (`webview/mod.rs:2233`, which registers `EventTarget::Webview{label}`): an
+   `AnyLabel` target matches only a listener whose **own** label equals it, so
+   `emit_to(CHROME_LABEL)` reaches the chrome and skips every content webview. That the chrome's
+   webview label IS `"main"` is measured, not assumed — an ACL-checked `popover.set` succeeded
+   from the chrome in the Phase-2 gate, and `webviews: ["main"]` would have refused it otherwise.
+   **`app.listen` (the global target) cannot observe a targeted emit at all**, which is why the
+   pick tests attach their listeners to a mock *webview*; that fact is pinned as
+   `a_global_listener_observes_no_targeted_pick` rather than left as a comment, because getting
+   it wrong makes a green test vacuous.
+
+   **And the payload needs a handshake, because `emit_to` does not queue.** The surface's
+   listener is registered from a React effect, so at every launch the first payload was emitted
+   before it existed and was delivered to nobody, permanently — the normal case, not a rare
+   race, and exactly what a WebKit reload reproduces (the surface stays blank forever). The
+   measured symptom was a surface placed at exactly the right rect with `topmost=true
+   visible=true` and nothing in it. `popover_ready` is the fix: the surface announces readiness
+   as its LAST startup step and Rust replays the current frame. `surfaceApi.start()` must
+   therefore **not** reuse the existing `on()` helper, because `on()` resolves its listener in
+   the background — awaiting `ready()` after it rebuilds the very race.
+
+i. **★ THE INSET PATH IS DELETED, and that deletion is the fix — the three remaining popovers
+   moved to the surface too.** `useChromePopover.tsx` and `useMeasuredHeight.ts` are **gone**;
+   `App` derives `contentTop` from `chrome.topInset` alone. The loop they closed: a popover
+   registered its measured height as a content-top inset, the content webview resized, the resize
+   re-laid-out the chrome, and the chrome re-measured the popover — **~57 layout passes per second
+   while typing**, never settling. Measured on the built AppImage with the omnibox open: the inset
+   is written **twice per session, both at startup**; with one line of the old behaviour re-added
+   it is 5 writes and a **120 px** page displacement. `platformContract.drift.test.ts` pins all
+   three halves (the modules are absent, no renderer file imports them, `contentTop` is exactly
+   `chrome.topInset`) because "the code is gone" is the only thing that stops it coming back.
+
+   **ACCEPTED REGRESSION from moving the three dialogs** (site info, shield, zoom) — they are
+   `role="dialog"` with `useDialog`'s FOCUS TRAP, unlike the omnibox whose rows have no tab stop.
+   The chrome's copy must stay the ACCESSIBLE one (focus cannot cross a webview, and the surface
+   is `aria-hidden`), so their focus trap and buttons live on the renderer-side
+   `opacity: 0` copy: keyboard activation **works** but there is **no visible focus ring** (WCAG
+   2.4.7). The alternatives were both worse — `aria-hidden` + non-focusable makes the popover
+   unreachable by keyboard, and handing focus into the surface from Rust means the surface owns
+   Escape and the arrow keys (contradicting the spec's §9.4). That second one is the real future
+   fix. Do not "fix" it by making the surface focusable without also moving the key handling.
+
+j. **★ A field-shape mismatch across the Rust/TypeScript boundary passes BOTH suites. Pin the
+   RECEIVER, and never prove a React dep is stable with `Math.random()`/`Date.now()`.** Two
+   lessons from the same phase:
+
+   - `parse_set` read `width`/`height` off the **envelope** while `PopoverSetArgs` sent them
+     **nested under `rect`**. The Rust unit test built a flat literal; the TypeScript contract
+     test asserted the nested shape. **1 908 frontend and 782 Rust tests were green while the
+     live app rejected every popover** (``popover.set: `width` must be a number``). A pin that
+     asserts the receiver reads the right KEY NAMES is also vacuous — mine was, and it had to be
+     rewritten to assert *which object* the numeric closure is handed. The pin that actually
+     holds reads the **Rust source's own key paths** (both the `.get("x")` literal and the
+     `num("x")` closure form) plus the receiver.
+   - To prove an effect dependency is *content*-stable, a mutation must change the dep **every
+     render**. `JSON.stringify(actions) + String(Math.random())` returns the same string across
+     renders of one test, so the dep never changes, the effect never re-runs, and the mutant
+     reads GREEN. **Use a monotonic module-level counter.** Two "mutations" came back green that
+     way and nearly became a false claim that a guard was not load-bearing; a counter reds them
+     immediately. A mutation arm that changes nothing is also not a control: an early return
+     guarded by `String(Math.random()) === 'never'` proves nothing by passing.
+
+   **The general conclusion, which is the point:** a green suite is weak evidence for anything
+   that crosses the language boundary. Only the running binary settles it, and the running
+   binary here found three defects (§7.2/§7.3/§8.1 of the popover-surface spec) that no test
+   on either side could see.
 
 26. **Most `#[allow(dead_code)]` in this crate hide LIVE code, not dead code — audit by
     STRIPPING and re-compiling, never by reading the comment.** (Full audit,

@@ -20,7 +20,14 @@ export interface OmniboxDropdownProps {
   idPrefix: string;
   /** The root element, so the parent can measure it for the content inset. */
   ref?: Ref<HTMLDivElement>;
-  onPick(suggestion: OmniboxSuggestion): void;
+  /** Appended to the root's class list. The chrome passes `address-bar__omnibox-source` for
+   *  the copy it keeps after the popover surface takes over rendering — invisible to the eye,
+   *  still in the accessibility tree, still measurable. See `index.css`. */
+  className?: string;
+  /** `index` is passed alongside the suggestion so a consumer that only holds the payload —
+   *  the popover surface — can report a row NUMBER, which is what Rust bounds-checks.
+   *  Callers that own the array (the chrome) ignore it. */
+  onPick(suggestion: OmniboxSuggestion, index: number): void;
   onHover(index: number): void;
 }
 
@@ -91,6 +98,7 @@ export function OmniboxDropdown({
   activeIndex,
   idPrefix,
   ref,
+  className,
   onPick,
   onHover,
 }: OmniboxDropdownProps) {
@@ -107,7 +115,7 @@ export function OmniboxDropdown({
   return (
     <div
       ref={ref}
-      className="omnibox"
+      className={className ? `omnibox ${className}` : 'omnibox'}
       role="listbox"
       aria-label="Suggestions"
       id={`${idPrefix}-list`}
@@ -129,7 +137,7 @@ export function OmniboxDropdown({
             // must not close) before the pick is handled.
             onMouseDown={(e) => {
               e.preventDefault();
-              onPick(s);
+              onPick(s, index);
             }}
             onMouseEnter={() => onHover(index)}
           >

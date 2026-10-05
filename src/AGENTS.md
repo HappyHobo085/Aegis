@@ -15,8 +15,65 @@ src/
 ├── index.css         # global theme (dark default + light palette via `[data-theme]`, selected by `lib/theme.ts`) + chrome layout (desktop chrome + .aegis-mobile shell)
 ├── components/       # presentational components + Settings tabs (+ co-located *.test.tsx)
 ├── hooks/            # one hook per feature domain (useNav, useAdblock, …) (+ tests)
-└── lib/              # IPC client, address parsing, theme, toast, layout consts (+ tests)
+├── lib/              # IPC client, address parsing, theme, toast, layout consts (+ tests)
+├── popover.html      # SECOND entry: the popover surface's document (loaded by Rust, never a tab)
+├── popover.tsx       # mounts <PopoverPanel/>; imports the SAME index.css — see below
+├── popover/          # the surface's presentational panel(s)
+├── hooks/useMeasuredRect.ts, hooks/usePopoverSurface.ts   # measure a popover; place it on the surface
+└── lib/surfaceApi.ts # the surface's OWN api: start/ready/picked. NOT ipcClient — see below
 ```
+
+### The two entries, and why the second one has its own API module
+
+`vite.config.ts` builds **two** Rollup inputs. `index.html` is the chrome; `popover.html` is
+a **child webview of the same window** that renders popovers **above** the page instead of
+displacing it (owned by `src-tauri/src/popover.rs`; design in
+`../docs/superpowers/specs/2026-10-04-popover-surface-design.md`). Three consequences:
+
+- **Both entries must import the one `index.css`**, or theming silently diverges. A test in
+  `lib/platformContract.drift.test.ts` asserts each entry file references it.
+- **The surface must not use `lib/ipcClient.ts`.** That module is the chrome's transport and
+  its events assume a chrome-level subscription. The surface has its own capability and its own
+  three calls in `lib/surfaceApi.ts`: `start()` (subscribe, then announce readiness — in that
+  order, and never via `tauriInvoke.on()`, which resolves its listener in the background and
+  would rebuild the lost-first-payload race), `ready()`, `picked()`.
+- **A component registers itself with `usePopoverSurface` and does not care what renders it.**
+  That is what lets the same presentational component be rendered in the chrome (today, and in
+  jsdom tests) or on the surface without a branch.
+
+**The omnibox is on the surface; the other three popovers are not.** `AddressBar` measures a
+RECT (`useMeasuredRect`), places the surface (`usePopoverSurface`) and **no longer registers a
+content inset**, so typing no longer moves the page. `address-site`, `adblock-shield` and
+`zoom-indicator` still take the `useMeasuredHeight` + `useChromePopoverInset` path; they move in
+Phase 4, which is also when `useChromePopover.tsx` and `useMeasuredHeight.ts` are deleted.
+
+### The chrome keeps a hidden copy of the omnibox, and that is load-bearing twice
+
+The dropdown is rendered **twice** — once in the chrome, once on the surface — and the chrome's
+copy is not a leftover:
+
+1. **It is what gets measured.** `useMeasuredRect` measures it to place the surface exactly over
+   the dropdown's real position. Dropping it would leave the surface with nothing to align to.
+2. **It is the accessible listbox.** `aria-activedescendant` cannot reference an element in
+   another document, so the address input must keep pointing at a listbox in ITS OWN document —
+   `aria-controls` and `aria-activedescendant` both resolve to ids in the chrome.
+
+So it is hidden with **`opacity: 0` + `pointer-events: none`**, never `visibility: hidden` or
+`display: none`: both of those remove it from the accessibility tree and would leave the input's
+`aria-controls` dangling. It is also, in practice, already invisible — the content webview is
+opaque and covers everything below the chrome bands, which is exactly why the inset mechanism
+existed — but `opacity` makes that independent of the webview stack, so the copy cannot appear
+even when the content webview is hidden.
+
+**`.address-bar__omnibox-source` is DESKTOP-ONLY, via `.aegis-mobile { opacity: 1 }`.** The
+Android shell has no surface: it is a single webview whose native content view is lowered with
+`view.setChromeOverlay`, so on Android the chrome's copy IS the visible dropdown. Applying the
+rule there deletes the omnibox on Android — invisible to every desktop test _and_ to the
+AppImage this repo builds. `platformContract.drift.test.ts` pins both halves.
+
+The surface is `aria-hidden` (`popover.html`), which is safe because `OmniboxDropdown`'s rows are
+`<div role="option">` with **no tab stop** — so the surface can never become a keyboard scope and
+focus stays in the chrome, where the arrow keys live.
 
 ## The backend boundary (read this first)
 
@@ -88,29 +145,59 @@ width })` so the page insets from the right and stays visible. There is no
   `hooks/useContentInset.ts` forwards the resulting `topInset` to
   `view.setContentInset`. It is **not** purely deterministic — a chrome element that
   appears after mount changes the inset.
-- **Chrome popovers (dropdowns/dialogs anchored below the chrome) are the OTHER half of
-  the compositor** and must never use `useChromeSurface`. A popover has to leave the page
-  visible, so it can't set `overlay: true` (Rust's `view::content_visible` would hide the
-  webview and blank the window). Instead the popover **measures itself** and the tallest
-  open popover's height is added to the content top inset — same `view.setContentInset`
-  path the FindBar uses. To add one, call **both** hooks in the component:
-  - `useMeasuredHeight<HTMLDivElement>(open)` (`hooks/useMeasuredHeight.ts`) → `[ref,
-height]`. One measure on open, then a `ResizeObserver`; sets 0 the moment `open` goes
-    false. An observer is safe here (unlike `useChromeHeights`, which avoids them) because
-    the chrome webview fills the window and is never resized by the content inset.
-  - `useChromePopoverInset('<id>', height)` (`hooks/useChromePopover.tsx`) → registers
-    while open, unregisters on unmount. `App.tsx` reads `inset` = **max, not sum**, from
-    the registry. `useChromePopoverInset` is a no-op outside `ChromePopoverProvider` (the
-    mobile shell has no provider and hides content via `view.setChromeOverlay` instead);
-    `useChromePopoverRegistry` throws outside one.
-  - Because the inset follows the measured box, a popover's CSS `max-height` must be a
-    **fixed px value, never `vh`** — a viewport-relative height would feed back into the
-    layout on every measure.
-  - Popover anchors need `position: relative` (`.address-bar__field` already is) and
-    `z-index: 5100`, matching `.site-identity`.
-  - `useDialog` returns a **stable** ref object, so a popover that must be observed has to
-    merge the two refs in a `useCallback` (stable identity) — an inline merge function
-    detaches and re-attaches the node every render and the observer would never fire.
+- **Popovers are on their own surface, and there is NO inset path any more.** All four anchored
+  popovers — the address-bar suggestions, site information, the ad-block shield and page zoom —
+  render in a **second webview** (`src/popover.html` → `src/popover.tsx` → `src/popover/`) that
+  the app places over the page. `useChromePopover` and `useMeasuredHeight` are **deleted**;
+  `App` derives `contentTop` from `chrome.topInset` alone, and a test pins that arithmetic
+  (adding a term back is what re-closes the loop). Neither may use `useChromeSurface` — a popover
+  has to leave the page visible, so it cannot set `overlay: true`, which would hide the content
+  webview and blank the window.
+  To add one: give it an id in `shared/types.ts`'s `PopoverId`, call `useMeasuredRect` +
+  `usePopoverSurface`, and add a pure panel under `src/popover/` plus a row in `PopoverPanel`'s
+  `PANELS`. `platformContract.drift.test.ts` fails if the panel list, the hidden-copy CSS rule
+  and the set of components calling `usePopoverSurface` ever disagree.
+  **Why the inset path had to go:** the omnibox registered its measured height as a content-top
+  inset, the content webview resized, the resize re-laid-out the chrome, and the chrome
+  re-measured the dropdown — a limit cycle at ~57 passes/second that never settled. A popover's
+  CSS `max-height` must still be a **fixed px value, never `vh`**, or it would feed back into
+  the surface's own placement.
+- **Every popover keeps a HIDDEN copy of itself in the chrome, and that is load-bearing twice.**
+  One grouped CSS rule (`.address-bar__omnibox-source, .site-identity,
+.adblock-shield__popover, .zoom-indicator__popover`) sets `opacity: 0; pointer-events: none`.
+  (1) `useMeasuredRect` measures that copy to place the surface over it, and (2) it is the copy
+  the keyboard and assistive tech reach — the surface is `aria-hidden` and focus cannot cross a
+  webview boundary, so the omnibox input's `aria-controls`/`aria-activedescendant` and the three
+  dialogs' focus traps all live here. **`opacity: 0`, never `visibility: hidden` or
+  `display: none`**: both remove the element from the accessibility tree, which would leave the
+  omnibox input pointing at nothing and strip the three dialogs' buttons from the tab order
+  entirely. **The rule carries an explicit `.aegis-mobile` override**, because Android has no
+  surface and its chrome copy IS the visible popover — applying the desktop rule there deletes
+  all four popovers, invisibly to every desktop test and to the AppImage. Both halves are pinned
+  by `platformContract.drift.test.ts`.
+  `useDialog` returns a **stable** ref object, so a popover that must also be measured merges the
+  two refs in a `useCallback` (stable identity) — an inline merge function detaches and
+  re-attaches the node every render and the observer would never fire.
+- **The surface reports an INDEX or an ACTION NAME; it never acts.** A row press reports
+  `{ index }` and the chrome resolves it against its OWN array; a control press reports
+  `{ action }` and the chrome runs its own handler with its own state. `actions` is therefore an
+  **allowlist** — Rust drops anything outside it — so every control a panel shows must be in it
+  or it is a button that does nothing. Each payload also declares `itemCount`, because Rust
+  cannot count rows inside a `payload` it does not interpret. **Send DECIDED values** (a
+  disabled state, an availability flag, an explanatory list) rather than deriving them in the
+  panel: two derivations of one rule are two things that can drift, and a disabled control that
+  disagrees with the chrome is a control that lies. `AdblockShield` is the worked example — its
+  `canUnallowHere` encodes the exact-vs-subdomain allowlist asymmetry and is computed once, in
+  the component, then sent.
+- **Hover has to be reported.** The omnibox's highlight follows `activeIndex`, which lives in the
+  chrome, so a surface that ignores hover is a real behaviour regression: hover-then-Enter would
+  open the keyboard-highlighted row instead of the one under the pointer. One pick per
+  `onMouseEnter` (per row entered, not per mouse move).
+- **Accepted regression, deliberately:** the three dialog popovers have **no visible focus ring**,
+  because their focus trap and tab stops stay on the `opacity: 0` copy. Keyboard activation works;
+  sighted keyboard users cannot see where focus is. The real fix is handing focus into the
+  surface from Rust. See the popover-surface spec's §12.1.
+
 - **One hook per domain** in `hooks/` (nav, adblock, history, saved, favorites,
   settings, subscriptions, customFilters, downloads, permissions, update, safety,
   **tabs**, **find**, **fingerprint**, **proxy**). Components stay presentational; state + IPC wiring

@@ -206,6 +206,17 @@ const UNSUBSCRIBED_EVENTS: Record<string, string> = {
     'no withGlobalTauri, so the injected window.__TAURI__.emit cannot run. form.rs:184 also ' +
     'refuses form.detectLoginForm outright. Wiring the content->core transport is a feature, not ' +
     'a guard change — a subscriber here would be dead code.',
+  // TEMPORARY, and it expires the moment Phase 3 lands. The popover surface's whole
+  // surface→chrome direction is BUILT and TESTED (`popover.rs::popover_picked` re-validates
+  // every pick and re-emits `popover.picked`; `ipcClient` exposes `popover.onPicked`), but
+  // nothing in the chrome calls it yet, because no popover has been moved off an inset —
+  // that is Phase 3 of the popover-surface design, and Phase 2's gate is the other
+  // direction (the surface renders a payload it was sent).
+  //
+  // This is NOT the same class as the three entries above, and the difference is why it is
+  // filed rather than guessed at: those are open product questions, and this is a scheduled
+  // migration with a named next step. The "no stale entry" test below makes Phase 3 oblige
+  // deleting this line, so it cannot outlive its own reason.
 };
 
 /** Read every `.rs` file in `src-tauri/src`. */
@@ -920,5 +931,125 @@ describe('IPC catalog drift', () => {
         ).toEqual(['zoomSet']);
       });
     });
+  });
+});
+
+describe('the popover surface contract must agree across the language boundary', () => {
+  // THIS GAP COST A BUILD AND A RUN. `popover.rs::parse_set` read `width`/`height` at the TOP
+  // LEVEL while `shared/types.ts::PopoverSetArgs` sends them NESTED under `rect`. Both sides
+  // had tests: the Rust unit test built a flat literal, and
+  // `ipcClient.contract.test.ts` asserted a nested one. Both were green, 1908 frontend tests
+  // and 782 Rust tests passed, and the LIVE app rejected every `popover.set` with
+  // "`width` must be a number". Unit tests on each side cannot see a disagreement between
+  // them — only a test that reads both can.
+  //
+  // So this reads the Rust parser's source and pins the key paths it looks up against the
+  // TypeScript type's fields. Rename a key on either side and this goes red.
+  //
+  // MUTATION RECIPE: change `parse_set` to read `obj.get("width")` instead of
+  // `rect.get("width")`, or rename `PopoverSetArgs.rect` to `PopoverSetArgs.box`. The guard
+  // must go red and NAME the key.
+
+  const POPOVER_RS = join(RUST_DIR, 'popover.rs');
+
+  /** The `obj.get("…")` / `rect.get("…")` key paths `parse_set` looks up, from its source. */
+  function popoverKeyPaths(): { scope: 'top' | 'rect'; key: string }[] {
+    const src = readFileSync(POPOVER_RS, 'utf8');
+    const start = src.indexOf('pub fn parse_set(');
+    expect(start, 'popover.rs must still have parse_set').toBeGreaterThan(-1);
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    const out: { scope: 'top' | 'rect'; key: string }[] = [];
+    // Whitespace-tolerant: rustfmt splits these chains across lines
+    // (`obj\n    .get("id")\n    .and_then(…)`), so a single-line regex finds `payload` and
+    // misses `id` — which is how this guard would have reported a key the parser DOES read.
+    for (const m of body.matchAll(/(obj|rect)\s*\.\s*get\(\s*"([A-Za-z]+)"\s*\)/g)) {
+      out.push({ scope: m[1] === 'rect' ? 'rect' : 'top', key: m[2] });
+    }
+    // The rect's four keys are read through a `num` closure over `rect`, so the literal is
+    // `num("width")`, not `rect.get("width")`. Both forms are the same lookup and the guard
+    // must see both, or it would demand a literal `rect.get("x")` that is not how the parser
+    // is written.
+    for (const m of body.matchAll(/\bnum\(\s*"([A-Za-z]+)"\s*\)/g)) {
+      out.push({ scope: 'rect', key: m[1] });
+    }
+    return out;
+  }
+
+  it('every key PopoverSetArgs declares is a key parse_set reads, at the same nesting', () => {
+    const paths = popoverKeyPaths();
+    const expectPaths: ['top' | 'rect', string][] = [
+      ['top', 'id'],
+      ['top', 'payload'],
+      ['top', 'rect'],
+      ['top', 'itemCount'],
+      ['top', 'actions'],
+      ['rect', 'x'],
+      ['rect', 'y'],
+      ['rect', 'width'],
+      ['rect', 'height'],
+    ];
+    for (const [scope, key] of expectPaths) {
+      expect(
+        paths.some((p) => p.scope === scope && p.key === key),
+        `popover.rs::parse_set never reads ${scope === 'rect' ? '`rect.' : '`'}${key}\`. ` +
+          `shared/types.ts::PopoverSetArgs sends it, so the live app rejects every popover ` +
+          `while both sides' own tests stay green — which is exactly what happened.`,
+      ).toBe(true);
+    }
+  });
+
+  it('parse_set reads NO key the contract does not declare', () => {
+    // The other direction: an extra `.get(...)` is a key Rust expects that nothing sends,
+    // which is the same failure with the sign flipped.
+    const declared = new Set(['id', 'payload', 'rect', 'itemCount', 'actions']);
+    const rectDeclared = new Set(['x', 'y', 'width', 'height']);
+    const undeclared = popoverKeyPaths()
+      .filter((p) => !(p.scope === 'top' ? declared.has(p.key) : rectDeclared.has(p.key)))
+      .map((p) => `${p.scope === 'rect' ? 'rect.' : ''}${p.key}`);
+    expect(
+      undeclared,
+      `popover.rs::parse_set reads ${undeclared.join(', ')}, which PopoverSetArgs does not ` +
+        `declare. Every such read is a field that can only ever be absent at runtime.`,
+    ).toEqual([]);
+  });
+
+  it('parse_set reads the rect keys off the rect object, not off the envelope', () => {
+    // The guard above reads key NAMES, which is not enough — and learning that cost a
+    // mutation round. `parse_set` reads x/y/width/height through a `num` closure, so the
+    // literal is `num("width")` and the RECEIVER lives in the closure's body. Changing that
+    // body from `rect.get(key)` to `obj.get(key)` reproduces the original defect exactly,
+    // and every key-name assertion above still passes. So the receiver is asserted directly.
+    //
+    // MUTATION RECIPE: change `rect\n.get(key)` to `obj\n.get(key)` inside the `num`
+    // closure. This test must go red.
+    const src = readFileSync(POPOVER_RS, 'utf8');
+    const start = src.indexOf('pub fn parse_set(');
+    const body = src.slice(start, src.indexOf('\n}\n', start));
+    const numAt = body.indexOf('let num =');
+    expect(numAt, 'parse_set must keep its `num` closure over the rect').toBeGreaterThan(-1);
+    const closure = body.slice(numAt, body.indexOf('};', numAt));
+    expect(
+      /rect\s*\.\s*get\(\s*key\s*\)/.test(closure),
+      `parse_set's \`num\` closure must read from \`rect\`, not from the envelope:\n${closure}`,
+    ).toBe(true);
+    expect(
+      !/obj\s*\.\s*get\(\s*key\s*\)/.test(closure),
+      `parse_set's \`num\` closure reads from \`obj\`, so rect.width is looked up on the \
+       envelope and every popover is rejected at runtime with "rect.width must be a number" — \
+       while every key-name test here still passes.`,
+    ).toBe(true);
+  });
+
+  it('the chrome-side hook sends exactly the declared keys', () => {
+    // The third side of the triangle: `usePopoverSurface` builds the object. A key it omits
+    // is a key the surface cannot be told about.
+    const hook = readFileSync(join(RENDERER_DIR, 'hooks', 'usePopoverSurface.ts'), 'utf8');
+    const call = hook.slice(
+      hook.indexOf('aegis.popover.set('),
+      hook.indexOf('});', hook.indexOf('aegis.popover.set(')),
+    );
+    for (const key of ['id', 'rect', 'payload', 'itemCount', 'actions']) {
+      expect(call, `usePopoverSurface does not send \`${key}\``).toContain(key);
+    }
   });
 });

@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
-  "windows": ["main"],
-  "permissions": ["core:event:default"]
+  "description": "enables the default permissions for the CHROME webview. Scoped by `webviews`, not `windows`, on purpose: the content webviews are CHILD webviews of the `main` window, so a `windows: [\"main\"]` list matches their WINDOW label too and would grant every tab the chrome's full `ipc` — `settings.set`, `nav.navigate`, every channel. That was harmless while there was no app ACL manifest (custom commands from a remote origin were refused outright), and would have become a real hole the moment the manifest was added. `webviews: [\"main\"]` matches the chrome webview only, because a content webview's label is `content:<id>`.",
+  "webviews": ["main"],
+  "permissions": ["core:event:default", "allow-ipc"]
 }

@@ -1,5 +1,7 @@
 // src/components/ZoomIndicator.test.tsx
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { invoke } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
 import { render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ZoomIndicator } from './ZoomIndicator';
@@ -115,5 +117,67 @@ describe('ZoomIndicator', () => {
     expect(screen.getByRole('dialog')).toBeInTheDocument();
     fireEvent.pointerDown(document.body);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+});
+
+describe('ZoomIndicator — picks reported by the popover surface', () => {
+  /** Deliver `popover.picked` the way the backend would.
+   *
+   *  `aegis` here is the REAL client (this file never module-mocks it), so the handler is the
+   *  one the real `onPicked` handed to `listen`. Going through the transport rather than through
+   *  a mocked hook is what makes this a test of the wiring. */
+  function emitPick(pick: unknown): void {
+    const hit = vi.mocked(listen).mock.calls.find(([n]) => n === 'popover:picked');
+    expect(hit, 'the chrome must subscribe to popover.picked').toBeTruthy();
+    hit![1]({ payload: pick } as never);
+  }
+
+  beforeEach(() => {
+    vi.mocked(listen).mockClear();
+  });
+
+  it('steps the zoom from the chrome’s OWN factor, never from anything on the payload', async () => {
+    const p = props(1.5);
+    render(<ZoomIndicator {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /page zoom/i }));
+    emitPick({ id: 'zoom-indicator', action: 'zoom-in' });
+    emitPick({ id: 'zoom-indicator', action: 'zoom-out' });
+    emitPick({ id: 'zoom-indicator', action: 'reset' });
+    expect(p.zoomIn).toHaveBeenCalledTimes(1);
+    expect(p.zoomOut).toHaveBeenCalledTimes(1);
+    expect(p.reset).toHaveBeenCalledTimes(1);
+  });
+
+  // One surface serves all four popovers, so the id filter is load-bearing: without it a zoom
+  // pick would fire while the shield popover is open.
+  it('ignores a pick addressed to a DIFFERENT popover', async () => {
+    const p = props(1.5);
+    render(<ZoomIndicator {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /page zoom/i }));
+    emitPick({ id: 'adblock-shield', action: 'reset' });
+    expect(p.reset).not.toHaveBeenCalled();
+  });
+
+  it('ignores an action name it does not know', async () => {
+    const p = props(1.5);
+    render(<ZoomIndicator {...p} />);
+    await userEvent.click(screen.getByRole('button', { name: /page zoom/i }));
+    emitPick({ id: 'zoom-indicator', action: 'obliterate' });
+    expect(p.zoomIn).not.toHaveBeenCalled();
+    expect(p.reset).not.toHaveBeenCalled();
+  });
+
+  it('places itself on the surface instead of insetting the page', async () => {
+    render(<ZoomIndicator {...props(1.5)} />);
+    await userEvent.click(screen.getByRole('button', { name: /page zoom/i }));
+    const sets = vi
+      .mocked(invoke)
+      .mock.calls.map(([, a]) => a as { channel?: string; payload?: { id?: string } })
+      .filter((a) => a.channel === 'popover.set');
+    expect(sets.at(-1)?.payload?.id).toBe('zoom-indicator');
+    // …and never touches the channel that moved the page.
+    expect(
+      vi.mocked(invoke).mock.calls.map(([, a]) => (a as { channel?: string }).channel),
+    ).not.toContain('view.setContentInset');
   });
 });

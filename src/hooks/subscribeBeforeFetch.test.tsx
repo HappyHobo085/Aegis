@@ -31,6 +31,7 @@ import { useCustomFilters } from './useCustomFilters';
 import { useDownloads } from './useDownloads';
 import { useHistory } from './useHistory';
 import { useNav } from './useNav';
+import { useOmnibox } from './useOmnibox';
 import { usePermissions } from './usePermissions';
 import { useProxy } from './useProxy';
 import { useSafety } from './useSafety';
@@ -138,6 +139,9 @@ vi.mock('../lib/ipcClient', () => ({
     },
     picker: {
       onPicked: (cb: BackendListener) => t.subscribe('picker.picked', cb),
+    },
+    popover: {
+      onPicked: (cb: BackendListener) => t.subscribe('popover.picked', cb),
     },
     subs: {
       list: () => t.seed(),
@@ -309,6 +313,46 @@ const CASES: Case[] = [
     read: (r) => r,
     expected: true,
     lost: false,
+  },
+  {
+    // A pick the surface reports IMMEDIATELY after mount is not lost. The scenario is real:
+    // the dropdown opens on focus with a "Search for …" row before any history has arrived,
+    // so a user CAN click a row inside the first 90 ms — and a click that reaches nobody is
+    // a click that silently does nothing.
+    //
+    // Honest limit of this case, established by MUTATION rather than assumed: it does NOT
+    // discriminate effect ORDER here. This hook's seed sits behind a 90 ms debounce, so it is
+    // never dispatched during a mount at all — the subscribe is the only request on the
+    // transport whether it is armed first or last. Moving the subscription effect below the
+    // seed effect leaves this case AND the uniform "first request is a subscribe" assertion
+    // green. So what this case actually pins is that the handler is armed synchronously on
+    // mount, which is the property a debounced seed cannot break.
+    hook: 'useOmnibox',
+    name: 'useOmnibox — a popover.picked emitted mid-seed is not lost (a click in the first 90 ms)',
+    before: [],
+    after: [],
+    event: 'popover.picked',
+    eventPayload: { id: 'address-omnibox', index: 0 },
+    mount: () => {
+      let pickedTarget = '';
+      const r = renderHook(() =>
+        useOmnibox({
+          query: 'ex',
+          active: true,
+          favorites: [],
+          saved: [],
+          searchTemplate: 'https://search.test/?q=%s',
+          dismissed: false,
+          onPickSuggestion: (s) => {
+            pickedTarget = s.target;
+          },
+        }),
+      );
+      return { unmount: r.unmount, latest: () => pickedTarget };
+    },
+    read: (r) => r,
+    expected: 'https://search.test/?q=ex',
+    lost: '',
   },
   {
     hook: 'useProxy',
