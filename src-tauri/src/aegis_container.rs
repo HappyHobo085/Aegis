@@ -84,6 +84,19 @@ mod imp {
         }
 
         fn size_allocate(&self, allocation: &gtk::Rectangle) {
+            // THE DEFAULT `WidgetImpl::size_allocate` IS `self.parent_size_allocate(allocation)`,
+            // and omitting it is what made the whole window paint NOTHING (a black client area,
+            // screenshot-confirmed, with the surface disabled as well). Two things break without
+            // it: the CONTAINER never records its own allocation — it stays at GTK's unset
+            // `(-1, -1, 1, 1)`, so the window's paint pass finds nothing to draw — and
+            // `GtkFixed` never runs its own child allocation at all.
+            //
+            // Calling it FIRST and then overwriting each child with its role rectangle keeps this
+            // a SINGLE pass. That is the whole difference from the deleted `size_fixed_children`,
+            // which did the same overriding from a SEPARATE `size-allocate` signal handler and
+            // therefore cost two full page layouts per pass.
+            self.parent_size_allocate(allocation);
+
             let size = (allocation.width(), allocation.height());
             let insets = *self.insets.borrow();
             // Clone the registry and drop the borrow: `child.size_allocate` must never be

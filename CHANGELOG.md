@@ -90,6 +90,13 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
   dropdown's own height. The site-info panel, the ad-block shield and the zoom popover still
   render in the chrome; they move next.
 
+- **A window in which nothing was drawn at all.** The popover work above replaced the plain
+  container the webviews lived in, and in doing so the new container stopped passing its own
+  size on to GTK — so the window painted an empty black rectangle where the toolbar, the page
+  and every popover should have been. Nothing inside the app was broken; nothing was being
+  drawn. It is fixed by handing the size back to GTK before the container places its children,
+  which keeps the placement a single pass and the window resizable.
+
 - **Opening Settings or the sidebar froze the AppImage for ~2.5 seconds on first open, on every
   launch.** Three stacked packaging faults in the bundle, not app logic: the linuxdeploy hook
   pointed GStreamer at a plugin-scanner binary that was never bundled, so GStreamer forked a

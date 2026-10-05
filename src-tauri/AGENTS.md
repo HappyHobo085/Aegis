@@ -3021,6 +3021,26 @@ CHILD, never the container, because queueing the container re-enters `size_alloc
   non-zero request on a webview is the exact change that historically made the window
   impossible to shrink, and no automated gate here can see a live window's resize behaviour.
 
+  - **★★★ `WidgetImpl::size_allocate`'s DEFAULT IMPLEMENTATION IS
+    `self.parent_size_allocate(allocation)`, and overriding it without calling that renders
+    NOTHING — the whole window is a black client area.** Shipped in `2bc14e2` and caught by
+    the owner ("running it only shows a black window"); screenshot-confirmed, not inferred.
+    Two things break at once: the CONTAINER never records its own allocation, so it stays at
+    GTK's unset `(-1, -1, 1, 1)` and the window's paint pass finds nothing to draw; and
+    `GtkFixed` never runs its own child allocation at all. The children still get CORRECT role
+    rectangles — the vfunc is *handed* the real allocation, so every rect-based measurement
+    (`setContentInset top=156`, the omnibox rect, the pick round-trip) reads healthy while
+    nothing is on screen. **A RECT IS NOT A PAINT.** The fix is one line, called FIRST:
+    `self.parent_size_allocate(allocation);` then overwrite each child with its role rectangle,
+    which keeps it a SINGLE pass — still the difference from the deleted
+    `size_fixed_children`, which did the same overriding from a separate `after=true` signal
+    handler and cost two full page layouts per pass.
+    **Nothing in the jsdom suite, the drift pins, or the AppImage gate could have caught this:**
+    jsdom has no layout, the pins read source text, and every Rust-side measurement reads a
+    rect. It took a human running the app and a screenshot. See the "no pixels" claim below —
+    spectacle + the `read` tool DOES work on this host, and the earlier "pixels are
+    unobtainable" belief was wrong.
+
   Six source pins in `aegis_container.rs` hold the vtable contract, all mutation-verified:
   reverting either `preferred_*` arm to `parent_preferred_*` reds the minimum test; adding
   `size_request` to `size_allocate` reds the collapse test; dropping `request_mode` reds the
