@@ -70,7 +70,7 @@ hkdf = "0.12"
 sha2 = "0.10"
 ed25519-dalek = { version = "2", features = ["zeroize"] }
 rand = "0.8"
-bip39 = "2"
+bip39 = "3"
 argon2 = "0.5"
 getrandom = "0.2"
 zeroize = { version = "1", features = ["derive"] }
