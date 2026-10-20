@@ -65,7 +65,7 @@ parking_lot = "0.12"
 # Sync engine (F2b) crypto. getrandom 0.2 (NOT the 0.4 uuid pulls) for raw OS randomness;
 # everything else derives from the BIP39 seed via HKDF. ed25519 keys come from HKDF bytes via
 # the infallible SigningKey::from_bytes, so no rand_core is needed.
-chacha20poly1305 = "0.10"
+chacha20poly1305 = "0.11"
 hkdf = "0.12"
 sha2 = "0.10"
 ed25519-dalek = { version = "2", features = ["zeroize"] }
