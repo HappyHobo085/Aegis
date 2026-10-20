@@ -114,7 +114,7 @@ jobs:
       # Base toolchain from rust-toolchain.toml (omitting `toolchain:` makes this action
       # read that file rather than a channel that floats); the per-OS release targets are
       # added on top. `cache: 'false'` — the explicit actions/cache step below owns it.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           target: ${{ matrix.rust_targets }}
           cache: 'false'
@@ -288,7 +288,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@v2
         with:
           target: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
           cache: 'false'
