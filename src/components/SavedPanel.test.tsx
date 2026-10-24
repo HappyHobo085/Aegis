@@ -256,6 +256,7 @@ describe('SavedPanel', () => {
       await userEvent.type(input, 'Documentation{Enter}');
       expect(p.update).toHaveBeenCalledWith(2, {
         title: 'Documentation',
+        url: 'https://docs.example/',
         tags: ['reference', 'work'],
       });
     });
@@ -270,6 +271,7 @@ describe('SavedPanel', () => {
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
       expect(p.update).toHaveBeenCalledWith(2, {
         title: 'Documentation',
+        url: 'https://docs.example/',
         tags: ['reference', 'work'],
       });
     });
@@ -282,6 +284,7 @@ describe('SavedPanel', () => {
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
       expect(p.update).toHaveBeenCalledWith(2, {
         title: 'Docs',
+        url: 'https://docs.example/',
         tags: ['reference', 'work', 'urgent'],
       });
     });
@@ -292,7 +295,11 @@ describe('SavedPanel', () => {
       await userEvent.click(screen.getByRole('button', { name: /^edit docs$/i }));
       await userEvent.click(screen.getByRole('button', { name: /remove tag work/i }));
       await userEvent.click(screen.getByRole('button', { name: /^save$/i }));
-      expect(p.update).toHaveBeenCalledWith(2, { title: 'Docs', tags: ['reference'] });
+      expect(p.update).toHaveBeenCalledWith(2, {
+        title: 'Docs',
+        url: 'https://docs.example/',
+        tags: ['reference'],
+      });
     });
 
     it('pressing Escape cancels without calling update', async () => {

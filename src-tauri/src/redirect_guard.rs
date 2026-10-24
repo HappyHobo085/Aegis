@@ -409,14 +409,24 @@ pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to
             // thread is undefined behaviour, not merely a warning. WebView2 is STA and
             // WKWebView is main-thread-only for the same reason.
             //
-            // So hop to the main thread for the engine work, exactly as
-            // `decide_navigation`'s pop-under auto-close does. The registry read above
-            // deliberately stays on this thread: it is plain state under a mutex, and
-            // keeping it here means the decision is still made at wake time.
-            let app_close = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                crate::tabs::close_tab(&app_close, new_id);
-            });
+            // On mobile there is no native child webview to tear down (`close_webview`
+            // is a no-op there), and `apply_inset` only touches the main window's
+            // geometry, so `close_tab` is safe to run on this worker thread directly.
+            // Routing it through `run_on_main_thread` there never executes the close
+            // (the Android main thread is not Tauri's event loop the way desktop's is),
+            // so the tab row was never removed and the tab stayed in the strip forever.
+            // So hop to the main thread only on desktop; on mobile, close inline.
+            #[cfg(desktop)]
+            {
+                let app_close = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    crate::tabs::close_tab(&app_close, new_id);
+                });
+            }
+            #[cfg(mobile)]
+            {
+                crate::tabs::close_tab(&app, new_id);
+            }
         }
         // Released OUTSIDE the hop on purpose: if the event loop is already gone
         // (shutdown) `run_on_main_thread` refuses the closure and the tab is never

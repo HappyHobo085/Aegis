@@ -831,7 +831,10 @@ export interface AegisApi {
     add(input: { url: string; title: string; tags?: string[] }): Promise<SavedItem[]>;
     remove(id: number): Promise<SavedItem[]>;
     has(url: string): Promise<boolean>;
-    update(id: number, partial: { title?: string; tags?: string[] }): Promise<SavedItem[]>;
+    update(
+      id: number,
+      partial: { title?: string; url?: string; tags?: string[] },
+    ): Promise<SavedItem[]>;
     renameTag(oldT: string, newT: string): Promise<SavedItem[]>;
     deleteTag(tag: string): Promise<SavedItem[]>;
     tagUnion(): Promise<string[]>;

@@ -658,21 +658,29 @@ pub fn start_idle_sweep(app: &AppHandle) {
             if victims.is_empty() {
                 continue;
             }
-            let app2 = app.clone();
-            let _ = app.run_on_main_thread(move || {
-                // Close the victims' webviews. The registry ROWS STAY: a swept tab is still a
-                // tab the user can see and click, and `activate` respawns its webview on the
-                // next activation. Deleting the rows here made background tabs disappear from
-                // the strip entirely after `tabIdleTimeout` minutes (30 by default) with no
-                // visual indication, and — since they never reached `closed_stack` — left them
-                // un-reopenable with Ctrl+Shift+T.
+            // On desktop, tearing down webviews + emitting must happen on the main thread
+            // (native GTK/WebKit/WebView2 objects are main-thread-only). On mobile there is
+            // no child webview to tear down (`close_webview` is a no-op there) and
+            // `run_on_main_thread` does not reliably execute on the Android UI thread, so
+            // run the close inline to keep the strip in sync.
+            #[cfg(desktop)]
+            {
+                let app2 = app.clone();
+                let _ = app.run_on_main_thread(move || {
+                    for id in &victims {
+                        close_webview(&app2, *id);
+                    }
+                    emit_and_persist(&app2);
+                });
+            }
+            #[cfg(mobile)]
+            {
+                let app2 = app.clone();
                 for id in &victims {
                     close_webview(&app2, *id);
                 }
-                // `sweep_idle` already flipped each victim to `live: false`, so the strip
-                // re-renders them as "asleep".
                 emit_and_persist(&app2);
-            });
+            }
         }
     });
 }

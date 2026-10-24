@@ -14,7 +14,7 @@ export interface UseSaved {
   addCurrent(title: string): Promise<void>;
   removeCurrent(): Promise<void>;
   remove(id: number): Promise<void>;
-  update(id: number, partial: { title?: string; tags?: string[] }): Promise<void>;
+  update(id: number, partial: { title?: string; url?: string; tags?: string[] }): Promise<void>;
   renameTag(oldT: string, newT: string): Promise<void>;
   deleteTag(tag: string): Promise<void>;
 }
@@ -128,7 +128,10 @@ export function useSaved(currentUrl: string): UseSaved {
   }, [refreshHas, refreshTagUnion]);
 
   const update = useCallback(
-    async (id: number, partial: { title?: string; tags?: string[] }): Promise<void> => {
+    async (
+      id: number,
+      partial: { title?: string; url?: string; tags?: string[] },
+    ): Promise<void> => {
       setItems(await aegis.saved.update(id, partial));
       await refreshTagUnion();
     },

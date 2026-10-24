@@ -14,7 +14,7 @@ export interface SavedPanelProps {
   setActiveTags(tags: string[]): void;
   add(input: { url: string; title: string; tags: string[] }): void;
   remove(id: number): Promise<SavedItem[]> | void;
-  update(id: number, partial: { title?: string; tags?: string[] }): void;
+  update(id: number, partial: { title?: string; url?: string; tags?: string[] }): void;
   renameTag(oldT: string, newT: string): void;
   deleteTag(tag: string): void;
   onOpen(url: string): void;
@@ -35,10 +35,12 @@ export function SavedPanel({
   const searchId = useId();
   const [query, setQuery] = useState('');
 
-  // Inline edit (title + tags).
+  // Inline edit (title + url + tags).
   const [editingId, setEditingId] = useState<number | null>(null);
   const [draftTitle, setDraftTitle] = useState('');
+  const [draftUrl, setDraftUrl] = useState('');
   const [draftTags, setDraftTags] = useState<string[]>([]);
+  const [editError, setEditError] = useState<string | null>(null);
 
   // Manual add-entry form.
   const [adding, setAdding] = useState(false);
@@ -76,6 +78,8 @@ export function SavedPanel({
   const startEdit = (item: SavedItem): void => {
     setEditingId(item.id);
     setDraftTitle(item.title);
+    setDraftUrl(item.url);
+    setEditError(null);
     // Defensive copy: avoid sharing the array reference with the items state so
     // TagInput's onChange (which creates new arrays via spread/filter) never
     // inadvertently mutates an item still in the list.
@@ -84,11 +88,18 @@ export function SavedPanel({
 
   const cancelEdit = (): void => {
     setEditingId(null);
+    setEditError(null);
   };
 
   const saveEdit = (id: number): void => {
-    update(id, { title: draftTitle.trim(), tags: draftTags });
+    const normalized = normalizeSavedUrl(draftUrl);
+    if (!normalized.ok) {
+      setEditError(normalized.reason);
+      return;
+    }
+    update(id, { title: draftTitle.trim(), url: normalized.url, tags: draftTags });
     setEditingId(null);
+    setEditError(null);
   };
 
   const openAdd = (): void => {
@@ -235,7 +246,30 @@ export function SavedPanel({
                         }
                       }}
                     />
+                    <input
+                      className="saved-panel__edit-url"
+                      aria-label="Edit URL"
+                      value={draftUrl}
+                      onChange={(e) => {
+                        setDraftUrl(e.target.value);
+                        if (editError) setEditError(null);
+                      }}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          saveEdit(item.id);
+                        } else if (e.key === 'Escape') {
+                          e.preventDefault();
+                          cancelEdit();
+                        }
+                      }}
+                    />
                     <TagInput tags={draftTags} suggestions={tagUnion} onChange={setDraftTags} />
+                    {editError && (
+                      <div className="saved-panel__edit-error" role="alert">
+                        {editError}
+                      </div>
+                    )}
                     <div className="saved-panel__edit-actions">
                       <button
                         type="button"
