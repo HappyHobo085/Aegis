@@ -601,10 +601,23 @@ pub(crate) fn decide_navigation(app: &AppHandle, nav_id: u32, u: &Url) -> bool {
                 .map(|s| s.reg.lock().unwrap_or_else(|e| e.into_inner()).active_id())
                 .unwrap_or(0);
             if should_autoclose_popunder(nav_id, active, has_content) {
-                let app_close = app.clone();
-                let _ = app.run_on_main_thread(move || {
-                    crate::tabs::close_tab(&app_close, nav_id);
-                });
+                // On desktop, close_tab touches native webview objects and must run
+                // on the main thread. On mobile there is no native child webview to
+                // tear down (`close_webview` is a no-op there) and `apply_inset`
+                // only touches the main window's geometry, so `close_tab` is safe to
+                // run inline — routing it through `run_on_main_thread` never
+                // executes on the Android UI thread, leaving the tab in the strip.
+                #[cfg(desktop)]
+                {
+                    let app_close = app.clone();
+                    let _ = app.run_on_main_thread(move || {
+                        crate::tabs::close_tab(&app_close, nav_id);
+                    });
+                }
+                #[cfg(mobile)]
+                {
+                    crate::tabs::close_tab(app, nav_id);
+                }
             }
             return false;
         }
