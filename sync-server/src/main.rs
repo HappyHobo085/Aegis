@@ -1719,6 +1719,58 @@ fn verify_account_root(account_id: &str, device_id: &str, account_sig: &str) -> 
     vk.verify_strict(msg.as_bytes(), &sig).is_ok()
 }
 
+/// Why a root-signed registration must be refused, or `None` to admit it.
+///
+/// Called TWICE: inside `verify_auth`'s `admit`, so a refused registration never spends a
+/// replay-nonce slot (anyone can mint device keys, so throwaway registrations used to fill the
+/// global nonce map), and again under the lock that performs the write, which is authoritative
+/// against a concurrent registration that filled a cap in between.
+fn registration_refusal(
+    g: &Store,
+    caps: &Caps,
+    account: &str,
+    device: &str,
+    secret_ok: bool,
+) -> Option<StatusCode> {
+    // REVOCATION. The account key is shared by every device on the account (both derive it from
+    // the recovery phrase), so `verify_account_root` cannot tell a device that was legitimately
+    // removed from one that is walking back in. The server's own deny-list is the only record of
+    // the decision that the removed device cannot overwrite — otherwise `remove_device` is
+    // reversible by the very device it removed.
+    if g.revoked
+        .contains(&(account.to_string(), device.to_string()))
+    {
+        return Some(StatusCode::FORBIDDEN);
+    }
+    let set = g.devices.get(account);
+    if set.is_some_and(|set| set.contains_key(device)) {
+        return None; // already a member: a re-registration only refreshes the label
+    }
+    let account_exists = set.is_some_and(|set| !set.is_empty());
+    let owner = g.owner.get(account);
+    if account_exists && owner.is_some_and(|o| o != device) {
+        // Joining an existing account: bounded by the pending queue (D2).
+        let pending = g.pending.get(account);
+        let queued = pending.is_some_and(|p| p.contains_key(device));
+        if !queued && pending.map_or(0, |p| p.len()) >= caps.max_pending_per_account {
+            return Some(StatusCode::TOO_MANY_REQUESTS);
+        }
+        return None;
+    }
+    // A NEW account (or the operator-recovery path, which re-uses an existing account, so
+    // neither gate applies to it): creating one is what the secret and the account cap gate (D1).
+    if !account_exists {
+        if !secret_ok {
+            return Some(StatusCode::FORBIDDEN);
+        }
+        let accounts = g.devices.values().filter(|set| !set.is_empty()).count();
+        if accounts >= caps.max_accounts {
+            return Some(StatusCode::INSUFFICIENT_STORAGE);
+        }
+    }
+    None
+}
+
 async fn post_device(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1728,7 +1780,15 @@ async fn post_device(
     // + device, and carry the PROOF-OF-ROOT: registration must be signed by the account key (whose
     // public half IS the account id). Without it, anyone who learned the public account id could
     // self-register a rogue device into the victim's account. All of this runs inside
-    // `verify_auth`'s `admit`, so a refused registration never spends a replay-nonce slot.
+    // `verify_auth`'s `admit` — the secret, the caps and revocation included
+    // (`registration_refusal`) — so a refused registration never spends a replay-nonce slot.
+    let secret_ok = match &state.registration_secret {
+        None => true,
+        Some(secret) => headers
+            .get(REGISTRATION_SECRET_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|given| constant_time_eq(given.as_bytes(), secret.as_bytes())),
+    };
     let (account, device) = verify_auth(&headers, &state, |a, d| {
         if a != body.account_id || d != body.device_id {
             return Err(StatusCode::FORBIDDEN);
@@ -1739,25 +1799,16 @@ async fn post_device(
         if !verify_account_root(&body.account_id, &body.device_id, &body.account_sig) {
             return Err(StatusCode::FORBIDDEN);
         }
-        Ok(())
+        let g = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        match registration_refusal(&g, &state.caps, a, d, secret_ok) {
+            Some(code) => Err(code),
+            None => Ok(()),
+        }
     })?;
-    let secret_ok = match &state.registration_secret {
-        None => true,
-        Some(secret) => headers
-            .get(REGISTRATION_SECRET_HEADER)
-            .and_then(|v| v.to_str().ok())
-            .is_some_and(|given| constant_time_eq(given.as_bytes(), secret.as_bytes())),
-    };
     let pending = {
         let mut g = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        // REVOCATION. The account key is shared by every device on the account (both derive it
-        // from the recovery phrase), so `verify_account_root` above cannot tell a device that was
-        // legitimately removed from one that is walking back in. The server's own deny-list is the
-        // only record of the decision that the removed device cannot overwrite, so honour it here
-        // — otherwise `remove_device` is reversible by the very device it removed, and the UI's
-        // most security-relevant control does nothing.
-        if g.revoked.contains(&(account.clone(), device.clone())) {
-            return Err(StatusCode::FORBIDDEN);
+        if let Some(code) = registration_refusal(&g, &state.caps, &account, &device, secret_ok) {
+            return Err(code);
         }
         let now = now_ms();
         let account_exists = g.devices.get(&account).is_some_and(|set| !set.is_empty());
@@ -1776,11 +1827,8 @@ async fn post_device(
             // phrase proves the caller can derive the account key — which every device on the
             // account, including one that was stolen or removed, can also do — so it cannot be the
             // whole decision. The request waits in `pending` until the owner approves or rejects it.
-            let cap = state.caps.max_pending_per_account;
+            // The pending cap was checked by `registration_refusal` under this same lock.
             let set = g.pending.entry(account.clone()).or_default();
-            if !set.contains_key(&device) && set.len() >= cap {
-                return Err(StatusCode::TOO_MANY_REQUESTS);
-            }
             let registered_ms = set.get(&device).map_or(now, |d| d.registered_ms);
             set.insert(
                 device.clone(),
@@ -1794,18 +1842,8 @@ async fn post_device(
             true
         } else {
             // A NEW account (or one whose owner entry the operator deleted to recover a lost owner
-            // device — see `Store::owner`). Creating an account is what the registration secret
-            // and the global account cap gate (D1); the operator-recovery path re-uses an existing
-            // account, so neither applies to it.
-            if !account_exists {
-                if !secret_ok {
-                    return Err(StatusCode::FORBIDDEN);
-                }
-                let accounts = g.devices.values().filter(|set| !set.is_empty()).count();
-                if accounts >= state.caps.max_accounts {
-                    return Err(StatusCode::INSUFFICIENT_STORAGE);
-                }
-            }
+            // device — see `Store::owner`). The secret and the account cap (D1) were checked by
+            // `registration_refusal` under this same lock.
             g.devices.entry(account.clone()).or_default().insert(
                 device.clone(),
                 Device {
@@ -3048,6 +3086,59 @@ mod tests {
             .await
             .is_ok());
         assert!(is_registered(&state, &account, &dev));
+    }
+
+    /// Security review of the audit push: only the account-root check ran inside `admit`, so a
+    /// registration refused for its SECRET, the ACCOUNT or PENDING cap, or REVOCATION still spent
+    /// a replay-nonce slot first. Anyone can mint device keys, so throwaway registrations could
+    /// fill the global nonce map and 429 every real device for the token TTL.
+    #[tokio::test]
+    async fn a_refused_registration_spends_no_replay_nonce() {
+        let nonces = |s: &AppState| s.seen_nonces.lock().unwrap().len();
+
+        // No / wrong secret for a NEW account.
+        let state =
+            AppState::new(Store::default(), None).with_registration_secret(Some("s3cret".into()));
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let dev = SigningKey::from_bytes(&[32u8; 32]);
+        let r = register(&state, &ak, &account, &dev, "a", None).await;
+        assert_eq!(r.unwrap_err(), StatusCode::FORBIDDEN);
+        assert_eq!(nonces(&state), 0, "secret refusal");
+
+        // Account cap.
+        let mut state = AppState::new(Store::default(), None);
+        state.caps.max_accounts = 0;
+        let r = register(&state, &ak, &account, &dev, "a", None).await;
+        assert_eq!(r.unwrap_err(), StatusCode::INSUFFICIENT_STORAGE);
+        assert_eq!(nonces(&state), 0, "account-cap refusal");
+
+        // Pending cap on an existing account.
+        let owner = SigningKey::from_bytes(&[33u8; 32]);
+        let mut state = account_with(&ak, &account, std::slice::from_ref(&owner)).await;
+        state.caps.max_pending_per_account = 0;
+        let before = nonces(&state);
+        let joiner = SigningKey::from_bytes(&[34u8; 32]);
+        let r = register(&state, &ak, &account, &joiner, "j", None).await;
+        assert_eq!(r.unwrap_err(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(nonces(&state), before, "pending-cap refusal");
+
+        // A revoked device walking back in.
+        let kicked = SigningKey::from_bytes(&[35u8; 32]);
+        let state = account_with(&ak, &account, &[owner.clone(), kicked.clone()]).await;
+        let _ = remove_device(
+            State(state.clone()),
+            signed(&owner, &account, "kick", now_ms() + 300_000),
+            Json(RemoveDevice {
+                device_id: id_of(&kicked),
+            }),
+        )
+        .await
+        .unwrap();
+        let before = nonces(&state);
+        let r = register(&state, &ak, &account, &kicked, "back", None).await;
+        assert_eq!(r.unwrap_err(), StatusCode::FORBIDDEN);
+        assert_eq!(nonces(&state), before, "revocation refusal");
     }
 
     #[tokio::test]

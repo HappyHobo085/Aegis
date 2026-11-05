@@ -70,7 +70,8 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
 
 - **Replay defense:** `verify_auth` records each spent `(device, nonce)` pair — only AFTER the
   signature verifies AND the caller's `admit` closure (registered device, or for registration
-  the account-root proof) passes, because anyone can mint a device key: recording first let a
+  the account-root proof PLUS every refusal in `registration_refusal`: revocation, the
+  registration secret, the account cap and the pending cap) passes, because anyone can mint a device key: recording first let a
   stranger fill the map with throwaway keys and 429 every real device — and rejects a repeat — a captured `Authorization` header can't be
   replayed. The set is bounded by the token TTL (expired entries are swept) and is in-memory
   (a restart forgets it → a token captured pre-restart could replay within its ≤5-min TTL).
@@ -299,5 +300,5 @@ Measured: down 23 h after a reboot while `docker ps` said `healthy`.
 `cargo test` (run from this folder, or `cargo test --manifest-path sync-server/Cargo.toml`
 from the repo root). Covers HLC ordering, auth canonical shape, account-root registration,
 owner approval / ownership transfer / registration secret / global caps, the request bounds,
-and the snapshot save/load round-trip (81 tests). Handlers are driven by calling them directly
+and the snapshot save/load round-trip (82 tests). Handlers are driven by calling them directly
 (no `tower` in the tree); test account ids must be lower-case hex (`registered()` hex-encodes).
