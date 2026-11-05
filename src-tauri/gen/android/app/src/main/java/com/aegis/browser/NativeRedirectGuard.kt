@@ -32,5 +32,5 @@ object NativeRedirectGuard {
    * both would open two tabs per block. Never throws; a failure is a logcat line and
    * `false`, because a failed open must not become a crashed navigation.
    */
-  external fun openBlockedRedirect(from: String, to: String): Boolean
+  external fun openBlockedRedirect(tab: Int, from: String, to: String): Boolean
 }

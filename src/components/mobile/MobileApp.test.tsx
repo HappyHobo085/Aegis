@@ -115,6 +115,7 @@ vi.mock('../../lib/ipcClient', () => ({
       getRecoveryPhrase: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
       listDevices: vi.fn().mockResolvedValue([]),
       removeDevice: vi.fn().mockResolvedValue([]),
+      approveDevice: vi.fn().mockResolvedValue([]),
       onState: vi.fn().mockReturnValue(() => {}),
       onChanged: vi.fn().mockReturnValue(() => {}),
       // `useSync` subscribes to this on mount, so a partial mock that omits it makes the
@@ -307,6 +308,29 @@ beforeEach(() => {
 });
 
 describe('MobileApp', () => {
+  // Audit 3.1: a target=_blank / window.open from a PRIVATE tab reaches the shell through the
+  // native `window.__aegisOpenTab(url, isPrivate)` hook (MainActivity's popup capture). It used
+  // to drop the opener's privateness and open a NORMAL tab — history, cookies and session
+  // persistence for a page the user opened from a private tab. Called the way MainActivity
+  // calls it: as a plain function on `window`.
+  it('a popup from a private tab opens a private background tab', async () => {
+    render(<MobileApp />);
+    await waitFor(() => expect(window.__aegisOpenTab).toBeTypeOf('function'));
+    window.__aegisOpenTab?.('https://popup.example/', true);
+    await waitFor(() =>
+      expect(aegis.tabs.create).toHaveBeenCalledWith('https://popup.example/', true, true),
+    );
+  });
+
+  it('a popup from a normal tab opens a normal background tab', async () => {
+    render(<MobileApp />);
+    await waitFor(() => expect(window.__aegisOpenTab).toBeTypeOf('function'));
+    window.__aegisOpenTab?.('https://popup.example/');
+    await waitFor(() =>
+      expect(aegis.tabs.create).toHaveBeenCalledWith('https://popup.example/', true, false),
+    );
+  });
+
   it('renders the top bar + bottom bar (no desktop Toolbar)', async () => {
     render(<MobileApp />);
     expect(await screen.findByRole('navigation', { name: /browser actions/i })).toBeInTheDocument();

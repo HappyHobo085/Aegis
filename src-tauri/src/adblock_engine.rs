@@ -67,7 +67,10 @@ pub fn host_is_allowlisted(host: &str) -> bool {
 
 /// Lowercased host of a URL (minimal parse — scheme://[user@]host[:port]/...).
 fn host_of(url: &str) -> Option<String> {
-    let authority = url.split("://").nth(1)?.split('/').next()?;
+    // The authority ends at the first `/`, `?` or `#` — splitting on `/` alone kept a query or
+    // fragment that directly follows the host (`https://h.example?x=1`) as part of the host,
+    // and no allowlist entry can ever match that (audit 4.9).
+    let authority = url.split("://").nth(1)?.split(['/', '?', '#']).next()?;
     let host = authority.rsplit('@').next()?.split(':').next()?;
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
@@ -96,23 +99,20 @@ struct Verdict {
     blocked: bool,
 }
 
-/// Messages to the engine thread. The `!Send` `Engine` lives on that one thread, so a
-/// FilterSet rebuild can't happen in-place from a caller — it's requested via `Reload`,
-/// which carries the extra list texts (enabled subscriptions + custom filters) to fold in
-/// alongside the bundled lists. `Query` and `Reload` are processed FIFO, so a query sent
-/// after a reload always sees the rebuilt engine.
+/// Messages to an engine thread. The `!Send` `Engine` lives on the thread that built it, so a
+/// rebuild cannot happen in place: `reload_lists` builds a NEW engine on a NEW thread and swaps
+/// the global sender (`TX`) to it once it is ready, while the previous engine keeps answering
+/// (audit 4.3). A query sent right after a reload may therefore still be answered by the old
+/// engine for as long as the build takes — eventual, not FIFO, consistency.
 enum Msg {
     Query(Query),
-    /// A rebuild request. The texts live in `PENDING_RELOAD` rather than in the message so
-    /// a burst of requests collapses into one (see `reload_lists`).
-    Reload,
 }
 
 /// How long `should_block` waits for the engine thread's verdict before failing open.
 ///
-/// Generous on purpose: a `Msg::Reload` re-parses ~20 MB of filter lists on that thread,
-/// and a filter edit is a foreground user action, so the cost of timing out too eagerly is
-/// a briefly under-blocked page while the cost of waiting too long is a frozen window.
+/// Since rebuilds no longer run on the query thread (audit 4.3) this only bounds the boot
+/// build — queries sent before the very first engine exists queue behind it — and a wedged
+/// engine thread. Timing out fails OPEN.
 const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Build the matching engine from every bundled list (ads + trackers + Peter Lowe's +
@@ -150,7 +150,7 @@ const VERDICT_CACHE_MAX: usize = 4096;
 ///
 /// Lives INSIDE the engine thread on purpose. That makes it `Send`-free (no lock, no
 /// atomic), gives it exactly one writer, and lets it be dropped in the one place the
-/// engine can change: `Msg::Reload`. It is deliberately NOT in the callers — a
+/// engine can change: a new engine is a new thread with a new cache. It is deliberately NOT in the callers — a
 /// caller-side memo would still pay the round-trip to learn whether a reload had
 /// happened, and two callers would need to agree on invalidation.
 struct VerdictCache {
@@ -173,11 +173,6 @@ impl VerdictCache {
             self.map.clear();
         }
         self.map.insert(key, blocked);
-    }
-
-    /// Forget every memoised verdict. Called only when the engine is replaced.
-    fn clear(&mut self) {
-        self.map.clear();
     }
 }
 
@@ -209,107 +204,117 @@ pub fn match_count_for(url: &str) -> usize {
         .count()
 }
 
-static TX: OnceLock<Sender<Msg>> = OnceLock::new();
+/// The CURRENT engine thread's request channel. Replaced — never mutated — by a reload: a
+/// rebuild runs on a NEW thread, which becomes the query thread only once its engine is built,
+/// and until then the previous engine keeps answering (audit 4.3). The old thread exits when
+/// the last clone of its sender is dropped.
+static TX: Mutex<Option<Sender<Msg>>> = Mutex::new(None);
 
-fn tx() -> &'static Sender<Msg> {
-    TX.get_or_init(|| {
-        let (tx, rx) = channel::<Msg>();
-        std::thread::spawn(move || {
-            let mut engine = build_engine(&[]);
-            // Owned by this thread, so it needs no synchronisation and can only be
-            // invalidated here.
-            let mut cache = VerdictCache::new();
-            while let Ok(msg) = rx.recv() {
-                // A panic here must NOT kill this thread. The `!Send` Engine exists ONLY on
-                // this thread, so a dead thread turns ad-blocking off permanently and
-                // silently: every later `tx().send` fails, `should_block` fails open, and
-                // the user just sees a working browser with no ad-blocking and no error.
-                // Catch per message and keep serving. `Msg::Reload` only assigns after
-                // `build_engine` returns, so a panicking reload leaves the previous (still
-                // perfectly valid) engine in place — the failure mode is "your new filter
-                // list didn't apply", not "ad-blocking died".
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    match &msg {
-                        Msg::Query(q) => {
-                            // The key is built once and used for both the lookup and the
-                            // store, so a hit costs three small allocations (~100 ns)
-                            // against a ~284 us match it avoids.
-                            let key = (q.url.clone(), q.source.clone(), q.rtype.clone());
-                            let blocked = match cache.get(&key) {
-                                Some(known) => known,
-                                None => {
-                                    let b = match Request::new(&q.url, &q.source, &q.rtype) {
-                                        Ok(req) => {
-                                            #[cfg(test)]
-                                            record_match(&q.url);
-                                            engine.check_network_request(&req).matched
-                                        }
-                                        // Fail open: an unparseable URL is allowed, and is
-                                        // memoised as such because re-parsing it would
-                                        // fail the same way every time.
-                                        Err(_) => false,
-                                    };
-                                    cache.put(key, b);
-                                    b
+/// Serialises rebuilds so they complete in the order they were requested — the newest list
+/// can never be replaced by an older build that happened to finish later.
+static BUILD_LOCK: Mutex<()> = Mutex::new(());
+
+fn tx() -> Sender<Msg> {
+    let mut g = TX.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(t) = g.as_ref() {
+        return t.clone();
+    }
+    // First use: queries queue in the channel until the boot engine is built, as before.
+    let t = spawn_engine_thread(Vec::new(), None);
+    *g = Some(t.clone());
+    t
+}
+
+/// Spawn a thread that BUILDS an engine from the bundled lists + `extra` and then serves
+/// queries with it. The `!Send` Engine never leaves that thread. `ready` (a reload) learns
+/// whether the build succeeded; the boot engine passes `None`.
+fn spawn_engine_thread(
+    extra: Vec<String>,
+    ready: Option<std::sync::mpsc::SyncSender<bool>>,
+) -> Sender<Msg> {
+    let (tx, rx) = channel::<Msg>();
+    std::thread::spawn(move || {
+        let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| build_engine(&extra)));
+        let engine = match built {
+            Ok(e) => e,
+            Err(_) => {
+                eprintln!("[aegis-adblock] engine build panicked; keeping the previous engine");
+                if let Some(r) = ready {
+                    let _ = r.send(false);
+                }
+                return;
+            }
+        };
+        if let Some(r) = ready {
+            let _ = r.send(true);
+        }
+        serve(engine, rx);
+    });
+    tx
+}
+
+/// Answer queries with `engine` until every sender is gone. A panic while matching must NOT
+/// kill this thread: the `!Send` Engine exists only here, so a dead thread would turn
+/// ad-blocking off silently. Catch per message and keep serving.
+fn serve(engine: Engine, rx: std::sync::mpsc::Receiver<Msg>) {
+    // Owned by this thread, so it needs no synchronisation; a new engine brings a new cache.
+    let mut cache = VerdictCache::new();
+    while let Ok(msg) = rx.recv() {
+        let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            match &msg {
+                Msg::Query(q) => {
+                    // The key is built once and used for both the lookup and the
+                    // store, so a hit costs three small allocations (~100 ns)
+                    // against a ~284 us match it avoids.
+                    let key = (q.url.clone(), q.source.clone(), q.rtype.clone());
+                    let blocked = match cache.get(&key) {
+                        Some(known) => known,
+                        None => {
+                            let b = match Request::new(&q.url, &q.source, &q.rtype) {
+                                Ok(req) => {
+                                    #[cfg(test)]
+                                    record_match(&q.url);
+                                    engine.check_network_request(&req).matched
                                 }
+                                // Fail open: an unparseable URL is allowed, and is
+                                // memoised as such because re-parsing it would
+                                // fail the same way every time.
+                                Err(_) => false,
                             };
-                            let _ = q.reply.send(Verdict {
-                                seq: q.seq,
-                                blocked,
-                            });
+                            cache.put(key, b);
+                            b
                         }
-                        // Rebuild the FilterSet + Engine in place on this thread (the only
-                        // place the !Send Engine can be replaced). Take the pending texts
-                        // and clear the "queued" flag FIRST, so a reload that arrives while
-                        // this one is building still queues its own rebuild rather than
-                        // being folded into this one and lost.
-                        Msg::Reload => {
-                            let extra = std::mem::take(
-                                &mut *PENDING_RELOAD.lock().unwrap_or_else(|e| e.into_inner()),
-                            );
-                            PENDING_QUEUED.store(false, Ordering::Release);
-                            #[cfg(test)]
-                            REBUILDS.fetch_add(1, Ordering::Relaxed);
-                            engine = build_engine(&extra);
-                            // The engine just changed, so every memoised verdict is stale.
-                            // Placed AFTER the assignment on purpose: `build_engine` can
-                            // panic, and if it does the old engine (and this cache) are
-                            // still a valid pair.
-                            cache.clear();
-                        }
-                    }
-                }));
-                if outcome.is_err() {
-                    eprintln!(
-                        "[aegis-adblock] engine panic recovered; keeping the previous engine"
-                    );
-                    // A Query that panicked never reached its `reply.send`, so its caller
-                    // would otherwise block until QUERY_TIMEOUT. Fail open explicitly.
-                    if let Msg::Query(q) = &msg {
-                        let _ = q.reply.send(Verdict {
-                            seq: q.seq,
-                            blocked: false,
-                        });
-                    }
+                    };
+                    let _ = q.reply.send(Verdict {
+                        seq: q.seq,
+                        blocked,
+                    });
                 }
             }
-        });
-        tx
-    })
+        }));
+        if outcome.is_err() {
+            eprintln!("[aegis-adblock] engine panic recovered; keeping the engine");
+            // A Query that panicked never reached its `reply.send`, so its caller would
+            // otherwise block until QUERY_TIMEOUT. Fail open explicitly.
+            let Msg::Query(q) = &msg;
+            let _ = q.reply.send(Verdict {
+                seq: q.seq,
+                blocked: false,
+            });
+        }
+    }
 }
 
 /// Rebuild the engine's FilterSet from the bundled lists + `extra_lists` (the enabled
 /// subscriptions' text + the user's custom filters) so a filter change takes effect on
 /// Windows/macOS/Android (which otherwise never re-read them after boot). Non-blocking, and
 /// **coalescing**: a burst of requests collapses into one rebuild from the most recent state
-/// (see the body). The FIFO channel still guarantees the next query sees the rebuilt engine.
+/// (see the body). The rebuilt engine takes over once BUILT; until then the previous one
+/// keeps answering, so a reload never stalls a query (audit 4.3).
 /// Called from `adblock_refresh::refresh`. (Linux's declarative WebKit tier reloads
 /// separately.)
 pub fn reload_lists(extra_lists: Vec<String>) {
-    // Coalesce, don't queue. `Msg::Reload` is FIFO on the SAME channel as `Msg::Query`,
-    // so N queued reloads means N full EasyList re-parses sitting in front of every
-    // in-flight query — and a query that waits out `QUERY_TIMEOUT` there fails OPEN,
-    // which is a real under-block, not just a slow test. A user who toggles a filter,
+    // Coalesce, don't queue: every rebuild is a full ~20 MB EasyList parse. A user who toggles a filter,
     // edits a custom filter and updates a subscription in quick succession (or a sync
     // that touches several stores) must cost ONE rebuild, not one per call.
     //
@@ -321,13 +326,40 @@ pub fn reload_lists(extra_lists: Vec<String>) {
         .unwrap_or_else(|e| e.into_inner())
         .clone_from(&extra_lists);
     if PENDING_QUEUED.swap(true, Ordering::AcqRel) {
-        return; // one is already in the channel; it will pick up the value above
+        return; // a builder is already waiting to start; it will pick up the value above
     }
-    let _ = tx().send(Msg::Reload);
+    #[cfg(test)]
+    IN_FLIGHT.fetch_add(1, Ordering::AcqRel);
+    std::thread::spawn(|| {
+        let _order = BUILD_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // Take the texts and clear the flag FIRST, so a request that arrives while this build
+        // runs queues its own rebuild instead of being folded into this one and lost.
+        let extra = std::mem::take(&mut *PENDING_RELOAD.lock().unwrap_or_else(|e| e.into_inner()));
+        PENDING_QUEUED.store(false, Ordering::Release);
+        #[cfg(test)]
+        build_gate_tick();
+        // Build on a NEW thread while the CURRENT engine keeps answering queries, and swap
+        // only once it is ready (audit 4.3). A rebuild used to run on the query thread, so
+        // every `should_block` behind it — from UI-thread navigation and request hooks —
+        // stalled up to `QUERY_TIMEOUT` and then failed OPEN.
+        let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+        let next = spawn_engine_thread(extra, Some(ready_tx));
+        if ready_rx.recv().unwrap_or(false) {
+            *TX.lock().unwrap_or_else(|e| e.into_inner()) = Some(next);
+            #[cfg(test)]
+            REBUILDS.fetch_add(1, Ordering::Relaxed);
+        }
+        #[cfg(test)]
+        IN_FLIGHT.fetch_sub(1, Ordering::AcqRel);
+    });
 }
 
+/// Test-only: rebuilds requested but not yet swapped in.
+#[cfg(test)]
+static IN_FLIGHT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// The `extra` list texts for a reload that has not been picked up by the engine thread
-/// yet, plus the flag saying a `Msg::Reload` is already in the channel.
+/// yet, plus the flag saying a builder is already waiting to start.
 static PENDING_RELOAD: Mutex<Vec<String>> = Mutex::new(Vec::new());
 static PENDING_QUEUED: AtomicBool = AtomicBool::new(false);
 
@@ -336,6 +368,38 @@ static PENDING_QUEUED: AtomicBool = AtomicBool::new(false);
 /// visible effect of coalescing is that fewer rebuilds happen.
 #[cfg(test)]
 static REBUILDS: AtomicU64 = AtomicU64::new(0);
+
+/// Test-only: park the next engine BUILD until the test releases it, so "a query issued while
+/// a rebuild is in progress" is a deterministic interleaving rather than a race. `Some((parked,
+/// resume))`: the builder signals `parked` and then waits on `resume`.
+#[cfg(test)]
+static BUILD_GATE: Mutex<
+    Option<(
+        std::sync::mpsc::SyncSender<()>,
+        std::sync::mpsc::Receiver<()>,
+    )>,
+> = Mutex::new(None);
+
+#[cfg(test)]
+fn build_gate_tick() {
+    let gate = BUILD_GATE.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some((parked, resume)) = gate {
+        let _ = parked.send(());
+        let _ = resume.recv();
+    }
+}
+
+/// Test-only: block until every requested rebuild has been built AND is the engine answering
+/// queries — a `reload_lists` is asynchronous, so a test asserting on the new rules waits here.
+#[cfg(test)]
+fn wait_for_reload() {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    while (PENDING_QUEUED.load(Ordering::Acquire) || IN_FLIGHT.load(Ordering::Acquire) > 0)
+        && Instant::now() < deadline
+    {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
 
 /// The number of rebuilds performed so far (test-only helper).
 #[cfg(test)]
@@ -431,13 +495,10 @@ pub fn should_block(url: &str, source_url: &str, request_type: &str) -> bool {
             mark_query_unanswered();
             return false;
         }
-        // Bounded wait. `Msg` is FIFO on ONE channel, so a `Msg::Reload` (any filter
-        // toggle, custom-filter edit or subscription update) makes every in-flight
-        // `should_block` queue behind a full EasyList re-parse. Unbounded, that froze the
-        // GTK main thread — `should_block` is called from `nav::decide_navigation` for
-        // every subresource, so 40 iframes x a filter edit meant 40 serialized stalls.
-        // Timing out fails OPEN (the request is allowed), so the worst case is that a
-        // filter edit briefly under-blocks instead of hanging the window.
+        // Bounded wait. Reloads no longer run on the query thread (audit 4.3), so this only
+        // waits on the boot build or a wedged engine; unbounded, either would freeze the GTK
+        // main thread — `should_block` is called from `nav::decide_navigation` for every
+        // subresource. Timing out fails OPEN (the request is allowed).
         //
         // The deadline is on the WHOLE wait, not per-reply: a late reply from an earlier
         // call is skipped inside the same budget rather than extending it.
@@ -542,9 +603,29 @@ pub extern "system" fn Java_com_aegis_browser_NativeAdblock_shouldBlock(
 
 #[cfg(test)]
 mod tests {
+    /// Audit 4.9: `host_of` split the authority on `/` only, so a URL with a query or fragment
+    /// straight after the host (`https://site.example?x=1`) yielded the host `site.example?x=1`
+    /// — which no allowlist entry can ever match.
+    #[test]
+    fn host_of_stops_at_a_query_or_fragment() {
+        assert_eq!(
+            super::host_of("https://Site.Example?x=1").as_deref(),
+            Some("site.example")
+        );
+        assert_eq!(
+            super::host_of("https://site.example#top").as_deref(),
+            Some("site.example")
+        );
+        assert_eq!(
+            super::host_of("https://site.example:8443/p").as_deref(),
+            Some("site.example")
+        );
+    }
+
     use super::{
         is_unwanted_popup, last_query_was_unanswered, mark_query_unanswered, match_count_for,
-        rebuild_count, reload_lists, set_policy, should_block, Duration, Verdict, REPLY,
+        rebuild_count, reload_lists, set_policy, should_block, wait_for_reload, Duration, Instant,
+        Verdict, BUILD_GATE, REPLY,
     };
 
     // A URL no other test queries, so the per-URL match tally belongs to this test alone
@@ -596,6 +677,8 @@ mod tests {
         reload_lists(vec![
             "||cache-probe.example/assets/only-me-7f3a.js^".to_string()
         ]);
+        // A reload is swapped in once BUILT (the previous engine answers meanwhile).
+        wait_for_reload();
 
         let blocked_now = should_block(CACHE_PROBE_URL, CACHE_PROBE_PAGE, "other");
         assert!(
@@ -761,6 +844,8 @@ mod tests {
     /// runs no match at all, so an unchanged count would prove the `false` came from a
     /// fail-open rather than from the rebuilt engine).
     fn settle_after_reload(probe: &str, source: &str, rtype: &str, why: &str) {
+        // The rebuild is swapped in only once built; wait for that before probing.
+        wait_for_reload();
         let matches_before = match_count_for(probe);
         assert!(
             !verdict_of(probe, source, rtype),
@@ -770,6 +855,62 @@ mod tests {
             match_count_for(probe) > matches_before,
             "{why}: the probe must have been re-matched, so the `false` above came from the \
              rebuilt engine and not from a fail-open timeout"
+        );
+    }
+
+    /// Audit 4.3: a rebuild (~20 MB parse) ran ON the query thread, so every `should_block`
+    /// issued while it ran — from navigation and request hooks on the UI thread — waited up to
+    /// `QUERY_TIMEOUT` and then failed OPEN: a stalled window AND an under-blocked page. A query
+    /// during a rebuild must be answered promptly by the PREVIOUS engine.
+    #[test]
+    fn a_query_during_a_rebuild_is_answered_by_the_previous_engine() {
+        let _guard = crate::test_support::lock();
+        assert!(wait_until_engine_blocks(
+            "https://adnxs.com/tag.js",
+            "https://news.example.com",
+            "script"
+        ));
+        let (parked_tx, parked_rx) = std::sync::mpsc::sync_channel(0);
+        let (resume_tx, resume_rx) = std::sync::mpsc::sync_channel(0);
+        *BUILD_GATE.lock().unwrap() = Some((parked_tx, resume_rx));
+        reload_lists(vec!["||during-rebuild.example^".to_string()]);
+        parked_rx.recv().expect("the rebuild parked");
+
+        let started = Instant::now();
+        let blocked = should_block(
+            "https://adnxs.com/tag.js",
+            "https://news.example.com",
+            "script",
+        );
+        let waited = started.elapsed();
+        let unanswered = last_query_was_unanswered();
+        resume_tx.send(()).expect("resume the rebuild");
+        assert!(
+            !unanswered,
+            "the query must be ANSWERED, not timed out (waited {waited:?})"
+        );
+        assert!(
+            blocked,
+            "the previous engine still blocks a bundled ad host"
+        );
+        assert!(
+            waited < Duration::from_secs(1),
+            "answered promptly, waited {waited:?}"
+        );
+
+        wait_for_reload();
+        assert!(verdict_of(
+            "https://during-rebuild.example/x",
+            "https://site.example",
+            "script"
+        ));
+        reload_lists(vec![]);
+        wait_for_reload();
+        settle_after_reload(
+            "https://during-rebuild.example/x",
+            "https://site.example",
+            "script",
+            "the rebuild probe must not survive into the next test",
         );
     }
 
@@ -1131,6 +1272,7 @@ mod tests {
         // after the reload — proving the FilterSet rebuild took effect (FIFO: the query
         // below is processed after the reload).
         reload_lists(vec!["||reloadtest.example^".to_string()]);
+        wait_for_reload();
         assert!(
             verdict_of(
                 "https://reloadtest.example/x",
@@ -1149,6 +1291,7 @@ mod tests {
         );
         // Reset the engine to the bundled-only lists so other tests don't see it blocked.
         reload_lists(vec![]);
+        wait_for_reload();
         assert!(
             !verdict_of(
                 "https://reloadtest.example/x",

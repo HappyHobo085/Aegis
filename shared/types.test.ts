@@ -276,6 +276,7 @@ describe('shared/types — Phase 5 additions', () => {
 
     const prompt: PermissionPrompt = {
       requestId: 7,
+      viewId: 1,
       origin: 'https://a.test',
       permission: 'notifications',
     };

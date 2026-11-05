@@ -7,6 +7,7 @@ import { PermissionPromptDialog } from './PermissionPromptDialog';
 
 const prompt = (over: Partial<PermissionPrompt> = {}): PermissionPrompt => ({
   requestId: 11,
+  viewId: 1,
   origin: 'https://example.com',
   permission: 'geolocation',
   ...over,
@@ -80,5 +81,17 @@ describe('PermissionPromptDialog', () => {
     // Click the message text inside the card — must not trigger a scrim-deny.
     await userEvent.click(screen.getByText(/wants to use/i));
     expect(p.onResolve).not.toHaveBeenCalled();
+  });
+
+  it('names the BACKGROUND tab a request came from (audit 5.6)', () => {
+    render(<PermissionPromptDialog {...props({ backgroundTabTitle: 'Mail — Inbox' })} />);
+    expect(screen.getByRole('dialog')).toHaveTextContent(
+      'This request is from a background tab: Mail — Inbox',
+    );
+  });
+
+  it('says nothing about a background tab when the requester is the visible one', () => {
+    render(<PermissionPromptDialog {...props()} />);
+    expect(screen.getByRole('dialog')).not.toHaveTextContent(/background tab/i);
   });
 });

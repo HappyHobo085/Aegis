@@ -148,4 +148,23 @@ describe('useDownloads', () => {
     unmount();
     expect(unsubscribe).toHaveBeenCalledTimes(1);
   });
+
+  it('a slow seed list does not overwrite a NEWER refresh triggered by an event (audit 5.3)', async () => {
+    let fire: (() => void) | undefined;
+    onChanged.mockImplementation((cb: () => void) => {
+      fire = cb;
+      return () => {};
+    });
+    let release: (d: DownloadEntry[]) => void = () => {};
+    const newer = [dl({ id: 2, state: 'completed', receivedBytes: 1000, totalBytes: 1000 })];
+    list
+      .mockImplementationOnce(() => new Promise<DownloadEntry[]>((r) => (release = r)))
+      .mockResolvedValueOnce(newer);
+    const { result } = renderHook(() => useDownloads());
+    await waitFor(() => expect(fire).toBeTypeOf('function'));
+    await act(async () => fire!());
+    await waitFor(() => expect(result.current.downloads).toEqual(newer));
+    await act(async () => release(seed));
+    expect(result.current.downloads).toEqual(newer);
+  });
 });

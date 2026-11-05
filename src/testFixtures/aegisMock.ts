@@ -167,6 +167,7 @@ export function aegisMockModule() {
           getRecoveryPhrase: vi.fn().mockResolvedValue({ recoveryPhrase: '' }),
           listDevices: vi.fn().mockResolvedValue([]),
           removeDevice: vi.fn().mockResolvedValue([]),
+          approveDevice: vi.fn().mockResolvedValue([]),
           onState: vi.fn().mockReturnValue(() => {}),
           onChanged: vi.fn().mockReturnValue(() => {}),
           // Reports records a peer tried to push that failed authentication. See the

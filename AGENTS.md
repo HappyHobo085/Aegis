@@ -51,7 +51,7 @@ npm run tauri:dev      # run the app (Vite renderer + Tauri, hot reload)
 npm test               # vitest: node project (shared/ + scripts/) + jsdom (src/)
 npm run tauri:build    # build installers (AppImage/deb/nsis/app/dmg)
 npm run android:dev    # Android emulator/device
-npm run android:build  # release APK (signed with the debug key unless keystore.properties exists)
+npm run android:build  # release APK — needs keystore.properties, or AEGIS_ALLOW_DEBUG_SIGNED_RELEASE=1 for a debug-key sideload
 ```
 
 Native build deps: a Rust toolchain; on Linux, webkit2gtk/gtk dev packages.
@@ -70,7 +70,7 @@ test that clicks/types the real UI, and/or a unit test in the owning Rust module
 ### Test coverage — a ratchet, not a 100% claim
 
 `@vitest/coverage-v8` measures **every** non-excluded source file (`src/**`, `shared/**`,
-`scripts/**` — 120 files) on every run, and the measured numbers are committed in
+`scripts/**` — 133 files) on every run, and the measured numbers are committed in
 `coverage-baseline.json`. CI enforces them as a **ratchet that may only go up**
 (`scripts/coverage-ratchet.mjs`). It fails if any metric drops below the baseline, if the
 baseline was _lowered_ in the same commit, or if a file the baseline names is missing from
@@ -107,42 +107,42 @@ committed `coverage-baseline.json` (**recompute these, do not carry them forward
 
 | Metric     | Measured               | Gap |
 | ---------- | ---------------------- | --- |
-| lines      | 4586/5162 = **88.84%** | 576 |
-| statements | 6049/6926 = **87.33%** | 877 |
-| functions  | 1237/1424 = **86.86%** | 187 |
-| branches   | 3658/4483 = **81.59%** | 825 |
+| lines      | 5015/5604 = **89.48%** | 589 |
+| statements | 6634/7585 = **87.46%** | 951 |
+| functions  | 1341/1525 = **87.93%** | 184 |
+| branches   | 4186/5126 = **81.66%** | 940 |
 
-48 of the 120 measured files are at 100% statements. The 877 uncovered statements decompose
+52 of the 133 measured files are at 100% statements. The 951 uncovered statements decompose
 as:
 
-- **323 statements in 10 `scripts/` files that v8 structurally cannot see** — `check-bundle-size`
-  (35), `check-npm-audit` (36), `check-android-versioncode` (61), `coverage-baseline` (17),
-  `coverage-ratchet` (46), `rust-coverage-baseline` (43), `rust-coverage-ratchet` (76), plus
-  three whose logic module is fully covered (`auditCheck`, `coverageCheck`, `rustCoverageCheck`
-  — together 9).
+- **331 statements in 10 `scripts/` files that v8 structurally cannot see** — `check-bundle-size`
+  (40), `check-npm-audit` (45), `check-android-versioncode` (49), `coverage-baseline` (17),
+  `coverage-ratchet` (49), `rust-coverage-baseline` (43), `rust-coverage-ratchet` (79), plus
+  three whose logic module is almost fully covered (`auditCheck`, `coverageCheck`,
+  `rustCoverageCheck` — together 9).
   v8 only instruments the test worker's own V8 runtime, so a **spawned subprocess earns zero
   coverage credit**. These are all thin I/O entry points whose logic lives in a pure module
-  that _is_ measured: `scripts/cliGates.test.mjs` really does cover the first three (49
-  passing tests) and the report still says 0%, and `scripts/rustCoverageCheck.mjs` is at
-  **96.58%** statements (100% lines and functions) because `rustCoverageCheck.test.mjs`
+  that _is_ measured: `scripts/cliGates.test.mjs` really does cover the first three (64
+  passing tests in the file) and the report still says 0%, and `scripts/rustCoverageCheck.mjs`
+  is at **96.82%** statements (100% lines and functions) because `rustCoverageCheck.test.mjs`
   imports it. Treat "0% in a report" as
   _"not measurable here"_, never as _"untested"_, for anything a test spawns. See
   `scripts/AGENTS.md`.
-- **591 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (50, the
-  `createRoot` entry point), `src/testFixtures/aegisMock.ts` (539, a mock), and
-  `src/vite-env.d.ts` (2). All three are entry-point-or-mock by design. They are absent from
+- **601 lines never measured at all**, by `coverage.exclude`: `src/main.tsx` (49, the
+  `createRoot` entry point), `src/testFixtures/aegisMock.ts` (551, a mock), and
+  `src/vite-env.d.ts` (1). All three are entry-point-or-mock by design. They are absent from
   the report entirely, so they are not part of any ratio above.
-- **554 statements of real, measurable test debt** spread across 62 of the 120 files (the
-  `scripts/` files above are counted separately), concentrated in a handful: `App.tsx` 121
-  of 344, `mobile/MobileApp.tsx` 73, `ipcClient.ts` 29, `mobile/MobileMenuSheet.tsx` 25,
+- **620 statements of real, measurable test debt** spread across 71 of the 133 files (the
+  `scripts/` files above are counted separately), concentrated in a handful: `App.tsx` 118
+  of 351, `mobile/MobileApp.tsx` 73, `ipcClient.ts` 28, `mobile/MobileMenuSheet.tsx` 25,
   `SecurityDashboard.tsx` 21, `mobile/MobileSheet.tsx` 19, `Toolbar.tsx` 18,
-  `commandPaletteData.ts` 1, `TabStrip.tsx` 13, `SettingsModal.tsx` 2, `Sidebar.tsx` 1.
-  By directory: `src/` 554 (components 206, mobile 147, hooks 38, lib 42, top level 121),
-  `shared/` **0**.
+  `mobile/MobileTabSwitcher.tsx` 16, `popover/SitePanel.tsx` 16, `TabStrip.tsx` 13,
+  `popover/ZoomPanel.tsx` 13, `SyncSettingsTab.tsx` 12.
+  By directory: `src/` 620 (components 215, mobile 147, popover 55, hooks 34, lib 41, top
+  level 128), `shared/` **0**.
   The file count is _files with at least one uncovered statement_, recomputed from
-  `coverage-baseline.json` rather than carried forward — an earlier revision of this line
-  said "66 files / 588 statements" and another "68 files", and neither is what the committed
-  baseline yields. Recompute; do not edit these numbers by hand.
+  `coverage-baseline.json` rather than carried forward (last recomputed 2026-11-04, after the
+  audit-fix phases). Recompute; do not edit these numbers by hand.
 
 **A percentage can move in the opposite direction from the codebase, so never read the ratio
 alone.** Removing split view deleted three fully-covered source files: the percentage went
@@ -165,7 +165,7 @@ the 4 files the settings work added**, so the settings change accounts for 36% o
 appeared to create. Itemise it with `Object.keys(pre.files)` vs `Object.keys(post.files)`
 rather than attributing the whole delta.
 
-**Branches (81.37%, 835 uncovered) is the weakest metric and where the next effort belongs.**
+**Branches (81.66%, 940 uncovered) is the weakest metric and where the next effort belongs.**
 The Rust side has its own measured numbers and its own structural ceiling — see the
 coverage section of `src-tauri/AGENTS.md`.
 
@@ -229,7 +229,10 @@ flag; desktop content webview uses `WebviewBuilder::incognito(true)` — Linux
 `WebContext::new_ephemeral`, Windows `SetIsInPrivateModeEnabled`, macOS
 `nonPersistentDataStore`; history/downloads-list/session-persistence all skip private
 tabs; closed private tabs are not reopenable; a tab opened from a private tab inherits
-privateness; Android is a best-effort weaker tier — `LOAD_NO_CACHE` + 3rd-party-cookies
+privateness — including an Android popup (`__aegisOpenTab(url, isPrivate)`) and a blocked
+scripted redirect reopened as a background tab on every platform (the JNI bridge now passes
+the real opener tab id) — and every spawn-time webview callback uses the privateness the tab
+was SPAWNED with, so a late event of a just-closed private tab is not recorded as normal; Android is a best-effort weaker tier — `LOAD_NO_CACHE` + 3rd-party-cookies
 refused + cache/history cleared on close, and the process-global cookie gate is refused
 while ANY private tab is ALIVE (not merely while one is the active tab — see
 `MainActivity.kt`'s `syncCookieAcceptance`, which is the only writer of that gate), but
@@ -274,8 +277,8 @@ in true global scope via indirect eval to catch this). Per-spawn: level/allowlis
 to newly created/reloaded tabs only. Honest limits: a same-world JS shim is detectable
 (default-off for this reason); per-frame-origin seeding (not Brave's per-top-eTLD+1).
 `vitest src/lib/farbleShim.test.ts` is authoritative for shim runtime behavior and passes
-(23 tests; the tree has 1825 tests in 123 files in total, verified on vitest
-4.1.9 and 4.1.11 — run `npm test` for the full count). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
+(31 tests; the tree has 2094 tests in 134 files in total, verified on vitest
+4.1.11 — run `npm test` for the full count). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
 are **PENDING** user. **Content-webview Proxy** (`proxy.rs`; sub-project M): routes
 browsed pages through a user-configured HTTP or SOCKS5 proxy. **This is a Proxy, not a
 VPN** — it covers the content webview only (not the OS, not other apps, not the chrome's
@@ -321,7 +324,9 @@ cover the config validation instead. Per-platform parity matrix:
   - Any draft or prototype files not intended for the final codebase
   - Keep the repository clean by removing these artifacts before pushing changes
 
-**Remaining roadmap features:** password-vault autofill (Phase B), anti-fingerprinting
+**Remaining roadmap features:** password-vault autofill (Phase B — the plumbing is live but
+inert: `vault_inject.js` is injected and the core answers `vault.*`, but the page has no
+bridge to ask while `withGlobalTauri` is off; see `vault.rs`'s header), anti-fingerprinting
 runtime verifies, and content-webview proxy macOS tier. The roadmap that tracked these was
 deleted in commit 58d2c4b; `CHANGELOG.md` and the status sections of the per-folder
 `AGENTS.md` files are the current record of what is and is not done.

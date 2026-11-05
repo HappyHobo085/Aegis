@@ -164,19 +164,114 @@ pub fn on_requested<R: Runtime>(
     destination: &mut PathBuf,
     private: bool,
 ) {
-    let filename = url
-        .rsplit('/')
-        .next()
-        .and_then(|s| s.split('?').next())
-        .filter(|s| !s.is_empty())
-        .unwrap_or("download")
-        .to_string();
-    let save = dir(app).join(&filename);
+    // Audit 7.6. The engine has already put ITS suggested name in `destination` (wry fills it
+    // from WebKit's `suggested_filename` / WebView2's `ResultFilePath`, i.e. Content-Disposition)
+    // and that used to be thrown away for the URL's last segment — so `…/dl?id=5` saved as
+    // `dl`. Prefer the engine's name, fall back to the URL; either way sanitise it, cap it and
+    // never overwrite an existing file.
+    let suggested = destination
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .filter(|n| !n.trim().is_empty());
+    let raw = suggested.unwrap_or_else(|| {
+        url.split(['?', '#'])
+            .next()
+            .unwrap_or("")
+            .rsplit('/')
+            .next()
+            .unwrap_or("")
+            .to_string()
+    });
+    let save = unique_in(&dir(app), &sanitize_filename(&raw));
+    let filename = save
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".to_string());
     *destination = save.clone();
 
     if push_row(app, url, &filename, &save.to_string_lossy(), private) {
         crate::emit_event(app, "downloads.changed", Value::Null);
     }
+}
+
+/// Longest file name we hand to the OS, in BYTES (ext4/NTFS/APFS all allow 255; the margin
+/// leaves room for a ` (n)` de-dup suffix).
+const MAX_FILENAME_BYTES: usize = 200;
+
+/// A file name safe on Linux, Windows and macOS (audit 7.6): the last path component only (so
+/// `../` cannot climb out of the downloads folder), Windows-reserved characters and control
+/// characters replaced by `_`, trailing dots/spaces trimmed (Windows strips them silently),
+/// a reserved device name (`CON`, `LPT9`, …) prefixed with `_`, and the byte length capped
+/// with the extension kept. An empty result becomes `download`.
+fn sanitize_filename(raw: &str) -> String {
+    let last = raw.rsplit(['/', '\\']).next().unwrap_or("");
+    let mut name: String = last
+        .chars()
+        .map(|c| match c {
+            '<' | '>' | ':' | '"' | '|' | '?' | '*' => '_',
+            c if c.is_control() => '_',
+            c => c,
+        })
+        .collect();
+    name = name
+        .trim_matches(|c: char| c == ' ' || c == '.')
+        .to_string();
+    if name.is_empty() {
+        return "download".to_string();
+    }
+    let stem_upper = name.split('.').next().unwrap_or("").to_ascii_uppercase();
+    let reserved = matches!(stem_upper.as_str(), "CON" | "PRN" | "AUX" | "NUL")
+        || ((stem_upper.starts_with("COM") || stem_upper.starts_with("LPT"))
+            && stem_upper.len() == 4
+            && stem_upper.as_bytes()[3].is_ascii_digit());
+    if reserved {
+        name.insert(0, '_');
+    }
+    if name.len() > MAX_FILENAME_BYTES {
+        let (stem, ext) = match name.rfind('.') {
+            Some(i) if i > 0 && name.len() - i <= 16 => (&name[..i], &name[i..]),
+            _ => (name.as_str(), ""),
+        };
+        let mut cut = MAX_FILENAME_BYTES.saturating_sub(ext.len());
+        while !stem.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        name = format!("{}{}", &stem[..cut], ext);
+    }
+    name
+}
+
+/// `dir/name`, or the first free `dir/stem (n).ext` — a second download of the same name must
+/// not silently overwrite the first file (audit 7.6). Gives up numbering after 10 000 and
+/// returns the last candidate rather than looping forever.
+fn unique_in(dir: &Path, name: &str) -> PathBuf {
+    let first = dir.join(name);
+    if !first.exists() {
+        return first;
+    }
+    let (stem, ext) = match name.rfind('.') {
+        Some(i) if i > 0 => (&name[..i], &name[i..]),
+        _ => (name, ""),
+    };
+    let mut candidate = first;
+    for n in 1..=10_000 {
+        candidate = dir.join(format!("{stem} ({n}){ext}"));
+        if !candidate.exists() {
+            break;
+        }
+    }
+    candidate
+}
+
+/// The name Android should save `name` under inside `dir`: the same sanitise + de-dup the
+/// desktop path uses (audit 7.6), reached through `NativeDownloads.safeName` so the two
+/// platforms cannot drift.
+#[cfg_attr(not(any(test, target_os = "android")), allow(dead_code))]
+fn android_safe_name(dir: &str, name: &str) -> String {
+    unique_in(Path::new(dir), &sanitize_filename(name))
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| "download".to_string())
 }
 
 /// Push a `progressing` downloads row. Shared by the desktop `on_requested` and by
@@ -290,7 +385,13 @@ pub fn on_finished<R: Runtime>(app: &AppHandle<R>, success: bool, url: Option<&s
                 finish_row(it, success, app);
                 return true;
             }
+            // A url that matches NO row is a download with no row of its own — a PRIVATE one
+            // (which deliberately records none) or one already removed. Falling through to "the
+            // newest in-progress row" marked someone else's download finished (audit 3.4).
+            return false;
         }
+        // No url at all (an engine that does not report one): the newest in-progress row is
+        // the best guess there is.
         for it in items.iter_mut().rev() {
             if !jsonstore::is_deleted(it)
                 && it.get("state").and_then(Value::as_str) == Some("progressing")
@@ -354,6 +455,26 @@ pub extern "system" fn Java_com_aegis_browser_NativeDownloads_recordStart(
     {
         eprintln!("[aegis-downloads] recordStart panicked for {url}; download not recorded");
     }
+}
+
+/// JNI bridge for Android's `NativeDownloads.safeName`: the file name Kotlin should save a
+/// download under inside `dir` — [`android_safe_name`], i.e. the desktop sanitise + de-dup
+/// (audit 7.6). Never returns null (see `jni_string_or_empty`).
+#[cfg(target_os = "android")]
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "system" fn Java_com_aegis_browser_NativeDownloads_safeName(
+    mut env: jni::JNIEnv,
+    _this: jni::objects::JObject,
+    dir: jni::objects::JString,
+    name: jni::objects::JString,
+) -> jni::sys::jstring {
+    // Owned Strings first: `JNIEnv` is `!UnwindSafe`, so it stays outside `ffi_guard`.
+    let dir: String = env.get_string(&dir).map(|s| s.into()).unwrap_or_default();
+    let name: String = env.get_string(&name).map(|s| s.into()).unwrap_or_default();
+    // An empty answer tells Kotlin to fall back to its own flattened name.
+    let text = crate::ffi_guard(|| android_safe_name(&dir, &name)).unwrap_or_default();
+    crate::jni_string_or_empty(&mut env, &text)
 }
 
 /// JNI bridge for Android's `NativeDownloads.recordFinish`, called from the
@@ -634,6 +755,24 @@ fn open(target: &str) -> std::result::Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+
+    /// Audit 3.4: a PRIVATE download records no row, so when it finished its url matched
+    /// nothing — and the "newest in-progress row" fallback then marked SOMEONE ELSE's download
+    /// completed (or interrupted). The fallback is only for an event that carries no url.
+    #[test]
+    fn a_finished_private_download_does_not_complete_another_row() {
+        crate::test_support::with_tmp_app(|app| {
+            let mut dest = std::env::temp_dir().join("aegis-dl-3-4.bin");
+            on_requested(app, "https://normal.example/big.iso", &mut dest, false);
+            on_finished(app, true, Some("https://private.example/secret.pdf"));
+            let rows = live_rows(app);
+            let row = rows
+                .iter()
+                .find(|r| r["url"] == serde_json::json!("https://normal.example/big.iso"))
+                .expect("the normal row");
+            assert_eq!(row["state"], serde_json::json!("progressing"));
+        });
+    }
     use super::*;
     use crate::test_support::with_tmp_app;
     use std::sync::mpsc;
@@ -649,6 +788,98 @@ mod tests {
     fn private_downloads_are_not_recorded() {
         assert!(should_record_download(false)); // normal tab → record
         assert!(!should_record_download(true)); // private tab → no record (file still saved)
+    }
+
+    // ---- Audit 7.6: the saved file's NAME ----
+
+    #[test]
+    fn a_filename_is_sanitised_for_every_desktop_filesystem() {
+        assert_eq!(sanitize_filename("../../etc/passwd"), "passwd");
+        assert_eq!(sanitize_filename("..\\..\\boot.ini"), "boot.ini");
+        assert_eq!(sanitize_filename("a<b>:c\"d|e?f*.txt"), "a_b__c_d_e_f_.txt");
+        assert_eq!(sanitize_filename("tab\there\u{7}.txt"), "tab_here_.txt");
+        assert_eq!(sanitize_filename("  trailing. . "), "trailing");
+        assert_eq!(sanitize_filename("CON.txt"), "_CON.txt"); // Windows device name
+        assert_eq!(sanitize_filename("lpt9"), "_lpt9");
+        assert_eq!(sanitize_filename(""), "download");
+        assert_eq!(sanitize_filename(".."), "download");
+        // Length cap keeps the extension and never splits a UTF-8 character.
+        let long = format!("{}.zip", "é".repeat(300));
+        let out = sanitize_filename(&long);
+        assert!(out.len() <= MAX_FILENAME_BYTES, "{}", out.len());
+        assert!(out.ends_with(".zip"));
+    }
+
+    #[test]
+    fn a_taken_name_gets_a_numbered_sibling() {
+        let d = tempfile_dir("dedup");
+        assert_eq!(unique_in(&d, "a.zip"), d.join("a.zip"));
+        std::fs::write(d.join("a.zip"), b"x").unwrap();
+        assert_eq!(unique_in(&d, "a.zip"), d.join("a (1).zip"));
+        std::fs::write(d.join("a (1).zip"), b"x").unwrap();
+        assert_eq!(unique_in(&d, "a.zip"), d.join("a (2).zip"));
+        std::fs::write(d.join("README"), b"x").unwrap();
+        assert_eq!(unique_in(&d, "README"), d.join("README (1)"));
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    #[test]
+    fn the_engine_suggested_name_wins_and_an_existing_file_is_not_overwritten() {
+        with_tmp_app(|app| {
+            let d = tempfile_dir("suggested");
+            crate::settings::apply_local(
+                app,
+                &serde_json::json!({ "partial": { "downloadDir": d.to_string_lossy() } }),
+            )
+            .unwrap();
+            // The engine filled `destination` from Content-Disposition; the URL says nothing.
+            let mut dest = PathBuf::from("/engine/default/Quarterly Report.pdf");
+            on_requested(app, "https://files.test/dl?id=5#frag", &mut dest, false);
+            assert_eq!(dest, d.join("Quarterly Report.pdf"));
+            // A second download of the same name must not clobber the first file.
+            std::fs::write(d.join("Quarterly Report.pdf"), b"first").unwrap();
+            let mut dest2 = PathBuf::from("/engine/default/Quarterly Report.pdf");
+            on_requested(app, "https://files.test/dl?id=6", &mut dest2, false);
+            assert_eq!(dest2, d.join("Quarterly Report (1).pdf"));
+            // No engine suggestion: the URL's last segment, minus query AND fragment.
+            let mut dest3 = PathBuf::new();
+            on_requested(app, "https://files.test/x/f.zip#part", &mut dest3, false);
+            assert_eq!(dest3, d.join("f.zip"));
+            let _ = std::fs::remove_dir_all(&d);
+        });
+    }
+
+    /// Android names its own files (Kotlin's `DownloadListener`), so it goes through the SAME
+    /// sanitise + de-dup via `NativeDownloads.safeName` (audit 7.6) — two implementations of
+    /// "is this name safe" would drift.
+    #[test]
+    fn android_names_go_through_the_same_sanitise_and_dedup() {
+        let d = tempfile_dir("android");
+        let dir = d.to_string_lossy().to_string();
+        assert_eq!(android_safe_name(&dir, ".."), "download");
+        assert_eq!(android_safe_name(&dir, "nul.txt"), "_nul.txt");
+        std::fs::write(d.join("song.mp3"), b"x").unwrap();
+        assert_eq!(android_safe_name(&dir, "song.mp3"), "song (1).mp3");
+        let _ = std::fs::remove_dir_all(&d);
+
+        let jni = crate::test_support::rust_production_source(include_str!("downloads.rs"));
+        assert!(jni
+            .contains("pub extern \"system\" fn Java_com_aegis_browser_NativeDownloads_safeName("));
+        let kt = crate::test_support::kotlin_source("NativeDownloads.kt");
+        assert!(kt.contains("external fun safeName(dir: String, name: String): String"));
+        let main = crate::test_support::kotlin_source("MainActivity.kt");
+        let wire = crate::test_support::kotlin_fn_body(&main, "private fun wireDownloadListener(");
+        assert!(wire.contains("NativeDownloads.safeName("), "{wire}");
+    }
+
+    fn tempfile_dir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!(
+            "aegis-dlname-{tag}-{}-{}",
+            std::process::id(),
+            jsonstore::now_ms()
+        ));
+        std::fs::create_dir_all(&d).unwrap();
+        d
     }
 
     #[test]
@@ -773,10 +1004,13 @@ mod tests {
         std::fs::create_dir_all(&dl_dir).unwrap();
         crate::settings::write(app, &json!({ "downloadDir": dl_dir.to_string_lossy() }))
             .expect("settings fixture write");
-        let inside = dl_dir.join("ok.bin");
-        std::fs::write(&inside, b"ok").unwrap();
+        // The file is written AFTER the path is chosen, as the engine does — creating it first
+        // would (correctly) make `on_requested` pick `ok (1).bin` instead (audit 7.6).
+        let mut inside = PathBuf::new();
         let id = {
-            on_requested(app, "https://files.test/ok.bin", &mut PathBuf::new(), false);
+            on_requested(app, "https://files.test/ok.bin", &mut inside, false);
+            assert_eq!(inside, dl_dir.join("ok.bin"));
+            std::fs::write(&inside, b"ok").unwrap();
             flush(app);
             let rows = live_rows(app);
             assert_eq!(rows.len(), 1);

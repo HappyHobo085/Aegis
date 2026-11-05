@@ -212,6 +212,14 @@ fn close_webview(app: &AppHandle, id: u32) {
         crate::linux_layout::remove_webview_label(app, &label);
     }
 
+    // macOS: release this tab's KVO observers, which hold a strong ref to its WKWebView
+    // (audit 7.5 — they used to be leaked for the app's lifetime). Main thread: the registry
+    // is thread-local to it.
+    #[cfg(target_os = "macos")]
+    {
+        let _ = app.run_on_main_thread(move || crate::nav_url_mac::uninstall(id));
+    }
+
     // Close the webview (this should not fail even if already closed)
     let _ = webview.close();
 }
@@ -517,6 +525,11 @@ fn forget_closed_tab<R: Runtime>(app: &AppHandle<R>, id: u32) {
     // of the fix — free, and it removes within-tab staleness too.
     crate::redirect_guard::clear_tab_actions(app, id);
     crate::redirect_guard::clear_chain(app, id);
+    // …and the tab's one-shot app-navigation exemption (audit 3.5), which a reused id would
+    // otherwise inherit.
+    if let Some(p) = app.try_state::<crate::redirect_guard::PendingNavs>() {
+        p.0.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+    }
     // `adblock::PAGE_BLOCKED` is the last of the process-global tab-keyed tables, and the
     // only one nothing ever removed an entry from. It is the INPUT to the shield badge, so
     // the cost is not just a slow leak: `alloc_tab_id` only skips ids still in the registry,
@@ -574,7 +587,7 @@ pub fn open_background(app: &AppHandle, url: &str, private: bool) {
 /// Open a URL in a new background tab and return its id. Used by the redirect blocker
 /// which needs the id for the auto-close timer.
 #[cfg_attr(target_os = "android", allow(dead_code))]
-pub fn open_redirect_background(app: &AppHandle, url: &str, private: bool) -> u32 {
+pub fn open_redirect_background<R: Runtime>(app: &AppHandle<R>, url: &str, private: bool) -> u32 {
     let now = now_ms(app);
     // Last gate before a background tab's url is PERSISTED. `on_new_window` already
     // refuses a page-supplied non-navigable scheme, but this function is also the
@@ -687,6 +700,54 @@ pub fn start_idle_sweep(app: &AppHandle) {
 
 #[cfg(test)]
 mod tests {
+    /// Audit 7.5 (macOS — compiled only by CI's macOS leg, never here, so this source pin is
+    /// the one local guard): both KVO observers hold a strong `Retained<WKWebView>` and used
+    /// to be `mem::forget`-ed, so every closed or discarded tab's WKWebView was leaked for
+    /// the app's lifetime. They now live in a per-tab registry that `close_webview` empties.
+    #[test]
+    fn macos_tab_observers_are_released_when_the_webview_closes() {
+        // nav_url_mac.rs has no test module of its own to cut at; dropping comment lines is
+        // enough, since a comment quoting `mem::forget` must not satisfy (or fail) the pin.
+        let mac: String = include_str!("nav_url_mac.rs")
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(
+            !mac.contains("mem::forget"),
+            "nav_url_mac must not leak its observers"
+        );
+        assert!(mac.contains("pub fn uninstall(id: u32)"));
+        let tabs = crate::test_support::rust_production_source(include_str!("tabs.rs"));
+        let close = &tabs[tabs
+            .find("fn close_webview(app: &AppHandle, id: u32)")
+            .unwrap()..];
+        let close = &close[..close.find("\n}\n").unwrap()];
+        assert!(
+            close.contains("crate::nav_url_mac::uninstall(id)"),
+            "close_webview must release the macOS observers: {close}"
+        );
+    }
+
+    /// Audit 3.5: `redirect_guard::PendingNavs` holds each tab's one-shot "the app itself asked
+    /// for this url" exemption, and closing a tab never cleared it — so an id reused by a later
+    /// tab inherited a stale exemption for the dead tab's target.
+    #[test]
+    fn closing_a_tab_forgets_its_pending_navigation() {
+        crate::test_support::with_tmp_app(|app| {
+            let pending = app.state::<crate::redirect_guard::PendingNavs>();
+            pending.expect(7, "https://expected.example/");
+            forget_closed_tab(app, 7);
+            assert!(
+                !pending
+                    .0
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .contains_key(&7),
+                "a closed tab's pending-navigation exemption must not outlive it"
+            );
+        });
+    }
 
     /// `PAGE_BLOCKED` was the one process-global table in the crate that nothing ever removed
     /// an entry from, and it is the INPUT to the shield badge. The property that matters is

@@ -126,6 +126,7 @@ export const IPC = {
   syncGetRecoveryPhrase: 'sync.getRecoveryPhrase',
   syncListDevices: 'sync.listDevices',
   syncRemoveDevice: 'sync.removeDevice',
+  syncApproveDevice: 'sync.approveDevice',
   // events (main -> chrome): engine state + a targeted post-merge change notice
   evtSyncState: 'sync.state',
   evtSyncChanged: 'sync.changed',
@@ -379,6 +380,8 @@ export interface SitePermission {
 }
 export interface PermissionPrompt {
   requestId: number;
+  /** The REQUESTING tab (audit 5.6) — not necessarily the active one. */
+  viewId: ViewId;
   origin: string;
   permission: string;
 }
@@ -701,6 +704,9 @@ export interface SyncState {
   /** The core's own view of the `syncAllowInsecure` waiver (Settings), so the Sync tab
    * reports the decision actually in force rather than echoing its own checkbox back. */
   allowInsecure?: boolean;
+  /** This device asked to join an existing account and the server is holding it until the
+   * account's owner device approves it. */
+  pendingApproval?: boolean;
 }
 
 export interface SyncDevice {
@@ -708,6 +714,10 @@ export interface SyncDevice {
   label: string;
   lastSeenMs?: number;
   isThisDevice: boolean;
+  /** The account's owner device — the only one that may approve or remove other devices. */
+  isOwner?: boolean;
+  /** A join request waiting for the owner's approval, not yet a member. */
+  pending?: boolean;
 }
 
 /** Targeted post-merge change notice — drives a per-store refetch, never a full reload. */
@@ -939,8 +949,17 @@ export interface AegisApi {
   sync: {
     getState(): Promise<SyncState>;
     /** Start fresh — returns the 24-word recovery phrase ONCE (show, then discard). */
-    enableNew(opts?: { passphrase?: string }): Promise<{ recoveryPhrase: string }>;
-    enableFromPhrase(opts: { phrase: string; passphrase?: string }): Promise<SyncState>;
+    /** `registrationCode` is the server's `AEGIS_SYNC_REGISTRATION_SECRET`, needed only when that
+     * server requires one to create a new account. Sent once; never stored. */
+    enableNew(opts?: {
+      passphrase?: string;
+      registrationCode?: string;
+    }): Promise<{ recoveryPhrase: string }>;
+    enableFromPhrase(opts: {
+      phrase: string;
+      passphrase?: string;
+      registrationCode?: string;
+    }): Promise<SyncState>;
     unlock(opts: { passphrase: string }): Promise<SyncState>;
     disable(opts?: { forget?: boolean }): Promise<SyncState>;
     syncNow(): Promise<SyncState>;
@@ -949,6 +968,8 @@ export interface AegisApi {
     getRecoveryPhrase(opts: { confirm: boolean }): Promise<{ recoveryPhrase: string }>;
     listDevices(): Promise<SyncDevice[]>;
     removeDevice(deviceId: string): Promise<SyncDevice[]>;
+    /** Owner only: admit a device waiting for approval. Returns the refreshed list. */
+    approveDevice(deviceId: string): Promise<SyncDevice[]>;
     onState(cb: (s: SyncState) => void): () => void;
     onChanged(cb: (c: SyncChanged) => void): () => void;
     onVaultQuarantined(cb: (q: SyncVaultQuarantined) => void): () => void;

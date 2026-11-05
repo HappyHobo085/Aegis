@@ -165,6 +165,32 @@ pub fn observe(node: &str, now_ms: i64, remote: &Hlc) -> Hlc {
     }
 }
 
+/// Whether a REMOTE record's stamp may take part in last-writer-wins at all.
+///
+/// HLC-LWW compares stamps, so a record stamped far ahead of this device's clock — a peer with a
+/// broken clock, or a hostile one — beats every later local edit until real time catches up:
+/// "wins forever" in practice. `observe` already clamps what such a stamp does to the CLOCK; this
+/// is the matching rule for the RECORD, and every merge (`sync_stores::merge_records`,
+/// `settings::merge_projection`, `customfilters::merge_remote`, the vault merge) consults it.
+/// A refused record is not lost: it is offered again on every pull and merges once real time is
+/// within the window — the same `MAX_REMOTE_SKEW_MS` the receive path already trusts.
+pub fn within_remote_skew(wall_ms: i64, now_ms: i64) -> bool {
+    let local = clock().lock().unwrap_or_else(|e| e.into_inner()).0;
+    within_remote_skew_from(wall_ms, now_ms, local)
+}
+
+/// The pure rule behind [`within_remote_skew`]. The window is measured from THIS DEVICE'S
+/// clock, not only from real time: `observe` legitimately pushes the clock up to
+/// `now + MAX_REMOTE_SKEW_MS`, so local stamps can already sit at that edge, and a peer's edit
+/// made just after observing one would otherwise be deferred for up to a minute. The local
+/// clock's contribution is itself capped at `now + MAX_REMOTE_SKEW_MS` — so a clock poisoned by
+/// a pre-fix build cannot widen the window, and no peer can ratchet it: the bound never exceeds
+/// `now + 2 * MAX_REMOTE_SKEW_MS`.
+pub(crate) fn within_remote_skew_from(wall_ms: i64, now_ms: i64, local_wall_ms: i64) -> bool {
+    let base = now_ms.max(local_wall_ms.min(now_ms.saturating_add(MAX_REMOTE_SKEW_MS)));
+    wall_ms <= base.saturating_add(MAX_REMOTE_SKEW_MS)
+}
+
 /// Whether the server's `ord` stamp may be adopted as a record's HLC. Pure, so the trust rule is
 /// unit-testable without a wire record.
 ///
@@ -249,6 +275,25 @@ pub fn seed_clock(max: (i64, u32)) {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn the_remote_skew_window_follows_the_local_clock_but_cannot_be_ratcheted() {
+        let now = 1_000_000_000i64;
+        let w = MAX_REMOTE_SKEW_MS;
+        // Real time alone.
+        assert!(within_remote_skew_from(now + w, now, 0));
+        assert!(!within_remote_skew_from(now + w + 1, now, 0));
+        // A clock legitimately pushed to the edge: a peer edit just after it is accepted.
+        assert!(within_remote_skew_from(now + w + 10, now, now + w));
+        // A poisoned clock cannot widen the window past now + 2 * skew.
+        assert!(within_remote_skew_from(now + 2 * w, now, i64::MAX));
+        assert!(!within_remote_skew_from(now + 2 * w + 1, now, i64::MAX));
+        assert!(!within_remote_skew_from(
+            now + 365 * 24 * 3_600_000,
+            now,
+            i64::MAX
+        ));
+    }
     use super::*;
 
     /// A hostile/broken peer stamping `i64::MAX` must NOT pin the clock. This is the

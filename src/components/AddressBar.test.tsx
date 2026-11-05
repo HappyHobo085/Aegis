@@ -439,10 +439,17 @@ describe('AddressBar — the omnibox on the popover surface', () => {
     const channels = invokeSpy.mock.calls
       .map(([, arg]) => (arg as { channel?: string }).channel)
       .filter((c): c is string => typeof c === 'string');
+    // The omnibox's OWN history query (`useOmnibox`, debounced 90 ms) is a data READ, not
+    // geometry, and whether it lands inside this window is pure timing: under a loaded full-suite
+    // run the debounce elapses first and the test used to flake on it. It is excluded BY NAME so
+    // every other channel — `view.setContentInset` above all — still fails the test.
+    const OMNIBOX_READS = new Set(['history.list', 'history.search']);
+    const layout = channels.filter((c) => !OMNIBOX_READS.has(c));
     expect(
-      new Set(channels),
+      new Set(layout),
       `channels used while the dropdown was open: ${channels.join(', ')}`,
     ).toEqual(new Set(['popover.set']));
+    expect(channels).not.toContain('view.setContentInset');
   });
 
   it('closes the surface when the dropdown closes', async () => {

@@ -71,6 +71,23 @@ fn ready_marker_cell() -> &'static Mutex<Option<PathBuf>> {
     READY_MARKER.get_or_init(|| Mutex::new(None))
 }
 
+/// Decide whether the compiled filters for `marker`'s source hash can be LOADED (`true`), and
+/// when they cannot, EMPTY the store so the compile starts clean.
+///
+/// The blobs are stored under FIXED ids (`aegis-{i}`) while the ready-marker is per source hash,
+/// so compiling hash B overwrote A's blobs and left A's marker behind: switching back to A (say,
+/// an allowlist entry removed again) found A's marker and loaded B's rules — wrong rules, with
+/// nothing on screen to say so (audit 4.2). Wiping on every compile removes every old marker
+/// with the blobs it described. The store only ever holds this module's compiled filters.
+pub fn prepare_store(store_dir: &std::path::Path, marker: &std::path::Path) -> bool {
+    if marker.exists() {
+        return true;
+    }
+    let _ = std::fs::remove_dir_all(store_dir);
+    let _ = std::fs::create_dir_all(store_dir);
+    false
+}
+
 /// Arm the deferred ready-marker: once `expected` chunk compiles have completed,
 /// `marker` is written so the next launch can safely load the now-complete filters.
 pub fn arm_ready_marker(expected: usize, marker: PathBuf) {
@@ -168,6 +185,11 @@ fn install_on<R: Runtime>(
             eprintln!("[aegis-cf] no user content manager");
             return;
         };
+        // Drop whatever filters this webview already has. A previous, LONGER compile left
+        // `aegis-{N..}` installed on every open tab, and those stale rules would keep applying
+        // alongside the new set (audit 4.2). Clearing first also makes the outcome independent
+        // of whether WebKit replaces a same-id filter on add.
+        ucm.remove_all_filters();
         let _ = std::fs::create_dir_all(&store_dir);
         let Ok(dir_c) = CString::new(store_dir.to_string_lossy().as_bytes()) else {
             return;
@@ -299,6 +321,76 @@ unsafe extern "C" fn load_done(
 #[cfg(test)]
 mod tests {
     use super::is_content_label;
+    use super::prepare_store;
+    use std::path::PathBuf;
+
+    fn tmpdir(tag: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("aegis-cf-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    /// Audit 4.2: the store holds blobs under FIXED ids (`aegis-{i}`) but the ready-marker is
+    /// per SOURCE HASH. Compiling hash B overwrote the blobs while hash A's marker survived, so
+    /// toggling back to A (an allowlist entry removed again) found A's marker and LOADED B's
+    /// rules. Compiling a new hash must therefore start from an empty store.
+    #[test]
+    fn compiling_a_new_source_wipes_the_previous_compile_and_its_marker() {
+        let dir = tmpdir("wipe");
+        std::fs::write(dir.join("vA.ready"), b"").unwrap();
+        std::fs::write(dir.join("ContentRuleList-aegis-0"), b"old").unwrap();
+        let cached = prepare_store(&dir, &dir.join("vB.ready"));
+        assert!(!cached, "a new hash must compile");
+        assert!(
+            !dir.join("vA.ready").exists(),
+            "the stale marker must not survive"
+        );
+        assert!(!dir.join("ContentRuleList-aegis-0").exists());
+        assert!(dir.exists(), "the store dir itself is recreated");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn an_already_compiled_source_is_loaded_untouched() {
+        let dir = tmpdir("keep");
+        std::fs::write(dir.join("vA.ready"), b"").unwrap();
+        std::fs::write(dir.join("ContentRuleList-aegis-0"), b"blob").unwrap();
+        assert!(prepare_store(&dir, &dir.join("vA.ready")));
+        assert!(dir.join("ContentRuleList-aegis-0").exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The other two halves are GTK calls no unit test can drive, so they are pinned by
+    /// production source: stale higher-index filters from a previous, longer compile are
+    /// removed before the new set is installed, and installs are serialised.
+    #[test]
+    fn installs_clear_old_filters_first_and_are_serialised() {
+        let src = crate::test_support::rust_production_source(include_str!("adblock_webkit.rs"));
+        let start = src.find("fn install_on<").expect("install_on");
+        let body = &src[start..start + src[start..].find("\n}\n").unwrap()];
+        let clear = body
+            .find("remove_all_filters()")
+            .expect("install_on must clear first");
+        let add = body.find("install_filter(").expect("install_filter call");
+        assert!(
+            clear < add,
+            "filters must be cleared BEFORE the new set is added"
+        );
+        let lib = crate::test_support::rust_production_source(include_str!("lib.rs"));
+        let start = lib
+            .find("pub fn install_adblock<")
+            .expect("install_adblock");
+        let body = &lib[start..start + lib[start..].find("\n}\n").unwrap()];
+        assert!(
+            body.contains("INSTALL_LOCK"),
+            "concurrent installs must be serialised"
+        );
+        assert!(
+            body.contains("prepare_store("),
+            "the store must be prepared per hash"
+        );
+    }
 
     #[test]
     fn content_labels_are_matched_but_chrome_is_not() {

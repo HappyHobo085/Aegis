@@ -125,7 +125,13 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &Value) -> bool {
         return false;
     };
     let node = crate::sync_identity::node_id(app);
-    crate::sync_envelope::observe(&node, crate::jsonstore::now_ms(), &rhlc);
+    let now = crate::jsonstore::now_ms();
+    crate::sync_envelope::observe(&node, now, &rhlc);
+    // A far-future stamp would out-rank every later local edit (audit 2.1).
+    if !crate::sync_envelope::within_remote_skew(rhlc.wall_ms, now) {
+        eprintln!("[aegis] deferring a peer custom-filter record: its stamp is too far ahead");
+        return false;
+    }
     let local = sync_record(app);
     let wins = crate::sync_envelope::from_value(&local)
         .map(|lh| rhlc > lh)
@@ -252,6 +258,16 @@ mod tests {
             "hlc": json!({ "wall_ms": wall_ms, "counter": 0u32, "node": "peer" }),
             "deleted": false,
         })
+    }
+
+    /// Audit 2.1 for the custom-filter record: a far-future peer stamp must not win.
+    #[test]
+    fn merge_remote_refuses_a_far_future_peer_record() {
+        crate::test_support::with_tmp_app(|app| {
+            let far = crate::jsonstore::now_ms() + 365 * 24 * 60 * 60 * 1_000;
+            assert!(!merge_remote(app, &remote(far, "||poison.test^\n")));
+            assert!(!load(app).contains("poison.test"));
+        });
     }
 
     fn remote_tombstone(wall_ms: i64) -> Value {

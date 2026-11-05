@@ -36,8 +36,10 @@ export function useAdblock(
     // listener only when the `listen` IPC is processed, so a block counted while the
     // `adblock.getState` round-trip was still queued was lost — the shield then reported a
     // stale page count for the rest of the view's life.
+    let sawCount = false;
     const unsubscribe = aegis.adblock.onBlockedCount((c: BlockedCount) => {
       if (c.viewId !== viewId) return;
+      sawCount = true;
       setPage(c.page);
       // Mirror the monotonic session total so the popover's "this session"
       // figure stays live without an extra getState round-trip.
@@ -51,6 +53,15 @@ export function useAdblock(
     // keys the cache per view (same as `nav.getState`).
     void aegis.adblock.getState(viewId).then((s) => {
       if (!active) return;
+      // Audit 5.3: a blockedCount that landed first is NEWER than the seed's counts (both are
+      // monotonic per page/session), so keep its numbers and take only the rest of the seed.
+      if (sawCount) {
+        setState((prev) => ({
+          ...s,
+          sessionBlocked: Math.max(s.sessionBlocked, prev.sessionBlocked),
+        }));
+        return;
+      }
       setState(s);
       // Recover the active page's count on mount / tab-switch (live blockedCount events
       // emitted before this subscription — e.g. the restored boot page — were missed).

@@ -859,6 +859,27 @@ mod tests {
     /// The happy path must still work: a record sealed under the SAME key by a genuine paired
     /// device merges, and an older one does not clobber a newer local edit.
     #[test]
+    fn a_vault_record_stamped_far_in_the_future_is_refused() {
+        // Audit 2.1 for the vault: LWW on `updatedAt` let a peer stamp a year ahead win every
+        // later local edit. The record is authentic (sealed under the vault key) — it is the
+        // STAMP that is refused, so it is not reported as quarantined (that alert means "failed
+        // its integrity check", which would be a false security claim).
+        with_tmp_app(|app| {
+            let vk = seeded_unlocked(app, &[]);
+            let far = crate::jsonstore::now_ms() + 365 * 24 * 60 * 60 * 1_000;
+            let out =
+                vault::merge_remote(app, &[vault::seal_record(&vk, &cred("far", far)).unwrap()])
+                    .expect("merge runs");
+            assert!(out.changed.is_empty(), "a far-future stamp must not land");
+            assert!(out.quarantined.is_empty());
+            let listed = vault::dispatch(app, "vault.list", &json!({}))
+                .expect("list")
+                .expect("list");
+            assert!(listed.as_array().expect("array").is_empty());
+        });
+    }
+
+    #[test]
     fn authentic_record_merges_and_older_timestamp_loses() {
         with_tmp_app(|app| {
             let vk = seeded_unlocked(app, &[]);
@@ -1400,8 +1421,11 @@ mod tests {
     fn a_delete_for_a_credential_this_device_never_held_survives_a_lock_and_unlock() {
         with_tmp_app(|app| {
             let vk = seeded_unlocked(app, &[]);
+            // Recent stamps: a marker older than the tombstone GC age is (correctly) reaped on
+            // write, and this test is about a delete that was just delivered.
+            let now = crate::jsonstore::now_ms();
             // Nothing local: this device has never held "ghost".
-            let tomb = vault::seal_tombstone(&vk, "ghost", 2_001).expect("seal tombstone");
+            let tomb = vault::seal_tombstone(&vk, "ghost", now - 1_000).expect("seal tombstone");
             let out = vault::merge_remote(app, &[tomb]).expect("merge delete");
             assert!(
                 out.changed.is_empty(),
@@ -1419,7 +1443,7 @@ mod tests {
                 .expect("unlock ok");
 
             // The peer still holds the credential and re-pushes it, as it always will.
-            let c = cred("ghost", 2_000);
+            let c = cred("ghost", now - 2_000);
             let out = vault::merge_remote(app, &[vault::seal_record(&vk, &c).unwrap()])
                 .expect("merge re-push");
             assert!(

@@ -116,10 +116,13 @@ export default tseslint.config(
       // (the `^_` prefix is already the convention) and delete those 17 sites in the
       // same commit.
       '@typescript-eslint/no-unused-vars': 'off',
+      // Exhaustive deps is ON (audit 5.7, owner decision 2026-11-04): it measured 14 sites,
+      // all fixed rather than suppressed except `useChromeHeights`' deliberately dep-less
+      // layout effect, which carries its reason inline. It is an error, not a warning — there
+      // is no warning tier here (see the header).
+      'react-hooks/exhaustive-deps': 'error',
       // These React Compiler advisory rules are too noisy for this event/subscription-heavy
-      // codebase today, so they are not checked at all (see the header: there is no
-      // warning tier here). Exhaustive Rules of Hooks stays enabled.
-      'react-hooks/exhaustive-deps': 'off',
+      // codebase today, so they are not checked at all.
       'react-hooks/set-state-in-effect': 'off',
       'react-hooks/refs': 'off',
     },

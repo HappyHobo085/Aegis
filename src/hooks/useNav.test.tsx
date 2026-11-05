@@ -133,4 +133,36 @@ describe('useNav', () => {
     expect(reloadOrStop).toHaveBeenCalledWith(PRIMARY_VIEW_ID);
     expect(home).toHaveBeenCalledWith(PRIMARY_VIEW_ID);
   });
+
+  it('a slow seed getState does not overwrite a NEWER nav.state event (audit 5.3)', async () => {
+    let pushed: ((s: NavState) => void) | undefined;
+    onState.mockImplementation((cb: (s: NavState) => void) => {
+      pushed = cb;
+      return () => {};
+    });
+    let release: (s: NavState) => void = () => {};
+    getState.mockImplementationOnce(() => new Promise<NavState>((r) => (release = r)));
+    const { result } = renderHook(() => useNav(PRIMARY_VIEW_ID));
+    await waitFor(() => expect(pushed).toBeTypeOf('function'));
+    act(() => pushed!({ ...baseState, url: 'https://newer.example/' }));
+    await act(async () => release({ ...baseState, url: 'https://older.example/' }));
+    expect(result.current.state.url).toBe('https://newer.example/');
+  });
+
+  it('an event for ANOTHER view does not suppress the seed', async () => {
+    let pushed: ((s: NavState) => void) | undefined;
+    onState.mockImplementation((cb: (s: NavState) => void) => {
+      pushed = cb;
+      return () => {};
+    });
+    let release: (s: NavState) => void = () => {};
+    getState.mockImplementationOnce(() => new Promise<NavState>((r) => (release = r)));
+    const { result } = renderHook(() => useNav(PRIMARY_VIEW_ID));
+    await waitFor(() => expect(pushed).toBeTypeOf('function'));
+    act(() =>
+      pushed!({ ...baseState, viewId: PRIMARY_VIEW_ID + 1, url: 'https://other.example/' }),
+    );
+    await act(async () => release({ ...baseState, url: 'https://seed.example/' }));
+    expect(result.current.state.url).toBe('https://seed.example/');
+  });
 });

@@ -11,7 +11,7 @@
 // (not function scope). This means patched globals ARE visible on `window` and any top-level
 // `var` would also land on `window`. The no-seed-on-window test relies on this: if the seed
 // were a top-level var the assertion would catch it.
-import { describe, it, expect, afterEach, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -899,5 +899,97 @@ describe('farble shim (strict) — shipped JS, runtime', () => {
 
     // With an empty seed the IIFE returns immediately — WebGL must be unpatched.
     expect(WGL?.prototype?.['getParameter']).toBe(origGP);
+  });
+});
+
+// ── Audit 4.7: four farble gaps, each run against the SHIPPED shim (standard AND strict). ──
+describe.each([
+  ['standard', (hex: string, origin?: string) => run(STANDARD, hex, origin)],
+  ['strict', (hex: string, origin?: string) => runStrict(hex, origin)],
+] as const)('farble shim (%s) — audit 4.7', (_label, runShim) => {
+  const crc2d = () =>
+    (window as unknown as Record<string, { prototype: AnyProto }>)['CanvasRenderingContext2D']
+      .prototype;
+
+  it('toDataURL / toBlob serialise a noised COPY and never write into the page canvas', () => {
+    runShim(SEED_A);
+    const put = vi.fn();
+    const ctx: Record<string, unknown> = {
+      getImageData: (_x: number, _y: number, w: number, h: number) => ({
+        data: new Uint8ClampedArray(w * h * 4).fill(0x80),
+        width: w,
+        height: h,
+      }),
+      putImageData: put,
+    };
+    // A REAL jsdom canvas (jsdom's own toDataURL brand-checks `this`), with getContext stubbed
+    // to the spy context the page drew into.
+    const fake = document.createElement('canvas');
+    fake.width = 4;
+    fake.height = 4;
+    (fake as unknown as AnyProto)['getContext'] = () => ctx;
+    ctx.canvas = fake;
+    const proto = HTMLCanvasElement.prototype as unknown as AnyProto;
+    (proto['toDataURL'] as (this: unknown) => unknown).call(fake);
+    (proto['toBlob'] as (this: unknown, cb: () => void) => unknown).call(fake, () => {});
+    expect(put).not.toHaveBeenCalled();
+  });
+
+  it('the Function.prototype.toString override itself reports native code', () => {
+    runShim(SEED_A);
+    const ts = Function.prototype.toString;
+    // EXACT form: the override's own SOURCE contains the text "[native code]" (it builds that
+    // string), so a `toContain` would pass on the leaked source itself.
+    expect(ts.call(ts)).toMatch(/^function toString\(\) \{\s*\[native code\]\s*\}$/);
+  });
+
+  it('opaque-origin ("null") frames do not share one noise stream; a real origin is stable', () => {
+    const proto = crc2d();
+    const orig = proto['getImageData'];
+    const sample = (origin: string) => {
+      runShim(SEED_A, origin);
+      const { ctx } = makeCanvas(8, 8);
+      const out = Array.from(
+        (proto['getImageData'] as (...a: number[]) => FakeImageData).call(ctx, 0, 0, 8, 8).data,
+      );
+      proto['getImageData'] = orig;
+      return out;
+    };
+    expect(sample('null')).not.toEqual(sample('null'));
+    expect(sample('https://example.com')).toEqual(sample('https://example.com'));
+  });
+
+  it('OffscreenCanvas getImageData and convertToBlob are covered too', () => {
+    const w = window as unknown as Record<string, unknown>;
+    class OffCtx {
+      getImageData(_x: number, _y: number, fw: number, fh: number): FakeImageData {
+        return { data: new Uint8ClampedArray(fw * fh * 4).fill(0x80), width: fw, height: fh };
+      }
+    }
+    const origConvert = vi.fn(async () => 'blob');
+    class Off {
+      width = 8;
+      height = 8;
+    }
+    (Off.prototype as unknown as AnyProto)['convertToBlob'] = origConvert;
+    w['OffscreenCanvasRenderingContext2D'] = OffCtx;
+    w['OffscreenCanvas'] = Off;
+    try {
+      runShim(SEED_A);
+      const data = (OffCtx.prototype.getImageData as (...a: number[]) => FakeImageData).call(
+        { canvas: { width: 8, height: 8 } },
+        0,
+        0,
+        8,
+        8,
+      ).data;
+      expect(Array.from(data).some((v, i) => i % 4 !== 3 && v !== 0x80)).toBe(true);
+      const conv = (Off.prototype as unknown as AnyProto)['convertToBlob'];
+      expect(conv).not.toBe(origConvert);
+      expect(Function.prototype.toString.call(conv)).toContain('[native code]');
+    } finally {
+      delete w['OffscreenCanvasRenderingContext2D'];
+      delete w['OffscreenCanvas'];
+    }
   });
 });

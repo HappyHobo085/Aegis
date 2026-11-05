@@ -627,6 +627,20 @@ const REQUESTS: ContractRow[] = [
     channel: IPC.syncRemoveDevice,
     payload: { deviceId: 'dev-1' },
   },
+  {
+    name: 'sync.approveDevice',
+    run: () => aegis.sync.approveDevice('dev-2'),
+    channel: IPC.syncApproveDevice,
+    payload: { deviceId: 'dev-2' },
+  },
+  // The server registration code rides the setup call as `registrationCode` (the Rust arm's
+  // `registration_code` reads exactly that key).
+  {
+    name: 'sync.enableNew (registration code)',
+    run: () => aegis.sync.enableNew({ registrationCode: 'c0de' }),
+    channel: IPC.syncEnableNew,
+    payload: { registrationCode: 'c0de' },
+  },
 
   // ---- find (4) ----
   {
@@ -974,16 +988,16 @@ describe('the dedup allowlist only ever collapses reads', () => {
     delete win.AegisAndroid;
   });
 
-  // NOTE on the payloads below: `dedupeCache` is MODULE-GLOBAL and outlives an individual
-  // test, so a channel the contract table above already called is still inside its window
-  // here and would be served from cache for free (0 invokes). Every read in this describe
-  // therefore uses a payload no earlier row used, which is also what makes the count
-  // assertions mean what they say.
+  // NOTE: dedup is IN-FLIGHT ONLY (audit 5.1) — an entry is evicted as soon as its call
+  // settles — so "collapsed" below means two identical reads issued while the first is still
+  // pending. Payloads stay unique per test anyway, so no count can depend on test order.
 
-  it('collapses two identical reads inside the window', async () => {
+  it('collapses two identical reads issued while the first is in flight', async () => {
     mockInvoke.mockResolvedValue([]);
-    await aegis.history.search('dedup-probe-1');
-    await aegis.history.search('dedup-probe-1');
+    await Promise.all([
+      aegis.history.search('dedup-probe-1'),
+      aegis.history.search('dedup-probe-1'),
+    ]);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
   });
 
@@ -999,17 +1013,27 @@ describe('the dedup allowlist only ever collapses reads', () => {
     expect(mockInvoke).toHaveBeenCalledTimes(2);
   });
 
-  it('re-issues a read once its window has passed', async () => {
+  it('re-issues a read once the first has SETTLED, even inside its window', async () => {
+    // Audit 5.1: a settled result is never replayed — a read after a mutation must see it.
+    mockInvoke.mockResolvedValue(true);
+    await aegis.saved.has('https://dedup.test/probe-2');
+    await aegis.saved.has('https://dedup.test/probe-2');
+    expect(mockInvoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('re-issues a read whose in-flight twin is older than the window', async () => {
     vi.useFakeTimers();
     try {
+      let release: (v: boolean) => void = () => {};
+      mockInvoke.mockImplementationOnce(() => new Promise<boolean>((r) => (release = r)));
       mockInvoke.mockResolvedValue(true);
-      await aegis.saved.has('https://dedup.test/probe-2');
-      await aegis.saved.has('https://dedup.test/probe-2');
-      expect(mockInvoke).toHaveBeenCalledTimes(1);
-      // 200ms window for `saved.has`; step past it.
+      const slow = aegis.saved.has('https://dedup.test/probe-3');
+      // 200ms window for `saved.has`; a call stuck longer than that is not shared.
       vi.advanceTimersByTime(201);
-      await aegis.saved.has('https://dedup.test/probe-2');
+      await aegis.saved.has('https://dedup.test/probe-3');
       expect(mockInvoke).toHaveBeenCalledTimes(2);
+      release(true);
+      await slow;
     } finally {
       vi.useRealTimers();
     }
@@ -1396,7 +1420,7 @@ describe('the Android bridge path', () => {
     // Kotlin raises the prompt with `window.__aegisPermissionPrompt` (the same push the
     // find/zoom/nav counters use); every subscriber must see it, or only the first
     // component mounted would ever learn there is a prompt.
-    const prompt = { requestId: 3, origin: 'https://a.test', permission: 'camera' };
+    const prompt = { requestId: 3, viewId: 1, origin: 'https://a.test', permission: 'camera' };
     push('__aegisPermissionPrompt', prompt);
     expect(first).toHaveBeenCalledWith(prompt);
     expect(second).toHaveBeenCalledWith(prompt);

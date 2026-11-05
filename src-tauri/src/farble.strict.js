@@ -125,6 +125,18 @@
     try {
       origin = String(location.origin || '');
     } catch (e) {}
+    // An OPAQUE origin ("null": sandboxed iframes, data:/blob: documents) is the SAME string in
+    // every such frame on every site, so seeding on it gave all of them ONE shared noise stream —
+    // a cross-site link. Each opaque frame gets its own random salt instead (audit 4.7).
+    if (origin === 'null') {
+      try {
+        var _salt = new Uint8Array(16);
+        crypto.getRandomValues(_salt);
+        origin = 'opaque:' + Array.prototype.join.call(_salt, ',');
+      } catch (e) {
+        origin = 'opaque:' + Math.random();
+      }
+    }
     var seedBytes = hexToBytes(SEEDHEX);
     var originBytes = [];
     for (var _oi = 0; _oi < origin.length; _oi++) {
@@ -224,6 +236,30 @@
       } catch (e) {}
       return fn;
     }
+    // The override must answer for ITSELF too: `Function.prototype.toString.toString()` used to
+    // print this shim's source — an instant detector (audit 4.7).
+    try {
+      if (Function.prototype.toString !== _origFnToString) {
+        _markNative(Function.prototype.toString, 'toString');
+      }
+    } catch (e) {}
+    // Serialise `idata` through a fresh scratch canvas instead of writing the noise back into
+    // the page's own canvas: `putImageData(…)` into `this` mutated what the page drew, and a
+    // second serialisation then noised already-noised pixels (audit 4.7). `null` when no scratch
+    // 2D context is available, so the caller falls back to the original (unnoised) path.
+    function _scratchWith(idata, w, h) {
+      try {
+        var scratch = document.createElement('canvas');
+        scratch.width = w;
+        scratch.height = h;
+        var sctx = scratch.getContext('2d');
+        if (!sctx) return null;
+        sctx.putImageData(idata, 0, 0);
+        return scratch;
+      } catch (e) {
+        return null;
+      }
+    }
 
     // ---- CANVAS: getImageData ----
     try {
@@ -249,6 +285,56 @@
       }, 'getImageData');
     } catch (e) {}
 
+    // ---- OffscreenCanvas (audit 4.7): the same canvas surface, reachable from a worker or the
+    // page without touching HTMLCanvasElement — so it gets the same getImageData noise, and
+    // convertToBlob serialises a noised scratch COPY (never the page's own canvas).
+    try {
+      if (typeof OffscreenCanvasRenderingContext2D !== 'undefined') {
+        var _origOGID = OffscreenCanvasRenderingContext2D.prototype.getImageData;
+        if (typeof _origOGID === 'function') {
+          OffscreenCanvasRenderingContext2D.prototype.getImageData = _markNative(
+            function getImageData() {
+              var img = _origOGID.apply(this, arguments);
+              try {
+                var d = img.data;
+                var noise = _getCanvasNoise(this.canvas, d.length / 4);
+                for (var i = 0; i < d.length; i += 4) {
+                  d[i] = Math.max(0, Math.min(255, d[i] + noise[i / 4]));
+                }
+              } catch (e) {}
+              return img;
+            },
+            'getImageData',
+          );
+        }
+      }
+    } catch (e) {}
+    try {
+      if (
+        typeof OffscreenCanvas !== 'undefined' &&
+        typeof OffscreenCanvas.prototype.convertToBlob === 'function'
+      ) {
+        var _origCTB = OffscreenCanvas.prototype.convertToBlob;
+        OffscreenCanvas.prototype.convertToBlob = _markNative(function convertToBlob() {
+          try {
+            var octx = this.getContext && this.getContext('2d');
+            if (octx) {
+              var ow = this.width || 1,
+                oh = this.height || 1;
+              var oimg = octx.getImageData(0, 0, ow, oh);
+              var oscratch = new OffscreenCanvas(ow, oh);
+              var osctx = oscratch.getContext('2d');
+              if (osctx) {
+                osctx.putImageData(oimg, 0, 0);
+                return _origCTB.apply(oscratch, arguments);
+              }
+            }
+          } catch (e) {}
+          return _origCTB.apply(this, arguments);
+        }, 'convertToBlob');
+      }
+    } catch (e) {}
+
     // ---- CANVAS: toDataURL / toBlob ----
     // These serialize the canvas. We perturb via a getImageData+putImageData on a temp
     // context before serializing, using the SAME deterministic noise as above.
@@ -260,7 +346,8 @@
           if (ctx) {
             // getImageData is already patched → will apply deterministic noise.
             var idata = ctx.getImageData(0, 0, this.width || 1, this.height || 1);
-            ctx.putImageData(idata, 0, 0);
+            var scratch = _scratchWith(idata, this.width || 1, this.height || 1);
+            if (scratch) return _origToDataURL.apply(scratch, arguments);
           }
         } catch (e) {}
         return _origToDataURL.apply(this, arguments);
@@ -275,7 +362,8 @@
             var ctx = this.getContext('2d');
             if (ctx) {
               var idata = ctx.getImageData(0, 0, this.width || 1, this.height || 1);
-              ctx.putImageData(idata, 0, 0);
+              var scratch = _scratchWith(idata, this.width || 1, this.height || 1);
+              if (scratch) return _origToBlob.apply(scratch, arguments);
             }
           } catch (e) {}
           return _origToBlob.apply(this, arguments);

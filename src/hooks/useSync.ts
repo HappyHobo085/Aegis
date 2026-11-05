@@ -19,8 +19,10 @@ const EMPTY: SyncState = {
 export interface UseSync {
   state: SyncState;
   /** Start fresh — returns the 24-word recovery phrase ONCE (caller shows then discards). */
-  enableNew(passphrase?: string): Promise<string>;
-  enableFromPhrase(phrase: string, passphrase?: string): Promise<void>;
+  /** `registrationCode`: the server's registration secret, when it requires one for a NEW
+   * account. Sent once, never stored. */
+  enableNew(passphrase?: string, registrationCode?: string): Promise<string>;
+  enableFromPhrase(phrase: string, passphrase?: string, registrationCode?: string): Promise<void>;
   unlock(passphrase: string): Promise<void>;
   disable(forget?: boolean): Promise<void>;
   syncNow(): Promise<void>;
@@ -39,6 +41,7 @@ export interface UseSync {
   quarantined: SyncVaultQuarantined | null;
   listDevices: typeof aegis.sync.listDevices;
   removeDevice: typeof aegis.sync.removeDevice;
+  approveDevice: typeof aegis.sync.approveDevice;
 }
 
 export function useSync(): UseSync {
@@ -93,22 +96,33 @@ export function useSync(): UseSync {
 
   // State updates arrive via onState (the engine emits sync.state on every transition);
   // the action results also return the fresh state where the backend provides it.
-  const enableNew = useCallback(async (passphrase?: string): Promise<string> => {
-    const ticket = nextTicket();
-    const r = await aegis.sync.enableNew(passphrase ? { passphrase } : undefined);
-    // `enableNew` returns ONLY the recovery phrase, so there is no state to adopt from the
-    // action result — the UI used to depend entirely on the `sync.state` event and could be
-    // stranded in the setup view with no in-app recovery if that event was missed. Re-seed
-    // from the core so the transition is guaranteed (and still guarded).
-    const next = await aegis.sync.getState();
-    if (isCurrent(ticket)) setState(next);
-    return r.recoveryPhrase;
-  }, []);
+  const enableNew = useCallback(
+    async (passphrase?: string, registrationCode?: string): Promise<string> => {
+      const ticket = nextTicket();
+      const opts = {
+        ...(passphrase ? { passphrase } : {}),
+        ...(registrationCode ? { registrationCode } : {}),
+      };
+      const r = await aegis.sync.enableNew(Object.keys(opts).length > 0 ? opts : undefined);
+      // `enableNew` returns ONLY the recovery phrase, so there is no state to adopt from the
+      // action result — the UI used to depend entirely on the `sync.state` event and could be
+      // stranded in the setup view with no in-app recovery if that event was missed. Re-seed
+      // from the core so the transition is guaranteed (and still guarded).
+      const next = await aegis.sync.getState();
+      if (isCurrent(ticket)) setState(next);
+      return r.recoveryPhrase;
+    },
+    [],
+  );
 
   const enableFromPhrase = useCallback(
-    async (phrase: string, passphrase?: string): Promise<void> => {
+    async (phrase: string, passphrase?: string, registrationCode?: string): Promise<void> => {
       const ticket = nextTicket();
-      const next = await aegis.sync.enableFromPhrase({ phrase, passphrase });
+      const next = await aegis.sync.enableFromPhrase({
+        phrase,
+        passphrase,
+        ...(registrationCode ? { registrationCode } : {}),
+      });
       if (isCurrent(ticket)) setState(next);
     },
     [],
@@ -146,6 +160,7 @@ export function useSync(): UseSync {
 
   const listDevices = useCallback(() => aegis.sync.listDevices(), []);
   const removeDevice = useCallback((id: string) => aegis.sync.removeDevice(id), []);
+  const approveDevice = useCallback((id: string) => aegis.sync.approveDevice(id), []);
 
   return {
     state,
@@ -159,5 +174,6 @@ export function useSync(): UseSync {
     getRecoveryPhrase,
     listDevices,
     removeDevice,
+    approveDevice,
   };
 }

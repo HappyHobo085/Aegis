@@ -11,7 +11,9 @@ Crate: binary `app` (`src/main.rs` → `app_lib::run()`); library `app_lib` (`sr
 ```
 src-tauri/
 ├── src/                # Rust source (modules below)
-├── capabilities/       # Tauri permission grants (default.json) — the WHOLE surface
+├── capabilities/       # Tauri permission grants: default.json (the chrome) + surface.json
+│                      #   (the popover surface: listen + popover_picked/ready, NOT `ipc`)
+│                      #   — together the WHOLE surface
 │                      #   (withGlobalTauri is off); see "What the chrome is allowed
 │                      #   to call" below
 ├── gen/android/        # generated Android project + hand-written Kotlin bridge
@@ -20,7 +22,8 @@ src-tauri/
 ├── target/             # cargo build output (gitignored)
 ├── Cargo.toml          # deps, incl. platform-gated blocks
 ├── tauri.conf.json     # app config, CSP, bundle targets, updater endpoint+pubkey
-└── build.rs            # delegates to tauri_build::build()
+└── build.rs            # tauri_build::try_build with an APP ACL manifest (ipc,
+                       #   popover_picked, popover_ready) + Android 16 KB page alignment
 ```
 
 ## IPC dispatcher pattern
@@ -89,7 +92,9 @@ dotted event name.
   the one users press. It is not tidiness: `nav::tabs_with_content()` and `TABS_LOADING`
   are suppression sets, and `alloc_tab_id` only skips ids still in the registry, so a
   hand-edited `tabs.json` or a restored backup can hand back a free id that a stale flag
-  then suppresses. It clears SIX process-global tab-keyed tables —
+  then suppresses. It clears SIX process-global tab-keyed tables (plus, since audit 3.5, the
+  tab's `redirect_guard::PendingNavs` one-shot exemption, which a reused id would otherwise
+  inherit) —
   `nav::forget_tab_content`, `nav::forget_tab_loading`,
   `redirect_guard::clear_tab_actions`, `redirect_guard::clear_chain`,
   `adblock::forget_page_blocked` and `find::forget_query_on_close` — the last being the
@@ -433,7 +438,12 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   `test_support::with_tmp_app` in `test_support::tests`) backs:
   - `places.rs` (favorites + saved) — **unit-tested via `test_support::with_tmp_app`:**
     add/list/remove/update/reorder for favorites; add/dedup/remove/tag/union for
-    saved (13 tests). **`favorites.add` dedups against LIVE rows by
+    saved. **`*.update` writes only the documented fields** (favorites `name`/`url`, saved
+    `title`/`url`/`tags` — the `shared/types.ts` partials), type-checked; any other key
+    (`id`, `deleted`, `hlc`, `savedAt`, `position`) is dropped, so a renderer call cannot
+    re-key, tombstone or forge a row's sync stamps (audit 7.7). **Every bookmark URL — add
+    and update, both stores — must pass `nav::parse_navigable`** (http/https/about:blank),
+    the same rule as navigating. **`favorites.add` dedups against LIVE rows by
     `sync_stores::normalize_url`, not by string equality** — see the sync bullet's
     near-duplicate sub-bullet for why the weaker rule was a data loss.
   - `history.rs` — **unit-tested via `test_support::with_tmp_app`:** record
@@ -466,8 +476,15 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
     `NativeDownloads.recordStart(url, destination, isPrivate)` →
     `record_download_start` pushes the `progressing` row; `recordFinish(url,
 success)` → `on_finished`. **The destination must be PASSED IN, not derived**:
-    `on_requested` (the desktop wry path) derives the filename from the URL and
-    OVERWRITES the caller's destination, whereas Android's
+    `on_requested` (the desktop wry path) picks the name — preferring the ENGINE's
+    suggestion that wry pre-fills into `destination` (WebKit `suggested_filename` /
+    WebView2 `ResultFilePath`, i.e. Content-Disposition), else the URL's last segment
+    minus `?`/`#` — then `sanitize_filename` (last component only, Windows-reserved and
+    control characters → `_`, trailing dots/spaces trimmed, `CON`/`LPT9`… prefixed,
+    `MAX_FILENAME_BYTES` cap keeping the extension) and `unique_in` (`name (n).ext`, never
+    overwrite) — audit 7.6. Android goes through the SAME two functions via
+    `NativeDownloads.safeName(dir, name)` → `android_safe_name`. And it OVERWRITES the
+    caller's destination, whereas Android's
     `DownloadListener.onDownloadStart` has no destination parameter at all, so the
     Kotlin listener chooses one under `getExternalFilesDir("downloads")` — a REAL
     path, because `open`/`showInFolder`/`trusted_download_path` need one and a
@@ -574,11 +591,13 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
     not have. `settings::apply_synced` returns `bool` and `merge_remote` reports no
     `sync.changed` event when it is false, so a transient failure (full disk, read-only
     mount) heals on the NEXT pull instead of being lost for good. `apply_imported` returns
-    `Result<Vec<String>, String>` for the same reason: it runs `rebuild_projection_from_current`
-    AFTER the write, and that wipes and re-seeds the projection FROM THE CURRENT FILE — so
-    after a failed write it would stamp the PRE-import values with fresh locally-invented
-    HLCs, and a genuinely newer peer record would lose to a stamp the device invented inside
-    its own failure path. `customFilters.set` reports the error rather than echoing text the
+    `Result<Vec<String>, String>` for the same reason: it stamps every imported key with a
+    fresh `tick` (`force_record_change`) AFTER the write — so after a failed write it would
+    give values the file does not hold fresh locally-invented HLCs, and a genuinely newer peer
+    record would lose to a stamp the device invented inside its own failure path. (It used to
+    rebuild the whole projection with `Hlc::zero`, the migration floor, so the next pull of
+    any peer record for an imported key reverted the import — audit 2.3. Keys the bundle did
+    not carry keep their stamps.) `customFilters.set` reports the error rather than echoing text the
     file does not hold, `picker::on_picked` emits no `picker.picked` for a rule it could not
     save, and `data.import` adds `settings` / `customFilters` to the `failed` list above.
   - **`customfilters` text is size-capped on BOTH write paths, not only the local one.**
@@ -616,7 +635,7 @@ true`. **No boot fetch** (deliberate): the baked-in `adblock_lists` copies alrea
       `apply_imported`, and `sync_records` — the last looks like a reader but
       `ensure_sync_projection` PERSISTS `settings-sync.json` on first use. Unlocked inner
       workers: `ensure_sync_projection`, `record_change`, `apply_synced`,
-      `rebuild_projection_from_current`, and `write` (the single low-level writer).
+      `force_record_change`, and `write` (the single low-level writer).
     - `places.rs` takes `store_lock` directly and holds it across the whole match.
       Because "one level only" is hand-maintained, `assert_holding_settings_lock` checks it: a
       `#[cfg(test)]` thread-local depth counter, a `debug_assert_eq!(0)` on re-entry into
@@ -1130,6 +1149,11 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   therefore calls `AegisAndroid.resolvePermission(requestId, decision)` instead of
   the `permissions.resolve` channel, and Kotlin answers the request it is holding
   and calls `NativePermissions.remember` for a decision that is not `allow-once`.
+  The `permissions.prompt` payload carries `viewId`, the REQUESTING tab (audit 5.6;
+  `permissions::prompt_payload` on Linux, `pushPermissionPrompt` on Android — pinned by
+  `the_prompt_payload_names_the_requesting_tab`), so the dialog's private/background notice
+  describes the requester rather than the active tab. The renderer queues prompts FIFO
+  (`usePermissions`) and keys the dialog by `requestId` so each one opens focused on Block.
   `requestId`s are minted by whichever side raises the prompt (Rust's `NEXT_ID` on
   Linux, Kotlin's own counter on Android) — they only have to be unique among
   _pending_ requests, and the unknown/stale-id case is logged and ignored on both
@@ -1194,13 +1218,17 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   - **The sync transport is HTTPS-only by default, with an explicit per-device waiver
     (`syncAllowInsecure`, default `false`).** `sync::validated_base(raw, allow_insecure)`
     accepts `https://` always and `http://` only for a genuine loopback host
-    (`localhost` / any `127.0.0.0/8` literal / `::1`; userinfo stripped, a bracketed IPv6
-    literal sliced by its own brackets, and both the `localhost.evil.com` suffix trick and
-    the `[::ffff:127.0.0.1]` v4-mapped form rejected). With the waiver on, a plaintext
+    (`localhost` / any `127.0.0.0/8` literal / `::1`, and both the `localhost.evil.com` suffix
+    trick and the `[::ffff:127.0.0.1]` v4-mapped form rejected). **The host is read from
+    `url::Url::host()`** — the same WHATWG parser reqwest connects with — never from a
+    hand-rolled split: the old split took the authority after the last `@`, but WHATWG treats
+    `\` as a path separator, so `http://evil.com\@127.0.0.1` passed as loopback and sent the
+    device token in cleartext to `evil.com` (audit 1.8). With the waiver on, a plaintext
     REMOTE host is accepted — that is the whole point, for operators whose `sync-server` has
     no TLS terminator in front. It is read at the **point of use** via
     `validated_base_for(app, ..)`, so all six request paths honor it: the periodic pass,
-    `syncNow`, `register_device`, `sync.listDevices`, `sync.removeDevice`, and the
+    `syncNow`, `register_device`, `sync.listDevices`, `sync.removeDevice`,
+    `sync.approveDevice`, and the
     `/healthz` probe behind `sync.testConnection`. What the waiver does NOT do: stop record
     bodies being sealed end-to-end (they still are; a forged body still fails AEAD). What it
     gives up: the network path learns which server you talk to and when, can drop/delay/
@@ -1209,6 +1237,20 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     live process does not). **Unit-tested** in `sync::tests`:
     `allow_insecure_waiver_opens_plaintext_remote` pins that the waiver relaxes _transport_
     only, so `ftp:` / scheme-less / empty are still rejected with it on.
+  - **Registration reports its outcome, and joining an account needs the owner (audit
+    2026-11-02, D1/D2).** `register_device` returns `Result<bool /*pending*/>` and
+    `note_registration` records it: `pendingApproval` in `state_json` while the server holds
+    this device for the owner's approval (cleared by the first accepted pass), and a REFUSED
+    registration (wrong/missing server code, the server's account cap) in `lastError` — it used
+    to be discarded, leaving only a later unexplained 403. A held or refused device (403/507,
+    `sync_after_registration`) is not nudged into a pass that could only be refused; a
+    TRANSIENT failure (offline, a 5xx) still runs the first pass, as before. `sync.enableNew` / `sync.enableFromPhrase`
+    accept an optional `registrationCode` sent ONCE as `x-aegis-registration-secret` and never
+    stored. `sync.listDevices` merges the server's `pending` list (`pending: true`) and marks
+    `isOwner`; `sync.approveDevice` posts to `/v1/devices/approve`. Removing THIS device turns
+    sync off exactly as `sync.disable` (forget: false) does (audit 1.9) — its identity is
+    revoked, so every later pass could only be refused. Tests: `CaptureServer` (a header- and
+    body-recording loopback server) in `sync::tests`.
   - **A failed CSPRNG REFUSES to enable sync; it never yields a shared identity.**
     `sync_keystore::fresh_salt` draws the per-install 16-byte salt that
     `crypto::device_signing_seed` mixes into `HKDF(root, "device-sign:" + salt)`. That salt is
@@ -1687,6 +1729,92 @@ adopted && vault unlocked` (four conditions; the first two are `vault_sync_opted
      credential pass drops the uuid's marker and a tombstone pass drops its record, so no
      state the product can reach has both. Pinned by
      `a_delete_for_a_credential_this_device_never_held_survives_a_lock_and_unlock`.
+  - **Audit 2026-11-02, Phase 2 (vault + sync data integrity).**
+    - **Argon2 parameters are versioned (D7).** `crypto::KdfParams` (`V1` = argon2 defaults,
+      19 MiB/t=2/p=1, exactly what an unrecorded blob was derived under; `V2` = 64 MiB/t=3/p=1)
+      is recorded as `kdfParams` in `vault.json` and as `kdf` in the passphrase-wrapped sync root.
+      Every NEW vault/blob is V2. `vault.unlock` runs `migrate_kdf` after a successful unlock:
+      same salt (so every updated device lands on the SAME key with no coordination), every
+      record and tombstone re-sealed under the V2 key with its stamp BUMPED 1 ms — the server's
+      LWW is strict, so an unchanged stamp would tie with the v1 ciphertext it already holds and
+      a v2 device can never open that. Undecryptable records are carried verbatim (they are opaque
+      under either key), so no vault is stuck on V1. The migrated file is written with NO
+      `.bak` and any older `vault.json.bak` is removed — both hold the V1 vault. `sync_keystore::unlock_with_passphrase` re-wraps a V1 blob as V2. Every
+      vault writer (`persist`, `seal_vault_versioned`, `reseal_with_salt`) records `g.kdf` — a
+      V2-sealed file without `kdfParams` would read back as V1 and never open again. **Accepted
+      cost:** a peer on an OLDER build, or one not yet unlocked since updating, quarantines the
+      v2 records until it migrates.
+    - **Far-future stamps are deferred, not merged (2.1).** `sync_envelope::within_remote_skew`
+      (`MAX_REMOTE_SKEW_MS`) gates `sync_stores::merge_records`, `settings::merge_projection`
+      (now takes `now_ms`), `customfilters::merge_remote` and the vault merge (on `updatedAt`).
+      A refused record is not quarantined (that alert means "failed integrity") — it is offered
+      again on every pull and merges once real time is within the window. The window is
+      measured from `max(now, this device's HLC clock capped at now + skew)`: `observe` can
+      legitimately push the clock to the edge, and a peer edit made just after one of those
+      stamps must still merge — measuring from real time alone deferred it, and the capped base
+      means no peer (and no pre-fix poisoned clock) can widen the window past `now + 2·skew`.
+    - **A local vault edit stamps `max(now, prev + 1)` (2.2)**, like `vault.remove` already did.
+    - **Vault tombstones older than `sync_stores::TOMBSTONE_GC_AGE_MS` are not written back
+      (2.8a)**; the file used to grow by one marker per delete forever.
+    - **Autofill matches child page → parent credential only (2.6)**; it used to be inverted.
+      No public-suffix list (that would be a new dependency): a dotted site is required for the
+      suffix arm, so a bare TLD cannot match, but a user-saved `co.uk` would match `*.co.uk`.
+    - **Key material keeps no `.bak` (2.4):** the passphrase vault and Android keystore blob use
+      `write_atomic_no_backup`, and `clear_root`/stale removals also delete any `.bak` an older
+      build left. `device_local_salt` errors when the salt cannot be SAVED (2.8c) — it used to
+      return a fresh one, minting a new device identity every launch. `keyring_get` returns
+      `Zeroizing` and wipes the keychain's own String (2.8e). `AegisKeystore.kt` falls back to
+      the TEE on ANY StrongBox exception, not only `StrongBoxUnavailableException` (2.8d,
+      source-pinned from `sync_keystore::tests`).
+    - **`vault_inject.js` returns early outside the top frame (2.9)** — one guard in the script
+      covers desktop (`initialization_script_for_all_frames`) and Android (`setOf("*")`);
+      `src/lib/vaultInject.test.ts` runs the real script.
+    - **Settings import stamps fresh HLCs (2.3)** on the imported keys only
+      (`settings::force_record_change`); `data.import` saves each store under
+      `jsonstore::with_store_lock` (2.5), the lock `sync_stores::merge_into` holds.
+    - **Not done (2.8b):** `vault.add/update/remove` still return the full record list with
+      passwords, because `vault.list` does too by design (Phase A UI holds the list and reveals
+      per row); changing the three mutators alone would hide nothing. Needs a list/reveal
+      redesign.
+  - **Audit 2026-11-02, Phase 4 (ad-block / content protection).**
+    - **Subscriptions are https-only (D3)**: `subs.add` refuses `http://`; `fetch_text` refuses a
+      non-https URL before connecting (covers rows from older builds, sync, import), follows
+      redirects only to https (≤ `MAX_LIST_REDIRECTS`), and reads the body through
+      `read_capped(MAX_LIST_BYTES = 16 MiB)` — over the cap is refused, never truncated.
+    - **Linux content-filter store (4.2)**: `adblock_webkit::prepare_store` wipes the store dir
+      whenever a NEW source hash compiles (ids are fixed `aegis-{i}`, so an old hash's surviving
+      marker used to load a newer compile's blobs), `install_on` calls `remove_all_filters()`
+      before installing (stale higher-index chunks stayed live on open tabs), and
+      `install_adblock` holds `INSTALL_LOCK`. Honest limit: WebKit's compile callbacks are
+      async, so a second install can start while the first's saves are still finishing.
+    - **The engine rebuild no longer stalls queries (4.3)**: `reload_lists` builds the new engine
+      on a NEW thread (the `!Send` Engine never moves) and swaps `TX` only once it is built; the
+      previous engine answers meanwhile (eventual, not FIFO, consistency — tests wait on
+      `wait_for_reload`). `BUILD_LOCK` keeps builds in request order; a build that panics keeps
+      the old engine. The subscription/custom-filter FILE reads in `adblock_refresh` still run
+      on the IPC thread (small; not changed).
+    - **`webrtcPolicy` is local-only (D4)**, added to `settings::LOCAL_ONLY_KEYS`; a projection
+      record left by an older build is purged on load. `proxy` keeps syncing (owner's choice).
+    - **WebView2 out-strings are freed (4.5)** via `webview2_com::take_pwstr` in
+      `adblock_win`/`nav_policy_win`/`nav_url_win` (pinned from `nav::tests`; clippy-checked
+      for `x86_64-pc-windows-gnu`, not linked or run here).
+    - **The public-only WebRTC shim patches the PROTOTYPE (4.6)**, so `.call(pc)` on the
+      prototype's methods/getters can no longer bypass the filters. It deliberately does NOT
+      patch `EventTarget.prototype`: that replaced a method every page script calls, and pages
+      whose anti-tamper code checks it reloaded forever (comix.to on Android, reproduced in
+      Chromium). `EventTarget.prototype.addEventListener.call(pc, 'icecandidate', …)` still sees
+      raw candidates — the accepted cost; pinned by `webrtcShim.test.ts` "leaves
+      EventTarget.prototype untouched".
+    - **Farble (4.7)**: `toDataURL`/`toBlob` serialise a noised SCRATCH copy (never
+      `putImageData` into the page canvas); OffscreenCanvas `getImageData`/`convertToBlob` are
+      covered; an opaque (`"null"`) origin gets a per-frame random salt; the
+      `Function.prototype.toString` override reports itself native. Both shim files carry it.
+    - **Picker (4.8)**: the rule host is the ACTIVE TAB's URL from the registry
+      (`picker::active_tab_host`); the payload's `host` (page-influenced) is ignored.
+    - **Smaller (4.9)**: `adblock_engine::host_of` stops at `?`/`#`; the injected fetch guard
+      reads `URL` objects' `.href`; the Android popup capture WebView uses `CHROME_UA`. NOT
+      done: a nonce on the find shim's `AEGISFIND` title — no platform consumes that title
+      (macOS reads the `evaluateJavaScript` return value), so it would protect nothing.
   - **`vault.state` carries no credential data:** only `{exists, unlocked, count, undecryptable,
 syncEnabled}` (`undecryptable` = on-disk records that failed to decrypt; preserved verbatim by
     `persist`/`Inner.orphans`, surfaced so the UI warns instead of silently dropping them).
@@ -1871,6 +1999,12 @@ that the AppHandle-backed modules share:
 bundle identifier, so `app_data_dir()` resolves directly to `$XDG_DATA_HOME`. The
 harness redirects all three env vars to a fresh per-test temp dir before the mock
 app is built, and removes the dir on exit — so test IO never touches real user data.
+The removal is a drop-guard (`TmpCleanup`), so it also runs when the test body PANICS, and it
+first waits for `install_adblock`'s detached threads (`wait_for_adblock_installs`, a
+`#[cfg(test)]` in-flight count): one finishing after the delete used to re-create
+`<tmp>/content-filters`, leaking a directory per ad-block test, every run (audit 7.8 —
+measured 43 per green run before, 0 after). `jsonstore`'s own `tmp_dir` returns a
+self-deleting `TmpDir` for the same reason.
 
 **Problem 2 — process-global serialization.** Env vars are process-global and
 `cargo test` runs tests on many threads. A process-global `static Mutex<()>` (`LOCK`)
@@ -2573,6 +2707,12 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     (WKWebView `URL` KVO, mirroring wry's own `DocumentTitleChangedObserver`). NOTE: the
     macOS objc2 code can't be compiled from Linux at all — `objc2`'s build script needs a
     macOS C toolchain — so it is **CI-verified only** (macos-latest), not locally.
+    The two KVO observers hold a strong `Retained<WKWebView>` and used to be `mem::forget`-ed,
+    leaking every closed/discarded tab's WKWebView for the app's lifetime. They now live in a
+    main-thread per-tab registry; `tabs::close_webview` calls `nav_url_mac::uninstall(id)` via
+    `run_on_main_thread` (audit 7.5; pinned by
+    `macos_tab_observers_are_released_when_the_webview_closes`). Runtime verify **PENDING** a
+    macOS session.
     **HTTPS-Only is the ONE check in that list this constraint actually bites** (investigated
     2026-09-30; left unfixed on purpose, see the note at the top of `nav::decide_navigation`).
     Its arm cancels an `http://` navigation and re-navigates the TAB's content webview to the
@@ -2662,6 +2802,13 @@ npm run android:build -- --target aarch64      # arm64-only APK (smaller; for a 
     asked for while a double-opened redirect tab is a resource the page chose to spend. The
     caller must NOT fall back to opening the URL itself: that is the unbudgeted route this
     replaced, and doing both would open two tabs per block.
+    **"Cross-origin" exempts two same-site hops** (`redirect_guard::same_site_hop`, audit
+    7.4): an `http→https` UPGRADE on the same host and port, and apex↔`www.`
+    canonicalisation (hosts equal after stripping ONE leading `www.` that leaves a dotted
+    name). Both were blocked as malvertising on a site's own pages. Deliberately narrow —
+    there is no public-suffix list in the tree — so a downgrade, any other subdomain, or a
+    port change is still cross-origin. One predicate, so all three hooked platforms
+    (Linux/Windows/Android) get it.
 15. **A blocked-redirect loop is BUDGETED — it cannot drive unbounded background tabs.**
     `on_blocked_redirect_to_new_tab` opens the destination natively on every block, with no
     rate limit and no dedup, so a page that bounces through the guard N times cost N tabs **and**

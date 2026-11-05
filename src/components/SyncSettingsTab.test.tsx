@@ -69,6 +69,7 @@ function fakeSync(over: Partial<UseSync> = {}): UseSync {
     getRecoveryPhrase: vi.fn(async () => 'my secret phrase'),
     listDevices: vi.fn(async () => []),
     removeDevice: vi.fn(async () => []),
+    approveDevice: vi.fn(async () => []),
     ...over,
   } as unknown as UseSync;
 }
@@ -457,6 +458,78 @@ describe('SyncSettingsTab', () => {
     const removeBtn = await screen.findByRole('button', { name: /^remove$/i });
     await userEvent.click(removeBtn);
     expect(removeDevice).not.toHaveBeenCalled();
+  });
+});
+
+// Audit Phase 1 (D1/D2): the server can require a registration code to create a NEW account,
+// and holds a device that joins an EXISTING account until the owner device approves it.
+describe('SyncSettingsTab - server registration code and owner approval', () => {
+  const renderTab = (sync: UseSync) =>
+    render(
+      <SyncSettingsTab sync={sync} onSetServerUrl={vi.fn()} settings={settings} update={update} />,
+    );
+
+  it('passes a typed registration code to "Start new sync"', async () => {
+    const enableNew = vi.fn(async () => 'alpha bravo charlie');
+    renderTab(fakeSync({ enableNew }));
+    await userEvent.type(screen.getByLabelText(/server registration code/i), 'c0de');
+    await userEvent.click(screen.getByRole('button', { name: /start new sync/i }));
+    expect(enableNew).toHaveBeenCalledWith(undefined, 'c0de');
+  });
+
+  it('passes a typed registration code to Restore', async () => {
+    const enableFromPhrase = vi.fn(async () => {});
+    renderTab(fakeSync({ enableFromPhrase }));
+    await userEvent.type(screen.getByLabelText(/server registration code/i), 'c0de');
+    await userEvent.type(screen.getByLabelText(/^recovery phrase$/i), 'w1 w2');
+    await userEvent.click(screen.getByRole('button', { name: /^restore$/i }));
+    expect(enableFromPhrase).toHaveBeenCalledWith('w1 w2', undefined, 'c0de');
+  });
+
+  it('says so when this device is waiting for the owner to approve it', () => {
+    renderTab(fakeSync({ state: { ...enabled, pendingApproval: true } }));
+    expect(screen.getByRole('status')).toHaveTextContent(/waiting for approval/i);
+  });
+
+  it('shows no approval notice for an ordinary enabled device', () => {
+    renderTab(fakeSync({ state: enabled }));
+    expect(screen.queryByText(/waiting for approval/i)).not.toBeInTheDocument();
+  });
+
+  const ownerView = [
+    { deviceId: 'devA', label: 'This laptop', isThisDevice: true, isOwner: true },
+    { deviceId: 'devC', label: 'New phone', isThisDevice: false, pending: true },
+  ];
+
+  it('lets the owner approve a pending device', async () => {
+    const approveDevice = vi.fn(async () => []);
+    renderTab(
+      fakeSync({ state: enabled, approveDevice, listDevices: vi.fn(async () => ownerView) }),
+    );
+    expect(await screen.findByText(/new phone/i)).toHaveTextContent(/waiting for approval/i);
+    await userEvent.click(screen.getByRole('button', { name: /^approve$/i }));
+    expect(approveDevice).toHaveBeenCalledWith('devC');
+  });
+
+  it('lets the owner reject a pending device, after confirming', async () => {
+    const removeDevice = vi.fn(async () => []);
+    renderTab(
+      fakeSync({ state: enabled, removeDevice, listDevices: vi.fn(async () => ownerView) }),
+    );
+    await userEvent.click(await screen.findByRole('button', { name: /^reject$/i }));
+    expect(confirm).toHaveBeenCalled();
+    expect(removeDevice).toHaveBeenCalledWith('devC');
+  });
+
+  it('a device that is not the owner sees the request but cannot approve it', async () => {
+    const memberView = [
+      { deviceId: 'devA', label: 'This laptop', isThisDevice: true, isOwner: false },
+      { deviceId: 'devO', label: 'Owner pc', isThisDevice: false, isOwner: true },
+      { deviceId: 'devC', label: 'New phone', isThisDevice: false, pending: true },
+    ];
+    renderTab(fakeSync({ state: enabled, listDevices: vi.fn(async () => memberView) }));
+    expect(await screen.findByText(/new phone/i)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^approve$/i })).not.toBeInTheDocument();
   });
 });
 

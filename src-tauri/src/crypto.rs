@@ -60,6 +60,71 @@ fn expand(root: &[u8; 32], label: &[u8], out: &mut [u8]) {
 /// Lowercase hex encode — the crate's single hex helper. `sync`, `sync_auth`,
 /// `sync_keystore`, and `vault` all use this (and [`unhex`]) instead of re-defining
 /// their own byte-identical copies. Table-based (no per-byte `format!` allocation).
+/// Argon2id cost parameters, recorded beside every passphrase-derived blob so they can change
+/// without stranding what was written under the old ones (audit 2026-11-02, D7).
+///
+/// `V1` is `argon2::Argon2::default()` — 19 MiB, t=2, p=1, the OWASP 2024 minimum floor — and is
+/// what a blob with NO recorded parameters was derived under. `V2` is 64 MiB, t=3, p=1. Every
+/// new blob is written V2; a V1 blob is migrated the first time its secret is supplied.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct KdfParams {
+    pub m_kib: u32,
+    pub t: u32,
+    pub p: u32,
+}
+
+impl KdfParams {
+    pub const V1: KdfParams = KdfParams {
+        m_kib: 19_456,
+        t: 2,
+        p: 1,
+    };
+    pub const V2: KdfParams = KdfParams {
+        m_kib: 65_536,
+        t: 3,
+        p: 1,
+    };
+
+    /// Read recorded parameters; ABSENT means V1 (every blob written before they were recorded).
+    /// Anything present but malformed or outside sane bounds is also treated as V1 rather than
+    /// trusted: a hostile file must not be able to ask for terabytes of memory.
+    pub fn from_json(v: Option<&serde_json::Value>) -> KdfParams {
+        let Some(v) = v else {
+            return KdfParams::V1;
+        };
+        let get = |k: &str| v.get(k).and_then(serde_json::Value::as_u64);
+        match (get("m"), get("t"), get("p")) {
+            (Some(m), Some(t), Some(p))
+                if (8..=1_048_576).contains(&m)
+                    && (1..=16).contains(&t)
+                    && (1..=16).contains(&p) =>
+            {
+                KdfParams {
+                    m_kib: m as u32,
+                    t: t as u32,
+                    p: p as u32,
+                }
+            }
+            _ => KdfParams::V1,
+        }
+    }
+
+    pub fn to_json(self) -> serde_json::Value {
+        serde_json::json!({ "alg": "argon2id", "m": self.m_kib, "t": self.t, "p": self.p })
+    }
+
+    /// Argon2id(secret, salt) under these parameters → 32 bytes.
+    pub fn derive(self, secret: &[u8], salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
+        let params =
+            argon2::Params::new(self.m_kib, self.t, self.p, Some(32)).map_err(|e| e.to_string())?;
+        let mut out = Zeroizing::new([0u8; 32]);
+        argon2::Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params)
+            .hash_password_into(secret, salt, &mut out[..])
+            .map_err(|e| e.to_string())?;
+        Ok(out)
+    }
+}
+
 pub fn hex(b: &[u8]) -> String {
     const LUT: &[u8; 16] = b"0123456789abcdef";
     let mut s = String::with_capacity(b.len() * 2);

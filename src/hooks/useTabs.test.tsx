@@ -73,4 +73,29 @@ describe('useTabs', () => {
     });
     expect(result.current.tabs[0].live).toBe(false);
   });
+
+  it('a slow seed list does not overwrite a NEWER tabs.state event (audit 5.3)', async () => {
+    let release: (s: unknown) => void = () => {};
+    vi.mocked(aegis.tabs.list).mockImplementationOnce(
+      () => new Promise((r) => (release = r as (s: unknown) => void)) as never,
+    );
+    const { result } = renderHook(() => useTabs());
+    await waitFor(() => expect(aegis.tabs.list).toHaveBeenCalled());
+    const fresh = {
+      tabs: [
+        { id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+        { id: 9, pinned: false, live: true, title: '', url: 'about:blank', private: false },
+      ],
+      activeId: 9,
+    };
+    act(() => (aegis.tabs as unknown as { __emit: (s: unknown) => void }).__emit(fresh));
+    await act(async () => {
+      release({
+        tabs: [{ id: 1, pinned: false, live: true, title: '', url: 'about:blank', private: false }],
+        activeId: 1,
+      });
+    });
+    expect(result.current.activeId).toBe(9);
+    expect(result.current.tabs).toHaveLength(2);
+  });
 });

@@ -381,17 +381,39 @@ describe('VaultSettingsTab — unlocked', () => {
       expect(writeText).toHaveBeenLastCalledWith('');
     });
 
-    it('is cancelled on unmount, so closing Settings cannot blank later text', async () => {
+    it('STILL clears 60s after a copy when Settings closes first (audit 5.4)', async () => {
+      // The UI promises "clipboard clears in 60s". Cancelling the timer on unmount (the old
+      // F6 behaviour) left the password on the clipboard indefinitely whenever the user closed
+      // Settings within that minute — the common case. The timer is module-level now.
       const { unmount } = await renderTwoRecords();
       const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
       writeText.mockClear();
       fireEvent.click(screen.getAllByRole('button', { name: /copy password for/i })[0]);
+      await vi.waitFor(() => expect(writeText).toHaveBeenLastCalledWith('secret-a'));
 
       unmount();
-      await advance(120_000);
-      // The user copied something unrelated after closing Settings; the stray timer must
-      // not have wiped it.
+      await advance(59_999);
       expect(writeText).not.toHaveBeenCalledWith('');
+      await advance(1);
+      expect(writeText).toHaveBeenLastCalledWith('');
+    });
+
+    it('a copy in a REMOUNTED tab still resets the one shared clock', async () => {
+      const first = await renderTwoRecords();
+      const writeText = navigator.clipboard.writeText as ReturnType<typeof vi.fn>;
+      writeText.mockClear();
+      fireEvent.click(screen.getAllByRole('button', { name: /copy password for/i })[0]);
+      await advance(30_000);
+      first.unmount();
+      vi.useRealTimers();
+      await renderTwoRecords();
+      fireEvent.click(screen.getAllByRole('button', { name: /copy password for/i })[1]);
+      await vi.waitFor(() => expect(writeText).toHaveBeenLastCalledWith('secret-b'));
+      // The first copy's timer would fire 30s from now; it must not wipe secret-b early.
+      await advance(30_000);
+      expect(writeText).not.toHaveBeenCalledWith('');
+      await advance(30_000);
+      expect(writeText).toHaveBeenLastCalledWith('');
     });
   });
 

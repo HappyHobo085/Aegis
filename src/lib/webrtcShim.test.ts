@@ -180,6 +180,49 @@ describe('webrtc shim (public-only) — shipped JS, runtime', () => {
   });
 });
 
+// Audit 4.6: every filter used to be an OWN property of the instance, while the prototype
+// kept the originals (`Patched.prototype === OrigPC.prototype`). A page could therefore read
+// the private address straight off the prototype with `.call(pc)` — no shim involved.
+describe('webrtc shim (public-only) — no prototype bypass', () => {
+  it('the prototype methods and getters filter too', async () => {
+    const PC = install(PUBLIC_ONLY_JS) as any;
+    const pc = new PC();
+    const offer = await PC.prototype.createOffer.call(pc);
+    expect(offer.sdp).not.toContain('192.168.1.5');
+    const ld = Object.getOwnPropertyDescriptor(PC.prototype, 'localDescription')!.get!.call(pc);
+    expect(ld.sdp).not.toContain('10.0.0.4');
+    const got: string[] = [];
+    PC.prototype.addEventListener.call(pc, 'icecandidate', (ev: any) =>
+      got.push(ev.candidate.candidate),
+    );
+    pc._emitIce(PRIVATE_HOST);
+    pc._emitIce(RELAY);
+    expect(got).toEqual([RELAY]);
+    const stats = await PC.prototype.getStats.call(pc);
+    expect(stats.get('host').address).toBeNull();
+  });
+
+  // The shim must NOT touch EventTarget.prototype. Patching it (to also filter
+  // `EventTarget.prototype.addEventListener.call(pc, 'icecandidate', …)`) replaced a method every
+  // script on every page calls, and anti-tamper code that checks it for `[native code]` reloaded
+  // the page forever: comix.to looped ~5 loads/s on Android and in Chromium. That one bypass is
+  // the accepted cost; the prototype filters above stay.
+  it('leaves EventTarget.prototype untouched', () => {
+    const add = EventTarget.prototype.addEventListener;
+    const remove = EventTarget.prototype.removeEventListener;
+    class EtPC extends EventTarget {}
+    const w = window as unknown as Record<string, unknown>;
+    w.RTCPeerConnection = EtPC;
+    new Function(PUBLIC_ONLY_JS)();
+    const same =
+      EventTarget.prototype.addEventListener === add &&
+      EventTarget.prototype.removeEventListener === remove;
+    EventTarget.prototype.addEventListener = add;
+    EventTarget.prototype.removeEventListener = remove;
+    expect(same).toBe(true);
+  });
+});
+
 describe('webrtc shim (disable) — shipped JS, runtime', () => {
   it('makes RTCPeerConnection construction throw', () => {
     const PC = install(DISABLE_JS);

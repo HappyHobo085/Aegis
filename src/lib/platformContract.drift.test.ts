@@ -10,7 +10,9 @@
 // red and NAME the file/selector at fault.
 
 import { describe, expect, it } from 'vitest';
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..', '..');
@@ -338,6 +340,48 @@ describe('the two React roots must share one stylesheet', () => {
     }
   });
 
+  it('the mobile shield popover opens DOWNWARD, because the shield is in the TOP bar', () => {
+    // 231d36c (06-18) made it open upward when the shield sat in the bottom bar; 17d4d51 (07-28)
+    // moved the shield into `MobileTopBar` and left the rule behind, so on Android the popover
+    // opened above the top bar — off the top of the screen, only its last row visible.
+    const app = readFileSync(join(ROOT, 'src', 'components', 'mobile', 'MobileApp.tsx'), 'utf8');
+    expect(app).toMatch(/<MobileTopBar[\s\S]*?inlineShield=\{shield\}/);
+    const css = readFileSync(INDEX_CSS, 'utf8');
+    const rule = css.match(/\.aegis-mobile \.adblock-shield__popover\s*\{([^}]*)\}/);
+    expect(rule, 'the mobile shield popover rule').not.toBeNull();
+    const body = rule?.[1] ?? '';
+    // Pinned across the screen just below the top bar: anchored to the shield (`right: 0`), it
+    // was wider than the space to the shield's left and ran off the left edge.
+    expect(body).toMatch(/position\s*:\s*fixed/);
+    expect(body).toMatch(/top\s*:\s*calc\(48px \+ var\(--aegis-inset-top/);
+    expect(body).toMatch(/left\s*:\s*8px/);
+    expect(body).toMatch(/right\s*:\s*8px/);
+    expect(body).toMatch(/bottom\s*:\s*auto/);
+    // Opaque: the desktop glass (10% white) relies on the surface webview behind it; inside the
+    // mobile top bar its blur cannot sample the page, so the favourites showed straight through.
+    expect(body).toMatch(/background\s*:\s*var\(--bg-elevated\)/);
+    // Taller than the space above the bottom bar on a small screen, so it scrolls.
+    expect(body).toMatch(/max-height\s*:/);
+    expect(body).toMatch(/overflow-y\s*:\s*auto/);
+  });
+
+  it("the shield panel does not inherit the address bar's accent text or its 44px input height", () => {
+    // The panel renders INSIDE `.address-bar__inline-right` (accent-coloured, for the shield
+    // icon) and inside `.address-bar`, whose mobile rule sized EVERY input 44px for the URL
+    // field. So the panel's unstyled text came out in the user's accent (pure blue on a dark
+    // panel for #0000ff) and its checkboxes were 44px tall.
+    const css = readFileSync(INDEX_CSS, 'utf8');
+    const popover = css.match(/\n\.adblock-shield__popover\s*\{([^}]*)\}/);
+    expect(popover?.[1] ?? '').toMatch(/(^|[;\s])color\s*:\s*var\(--fg\)/);
+    const count = css.match(/\n\.adblock-shield__count\s*\{([^}]*)\}/);
+    expect(count?.[1] ?? '').not.toMatch(/var\(--accent/);
+    const note = css.match(/\n\.adblock-shield__note\s*\{([^}]*)\}/);
+    expect(note?.[1] ?? '').toMatch(/color\s*:\s*var\(--fg-muted\)/);
+    expect(css).not.toMatch(/\.aegis-mobile \.address-bar input\s*\{/);
+    const urlInput = css.match(/\.aegis-mobile \.address-bar input\[type='text'\]\s*\{([^}]*)\}/);
+    expect(urlInput?.[1] ?? '').toMatch(/height\s*:\s*44px/);
+  });
+
   it('every class a surface panel puts on its ROOT has a surface-scoped override', () => {
     // ★ THE PIN FOR THE WORST DEFECT IN THIS FEATURE, found by review rather than by a test.
     //
@@ -502,7 +546,14 @@ describe('the sync server must start unattended, and must be able to report that
     // It has to probe the PUBLISHED address, which is the address compose binds and
     // the one clients connect to, and never a hardcoded loopback: a loopback probe is
     // green for a container with no network at all.
-    expect(unit).toMatch(/^ExecStartPost=.*\$\$\{AEGIS_SYNC_BIND:-127\.0\.0\.1\}\/8787/m);
+    // The PORT is the one compose publishes (`${AEGIS_SYNC_PORT:-8787}`), not a literal 8787:
+    // with a non-default port the probe would knock on a closed port and fail a healthy start
+    // (audit 1.10).
+    // (The bind is read into `$$h` first so an IPv6 bind's compose-required brackets can be
+    // stripped — `/dev/tcp` wants the bare address.)
+    expect(unit).toMatch(/^ExecStartPost=.*h=\$\$\{AEGIS_SYNC_BIND:-127\.0\.0\.1\}/m);
+    expect(unit).toMatch(/^ExecStartPost=.*\/dev\/tcp\/\$\$h\/\$\$\{AEGIS_SYNC_PORT:-8787\}/m);
+    expect(compose).toContain('${AEGIS_SYNC_PORT:-8787}:8787');
     // `bash` /dev/tcp, not wget or curl: `rpm -q wget` reports "not installed" on the
     // host this was written on (busybox supplies it), so a wget probe would make the
     // unit fail on any host without busybox — a failure that looks like the outage.
@@ -530,6 +581,48 @@ describe('the sync server must start unattended, and must be able to report that
     expect(wait).toMatch(/exit 1/);
     // Always-satisfiable binds must not add startup latency to the safe default.
     expect(wait).toMatch(/127\.\*.*exit 0/s);
+  });
+
+  // Audit 1.10: the wait matched only `inet <addr>/`, so an IPv6 bind (`inet6 …`, and compose
+  // needs it BRACKETED in `ports:`) never matched and every boot timed out. Driven for real:
+  // the script runs under bash with a stub `ip` first on PATH printing what `ip -o addr show`
+  // prints for a tailnet IPv6 address.
+  describe('wait-for-bind-address.sh, run for real against a stub `ip`', () => {
+    const run = (bind: string): number => {
+      const dir = mkdtempSync(join(tmpdir(), 'aegis-wait-'));
+      try {
+        writeFileSync(
+          join(dir, 'ip'),
+          '#!/bin/sh\n' +
+            "echo '1: lo    inet 127.0.0.1/8 scope host lo'\n" +
+            "echo '3: tailscale0    inet 100.103.103.103/32 scope global tailscale0'\n" +
+            "echo '3: tailscale0    inet6 fd7a:115c:a1e0::1/128 scope global'\n",
+          { mode: 0o755 },
+        );
+        const r = spawnSync('bash', [join(SYNC, 'systemd', 'wait-for-bind-address.sh')], {
+          env: {
+            PATH: `${dir}:/usr/bin:/bin`,
+            AEGIS_SYNC_BIND: bind,
+            AEGIS_SYNC_WAIT_TIMEOUT: '1',
+          },
+          encoding: 'utf8',
+        });
+        return r.status ?? -1;
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    };
+    it('finds a present IPv4 address (control)', () => {
+      expect(run('100.103.103.103')).toBe(0);
+    });
+    it('finds a present IPv6 address, bare or bracketed', () => {
+      expect(run('fd7a:115c:a1e0::1')).toBe(0);
+      expect(run('[fd7a:115c:a1e0::1]')).toBe(0);
+    });
+    it('still times out on an address the host does not have', () => {
+      expect(run('fd7a:115c:a1e0::2')).toBe(1);
+      expect(run('100.103.103.10')).toBe(1);
+    });
   });
 
   it('anti-vacuity: the scan found the real files, not empty ones', () => {

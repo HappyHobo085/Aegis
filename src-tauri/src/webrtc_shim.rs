@@ -253,9 +253,10 @@ fn android_policy() -> String {
     }
 }
 
-/// JNI bridge for Android's `NativeWebrtc.shimScript()`. Returns the WebRTC shim JS for
-/// the current policy. The per-site allowlist escape hatch is desktop-only in v1, so
-/// `host_allowlisted` is false here. Registered as a per-tab document-start script in
+/// JNI bridge for Android's `NativeWebrtc.shimScript(host)`. Returns the WebRTC shim JS for
+/// the current policy, honouring the per-site WebRTC exemption for `host` (the tab's content
+/// host) through `webrtc_exempt::android_host_exempt` — the exemption is NOT desktop-only, as
+/// this comment used to claim (audit 4.9). Registered as a per-tab document-start script in
 /// `MainActivity.createTabWebView`. Null jstring on failure (Kotlin skips registration).
 #[cfg(target_os = "android")]
 #[allow(unsafe_code)]

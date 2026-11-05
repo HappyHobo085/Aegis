@@ -8,8 +8,11 @@
 //!   - Linux: rebuild + reapply the WebKit content filters (`install_adblock`, hash-cached).
 //!   - all targets: re-mirror the on/off + allowlist policy into the engine (`set_policy`).
 //!   - all targets: rebuild the engine's `FilterSet` from the bundled lists + enabled
-//!     subscriptions + the user's custom filters (`reload_lists`), so the change blocks
-//!     everywhere (incl. the pop-under check on every desktop, and Android's interceptor).
+//!     subscriptions + the user's custom filters (`reload_lists`), so the change reaches every
+//!     tier that consults the engine: Windows' WebView2 network tier, Android's interceptor,
+//!     the pop-under check and `nav` decisions on every desktop. macOS has NO network tier — its
+//!     blocking is the injected script plus those navigation decisions — so "blocks everywhere"
+//!     overstated it there (audit 4.9).
 //!
 //! Toggle/allowlist-only changes (`adblock.rs`) don't change the LISTS, so they call
 //! `set_policy` directly and skip the (~20 MB) FilterSet reload this does.

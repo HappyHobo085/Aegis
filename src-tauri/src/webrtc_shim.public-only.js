@@ -63,106 +63,128 @@
         }).join(nl);
       } catch (e) { return sdp; }
     }
-    function wrap(pc){
-      try {
-        var realAddEL = pc.addEventListener.bind(pc);
-        var realRemoveEL = (typeof pc.removeEventListener === 'function') ? pc.removeEventListener.bind(pc) : function(){};
-        function filteredIce(fn){
-          return function(ev){
-            try { if(ev && ev.candidate && ev.candidate.candidate && !keepCand(ev.candidate.candidate)) return; } catch (e) {}
-            return fn.call(this, ev);
-          };
-        }
-        // addEventListener/removeEventListener: filter 'icecandidate', remember the wrapper
-        // so removeEventListener(fn) can find and detach the closure it actually registered.
-        pc.addEventListener = function(type, fn, opts){
-          if(type === 'icecandidate' && typeof fn === 'function'){
-            var w = filteredIce(fn);
-            try { Object.defineProperty(fn, '__aegisIceWrap', { value: w, configurable: true }); } catch (e) {}
-            return realAddEL(type, w, opts);
-          }
-          return realAddEL(type, fn, opts);
-        };
-        pc.removeEventListener = function(type, fn, opts){
-          if(type === 'icecandidate' && fn && fn.__aegisIceWrap){
-            return realRemoveEL(type, fn.__aegisIceWrap, opts);
-          }
-          return realRemoveEL(type, fn, opts);
-        };
-        // onicecandidate: EventHandler REPLACE semantics — detach the prior wrapper before
-        // attaching a new one; assigning null detaches (no accumulation, no zombie listener).
-        try {
-          Object.defineProperty(pc, 'onicecandidate', {
-            configurable: true,
-            get: function(){ return this.__aegisOnIce || null; },
-            set: function(fn){
-              if(this.__aegisOnIceWrap){ try { realRemoveEL('icecandidate', this.__aegisOnIceWrap); } catch (e) {} this.__aegisOnIceWrap = null; }
-              this.__aegisOnIce = (typeof fn === 'function') ? fn : null;
-              if(typeof fn === 'function'){ var w = filteredIce(fn); this.__aegisOnIceWrap = w; realAddEL('icecandidate', w); }
-            }
-          });
-        } catch (e) {}
-        // createOffer/createAnswer: filter the returned SDP (belt-and-suspenders).
-        ['createOffer','createAnswer'].forEach(function(m){
-          var orig = pc[m];
-          if(typeof orig !== 'function') return;
-          pc[m] = function(){
-            var r = orig.apply(this, arguments);
-            if(r && typeof r.then === 'function'){
-              return r.then(function(desc){ try { if(desc && desc.sdp) return { type: desc.type, sdp: filterSdp(desc.sdp) }; } catch (e) {} return desc; });
-            }
-            return r;
-          };
-        });
-        // localDescription getters: filter SDP on read (closes the direct-read bypass).
-        ['localDescription','currentLocalDescription','pendingLocalDescription'].forEach(function(p){
-          try {
-            var d = Object.getOwnPropertyDescriptor(OrigPC.prototype, p);
-            if(!d || !d.get) return;
-            Object.defineProperty(pc, p, { configurable: true, get: function(){
-              var v = d.get.call(this);
-              try { if(v && v.sdp) return { type: v.type, sdp: filterSdp(v.sdp) }; } catch (e) {}
-              return v;
-            }});
-          } catch (e) {}
-        });
-        // getStats: the stats report's local/remote-candidate entries carry .address/.ip,
-        // exposing the LAN IP even when the event + SDP are filtered. Return a sanitized
-        // copy (a Map, which mirrors RTCStatsReport's forEach/get/iteration) with private
-        // host/srflx addresses nulled; keep relay. Fail-open: any error → original report.
-        try {
-          var origStats = pc.getStats;
-          if(typeof origStats === 'function'){
-            pc.getStats = function(){
-              var r = origStats.apply(this, arguments);
-              if(r && typeof r.then === 'function'){
-                return r.then(function(report){
-                  try {
-                    if(!report || typeof report.forEach !== 'function') return report;
-                    var out = new Map();
-                    report.forEach(function(stat, id){
-                      var s = stat;
-                      try {
-                        if(stat && (stat.type === 'local-candidate' || stat.type === 'remote-candidate') && stat.candidateType !== 'relay'){
-                          s = Object.assign({}, stat);
-                          if(s.address && isLocalAddr(s.address)) s.address = null;
-                          if(s.ip && isLocalAddr(s.ip)) s.ip = null;
-                          if(s.relatedAddress && isLocalAddr(s.relatedAddress)) s.relatedAddress = null;
-                        }
-                      } catch (e) { s = stat; }
-                      out.set(id, s);
-                    });
-                    return out;
-                  } catch (e) { return report; }
-                });
-              }
-              return r;
-            };
-          }
-        } catch (e) {}
-      } catch (e) {}
-      return pc;
+    // Every filter is installed ONCE, on the PROTOTYPE (audit 4.6). They used to be own
+    // properties of each instance while the prototype kept the originals, so a page could read
+    // the private address straight off the prototype — `RTCPeerConnection.prototype.createOffer
+    // .call(pc)`, the prototype's `localDescription` getter, `EventTarget.prototype
+    // .addEventListener.call(pc, 'icecandidate', …)` — with no shim in the way.
+    var proto = OrigPC.prototype;
+    function filteredIce(fn){
+      return function(ev){
+        try { if(ev && ev.candidate && ev.candidate.candidate && !keepCand(ev.candidate.candidate)) return; } catch (e) {}
+        return fn.call(this, ev);
+      };
     }
+    // One wrapper per listener, remembered on the listener, so removeEventListener(fn) can
+    // find and detach the closure that was actually registered.
+    function iceWrap(fn){
+      if(!fn.__aegisIceWrap){
+        try { Object.defineProperty(fn, '__aegisIceWrap', { value: filteredIce(fn), configurable: true }); } catch (e) { return filteredIce(fn); }
+      }
+      return fn.__aegisIceWrap;
+    }
+    function isPC(o){ try { return o instanceof OrigPC; } catch (e) { return false; } }
+    // The REAL add/remove, resolved before anything is patched (usually EventTarget's).
+    var baseAdd = proto.addEventListener;
+    var baseRemove = proto.removeEventListener;
+    function addFor(add){
+      return function(type, fn, opts){
+        if(type === 'icecandidate' && typeof fn === 'function' && isPC(this)) return add.call(this, type, iceWrap(fn), opts);
+        return add.call(this, type, fn, opts);
+      };
+    }
+    function removeFor(remove){
+      return function(type, fn, opts){
+        if(type === 'icecandidate' && fn && fn.__aegisIceWrap && isPC(this)) return remove.call(this, type, fn.__aegisIceWrap, opts);
+        return remove.call(this, type, fn, opts);
+      };
+    }
+    try {
+      if(typeof baseAdd === 'function'){
+        Object.defineProperty(proto, 'addEventListener', { configurable: true, writable: true, value: addFor(baseAdd) });
+      }
+      if(typeof baseRemove === 'function'){
+        Object.defineProperty(proto, 'removeEventListener', { configurable: true, writable: true, value: removeFor(baseRemove) });
+      }
+    } catch (e) {}
+    // NOT patched: EventTarget.prototype. Doing so (to also filter
+    // `EventTarget.prototype.addEventListener.call(pc, 'icecandidate', …)`) replaced a method every
+    // script on every page calls, and pages whose anti-tamper code checks it reloaded forever.
+    // That one bypass is the accepted cost; the SDP and getStats filters still apply to it.
+    // onicecandidate: EventHandler REPLACE semantics — detach the prior wrapper before
+    // attaching a new one; assigning null detaches (no accumulation, no zombie listener).
+    try {
+      Object.defineProperty(proto, 'onicecandidate', {
+        configurable: true,
+        get: function(){ return this.__aegisOnIce || null; },
+        set: function(fn){
+          if(this.__aegisOnIceWrap){ try { baseRemove.call(this, 'icecandidate', this.__aegisOnIceWrap); } catch (e) {} this.__aegisOnIceWrap = null; }
+          this.__aegisOnIce = (typeof fn === 'function') ? fn : null;
+          if(typeof fn === 'function'){ var w = filteredIce(fn); this.__aegisOnIceWrap = w; baseAdd.call(this, 'icecandidate', w); }
+        }
+      });
+    } catch (e) {}
+    // createOffer/createAnswer: filter the returned SDP (belt-and-suspenders).
+    ['createOffer','createAnswer'].forEach(function(m){
+      try {
+        var orig = proto[m];
+        if(typeof orig !== 'function') return;
+        proto[m] = function(){
+          var r = orig.apply(this, arguments);
+          if(r && typeof r.then === 'function'){
+            return r.then(function(desc){ try { if(desc && desc.sdp) return { type: desc.type, sdp: filterSdp(desc.sdp) }; } catch (e) {} return desc; });
+          }
+          return r;
+        };
+      } catch (e) {}
+    });
+    // localDescription getters: filter SDP on read (closes the direct-read bypass).
+    ['localDescription','currentLocalDescription','pendingLocalDescription'].forEach(function(p){
+      try {
+        var d = Object.getOwnPropertyDescriptor(proto, p);
+        if(!d || !d.get) return;
+        Object.defineProperty(proto, p, { configurable: true, get: function(){
+          var v = d.get.call(this);
+          try { if(v && v.sdp) return { type: v.type, sdp: filterSdp(v.sdp) }; } catch (e) {}
+          return v;
+        }});
+      } catch (e) {}
+    });
+    // getStats: the stats report's local/remote-candidate entries carry .address/.ip,
+    // exposing the LAN IP even when the event + SDP are filtered. Return a sanitized
+    // copy (a Map, which mirrors RTCStatsReport's forEach/get/iteration) with private
+    // host/srflx addresses nulled; keep relay. Fail-open: any error → original report.
+    try {
+      var origStats = proto.getStats;
+      if(typeof origStats === 'function'){
+        proto.getStats = function(){
+          var r = origStats.apply(this, arguments);
+          if(r && typeof r.then === 'function'){
+            return r.then(function(report){
+              try {
+                if(!report || typeof report.forEach !== 'function') return report;
+                var out = new Map();
+                report.forEach(function(stat, id){
+                  var s = stat;
+                  try {
+                    if(stat && (stat.type === 'local-candidate' || stat.type === 'remote-candidate') && stat.candidateType !== 'relay'){
+                      s = Object.assign({}, stat);
+                      if(s.address && isLocalAddr(s.address)) s.address = null;
+                      if(s.ip && isLocalAddr(s.ip)) s.ip = null;
+                      if(s.relatedAddress && isLocalAddr(s.relatedAddress)) s.relatedAddress = null;
+                    }
+                  } catch (e) { s = stat; }
+                  out.set(id, s);
+                });
+                return out;
+              } catch (e) { return report; }
+            });
+          }
+          return r;
+        };
+      }
+    } catch (e) {}
+    function wrap(pc){ return pc; }
     function Patched(){ return wrap(new OrigPC(...arguments)); }
     Patched.prototype = OrigPC.prototype;
     try { Patched.prototype.constructor = Patched; } catch (e) {}

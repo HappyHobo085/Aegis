@@ -11,7 +11,10 @@ export function usePermissions(): {
   resolve(decision: PermissionDecision): Promise<void>;
 } {
   const [permissions, setPermissions] = useState<SitePermission[]>([]);
-  const [prompt, setPrompt] = useState<PermissionPrompt | null>(null);
+  // FIFO queue of pending prompts; the head is the one on screen (audit 5.2). A second prompt
+  // used to REPLACE the first, so the first request was never answered.
+  const [queue, setQueue] = useState<PermissionPrompt[]>([]);
+  const prompt = queue[0] ?? null;
 
   // Read the active prompt at call time inside resolve() without re-binding the
   // callback on every prompt change (mirrors useAdblock's urlRef pattern).
@@ -29,7 +32,8 @@ export function usePermissions(): {
     // `permissions.list` round-trip was still queued used to be dropped on the floor and
     // never re-surfaced — the user never saw the permission dialog at all.
     const unsubscribe = aegis.permissions.onPrompt((p: PermissionPrompt) => {
-      setPrompt(p);
+      // A duplicate delivery of an already-queued request is not shown twice.
+      setQueue((q) => (q.some((x) => x.requestId === p.requestId) ? q : [...q, p]));
     });
     void aegis.permissions.list().then((next) => {
       if (active) setPermissions(next);
@@ -52,10 +56,10 @@ export function usePermissions(): {
     async (decision: PermissionDecision): Promise<void> => {
       const active = promptRef.current;
       if (active === null) return;
-      // Clear optimistically so the dialog dismisses immediately; the resolve
-      // round-trip then persists the decision and refresh() pulls the freshly
-      // remembered (origin, permission) row into the list.
-      setPrompt(null);
+      // Dequeue optimistically so the dialog moves on immediately (to the next queued prompt,
+      // if any); the resolve round-trip then persists the decision and refresh() pulls the
+      // freshly remembered (origin, permission) row into the list.
+      setQueue((q) => q.filter((x) => x.requestId !== active.requestId));
       await aegis.permissions.resolve(active.requestId, decision);
       await refresh();
     },

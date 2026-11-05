@@ -697,7 +697,6 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
     let app_title = app.clone();
     let nav_id = id;
     let load_id = id;
-    let dl_id = id;
     let title_id = id;
     // `mut` is only needed on Windows (additional_browser_args below); harmless elsewhere.
     #[allow(unused_mut)]
@@ -754,14 +753,10 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
                 !u.starts_with("about:"),
             );
             if matches!(event, tauri::webview::PageLoadEvent::Finished) {
-                // PRIVATE: look up the tab's privateness — is_private returns false for
-                // unknown ids, so a normal tab always records. Private tabs skip history.
-                crate::history::record(
-                    &app_load,
-                    u,
-                    "",
-                    crate::tabs::is_private(&app_load, load_id),
-                );
+                // PRIVATE: the privateness this webview was SPAWNED with. Re-asking the registry
+                // (`tabs::is_private`) answered `false` once the tab was closed, so a late load
+                // event of a private tab was recorded as normal history (audit 3.3).
+                crate::history::record(&app_load, u, "", private);
             }
         })
         // A page that changes its OWN title after load — an SPA route change, a Gmail
@@ -784,12 +779,7 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
             match event {
                 tauri::webview::DownloadEvent::Requested { url, destination } => {
                     // PRIVATE: still save the file the user asked for, but record NO row.
-                    crate::downloads::on_requested(
-                        &app_dl,
-                        url.as_str(),
-                        destination,
-                        crate::tabs::is_private(&app_dl, dl_id),
-                    );
+                    crate::downloads::on_requested(&app_dl, url.as_str(), destination, private);
                 }
                 tauri::webview::DownloadEvent::Finished { success, url, .. } => {
                     crate::downloads::on_finished(&app_dl, success, Some(url.as_str()));
@@ -828,8 +818,9 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
                     );
                     return tauri::webview::NewWindowResponse::Deny;
                 }
-                // PRIVATE: a tab opened FROM a private tab inherits privateness.
-                let inherit_private = crate::tabs::is_private(&app_nw, opener_id);
+                // PRIVATE: a tab opened FROM a private tab inherits privateness — the spawn-time
+                // value, so a popup fired as the opener closes cannot open normal (audit 3.3).
+                let inherit_private = private;
                 let app_main = app_nw.clone();
                 let _ = app_nw.run_on_main_thread(move || {
                     crate::tabs::open_background(&app_main, &u, inherit_private);
@@ -960,13 +951,13 @@ pub fn spawn_tab(app: &AppHandle, id: u32, url: Url, private: bool) -> tauri::Re
     #[cfg(target_os = "linux")]
     {
         crate::linux_layout::mark_content_label(app, &label);
-        crate::linux_layout::connect_title_label(app, &label);
+        crate::linux_layout::connect_title_label(app, &label, private);
         // Track the main-frame URL for the address bar (incl. SPA pushState/hash that
         // on_page_load's load-changed misses; main-frame only, so no subframe flicker).
         crate::linux_layout::connect_url_tracker(app, &label);
         crate::linux_layout::connect_fullscreen_exit_label(app, &label);
         crate::linux_layout::connect_tab_keys_label(app, &label);
-        crate::permissions::install_handler_label(app, &label);
+        crate::permissions::install_handler_label(app, &label, id);
         // Ad-block: WebKit content filters live per-webview, so this new tab needs
         // its own copy (install_adblock only filtered tabs that existed at boot).
         crate::adblock_webkit::apply_to_new_tab(app, &label);
@@ -1187,6 +1178,76 @@ pub fn dispatch<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
+    /// Audit 7.7: a pull-to-refresh's hard timeout was a bare `postDelayed` that nothing ever
+    /// removed, so a SECOND refresh of the same tab inside the window had its spinner cleared
+    /// early by the FIRST refresh's stale timeout. Android-only (no Kotlin test set), so pinned.
+    #[test]
+    fn a_stale_refresh_timeout_cannot_clear_a_newer_refresh() {
+        use crate::test_support::{kotlin_fn_body, kotlin_source};
+        let src = kotlin_source("GestureContainer.kt");
+        let start = kotlin_fn_body(&src, "private fun startRefresh(");
+        assert!(
+            start.contains("removeCallbacks(refreshTimeout)")
+                && start.contains("postDelayed(refreshTimeout, REFRESH_TIMEOUT_MS)"),
+            "startRefresh must replace, not stack, its timeout: {start}"
+        );
+        let clear = kotlin_fn_body(&src, "private fun clearRefresh(");
+        assert!(clear.contains("removeCallbacks(refreshTimeout)"), "{clear}");
+    }
+
+    /// Audit 4.5: WebView2 hands back every URI/title as a `PWSTR` the CALLER owns and must free
+    /// with `CoTaskMemFree`. These three Windows modules converted them with `.to_string()` and
+    /// dropped the buffer — one leaked string per request on the WebView2 network tier, i.e. per
+    /// ad/tracker check. Every out-param must go through `webview2_com::take_pwstr`, which
+    /// copies and frees. The files only compile for Windows, so the pin reads them as text here.
+    #[test]
+    fn every_webview2_out_string_is_freed() {
+        for (name, src) in [
+            ("adblock_win.rs", include_str!("adblock_win.rs")),
+            ("nav_policy_win.rs", include_str!("nav_policy_win.rs")),
+            ("nav_url_win.rs", include_str!("nav_url_win.rs")),
+        ] {
+            let code: String = src
+                .lines()
+                .filter(|l| !l.trim_start().starts_with("//"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            let outs = code.matches("PWSTR::null()").count();
+            let freed = code.matches("take_pwstr(").count();
+            assert!(outs > 0, "{name}: the scan found no out-params (vacuous)");
+            assert_eq!(
+                outs, freed,
+                "{name}: {outs} PWSTR out-param(s) but {freed} take_pwstr call(s)"
+            );
+        }
+    }
+
+    /// Audit 3.3: the spawn-time callbacks (page load → history, download → downloads row, new
+    /// window → inherited privateness, Linux title → history title) asked
+    /// `tabs::is_private(app, id)` WHEN THEY FIRED — and that answers `false` for a tab that is
+    /// no longer in the registry. A late event from a private tab that was just closed (a
+    /// download finishing, a final page-load, a popup) was therefore recorded as NORMAL. They
+    /// now use the `private` the webview was SPAWNED with, which cannot change and cannot be
+    /// forgotten. Text pin over production source: no MockRuntime test can spawn a webview.
+    #[test]
+    fn spawn_time_callbacks_use_the_privateness_the_tab_was_spawned_with() {
+        let nav = crate::test_support::rust_production_source(include_str!("nav.rs"));
+        let start = nav
+            .find("pub fn spawn_tab(app: &AppHandle")
+            .expect("desktop spawn_tab");
+        let end = start + nav[start..].find("\n}\n").expect("end of spawn_tab");
+        let body = &nav[start..end];
+        assert!(
+            !body.contains("is_private("),
+            "spawn_tab's callbacks must not re-ask the registry:\n{body}"
+        );
+        let layout = crate::test_support::rust_production_source(include_str!("linux_layout.rs"));
+        let start = layout
+            .find("pub fn connect_title_label(")
+            .expect("connect_title_label");
+        let end = start + layout[start..].find("\n}\n").expect("end");
+        assert!(!layout[start..end].contains("is_private("));
+    }
     use super::{
         content_ua_for, dispatch, forget_tab_content, forget_tab_loading, is_navigable,
         is_page_navigable, mark_tab_has_content, note_tab_loading, parse_navigable, reload_or_stop,
@@ -2416,7 +2477,7 @@ mod tests {
 
         let body = kotlin_fn_body(&src, "private fun showRedirectBlocked(");
         assert!(
-            body.contains("NativeRedirectGuard.openBlockedRedirect(from, to)"),
+            body.contains("NativeRedirectGuard.openBlockedRedirect(id, from, to)"),
             "showRedirectBlocked must ask RUST to open the tab, not the chrome webview: \
              the renderer route is the unbudgeted one this replaced. body was:\n{body}"
         );
@@ -2430,7 +2491,7 @@ mod tests {
         // deduping on `to` alone would let a page hop one destination through a chain of
         // different pages and still be admitted every time.
         assert!(
-            src.contains("private fun showRedirectBlocked(from: String, to: String)"),
+            src.contains("private fun showRedirectBlocked(id: Int, from: String, to: String)"),
             "showRedirectBlocked must take BOTH urls: the budget's dedup key is the \
              (from, to) pair, so half a pair is not a redirect and Rust refuses it."
         );
@@ -2438,7 +2499,7 @@ mod tests {
         // target, or the pair is still incomplete.
         let frame = kotlin_main_frame_code(&src);
         assert!(
-            frame.contains("showRedirectBlocked(current, raw)"),
+            frame.contains("showRedirectBlocked(id, current, raw)"),
             "the main-frame hook must pass the page the redirect came from (`current`) as \
              well as the target (`raw`); anything else is a half pair. frame was:\n{frame}"
         );
@@ -2448,8 +2509,8 @@ mod tests {
         // from an open tab, and unable to avoid a double open.
         let guard = kotlin_source("NativeRedirectGuard.kt");
         assert!(
-            guard.contains("external fun openBlockedRedirect(from: String, to: String): Boolean"),
-            "NativeRedirectGuard must declare openBlockedRedirect with the (from, to) pair \
+            guard.contains("external fun openBlockedRedirect(tab: Int, from: String, to: String): Boolean"),
+            "NativeRedirectGuard must declare openBlockedRedirect with the opener tab and the (from, to) pair \
              and answer whether a tab was opened."
         );
     }

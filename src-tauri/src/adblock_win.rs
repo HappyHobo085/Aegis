@@ -88,7 +88,9 @@ unsafe fn page_url(core: Option<&ICoreWebView2>) -> String {
     if core.Source(&mut src).is_err() || src.is_null() {
         return String::new();
     }
-    src.to_string().unwrap_or_default()
+    // `take_pwstr` copies AND frees (`CoTaskMemFree`): the caller owns a WebView2 out-string,
+    // and `.to_string()` alone leaked one per call (audit 4.5).
+    webview2_com::take_pwstr(src)
 }
 
 /// Block a single request if the adblock engine matches it. Returns `Ok(true)` when the
@@ -108,7 +110,8 @@ unsafe fn handle(
     if uri.is_null() {
         return Ok(false);
     }
-    let url = uri.to_string().unwrap_or_default();
+    // Copies AND frees the caller-owned WebView2 string (audit 4.5).
+    let url = webview2_com::take_pwstr(uri);
     if !url.starts_with("http") {
         return Ok(false);
     }

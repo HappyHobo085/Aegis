@@ -179,7 +179,7 @@ fn classify(req: &webkit2gtk::PermissionRequest) -> String {
 /// unaffected. Recorded here rather than in `AGENTS.md` only, because the comment must
 /// be read by anyone editing THIS line.
 #[cfg(target_os = "linux")]
-pub fn install_handler_label(app: &AppHandle, label: &str) {
+pub fn install_handler_label(app: &AppHandle, label: &str, view_id: u32) {
     use webkit2gtk::{PermissionRequestExt, WebViewExt};
     let Some(content) = app.get_webview(label) else {
         return;
@@ -206,7 +206,7 @@ pub fn install_handler_label(app: &AppHandle, label: &str) {
                     crate::emit_event(
                         &app,
                         "permissions.prompt",
-                        json!({ "requestId": id, "origin": origin, "permission": permission }),
+                        prompt_payload(id, view_id, &origin, &permission),
                     );
                     eprintln!("[aegis-perm] prompt: id={id} {permission} from {origin}");
                 }
@@ -214,6 +214,14 @@ pub fn install_handler_label(app: &AppHandle, label: &str) {
             true
         });
     });
+}
+
+/// The `permissions.prompt` event body. `viewId` names the REQUESTING tab (audit 5.6), which
+/// need not be the active one — the dialog's private/background notice is about that tab.
+/// Android builds the same shape in `MainActivity.pushPermissionPrompt`.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn prompt_payload(id: u64, view_id: u32, origin: &str, permission: &str) -> Value {
+    json!({ "requestId": id, "viewId": view_id, "origin": origin, "permission": permission })
 }
 
 /// Handle `permissions.*`. list/remove/clear are cross-platform (JSON store);
@@ -367,10 +375,8 @@ pub extern "system" fn Java_com_aegis_browser_NativePermissions_normalizeOrigin(
     uri: jni::objects::JString,
 ) -> jni::sys::jstring {
     let uri: String = env.get_string(&uri).map(|s| s.into()).unwrap_or_default();
-    let out = env
-        .new_string(origin_of(&uri))
-        .unwrap_or_else(|_| jni::objects::JString::from(jni::objects::JObject::null()));
-    out.into_raw()
+    let normalized = origin_of(&uri);
+    crate::jni_string_or_empty(&mut env, &normalized)
 }
 
 /// `verdict` as a jstring. The `String` is built OUTSIDE `ffi_guard` because it borrows
@@ -411,9 +417,7 @@ pub extern "system" fn Java_com_aegis_browser_NativePermissions_decision(
             },
         }
     };
-    env.new_string(text)
-        .unwrap_or_else(|_| jni::objects::JString::from(jni::objects::JObject::null()))
-        .into_raw()
+    crate::jni_string_or_empty(&mut env, &text)
 }
 
 /// Upsert a remembered decision. The live request is answered on the Kotlin side, so this
@@ -700,6 +704,55 @@ mod tests {
             push.contains("__aegisPermissionPrompt"),
             "pushPermissionPrompt must raise window.__aegisPermissionPrompt, the same push \
              the find/zoom/nav counters use: {push}"
+        );
+    }
+
+    /// Audit 5.6: the prompt must say WHICH TAB asked. Without it the dialog described the
+    /// ACTIVE tab (e.g. "not private") while a background PRIVATE tab was the requester.
+    /// Audit 7.7: both string getters fell back to a NULL jstring when `new_string` failed,
+    /// while Kotlin declares them non-null. The call sites catch the resulting NPE, but
+    /// `normalizeOrigin`'s catch then keys the store by the RAW origin. An empty string takes
+    /// Kotlin's existing "no origin → deny without prompting" branch instead.
+    #[test]
+    fn the_jni_string_getters_never_hand_kotlin_a_null() {
+        let src = crate::test_support::rust_production_source(include_str!("permissions.rs"));
+        assert!(
+            !src.contains("JObject::null()"),
+            "a JNI string getter must not fall back to null"
+        );
+        assert_eq!(
+            src.matches("crate::jni_string_or_empty(&mut env,").count(),
+            2
+        );
+    }
+
+    #[test]
+    fn the_prompt_payload_names_the_requesting_tab() {
+        let v = prompt_payload(7, 3, "https://a.example", "camera");
+        assert_eq!(
+            v,
+            json!({ "requestId": 7, "viewId": 3, "origin": "https://a.example", "permission": "camera" })
+        );
+        // Linux: the handler is installed per tab WITH that tab's id, and emits through the
+        // one payload builder (so the field cannot be dropped on this platform alone).
+        let src = crate::test_support::rust_production_source(include_str!("permissions.rs"));
+        assert!(
+            src.contains(
+                "pub fn install_handler_label(app: &AppHandle, label: &str, view_id: u32)"
+            ),
+            "install_handler_label must take the tab id"
+        );
+        assert!(src.contains("prompt_payload(id, view_id, &origin, &permission)"));
+        let nav = crate::test_support::rust_production_source(include_str!("nav.rs"));
+        assert!(nav.contains("crate::permissions::install_handler_label(app, &label, id);"));
+        // Android: the push carries the tab too.
+        let kt = kotlin("MainActivity.kt");
+        let push = fn_body(&kt, "private fun pushPermissionPrompt(");
+        assert!(push.contains(".put(\"viewId\", tab)"), "{push}");
+        let ask = fn_body(&kt, "private fun askUser(");
+        assert!(
+            ask.contains("pushPermissionPrompt(requestId, tab, key, permission)"),
+            "{ask}"
         );
     }
 

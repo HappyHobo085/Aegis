@@ -347,15 +347,17 @@ export function AdblockShield(props: AdblockShieldProps) {
 
   // The surface reports an ACTION NAME and the chrome runs its own handlers, so a poisoned
   // payload cannot pick a level or an allowlist entry of its own choosing.
+  const { setEnabled, toggleAllowlist, onReload } = props;
+  const enabled = props.state.enabled;
   useEffect(
     () =>
       aegis.popover.onPicked((pick) => {
         if (pick.id !== 'adblock-shield') return;
-        if (pick.action === 'toggle-enabled') props.setEnabled(!props.state.enabled);
-        else if (pick.action === 'toggle-allowlist') props.toggleAllowlist();
-        else if (pick.action === 'reload') props.onReload?.();
+        if (pick.action === 'toggle-enabled') setEnabled(!enabled);
+        else if (pick.action === 'toggle-allowlist') toggleAllowlist();
+        else if (pick.action === 'reload') onReload?.();
       }),
-    [props.setEnabled, props.toggleAllowlist, props.onReload, props.state.enabled],
+    [setEnabled, toggleAllowlist, onReload, enabled],
   );
 
   return (

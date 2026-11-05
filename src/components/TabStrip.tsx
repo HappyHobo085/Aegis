@@ -89,7 +89,7 @@ export function TabStrip({
     e = Math.min(tabs.length - 1, (e < 0 ? 0 : e) + OVERSCAN);
 
     return { start: s, end: e };
-  }, [scrollLeft, isVirtualized, positions, tabs.length]);
+  }, [scrollLeft, isVirtualized, positions, tabs]);
 
   // RAF-debounced scroll handler
   const onScroll = useCallback(() => {

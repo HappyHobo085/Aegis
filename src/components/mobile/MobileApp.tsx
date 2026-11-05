@@ -48,7 +48,7 @@ import { AllowlistTab } from '../AllowlistTab';
 import { DownloadsTab } from '../DownloadsTab';
 import { SitePermissionsTab } from '../SitePermissionsTab';
 import { DataTab } from '../DataTab';
-import { PermissionPromptDialog } from '../PermissionPromptDialog';
+import { PermissionPromptDialog, promptTabProps } from '../PermissionPromptDialog';
 import { Toaster } from '../Toaster';
 import { ConfirmDialog } from '../ConfirmDialog';
 import { Onboarding } from '../Onboarding';
@@ -64,7 +64,7 @@ import { MobileFavourites } from './MobileFavourites';
 declare global {
   interface Window {
     __aegisMobileBack?: () => void;
-    __aegisOpenTab?: (url: string) => void;
+    __aegisOpenTab?: (url: string, isPrivate?: boolean) => void;
   }
 }
 
@@ -93,6 +93,9 @@ function MobileShell() {
   useTabTitleSync();
   const find = useFind(tabs.activeId);
   const zoom = useZoom(tabs.activeId);
+  // Destructured so effects can list them as deps (exhaustive-deps, audit 5.7).
+  const { open: findOpen, close: findClose } = find;
+  const { create: tabCreate } = tabs;
   const adblock = useAdblock(tabs.activeId, nav.state.url);
   const fingerprint = useFingerprint();
   const webrtcExempt = useWebrtcExempt();
@@ -177,37 +180,39 @@ function MobileShell() {
   }, [overlayOpen, tabs.activeId]);
 
   useEffect(() => {
-    setBackInterceptActive(sheet !== null || fullscreen || find.open);
+    setBackInterceptActive(sheet !== null || fullscreen || findOpen);
     window.__aegisMobileBack = () => {
       if (sheet !== null) setSheet(null);
       else if (fullscreen) setFullscreen(false);
       // The find bar is a full-window surface over the content, so BACK has to close
       // it too — otherwise intercepting BACK here would swallow the gesture without
       // dismissing anything, which is worse than not intercepting at all.
-      else if (find.open) find.close();
+      else if (findOpen) findClose();
     };
     return () => {
       delete window.__aegisMobileBack;
     };
-    // `find.open` and `find.close` are BOTH required. Without `find.open` in the deps
+    // `findOpen` and `findClose` are BOTH required. Without `findOpen` in the deps
     // the effect does not re-run when the bar opens or closes, so BACK is armed and
-    // disarmed at the wrong times; `find.close` is a useCallback on `activeViewId`, so
+    // disarmed at the wrong times; `findClose` is a useCallback on `activeViewId`, so
     // listing it does not re-run this every render.
-  }, [sheet, fullscreen, find.open, find.close]);
+  }, [sheet, fullscreen, findOpen, findClose]);
 
   // Allow native Android code to open a URL in a new tab (target=_blank / window.open).
   // Open it in the BACKGROUND so the current page keeps focus (matches desktop's
-  // on_new_window). Depend on the stable `tabs.create` callback (a useCallback in
+  // on_new_window). Depend on the stable `tabCreate` (`tabs.create`, a useCallback in
   // useTabs), not the whole `tabs` object — which is re-created every render and would
   // reinstall this each render.
   useEffect(() => {
-    window.__aegisOpenTab = (url) => {
-      void tabs.create(url, true);
+    // `isPrivate` is the OPENER tab's privateness, passed by MainActivity's popup capture: a
+    // popup from a private tab must open private (audit 3.1) — it used to always open normal.
+    window.__aegisOpenTab = (url, isPrivate) => {
+      void tabCreate(url, true, isPrivate === true);
     };
     return () => {
       delete window.__aegisOpenTab;
     };
-  }, [tabs.create]);
+  }, [tabCreate]);
 
   // On Android the Rust core can't observe the native content WebView's navigations
   // (nav.navigate goes through the bridge, not the Rust child-webview path). Relay the
@@ -568,8 +573,9 @@ function MobileShell() {
 
       {permissions.prompt && (
         <PermissionPromptDialog
+          key={permissions.prompt.requestId}
           prompt={permissions.prompt}
-          isPrivate={activeProtection.privateMode}
+          {...promptTabProps(permissions.prompt, tabs.tabs, tabs.activeId)}
           onOpenSitePermissions={() => openSettings('sitePermissions')}
           onResolve={(_requestId, decision) => void permissions.resolve(decision)}
         />

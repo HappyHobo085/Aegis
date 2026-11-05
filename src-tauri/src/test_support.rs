@@ -159,6 +159,9 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
     let _guard = lock();
     ensure_crypto_provider();
     let tmp = fresh_tmp();
+    // Declared BEFORE the app, so it drops AFTER it — on a normal return and on a panic alike
+    // (the old trailing `remove_dir_all` was skipped whenever the test body panicked).
+    let _cleanup = TmpCleanup(tmp.clone());
     // Clear process-global jsonstore caches so each test starts clean.
     // (CACHE and NEXT_ID_CACHE are statics that survive across with_tmp_app calls.)
     crate::jsonstore::clear_caches();
@@ -211,8 +214,19 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
     let out = f(app.handle());
 
     drop(app);
-    let _ = std::fs::remove_dir_all(&tmp);
     out
+}
+
+/// Deletes a `with_tmp_app` directory on drop — but only once no `install_adblock` thread is
+/// still running: those threads are detached, and one finishing after the delete re-created
+/// `<tmp>/content-filters`, leaking a directory per ad-block test, every run (audit 7.8).
+struct TmpCleanup(PathBuf);
+impl Drop for TmpCleanup {
+    fn drop(&mut self) {
+        #[cfg(target_os = "linux")]
+        crate::wait_for_adblock_installs();
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 // --- bulk-data worker gate ---------------------------------------------------------
@@ -424,6 +438,26 @@ pub fn kotlin_production_source(src: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// Audit 7.8: a test that toggles ad-blocking starts `install_adblock`'s DETACHED thread,
+    /// which used to outlive `with_tmp_app` and re-create `<tmp>/content-filters` after the
+    /// teardown deleted `<tmp>` — one leaked directory per such test, every run.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn with_tmp_app_leaves_no_directory_behind_after_an_adblock_install() {
+        use tauri::Manager;
+        let cache = with_tmp_app(|app| {
+            crate::install_adblock(app.clone());
+            app.path().app_cache_dir().unwrap()
+        });
+        // Let any straggler finish, THEN look: the leak appeared after teardown.
+        crate::wait_for_adblock_installs();
+        assert!(
+            !cache.exists(),
+            "{} was re-created after teardown",
+            cache.display()
+        );
+    }
+
     use super::*;
     use serde_json::json;
 

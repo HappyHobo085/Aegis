@@ -136,4 +136,25 @@ describe('on', () => {
     off();
     expect(unlisten).toHaveBeenCalledTimes(1);
   });
+
+  it('a REJECTED listen() is reported, not left as an unhandled rejection (audit 5.5)', async () => {
+    const unhandled = vi.fn();
+    process.on('unhandledRejection', unhandled);
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      listenMock.mockRejectedValueOnce(new Error('listen refused'));
+      const off = on('nav.state', () => {});
+      await new Promise((r) => setTimeout(r, 0));
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(err).toHaveBeenCalledWith(
+        expect.stringContaining('nav:state'),
+        expect.objectContaining({ message: 'listen refused' }),
+      );
+      // Tearing down a subscription that never registered is a harmless no-op.
+      expect(() => off()).not.toThrow();
+    } finally {
+      process.off('unhandledRejection', unhandled);
+      err.mockRestore();
+    }
+  });
 });

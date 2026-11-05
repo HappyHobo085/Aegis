@@ -23,10 +23,18 @@ export function on<T>(event: string, cb: (payload: T) => void): () => void {
   const tauriEvent = event.replace(/\./g, ':');
   let unlisten: UnlistenFn | null = null;
   let cancelled = false;
-  void listen<T>(tauriEvent, (e) => cb(e.payload)).then((u) => {
-    if (cancelled) u();
-    else unlisten = u;
-  });
+  void listen<T>(tauriEvent, (e) => cb(e.payload)).then(
+    (u) => {
+      if (cancelled) u();
+      else unlisten = u;
+    },
+    // Audit 5.5: a refused registration (e.g. a capability/ACL change) used to surface as an
+    // UNHANDLED rejection with no hint of which subscription failed. Report it by name; the
+    // returned `off()` stays a harmless no-op since no handle was ever stored.
+    (e: unknown) => {
+      console.error(`[aegis] listen('${tauriEvent}') failed:`, e);
+    },
+  );
   return () => {
     cancelled = true;
     // Null the handle after releasing it so a second `off()` (a double-invoked cleanup)

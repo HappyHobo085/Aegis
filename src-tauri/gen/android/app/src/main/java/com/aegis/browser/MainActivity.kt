@@ -560,7 +560,7 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       val scripted = !request.hasGesture()
       if (current.isNotEmpty() && redirectBlocked(current, raw, scripted, request.isForMainFrame)) {
         Log.i("AegisRedirect", "BLOCK $raw (from $current)")
-        showRedirectBlocked(current, raw)
+        showRedirectBlocked(id, current, raw)
         return true
       }
 
@@ -709,6 +709,10 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
       // The popup renders real web content while it lives here, so it gets the same
       // hardening as a tab (no file:// or content:// reads, no cleartext subresources).
       hardenContentWebView(temp.settings)
+      // The SAME user agent as a tab (audit 4.9): the capture WebView loads the popup's first
+      // request, and the WebView default UA there was a fingerprint that differed from every
+      // other request this browser makes.
+      temp.settings.userAgentString = CHROME_UA
       popupTemps.add(temp)
       // A capture WebView is a full WebView (~30-80 MB), so EVERY exit destroys it. The
       // URL capture below only covers popups that navigate; the two common shapes it
@@ -754,7 +758,10 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
             return true
           }
           chromeWebView?.evaluateJavascript(
-            "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(url)})",
+            // The opener's privateness rides along, so a popup from a private tab opens
+            // private (audit 3.1); it used to always open a normal tab.
+            "window.__aegisOpenTab && window.__aegisOpenTab(${JSONObject.quote(url)}, " +
+              "${privateTabs.contains(id)})",
             null,
           )
           temp.post { destroyPopupTemp(temp) }
@@ -1225,11 +1232,19 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
           Log.w("AegisDownload", "ignoring non-http download $url")
           return@setDownloadListener
         }
-        val name = safeDownloadName(URLUtil.guessFileName(url, disposition, mimeType), url)
         val dir = downloadDir()
         if (dir == null) {
           Log.w("AegisDownload", "no app-private external directory for $url")
           return@setDownloadListener
+        }
+        val guessed = safeDownloadName(URLUtil.guessFileName(url, disposition, mimeType), url)
+        // Same sanitise + de-dup as the desktop path (audit 7.6): a second download of the same
+        // name must not overwrite the first, and `..` / device names must never reach `File`.
+        val name = try {
+          NativeDownloads.safeName(dir.path, guessed).ifEmpty { guessed }
+        } catch (t: Throwable) {
+          Log.w("AegisDownload", "safeName failed for $guessed", t)
+          guessed
         }
         val file = File(dir, name)
         val req = DownloadManager.Request(Uri.parse(url))
@@ -1573,16 +1588,20 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     }
     val requestId = nextPermissionId++
     pendingPermissions[requestId] = PendingPermission(tab, key, permission, onDecision)
-    pushPermissionPrompt(requestId, key, permission)
+    pushPermissionPrompt(requestId, tab, key, permission)
   }
 
   /**
    * Raise the permission prompt in the CHROME webview, which is where the dialog lives:
    * the same `window.__aegisX` push the find, nav, zoom and ad-block counters use.
    */
-  private fun pushPermissionPrompt(requestId: Int, origin: String, permission: String) {
+  private fun pushPermissionPrompt(requestId: Int, tab: Int, origin: String, permission: String) {
+    // `viewId` names the REQUESTING tab (audit 5.6): it need not be the visible one, and the
+    // chrome's private/background notice is about the requester. Same shape as Rust's
+    // `permissions::prompt_payload`.
     val obj = JSONObject()
       .put("requestId", requestId)
+      .put("viewId", tab)
       .put("origin", origin)
       .put("permission", permission)
     val js = "window.__aegisPermissionPrompt && window.__aegisPermissionPrompt($obj)"
@@ -1656,9 +1675,10 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
    * [from] is the page the redirect came FROM, not just [to]: the dedup key is the
    * (from, to) PAIR, so half a pair is not a redirect and Rust refuses it.
    */
-  private fun showRedirectBlocked(from: String, to: String) {
+  private fun showRedirectBlocked(id: Int, from: String, to: String) {
     val opened = try {
-      NativeRedirectGuard.openBlockedRedirect(from, to)
+      // [id] is the OPENER tab: Rust gives the reopened tab its privateness (audit 3.2).
+      NativeRedirectGuard.openBlockedRedirect(id, from, to)
     } catch (t: Throwable) {
       Log.w("AegisRedirect", "openBlockedRedirect failed for $to", t)
       false

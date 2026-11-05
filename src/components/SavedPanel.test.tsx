@@ -317,6 +317,45 @@ describe('SavedPanel', () => {
     });
   });
 
+  // Editing a saved page's URL (added in da73789 with no test of its own).
+  describe('edit url', () => {
+    it('changing the URL and pressing Enter saves the normalized URL', async () => {
+      const p = props();
+      render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByRole('button', { name: /^edit docs$/i }));
+      const url = screen.getByRole('textbox', { name: /edit url/i });
+      await userEvent.clear(url);
+      await userEvent.type(url, 'docs.example/v2{Enter}');
+      expect(p.update).toHaveBeenCalledWith(2, {
+        title: 'Docs',
+        url: 'https://docs.example/v2',
+        tags: ['reference', 'work'],
+      });
+    });
+
+    it('an invalid URL shows an inline error, saves nothing, and typing clears the error', async () => {
+      const p = props();
+      render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByRole('button', { name: /^edit docs$/i }));
+      const url = screen.getByRole('textbox', { name: /edit url/i });
+      await userEvent.clear(url);
+      await userEvent.type(url, 'javascript:alert(1){Enter}');
+      expect(p.update).not.toHaveBeenCalled();
+      expect(screen.getByRole('alert')).toBeInTheDocument();
+      await userEvent.type(url, 'x');
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('pressing Escape in the URL field cancels without saving', async () => {
+      const p = props();
+      render(<SavedPanel {...p} />);
+      await userEvent.click(screen.getByRole('button', { name: /^edit docs$/i }));
+      await userEvent.type(screen.getByRole('textbox', { name: /edit url/i }), 'zz{Escape}');
+      expect(p.update).not.toHaveBeenCalled();
+      expect(screen.queryByRole('textbox', { name: /edit url/i })).not.toBeInTheDocument();
+    });
+  });
+
   describe('manage tags', () => {
     it('does not render the Manage tags section when tagUnion is empty', () => {
       render(<SavedPanel {...props()} tagUnion={[]} />);

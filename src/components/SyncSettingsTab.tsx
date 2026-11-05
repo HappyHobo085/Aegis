@@ -140,6 +140,9 @@ export function SyncSettingsTab({
   const [setupPassphrase, setSetupPassphrase] = useState('');
   const [restorePassphrase, setRestorePassphrase] = useState('');
   const [unlockPassphrase, setUnlockPassphrase] = useState('');
+  // The server's registration secret, when it requires one to create a NEW account. Held only
+  // in this component's state and handed to the one setup call that uses it — never persisted.
+  const [registrationCode, setRegistrationCode] = useState('');
   const [devices, setDevices] = useState<SyncDevice[]>([]);
   const [forget, setForget] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -226,19 +229,28 @@ export function SyncSettingsTab({
   const enableNew = async () => {
     await commitServerUrl();
     const passphrase = setupPassphrase.trim();
-    setPhrase(passphrase ? await sync.enableNew(passphrase) : await sync.enableNew());
+    const code = registrationCode.trim();
+    if (code) setPhrase(await sync.enableNew(passphrase || undefined, code));
+    else setPhrase(passphrase ? await sync.enableNew(passphrase) : await sync.enableNew());
   };
 
   const enableFromPhrase = async () => {
     await commitServerUrl();
     const phraseText = restore.trim();
     const passphrase = restorePassphrase.trim();
-    if (passphrase) {
+    const code = registrationCode.trim();
+    if (code) {
+      await sync.enableFromPhrase(phraseText, passphrase || undefined, code);
+    } else if (passphrase) {
       await sync.enableFromPhrase(phraseText, passphrase);
     } else {
       await sync.enableFromPhrase(phraseText);
     }
   };
+
+  // The owner is the only device the server lets approve or reject a join request, so only the
+  // owner is offered the buttons (anyone else would get a 403 for pressing them).
+  const thisIsOwner = devices.some((d) => d.isThisDevice && d.isOwner === true);
 
   const unlock = async () => {
     await commitServerUrl();
@@ -300,6 +312,22 @@ export function SyncSettingsTab({
               {testStatus}
             </p>
           )}
+          <label className="settings-row">
+            <span className="settings-row__label">Server registration code (if required)</span>
+            <input
+              type="password"
+              value={registrationCode}
+              placeholder="Only if your server's operator gave you one"
+              aria-label="Server registration code"
+              autoComplete="off"
+              onChange={(e) => setRegistrationCode(e.target.value)}
+            />
+          </label>
+          <p className="settings-hint">
+            Some servers only let you create a new account with a code from their operator. Joining
+            an account you already have does not need it &mdash; your first device approves the new
+            one instead.
+          </p>
         </section>
 
         <TransportSection
@@ -453,6 +481,12 @@ export function SyncSettingsTab({
           {state.lastError ? ` — ${state.lastError}` : ''}
         </p>
         <p className="settings-hint">Key storage: {vaultBackingLabel(state.vaultBacking)}</p>
+        {state.pendingApproval && (
+          <p className="settings-hint" role="status">
+            This device is waiting for approval. On the device you first set up sync on, open
+            Settings &rarr; Sync &rarr; Devices and approve it, then press Sync now here.
+          </p>
+        )}
         {/*
           A rejected vault write is the ONLY signal the user gets that a peer tried to write to
           their vault and the core refused it: the record is quarantined rather than merged, and
@@ -583,8 +617,43 @@ export function SyncSettingsTab({
               <span className="settings-list__main">
                 {d.label}
                 {d.isThisDevice ? ' (this device)' : ''}
+                {d.isOwner ? ' (owner)' : ''}
+                {d.pending ? ' — waiting for approval' : ''}
               </span>
-              {!d.isThisDevice && (
+              {d.pending && thisIsOwner && (
+                <>
+                  <button
+                    type="button"
+                    className="settings-btn"
+                    disabled={busy}
+                    onClick={() =>
+                      void run(async () => setDevices(await sync.approveDevice(d.deviceId)))
+                    }
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    className="settings-btn settings-btn--quiet"
+                    disabled={busy}
+                    onClick={() =>
+                      void (async () => {
+                        if (
+                          await confirm(
+                            `Reject “${d.label}”? It will not be able to ask to join again.`,
+                            { destructive: true },
+                          )
+                        ) {
+                          void run(async () => setDevices(await sync.removeDevice(d.deviceId)));
+                        }
+                      })()
+                    }
+                  >
+                    Reject
+                  </button>
+                </>
+              )}
+              {!d.isThisDevice && !d.pending && (
                 <button
                   type="button"
                   className="settings-btn settings-btn--quiet"

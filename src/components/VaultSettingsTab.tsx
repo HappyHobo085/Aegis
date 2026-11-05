@@ -15,35 +15,30 @@ import type { VaultRecord, VaultRecordInput } from '../../shared/types';
 import type { UseVault } from '../hooks/useVault';
 import { confirm, toast } from '../lib/toast';
 
+const CLIPBOARD_CLEAR_MS = 60_000;
+// ONE module-level clear timer, shared by every mount of this tab (audit 5.4). It is NOT
+// cancelled on unmount: the UI promises "clipboard clears in 60s", and the common case is
+// copying a password and closing Settings straight away — a per-mount timer cancelled on
+// unmount left the secret on the clipboard indefinitely. A newer copy (from any mount) resets
+// the clock, so an older timer never wipes a newer secret early (BUG F6).
+let clipboardClearTimer: ReturnType<typeof setTimeout> | null = null;
+
+function armClipboardClear(): void {
+  if (clipboardClearTimer !== null) clearTimeout(clipboardClearTimer);
+  clipboardClearTimer = setTimeout(() => {
+    clipboardClearTimer = null;
+    void navigator.clipboard.writeText('').catch(() => {
+      // Best-effort: clipboard may have been overwritten by user
+    });
+  }, CLIPBOARD_CLEAR_MS);
+}
+
 export function VaultSettingsTab({ vault }: { vault: UseVault }) {
   const { state } = vault;
 
   // ---- shared async helper ----
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-
-  const CLIPBOARD_CLEAR_MS = 60_000;
-  // BUG(F6): the clear-timer handle was never stored, so a second Copy could not cancel the
-  // first. Copying two secrets in quick succession meant the FIRST timer wiped the SECOND
-  // secret off the clipboard right after the UI had promised it would survive for 60s; and
-  // closing Settings left the timer running, so it blanked whatever the user had copied
-  // since. One handle, always the newest timer, cleared on unmount.
-  const clipboardClearRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // `handleCopy` awaits the clipboard write before arming the timer, so a copy whose write
-  // resolves after the tab closed would leave a timer with no owner. Track liveness so the
-  // timer is disarmed instead of stranding a stray 60s wipe.
-  const mountedRef = useRef(true);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
-      if (clipboardClearRef.current !== null) {
-        clearTimeout(clipboardClearRef.current);
-        clipboardClearRef.current = null;
-      }
-    };
-  }, []);
 
   const run = async (fn: () => Promise<void>) => {
     setBusy(true);
@@ -316,18 +311,9 @@ export function VaultSettingsTab({ vault }: { vault: UseVault }) {
       try {
         await navigator.clipboard.writeText(text);
         toast.success('Copied — clipboard clears in 60s');
-        if (clipboardClearRef.current !== null) clearTimeout(clipboardClearRef.current);
-        // Clear clipboard after delay to avoid leaving passwords exposed
-        clipboardClearRef.current = setTimeout(() => {
-          clipboardClearRef.current = null;
-          void navigator.clipboard.writeText('').catch(() => {
-            // Best-effort: clipboard may have been overwritten by user
-          });
-        }, CLIPBOARD_CLEAR_MS);
-        if (!mountedRef.current) {
-          clearTimeout(clipboardClearRef.current);
-          clipboardClearRef.current = null;
-        }
+        // Armed even if the tab unmounted while the write was pending: the secret IS on the
+        // clipboard now, so it must still be wiped.
+        armClipboardClear();
       } catch (e) {
         console.error('Clipboard copy failed:', e);
         toast.error('Couldn\u0027t copy');

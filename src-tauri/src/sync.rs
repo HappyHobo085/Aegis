@@ -76,6 +76,10 @@ pub struct Inner {
     /// Deliberately NOT in `state_json` — it is retry bookkeeping, not user-visible state, and
     /// adding it would change the `shared/types.ts` IPC contract for no user-facing reason.
     rate_limit_until_ms: i64,
+    /// This device asked to join an EXISTING account and the server is holding it until the
+    /// account's owner device approves it (sync-server D2). Cleared by the first pass that
+    /// succeeds, which can only happen once the owner has approved.
+    pending_approval: bool,
     /// Consecutive rate-limited passes, driving the exponential curve in
     /// [`rate_limit_backoff`]. Reset to 0 by the first pass that is not rate-limited.
     consecutive_rate_limits: u32,
@@ -96,6 +100,7 @@ impl Default for SyncState {
             generation: 0,
             rate_limit_until_ms: 0,
             consecutive_rate_limits: 0,
+            pending_approval: false,
         }))
     }
 }
@@ -161,6 +166,7 @@ fn state_json<R: Runtime>(app: &AppHandle<R>) -> Value {
         "accountId": g.account_id,
         "vaultBacking": g.backing,
         "hasStoredRoot": sync_keystore::has_stored_root(app),
+        "pendingApproval": g.pending_approval,
     })
 }
 
@@ -312,6 +318,18 @@ fn http(
     body: Option<Value>,
     timeout_secs: u64,
 ) -> Result<Value, String> {
+    http_with(method, url, auth, &[], body, timeout_secs)
+}
+
+/// [`http`] with extra request headers (the registration secret is the one user).
+fn http_with(
+    method: &'static str,
+    url: String,
+    auth: String,
+    extra_headers: &[(&'static str, String)],
+    body: Option<Value>,
+    timeout_secs: u64,
+) -> Result<Value, String> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(timeout_secs))
         .build()
@@ -322,6 +340,9 @@ fn http(
         _ => return Err("bad method".into()),
     };
     req = req.header("Authorization", auth);
+    for (name, value) in extra_headers {
+        req = req.header(*name, value);
+    }
     if let Some(b) = body {
         req = req.json(&b);
     }
@@ -981,10 +1002,11 @@ fn register_device<R: Runtime>(
     device_id: &str,
     device_seed: &[u8; 32],
     root: &RootSecret,
-) {
+    registration_code: Option<&str>,
+) -> Result<bool, String> {
     let server = crate::settings::sync_server_url(app);
     if server.trim().is_empty() {
-        return;
+        return Ok(false);
     }
     // Best-effort: a URL that fails validation skips device registration rather than
     // sending the device token in the clear. The sync pass surfaces the error to the user.
@@ -992,7 +1014,7 @@ fn register_device<R: Runtime>(
         Ok(b) => b,
         Err(e) => {
             eprintln!("[aegis-sync] skipping device registration: {e}");
-            return;
+            return Ok(false);
         }
     };
     let account_sig = {
@@ -1000,24 +1022,75 @@ fn register_device<R: Runtime>(
         let msg = format!("aegis-register-v1\n{account_id}\n{device_id}");
         hex(&sk.sign(msg.as_bytes()).to_bytes())
     };
-    if let Ok(auth) = auth_header(account_id, device_seed) {
-        let label = format!("{} device", std::env::consts::OS);
-        let _ = http(
-            "POST",
-            format!("{base}/v1/devices"),
-            auth,
-            Some(json!({
-                "accountId": account_id, "deviceId": device_id,
-                "label": label, "accountSig": account_sig,
-            })),
-            SYNC_TIMEOUT_SECS,
-        );
+    let auth = auth_header(account_id, device_seed)?;
+    let label = format!("{} device", std::env::consts::OS);
+    // The server's `AEGIS_SYNC_REGISTRATION_SECRET` (D1), needed only to create a NEW account.
+    // Sent only when the user supplied one, and never stored: it is a one-time setup input.
+    let headers: Vec<(&'static str, String)> = registration_code
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(|c| vec![("x-aegis-registration-secret", c.to_string())])
+        .unwrap_or_default();
+    let reply = http_with(
+        "POST",
+        format!("{base}/v1/devices"),
+        auth,
+        &headers,
+        Some(json!({
+            "accountId": account_id, "deviceId": device_id,
+            "label": label, "accountSig": account_sig,
+        })),
+        SYNC_TIMEOUT_SECS,
+    )?;
+    // `pending: true` = this device asked to join an EXISTING account and is waiting for the
+    // owner device to approve it (D2). Absent on an older server, which registers immediately.
+    Ok(reply
+        .get("pending")
+        .and_then(Value::as_bool)
+        .unwrap_or(false))
+}
+
+/// Record what registration reported in the engine state, so the Sync panel can say WHY a
+/// device is not syncing. A refused registration (wrong or missing server registration code,
+/// the server's account cap) used to be discarded, and the user only ever saw a later,
+/// unexplained `HTTP 403` from the first pass.
+fn note_registration<R: Runtime>(app: &AppHandle<R>, result: &Result<bool, String>) {
+    {
+        let st = app.state::<SyncState>();
+        let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+        match result {
+            Ok(pending) => g.pending_approval = *pending,
+            Err(e) => {
+                g.pending_approval = false;
+                g.status = Status::Error;
+                g.last_error = format!("device registration failed: {e}");
+            }
+        }
+    }
+    emit_state(app);
+}
+
+/// Whether the first sync pass should run after registration reported `result`.
+///
+/// Skipped only for a join held for approval or a DEFINITIVE refusal (403: bad/missing code,
+/// revoked; 507: the server's account cap) — a pass could only be answered 403 and would
+/// overwrite the explanation `note_registration` recorded. Anything else (offline, a 5xx) is
+/// transient, and skipping the pass then left the device unsynced until the periodic timer.
+fn sync_after_registration(result: &Result<bool, String>) -> bool {
+    match result {
+        Ok(pending) => !pending,
+        Err(e) => !(e.starts_with("HTTP 403") || e.starts_with("HTTP 507")),
     }
 }
 
 /// Bring sync up for `root` (new or restored): derive identity, persist the seed, register,
 /// set state. Returns the chosen vault backing.
-fn enable_with_root<R: Runtime>(app: &AppHandle<R>, root: RootSecret, passphrase: Option<&str>) {
+fn enable_with_root<R: Runtime>(
+    app: &AppHandle<R>,
+    root: RootSecret,
+    passphrase: Option<&str>,
+    registration_code: Option<String>,
+) {
     set_disabled_flag(app, false); // re-enabling clears any prior durable "disabled" marker
                                    // A NEW install needs a random per-install salt, and there is no safe constant to
                                    // substitute for it (see `sync_keystore::fresh_salt`): a zero salt derives one signing
@@ -1062,20 +1135,32 @@ fn enable_with_root<R: Runtime>(app: &AppHandle<R>, root: RootSecret, passphrase
     let device_id_bg = device_id;
     let device_seed_bg = Zeroizing::new(*device_seed);
     std::thread::spawn(move || {
-        register_device(
+        let registered = register_device(
             &app_bg,
             &account_id_bg,
             &device_id_bg,
             &device_seed_bg,
             &root_bg,
+            registration_code.as_deref(),
         );
-        nudge(&app_bg); // kick off an initial sync if a server is configured
+        note_registration(&app_bg, &registered);
+        // Kick off an initial sync if a server is configured — but not into a refusal: a
+        // device the server refused or is holding for approval can only be answered 403, which
+        // would overwrite the explanation `note_registration` just recorded.
+        if sync_after_registration(&registered) {
+            nudge(&app_bg);
+        }
     });
 }
 
 /// Persist the root and unlock sync before returning to the renderer. Device registration
 /// and the first sync still run in the background, but the seed is durable once this returns.
-fn unlock_with_root<R: Runtime>(app: &AppHandle<R>, root: RootSecret, passphrase: Option<String>) {
+fn unlock_with_root<R: Runtime>(
+    app: &AppHandle<R>,
+    root: RootSecret,
+    passphrase: Option<String>,
+    registration_code: Option<String>,
+) {
     {
         let st = app.state::<SyncState>();
         let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
@@ -1083,7 +1168,7 @@ fn unlock_with_root<R: Runtime>(app: &AppHandle<R>, root: RootSecret, passphrase
         g.last_error.clear();
     }
     emit_state(app);
-    enable_with_root(app, root, passphrase.as_deref());
+    enable_with_root(app, root, passphrase.as_deref(), registration_code);
 }
 
 /// Trigger a background sync pass (no-op if disabled). Debounced only by the engine status.
@@ -1121,6 +1206,8 @@ pub fn nudge<R: Runtime>(app: &AppHandle<R>) {
                 g.status = Status::Idle;
                 g.last_sync_ms = crate::jsonstore::now_ms();
                 g.last_error.clear();
+                // A pass the server accepted means the owner has approved this device.
+                g.pending_approval = false;
                 // The server is answering again, so whatever window it was enforcing has cleared.
                 // Forgetting the counter is what makes the next rate-limit start from the short
                 // end of the curve again instead of inheriting an hours-old streak.
@@ -1232,7 +1319,7 @@ pub fn start<R: Runtime>(app: &AppHandle<R>) {
     // Passphrase-backed vaults can't auto-unlock at boot (no passphrase yet) — they unlock
     // when the user provides it. The keychain path returns the root here.
     if let Some(root) = sync_keystore::load_root(app, None) {
-        enable_with_root(app, root, None);
+        enable_with_root(app, root, None, None);
     }
 }
 
@@ -1267,31 +1354,18 @@ fn validated_base(raw: &str, allow_insecure: bool) -> Result<String, String> {
     if lower.starts_with("https://") {
         return Ok(base.to_string());
     }
-    if let Some(rest) = lower.strip_prefix("http://") {
-        // Host = authority up to the first '/', '?' or '#', minus any userinfo and port.
-        let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
-        let authority = authority
-            .rsplit_once('@')
-            .map(|(_, h)| h)
-            .unwrap_or(authority);
-        // Split off the port. A bracketed IPv6 literal is `[::1]:8787`, where the port colon
-        // is the one AFTER the closing bracket — splitting on the first colon would cut a
-        // hole in the middle of the address and reject a legitimate loopback server.
-        let host = if authority.starts_with('[') {
-            // `[::1]:8787` — the port colon is the one after the closing bracket, so slice
-            // the literal out by its own brackets rather than splitting on ':'.
-            authority
-                .find(']')
-                .map(|close| &authority[1..close])
-                .unwrap_or("")
-        } else {
-            authority.split(':').next().unwrap_or("")
+    if lower.starts_with("http://") {
+        // The host is read from the SAME parser reqwest connects with (the WHATWG `url` crate),
+        // never from a hand-rolled split. The old split took the authority after the last `@`,
+        // but WHATWG treats `\` as a path separator in http(s) URLs, so
+        // `http://evil.com\@127.0.0.1` passed as loopback and then sent the device token in
+        // cleartext to `evil.com`. A URL that does not parse is refused.
+        let is_loopback = match url::Url::parse(base).ok().as_ref().and_then(url::Url::host) {
+            Some(url::Host::Domain(d)) => d.eq_ignore_ascii_case("localhost"),
+            Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
+            Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
+            None => false,
         };
-        let is_loopback = host.eq_ignore_ascii_case("localhost")
-            || host
-                .parse::<std::net::IpAddr>()
-                .map(|ip| ip.is_loopback())
-                .unwrap_or(false);
         if is_loopback {
             return Ok(base.to_string());
         }
@@ -1350,6 +1424,16 @@ fn test_connection<R: Runtime>(app: &AppHandle<R>, raw_url: &str) -> Value {
     }
 }
 
+/// The optional server registration code (`registrationCode`) a setup payload may carry.
+fn registration_code(payload: &Value) -> Option<String> {
+    payload
+        .get("registrationCode")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(String::from)
+}
+
 pub fn dispatch<R: Runtime>(
     app: &AppHandle<R>,
     channel: &str,
@@ -1371,7 +1455,7 @@ pub fn dispatch<R: Runtime>(
                 .get("passphrase")
                 .and_then(Value::as_str)
                 .map(String::from);
-            unlock_with_root(app, root, passphrase);
+            unlock_with_root(app, root, passphrase, registration_code(payload));
             // Show-once: the phrase is returned here and never retrievable without confirm.
             Some(Ok(json!({ "recoveryPhrase": phrase })))
         }
@@ -1386,7 +1470,7 @@ pub fn dispatch<R: Runtime>(
                 .get("passphrase")
                 .and_then(Value::as_str)
                 .map(String::from);
-            unlock_with_root(app, root, passphrase);
+            unlock_with_root(app, root, passphrase, registration_code(payload));
             Some(Ok(state_json(app)))
         }
 
@@ -1402,7 +1486,7 @@ pub fn dispatch<R: Runtime>(
                 Ok(root) => root,
                 Err(e) => return Some(Err(e)),
             };
-            unlock_with_root(app, root, Some(passphrase.to_string()));
+            unlock_with_root(app, root, Some(passphrase.to_string()), None);
             Some(Ok(state_json(app)))
         }
 
@@ -1497,21 +1581,33 @@ pub fn dispatch<R: Runtime>(
                         .unwrap_or_else(|e| e.into_inner())
                         .device_id
                         .clone();
-                    let devices: Vec<Value> = v
-                        .get("devices")
-                        .and_then(Value::as_array)
-                        .cloned()
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|mut d| {
-                            let is_this =
-                                d.get("deviceId").and_then(Value::as_str) == Some(this.as_str());
-                            if let Some(o) = d.as_object_mut() {
-                                o.insert("isThisDevice".into(), json!(is_this));
-                            }
-                            d
-                        })
-                        .collect();
+                    let owner = v
+                        .get("ownerDeviceId")
+                        .and_then(Value::as_str)
+                        .map(String::from);
+                    let rows = |key: &str, pending: bool| -> Vec<Value> {
+                        v.get(key)
+                            .and_then(Value::as_array)
+                            .cloned()
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|mut d| {
+                                let id =
+                                    d.get("deviceId").and_then(Value::as_str).map(String::from);
+                                let is_this = id.as_deref() == Some(this.as_str());
+                                let is_owner = id.is_some() && id == owner;
+                                if let Some(o) = d.as_object_mut() {
+                                    o.insert("isThisDevice".into(), json!(is_this));
+                                    o.insert("isOwner".into(), json!(is_owner));
+                                    // A join request waiting for the owner's approval (D2).
+                                    o.insert("pending".into(), json!(pending));
+                                }
+                                d
+                            })
+                            .collect()
+                    };
+                    let mut devices = rows("devices", false);
+                    devices.extend(rows("pending", true));
                     Some(Ok(json!(devices)))
                 }
                 Err(e) => Some(Err(e)),
@@ -1551,7 +1647,63 @@ pub fn dispatch<R: Runtime>(
             if let Err(e) = result {
                 return Some(Err(format!("failed to remove device: {e}")));
             }
+            // Removing THIS device revokes its identity on the server permanently, so every later
+            // pass could only be refused — the engine used to stay enabled and retry into 403s
+            // forever. Turn sync off exactly as `sync.disable` does (durable flag included, so a
+            // restart does not re-enable into a revoked identity). `forget: false` keeps the
+            // stored root, as the user's own "turn off sync" does.
+            let is_self = {
+                let st = app.state::<SyncState>();
+                let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+                !device_id.is_empty() && g.device_id == device_id
+            };
+            if is_self {
+                if let Some(Err(e)) = dispatch(app, "sync.disable", &json!({ "forget": false })) {
+                    return Some(Err(e));
+                }
+                return Some(Ok(json!([])));
+            }
             // Return the refreshed list.
+            dispatch(app, "sync.listDevices", &Value::Null)
+        }
+
+        // The owner admits a device that asked to join this account (sync-server D2). Only the
+        // owner may; the server answers anyone else with 403, which is reported as-is.
+        "sync.approveDevice" => {
+            let device_id = payload
+                .get("deviceId")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            if device_id.is_empty() {
+                return Some(Err("deviceId required".into()));
+            }
+            let (account_id, device_seed) = {
+                let st = app.state::<SyncState>();
+                let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+                match &g.device_seed {
+                    Some(s) => (g.account_id.clone(), Zeroizing::new(**s)),
+                    None => return Some(Err("sync is locked".into())),
+                }
+            };
+            let server = crate::settings::sync_server_url(app);
+            let base = match validated_base_for(app, &server) {
+                Ok(b) => b,
+                Err(e) => return Some(Err(e)),
+            };
+            let auth = match auth_header(&account_id, &device_seed) {
+                Ok(a) => a,
+                Err(e) => return Some(Err(e)),
+            };
+            if let Err(e) = http(
+                "POST",
+                format!("{base}/v1/devices/approve"),
+                auth,
+                Some(json!({ "deviceId": device_id })),
+                INTERACTIVE_TIMEOUT_SECS,
+            ) {
+                return Some(Err(format!("failed to approve device: {e}")));
+            }
             dispatch(app, "sync.listDevices", &Value::Null)
         }
 
@@ -1654,7 +1806,7 @@ mod tests {
             return;
         }
         if let Some(root) = sync_keystore::load_root(app, None) {
-            enable_with_root(app, root, None);
+            enable_with_root(app, root, None, None);
         }
     }
 
@@ -1914,6 +2066,7 @@ mod tests {
                 last_error: String::new(),
                 rate_limit_until_ms: 0,
                 consecutive_rate_limits: 0,
+                pending_approval: false,
             };
 
             // 3. Boot. The panel must render the ENABLED view again, for the SAME account.
@@ -1966,6 +2119,7 @@ mod tests {
                 last_error: String::new(),
                 rate_limit_until_ms: 0,
                 consecutive_rate_limits: 0,
+                pending_approval: false,
             };
             // The durable marker wins over the still-present keychain seed.
             boot_restore(app);
@@ -2239,6 +2393,34 @@ mod tests {
         assert!(validated_base("", false).is_err());
         assert!(validated_base("    ", false).is_err());
         assert!(validated_base("///", false).is_err());
+    }
+
+    /// Audit 1.8: the host check must be the host reqwest will CONNECT to. The hand-rolled
+    /// authority split took everything after the last `@`, but WHATWG URL parsing (what reqwest
+    /// uses) treats `\` as a path separator in http(s) URLs — so `http://evil.com\@127.0.0.1`
+    /// passed as loopback and then sent the device token in cleartext to `evil.com`.
+    #[test]
+    fn a_backslash_cannot_smuggle_a_remote_host_past_the_loopback_check() {
+        for bad in [
+            "http://evil.com\\@127.0.0.1:8787",
+            "http://evil.com\\@localhost",
+            "http://evil.com\\@[::1]:8787",
+        ] {
+            assert!(
+                validated_base(bad, false).is_err(),
+                "expected rejection for: {bad}"
+            );
+        }
+        // A PERCENT-ENCODED backslash is ordinary userinfo to the URL parser, so reqwest really
+        // does connect to the loopback host here — accepting it is correct.
+        for ok in [
+            "http://[::1]:8787",
+            "http://127.0.0.1",
+            "http://[::1]",
+            "http://evil.com%5C@127.0.0.1",
+        ] {
+            assert!(validated_base(ok, false).is_ok(), "expected loopback: {ok}");
+        }
     }
 
     /// The `syncAllowInsecure` waiver: with it on, a plaintext REMOTE server is accepted —
@@ -2708,6 +2890,295 @@ mod tests {
         fn pushes(&self) -> usize {
             self.pushes.lock().unwrap_or_else(|e| e.into_inner()).len()
         }
+    }
+
+    /// Put the engine in the unlocked, enabled state against `base`, as `enable_with_root` leaves
+    /// it, without needing an OS keychain.
+    fn unlocked_against<R: Runtime>(app: &AppHandle<R>, base: &str, device_id: &str) {
+        crate::settings::dispatch(
+            app,
+            "settings.set",
+            &json!({ "partial": { "syncServerUrl": base } }),
+        )
+        .expect("settings arm")
+        .expect("set the server url");
+        let st = app.state::<SyncState>();
+        let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+        g.root = Some(RootSecret([3u8; 32]));
+        g.device_seed = Some(Zeroizing::new([7u8; 32]));
+        g.enabled = true;
+        g.account_id = "acct-1".into();
+        g.device_id = device_id.into();
+        g.status = Status::Idle;
+    }
+
+    /// Audit 1.9: removing THIS device revokes it on the server permanently, so every later pass
+    /// can only be refused. Sync used to stay enabled and retry into 403s forever.
+    #[test]
+    fn removing_this_device_turns_sync_off() {
+        use crate::test_support::with_tmp_app;
+        let server = EchoServer::start();
+        with_tmp_app(|app| {
+            unlocked_against(app, &server.base, "me");
+            dispatch(app, "sync.removeDevice", &json!({ "deviceId": "me" }))
+                .expect("sync arm")
+                .expect("the server accepted the removal");
+            let st = app.state::<SyncState>();
+            let g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+            assert!(!g.enabled, "a self-removed device must stop syncing");
+            assert!(g.status == Status::Disabled);
+            assert!(g.device_seed.is_none());
+            drop(g);
+            assert!(
+                is_disabled_flag(app),
+                "and stay off across a restart rather than re-enabling into a revoked identity"
+            );
+        });
+    }
+
+    #[test]
+    fn removing_another_device_keeps_this_one_syncing() {
+        use crate::test_support::with_tmp_app;
+        let server = EchoServer::start();
+        with_tmp_app(|app| {
+            unlocked_against(app, &server.base, "me");
+            dispatch(app, "sync.removeDevice", &json!({ "deviceId": "other" }))
+                .expect("sync arm")
+                .expect("the server accepted the removal");
+            let st = app.state::<SyncState>();
+            assert!(st.0.lock().unwrap_or_else(|e| e.into_inner()).enabled);
+            assert!(!is_disabled_flag(app));
+        });
+    }
+
+    /// A loopback server that records every request (line, lower-cased headers, JSON body) and
+    /// answers each with the JSON registered for the longest matching path prefix.
+    /// One captured request: the request line, lower-cased headers, and the JSON body.
+    type Captured = (String, HashMap<String, String>, Value);
+
+    struct CaptureServer {
+        base: String,
+        seen: std::sync::Arc<Mutex<Vec<Captured>>>,
+    }
+
+    impl CaptureServer {
+        fn start(routes: Vec<(&'static str, Value)>) -> Self {
+            use std::io::{BufRead, BufReader, Read, Write};
+            use std::net::TcpListener;
+            let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+            let base = format!("http://{}", listener.local_addr().expect("local addr"));
+            let seen: std::sync::Arc<Mutex<Vec<Captured>>> =
+                std::sync::Arc::new(Mutex::new(Vec::new()));
+            let log = seen.clone();
+            std::thread::spawn(move || {
+                for conn in listener.incoming().flatten() {
+                    let mut reader = BufReader::new(match conn.try_clone() {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    });
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).is_err() {
+                        continue;
+                    }
+                    let mut headers = HashMap::new();
+                    loop {
+                        let mut h = String::new();
+                        if reader.read_line(&mut h).is_err() || h == "\r\n" || h == "\n" {
+                            break;
+                        }
+                        if let Some((k, v)) = h.split_once(':') {
+                            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+                        }
+                    }
+                    let len: usize = headers
+                        .get("content-length")
+                        .and_then(|v| v.parse().ok())
+                        .unwrap_or(0);
+                    let mut body = vec![0u8; len];
+                    if len > 0 && reader.read_exact(&mut body).is_err() {
+                        continue;
+                    }
+                    let body: Value = serde_json::from_slice(&body).unwrap_or(Value::Null);
+                    let path = request_line
+                        .split_whitespace()
+                        .nth(1)
+                        .unwrap_or("/")
+                        .to_string();
+                    let response = routes
+                        .iter()
+                        .filter(|(prefix, _)| path.starts_with(prefix))
+                        .max_by_key(|(prefix, _)| prefix.len())
+                        .map(|(_, v)| v.clone())
+                        .unwrap_or_else(|| json!({}));
+                    log.lock().unwrap_or_else(|e| e.into_inner()).push((
+                        request_line.trim().to_string(),
+                        headers,
+                        body,
+                    ));
+                    let b = response.to_string();
+                    let mut out = conn;
+                    let _ = write!(
+                        out,
+                        "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: \
+                         {}\r\nconnection: close\r\n\r\n{}",
+                        b.len(),
+                        b
+                    );
+                    let _ = out.flush();
+                }
+            });
+            CaptureServer { base, seen }
+        }
+
+        fn requests_to(&self, path: &str) -> Vec<Captured> {
+            self.seen
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter(|(line, _, _)| line.split_whitespace().nth(1) == Some(path))
+                .cloned()
+                .collect()
+        }
+    }
+
+    /// D1: a server configured with `AEGIS_SYNC_REGISTRATION_SECRET` refuses a NEW account
+    /// unless the registration carries the secret. The code is sent as that header, and only
+    /// when the user gave one.
+    #[test]
+    fn registration_sends_the_server_registration_code_only_when_given() {
+        use crate::test_support::with_tmp_app;
+        let server = CaptureServer::start(vec![("/v1/devices", json!({ "ok": true }))]);
+        with_tmp_app(|app| {
+            unlocked_against(app, &server.base, "me");
+            let root = RootSecret([3u8; 32]);
+            let seed = [7u8; 32];
+            let pending = register_device(app, "acct-1", "dev-1", &seed, &root, Some("s3cret"))
+                .expect("registration reached the server");
+            assert!(!pending);
+            let _ = register_device(app, "acct-1", "dev-1", &seed, &root, None);
+            let regs = server.requests_to("/v1/devices");
+            assert_eq!(regs.len(), 2);
+            assert_eq!(
+                regs[0]
+                    .1
+                    .get("x-aegis-registration-secret")
+                    .map(String::as_str),
+                Some("s3cret")
+            );
+            assert!(!regs[1].1.contains_key("x-aegis-registration-secret"));
+        });
+    }
+
+    /// D2: joining an existing account answers `pending: true`; the engine must say so instead
+    /// of syncing into refusals with nothing on screen explaining why.
+    #[test]
+    fn a_join_held_for_owner_approval_is_reported_as_pending() {
+        use crate::test_support::with_tmp_app;
+        let server = CaptureServer::start(vec![(
+            "/v1/devices",
+            json!({ "ok": true, "pending": true }),
+        )]);
+        with_tmp_app(|app| {
+            unlocked_against(app, &server.base, "me");
+            let r = register_device(
+                app,
+                "acct-1",
+                "dev-1",
+                &[7u8; 32],
+                &RootSecret([3u8; 32]),
+                None,
+            );
+            assert_eq!(r, Ok(true));
+            note_registration(app, &r);
+            assert_eq!(state_json(app)["pendingApproval"], json!(true));
+        });
+    }
+
+    /// Final review #3: only a DEFINITIVE refusal (403, 507) or a held join may skip the first
+    /// pass. A transient failure — offline at startup, the server restarting — used to suppress
+    /// it too, so nothing synced until the periodic timer (or, with that off, a local edit).
+    #[test]
+    fn only_a_definitive_refusal_skips_the_first_sync_pass() {
+        assert!(sync_after_registration(&Ok(false)));
+        assert!(!sync_after_registration(&Ok(true)), "held for approval");
+        assert!(!sync_after_registration(&Err(
+            "HTTP 403 Forbidden: no".into()
+        )));
+        assert!(!sync_after_registration(&Err(
+            "HTTP 507 Insufficient Storage: cap".into()
+        )));
+        assert!(sync_after_registration(&Err(
+            "error sending request: connection refused".into()
+        )));
+        assert!(sync_after_registration(&Err(
+            "HTTP 502 Bad Gateway: ".into()
+        )));
+    }
+
+    /// A registration the server REFUSED (wrong/missing code, account cap) used to be dropped on
+    /// the floor; the user only ever saw a later, unexplained 403.
+    #[test]
+    fn a_refused_registration_is_reported_in_last_error() {
+        use crate::test_support::with_tmp_app;
+        with_tmp_app(|app| {
+            note_registration(app, &Err("HTTP 403 Forbidden".into()));
+            let st = state_json(app);
+            assert!(
+                st["lastError"].as_str().unwrap_or("").contains("403"),
+                "got {st}"
+            );
+            assert_eq!(st["pendingApproval"], json!(false));
+        });
+    }
+
+    #[test]
+    fn the_device_list_includes_pending_requests_and_marks_the_owner() {
+        use crate::test_support::with_tmp_app;
+        let server = CaptureServer::start(vec![(
+            "/v1/devices",
+            json!({
+                "devices": [{ "deviceId": "me", "label": "a" }, { "deviceId": "b", "label": "b" }],
+                "pending": [{ "deviceId": "new", "label": "n" }],
+                "ownerDeviceId": "me",
+            }),
+        )]);
+        with_tmp_app(|app| {
+            unlocked_against(app, &server.base, "me");
+            let list = dispatch(app, "sync.listDevices", &Value::Null)
+                .expect("sync arm")
+                .expect("listed");
+            let rows = list.as_array().expect("an array");
+            let row = |id: &str| rows.iter().find(|r| r["deviceId"] == json!(id)).cloned();
+            assert_eq!(rows.len(), 3);
+            assert_eq!(row("new").unwrap()["pending"], json!(true));
+            assert_eq!(row("b").unwrap()["pending"], json!(false));
+            assert_eq!(row("me").unwrap()["isOwner"], json!(true));
+            assert_eq!(row("b").unwrap()["isOwner"], json!(false));
+            assert_eq!(row("me").unwrap()["isThisDevice"], json!(true));
+        });
+    }
+
+    #[test]
+    fn approving_a_device_posts_it_to_the_server_and_returns_the_refreshed_list() {
+        use crate::test_support::with_tmp_app;
+        let server = CaptureServer::start(vec![
+            (
+                "/v1/devices",
+                json!({ "devices": [{ "deviceId": "me" }], "pending": [] }),
+            ),
+            ("/v1/devices/approve", json!({ "ok": true })),
+        ]);
+        with_tmp_app(|app| {
+            unlocked_against(app, &server.base, "me");
+            let list = dispatch(app, "sync.approveDevice", &json!({ "deviceId": "new" }))
+                .expect("sync arm")
+                .expect("approved");
+            assert!(list.is_array());
+            let posts = server.requests_to("/v1/devices/approve");
+            assert_eq!(posts.len(), 1);
+            assert!(posts[0].0.starts_with("POST"));
+            assert_eq!(posts[0].2, json!({ "deviceId": "new" }));
+        });
     }
 
     /// One `favorites` pass, exactly as `sync_once` drives it: the real namespace, the real

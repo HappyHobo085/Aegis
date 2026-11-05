@@ -7,8 +7,122 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ## [Unreleased]
 
+### Security
+
+- **Release pipeline hardening.**
+  - The third-party Rust toolchain action is pinned to a commit.
+  - Release checkouts no longer keep the job token.
+  - The Gradle wrapper download is checksum-verified.
+  - The AppImage repack tool (and the runtime it embeds) are pinned and `sha256`-checked
+    on every run.
+
+- **Sync server: registration is gated and joining an account needs the owner.** A server
+  operator can set `AEGIS_SYNC_REGISTRATION_SECRET`; creating a new account then needs that
+  code, typed into **Settings → Sync → Server registration code**. Without it the server warns
+  at boot. Server-wide caps on accounts, records and stored bytes now apply either way. A new
+  device joining an existing account now waits until the account's first (owner) device
+  approves it under **Settings → Sync → Devices**, and the waiting device says so. If the owner
+  signs itself out, ownership passes to the oldest remaining device instead of stranding the
+  account.
+- **Sync server: an unregistered caller can no longer exhaust the replay-protection table.**
+  Anyone could mint a device key and sign a token; each such request used a replay slot before
+  being refused, so a stranger could make the server answer `429` to every real device.
+- **Sync server: a removed device can no longer re-register under an upper-cased id**, a pushed
+  record's `hlc` stamp is size- and shape-checked, a client can no longer set the server's own
+  ordering stamp (`ord`), and a retried push after a failed disk write is now actually written
+  instead of answering `ok`. Snapshot writes also flush the directory, so an `ok` survives a
+  power loss.
+- **Filter-list subscriptions must use https,** and an https list can no longer redirect to
+  plain http or send an unbounded body.
+- **Ad-blocking hardening:** the WebRTC IP-leak shim and the fingerprint-noise shim can no
+  longer be bypassed through the prototype or an OffscreenCanvas, reading a canvas no longer
+  alters it, sandboxed frames no longer share one fingerprint noise stream, the element picker
+  can no longer be tricked into saving a rule for a different site, and a synced device can no
+  longer turn off this device's WebRTC IP-leak protection.
+- **Stronger password-vault and sync-passphrase key derivation.** New vaults and sync
+  passphrases use Argon2id at 64 MiB / 3 passes (was 19 MiB / 2). An existing vault or sync
+  passphrase file is upgraded automatically the next time you unlock it, and no copy under
+  the old, weaker settings is left behind in a backup file. Until every one of
+  your devices has updated and been unlocked once, an older device may report synced
+  passwords as "rejected"; they arrive once it updates.
+- **A synced record stamped far in the future can no longer override your later edits**
+  (bookmarks, settings, custom filters, passwords), and an edit made right after a
+  clock-skewed device's edit now correctly wins.
+- **"Forget the keys" now forgets every copy:** the sync passphrase file no longer leaves a
+  backup copy behind. A device whose identity file cannot be saved now refuses to enable sync
+  instead of registering a new device on every launch. The password autofill code no longer
+  runs inside embedded third-party frames.
+- **Sync: a backslash can no longer sneak a remote server past the "plain http only for
+  localhost" rule.** `http://evil.com\@127.0.0.1` was accepted as local and then sent this
+  device's sync token unencrypted to `evil.com`.
+
 ### Fixed
 
+- **Android: the ad-block shield's panel opens on screen and is readable.** It opened upward
+  from the top bar, so only its last row showed; it now drops down across the screen, opaque and
+  scrollable. Its text no longer takes on your accent colour (unreadable with a dark accent),
+  and its checkboxes are normal size instead of 44px tall.
+- **Android: turning HTTPS-Only on or off takes effect immediately**, not after a restart.
+- **A site's own HTTPS upgrade or `www.` redirect is no longer blocked** as a suspicious
+  scripted redirect. Other cross-site redirects still are.
+- **Downloads keep the server's file name** (e.g. `Quarterly Report.pdf` rather than
+  `download?id=5`), never overwrite an earlier file of the same name (`name (1).ext`), and
+  are made safe for every filesystem, on desktop and Android alike.
+- **macOS: closed tabs release their web view** instead of keeping it in memory until quit.
+- **Android: refreshing the same tab twice in a row** no longer hides the second spinner
+  early.
+- **A damaged settings file is no longer wiped by sync**, and a settings change made during
+  a sync can no longer be lost from the in-memory copy.
+- **Bookmarks and saved pages only accept web addresses**, and an edit can no longer
+  rewrite a bookmark's internal fields.
+
+- **Desktop auto-update produces its feed again.** A release with the update-signing key
+  now emits the signed updater artifacts and `latest.json`, and fails instead of shipping
+  silently when `latest.json` is missing. Local builds and keyless releases do not need the
+  key. A tag that disagrees with the app version is refused.
+- **Android: a release APK is no longer silently signed with a throwaway debug key.** A
+  release build needs a real key (or an explicit `AEGIS_ALLOW_DEBUG_SIGNED_RELEASE=1`
+  opt-in). With a release key configured, the APK is listed in the update feed, so the
+  in-app update check can finally report a new version.
+- **The Linux→Windows cross-built exe is a production build.** It used to be a dev build
+  that loaded `localhost:5174` and showed a blank window.
+- **One failing desktop build no longer leaves a release without its APK and checksums.**
+
+- **A list re-read right after a change shows the change.** Adding a favorite and reopening
+  the list inside ~300 ms used to show the list from before; identical reads are now only
+  shared while one is still in flight.
+- **Two permission prompts in a row both get asked.** The second used to replace the first,
+  leaving that site waiting forever; they now queue, and each one opens with **Block**
+  focused.
+- **Permission prompts name the tab that asked.** A request from a background or private tab
+  now says so, instead of describing the tab you happen to be looking at (Linux, Android).
+- **A slow startup read can no longer roll back a newer live update** of tabs, the address
+  bar, the ad-block counter or downloads.
+- **Copied vault passwords are wiped after 60 s even if you close Settings first.** Closing
+  Settings used to cancel the wipe.
+- **A failed event subscription is reported by name** instead of as an anonymous unhandled
+  error.
+- **Sync stops after you remove this device**, instead of retrying into refusals forever.
+- **Editing a filter no longer freezes the window** while the ad-block engine rebuilds; the
+  previous rules keep applying until the new ones are ready.
+- **Linux: toggling a filter change back no longer loads the wrong compiled rules**, and old
+  rules no longer stay active alongside the new ones.
+- **Windows: no more memory leak per network request** in the ad-block and navigation hooks.
+- **Restoring settings from a backup sticks.** The next sync used to put the old values back.
+  Restoring a backup while a sync is running can no longer have the sync overwrite it.
+- **Password suggestions match the right sites:** a login saved for `example.com` is offered
+  on `login.example.com`, and a login saved for `api.example.com` is no longer offered on
+  `example.com`.
+- **Private browsing no longer leaks into normal tabs.** On Android a link that opens a new
+  window from a private tab now opens a private tab. On every platform a blocked redirect
+  reopened from a private tab stays private, a download or page event that arrives just
+  after a private tab closes is no longer recorded as normal history or a download row, and
+  a private download finishing no longer marks another download as complete.
+- **Deleted passwords no longer accumulate forever** in the vault file; deletion markers older
+  than 30 days are dropped.
+- **The sync server's boot unit honours a non-default `AEGIS_SYNC_PORT` and IPv6 bind
+  addresses**; previously the reachability probe always knocked on 8787 and the address wait
+  never matched an IPv6 address.
 - **Bookmarks can be renamed and deleted on Android.** The mobile favourites bar's `+`
   bookmarked the current page in one tap and did nothing else: the bookmarks manager is a
   desktop modal that the Android shell never rendered, so a bookmark could be created on a
@@ -43,6 +157,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
     The default loopback bind needed none of this and still does not wait.
 
 ### Changed
+
+- **Hook dependency lint is enforced** (`react-hooks/exhaustive-deps` as an error). The 14
+  existing sites were fixed without behaviour change; one deliberate exception is documented
+  inline.
 
 - **Settings is regrouped into six sections, and the Security tab is split three ways.**
   The rail is now **Appearance / Privacy / Security / Blocking / Network / Data**, and

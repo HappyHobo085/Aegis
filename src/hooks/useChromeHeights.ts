@@ -88,6 +88,10 @@ export function useChromeHeights(containerRef: RefObject<HTMLElement | null>): C
   const measured = useRef(false);
   const presence = useRef('');
 
+  // Deliberately NO dependency array (BUG F1 above): it must run after every commit and bails
+  // on an unchanged presence signature, so `setHeights` cannot loop. `[containerRef]` — what
+  // the rule suggests — is exactly the run-once regression F1 fixed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useLayoutEffect(() => {
     const container = containerRef.current;
     if (!container) return;

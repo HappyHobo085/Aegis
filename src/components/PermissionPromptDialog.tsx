@@ -1,19 +1,39 @@
 // src/components/PermissionPromptDialog.tsx
 import { useId, useRef } from 'react';
-import type { PermissionDecision, PermissionPrompt } from '../../shared/types';
+import type { PermissionDecision, PermissionPrompt, TabMeta, ViewId } from '../../shared/types';
 import { useDialog } from '../hooks/useDialog';
 import { useChromeSurface } from '../hooks/useChromeSurfaces';
 
 export interface PermissionPromptDialogProps {
   prompt: PermissionPrompt;
+  /** The requesting tab is private (judged on the REQUESTER, not the active tab). */
   isPrivate?: boolean;
+  /** Set when the requester is NOT the visible tab: its title, so the user knows who asks. */
+  backgroundTabTitle?: string;
   onOpenSitePermissions?(): void;
   onResolve(requestId: number, decision: PermissionDecision): void;
+}
+
+/**
+ * The dialog's tab-dependent props, judged on the REQUESTING tab (audit 5.6): a background
+ * private tab's request must say "private", and a request from any non-visible tab names it.
+ * An id no longer in the list (the tab closed meanwhile) is treated as a normal background tab.
+ */
+export function promptTabProps(
+  prompt: PermissionPrompt,
+  tabs: readonly TabMeta[],
+  activeId: ViewId,
+): { isPrivate: boolean; backgroundTabTitle?: string } {
+  const tab = tabs.find((t) => t.id === prompt.viewId);
+  const isPrivate = tab?.private === true;
+  if (prompt.viewId === activeId) return { isPrivate };
+  return { isPrivate, backgroundTabTitle: tab ? tab.title || tab.url : prompt.origin };
 }
 
 export function PermissionPromptDialog({
   prompt,
   isPrivate = false,
+  backgroundTabTitle,
   onOpenSitePermissions,
   onResolve,
 }: PermissionPromptDialogProps) {
@@ -43,6 +63,11 @@ export function PermissionPromptDialog({
           </span>
           {isPrivate && (
             <span className="permission-prompt__private">This request is from a private tab.</span>
+          )}
+          {backgroundTabTitle !== undefined && (
+            <span className="permission-prompt__background">
+              This request is from a background tab: {backgroundTabTitle}
+            </span>
           )}
         </div>
         <div className="permission-prompt__actions">

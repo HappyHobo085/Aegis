@@ -208,12 +208,26 @@ fn redacted(present: bool) -> &'static str {
 /// Reuses the exact derivation the sync passphrase path uses
 /// (sync_keystore::derive_kek); kept as its own fn so the params stay
 /// single-sourced if they ever change.
+/// Test-only since D7: production derives under the parameters the file records.
+#[cfg(test)]
 fn derive_vault_key(password: &str, salt: &[u8]) -> Result<Zeroizing<[u8; 32]>, String> {
-    let mut vk = Zeroizing::new([0u8; 32]);
-    argon2::Argon2::default()
-        .hash_password_into(password.as_bytes(), salt, &mut vk[..])
-        .map_err(|e| e.to_string())?;
-    Ok(vk)
+    derive_vault_key_with(password, salt, crate::crypto::KdfParams::V1)
+}
+
+/// [`derive_vault_key`] under explicit Argon2id parameters. Production code always passes the
+/// parameters the vault FILE records (`file_kdf`) or, for anything new, `KdfParams::V2` (D7).
+fn derive_vault_key_with(
+    password: &str,
+    salt: &[u8],
+    kdf: crate::crypto::KdfParams,
+) -> Result<Zeroizing<[u8; 32]>, String> {
+    kdf.derive(password.as_bytes(), salt)
+}
+
+/// The Argon2id parameters a vault file's key was derived under. A file with no `kdfParams`
+/// predates D7 and was derived under `KdfParams::V1` (the argon2 defaults).
+pub(crate) fn file_kdf(file: &Value) -> crate::crypto::KdfParams {
+    crate::crypto::KdfParams::from_json(file.get("kdfParams"))
 }
 
 /// 8 big-endian bytes of `updated_at` — the per-record AAD version tag bound by the seal.
@@ -408,6 +422,21 @@ fn file_json(salt: &[u8], verifier: Value, records: &[Value], v: u64) -> Value {
     json!({ "v": v, "kdf": "argon2id", "salt": hex(salt), "verifier": verifier, "records": records })
 }
 
+/// [`file_json`] that also RECORDS the Argon2id parameters the key was derived under. Every
+/// production writer uses this: a file sealed under V2 but missing `kdfParams` would be read
+/// back as V1 and could never be opened again.
+fn file_json_kdf(
+    salt: &[u8],
+    verifier: Value,
+    records: &[Value],
+    v: u64,
+    kdf: crate::crypto::KdfParams,
+) -> Value {
+    let mut f = file_json(salt, verifier, records, v);
+    f["kdfParams"] = kdf.to_json();
+    f
+}
+
 /// The in-memory vault state: locked (key = None, records empty) or unlocked.
 #[derive(Default)]
 pub struct Inner {
@@ -426,10 +455,17 @@ pub struct Inner {
     salt: Vec<u8>, // the Argon2 salt for THIS vault (loaded from the file)
     version: u64,  // the file's KDF version — see `KDF_V_LOCAL` / `KDF_V_SYNCED`
     created: bool, // a vault file exists
+    kdf: crate::crypto::KdfParams, // the Argon2id parameters `key` was derived under (D7)
 }
 
 /// Tauri managed state for the vault — a single Mutex around the inner state.
 pub struct VaultState(pub Mutex<Inner>);
+
+impl Default for crate::crypto::KdfParams {
+    fn default() -> Self {
+        crate::crypto::KdfParams::V1
+    }
+}
 
 impl Default for VaultState {
     fn default() -> Self {
@@ -479,9 +515,9 @@ pub fn init_vault_with_salt(
     salt: &[u8],
     version: u64,
 ) -> Result<(Value, Zeroizing<[u8; 32]>), VaultError> {
-    let vk = derive_vault_key(password, salt)?;
+    let vk = derive_vault_key_with(password, salt, crate::crypto::KdfParams::V2)?;
     let verifier = seal_verifier(&vk)?;
-    let file = file_json(salt, verifier, &[], version);
+    let file = file_json_kdf(salt, verifier, &[], version, crate::crypto::KdfParams::V2);
     Ok((file, vk))
 }
 
@@ -535,7 +571,7 @@ pub fn unlock_vault(file: &Value, password: &str) -> Result<UnlockedVault, Vault
         .and_then(Value::as_str)
         .ok_or_else(|| VaultError::Crypto("missing salt".into()))?;
     let salt = unhex(salt_hex).ok_or_else(|| VaultError::Crypto("bad salt hex".into()))?;
-    let vk = derive_vault_key(password, &salt)?;
+    let vk = derive_vault_key_with(password, &salt, file_kdf(file))?;
 
     // Authenticate via the verifier before attempting to decrypt any records.
     let verifier = file
@@ -611,13 +647,56 @@ pub fn reseal_with_salt(
         }
         return Ok(out);
     }
-    let vk = derive_vault_key(password, new_salt)?;
+    let kdf = file_kdf(file);
+    let vk = derive_vault_key_with(password, new_salt, kdf)?;
     let mut wire = Vec::with_capacity(unlocked.records.len());
     for c in &unlocked.records {
         wire.push(seal_record(&vk, c)?);
     }
     let verifier = seal_verifier(&vk)?;
-    Ok(file_json(new_salt, verifier, &wire, KDF_V_SYNCED))
+    Ok(file_json_kdf(new_salt, verifier, &wire, KDF_V_SYNCED, kdf))
+}
+
+/// D7: re-seal a vault derived under OLD Argon2 parameters under `KdfParams::V2`, or `None`
+/// when it already is V2.
+///
+/// The salt is KEPT, so every updated device that migrates independently derives the SAME
+/// key (same password, same synced salt, same parameters) — no coordination between devices.
+/// Every record's and tombstone's stamp is BUMPED by 1 ms: the server's last-writer-wins is
+/// strict, so a re-seal at an unchanged stamp would TIE with the v1 ciphertext the server
+/// already holds and lose, and a migrated device can never open v1 ciphertext. Peers still on
+/// v1 (an older build, or not yet unlocked since updating) quarantine the v2 records until they
+/// migrate — the cost the owner accepted for a full migration.
+///
+/// Undecryptable records are carried VERBATIM: they are opaque under the old key and the new one
+/// alike, exactly as `persist` keeps them. Refusing instead left such a vault on v1 forever, so
+/// it quarantined every record its migrated peers pushed (final review #1).
+pub fn migrate_kdf(file: &Value, password: &str) -> Result<Option<Value>, VaultError> {
+    if file_kdf(file) == crate::crypto::KdfParams::V2 {
+        return Ok(None);
+    }
+    let unlocked = unlock_vault(file, password)?;
+    let salt = file_salt(file).ok_or_else(|| VaultError::Crypto("missing salt".into()))?;
+    let kdf = crate::crypto::KdfParams::V2;
+    let vk = derive_vault_key_with(password, &salt, kdf)?;
+    let mut wire = Vec::with_capacity(unlocked.records.len() + unlocked.tombstones.len());
+    for c in &unlocked.records {
+        let mut bumped = c.clone();
+        bumped.updated_at = c.updated_at.saturating_add(1);
+        wire.push(seal_record(&vk, &bumped)?);
+    }
+    for (uuid, at) in &unlocked.tombstones {
+        wire.push(seal_tombstone(&vk, uuid, at.saturating_add(1))?);
+    }
+    wire.extend(unlocked.orphans.iter().cloned());
+    let verifier = seal_verifier(&vk)?;
+    Ok(Some(file_json_kdf(
+        &salt,
+        verifier,
+        &wire,
+        file_version(file),
+        kdf,
+    )))
 }
 
 /// Adopt a re-sealed vault file into the live state.
@@ -638,13 +717,15 @@ pub(crate) fn adopt_resealed<R: Runtime>(
     let version = file_version(new_file);
     // Re-derive under the new salt. `reseal_with_salt` already authenticated the password
     // against the old file, so a wrong password cannot reach here.
-    let vk = derive_vault_key(password, &salt)?;
+    let kdf = file_kdf(new_file);
+    let vk = derive_vault_key_with(password, &salt, kdf)?;
     let st = app
         .try_state::<VaultState>()
         .ok_or("vault state unavailable")?;
     let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
     g.salt = salt;
     g.version = version;
+    g.kdf = kdf;
     g.key = Some(vk);
     // `g.records` / `g.orphans` are deliberately untouched: a re-seal moves bytes, not data.
     // If a re-seal ever did change the record set, that would be a bug worth failing on.
@@ -688,12 +769,22 @@ pub(crate) fn merge_remote<R: Runtime>(
     // `unlock_vault` rebuilds them from `vault.json`, so the delete was simply forgotten, and
     // the credential the peer still holds came back the next time the user typed the password.
     let mut tombstone_dirty = false;
+    let now = now_ms();
 
     for r in remote {
         let Some(uuid) = r.get("uuid").and_then(Value::as_str) else {
             out.quarantined.push("<no-uuid>".into());
             continue;
         };
+        // LWW here is on `updatedAt`, so a peer stamp far ahead of this clock would beat every
+        // later local edit (audit 2.1). Deferred, not quarantined: the record may be authentic,
+        // and "quarantined" tells the user it failed its integrity check, which it did not.
+        if let Some(at) = r.get("updatedAt").and_then(Value::as_i64) {
+            if !crate::sync_envelope::within_remote_skew(at, now) {
+                eprintln!("[aegis-vault] deferring {uuid}: its stamp is too far in the future");
+                continue;
+            }
+        }
         // Authenticate FIRST. An unauthenticated record must not be able to displace a good one,
         // and only an authenticated tombstone is allowed to delete anything.
         let cred = match open_kind(&vk, r) {
@@ -866,25 +957,21 @@ pub(crate) fn emit_state_after_external_change<R: Runtime>(app: &AppHandle<R>) {
     emit_state(app);
 }
 
-/// Re-seal all records (and the verifier) under `vk`, returning an updated on-disk JSON.
-/// Called when adding/updating/removing a record while the vault is unlocked.
-pub fn seal_vault(salt: &[u8], vk: &[u8; 32], records: &[Cred]) -> Result<Value, VaultError> {
-    seal_vault_versioned(salt, vk, records, KDF_V_LOCAL)
-}
-
-/// [`seal_vault`] with an explicit KDF version stamp.
+/// Re-seal all records (and the verifier) under `vk`, returning an updated on-disk JSON with
+/// an explicit KDF version stamp and the Argon2id parameters `vk` was derived under.
 pub fn seal_vault_versioned(
     salt: &[u8],
     vk: &[u8; 32],
     records: &[Cred],
     v: u64,
+    kdf: crate::crypto::KdfParams,
 ) -> Result<Value, VaultError> {
     let verifier = seal_verifier(vk)?;
     let mut wire: Vec<Value> = Vec::with_capacity(records.len());
     for c in records {
         wire.push(seal_record(vk, c)?);
     }
-    Ok(file_json(salt, verifier, &wire, v))
+    Ok(file_json_kdf(salt, verifier, &wire, v, kdf))
 }
 
 // ─── VaultState methods (pure, AppHandle-free) ──────────────────────────────
@@ -907,6 +994,7 @@ impl VaultState {
             inner.salt = s;
         }
         inner.version = file_version(file);
+        inner.kdf = file_kdf(file);
         Ok(())
     }
 
@@ -920,6 +1008,7 @@ impl VaultState {
         inner.records = Vec::new();
         inner.salt = salt;
         inner.version = file_version(&file);
+        inner.kdf = file_kdf(&file);
         inner.created = true;
         Ok(file)
     }
@@ -964,7 +1053,8 @@ impl VaultState {
         } else {
             inner.records.push(cred);
         }
-        let file = seal_vault(&inner.salt, &vk, &inner.records)?;
+        let file =
+            seal_vault_versioned(&inner.salt, &vk, &inner.records, inner.version, inner.kdf)?;
         Ok(file)
     }
 
@@ -975,7 +1065,8 @@ impl VaultState {
         // leaving no key residue on the stack after the function exits.
         let vk = Zeroizing::new(*inner.key.as_deref().ok_or(VaultError::Locked)?);
         inner.records.retain(|r| r.uuid != uuid);
-        let file = seal_vault(&inner.salt, &vk, &inner.records)?;
+        let file =
+            seal_vault_versioned(&inner.salt, &vk, &inner.records, inner.version, inner.kdf)?;
         Ok(file)
     }
 
@@ -994,9 +1085,16 @@ impl VaultState {
         Ok(inner
             .records
             .iter()
+            // A credential applies to the site it was saved for and to that site's SUBDOMAINS —
+            // child page → parent credential — never up or sideways (audit 2.6; it used to be
+            // inverted, offering `api.example.com`'s login on `example.com`). The suffix arm
+            // requires a dotted site, so a bare TLD typed as a "site" cannot match every page
+            // under it. Honest limit: there is no public-suffix list here (adding the `psl`
+            // crate would be a new dependency), so a site saved as e.g. `co.uk` WOULD match
+            // every `*.co.uk` page; only a user can create such a record.
             .filter(|c| {
-                let site = c.site.to_lowercase();
-                site == needle || site.ends_with(&format!(".{needle}"))
+                let site = c.site.trim().to_lowercase();
+                site == needle || (site.contains('.') && needle.ends_with(&format!(".{site}")))
             })
             .cloned()
             .collect())
@@ -1051,7 +1149,10 @@ pub fn update_record(
         if let Some(v) = notes {
             c.notes = v.to_string();
         }
-        c.updated_at = now;
+        // `max(now, prev + 1)`, as `vault.remove` already stamps its tombstone: after a peer's
+        // edit stamped a few seconds ahead (inside the accepted skew window), the raw clock gave
+        // this LATER local edit a SMALLER stamp, and it lost LWW on every device (audit 2.2).
+        c.updated_at = now.max(c.updated_at.saturating_add(1));
         true
     } else {
         false
@@ -1105,13 +1206,18 @@ pub fn persist<R: Runtime>(app: &AppHandle<R>, g: &Inner) -> Result<(), String> 
     // once synced, is what stops a peer re-adding the record. They must round-trip through the
     // file exactly like a credential does — dropping them here would silently un-delete
     // everything on the next launch.
-    for (uuid, at) in &g.tombstones {
+    // …except markers older than the store-wide GC age, which every device has long since
+    // synced past (the same `TOMBSTONE_GC_AGE_MS` the other synced stores reap at; the server
+    // keeps them three times as long). Without this the file grew by one marker per delete,
+    // forever (audit 2.8a).
+    let cutoff = now_ms().saturating_sub(crate::sync_stores::TOMBSTONE_GC_AGE_MS);
+    for (uuid, at) in g.tombstones.iter().filter(|(_, at)| *at >= cutoff) {
         records.push(seal_tombstone(vk, uuid, *at)?);
     }
     // Pass through records that couldn't be decrypted on unlock verbatim — re-sealing only the
     // decrypted set would permanently drop them (silent credential loss). They stay sealed as-is.
     records.extend(g.orphans.iter().cloned());
-    let file = file_json(&g.salt, verifier, &records, g.version);
+    let file = file_json_kdf(&g.salt, verifier, &records, g.version, g.kdf);
     let p = vault_path(app).ok_or("no app data dir")?;
     let txt = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
     crate::jsonstore::write_atomic(&p, txt.as_bytes()).map_err(|e| e.to_string())
@@ -1231,7 +1337,9 @@ pub fn dispatch<R: Runtime>(
                     (s.to_vec(), KDF_V_LOCAL)
                 }
             };
-            let vk = match derive_vault_key(&password, &salt) {
+            // Every new vault is born on the current Argon2 parameters (D7).
+            let kdf = crate::crypto::KdfParams::V2;
+            let vk = match derive_vault_key_with(&password, &salt, kdf) {
                 Ok(k) => k,
                 Err(e) => return Some(Err(e)),
             };
@@ -1240,6 +1348,7 @@ pub fn dispatch<R: Runtime>(
                 let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
                 g.salt = salt;
                 g.version = version;
+                g.kdf = kdf;
                 g.key = Some(vk);
                 g.records = Vec::new();
                 g.orphans = Vec::new();
@@ -1283,6 +1392,44 @@ pub fn dispatch<R: Runtime>(
             }
             FAILED_ATTEMPTS.store(0, Ordering::Relaxed);
             LAST_FAILURE_MS.store(0, Ordering::Relaxed);
+            // D7: a vault still on the old Argon2 parameters is migrated now that the password is
+            // known to be right. Best-effort — the unlock already succeeded, so a migration that
+            // fails (a write error) leaves the vault on v1 and tries again at the next unlock.
+            match migrate_kdf(&file, &pw()) {
+                Ok(Some(migrated)) => {
+                    // No `.bak`, and any older one goes too: both hold the v1 vault, which would
+                    // hand an offline attacker the weaker KDF this migration retires (final
+                    // review #2) — the same rule `sync_keystore` applies to its key blobs.
+                    let written = vault_path(app)
+                        .ok_or_else(|| "no app data dir".to_string())
+                        .and_then(|p| {
+                            crate::jsonstore::write_atomic_no_backup(
+                                &p,
+                                migrated.to_string().as_bytes(),
+                            )
+                            .map_err(|e| e.to_string())?;
+                            let mut bak = p.into_os_string();
+                            bak.push(".bak");
+                            match std::fs::remove_file(&bak) {
+                                Err(e) if e.kind() != std::io::ErrorKind::NotFound => eprintln!(
+                                    "[aegis-vault] could not remove the pre-migration backup: {e}"
+                                ),
+                                _ => {}
+                            }
+                            Ok(())
+                        });
+                    match written {
+                        Ok(()) => {
+                            if let Err(e) = st.unlock(Some(&migrated), &pw()) {
+                                return Some(Err(format!("vault migration did not reopen: {e}")));
+                            }
+                        }
+                        Err(e) => eprintln!("[aegis-vault] KDF migration not written: {e}"),
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => eprintln!("[aegis-vault] KDF migration skipped: {e}"),
+            }
             // The password is only available here (not in the background sync pass), so this is
             // where a local vault ADOPTS the account's shared salt and re-seals its records.
             // Best-effort: a refusal leaves the vault local-only and is reported in state, never
@@ -1527,6 +1674,184 @@ pub fn dispatch<R: Runtime>(
 
 #[cfg(test)]
 mod tests {
+
+    // ── D7: Argon2 parameter migration for the password vault ──
+
+    /// A pre-D7 vault file: argon2 DEFAULT params (`derive_vault_key`) and no `kdfParams`
+    /// field, holding one credential stamped at 1_000 and one undecryptable record if asked.
+    fn write_legacy_vault<R: Runtime>(app: &AppHandle<R>, password: &str, with_orphan: bool) {
+        let salt = vec![4u8; 32];
+        let vk = derive_vault_key(password, &salt).unwrap();
+        let mut recs = Vec::new();
+        add_record(&mut recs, "a.com", "alice", "s3cret", "", 1_000);
+        let mut wire = vec![seal_record(&vk, &recs[0]).unwrap()];
+        if with_orphan {
+            wire.push(json!({ "uuid": "bad", "updatedAt": 1, "nonce": "00", "ct": "00" }));
+        }
+        let file = file_json(&salt, seal_verifier(&vk).unwrap(), &wire, KDF_V_LOCAL);
+        std::fs::write(vault_path(app).unwrap(), file.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_new_vault_is_created_with_the_v2_kdf() {
+        crate::test_support::with_tmp_app(|app| {
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "long-pw!"}))
+                .unwrap()
+                .unwrap();
+            let file = read_file(app).unwrap();
+            assert_eq!(
+                crate::crypto::KdfParams::from_json(file.get("kdfParams")),
+                crate::crypto::KdfParams::V2
+            );
+        });
+    }
+
+    /// Unlocking a v1 vault re-seals it under the v2 key — and BUMPS every stamp, because the
+    /// server keeps the old v1 ciphertext on an equal stamp (LWW is strict), and a v2 device can
+    /// never open v1 ciphertext. Every updated device migrates to the SAME key (same password,
+    /// same synced salt, same params), so no coordination is needed between them.
+    #[test]
+    fn unlocking_a_legacy_vault_migrates_it_and_bumps_every_stamp() {
+        crate::test_support::with_tmp_app(|app| {
+            write_legacy_vault(app, "long-pw!", false);
+            super::dispatch(app, "vault.unlock", &json!({"masterPassword": "long-pw!"}))
+                .unwrap()
+                .unwrap();
+            let file = read_file(app).unwrap();
+            assert_eq!(
+                crate::crypto::KdfParams::from_json(file.get("kdfParams")),
+                crate::crypto::KdfParams::V2
+            );
+            assert_eq!(file["records"][0]["updatedAt"], json!(1_001));
+            let listed = super::dispatch(app, "vault.list", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(listed[0]["password"], json!("s3cret"));
+            // …and it unlocks again from the migrated file.
+            super::dispatch(app, "vault.lock", &json!({}))
+                .unwrap()
+                .unwrap();
+            super::dispatch(app, "vault.unlock", &json!({"masterPassword": "long-pw!"}))
+                .unwrap()
+                .unwrap();
+            let listed = super::dispatch(app, "vault.list", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(listed[0]["password"], json!("s3cret"));
+        });
+    }
+
+    /// An undecryptable record is an opaque blob under the OLD key and the new one alike, so the
+    /// migration carries it VERBATIM rather than refusing. Refusing left such a vault on v1
+    /// forever, so it quarantined every record its migrated peers pushed, permanently (final
+    /// review #1).
+    #[test]
+    fn a_legacy_vault_with_undecryptable_records_migrates_and_keeps_them_verbatim() {
+        crate::test_support::with_tmp_app(|app| {
+            write_legacy_vault(app, "long-pw!", true);
+            super::dispatch(app, "vault.unlock", &json!({"masterPassword": "long-pw!"}))
+                .unwrap()
+                .unwrap();
+            let file = read_file(app).unwrap();
+            assert_eq!(
+                crate::crypto::KdfParams::from_json(file.get("kdfParams")),
+                crate::crypto::KdfParams::V2
+            );
+            let recs = file["records"].as_array().unwrap();
+            assert_eq!(recs.len(), 2, "nothing dropped");
+            assert!(
+                recs.contains(&json!({ "uuid": "bad", "updatedAt": 1, "nonce": "00", "ct": "00" })),
+                "the undecryptable record is carried byte-for-byte"
+            );
+            let listed = super::dispatch(app, "vault.list", &json!({}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(listed[0]["password"], json!("s3cret"));
+        });
+    }
+
+    /// The migration must not leave the v1 vault in `vault.json.bak`: an offline attacker would
+    /// then still get the weaker KDF the migration retires (final review #2). A `.bak` an
+    /// earlier edit left behind holds v1 too, so it goes as well.
+    #[test]
+    fn migrating_the_kdf_leaves_no_v1_backup_behind() {
+        crate::test_support::with_tmp_app(|app| {
+            write_legacy_vault(app, "long-pw!", false);
+            let p = vault_path(app).unwrap();
+            let mut bak = p.as_os_str().to_owned();
+            bak.push(".bak");
+            let bak = std::path::PathBuf::from(bak);
+            std::fs::copy(&p, &bak).unwrap();
+            super::dispatch(app, "vault.unlock", &json!({"masterPassword": "long-pw!"}))
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                crate::crypto::KdfParams::from_json(read_file(app).unwrap().get("kdfParams")),
+                crate::crypto::KdfParams::V2
+            );
+            assert!(
+                !bak.exists(),
+                "a v1 copy of the vault lingers in {}",
+                bak.display()
+            );
+        });
+    }
+
+    /// Audit 2.8(a): vault tombstones were never reaped, so the file grew by one sealed marker
+    /// per delete forever. Markers older than the store-wide GC age
+    /// (`sync_stores::TOMBSTONE_GC_AGE_MS`) are no longer written back.
+    #[test]
+    fn tombstones_past_the_gc_age_are_not_written_back() {
+        crate::test_support::with_tmp_app(|app| {
+            super::dispatch(app, "vault.create", &json!({"masterPassword": "long-pw!"}))
+                .unwrap()
+                .unwrap();
+            let now = now_ms();
+            let st = app.state::<VaultState>();
+            let mut g = st.0.lock().unwrap_or_else(|e| e.into_inner());
+            g.tombstones.push((
+                "old".into(),
+                now - crate::sync_stores::TOMBSTONE_GC_AGE_MS - 1,
+            ));
+            g.tombstones.push(("fresh".into(), now - 1_000));
+            persist(app, &g).expect("persist");
+            drop(g);
+            let file = read_file(app).expect("vault file");
+            let uuids: Vec<String> = file["records"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|r| r["uuid"].as_str().map(String::from))
+                .collect();
+            assert!(uuids.contains(&"fresh".to_string()));
+            assert!(!uuids.contains(&"old".to_string()), "got {uuids:?}");
+        });
+    }
+
+    /// Audit 2.2: an edit stamped the raw wall clock, so after a skewed peer's edit (inside the
+    /// accepted window, i.e. a few seconds ahead) a LATER local edit got a SMALLER `updated_at`
+    /// and lost LWW on every device. Stamping `max(now, prev + 1)` keeps a local edit newest.
+    #[test]
+    fn a_local_edit_after_a_skewed_peer_edit_still_wins() {
+        let now = 1_700_000_000_000i64;
+        let mut recs = Vec::new();
+        let c = add_record(&mut recs, "a.com", "u", "p", "", now);
+        recs[0].updated_at = now + 30_000; // the peer's edit, 30 s ahead of this clock
+        assert!(update_record(
+            &mut recs,
+            &c.uuid,
+            None,
+            None,
+            Some("mine"),
+            None,
+            now
+        ));
+        assert!(
+            recs[0].updated_at > now + 30_000,
+            "the later local edit must carry the larger stamp, got {}",
+            recs[0].updated_at
+        );
+    }
     use super::*;
     use crate::test_support::with_tmp_app;
 
@@ -1711,7 +2036,13 @@ mod tests {
         let wire_record = seal_record(&vk, &cred).expect("seal_record failed");
         let records_sealed = vec![wire_record];
         let verifier = seal_verifier(&vk).expect("seal_verifier failed");
-        let on_disk = file_json(&salt, verifier, &records_sealed, KDF_V_LOCAL);
+        let on_disk = file_json_kdf(
+            &salt,
+            verifier,
+            &records_sealed,
+            KDF_V_LOCAL,
+            file_kdf(&file),
+        );
 
         // --- Simulate a process restart: serialize to JSON string and parse back ---
         let json_str = serde_json::to_string(&on_disk).expect("serialize failed");
@@ -1745,7 +2076,13 @@ mod tests {
         chars[0] = if chars[0] == 'a' { 'b' } else { 'a' };
         wire["ct"] = json!(chars.into_iter().collect::<String>());
         let verifier = seal_verifier(&vk).expect("verifier");
-        let on_disk = file_json(&salt, verifier, std::slice::from_ref(&wire), KDF_V_LOCAL);
+        let on_disk = file_json_kdf(
+            &salt,
+            verifier,
+            std::slice::from_ref(&wire),
+            KDF_V_LOCAL,
+            file_kdf(&file),
+        );
 
         let unlocked = unlock_vault(&on_disk, "pw").expect("unlock must succeed");
         let records = unlocked.records;
@@ -2559,11 +2896,11 @@ mod tests {
         assert_eq!(results[0].username, "alice");
     }
 
-    /// autofill_suggestions matches subdomains: stored "github.com" matches query
-    /// "github.com" (exact), and stored "api.example.com" matches query "example.com"
-    /// (stored is a subdomain of the queried domain). Querying for a broader domain does
-    /// NOT surface credentials for an unrelated subdomain (e.g. "api.github.com" does NOT
-    /// match stored "github.com" — only exact match).
+    /// Audit 2.6: the match ran in the WRONG direction. A credential belongs to the site it was
+    /// saved for and to that site's SUBDOMAINS (child → parent: on `login.github.com`, offer the
+    /// `github.com` login). It must never travel UP or SIDEWAYS: on `example.com` a credential
+    /// saved for `api.example.com` was offered, and on `api.github.com` the `github.com` one was
+    /// not. The old test pinned the inverted behaviour.
     #[test]
     fn autofill_suggestions_subdomain_match() {
         let vs = VaultState::default();
@@ -2573,25 +2910,32 @@ mod tests {
             let mut g = vs.0.lock().unwrap_or_else(|e| e.into_inner());
             add_record(&mut g.records, "github.com", "alice", "pass1", "", t);
             add_record(&mut g.records, "api.example.com", "bob", "pass2", "", t);
+            add_record(&mut g.records, "com", "tld", "pass3", "", t);
         }
-        // Query for a broader domain than a stored site — should NOT match
-        // (stored subdomain credentials don't bleed to parent-domain queries).
-        let results = vs.autofill_suggestions("api.github.com").unwrap();
-        assert_eq!(
-            results.len(),
-            0,
-            "stored parent must not match a subdomain query"
-        );
+        // A page on a SUBDOMAIN of a stored site: the parent's credential applies.
+        let on_child = vs.autofill_suggestions("api.github.com").unwrap();
+        assert_eq!(on_child.len(), 1, "a stored parent must fill its subdomain");
+        assert_eq!(on_child[0].site, "github.com");
 
-        // Query for a parent domain of a stored subdomain — SHOULD match
-        // (credentials for api.example.com are relevant when visiting example.com).
-        let results2 = vs.autofill_suggestions("example.com").unwrap();
-        assert_eq!(
-            results2.len(),
-            1,
-            "stored subdomain must match parent domain query"
-        );
-        assert_eq!(results2[0].site, "api.example.com");
+        // A page on the PARENT of a stored subdomain: the child's credential must not leak up.
+        assert!(vs.autofill_suggestions("example.com").unwrap().is_empty());
+        // …nor sideways to a sibling.
+        assert!(vs
+            .autofill_suggestions("www.example.com")
+            .unwrap()
+            .is_empty());
+        // A dotless stored "site" (a bare TLD) never matches by suffix.
+        assert!(vs
+            .autofill_suggestions("evil.com")
+            .unwrap()
+            .iter()
+            .all(|c| c.site != "com"));
+        // Lookalikes are not subdomains.
+        assert!(vs.autofill_suggestions("notgithub.com").unwrap().is_empty());
+        assert!(vs
+            .autofill_suggestions("github.com.evil.test")
+            .unwrap()
+            .is_empty());
     }
 
     /// autofill_suggestions returns empty for a vault that doesn't exist / is locked.

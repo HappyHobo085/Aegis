@@ -58,7 +58,7 @@ export function usePopoverSurface({
   const payloadKey = payload === null ? '' : JSON.stringify(payload);
 
   useEffect(() => {
-    const open = active && payload !== null;
+    const open = active && payloadKey !== '';
     // A popover with no measured size cannot be placed, so an open-but-unmeasured popover is
     // treated as closed. Sending a 0x0 rect would park a webview of no size in the middle of
     // the window and, on some toolkits, size 0 is not a no-op.
@@ -75,12 +75,16 @@ export function usePopoverSurface({
     // measure. Closing a popover always sends, so this cannot outlive the interaction.
     if (open && !measurable) return;
 
+    // Read back from the serialised keys the effect is keyed on, so what is SENT is exactly
+    // what the deps describe (both cross IPC as JSON anyway, so nothing is lost).
+    const sentActions = JSON.parse(actionKey) as string[];
+    const sentPayload = payloadKey === '' ? null : (JSON.parse(payloadKey) as typeof payload);
     void aegis.popover.set({
       id,
       rect: open ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : EMPTY_RECT,
-      payload: open ? { kind: id as PopoverKind, ...payload } : null,
+      payload: open ? { kind: id as PopoverKind, ...sentPayload } : null,
       itemCount: open ? itemCount : 0,
-      actions: open ? [...actions] : [],
+      actions: open ? sentActions : [],
     });
   }, [id, active, rect.x, rect.y, rect.width, rect.height, itemCount, actionKey, payloadKey]);
 }

@@ -35,6 +35,15 @@ object NativeDownloads {
   external fun recordStart(url: String, destination: String, isPrivate: Boolean)
 
   /**
+   * Implemented in Rust (`downloads::android_safe_name`): the file name to save `name` under
+   * inside `dir` — sanitised for every filesystem (no `..`, no reserved device names, no
+   * control characters, length-capped) and de-duplicated as `name (n).ext` so a second
+   * download never overwrites the first. The SAME function the desktop path uses (audit 7.6).
+   * Returns "" when it cannot answer; the caller then keeps its own flattened name.
+   */
+  external fun safeName(dir: String, name: String): String
+
+  /**
    * Implemented in Rust (`downloads::on_finished`): settles the row whose URL matches into
    * `completed` or `interrupted`. Matching on the URL is what keeps two concurrent downloads
    * from settling each other.

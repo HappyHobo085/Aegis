@@ -13,6 +13,8 @@
 //! Reached via Tauri's `with_webview` -> `PlatformWebview::inner()` (the WKWebView).
 //! Compiles on macOS CI (macos-latest); runtime behavior needs a macOS desktop.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
@@ -171,10 +173,32 @@ impl Drop for TitleObserver {
 
 // ── Installation ──
 
+/// One tab's two observers. Each holds a strong `Retained<WKWebView>` (needed so `Drop` can
+/// call `removeObserver` on a live object), so whoever owns this owns the WebView too.
+struct TabObservers {
+    _url: Retained<UrlObserver>,
+    _title: Retained<TitleObserver>,
+}
+
+// Per-tab registry (audit 7.5). The observers used to be `mem::forget`-ed, which leaked every
+// closed or discarded tab's WKWebView — and its whole web-content tree — for the app's
+// lifetime. Thread-local because the objc objects are not `Send` and both `install` (the
+// `with_webview` callback) and `uninstall` (via `run_on_main_thread`) run on the main thread.
+thread_local! {
+    static OBSERVERS: RefCell<HashMap<u32, TabObservers>> = RefCell::new(HashMap::new());
+}
+
+/// Release tab `id`'s observers: their `Drop` unregisters KVO and drops the strong WebView
+/// reference. Called from `tabs::close_webview` (close AND discard). MAIN THREAD ONLY.
+pub fn uninstall(id: u32) {
+    OBSERVERS.with(|m| m.borrow_mut().remove(&id));
+}
+
 /// Install a KVO observer on the content WKWebView that pushes top-frame URL changes
 /// to the chrome address bar (`nav.state`). Call inside
-/// `content.with_webview(|pw| nav_url_mac::install(&pw, app, id))`. The observer is
-/// leaked (one per tab, app lifetime) so KVO stays registered for the tab's life.
+/// `content.with_webview(|pw| nav_url_mac::install(&pw, app, id))`. The observers are kept in
+/// the per-tab registry until [`uninstall`] (tab close/discard); re-installing for the same id
+/// (a discarded tab re-spawned) replaces — and so releases — the previous pair.
 pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
     let ptr = pw.inner() as *mut WKWebView;
     if ptr.is_null() {
@@ -200,9 +224,8 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
             }
         }),
     );
-    // KVO needs the observer alive for as long as it's registered; keep it for the
-    // tab/app lifetime (the WKWebView outlives this call).
-    std::mem::forget(url_observer);
+    // KVO needs the observer alive for as long as it's registered: the registry below owns
+    // it until the tab's webview closes.
 
     // ── Title observer: catch the element picker's AEGISPICK: sentinel ──
     let title_observer = TitleObserver::new(
@@ -213,5 +236,13 @@ pub fn install(pw: &tauri::webview::PlatformWebview, app: AppHandle, id: u32) {
             }
         }),
     );
-    std::mem::forget(title_observer);
+    OBSERVERS.with(|m| {
+        m.borrow_mut().insert(
+            id,
+            TabObservers {
+                _url: url_observer,
+                _title: title_observer,
+            },
+        )
+    });
 }

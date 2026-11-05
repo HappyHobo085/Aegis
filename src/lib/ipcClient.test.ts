@@ -355,24 +355,40 @@ describe('ipc rejection boundary', () => {
       payload: { viewId: 2 },
     });
 
-    // …and the optimization still applies: the SAME view twice inside the window is one
-    // invoke. Without this half, "stop deduping" would pass the test above.
-    await aegis.adblock.getState(2);
-    expect(mockInvoke).toHaveBeenCalledTimes(2);
+    // …and the optimization still applies: the SAME view requested twice while the first
+    // call is still IN FLIGHT is one invoke. Without this half, "stop deduping" would pass the
+    // test above.
+    mockInvoke.mockResolvedValueOnce({
+      enabled: true,
+      allowlistedHosts: [],
+      sessionBlocked: 0,
+      pageBlocked: 30,
+    });
+    const [a, b] = await Promise.all([aegis.adblock.getState(2), aegis.adblock.getState(2)]);
+    expect(a).toBe(b);
+    expect(mockInvoke).toHaveBeenCalledTimes(3);
   });
 
-  it('a RESOLVING dedupable call is still collapsed, so the optimization survives', async () => {
-    // Guard against "fixing" the eviction by dropping dedup entirely: two identical
-    // reads inside the window must still produce a single invoke.
-    //
-    // Uses `history.search` rather than `nav.getState` because the dedup cache is
-    // module-global and outlives an individual test — the preceding test leaves a
-    // RESOLVED `nav.getState` entry behind, which would be served from cache here
-    // and make the invoke count 0. Each test needs a channel nothing else touched.
+  it('concurrent identical reads are still collapsed, so the optimization survives', async () => {
+    // Guard against "fixing" stale reuse by dropping dedup entirely: two identical reads
+    // issued while the first is still in flight must still produce a single invoke.
     mockInvoke.mockResolvedValue([]);
-    await aegis.history.search('dedup-probe');
-    await aegis.history.search('dedup-probe');
+    await Promise.all([aegis.history.search('dedup-probe'), aegis.history.search('dedup-probe')]);
     expect(mockInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('a SETTLED read is never reused: read → mutate → read reaches the backend again', async () => {
+    // Audit 5.1. The cache used to keep a RESOLVED promise for the whole window, so a read
+    // straight after a mutation (add a favorite, then re-list) was answered with the list from
+    // BEFORE the mutation. Dedup is now in-flight only: a settled entry is evicted.
+    mockInvoke.mockResolvedValueOnce([]);
+    expect(await aegis.favorites.list()).toEqual([]);
+    const added = [{ id: 1, name: 'A', url: 'https://a.example', position: 0 }];
+    mockInvoke.mockResolvedValueOnce(added);
+    await aegis.favorites.add({ name: 'A', url: 'https://a.example' });
+    mockInvoke.mockResolvedValueOnce(added);
+    expect(await aegis.favorites.list()).toEqual(added);
+    expect(mockInvoke).toHaveBeenCalledTimes(3);
   });
 });
 

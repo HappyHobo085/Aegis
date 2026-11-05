@@ -300,7 +300,7 @@ fn build() -> String {
   var B=new Set([{domains_js}]);
   function blk(u){{try{{var h=new URL(u,location.href).hostname;while(h){{if(B.has(h))return true;var i=h.indexOf('.');if(i<0)break;h=h.slice(i+1);}}return false;}}catch(e){{return false;}}}}
   var of=window.fetch;
-  if(of)window.fetch=function(i){{var u=typeof i==='string'?i:(i&&i.url);if(u&&blk(u))return Promise.reject(new TypeError('Blocked by Aegis'));return of.apply(this,arguments);}};
+  if(of)window.fetch=function(i){{var u=typeof i==='string'?i:(typeof URL!=='undefined'&&i instanceof URL)?i.href:(i&&i.url);if(u&&blk(u))return Promise.reject(new TypeError('Blocked by Aegis'));return of.apply(this,arguments);}};
   var XO=XMLHttpRequest.prototype.open;
   XMLHttpRequest.prototype.open=function(m,u){{this.__ab=!!(u&&blk(u));return XO.apply(this,arguments);}};
   var XS=XMLHttpRequest.prototype.send;
@@ -390,6 +390,17 @@ pub extern "system" fn Java_com_aegis_browser_NativeAdblock_enabled(
 
 #[cfg(test)]
 mod tests {
+
+    /// Audit 4.9: the injected `fetch` wrapper read the target from a string or `Request.url`
+    /// only, so `fetch(new URL('https://ads.example/x'))` — a URL OBJECT — reached the network
+    /// unchecked. The guard must read `.href` from a URL object too.
+    #[test]
+    fn the_fetch_guard_reads_url_objects_too() {
+        let src = include_str!("adblock_inject.rs");
+        let start = src.find("var of=window.fetch;").expect("the fetch guard");
+        let line = &src[start..start + src[start..].find('\n').unwrap() + 200];
+        assert!(line.contains("instanceof URL"), "fetch guard: {line}");
+    }
     use serde_json::json;
 
     use crate::test_support::with_tmp_app;

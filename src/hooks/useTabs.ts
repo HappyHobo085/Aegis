@@ -23,9 +23,15 @@ export function useTabs(): {
     // PROCESSED — and both requests ride the same transport, so Rust handled `tabs.list`
     // strictly before the subscription existed. Any `tabs.state` emitted in that window was
     // lost permanently and nothing refetched. Subscribe FIRST, then seed.
-    const off = aegis.tabs.onState((s) => setState(s));
+    let sawEvent = false;
+    const off = aegis.tabs.onState((s) => {
+      sawEvent = true;
+      setState(s);
+    });
+    // Audit 5.3: once a live event has landed, the seed result is OLDER than what is on screen
+    // (an event is emitted for every later change), so a seed that resolves late is dropped.
     void aegis.tabs.list().then((s) => {
-      if (active) setState(s);
+      if (active && !sawEvent) setState(s);
     });
     return () => {
       active = false;

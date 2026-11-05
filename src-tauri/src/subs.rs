@@ -96,20 +96,61 @@ fn hash_text(text: &str) -> String {
     format!("{:x}", h.finish())
 }
 
+/// Largest filter-list body accepted (16 MiB — EasyList is ~2 MB).
+const MAX_LIST_BYTES: u64 = 16 * 1024 * 1024;
+/// Redirect hops followed for one list fetch.
+const MAX_LIST_REDIRECTS: usize = 10;
+
+/// Read at most `cap` bytes; a body LONGER than that is refused rather than truncated (a
+/// truncated list is a silently different rule set). Reads `cap + 1` to tell the two apart.
+fn read_capped(r: impl std::io::Read, cap: u64) -> Result<String, String> {
+    use std::io::Read;
+    let mut buf = Vec::new();
+    r.take(cap.saturating_add(1))
+        .read_to_end(&mut buf)
+        .map_err(|e| e.to_string())?;
+    if buf.len() as u64 > cap {
+        return Err(format!("filter list is larger than {cap} bytes"));
+    }
+    String::from_utf8(buf).map_err(|e| e.to_string())
+}
+
+/// Whether a redirect to `next` may be followed after `hops` earlier ones: https only (an
+/// https list redirecting to http would hand a path attacker exactly the rewrite the https
+/// requirement exists to prevent), and a bounded chain.
+fn redirect_allowed(next: &str, hops: usize) -> bool {
+    hops < MAX_LIST_REDIRECTS && next.starts_with("https://")
+}
+
 /// Blocking HTTPS GET on a dedicated thread (so an ambient async runtime can't
 /// make `reqwest::blocking` panic). 2xx → body text.
 fn fetch_text(url: String) -> Result<String, String> {
+    // https only (owner decision D3). Checked BEFORE connecting, so a row stored by an older
+    // build, or arriving by sync/import, cannot be fetched in the clear either (audit 4.1).
+    if !url.starts_with("https://") {
+        return Err(format!(
+            "filter lists are fetched over https only, not {url}"
+        ));
+    }
     std::thread::spawn(move || -> Result<String, String> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(25))
             .user_agent("Aegis/0.1 (filter-list updater)")
+            .redirect(reqwest::redirect::Policy::custom(|attempt| {
+                if redirect_allowed(attempt.url().as_str(), attempt.previous().len()) {
+                    attempt.follow()
+                } else {
+                    attempt.error("filter-list redirect left https (or went on too long)")
+                }
+            }))
             .build()
             .map_err(|e| e.to_string())?;
         let resp = client.get(&url).send().map_err(|e| e.to_string())?;
         if !resp.status().is_success() {
             return Err(format!("HTTP {}", resp.status()));
         }
-        resp.text().map_err(|e| e.to_string())
+        // A hard cap on the body: `resp.text()` buffered whatever the server sent.
+        read_capped(resp, MAX_LIST_BYTES)
     })
     .join()
     .map_err(|e| {
@@ -384,8 +425,10 @@ pub fn dispatch<R: Runtime>(
                 .unwrap_or("")
                 .trim()
                 .to_string();
-            if !(url.starts_with("https://") || url.starts_with("http://")) {
-                return Some(Err("subscription url must be http(s)".into()));
+            // https only (owner decision D3, audit 4.1): a list decides what is blocked AND
+            // what is exempted, so a plain-http one is rewritable by anyone on the path.
+            if !url.starts_with("https://") {
+                return Some(Err("subscription url must be https".into()));
             }
             let list_id = list_id_from_url(&url);
             // A URL's last segment cannot hold a separator, but it CAN be `.` or `..`.
@@ -607,6 +650,50 @@ mod tests {
         ];
         assert_eq!(url_of(&items, "de").as_deref(), Some("https://x/de.txt"));
         assert_eq!(url_of(&items, "missing"), None);
+    }
+
+    /// Audit 4.1 / D3: a filter list decides what this browser blocks AND what it exempts
+    /// (`@@` rules), so fetching one over plain http let anyone on the path rewrite it.
+    #[test]
+    fn add_rejects_plain_http() {
+        with_tmp_app(|app| {
+            let r = dispatch(
+                app,
+                "subs.add",
+                &json!({ "url": "http://lists.example/ads.txt" }),
+            );
+            assert!(matches!(r, Some(Err(_))), "plain http must be refused");
+            assert!(jsonstore::live(jsonstore::load_synced(app, "subs")).is_empty());
+        });
+    }
+
+    /// An http subscription stored by an older build (or a synced/imported row) must not be
+    /// fetched either — refused before any connection is made.
+    #[test]
+    fn fetching_a_non_https_url_is_refused_before_connecting() {
+        let err = fetch_text("http://127.0.0.1:9/never".into()).expect_err("refused");
+        assert!(err.contains("https"), "got {err}");
+    }
+
+    /// A list body is read with a hard cap, so a hostile (or broken) server cannot make the
+    /// updater buffer an unbounded body in memory.
+    #[test]
+    fn a_list_body_over_the_cap_is_refused() {
+        let ok = read_capped(std::io::Cursor::new(vec![b'a'; 10]), 10).expect("at the cap");
+        assert_eq!(ok.len(), 10);
+        assert!(read_capped(std::io::Cursor::new(vec![b'a'; 11]), 10).is_err());
+    }
+
+    /// A redirect may only stay on https: an https list that redirects to http would hand the
+    /// path-attacker the very rewrite the https requirement exists to stop.
+    #[test]
+    fn redirects_are_followed_only_to_https() {
+        assert!(redirect_allowed("https://cdn.example/list.txt", 0));
+        assert!(!redirect_allowed("http://cdn.example/list.txt", 0));
+        assert!(!redirect_allowed(
+            "https://cdn.example/list.txt",
+            MAX_LIST_REDIRECTS
+        ));
     }
 
     #[test]

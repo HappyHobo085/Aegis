@@ -62,6 +62,10 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
   // the hard timeout in startRefresh for a load that never finishes at all.
   private var refreshing = false
   private var refreshTabId = -1
+  /** The ONE pending hard timeout. Stored so a new refresh (or a release) can remove it: a bare
+   *  `postDelayed` left the previous refresh's timeout armed, and it then cleared a NEWER
+   *  refresh of the same tab early (audit 7.7). Reads `refreshTabId` when it fires. */
+  private val refreshTimeout = Runnable { stopRefresh(refreshTabId) }
   private var spin = 0f
 
   private val disc = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1f6feb") }
@@ -171,7 +175,8 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
     refreshTabId = tabId
     spin = 0f
     postInvalidateOnAnimation()
-    postDelayed({ stopRefresh(tabId) }, REFRESH_TIMEOUT_MS)
+    removeCallbacks(refreshTimeout)
+    postDelayed(refreshTimeout, REFRESH_TIMEOUT_MS)
   }
 
   /** Called by the host when tab [tabId] finishes (re)loading — hides the spinner. Only
@@ -186,6 +191,7 @@ class GestureContainer(context: Context, private val host: GestureHost) : FrameL
   fun cancelRefresh() = clearRefresh()
 
   private fun clearRefresh() {
+    removeCallbacks(refreshTimeout)
     refreshTabId = -1
     if (!refreshing) return
     refreshing = false

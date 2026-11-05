@@ -431,7 +431,12 @@ describe('App', () => {
       ),
     );
     act(() =>
-      promptCb!({ requestId: 1, origin: 'https://example.com', permission: 'geolocation' }),
+      promptCb!({
+        requestId: 1,
+        viewId: 1,
+        origin: 'https://example.com',
+        permission: 'geolocation',
+      }),
     );
     await waitFor(() =>
       expect(setLayout).toHaveBeenLastCalledWith(
@@ -439,6 +444,76 @@ describe('App', () => {
         expect.objectContaining({ overlay: true }),
       ),
     );
+  });
+
+  it('queued permission prompts are shown one after another, each focused on Block', async () => {
+    // Audit 5.2: the second prompt queues behind the first. When the dialog advances, it must
+    // REMOUNT so its initial focus lands on the safe choice again — otherwise a stray Enter
+    // aimed at the first prompt's focused button could grant the second request.
+    const { aegis } = await import('./lib/ipcClient');
+    let promptCb: ((p: import('../shared/types').PermissionPrompt) => void) | undefined;
+    (aegis.permissions.onPrompt as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: (p: import('../shared/types').PermissionPrompt) => void) => {
+        promptCb = cb;
+        return () => {};
+      },
+    );
+    const { default: userEvent } = await import('@testing-library/user-event');
+    render(<App />);
+    await waitFor(() => expect(promptCb).toBeTypeOf('function'));
+    act(() =>
+      promptCb!({ requestId: 1, viewId: 1, origin: 'https://first.example', permission: 'media' }),
+    );
+    act(() =>
+      promptCb!({
+        requestId: 2,
+        viewId: 1,
+        origin: 'https://second.example',
+        permission: 'geolocation',
+      }),
+    );
+    expect(await screen.findByText('https://first.example')).toBeInTheDocument();
+    const allowOnce = screen.getByRole('button', { name: 'Allow once' });
+    allowOnce.focus();
+    await userEvent.click(allowOnce);
+    expect(await screen.findByText('https://second.example')).toBeInTheDocument();
+    await waitFor(() =>
+      expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Block' })),
+    );
+    expect(aegis.permissions.resolve).toHaveBeenCalledWith(1, 'allow-once');
+  });
+
+  it('a prompt from a PRIVATE BACKGROUND tab is labelled by that tab, not the active one (audit 5.6)', async () => {
+    const { aegis } = await import('./lib/ipcClient');
+    const tab = (id: number, priv: boolean, title: string) => ({
+      id,
+      pinned: false,
+      live: true,
+      title,
+      url: 'https://' + id + '.example/',
+      private: priv,
+      workspaceId: 'default',
+    });
+    (aegis.tabs.list as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      tabs: [tab(1, false, 'Visible'), tab(2, true, 'Secret tab')],
+      activeId: 1,
+    });
+    let promptCb: ((p: import('../shared/types').PermissionPrompt) => void) | undefined;
+    (aegis.permissions.onPrompt as ReturnType<typeof vi.fn>).mockImplementation(
+      (cb: (p: import('../shared/types').PermissionPrompt) => void) => {
+        promptCb = cb;
+        return () => {};
+      },
+    );
+    render(<App />);
+    await waitFor(() => expect(promptCb).toBeTypeOf('function'));
+    await screen.findByText('Secret tab');
+    act(() =>
+      promptCb!({ requestId: 4, viewId: 2, origin: 'https://2.example', permission: 'camera' }),
+    );
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog).toHaveTextContent('This request is from a private tab.');
+    expect(dialog).toHaveTextContent('This request is from a background tab: Secret tab');
   });
 
   it('opens the Settings modal from the toolbar gear button', async () => {
@@ -527,7 +602,12 @@ describe('App', () => {
     render(<App />);
     await waitFor(() => expect(promptCb).toBeTypeOf('function'));
     act(() =>
-      promptCb!({ requestId: 1, origin: 'https://example.com', permission: 'geolocation' }),
+      promptCb!({
+        requestId: 1,
+        viewId: 1,
+        origin: 'https://example.com',
+        permission: 'geolocation',
+      }),
     );
     expect(screen.getByRole('dialog', { name: undefined })).toBeInTheDocument();
     const { default: userEvent } = await import('@testing-library/user-event');

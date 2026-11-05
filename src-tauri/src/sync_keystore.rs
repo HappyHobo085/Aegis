@@ -83,34 +83,29 @@ impl VaultBacking {
     }
 }
 
-/// Derive a 256-bit key-encryption key from a passphrase + salt (Argon2id).
-///
-/// Parameters: argon2id defaults (m_cost=19456/19 MiB, t_cost=2, p_cost=1) —
-/// the OWASP 2024 minimum floor. For stronger offline-attack resistance on
-/// desktop-class hardware, consider upgrading to m_cost=65536, t_cost=3, p_cost=4
-/// (OWASP recommended). Changing params requires a migration path for existing
-/// vaults (KDF version field in the wrapped blob).
-fn derive_kek(passphrase: &str, salt: &[u8]) -> Result<[u8; 32], String> {
-    let mut kek = [0u8; 32];
-    argon2::Argon2::default()
-        .hash_password_into(passphrase.as_bytes(), salt, &mut kek)
-        .map_err(|e| e.to_string())?;
-    Ok(kek)
-}
-
 /// Wrap the root with a passphrase: Argon2id(passphrase, random salt) → KEK, then
-/// XChaCha20-Poly1305-seal the root. Returns a JSON blob `{v, salt, nonce, ct}` (hex).
+/// XChaCha20-Poly1305-seal the root. Returns a JSON blob `{v, kdf, salt, nonce, ct}` (hex).
+///
+/// `kdf` records the Argon2id parameters (`crypto::KdfParams`). New blobs are always
+/// `KdfParams::V2` (64 MiB, t=3); a blob without `kdf` was written under V1 (the argon2
+/// defaults, 19 MiB, t=2) and is re-wrapped as V2 on its first successful unlock (D7).
 pub fn wrap_with_passphrase(root: &RootSecret, passphrase: &str) -> Result<String, String> {
     let mut salt = [0u8; 16];
     getrandom::getrandom(&mut salt).map_err(|e| e.to_string())?;
-    let mut kek = derive_kek(passphrase, &salt)?;
-    let sealed = crate::crypto::seal(&kek, "vault", "root", b"aegis-vault-v1", &root.0);
-    kek.zeroize();
-    let (nonce, ct) = sealed?;
+    let params = crate::crypto::KdfParams::V2;
+    let kek = params.derive(passphrase.as_bytes(), &salt)?;
+    let (nonce, ct) = crate::crypto::seal(&kek, "vault", "root", b"aegis-vault-v1", &root.0)?;
     serde_json::to_string(&serde_json::json!({
-        "v": 1, "salt": hex(&salt), "nonce": hex(&nonce), "ct": hex(&ct),
+        "v": 1, "kdf": params.to_json(),
+        "salt": hex(&salt), "nonce": hex(&nonce), "ct": hex(&ct),
     }))
     .map_err(|e| e.to_string())
+}
+
+/// The Argon2id parameters a wrapped blob was written under.
+fn blob_kdf(blob: &str) -> crate::crypto::KdfParams {
+    let v: Option<serde_json::Value> = serde_json::from_str(blob).ok();
+    crate::crypto::KdfParams::from_json(v.as_ref().and_then(|v| v.get("kdf")))
 }
 
 /// Reverse `wrap_with_passphrase`. A wrong passphrase fails authentication.
@@ -125,9 +120,9 @@ pub fn unwrap_with_passphrase(blob: &str, passphrase: &str) -> Result<RootSecret
     let salt = get("salt")?;
     let nonce = get("nonce")?;
     let ct = get("ct")?;
-    let mut kek = derive_kek(passphrase, &salt)?;
+    let kek =
+        crate::crypto::KdfParams::from_json(v.get("kdf")).derive(passphrase.as_bytes(), &salt)?;
     let opened = crate::crypto::open(&kek, &nonce, &ct, "vault", "root", b"aegis-vault-v1");
-    kek.zeroize();
     // `pt` is the cleartext root; Vec<u8> isn't zeroize-on-drop, so wipe it on every path.
     let mut pt = opened?;
     if pt.len() != 32 {
@@ -254,9 +249,12 @@ pub fn device_local_salt<R: Runtime>(app: &AppHandle<R>) -> Result<Vec<u8>, Stri
         let salt = fresh_salt()?;
         let txt =
             serde_json::to_string(&serde_json::json!({ "salt": hex(&salt) })).unwrap_or_default();
-        if let Err(e) = crate::jsonstore::write_atomic(&p, txt.as_bytes()) {
-            eprintln!("[aegis] failed to persist device salt: {e}");
-        }
+        // A salt that cannot be SAVED must not be used: the next launch would mint another, and
+        // every launch would then register a different device identity on the server — none of
+        // which `removeDevice` could ever revoke as "this device". Refuse, exactly as an RNG
+        // failure does (audit 2.8c).
+        crate::jsonstore::write_atomic(&p, txt.as_bytes())
+            .map_err(|e| format!("cannot persist the device salt: {e}"))?;
         return Ok(salt.to_vec());
     }
     Ok(fresh_salt()?.to_vec())
@@ -463,13 +461,17 @@ fn keyring_set(user: &str, bytes: Zeroizing<Vec<u8>>) -> Result<(), String> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-fn keyring_get(user: &str) -> Option<Vec<u8>> {
+fn keyring_get(user: &str) -> Option<Zeroizing<Vec<u8>>> {
     let user = user.to_string();
     std::thread::spawn(move || {
+        // Both the keychain's String (the hex-encoded root) and the decoded bytes are wrapped in
+        // `Zeroizing`, so neither copy of the root survives in freed memory (audit 2.8e) — the
+        // callers already wipe the bytes they get, but the String was never wiped at all.
         keyring::Entry::new(KEYRING_SERVICE, &user)
             .ok()
             .and_then(|e| e.get_password().ok())
-            .and_then(decode_keyring_value)
+            .map(Zeroizing::new)
+            .and_then(|stored| decode_keyring_value(&stored))
     })
     .join()
     .ok()
@@ -481,11 +483,11 @@ fn keyring_get(user: &str) -> Option<Vec<u8>> {
 /// long is accepted as-is. Anything else (truncated, or a foreign entry) is rejected
 /// rather than guessed at — a wrong root here would sync as the wrong account.
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-fn decode_keyring_value(stored: String) -> Option<Vec<u8>> {
-    if let Some(bytes) = unhex(&stored).filter(|b| b.len() == 32) {
-        return Some(bytes);
+fn decode_keyring_value(stored: &str) -> Option<Zeroizing<Vec<u8>>> {
+    if let Some(hexed) = unhex(stored).map(Zeroizing::new).filter(|b| b.len() == 32) {
+        return Some(hexed);
     }
-    let raw = stored.into_bytes();
+    let raw = Zeroizing::new(stored.as_bytes().to_vec());
     (raw.len() == 32).then_some(raw)
 }
 
@@ -537,6 +539,27 @@ pub(crate) fn keyring_available() -> bool {
     }
 }
 
+/// `<path>.bak` — where `jsonstore::write_atomic` keeps the previous copy.
+fn backup_of(p: &std::path::Path) -> std::path::PathBuf {
+    let mut b = p.as_os_str().to_owned();
+    b.push(".bak");
+    std::path::PathBuf::from(b)
+}
+
+/// Best-effort removal of one key file.
+fn remove_key_file(p: &std::path::Path) {
+    let _ = std::fs::remove_file(p);
+}
+
+/// Remove a key file AND any `.bak` an older build's `write_atomic` left beside it — "forget the
+/// keys" has to forget every copy, not only the live one (audit 2.4). Returns the live file's
+/// removal result so existing `let _ =` call sites read the same.
+fn remove_key_file_and_backup<P: AsRef<std::path::Path>>(p: P) -> std::io::Result<()> {
+    let p = p.as_ref();
+    remove_key_file(&backup_of(p));
+    std::fs::remove_file(p)
+}
+
 /// Persist the root: OS keychain first (desktop), else a passphrase-wrapped file if a
 /// passphrase is supplied, else not at all (in-memory only). Returns where it landed.
 pub fn store_root<R: Runtime>(
@@ -549,11 +572,12 @@ pub fn store_root<R: Runtime>(
     {
         let wrapped = android_keystore::wrap(&root.0);
         if let (Some(blob), Some(p)) = (&wrapped, keystore_vault_path(app)) {
-            if crate::jsonstore::write_atomic(&p, blob.as_bytes()).is_ok() {
+            remove_key_file(&backup_of(&p));
+            if crate::jsonstore::write_atomic_no_backup(&p, blob.as_bytes()).is_ok() {
                 if let Some(pp) = passphrase {
                     let _ = store_passphrase_vault(app, root, pp);
                 } else if let Some(vp) = vault_path(app) {
-                    let _ = std::fs::remove_file(vp); // no stale passphrase vault
+                    let _ = remove_key_file_and_backup(vp); // no stale passphrase vault
                 }
                 return VaultBacking::Keychain;
             }
@@ -561,7 +585,7 @@ pub fn store_root<R: Runtime>(
         // Keystore unavailable/failed → REMOVE any stale keystore vault so load_root can't
         // resurrect an OLD root over the passphrase/in-memory path we're about to use.
         if let Some(p) = keystore_vault_path(app) {
-            let _ = std::fs::remove_file(p);
+            let _ = remove_key_file_and_backup(p);
         }
     }
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
@@ -570,7 +594,7 @@ pub fn store_root<R: Runtime>(
             if let Some(pp) = passphrase {
                 let _ = store_passphrase_vault(app, root, pp);
             } else if let Some(p) = vault_path(app) {
-                let _ = std::fs::remove_file(p); // don't leave a stale passphrase vault
+                let _ = remove_key_file_and_backup(p); // don't leave a stale passphrase vault
             }
             return VaultBacking::Keychain;
         }
@@ -590,7 +614,11 @@ fn store_passphrase_vault<R: Runtime>(
 ) -> Result<(), String> {
     let blob = wrap_with_passphrase(root, passphrase)?;
     let p = vault_path(app).ok_or_else(|| "vault path unavailable".to_string())?;
-    crate::jsonstore::write_atomic(&p, blob.as_bytes()).map_err(|e| e.to_string())
+    // NO `.bak`: a backup of a key blob is a second copy of the key — and the old wrapping (under
+    // a passphrase the user may have changed BECAUSE it leaked) would outlive both the rewrite
+    // and `clear_root` (audit 2.4).
+    remove_key_file(&backup_of(&p));
+    crate::jsonstore::write_atomic_no_backup(&p, blob.as_bytes()).map_err(|e| e.to_string())
 }
 
 /// Load the root at boot: OS keychain (desktop), else the passphrase vault if a passphrase
@@ -646,8 +674,17 @@ pub fn unlock_with_passphrase<R: Runtime>(
         "Couldn't read the saved sync vault. Restore with your recovery phrase to repair it."
             .to_string()
     })?;
-    unwrap_with_passphrase(&blob, passphrase)
-        .map_err(|_| "That passphrase couldn't unlock the saved sync vault.".to_string())
+    let root = unwrap_with_passphrase(&blob, passphrase)
+        .map_err(|_| "That passphrase couldn't unlock the saved sync vault.".to_string())?;
+    // D7 migration: a blob still on the old Argon2 parameters is re-wrapped under the current
+    // ones now that the passphrase is in hand. Best-effort — the unlock itself already
+    // succeeded, and a failed re-wrap leaves the old (still valid) blob in place.
+    if blob_kdf(&blob) != crate::crypto::KdfParams::V2 {
+        if let Err(e) = store_passphrase_vault(app, &root, passphrase) {
+            eprintln!("[aegis] could not upgrade the sync vault's key derivation: {e}");
+        }
+    }
+    Ok(root)
 }
 
 /// Whether a persisted seed exists (keychain or vault file) — for the boot auto-unlock check.
@@ -676,18 +713,154 @@ pub fn has_stored_root<R: Runtime>(app: &AppHandle<R>) -> bool {
 pub fn clear_root<R: Runtime>(app: &AppHandle<R>) {
     #[cfg(target_os = "android")]
     if let Some(p) = keystore_vault_path(app) {
-        let _ = std::fs::remove_file(p);
+        let _ = remove_key_file_and_backup(p);
     }
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     keyring_clear(&keyring_user(app));
     if let Some(p) = vault_path(app) {
-        let _ = std::fs::remove_file(p);
+        let _ = remove_key_file_and_backup(p);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ── D7: versioned Argon2 parameters for the passphrase-wrapped root ──
+
+    /// A legacy (pre-D7) blob: argon2 DEFAULT params and no `kdf` field — byte-for-byte what
+    /// `wrap_with_passphrase` produced before the version bump.
+    fn legacy_blob(root: &RootSecret, passphrase: &str) -> String {
+        let salt = [9u8; 16];
+        let mut kek = [0u8; 32];
+        argon2::Argon2::default()
+            .hash_password_into(passphrase.as_bytes(), &salt, &mut kek)
+            .unwrap();
+        let (nonce, ct) =
+            crate::crypto::seal(&kek, "vault", "root", b"aegis-vault-v1", &root.0).unwrap();
+        serde_json::json!({ "v": 1, "salt": hex(&salt), "nonce": hex(&nonce), "ct": hex(&ct) })
+            .to_string()
+    }
+
+    #[test]
+    fn a_new_passphrase_wrap_records_the_stronger_v2_parameters() {
+        let blob = wrap_with_passphrase(&RootSecret([1u8; 32]), "pw").unwrap();
+        let v: serde_json::Value = serde_json::from_str(&blob).unwrap();
+        assert_eq!(
+            crate::crypto::KdfParams::from_json(v.get("kdf")),
+            crate::crypto::KdfParams::V2
+        );
+        assert_eq!(
+            unwrap_with_passphrase(&blob, "pw").unwrap().0,
+            [1u8; 32],
+            "round trip"
+        );
+    }
+
+    #[test]
+    fn a_legacy_v1_blob_still_unwraps() {
+        let root = RootSecret([2u8; 32]);
+        assert_eq!(
+            unwrap_with_passphrase(&legacy_blob(&root, "pw"), "pw")
+                .unwrap()
+                .0,
+            root.0
+        );
+    }
+
+    #[test]
+    fn unlocking_a_legacy_vault_migrates_it_to_v2_on_disk() {
+        crate::test_support::with_tmp_app(|app| {
+            let root = RootSecret([3u8; 32]);
+            let p = vault_path(app).unwrap();
+            std::fs::write(&p, legacy_blob(&root, "pw")).unwrap();
+            assert_eq!(unlock_with_passphrase(app, "pw").unwrap().0, root.0);
+            let v: serde_json::Value =
+                serde_json::from_str(&std::fs::read_to_string(&p).unwrap()).unwrap();
+            assert_eq!(
+                crate::crypto::KdfParams::from_json(v.get("kdf")),
+                crate::crypto::KdfParams::V2,
+                "the stored blob must be re-wrapped under v2 on the first successful unlock"
+            );
+            assert_eq!(unlock_with_passphrase(app, "pw").unwrap().0, root.0);
+            assert!(unlock_with_passphrase(app, "wrong").is_err());
+        });
+    }
+
+    /// Audit 2.8(c): when the salt could not be SAVED, `device_local_salt` still returned a fresh
+    /// one — so every launch derived a different device identity (a new, unrevocable device on
+    /// the server each time). It must refuse instead, like an RNG failure already does.
+    #[test]
+    fn a_device_salt_that_cannot_be_saved_is_an_error_not_a_fresh_identity() {
+        crate::test_support::with_tmp_app(|app| {
+            let p = salt_path(app).expect("salt path");
+            let name = p.file_name().unwrap().to_string_lossy().to_string();
+            crate::test_support::block_store_file(app, &name);
+            assert!(device_local_salt(app).is_err());
+        });
+    }
+
+    /// Audit 2.8(d): the StrongBox attempt caught ONLY `StrongBoxUnavailableException`, but some
+    /// devices fail StrongBox key generation with a `ProviderException` (or another
+    /// `RuntimeException`). That escaped `secretKey()` and `wrap` returned null, so the device fell
+    /// all the way to the passphrase/in-memory tier instead of the TEE. There is no Kotlin test
+    /// source set, so this is a source pin (see `test_support::kotlin_source`).
+    #[test]
+    fn a_failed_strongbox_attempt_falls_back_to_the_tee_whatever_it_throws() {
+        let src = crate::test_support::kotlin_source("AegisKeystore.kt");
+        let body = crate::test_support::kotlin_fn_body(&src, "private fun secretKey()");
+        assert!(
+            body.contains("catch (_: Exception)") || body.contains("catch (e: Exception)"),
+            "the StrongBox attempt must catch any Exception and fall back to the TEE:\n{body}"
+        );
+    }
+
+    /// Audit 2.8(e): the keychain read returned the root as a plain `Vec<u8>`, so the bytes
+    /// outlived their use in freed memory. This only compiles if the type zeroizes on drop.
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    #[test]
+    fn the_keychain_read_is_zeroized_on_drop() {
+        let _typed: fn(&str) -> Option<Zeroizing<Vec<u8>>> = keyring_get;
+    }
+
+    /// Audit 2.4: key blobs were written with `write_atomic`, which keeps the PREVIOUS file at
+    /// `<name>.bak` — and `clear_root` ("forget the keys") removed only the live file. The
+    /// passphrase-wrapped root therefore survived "forget" on disk.
+    #[test]
+    fn forgetting_the_keys_leaves_no_copy_of_the_wrapped_root_behind() {
+        crate::test_support::with_tmp_app(|app| {
+            let root = RootSecret([5u8; 32]);
+            store_passphrase_vault(app, &root, "pw-one").expect("first write");
+            store_passphrase_vault(app, &root, "pw-two").expect("second write");
+            let p = vault_path(app).expect("path");
+            let dir = p.parent().expect("dir").to_path_buf();
+            let name = p.file_name().expect("name").to_string_lossy().to_string();
+            clear_root(app);
+            let left: Vec<String> = std::fs::read_dir(&dir)
+                .expect("read dir")
+                .filter_map(|e| e.ok())
+                .map(|e| e.file_name().to_string_lossy().to_string())
+                .filter(|n| n.starts_with(&name))
+                .collect();
+            assert!(left.is_empty(), "key material left behind: {left:?}");
+        });
+    }
+
+    #[test]
+    fn rewriting_the_passphrase_vault_keeps_no_backup_of_the_old_wrapping() {
+        crate::test_support::with_tmp_app(|app| {
+            let root = RootSecret([6u8; 32]);
+            store_passphrase_vault(app, &root, "old").expect("first");
+            store_passphrase_vault(app, &root, "new").expect("second");
+            let p = vault_path(app).expect("path");
+            let mut bak = p.as_os_str().to_owned();
+            bak.push(".bak");
+            assert!(
+                !std::path::Path::new(&bak).exists(),
+                "the root wrapped under the OLD passphrase must not linger in a .bak"
+            );
+        });
+    }
     #[cfg(test)]
     use std::rc::Rc;
 
@@ -762,7 +935,8 @@ mod tests {
         }
 
         pub fn get(user: &str) -> Option<Vec<u8>> {
-            decode_keyring_value(entry(user).get_password().ok()?)
+            decode_keyring_value(&zeroize::Zeroizing::new(entry(user).get_password().ok()?))
+                .map(|b| b.to_vec())
         }
 
         pub fn clear(user: &str) {

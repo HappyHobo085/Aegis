@@ -1,5 +1,5 @@
 // src/hooks/useDownloads.ts
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { DownloadEntry } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 
@@ -17,9 +17,18 @@ export function useDownloads(): {
   // return value, so the live `downloads.changed` pushes (progress/done) and
   // the explicit actions converge on a single source of truth (mirrors
   // useHistory's refresh-on-onChanged pattern).
-  const refresh = useCallback(async (): Promise<void> => {
-    setDownloads(await aegis.downloads.list());
+  // Audit 5.3: every list request is numbered and only the NEWEST-issued one may land, so a
+  // slow seed (or an earlier refresh) resolving after a later one cannot roll the list back.
+  const seq = useRef(0);
+  const latestList = useCallback(async (): Promise<DownloadEntry[] | null> => {
+    const mine = ++seq.current;
+    const next = await aegis.downloads.list();
+    return mine === seq.current ? next : null;
   }, []);
+  const refresh = useCallback(async (): Promise<void> => {
+    const next = await latestList();
+    if (next) setDownloads(next);
+  }, [latestList]);
 
   useEffect(() => {
     let active = true;
@@ -30,14 +39,14 @@ export function useDownloads(): {
     const unsubscribe = aegis.downloads.onChanged(() => {
       void refresh();
     });
-    void aegis.downloads.list().then((next) => {
-      if (active) setDownloads(next);
+    void latestList().then((next) => {
+      if (active && next) setDownloads(next);
     });
     return () => {
       active = false;
       unsubscribe();
     };
-  }, [refresh]);
+  }, [refresh, latestList]);
 
   const remove = useCallback(
     async (id: number): Promise<void> => {

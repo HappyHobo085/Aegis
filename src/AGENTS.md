@@ -110,6 +110,12 @@ Channel and event names, and all payload/return types, are defined once in
 
 ## Conventions & gotchas (verified in code)
 
+- **`react-hooks/exhaustive-deps` is ON, as an error (audit 5.7).** Depend on a hook's
+  STABLE callbacks, destructured (`const { create: tabCreate } = tabs`), never the whole
+  object (`useTabs()` etc. return a fresh object every render, so listing it re-registers
+  the effect each render). The one suppression is `useChromeHeights`' deliberately dep-less
+  layout effect, with its reason inline; a new suppression needs one too.
+
 - **Chrome overlay z-order (centralized compositor).** The content webview is opaque
   and on top, so full-window chrome must lower it. The decision is single-sourced:
   every content-hiding surface calls `useChromeSurface('<id>', active)`
@@ -217,6 +223,13 @@ width })` so the page insets from the right and stays visible. There is no
   subscribes to the syncBus (position irrelevant) _and_ to `aegis.picker.onPicked`, which is
   a real async `listen()` and must be registered first. Judge each subscription, not each
   hook.
+  **…and a seed that resolves AFTER an event must not overwrite it (audit 5.3).** Subscribing
+  first opens the opposite race: the event lands, then the older seed result. `useTabs` and
+  `useNav` drop the seed once a (matching-view) event arrived; `useAdblock` keeps the
+  event's counts and takes only the rest of the seed (the event carries no allowlist);
+  `useDownloads` numbers its list requests and applies only the newest-issued one. A
+  `listen()` that REJECTS is logged by event name in `tauriInvoke.on` (audit 5.5), never left
+  as an unhandled rejection.
   **The list is DERIVED, not hand-maintained.** The guard scans `hooks/use[A-Z]*.ts` for
   files that read a seed (`aegis.*.getState|get|list`) _and_ register an async
   `aegis.*.on*` subscription, and fails if any of them has no case in its own table — so a
@@ -260,6 +273,14 @@ width })` so the page insets from the right and stays visible. There is no
   calling `useSync.getRecoveryPhrase(true)`. The hook used to hardcode `{ confirm: true }`,
   which turned the core's "gated on an explicit confirm" contract into a bypass; the flag now
   has to be the user's own answer, and the hook throws if it is not.
+  **Server registration code + owner approval (audit 2026-11-02).** The setup view has a
+  "Server registration code (if required)" field, held in component state only and passed to
+  whichever setup call the user presses (`useSync.enableNew(passphrase?, code?)` /
+  `enableFromPhrase(phrase, passphrase?, code?)`; omitted entirely when blank). The running view
+  shows a `role="status"` "waiting for approval" notice while `state.pendingApproval`, and the
+  device list labels `(owner)` and `— waiting for approval` rows; **Approve**/**Reject** are
+  offered only when THIS device `isOwner` (the server 403s anyone else), and Reject goes
+  through the same destructive `confirm()` + `removeDevice` as Remove.
   Coverage: the `settings:sync` screen plus the
   `settings.sync.allowInsecure` interaction spec (vitest asserts the `settings.set` wiring;
   live asserts `sync.getState().allowInsecure` flips and restores it) and the
@@ -423,9 +444,12 @@ canceled`) passed because of the defect and named a "canceled" state the flow
     explicit per-row "Reveal" click; each row tracks its own reveal state in
     `revealedUuids` (a `Set<string>` in local state, cleared on lock).
   - "Copy" copies the plaintext to the clipboard without ever showing it. The 60 s
-    clear-timer handle lives in a ref: a second Copy cancels the first (otherwise the first
-    timer wipes the secret the UI just promised would survive 60 s) and the timer is cleared
-    on unmount (otherwise closing Settings blanks whatever the user copied since).
+    clear-timer is ONE module-level handle (audit 5.4): a second Copy — from any mount —
+    resets it (otherwise the first timer wipes the secret the UI just promised would survive
+    60 s), and it is deliberately NOT cleared on unmount, because the common case is copy then
+    close Settings, and cancelling there left the password on the clipboard indefinitely. It
+    does not `readText()` first to check the clipboard still holds the secret: on WebView2 that
+    raises a clipboard-read permission prompt.
   - "Delete" removes the record from the vault (confirm on the row).
   - Records are NOT stored in `useVault` state — `VaultSettingsTab` calls
     `vault.list()` on unlock and holds the list locally; the hook never persists plaintext.
@@ -660,6 +684,10 @@ now?)` (`just now` → `12 min ago` → `3 h ago` → `Yesterday, 14:32` → `Tu
   `AdblockShield.test.tsx` drives the real UI for the refused case, for both still-allowed
   cases, and for the both-listed case. (The `farble.rs:370` / `SecurityTab.tsx:223` pair looks
   like the same bug and is **not** — it is exact on BOTH sides, so read and write agree.)
+- **Dedup is IN-FLIGHT ONLY (audit 5.1).** `dedupedCall` evicts an entry the moment its call
+  settles (resolved or rejected); `DEDUP_WINDOWS` now only caps how long a still-pending call
+  may be shared. Reusing a SETTLED promise for the window served a read right after a mutation
+  the data from before it. `ipcClient.test.ts` pins read → mutate → read = 3 invokes.
 - **A view-scoped `getState` MUST carry its `viewId`, because the dedup cache is keyed by
   payload.** `ipcClient`'s `dedupedCall` hashes the payload into the cache key, so a
   payload-less call on a channel in `DEDUP_WINDOWS` has **ONE key shared by every caller**.
@@ -708,7 +736,8 @@ now?)` (`just now` → `12 min ago` → `3 h ago` → `Yesterday, 14:32` → `Tu
   fixture. The mock now carries `pageBlocked`, keyed by the requested view, with
   `setMockPageBlocked` / `resetMockPageBlocked` test-only helpers; its `nav.getState` is
   likewise view-aware (it used to return one fixed `baseState` for every argument).
-  `ipcClient.test.ts` pins the dedup shape (two views ⇒ two invokes, same view ⇒ one) and
+  `ipcClient.test.ts` pins the dedup shape (two views ⇒ two invokes, same view concurrently ⇒
+  one) and
   `useAdblock.test.tsx` pins the tab switch.
 - **The badges must not overstate protection.** `protectionSummary` takes `webrtc:
 WebrtcExemptState` as a **REQUIRED** option (an optional field with a default would fail
@@ -920,8 +949,11 @@ instead of the desktop chrome; the desktop body is unchanged (just renamed `Desk
   keyed); **`useMobileTabSync`** diffs the registry's tabs state and drives the native
   per-tab bridge (`activateTab`/`closeTab`/`discardTab`) — it tracks the last-activated id
   (not an activeId diff) so the first tab still activates when `useTabs` resolves its
-  EMPTY `{activeId:1}` seed into a real `activeId:1`. `window.__aegisOpenTab(url)` opens a
-  **background** tab (`tabs.create(url, true)`) for native `target=_blank`/`window.open`.
+  EMPTY `{activeId:1}` seed into a real `activeId:1`. `window.__aegisOpenTab(url, isPrivate)`
+  opens a **background** tab (`tabs.create(url, true, isPrivate)`) for native
+  `target=_blank`/`window.open`; `isPrivate` is the OPENER's privateness, which
+  `MainActivity`'s popup capture passes as `privateTabs.contains(id)` (audit 3.1 — a popup from
+  a private tab used to open normal). `MobileApp.test.tsx` calls the hook as Kotlin does.
   On Android the Rust core can't see the WebView title, so MobileApp relays the active
   tab's title into the registry via **`tabs.setTitle`** (guarded on the nav state's viewId)
   to keep the switcher labels accurate.

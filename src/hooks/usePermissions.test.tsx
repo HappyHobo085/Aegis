@@ -87,9 +87,12 @@ describe('usePermissions', () => {
     });
     const { result } = renderHook(() => usePermissions());
     await waitFor(() => expect(pushed).toBeTypeOf('function'));
-    act(() => pushed!({ requestId: 7, origin: 'https://c.example', permission: 'media' }));
+    act(() =>
+      pushed!({ requestId: 7, viewId: 1, origin: 'https://c.example', permission: 'media' }),
+    );
     expect(result.current.prompt).toEqual({
       requestId: 7,
+      viewId: 1,
       origin: 'https://c.example',
       permission: 'media',
     });
@@ -108,7 +111,9 @@ describe('usePermissions', () => {
     list.mockResolvedValueOnce(seed).mockResolvedValue(refreshed);
     const { result } = renderHook(() => usePermissions());
     await waitFor(() => expect(pushed).toBeTypeOf('function'));
-    act(() => pushed!({ requestId: 7, origin: 'https://c.example', permission: 'media' }));
+    act(() =>
+      pushed!({ requestId: 7, viewId: 1, origin: 'https://c.example', permission: 'media' }),
+    );
     expect(result.current.prompt).not.toBeNull();
     await act(async () => {
       await result.current.resolve('allow');
@@ -130,13 +135,50 @@ describe('usePermissions', () => {
     list.mockResolvedValueOnce(seed).mockResolvedValue(refreshed);
     const { result } = renderHook(() => usePermissions());
     await waitFor(() => expect(result.current.permissions).toHaveLength(2));
-    act(() => pushed!({ requestId: 9, origin: 'https://c.example', permission: 'media' }));
+    act(() =>
+      pushed!({ requestId: 9, viewId: 1, origin: 'https://c.example', permission: 'media' }),
+    );
     await act(async () => {
       await result.current.resolve('allow');
     });
     await waitFor(() => expect(result.current.permissions).toHaveLength(3));
     expect(list).toHaveBeenCalledTimes(2);
     expect(result.current.permissions[2].origin).toBe('https://c.example');
+  });
+
+  it('a second prompt queues behind the first instead of replacing it (FIFO)', async () => {
+    // Audit 5.2: a second `permissions.prompt` used to overwrite the first, so the first
+    // request was never answered and its page waited forever.
+    let pushed: ((p: PermissionPrompt) => void) | undefined;
+    onPrompt.mockImplementation((cb: (p: PermissionPrompt) => void) => {
+      pushed = cb;
+      return () => {};
+    });
+    const { result } = renderHook(() => usePermissions());
+    await waitFor(() => expect(pushed).toBeTypeOf('function'));
+    act(() =>
+      pushed!({ requestId: 1, viewId: 1, origin: 'https://a.example', permission: 'media' }),
+    );
+    act(() =>
+      pushed!({ requestId: 2, viewId: 1, origin: 'https://b.example', permission: 'geolocation' }),
+    );
+    // A duplicate delivery of a queued request must not be shown twice.
+    act(() =>
+      pushed!({ requestId: 2, viewId: 1, origin: 'https://b.example', permission: 'geolocation' }),
+    );
+    expect(result.current.prompt?.requestId).toBe(1);
+    await act(async () => {
+      await result.current.resolve('deny');
+    });
+    expect(result.current.prompt?.requestId).toBe(2);
+    await act(async () => {
+      await result.current.resolve('allow');
+    });
+    expect(result.current.prompt).toBeNull();
+    expect(resolve.mock.calls).toEqual([
+      [1, 'deny'],
+      [2, 'allow'],
+    ]);
   });
 
   it('resolve() is a no-op when there is no active prompt', async () => {

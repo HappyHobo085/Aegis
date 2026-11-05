@@ -18,6 +18,13 @@
   // ─── Skip non-HTTP origins ──────────────────────────────────────
   if (!window.location.protocol.startsWith('http')) return;
 
+  // ─── Top frame only ─────────────────────────────────────────────
+  // Injected into EVERY frame (desktop: `initialization_script_for_all_frames`; Android:
+  // `addDocumentStartJavaScript(…, setOf("*"))`), so without this a third-party iframe on a
+  // login page would run the credential-form machinery too. `window.top === window` is safe to
+  // evaluate cross-origin (a comparison, not a property read). Audit 2.9.
+  if (window.top !== window) return;
+
   // ─── Tauri event helpers ────────────────────────────────────────
   function emit(channel, payload) {
     try {

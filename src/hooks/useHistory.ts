@@ -52,8 +52,10 @@ export function useHistory(): {
     // Initial load goes through refresh() so it shares the seq-guard (a slow mount
     // fetch can't clobber a fast history.changed refresh, or vice versa).
     void refresh();
+    // The counter object itself, captured so the cleanup bumps the same one (exhaustive-deps).
+    const seq = refreshSeq;
     return () => {
-      refreshSeq.current++; // invalidate any in-flight refresh on unmount
+      seq.current++; // invalidate any in-flight refresh on unmount
       unsubscribe();
     };
   }, [refresh]);

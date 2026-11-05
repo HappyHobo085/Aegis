@@ -159,4 +159,24 @@ describe('useAdblock', () => {
     expect(clearAllowlist).toHaveBeenCalledTimes(1);
     expect(result.current.state.allowlistedHosts).toEqual([]);
   });
+
+  it('a slow seed getState does not overwrite a NEWER blockedCount (audit 5.3)', async () => {
+    let pushed: ((c: BlockedCount) => void) | undefined;
+    onBlockedCount.mockImplementation((cb: (c: BlockedCount) => void) => {
+      pushed = cb;
+      return () => {};
+    });
+    let release: (s: AdblockState) => void = () => {};
+    getState.mockImplementationOnce(() => new Promise<AdblockState>((r) => (release = r)));
+    const { result } = renderHook(() => useAdblock(PRIMARY_VIEW_ID, 'https://example.com/'));
+    await waitFor(() => expect(pushed).toBeTypeOf('function'));
+    act(() => pushed!({ viewId: PRIMARY_VIEW_ID, page: 5, session: 50 }));
+    await act(async () =>
+      release({ ...baseState, allowlistedHosts: ['a.example'], sessionBlocked: 1, pageBlocked: 1 }),
+    );
+    expect(result.current.page).toBe(5);
+    expect(result.current.state.sessionBlocked).toBe(50);
+    // The seed's NON-count fields still land: the event carries no allowlist.
+    expect(result.current.state.allowlistedHosts).toEqual(['a.example']);
+  });
 });

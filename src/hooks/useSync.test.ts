@@ -56,6 +56,7 @@ const mockSync = {
   getRecoveryPhrase: vi.fn(),
   listDevices: vi.fn(),
   removeDevice: vi.fn(),
+  approveDevice: vi.fn(),
   onState: vi.fn(),
   onChanged: vi.fn(),
   onVaultQuarantined: vi.fn(),
@@ -165,6 +166,49 @@ describe('useSync', () => {
     });
     expect(seen).toEqual(['a,b']);
     off();
+  });
+
+  // ── server registration code + owner approval (audit Phase 1, D1/D2) ──────
+
+  it('enableNew forwards a registration code, and sends none when there is none', async () => {
+    mockSync.getState.mockResolvedValue(ENABLED);
+    const { result } = renderHook(() => useSync());
+    await act(async () => {});
+    await act(async () => {
+      await result.current.enableNew(undefined, 'c0de');
+    });
+    expect(mockSync.enableNew).toHaveBeenLastCalledWith({ registrationCode: 'c0de' });
+    await act(async () => {
+      await result.current.enableNew('pw');
+    });
+    expect(mockSync.enableNew).toHaveBeenLastCalledWith({ passphrase: 'pw' });
+  });
+
+  it('enableFromPhrase forwards a registration code', async () => {
+    mockSync.getState.mockResolvedValue(ENABLED);
+    const { result } = renderHook(() => useSync());
+    await act(async () => {});
+    await act(async () => {
+      await result.current.enableFromPhrase('w1 w2', undefined, 'c0de');
+    });
+    expect(mockSync.enableFromPhrase).toHaveBeenLastCalledWith({
+      phrase: 'w1 w2',
+      passphrase: undefined,
+      registrationCode: 'c0de',
+    });
+  });
+
+  it('approveDevice calls the core and returns its refreshed list', async () => {
+    mockSync.getState.mockResolvedValue(ENABLED);
+    mockSync.approveDevice.mockResolvedValue([{ deviceId: 'n', label: 'n', isThisDevice: false }]);
+    const { result } = renderHook(() => useSync());
+    await act(async () => {});
+    let list: unknown = null;
+    await act(async () => {
+      list = await result.current.approveDevice('n');
+    });
+    expect(mockSync.approveDevice).toHaveBeenCalledWith('n');
+    expect(list).toEqual([{ deviceId: 'n', label: 'n', isThisDevice: false }]);
   });
 
   // ── enableNew ─────────────────────────────────────────────────────────────

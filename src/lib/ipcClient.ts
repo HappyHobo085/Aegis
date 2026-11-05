@@ -261,17 +261,18 @@ function dedupedCall<T>(channel: IPCChannel, payload: any): Promise<T> {
   dedupeCache.set(key, { timestamp: now, promise });
   ensureCleanupTimer();
 
-  // A REJECTED promise must not stay memoized. `cleanupCache` only evicts on age, so
-  // without this a single transient failure (a vault that was locked at that instant, a
-  // proxy that was briefly down) is replayed to every caller for the next `window * 2` —
-  // turning one flaky response into a burst of unrelated-looking errors. Evicting here
-  // means the next caller retries for real, which is what a read-only query wants.
-  // Guarded on identity so a newer entry for the same key is not removed.
-  void promise.catch(() => {
+  // Dedup is IN-FLIGHT ONLY: the entry is evicted the moment the call settles, resolved OR
+  // rejected (audit 5.1). Keeping a RESOLVED promise for the whole window served a read issued
+  // straight after a mutation (add a favorite, then re-list) the data from BEFORE it, and a
+  // REJECTED one replayed a single transient failure to every caller. Concurrent identical reads
+  // still collapse into one invoke, which is the optimization worth keeping. Guarded on identity
+  // so a newer entry for the same key is not removed.
+  const evict = () => {
     if (dedupeCache.get(key)?.promise === promise) {
       dedupeCache.delete(key);
     }
-  });
+  };
+  void promise.then(evict, evict);
 
   return promise;
 }
@@ -778,6 +779,7 @@ export const aegis: AegisApi = {
       dedupedCall<{ recoveryPhrase: string }>(IPC.syncGetRecoveryPhrase, { ...opts }),
     listDevices: () => dedupedCall<SyncDevice[]>(IPC.syncListDevices, undefined),
     removeDevice: (deviceId) => dedupedCall<SyncDevice[]>(IPC.syncRemoveDevice, { deviceId }),
+    approveDevice: (deviceId) => dedupedCall<SyncDevice[]>(IPC.syncApproveDevice, { deviceId }),
     onState: (cb) => on<SyncState>(IPC.evtSyncState, cb),
     onChanged: (cb) => on<SyncChanged>(IPC.evtSyncChanged, cb),
     onVaultQuarantined: (cb) => on<SyncVaultQuarantined>(IPC.evtSyncVaultQuarantined, cb),

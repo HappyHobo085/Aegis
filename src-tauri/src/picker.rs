@@ -5,7 +5,9 @@
 //! title-change handler on each platform (Linux: `linux_layout::connect_title_label`
 //! via WebKit's `notify::title`; Windows: `nav_url_win` via WebView2's
 //! `DocumentTitleChanged` event; macOS: `nav_url_mac` via WKWebView KVO on `title`).
-//! We persist `host##selector` as a custom cosmetic filter — the content-blocker
+//! We persist `host##selector` as a custom cosmetic filter — with the host taken from the
+//! ACTIVE TAB's URL in the registry, never from the sentinel's payload, which page script can
+//! influence (audit 4.8; the payload's `host` is ignored) — the content-blocker
 //! converter turns it into a css-display-none action, so it hides on future
 //! visits — and re-install the engine. The element is hidden immediately
 //! client-side too, for instant feedback.
@@ -63,7 +65,7 @@
 use serde_json::{json, Value};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Runtime};
+use tauri::{AppHandle, Manager, Runtime};
 
 /// Sentinel prefix a picked selector's payload is wrapped in (via document.title).
 pub const SENTINEL: &str = "AEGISPICK:";
@@ -209,8 +211,8 @@ fn build_rule(host: &str, selector: &str) -> Option<String> {
     }
     let host = host.trim();
     // An empty host means "scoped to nothing", which would emit a global `##sel`
-    // cosmetic rule — the overlay always supplies a hostname, so treat its absence
-    // as a malformed payload rather than widening the rule's scope.
+    // cosmetic rule — so its absence (an active tab with no http(s) host) refuses the rule
+    // rather than widening its scope.
     if host.is_empty() || !host.chars().all(is_host_char) {
         return None;
     }
@@ -218,7 +220,8 @@ fn build_rule(host: &str, selector: &str) -> Option<String> {
 }
 
 /// Picking overlay: highlight on hover, pick on click, Esc to cancel. On pick it
-/// hides the element (instant feedback) and signals {selector, host} via a short
+/// hides the element (instant feedback) and signals {selector, host} (the core uses only the
+/// selector; the host comes from the active tab — audit 4.8) via a short
 /// title sentinel, restored after a moment. Idempotent while active.
 /// Engine-agnostic — works in WebKitGTK, WebView2, and WKWebView.
 ///
@@ -377,7 +380,14 @@ pub fn on_picked<R: Runtime>(app: &AppHandle<R>, payload: &str) {
         return;
     }
     let selector = parsed.get("selector").and_then(Value::as_str).unwrap_or("");
-    let host = parsed.get("host").and_then(Value::as_str).unwrap_or("");
+    // The rule's host is the ACTIVE TAB's, never the payload's: the payload is assembled by
+    // script running in the page's own JS world, so a page could otherwise get a cosmetic rule
+    // written for a DIFFERENT site (audit 4.8). The payload's `host` is ignored.
+    let Some(host) = active_tab_host(app) else {
+        eprintln!("[aegis-picker] rejected pick: the active tab has no http(s) host");
+        return;
+    };
+    let host = host.as_str();
     let Some(rule) = build_rule(host, selector) else {
         eprintln!("[aegis-picker] rejected malformed pick (host={host:?})");
         return;
@@ -408,6 +418,18 @@ pub fn on_picked<R: Runtime>(app: &AppHandle<R>, payload: &str) {
     crate::adblock_refresh::refresh(app);
     crate::emit_event(app, "picker.picked", json!({ "rule": rule }));
     eprintln!("[aegis-picker] added rule: {rule}");
+}
+
+/// The host of the ACTIVE tab's current URL, from the registry. The picker only ever runs in
+/// the active tab, and the registry is the core's own record — unlike the overlay's payload,
+/// which is built by script running in the page's JS world (audit 4.8).
+fn active_tab_host<R: Runtime>(app: &AppHandle<R>) -> Option<String> {
+    let tabs = app.try_state::<crate::tabs::Tabs>()?;
+    let reg = tabs.reg.lock().unwrap_or_else(|e| e.into_inner());
+    let url = reg.url_of(reg.active_id())?.to_string();
+    drop(reg);
+    let host = url::Url::parse(&url).ok()?.host_str()?.to_string();
+    (!host.is_empty()).then_some(host)
 }
 
 /// Evaluate `js` in the ACTIVE tab's content webview. Returns whether there was a webview
@@ -833,9 +855,35 @@ mod tests {
     /// strip `SENTINEL` and hand the rest to `on_picked`. A title without the
     /// sentinel is not a pick at all, so it must not reach the writer.
     fn route_title<R: Runtime>(app: &AppHandle<R>, title: &str) {
+        // Every pick here models a user on example.com: the rule's host now comes from the
+        // ACTIVE TAB, not from the page's payload (audit 4.8).
+        if active_tab_host(app).is_none() {
+            on_page(app, "https://example.com/");
+        }
         if let Some(payload) = title.strip_prefix(SENTINEL) {
             on_picked(app, payload);
         }
+    }
+
+    /// Put the active tab on `url`, as a navigation would.
+    fn on_page<R: Runtime>(app: &AppHandle<R>, url: &str) {
+        let t = app.state::<crate::tabs::Tabs>();
+        let mut reg = t.reg.lock().unwrap_or_else(|e| e.into_inner());
+        let id = reg.active_id();
+        reg.record_nav(id, url);
+    }
+
+    /// Audit 4.8: the host in the overlay's payload is built by script running IN THE PAGE's
+    /// JS world, so a page (e.g. with a patched `JSON.stringify`) could get a cosmetic rule
+    /// saved for ANOTHER site. The host comes from the active tab's URL instead.
+    #[test]
+    fn the_rule_host_is_the_active_tab_not_what_the_page_claims() {
+        crate::test_support::with_tmp_app(|app| {
+            on_page(app, "https://real.example/article");
+            let n = begin_session().expect("os randomness");
+            route_title(app, &sentinel(&n, "victim.example", "#banner"));
+            assert_eq!(filters_on_disk(app), "real.example###banner\n");
+        });
     }
 
     #[test]

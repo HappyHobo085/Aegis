@@ -1,6 +1,6 @@
 // src/components/HistoryPanel.test.tsx
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import type { HistoryEntry } from '../../shared/types';
 
@@ -90,11 +90,23 @@ describe('HistoryPanel', () => {
   });
 
   it('searches as you type after the debounce', async () => {
-    const p = props();
-    render(<HistoryPanel {...p} />);
-    await userEvent.type(screen.getByRole('searchbox', { name: /search history/i }), 'x');
-    expect(p.search).not.toHaveBeenCalled();
-    await waitFor(() => expect(p.search).toHaveBeenCalled(), { timeout: 1000 });
+    // Fake timers: with real ones, a loaded full-suite run let the debounce elapse before the
+    // "not yet" assertion ran, and the test flaked. The clock now moves only when told to.
+    vi.useFakeTimers();
+    try {
+      const p = props();
+      render(<HistoryPanel {...p} />);
+      fireEvent.change(screen.getByRole('searchbox', { name: /search history/i }), {
+        target: { value: 'x' },
+      });
+      expect(p.search).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(1000);
+      });
+      expect(p.search).toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('offers a way to clear an active search', async () => {

@@ -86,7 +86,8 @@ unsafe fn source_url(core: &ICoreWebView2) -> windows::core::Result<String> {
     if uri.is_null() {
         return Ok(String::new());
     }
-    Ok(uri.to_string().unwrap_or_default())
+    // Copies AND frees the caller-owned WebView2 string (audit 4.5).
+    Ok(webview2_com::take_pwstr(uri))
 }
 
 /// Read `ICoreWebView2::DocumentTitle` — the current page title.
@@ -99,5 +100,5 @@ unsafe fn document_title(core: &ICoreWebView2) -> windows::core::Result<String> 
     if title.is_null() {
         return Ok(String::new());
     }
-    Ok(title.to_string().unwrap_or_default())
+    Ok(webview2_com::take_pwstr(title))
 }

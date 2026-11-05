@@ -1129,8 +1129,11 @@ body.aegis-fullscreen {
   text-align: center;
 }
 
-/* Popover card — glass morphism */
+/* Popover card — glass morphism. `color` is set here because the panel renders inside
+   `.address-bar__inline-right`, which is accent-coloured for the shield icon; without it every
+   unstyled line inherited the user's accent (pure blue on the dark panel for #0000ff). */
 .adblock-shield__popover {
+  color: var(--fg);
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
@@ -1148,13 +1151,30 @@ body.aegis-fullscreen {
   gap: 8px;
 }
 
-/* On mobile the shield sits in the bottom bar, so its popover must open UPWARD — the
-   desktop default (top: 100%) opens it below the bar, off-screen and inaccessible. The
-   bottom bar doesn't clip overflow and opening the shield raises the chrome above the
-   native content, so an upward popover is visible. */
+/* On mobile the shield sits in the TOP bar (`MobileTopBar`'s inline slot), so its popover opens
+   DOWNWARD over the page; opening the shield raises the chrome above the native content view
+   (`setChromeOverlay`), so it is visible there. It used to open upward — right when the shield
+   lived in the bottom bar, off the top of the screen once it moved.
+   - `fixed` across the screen, just below the 48px bar (MOBILE_ADDRESS_H): anchored to the
+     shield it was wider than the space to its left and ran off the left edge. The top bar is
+     itself fixed at 0,0 full-width, so these offsets land the same whether it or the viewport
+     is the containing block (its backdrop-filter makes it one).
+   - Opaque: the desktop glass (10% white) relies on the surface webview behind it; inside the
+     top bar its blur cannot sample the page, so the favourites showed straight through.
+   - Capped above the 56px bottom bar (MOBILE_BOTTOMBAR_H) and scrollable. */
 .aegis-mobile .adblock-shield__popover {
-  top: auto;
-  bottom: calc(100% + 6px);
+  position: fixed;
+  top: calc(48px + var(--aegis-inset-top, env(safe-area-inset-top)) + 6px);
+  left: 8px;
+  right: 8px;
+  bottom: auto;
+  min-width: 0;
+  background: var(--bg-elevated);
+  max-height: calc(
+    100dvh - 48px - 56px - 18px - var(--aegis-inset-top, env(safe-area-inset-top)) -
+      var(--aegis-inset-bottom, env(safe-area-inset-bottom))
+  );
+  overflow-y: auto;
 }
 
 /* Row inside popover (flex row for label + control pairs) */
@@ -1187,10 +1207,17 @@ body.aegis-fullscreen {
 }
 
 /* Count lines inside the popover */
+/* `--fg`, not the accent: the accent is user-picked and may be unreadable as body text on the
+   panel (pure blue on dark is ~2.3:1). */
 .adblock-shield__count {
   margin: 0;
   font-size: var(--fs-4);
-  color: var(--accent);
+  color: var(--fg);
+}
+
+.adblock-shield__note {
+  margin: 0;
+  color: var(--fg-muted);
 }
 
 .adblock-shield__site {
@@ -4503,9 +4530,14 @@ body.aegis-fullscreen {
   overflow-wrap: anywhere;
 }
 
-.permission-prompt__private {
+.permission-prompt__private,
+.permission-prompt__background {
   color: var(--fg-muted);
   font-size: var(--font-size-2);
+}
+
+.permission-prompt__background {
+  overflow-wrap: anywhere;
 }
 
 .permission-prompt__actions {
@@ -5561,7 +5593,9 @@ a:focus-visible {
 }
 
 /* ===== Mobile (Android) chrome — the MobileApp shell ===== */
-.aegis-mobile .address-bar input {
+/* The URL field only: a bare `input` also matched the shield panel's checkboxes, which render
+   inside the address bar, and made them 44px tall. */
+.aegis-mobile .address-bar input[type='text'] {
   font-size: var(--font-size-5);
   height: 44px;
 } /* 16px avoids focus-zoom; 44px is the min touch height */

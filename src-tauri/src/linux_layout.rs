@@ -190,7 +190,7 @@ pub fn connect_nav_failure_label(app: &AppHandle, label: &str) {
 /// Record page titles into history as WebKit makes them available. The visit is
 /// recorded URL-only at page-load (nav.rs); the title arrives slightly later via
 /// the WebView's "title" property, so we fill it in on the title-changed signal.
-pub fn connect_title_label(app: &AppHandle, label: &str) {
+pub fn connect_title_label(app: &AppHandle, label: &str, private: bool) {
     let Some(content) = app.get_webview(label) else {
         return;
     };
@@ -208,10 +208,9 @@ pub fn connect_title_label(app: &AppHandle, label: &str) {
                 return;
             }
             let url = wv.uri().map(|s| s.to_string()).unwrap_or_default();
-            let is_private = id
-                .map(|i| crate::tabs::is_private(&app, i))
-                .unwrap_or(false);
-            crate::history::update_title(&app, &url, &title, is_private);
+            // The SPAWN-time privateness: re-asking the registry answered `false` for a tab
+            // that had just closed (audit 3.3).
+            crate::history::update_title(&app, &url, &title, private);
             if let Some(id) = id {
                 crate::tabs::on_tab_title(&app, id, &title);
             }

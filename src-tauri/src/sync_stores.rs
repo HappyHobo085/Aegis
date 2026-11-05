@@ -121,6 +121,11 @@ fn merge_records(
             continue; // nor one without a well-formed hlc
         };
         crate::sync_envelope::observe(node, now_ms, &rhlc);
+        // A stamp too far ahead would win LWW against every later local edit (audit 2.1).
+        if !crate::sync_envelope::within_remote_skew(rhlc.wall_ms, now_ms) {
+            eprintln!("[aegis-sync] deferring {ruuid}: its stamp is too far in the future");
+            continue;
+        }
         // The merge identity is `uuid` (globally unique). The integer `id` is DEVICE-LOCAL
         // (next_id = max+1), so two devices independently assign 1,2,3…; the renderer keys
         // its mutations by `id`, so the merged array must stay id-unique or a `remove {id}`
@@ -423,6 +428,45 @@ fn duplicate_losers(records: &[Value], key_field: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Audit 2.1: HLC-LWW compares stamps, so a peer record stamped a YEAR ahead (a peer with a
+    /// broken clock, or a hostile one) beat every local edit until real time caught up — "wins
+    /// forever" in practice. `observe` already clamps what such a stamp does to this device's
+    /// CLOCK; the merge must refuse to let it decide the RECORD too.
+    #[test]
+    fn a_remote_record_stamped_far_in_the_future_does_not_replace_or_insert() {
+        let now = 1_700_000_000_000i64;
+        let local = vec![json!({
+            "uuid": "u1", "id": 1, "url": "https://local.example/",
+            "hlc": { "wall_ms": now - 1_000, "counter": 0, "node": "me" }, "deleted": false,
+        })];
+        let far = now + 365 * 24 * 60 * 60 * 1_000;
+        let remote = vec![
+            json!({ "uuid": "u1", "url": "https://poison.example/",
+                "hlc": { "wall_ms": far, "counter": 0, "node": "peer" }, "deleted": false }),
+            json!({ "uuid": "u2", "url": "https://poison2.example/",
+                "hlc": { "wall_ms": far, "counter": 0, "node": "peer" }, "deleted": false }),
+        ];
+        let (merged, changed) = merge_records(local, &remote, "me", now);
+        assert!(changed.is_empty(), "nothing may change: {changed:?}");
+        assert_eq!(merged.len(), 1);
+        assert_eq!(merged[0]["url"], json!("https://local.example/"));
+    }
+
+    /// The control: ordinary skew between two devices (inside `MAX_REMOTE_SKEW_MS`) still wins.
+    #[test]
+    fn a_remote_record_within_the_skew_window_still_wins() {
+        let now = 1_700_000_000_000i64;
+        let local = vec![json!({
+            "uuid": "u1", "id": 1, "url": "https://local.example/",
+            "hlc": { "wall_ms": now - 1_000, "counter": 0, "node": "me" }, "deleted": false,
+        })];
+        let remote = vec![json!({ "uuid": "u1", "url": "https://peer.example/",
+            "hlc": { "wall_ms": now + 30_000, "counter": 0, "node": "peer" }, "deleted": false })];
+        let (merged, changed) = merge_records(local, &remote, "me", now);
+        assert_eq!(changed, vec!["u1".to_string()]);
+        assert_eq!(merged[0]["url"], json!("https://peer.example/"));
+    }
 
     fn drec(uuid: &str, key: &str, key_field: &str, wall: i64, deleted: bool) -> Value {
         json!({

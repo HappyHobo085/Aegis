@@ -699,8 +699,40 @@ fn elapsed_secs(instant: &Instant) -> u64 {
 mod tests {
     use super::*;
 
-    /// A unique, fresh temp directory (no `tempfile` dep in the tree).
-    fn tmp_dir(tag: &str) -> PathBuf {
+    /// Audit 7.8: every test here used to leave its `aegis-jsonstore-*` directory behind.
+    #[test]
+    fn a_test_temp_dir_is_removed_when_dropped() {
+        let path = {
+            let d = tmp_dir("dropguard");
+            fs::write(d.join("x.json"), b"[]").unwrap();
+            d.to_path_buf()
+        };
+        assert!(!path.exists(), "{} leaked", path.display());
+    }
+
+    /// A test temp directory that deletes itself when dropped (audit 7.8 — every test here
+    /// used to leave its `aegis-jsonstore-*` directory behind). Derefs to `Path`, so call
+    /// sites read exactly as they did with the bare `PathBuf`.
+    struct TmpDir(PathBuf);
+    impl std::ops::Deref for TmpDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl AsRef<Path> for TmpDir {
+        fn as_ref(&self) -> &Path {
+            &self.0
+        }
+    }
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// A unique, fresh temp directory (no `tempfile` dep in the tree), removed on drop.
+    fn tmp_dir(tag: &str) -> TmpDir {
         let d = std::env::temp_dir().join(format!(
             "aegis-jsonstore-{}-{}-{}",
             tag,
@@ -711,7 +743,7 @@ mod tests {
                 .unwrap_or(0)
         ));
         fs::create_dir_all(&d).unwrap();
-        d
+        TmpDir(d)
     }
 
     /// The `*.tmp` siblings sitting next to `dir` — the temp files `write_atomic`

@@ -49,9 +49,51 @@ fn load_id_keyed<R: Runtime>(
     Ok(items)
 }
 
-fn merge_into(item: &mut Value, partial: Option<&Value>) {
-    if let (Some(obj), Some(p)) = (item.as_object_mut(), partial.and_then(Value::as_object)) {
-        for (k, v) in p {
+/// The fields a renderer `favorites.update` / `saved.update` may write — exactly the IPC
+/// types in `shared/types.ts`. `merge_into` used to copy EVERY key of `partial`, so one call
+/// could re-key a row (`id`), tombstone it (`deleted`), or forge its sync stamps (`hlc`,
+/// `savedAt`) — and sync would then push that to every paired device (audit 7.7).
+const FAVORITE_FIELDS: &[&str] = &["name", "url"];
+const SAVED_FIELDS: &[&str] = &["title", "url", "tags"];
+
+/// A bookmark is opened as a navigation, so it must pass the SAME rule a navigation does
+/// (`nav::parse_navigable`: http, https, about:blank) — not `javascript:` / `file:` / `data:`.
+fn check_bookmark_url(url: &str) -> Result<(), String> {
+    crate::nav::parse_navigable(url).map(|_| ())
+}
+
+/// Validate `partial` against `allowed`: unknown keys are dropped, a wrongly-typed value or a
+/// non-navigable `url` is an error (so the whole update is refused, nothing half-applied).
+fn checked_partial(
+    partial: Option<&Value>,
+    allowed: &[&str],
+) -> Result<serde_json::Map<String, Value>, String> {
+    let mut out = serde_json::Map::new();
+    let Some(p) = partial.and_then(Value::as_object) else {
+        return Ok(out);
+    };
+    for (k, v) in p {
+        if !allowed.contains(&k.as_str()) {
+            continue;
+        }
+        let ok = match k.as_str() {
+            "tags" => v.as_array().is_some_and(|a| a.iter().all(Value::is_string)),
+            _ => v.is_string(),
+        };
+        if !ok {
+            return Err(format!("{k} has the wrong type"));
+        }
+        if k == "url" {
+            check_bookmark_url(v.as_str().unwrap_or(""))?;
+        }
+        out.insert(k.clone(), v.clone());
+    }
+    Ok(out)
+}
+
+fn merge_into(item: &mut Value, partial: &serde_json::Map<String, Value>) {
+    if let Some(obj) = item.as_object_mut() {
+        for (k, v) in partial {
             obj.insert(k.clone(), v.clone());
         }
     }
@@ -102,6 +144,9 @@ pub fn dispatch<R: Runtime>(
             // and on every paired device. Refusing the second add is the honest outcome — the
             // page is already bookmarked — and it loses nothing.
             let url_str = input.get("url").and_then(Value::as_str).unwrap_or("");
+            if let Err(e) = check_bookmark_url(url_str) {
+                return Some(Err(e));
+            }
             let want = crate::sync_stores::normalize_url(url_str);
             let already = !want.is_empty()
                 && items.iter().any(|it| {
@@ -134,10 +179,14 @@ pub fn dispatch<R: Runtime>(
             let Some(id) = payload.get("id").and_then(Value::as_i64) else {
                 return Some(Err("favorites.update requires an integer id".into()));
             };
+            let partial = match checked_partial(payload.get("partial"), FAVORITE_FIELDS) {
+                Ok(p) => p,
+                Err(e) => return Some(Err(e)),
+            };
             let mut items = id_keyed!(app, "favorites");
             for it in items.iter_mut() {
                 if id_of(it) == Some(id) {
-                    merge_into(it, payload.get("partial"));
+                    merge_into(it, &partial);
                     jsonstore::touch(it, app);
                 }
             }
@@ -196,6 +245,9 @@ pub fn dispatch<R: Runtime>(
             let input = payload.get("input").cloned().unwrap_or_else(|| json!({}));
             // Dedup against LIVE records only (a previously-removed url can be re-added).
             let url_str = input.get("url").and_then(Value::as_str).unwrap_or("");
+            if let Err(e) = check_bookmark_url(url_str) {
+                return Some(Err(e));
+            }
             if !live_has_url(&items, url_str) {
                 let id = jsonstore::next_id(&items);
                 let mut item = json!({
@@ -224,10 +276,14 @@ pub fn dispatch<R: Runtime>(
             let Some(id) = payload.get("id").and_then(Value::as_i64) else {
                 return Some(Err("saved.update requires an integer id".into()));
             };
+            let partial = match checked_partial(payload.get("partial"), SAVED_FIELDS) {
+                Ok(p) => p,
+                Err(e) => return Some(Err(e)),
+            };
             let mut items = id_keyed!(app, "saved");
             for it in items.iter_mut() {
                 if id_of(it) == Some(id) {
-                    merge_into(it, payload.get("partial"));
+                    merge_into(it, &partial);
                     jsonstore::touch(it, app);
                 }
             }
@@ -485,6 +541,104 @@ mod tests {
                     .any(|r| r.get("url").and_then(Value::as_str) == Some("https://row-1.test/")),
                 "the named page must be the one removed: {live:?}"
             );
+        });
+    }
+
+    // ---- Audit 7.7: what a renderer `*.update` / `*.add` may write ----
+
+    #[test]
+    fn an_update_writes_only_the_documented_fields() {
+        with_tmp_app(|app| {
+            let fav = arr(dispatch(
+                app,
+                "favorites.add",
+                &json!({ "input": { "name": "A", "url": "https://a.test/" } }),
+            )
+            .unwrap());
+            let id = fav[0]["id"].as_i64().unwrap();
+            let r = dispatch(
+                app,
+                "favorites.update",
+                &json!({ "id": id, "partial": {
+                    "name": "Renamed", "id": 999, "deleted": true, "position": 42,
+                    "hlc": { "wall_ms": 1, "counter": 0, "node": "evil" }
+                }}),
+            )
+            .unwrap();
+            let live = arr(r);
+            assert_eq!(
+                live.len(),
+                1,
+                "a partial must not be able to tombstone the row"
+            );
+            assert_eq!(
+                live[0]["id"].as_i64(),
+                Some(id),
+                "a partial must not re-key the row"
+            );
+            assert_eq!(live[0]["name"], json!("Renamed"));
+            assert_eq!(live[0]["position"].as_i64(), Some(0));
+            assert_ne!(live[0]["hlc"]["node"], json!("evil"));
+
+            let saved = arr(dispatch(
+                app,
+                "saved.add",
+                &json!({ "input": { "url": "https://s.test/", "title": "S" } }),
+            )
+            .unwrap());
+            let sid = saved[0]["id"].as_i64().unwrap();
+            let live = arr(dispatch(
+                app,
+                "saved.update",
+                &json!({ "id": sid, "partial": { "tags": ["x"], "savedAt": 1, "id": 7 } }),
+            )
+            .unwrap());
+            assert_eq!(live[0]["id"].as_i64(), Some(sid));
+            assert_eq!(live[0]["tags"], json!(["x"]));
+            assert_ne!(live[0]["savedAt"].as_i64(), Some(1));
+        });
+    }
+
+    #[test]
+    fn a_bookmark_url_must_be_navigable() {
+        with_tmp_app(|app| {
+            for bad in [
+                "javascript:alert(1)",
+                "file:///etc/passwd",
+                "data:text/html,x",
+                "not a url",
+            ] {
+                let r = dispatch(
+                    app,
+                    "favorites.add",
+                    &json!({ "input": { "name": "x", "url": bad } }),
+                )
+                .unwrap();
+                assert!(r.is_err(), "favorites.add accepted {bad:?}");
+                let r = dispatch(
+                    app,
+                    "saved.add",
+                    &json!({ "input": { "title": "x", "url": bad } }),
+                )
+                .unwrap();
+                assert!(r.is_err(), "saved.add accepted {bad:?}");
+            }
+            let fav = arr(dispatch(
+                app,
+                "favorites.add",
+                &json!({ "input": { "name": "A", "url": "https://a.test/" } }),
+            )
+            .unwrap());
+            let id = fav[0]["id"].as_i64().unwrap();
+            let r = dispatch(
+                app,
+                "favorites.update",
+                &json!({ "id": id, "partial": { "url": "javascript:alert(1)" } }),
+            )
+            .unwrap();
+            assert!(r.is_err(), "favorites.update accepted a javascript: url");
+            let listed = arr(dispatch(app, "favorites.list", &json!({})).unwrap());
+            assert_eq!(listed[0]["url"], json!("https://a.test/"));
         });
     }
 

@@ -39,11 +39,16 @@ export function useNav(viewId: ViewId): {
     // fetching first meant a navigation that completed while `nav.getState` was still in flight
     // was lost with nothing to refetch it, leaving the address bar on the page the user just
     // left.
+    let sawEvent = false;
     const unsubscribe = aegis.nav.onState((s) => {
-      if (s.viewId === viewId) setState(s);
+      if (s.viewId !== viewId) return;
+      sawEvent = true;
+      setState(s);
     });
+    // Audit 5.3: once a live event has landed, the seed result is OLDER than what is on screen
+    // (an event is emitted for every later change), so a seed that resolves late is dropped.
     void aegis.nav.getState(viewId).then((s) => {
-      if (active) setState(s);
+      if (active && !sawEvent) setState(s);
     });
     void aegis.settings.get().then((s) => {
       if (active) setSearchTemplate(s.defaultSearchTemplate);

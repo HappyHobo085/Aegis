@@ -51,7 +51,40 @@ fn is_cross_origin_http(current: &str, target: &str) -> bool {
     if !matches!(tgt.scheme(), "http" | "https") {
         return false; // about:, data:, blob:, javascript:, mailto:, custom schemes
     }
-    cur.origin() != tgt.origin()
+    cur.origin() != tgt.origin() && !same_site_hop(&cur, &tgt)
+}
+
+/// The two same-site hops a site makes on its own pages, which the origin test alone flagged
+/// as malvertising (audit 7.4): an `http→https` UPGRADE, and apex↔`www.` canonicalisation —
+/// or both at once. Deliberately narrow, because there is no public-suffix list here: hosts
+/// must be equal after stripping ONE leading `www.` (and that must leave a dotted name), the
+/// port must match, and the scheme may only stay or go http→https. A downgrade, any other
+/// subdomain, or a port change is still cross-origin.
+fn same_site_hop(cur: &Url, tgt: &Url) -> bool {
+    let scheme_ok =
+        cur.scheme() == tgt.scheme() || (cur.scheme() == "http" && tgt.scheme() == "https");
+    if !scheme_ok || !matches!(cur.scheme(), "http" | "https") {
+        return false;
+    }
+    // Explicit ports are compared as written-or-default per scheme EXCEPT across the upgrade,
+    // where the defaults (80 vs 443) necessarily differ: there, both must be implicit, or the
+    // same explicit port.
+    let ports_ok = if cur.scheme() == tgt.scheme() {
+        cur.port_or_known_default() == tgt.port_or_known_default()
+    } else {
+        cur.port() == tgt.port()
+    };
+    let (Some(a), Some(b)) = (cur.host_str(), tgt.host_str()) else {
+        return false;
+    };
+    let bare = |h: &str| -> String {
+        let h = h.to_ascii_lowercase();
+        match h.strip_prefix("www.") {
+            Some(rest) if rest.contains('.') => rest.to_string(),
+            _ => h,
+        }
+    };
+    ports_ok && bare(a) == bare(b)
 }
 
 use std::collections::HashMap;
@@ -367,15 +400,35 @@ impl RedirectBudget {
 /// the JNI export `Java_com_aegis_browser_NativeRedirectGuard_openBlockedRedirect`;
 /// the two desktop callers (`linux_layout`, `nav_policy_win`) are the pop-under path,
 /// which shows blocking UI and has no affordance to suppress, so they ignore it.
-pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, _tab: u32, from: &str, to: &str) -> bool {
+/// The budgeted half of [`on_blocked_redirect_to_new_tab`]: admit the `(from, to)` pair, open
+/// the background tab, occupy a budget slot. Generic over the runtime so the privateness rule
+/// is testable on the mock runtime (the auto-close half needs a real `close_tab`).
+fn open_blocked_redirect_tab<R: Runtime>(
+    app: &AppHandle<R>,
+    tab: u32,
+    budget: &RedirectBudget,
+    from: &str,
+    to: &str,
+) -> Option<u32> {
+    if !budget.admit(from, to) {
+        return None;
+    }
+    // The reopened tab inherits the OPENER's privateness (audit 3.2). It used to be always
+    // normal, so a redirect blocked inside a private session left a history row, cookies and
+    // a persisted session entry for the very page the guard intercepted.
+    let private = crate::tabs::is_private(app, tab);
+    let new_id = crate::tabs::open_redirect_background(app, to, private);
+    budget.occupy(new_id);
+    Some(new_id)
+}
+
+pub fn on_blocked_redirect_to_new_tab(app: &AppHandle, tab: u32, from: &str, to: &str) -> bool {
     let Some(budget) = app.try_state::<RedirectBudget>() else {
         return false;
     };
-    if !budget.admit(from, to) {
+    let Some(new_id) = open_blocked_redirect_tab(app, tab, &budget, from, to) else {
         return false;
-    }
-    let new_id = crate::tabs::open_redirect_background(app, to, false);
-    budget.occupy(new_id);
+    };
     let app = app.clone();
     // `budget` is a `State<'_, _>`; clone the `Arc` out of it so the timer thread gets a handle
     // with no borrow of `app` (see `RedirectBudget`'s doc).
@@ -705,6 +758,7 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_shouldBlock(
 pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_openBlockedRedirect(
     mut env: jni::JNIEnv,
     _this: jni::objects::JObject,
+    tab: jni::sys::jint,
     from: jni::objects::JString,
     to: jni::objects::JString,
 ) -> jni::sys::jboolean {
@@ -726,7 +780,10 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_openBlockedRed
         eprintln!("[aegis-redirect] no app handle yet; refusing to open {to}");
         return 0;
     };
-    match crate::ffi_guard(|| on_blocked_redirect_to_new_tab(app, 0, &from, &to)) {
+    // The REAL opener tab id (Kotlin's tab ids are the registry's), so the reopened tab can
+    // inherit its privateness — `0` matched no tab and always opened a normal one.
+    let tab = u32::try_from(tab).unwrap_or(0);
+    match crate::ffi_guard(|| on_blocked_redirect_to_new_tab(app, tab, &from, &to)) {
         Some(opened) => opened as jni::sys::jboolean,
         None => {
             eprintln!("[aegis-redirect] opening a blocked redirect panicked; nothing opened");
@@ -739,6 +796,72 @@ pub extern "system" fn Java_com_aegis_browser_NativeRedirectGuard_openBlockedRed
 mod tests {
     use super::*;
     use crate::test_support::with_tmp_app;
+
+    /// Audit 3.2: a scripted redirect blocked in a PRIVATE tab is reopened as a background tab
+    /// — and that tab was always NORMAL (`open_redirect_background(.., false)`, the opener id
+    /// ignored), so a private browsing session leaked a history row, cookies and a persisted
+    /// session entry for the very page the guard intercepted. The new tab inherits the
+    /// opener's privateness, as every other tab opened from a private tab already does.
+    #[test]
+    fn a_redirect_blocked_in_a_private_tab_reopens_privately() {
+        with_tmp_app(|app| {
+            let private_id = {
+                let t = app.state::<crate::tabs::Tabs>();
+                let mut reg = t.reg.lock().unwrap_or_else(|e| e.into_inner());
+                reg.create_private(Some("https://opener.example/".into()), true, 0, true)
+                    .0
+            };
+            let budget = RedirectBudget::default();
+            let new_id = open_blocked_redirect_tab(
+                app,
+                private_id,
+                &budget,
+                "https://opener.example/",
+                "https://landing.example/",
+            )
+            .expect("admitted");
+            assert!(crate::tabs::is_private(app, new_id));
+        });
+    }
+
+    /// The Android half of 3.1/3.2 lives in Kotlin, which has no test source set, so it is
+    /// pinned here by source text (comment lines dropped, see `test_support::kotlin_fn_body`).
+    #[test]
+    fn android_passes_the_opener_tab_and_its_privateness_on() {
+        let src = crate::test_support::kotlin_source("MainActivity.kt");
+        let redirect =
+            crate::test_support::kotlin_fn_body(&src, "private fun showRedirectBlocked(");
+        assert!(
+            redirect.contains("openBlockedRedirect(id, from, to)"),
+            "the blocked-redirect bridge must pass the opener tab id:\n{redirect}"
+        );
+        let chrome = crate::test_support::kotlin_fn_body(&src, "private fun makeChromeClient(");
+        assert!(
+            chrome.contains("__aegisOpenTab(") && chrome.contains("privateTabs.contains(id)"),
+            "the popup bridge must pass the opener's privateness:\n{chrome}"
+        );
+        // Audit 4.9: the popup capture WebView carries the same UA as a tab.
+        assert!(
+            chrome.contains("temp.settings.userAgentString = CHROME_UA"),
+            "the popup capture WebView must use the tab user agent:\n{chrome}"
+        );
+    }
+
+    #[test]
+    fn a_redirect_blocked_in_a_normal_tab_reopens_normally() {
+        with_tmp_app(|app| {
+            let budget = RedirectBudget::default();
+            let new_id = open_blocked_redirect_tab(
+                app,
+                1,
+                &budget,
+                "https://a.example/",
+                "https://b.example/",
+            )
+            .expect("admitted");
+            assert!(!crate::tabs::is_private(app, new_id));
+        });
+    }
 
     // --- the recorded-NavigationAction map is bounded per tab ---
 
@@ -1077,6 +1200,31 @@ mod tests {
             true,
             true
         )); // port differs
+    }
+
+    // Audit 7.4: two same-site hops a site makes on its OWN pages were blocked as if they
+    // were malvertising: the HTTPS upgrade and the apex↔www canonicalisation.
+    #[test]
+    fn same_site_upgrade_and_www_canonicalisation_are_not_blocked() {
+        let blocked = |c: &str, t: &str| should_block(c, t, true, true);
+        assert!(!blocked("http://a.com/", "https://a.com/x")); // upgrade, same host
+        assert!(!blocked("https://a.com/", "https://www.a.com/")); // apex → www
+        assert!(!blocked("https://www.a.com/", "https://a.com/")); // www → apex
+        assert!(!blocked("http://a.com/", "https://www.a.com/")); // both at once
+        assert!(!blocked("http://a.com:8080/", "https://a.com:8080/")); // explicit, same port
+    }
+
+    #[test]
+    fn the_same_site_relaxation_stays_narrow() {
+        let blocked = |c: &str, t: &str| should_block(c, t, true, true);
+        assert!(blocked("https://a.com/", "http://a.com/")); // DOWNgrade stays blocked
+        assert!(blocked("https://www.a.com/", "http://a.com/")); // downgrade via www too
+        assert!(blocked("https://a.com/", "https://sub.a.com/")); // other subdomains: no PSL here
+        assert!(blocked("https://a.com/", "https://www.b.com/")); // www of ANOTHER site
+        assert!(blocked("https://www.a.com/", "https://www.b.a.com/"));
+        assert!(blocked("https://a.com:8443/", "https://www.a.com/")); // port still matters
+        assert!(blocked("https://a.com/", "https://www.www.a.com/")); // only ONE www. label
+        assert!(blocked("https://www.com/", "https://com/")); // not a site of its own
     }
 
     // --- should_block_pred (the chain verdict applied at the decision point; `from` is the chain

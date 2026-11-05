@@ -419,7 +419,11 @@ fn import_blocking<R: Runtime>(app: &AppHandle<R>, payload: &Value) -> Value {
             }
             // The result is COLLECTED, not discarded: a store that cannot be written
             // is reported by name below instead of being reported as imported.
-            saves.push((*s, arr.len(), jsonstore::save(app, s, &migrated)));
+            // Under the store's write lock: `sync_stores::merge_into` is a read-modify-write
+            // under the same lock, so an unlocked save here let a merge in flight write its
+            // pre-import rows straight back over the restore (audit 2.5).
+            let saved = jsonstore::with_store_lock(s, || jsonstore::save(app, s, &migrated));
+            saves.push((*s, arr.len(), saved));
             // Test seam: a test can run a real background flush HERE, between this
             // store's write and the end of the import. See `test_support`'s
             // import/flush interleave hook for why that is the only place a flush
@@ -1289,6 +1293,47 @@ mod tests {
 
     /// A partial bundle (only some stores present) must import whatever keys exist and
     /// return ok:true — partial imports are valid (forward-compat / hand-edited bundles).
+    #[test]
+    fn an_import_waits_for_a_store_lock_held_by_a_sync_merge() {
+        // Audit 2.5: `sync_stores::merge_into` is a read-modify-write under
+        // `jsonstore::with_store_lock(name)`; the import saved the same file WITHOUT that lock,
+        // so a merge in flight could write its pre-import rows back over the restore.
+        use std::sync::mpsc::channel;
+        use std::time::{Duration, Instant};
+        with_tmp_app(|app| {
+            let (held_tx, held_rx) = channel();
+            let (release_tx, release_rx) = channel::<()>();
+            let holder = std::thread::spawn(move || {
+                crate::jsonstore::with_store_lock("favorites", || {
+                    held_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                });
+            });
+            held_rx.recv().unwrap();
+            let app2 = app.clone();
+            let importer = std::thread::spawn(move || {
+                let bundle = json!({
+                    "version": 2,
+                    "favorites": [{ "id": 1, "url": "https://imp.test/", "name": "I" }],
+                });
+                import_now(&app2, &json!({ "text": bundle.to_string() }))
+            });
+            let deadline = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < deadline && !importer.is_finished() {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            let finished_under_lock = importer.is_finished();
+            release_tx.send(()).unwrap();
+            holder.join().unwrap();
+            let res = importer.join().unwrap();
+            assert!(
+                !finished_under_lock,
+                "the import wrote favorites while a merge held that store's lock"
+            );
+            assert_eq!(res.get("ok").and_then(Value::as_bool), Some(true));
+        });
+    }
+
     #[test]
     fn import_of_partial_bundle_imports_present_keys_and_returns_ok() {
         with_tmp_app(|app| {

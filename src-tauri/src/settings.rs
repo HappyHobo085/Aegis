@@ -117,13 +117,23 @@ static ANDROID_HTTPS_ONLY: AtomicBool = AtomicBool::new(HTTPS_ONLY_FAIL_SAFE);
 
 /// Push the stored HTTPS-Only policy into the Android JNI global.
 ///
-/// Called from [`write`] — the single low-level writer, which every path funnels through
-/// (`settings.set`, an imported `data.import` bundle, and the synced-apply path) — and once
-/// at boot from `lib.rs` next to `webrtc_shim::note_policy`, because the value can already
-/// be on disk before any process starts.
+/// Called from [`write`] (an imported `data.import` bundle and the synced-apply path), from
+/// [`apply_local`] (`settings.set` — it writes the file itself, NOT through `write`, which
+/// is why the toggle used to need a restart: audit 7.1), and once at boot from `lib.rs` next
+/// to `webrtc_shim::note_policy`, because the value can already be on disk before any
+/// process starts.
 #[cfg(any(target_os = "android", test))]
 pub fn note_https_only(on: bool) {
     ANDROID_HTTPS_ONLY.store(on, Ordering::Relaxed);
+    #[cfg(test)]
+    LAST_HTTPS_NOTE.with(|c| c.set(Some(on)));
+}
+
+// This THREAD's most recent push, for tests: `ANDROID_HTTPS_ONLY` is process-global, so a
+// parallel test could overwrite it between a call and its assertion.
+#[cfg(test)]
+thread_local! {
+    static LAST_HTTPS_NOTE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
 }
 
 /// Whether Android should upgrade `http:` navigations to `https:`, for the JNI getter.
@@ -157,9 +167,8 @@ pub fn write<R: Runtime>(app: &AppHandle<R>, value: &Value) -> Result<(), String
         eprintln!("[aegis] failed to persist settings: {e}");
         e.to_string()
     })?;
-    // Mirror the policy into the Android JNI global on every write. See the type's doc for
-    // why this is the ONE place to hook: `write` is the single low-level writer, so a
-    // local edit, an imported bundle and a synced record all refresh the getter.
+    // Mirror the policy into the Android JNI global on every write — an imported bundle and
+    // a synced record. (`apply_local` writes the file itself and pushes on its own.)
     #[cfg(any(target_os = "android", test))]
     note_https_only(https_only(app));
     // The file changed — drop the cache so getters re-read the new values. Only on success:
@@ -313,10 +322,16 @@ pub fn sync_allow_insecure<R: Runtime>(app: &AppHandle<R>) -> bool {
 /// until then `VaultState.syncEnabled` is false. A local opt-in is what the design already
 /// required in substance; this makes the switch itself match.
 ///
+/// `webrtcPolicy` decides whether pages can learn this device's local/public IP over WebRTC
+/// (audit 4.4, owner decision D4). Synced, one record on any device holding the data key
+/// switched every device to `default` — IP-leak protection off — with nothing on screen to say
+/// a peer had done it. `proxy` is deliberately NOT here: the owner chose to keep it syncing
+/// (see `proxy.rs`).
+///
 /// Enforced at all three write/apply points: `record_change` (local edits), the
 /// `ensure_sync_projection` migration seed, and `apply_synced` (inbound peer records). A key
 /// filtered at only some of them still leaks through the others, so all three are asserted.
-const LOCAL_ONLY_KEYS: &[&str] = &["syncAllowInsecure", "syncVault"];
+const LOCAL_ONLY_KEYS: &[&str] = &["syncAllowInsecure", "syncVault", "webrtcPolicy"];
 
 /// True for keys excluded from the sync projection by [`LOCAL_ONLY_KEYS`].
 fn is_local_only(key: &str) -> bool {
@@ -395,6 +410,20 @@ pub(crate) fn load<R: Runtime>(app: &AppHandle<R>) -> Value {
     read_and_cache(app, &cache, || read_from_disk(app))
 }
 
+// Test-only: runs just before `read_and_cache` takes the cache's write lock, so a test can land
+// a write in the window between the generation check and the publish (audit 7.2).
+#[cfg(test)]
+thread_local! {
+    static PRE_PUBLISH_HOOK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        std::cell::RefCell::new(None);
+}
+#[cfg(test)]
+fn run_pre_publish_hook() {
+    if let Some(f) = PRE_PUBLISH_HOOK.with(|h| h.borrow_mut().take()) {
+        f();
+    }
+}
+
 /// Read the settings and publish them into the cache **unless** a write landed while we were
 /// reading. Split out of [`load`] so a test can land a write *inside* the read via the `read`
 /// closure — that interleaving is the whole defect and it cannot be produced deterministically
@@ -407,8 +436,16 @@ fn read_and_cache<R: Runtime>(
     let seen = cache.generation.load(Ordering::Relaxed);
     let s = read();
     if cache.generation.load(Ordering::Relaxed) == seen {
+        #[cfg(test)]
+        run_pre_publish_hook();
         if let Ok(mut g) = cache.value.write() {
-            *g = Some(s.clone());
+            // Re-check UNDER the write lock (audit 7.2): a write could land between the check
+            // above and acquiring the lock. `invalidate_cache` bumps the generation before it
+            // takes this lock, so a writer either bumped already (seen here → skip) or will
+            // clear the cache after we release it — never after our stale publish.
+            if cache.generation.load(Ordering::Relaxed) == seen {
+                *g = Some(s.clone());
+            }
         }
     } // else: a write landed mid-read and already cleared the cache; publishing now would
       // resurrect the value it just replaced.
@@ -559,12 +596,23 @@ fn save_sync_records<R: Runtime>(app: &AppHandle<R>, recs: &[Value]) {
 ///
 /// MUST be called under [`with_settings_store_lock`]: it WRITES on the first-use path, so it
 /// is a read-modify-write. Every caller ([`merge_remote`], [`apply_local`] via
-/// [`record_change`], [`rebuild_projection_from_current`]) already holds the lock. Do NOT add
+/// [`record_change`], [`force_record_change`]) already holds the lock. Do NOT add
 /// a lock here. [`sync_records_readonly`] is the deliberately unwrapped reader.
 fn ensure_sync_projection<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
     assert_holding_settings_lock("ensure_sync_projection");
     let mut recs = load_sync_records(app);
     if !recs.is_empty() {
+        // A key that BECAME local-only (e.g. `webrtcPolicy`, audit 4.4) can still sit in a
+        // projection written by an older build, and would otherwise keep being pushed to peers.
+        let before = recs.len();
+        recs.retain(|r| {
+            !r.get("key")
+                .and_then(Value::as_str)
+                .is_some_and(is_local_only)
+        });
+        if recs.len() != before {
+            save_sync_records(app, &recs);
+        }
         return recs;
     }
     let node = crate::sync_identity::node_id(app);
@@ -636,10 +684,34 @@ fn record_change<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
     save_sync_records(app, &recs);
 }
 
+/// [`record_change`] without its "unchanged value" shortcut: an import must stamp a key even
+/// when the restored value equals the current one, or a peer's different value would still win.
+/// Same lock contract as `record_change`.
+fn force_record_change<R: Runtime>(app: &AppHandle<R>, key: &str, value: &Value) {
+    assert_holding_settings_lock("force_record_change");
+    if is_local_only(key) {
+        return;
+    }
+    let mut recs = ensure_sync_projection(app);
+    recs.retain(|r| r.get("key").and_then(Value::as_str) != Some(key));
+    let node = crate::sync_identity::node_id(app);
+    let hlc = crate::sync_envelope::tick(&node, crate::jsonstore::now_ms());
+    recs.push(json!({
+        "key": key, "value": value.clone(), "uuid": key,
+        "hlc": serde_json::to_value(&hlc).unwrap_or(Value::Null),
+        "deleted": false,
+    }));
+    save_sync_records(app, &recs);
+}
+
 /// Pure per-KEY HLC last-writer-wins fold of `remote` into `local`. Returns the merged
 /// records + the changed keys. AppHandle-free so the merge rules are deterministically
 /// testable (mirrors sync_stores::merge_records, but the identity is `key`, not `uuid`).
-fn merge_projection(mut local: Vec<Value>, remote: &[Value]) -> (Vec<Value>, Vec<String>) {
+fn merge_projection(
+    mut local: Vec<Value>,
+    remote: &[Value],
+    now_ms: i64,
+) -> (Vec<Value>, Vec<String>) {
     let mut changed = Vec::new();
     for r in remote {
         let Some(key) = r.get("key").and_then(Value::as_str) else {
@@ -648,6 +720,11 @@ fn merge_projection(mut local: Vec<Value>, remote: &[Value]) -> (Vec<Value>, Vec
         let Some(rhlc) = crate::sync_envelope::from_value(r) else {
             continue;
         };
+        // A far-future stamp would out-rank every later local change (audit 2.1).
+        if !crate::sync_envelope::within_remote_skew(rhlc.wall_ms, now_ms) {
+            eprintln!("[aegis] deferring synced setting {key:?}: its stamp is too far ahead");
+            continue;
+        }
         match local
             .iter_mut()
             .find(|l| l.get("key").and_then(Value::as_str) == Some(key))
@@ -686,7 +763,11 @@ pub fn merge_remote<R: Runtime>(app: &AppHandle<R>, remote: &[Value]) -> Vec<Str
                 crate::sync_envelope::observe(&node, crate::jsonstore::now_ms(), &h);
             }
         }
-        let (merged, changed) = merge_projection(ensure_sync_projection(app), remote);
+        let (merged, changed) = merge_projection(
+            ensure_sync_projection(app),
+            remote,
+            crate::jsonstore::now_ms(),
+        );
         if changed.is_empty() {
             return Vec::new();
         }
@@ -715,15 +796,6 @@ pub fn sync_records<R: Runtime>(app: &AppHandle<R>) -> Vec<Value> {
     })
 }
 
-/// Wipe + rebuild the per-key projection from the current flat settings — used after a
-/// data import replaces the flat file, so the projection reflects the imported values
-/// (with fresh HLCs) rather than the pre-import keys.
-pub fn rebuild_projection_from_current<R: Runtime>(app: &AppHandle<R>) {
-    assert_holding_settings_lock("rebuild_projection_from_current");
-    save_sync_records(app, &[]);
-    let _ = ensure_sync_projection(app);
-}
-
 /// Apply merged per-key records back into the flat settings file: write each live key's
 /// value, or REMOVE a tombstoned key so `load()` falls to its default (= "reset to
 /// default"). Consumed by F2b's merge. (Also rebuilds the projection from `records`.)
@@ -742,10 +814,24 @@ pub fn rebuild_projection_from_current<R: Runtime>(app: &AppHandle<R>) {
 pub fn apply_synced<R: Runtime>(app: &AppHandle<R>, records: &[Value]) -> bool {
     assert_holding_settings_lock("apply_synced");
     // Start from the saved flat file (NOT defaults overlay) so we only touch synced keys.
-    let mut flat = store_path(app)
-        .and_then(|p| crate::jsonstore::read_with_backup(&p))
-        .and_then(|t| serde_json::from_str::<Value>(&t).ok())
-        .unwrap_or_else(|| json!({}));
+    let path = store_path(app);
+    let saved = path
+        .as_ref()
+        .and_then(|p| crate::jsonstore::read_with_backup(p))
+        .and_then(|t| serde_json::from_str::<Value>(&t).ok());
+    // A file that EXISTS but cannot be read (neither it nor its `.bak` parses, or the read
+    // failed) is not an empty one (audit 7.3). Starting from `{}` and writing that back
+    // replaced every local-only and unsynced key on disk with nothing. Refuse instead: the
+    // file stays recoverable, and returning false leaves the projection where it was, so the
+    // same records win again on the next pass. Only a genuinely ABSENT file starts empty.
+    let mut flat = match saved {
+        Some(v) => v,
+        None if path.as_ref().is_some_and(|p| p.exists()) => {
+            eprintln!("[aegis] settings.json is unreadable; not applying synced settings over it");
+            return false;
+        }
+        None => json!({}),
+    };
     if let Some(obj) = flat.as_object_mut() {
         for r in records {
             let Some(key) = r.get("key").and_then(Value::as_str) else {
@@ -1095,14 +1181,17 @@ pub extern "system" fn Java_com_aegis_browser_NativeSettings_httpsOnly(
 ///
 /// Locked for the whole body: a `data.import` rewriting `settings.json` while the main thread
 /// is inside `settings.set`, or while the sync worker is merging, loses whichever write is not
-/// last — with no error anywhere. `write` and `rebuild_projection_from_current` stay UNLOCKED
-/// inner workers, because they are also called from `apply_synced` under a held lock.
+/// last — with no error anywhere. `write` and `force_record_change` stay UNLOCKED inner workers,
+/// because the lock is not reentrant.
 ///
 /// `Err` means `settings.json` could not be written, and the projection was then left alone
-/// deliberately: `rebuild_projection_from_current` wipes the projection and re-seeds it from
-/// the CURRENT FILE, so running it after a failed write would not merely skip the import — it
-/// would stamp the PRE-import values with FRESH, locally-invented HLCs, and a peer's newer
-/// record would then lose to a stamp this device made up in its own failure path. The caller
+/// deliberately: stamping the imported keys after a failed write would give values the file
+/// does not hold FRESH, locally-invented HLCs, and a peer's newer record would then lose to a
+/// stamp this device made up in its own failure path.
+///
+/// On success every imported key is stamped with a fresh `tick` (`force_record_change`), so the
+/// restore out-ranks what peers hold; it used to rebuild the projection with `Hlc::zero`, the
+/// migration floor, so the next pull reverted the import (audit 2.3). The caller
 /// (`data.import`) reports the `Err` through the same `failed` list the store writes use.
 pub(crate) fn apply_imported<R: Runtime>(
     app: &AppHandle<R>,
@@ -1127,8 +1216,21 @@ pub(crate) fn apply_imported<R: Runtime>(
             }
         }
         write(app, &merged)?;
-        // Rebuild the per-key sync projection from the post-merge flat settings.
-        rebuild_projection_from_current(app);
+        // Stamp every IMPORTED key with a fresh HLC, so the restore out-ranks what peers hold.
+        // The projection used to be wiped and re-seeded with `Hlc::zero` (the migration floor),
+        // so the very next pull of ANY peer record for an imported key won and the import was
+        // reverted (audit 2.3). Keys the bundle did not carry keep their existing stamps, so a
+        // newer peer edit of THOSE still wins — the import cannot invent a stamp for a value it
+        // did not restore. Refused keys never landed, so they are not stamped either.
+        let _ = ensure_sync_projection(app);
+        if let Some(obj) = incoming.as_object() {
+            for (k, v) in obj {
+                if refused.contains(k) {
+                    continue;
+                }
+                force_record_change(app, k, v);
+            }
+        }
         Ok(refused)
     })
 }
@@ -1177,6 +1279,11 @@ pub(crate) fn apply_local<R: Runtime>(
         }
         // The file changed — drop the cache so getters re-read the new values.
         invalidate_cache(app);
+        // Android: refresh the HTTPS-Only JNI global (audit 7.1). This path writes the file
+        // itself rather than through `write`, so it has to push the policy itself too —
+        // without this the toggle only took effect after a restart.
+        #[cfg(any(target_os = "android", test))]
+        note_https_only(https_only(app));
         // Update the per-key sync projection for each key the renderer set.
         if let Some(partial) = payload.get("partial").and_then(Value::as_object) {
             for (k, v) in partial {
@@ -1254,6 +1361,57 @@ mod tests {
     fn rec(key: &str, wall: i64, value: Value) -> Value {
         json!({ "key": key, "uuid": key, "value": value,
             "hlc": { "wall_ms": wall, "counter": 0, "node": "remote" }, "deleted": false })
+    }
+
+    /// Audit 2.3: an import rebuilt the projection with `Hlc::zero`, so the very next pull of
+    /// ANY peer record for an imported key — however old — won, and the restore was reverted.
+    #[test]
+    fn an_imported_setting_survives_the_next_sync_of_an_older_peer_value() {
+        crate::test_support::with_tmp_app(|app| {
+            apply_imported(app, &json!({ "homeUrl": "https://imported.example/" }))
+                .expect("import");
+            let older = crate::jsonstore::now_ms() - 10_000;
+            merge_remote(
+                app,
+                &[rec("homeUrl", older, json!("https://peer.example/"))],
+            );
+            assert_eq!(load(app)["homeUrl"], json!("https://imported.example/"));
+        });
+    }
+
+    /// The other half: a key the import did NOT carry keeps its existing stamp, so a newer peer
+    /// edit of it is not out-ranked by a stamp the import invented.
+    #[test]
+    fn a_key_the_import_did_not_carry_still_takes_a_newer_peer_value() {
+        crate::test_support::with_tmp_app(|app| {
+            apply_imported(app, &json!({ "homeUrl": "https://imported.example/" }))
+                .expect("import");
+            let newer = crate::jsonstore::now_ms() - 10_000;
+            merge_remote(app, &[rec("primaryColor", newer, json!("#123456"))]);
+            assert_eq!(load(app)["primaryColor"], json!("#123456"));
+        });
+    }
+
+    /// Audit 2.1 for the settings projection: a peer key stamped far in the future must not
+    /// replace (or insert) a setting — it would otherwise beat every later local change.
+    #[test]
+    fn merge_projection_refuses_a_far_future_stamp() {
+        let now = 1_700_000_000_000i64;
+        let local = vec![rec("homeUrl", now - 1_000, json!("https://mine.example/"))];
+        let far = now + 365 * 24 * 60 * 60 * 1_000;
+        let remote = vec![
+            rec("homeUrl", far, json!("https://poison.example/")),
+            rec("primaryColor", far, json!("#000000")),
+            rec("httpsOnly", now + 30_000, json!(false)), // control: in-window wins
+        ];
+        let (merged, changed) = merge_projection(local, &remote, now);
+        assert_eq!(changed, vec!["httpsOnly".to_string()]);
+        let home = merged
+            .iter()
+            .find(|r| r["key"] == json!("homeUrl"))
+            .unwrap();
+        assert_eq!(home["value"], json!("https://mine.example/"));
+        assert!(!merged.iter().any(|r| r["key"] == json!("primaryColor")));
     }
 
     /// A URL carrying `user:password@` is the textbook way to make a user read a
@@ -1360,14 +1518,62 @@ mod tests {
     /// key with no test is exactly the shape of bug this list exists to prevent. An empty or
     /// filtered list must not pass either.
     #[test]
-    fn the_local_only_list_is_exactly_the_two_credential_and_transport_waivers() {
+    fn the_local_only_list_is_exactly_the_device_local_privacy_waivers() {
         assert_eq!(
             LOCAL_ONLY_KEYS,
-            &["syncAllowInsecure", "syncVault"],
+            &["syncAllowInsecure", "syncVault", "webrtcPolicy"],
             "a new LOCAL_ONLY_KEYS entry needs a test of its own here, and any key added \
              must be a device-local waiver — never a value the user expects to follow them"
         );
         assert!(!LOCAL_ONLY_KEYS.is_empty(), "a filtered list must not pass");
+    }
+
+    /// Audit 4.4 / D4: `webrtcPolicy` decides whether pages can learn this device's LAN/public
+    /// IP. A synced value let one record on any device holding the data key switch the IP-leak
+    /// protection to `default` on every device the user owns, silently. All three enforcement
+    /// points: the write, the outbound projection, and an inbound peer record.
+    /// A projection written BEFORE `webrtcPolicy` became local-only still holds its record, and
+    /// would keep pushing it to peers (an older build would apply it). Loading drops it.
+    #[test]
+    fn a_pre_existing_local_only_record_is_purged_from_the_projection() {
+        with_tmp_app(|app| {
+            save_sync_records(
+                app,
+                &[
+                    rec("webrtcPolicy", 5, json!("default")),
+                    rec("homeUrl", 5, json!("https://x.example/")),
+                ],
+            );
+            let recs = sync_records(app);
+            assert!(!recs
+                .iter()
+                .any(|r| r.get("key").and_then(Value::as_str) == Some("webrtcPolicy")));
+            assert!(recs
+                .iter()
+                .any(|r| r.get("key").and_then(Value::as_str) == Some("homeUrl")));
+        });
+    }
+
+    #[test]
+    fn webrtc_policy_is_local_only() {
+        with_tmp_app(|app| {
+            apply_local(app, &json!({ "partial": { "webrtcPolicy": "disable" } }))
+                .expect("a valid policy");
+            assert_eq!(webrtc_policy(app), "disable");
+            assert!(
+                !sync_records(app)
+                    .iter()
+                    .any(|r| r.get("key").and_then(Value::as_str) == Some("webrtcPolicy")),
+                "the policy must not enter the sync projection"
+            );
+            let now = crate::jsonstore::now_ms();
+            merge_remote(app, &[rec("webrtcPolicy", now, json!("default"))]);
+            assert_eq!(
+                webrtc_policy(app),
+                "disable",
+                "a peer's record must not be able to weaken this device's IP-leak protection"
+            );
+        });
     }
 
     /// `syncAllowInsecure` waives the https-or-loopback rule for the sync transport, so it
@@ -1484,6 +1690,77 @@ mod tests {
             );
             // And because the cache was left empty, the next load re-reads the writer's value.
             assert_eq!(load(app)[key].as_bool(), Some(false));
+        });
+    }
+
+    /// Audit 7.3: when `settings.json` EXISTS but neither it nor its `.bak` parses, the
+    /// synced-apply path used to start from `{}` and write that back — replacing every
+    /// local-only (and every unsynced) key on disk with nothing. It must refuse instead, so
+    /// the file stays recoverable and the next pass retries.
+    #[test]
+    fn an_unreadable_settings_file_is_not_clobbered_by_a_sync() {
+        with_tmp_app(|app| {
+            let p = store_path(app).expect("app data dir");
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            let garbage = "{\"proxy\": {\"host\": \"10.0.0.1\" <<truncated";
+            std::fs::write(&p, garbage).unwrap();
+            let rec = json!({ "key": "homeUrl", "value": "https://example.com/" });
+            let applied = with_settings_store_lock(|| apply_synced(app, &[rec]));
+            assert!(
+                !applied,
+                "an unreadable file must not be reported as applied"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&p).unwrap(),
+                garbage,
+                "the unreadable file was overwritten"
+            );
+        });
+    }
+
+    /// A fresh install has NO file: that is not "unreadable", and the sync must still land.
+    #[test]
+    fn a_missing_settings_file_still_takes_a_sync() {
+        with_tmp_app(|app| {
+            let rec = json!({ "key": "homeUrl", "value": "https://example.com/" });
+            assert!(with_settings_store_lock(|| apply_synced(app, &[rec])));
+            assert_eq!(load(app)["homeUrl"].as_str(), Some("https://example.com/"));
+        });
+    }
+
+    /// Audit 7.2: the generation used to be checked BEFORE taking the write lock, so a write
+    /// landing between that check and the publish was overwritten by the stale parse. The
+    /// hook lands the write in exactly that window.
+    #[test]
+    fn a_write_between_the_generation_check_and_the_publish_is_not_overwritten() {
+        with_tmp_app(|app| {
+            let cache = app
+                .try_state::<SettingsCache>()
+                .expect("test app manages the cache");
+            let p = store_path(app).expect("app data dir");
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            let put = |v: bool| {
+                let mut d = defaults();
+                d["httpsOnly"] = json!(v);
+                std::fs::write(&p, serde_json::to_string_pretty(&d).unwrap()).unwrap();
+            };
+            put(true);
+            let app2 = app.clone();
+            let p2 = p.clone();
+            PRE_PUBLISH_HOOK.with(|h| {
+                *h.borrow_mut() = Some(Box::new(move || {
+                    let mut d = defaults();
+                    d["httpsOnly"] = json!(false);
+                    std::fs::write(&p2, serde_json::to_string_pretty(&d).unwrap()).unwrap();
+                    invalidate_cache(&app2);
+                }));
+            });
+            let _ = read_and_cache(app, &cache, || json!({ "httpsOnly": true }));
+            assert!(
+                cache.value.read().unwrap().is_none(),
+                "the stale parse was published over a write that landed after the check"
+            );
+            assert_eq!(load(app)["httpsOnly"].as_bool(), Some(false));
         });
     }
 
@@ -1710,6 +1987,21 @@ mod tests {
     /// unobservable. Asserting the named initialiser is what the JNI getter's failure path
     /// reads, so it is the value that is actually load-bearing.
     #[test]
+    fn a_settings_form_save_pushes_https_only_to_android() {
+        // Audit 7.1: `apply_local` (the `settings.set` path the toggle uses) writes the file
+        // itself instead of going through `write`, so it never refreshed the Android JNI
+        // global — the toggle only took effect after a restart. Asserted on this thread's
+        // own record of the push, because the global itself is shared by parallel tests.
+        with_tmp_app(|app| {
+            LAST_HTTPS_NOTE.with(|c| c.set(None));
+            apply_local(app, &json!({ "partial": { "httpsOnly": false } })).unwrap();
+            assert_eq!(LAST_HTTPS_NOTE.with(|c| c.get()), Some(false));
+            apply_local(app, &json!({ "partial": { "httpsOnly": true } })).unwrap();
+            assert_eq!(LAST_HTTPS_NOTE.with(|c| c.get()), Some(true));
+        });
+    }
+
+    #[test]
     fn a_lost_push_or_a_failed_jni_call_leaves_https_only_on() {
         assert!(
             std::hint::black_box(HTTPS_ONLY_FAIL_SAFE),
@@ -1733,7 +2025,7 @@ mod tests {
             rec("primaryColor", 9, json!("#fff")), // newer → wins
             rec("homeUrl", 1, json!("https://x")), // new key → inserted
         ];
-        let (merged, mut changed) = merge_projection(local, &remote);
+        let (merged, mut changed) = merge_projection(local, &remote, 0);
         changed.sort();
         assert_eq!(
             changed,
@@ -1814,7 +2106,7 @@ mod tests {
         with_tmp_app(|app| {
             // Reachable today only from a test — which is the point: if a future caller reaches
             // `record_change` (or `apply_synced`, `ensure_sync_projection`,
-            // `rebuild_projection_from_current`) directly again, it would do an unprotected
+            // `force_record_change`) directly again, it would do an unprotected
             // read-modify-write of the same two files. That is the defect this commit removes.
             record_change(app, "themeMode", &json!("dark"));
         });
@@ -1885,10 +2177,9 @@ mod tests {
     }
 
     /// `apply_imported` is the same defect with a nastier failure mode, and it is the reason
-    /// `write` had to report at all: it runs `rebuild_projection_from_current` AFTER the write,
-    /// and that wipes the projection and re-seeds it from the CURRENT FILE. Run after a failed
-    /// write it would not merely skip the import — it would stamp the PRE-import values with
-    /// FRESH, locally-invented HLCs, and a peer's genuinely newer record would then lose to a
+    /// `write` had to report at all: it stamps every imported key with a fresh HLC AFTER the
+    /// write. Run after a failed write it would not merely skip the import — it would give
+    /// values the file does not hold FRESH, locally-invented HLCs, and a peer's genuinely newer record would then lose to a
     /// stamp this device made up inside its own failure path.
     #[test]
     fn a_settings_import_that_fails_leaves_the_projection_on_the_values_that_are_on_disk() {

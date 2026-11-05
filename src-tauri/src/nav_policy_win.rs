@@ -45,12 +45,13 @@ unsafe fn handle(
     let target = {
         let mut p = windows::core::PWSTR::null();
         args.Uri(&mut p)?;
-        p.to_string().unwrap_or_default()
+        // Copies AND frees the caller-owned WebView2 string; null-safe (audit 4.5).
+        webview2_com::take_pwstr(p)
     };
     let current = {
         let mut p = windows::core::PWSTR::null();
         core.Source(&mut p)?;
-        p.to_string().unwrap_or_default()
+        webview2_com::take_pwstr(p)
     };
     let mut user = windows::core::BOOL::default();
     args.IsUserInitiated(&mut user)?;

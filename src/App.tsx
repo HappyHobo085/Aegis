@@ -53,7 +53,7 @@ import { ErrorOverlay } from './components/ErrorOverlay';
 import { SkipLink } from './components/SkipLink';
 import { Toaster } from './components/Toaster';
 import { ConfirmDialog } from './components/ConfirmDialog';
-import { PermissionPromptDialog } from './components/PermissionPromptDialog';
+import { PermissionPromptDialog, promptTabProps } from './components/PermissionPromptDialog';
 import { Onboarding } from './components/Onboarding';
 import { SettingsModal } from './components/SettingsModal';
 import type { SettingsTab } from './components/SettingsModal';
@@ -154,6 +154,17 @@ function DesktopApp() {
   const webrtcExempt = useWebrtcExempt();
   const proxy = useProxy();
   const find = useFind(tabs.activeId);
+  // The stable callbacks the shortcut effects below depend on, destructured so the effects can
+  // list them as deps (exhaustive-deps, audit 5.7). Each is a useCallback, so listing them
+  // does not re-register a listener per render.
+  const {
+    create: tabCreate,
+    close: tabClose,
+    activate: tabActivate,
+    reopenClosed: tabReopenClosed,
+  } = tabs;
+  const { show: findShow } = find;
+  const { zoomIn, zoomOut, reset: zoomReset } = zoom;
   const navUrlRef = useRef(nav.state.url);
   navUrlRef.current = nav.state.url;
 
@@ -299,24 +310,24 @@ function DesktopApp() {
   // tabs.shortcut event and are mapped to tab actions here in the chrome.
   useEffect(() => {
     return aegis.tabs.onShortcut((s) => {
-      if (s === 'new') void tabs.create();
-      else if (s === 'close') void tabs.close(activeIdRef.current);
-      else if (s === 'reopen') void tabs.reopenClosed();
+      if (s === 'new') void tabCreate();
+      else if (s === 'close') void tabClose(activeIdRef.current);
+      else if (s === 'reopen') void tabReopenClosed();
       else if (s === 'next' || s === 'prev') {
         const ids = tabsRef.current.map((t) => t.id);
         const i = ids.indexOf(activeIdRef.current);
         if (ids.length > 0) {
           const ni = s === 'next' ? (i + 1) % ids.length : (i - 1 + ids.length) % ids.length;
-          void tabs.activate(ids[ni]);
+          void tabActivate(ids[ni]);
         }
       } else if (s.startsWith('jump')) {
         const ids = tabsRef.current.map((t) => t.id);
         if (ids.length === 0) return;
         const target = s === 'jumpLast' ? ids[ids.length - 1] : ids[Number(s.slice(4)) - 1];
-        if (target !== undefined) void tabs.activate(target);
+        if (target !== undefined) void tabActivate(target);
       }
     });
-  }, []);
+  }, [tabCreate, tabClose, tabReopenClosed, tabActivate]);
 
   // Ctrl+Shift+N — open a new private tab (incognito).
   // Collision check: the Ctrl+digit handler below guards !e.shiftKey; the Windows handler
@@ -326,12 +337,12 @@ function DesktopApp() {
       if (!e.ctrlKey || e.altKey || e.metaKey || !e.shiftKey) return;
       if (e.key.toLowerCase() === 'n') {
         e.preventDefault();
-        void tabs.create(undefined, false, true);
+        void tabCreate(undefined, false, true);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [tabs.create]);
+  }, [tabCreate]);
 
   // Ctrl+1-9 when the chrome/address bar is focused (and as the Win/macOS path,
   // where content-webview digit keys aren't captured by a menu accelerator).
@@ -343,12 +354,12 @@ function DesktopApp() {
         const ids = tabsRef.current.map((t) => t.id);
         if (ids.length === 0) return;
         const target = e.key === '9' ? ids[ids.length - 1] : ids[Number(e.key) - 1];
-        if (target !== undefined) void tabs.activate(target);
+        if (target !== undefined) void tabActivate(target);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [tabActivate]);
 
   // Windows: the native "Tabs" menu (which carried Ctrl+T/W/Shift+T/Ctrl+Tab) is hidden,
   // so handle those tab shortcuts here when the chrome has focus. No-op on macOS, where the
@@ -363,24 +374,24 @@ function DesktopApp() {
         if (ids.length === 0) return;
         const i = ids.indexOf(activeIdRef.current);
         const ni = e.shiftKey ? (i - 1 + ids.length) % ids.length : (i + 1) % ids.length;
-        void tabs.activate(ids[ni]);
+        void tabActivate(ids[ni]);
         return;
       }
       const k = e.key.toLowerCase();
       if (k === 't' && e.shiftKey) {
         e.preventDefault();
-        void tabs.reopenClosed();
+        void tabReopenClosed();
       } else if (k === 't') {
         e.preventDefault();
-        void tabs.create();
+        void tabCreate();
       } else if (k === 'w') {
         e.preventDefault();
-        void tabs.close(activeIdRef.current);
+        void tabClose(activeIdRef.current);
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [tabCreate, tabClose, tabReopenClosed, tabActivate]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -399,12 +410,12 @@ function DesktopApp() {
     const onKey = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
-        find.show();
+        findShow();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [find.show]);
+  }, [findShow]);
 
   // Ctrl+= / Ctrl++ / Ctrl+- / Ctrl+0 — page zoom.
   // Collision check: the Ctrl+1–9 handler above guards `e.key >= '1' && e.key <= '9'`, so
@@ -417,18 +428,18 @@ function DesktopApp() {
       if (!e.ctrlKey || e.altKey || e.metaKey) return;
       if (e.key === '+' || e.key === '=' || e.code === 'NumpadAdd') {
         e.preventDefault();
-        zoom.zoomIn();
+        zoomIn();
       } else if (e.key === '-' || e.code === 'NumpadSubtract') {
         e.preventDefault();
-        zoom.zoomOut();
+        zoomOut();
       } else if (e.key === '0' || e.code === 'Numpad0') {
         e.preventDefault();
-        zoom.reset();
+        zoomReset();
       }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [zoom.zoomIn, zoom.zoomOut, zoom.reset]);
+  }, [zoomIn, zoomOut, zoomReset]);
 
   // Ctrl-wheel over the chrome zooms in/out. Must be a non-passive listener to allow
   // preventDefault (React's synthetic onWheel is always passive in React 17+).
@@ -443,12 +454,12 @@ function DesktopApp() {
     const onWheel = (e: WheelEvent) => {
       if (!e.ctrlKey) return;
       e.preventDefault();
-      if (e.deltaY < 0) zoom.zoomIn();
-      else if (e.deltaY > 0) zoom.zoomOut();
+      if (e.deltaY < 0) zoomIn();
+      else if (e.deltaY > 0) zoomOut();
     };
     window.addEventListener('wheel', onWheel, { passive: false });
     return () => window.removeEventListener('wheel', onWheel);
-  }, [zoom.zoomIn, zoom.zoomOut]);
+  }, [zoomIn, zoomOut]);
 
   useEffect(() => {
     const offFailed = aegis.nav.onFailed((f) => {
@@ -864,8 +875,9 @@ function DesktopApp() {
       )}
       {permissions.prompt && (
         <PermissionPromptDialog
+          key={permissions.prompt.requestId}
           prompt={permissions.prompt}
-          isPrivate={activeProtection.privateMode}
+          {...promptTabProps(permissions.prompt, tabs.tabs, tabs.activeId)}
           onOpenSitePermissions={() => openSettings('sitePermissions')}
           onResolve={(_requestId, decision) => void permissions.resolve(decision)}
         />

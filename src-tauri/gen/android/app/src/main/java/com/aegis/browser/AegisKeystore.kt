@@ -76,8 +76,12 @@ object AegisKeystore {
         val key = kg.generateKey()
         logKeySecurityLevel(key)
         return key
-      } catch (_: android.security.keystore.StrongBoxUnavailableException) {
-        // No Secure Element — re-init the SAME generator without StrongBox.
+      } catch (_: Exception) {
+        // No Secure Element (`StrongBoxUnavailableException`) — or a StrongBox that FAILED key
+        // generation, which some devices report as a `ProviderException`/other RuntimeException.
+        // Either way, re-init the SAME generator without StrongBox: catching only the first
+        // let the second escape `secretKey()`, `wrap` returned null, and the device fell to the
+        // passphrase/in-memory tier instead of the TEE.
       }
     }
     kg.init(spec(false))

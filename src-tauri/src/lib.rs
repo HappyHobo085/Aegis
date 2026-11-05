@@ -203,6 +203,21 @@ pub(crate) fn ffi_guard<T>(f: impl FnOnce() -> T) -> Option<T> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).ok()
 }
 
+/// A Java string for a JNI getter that Kotlin declares NON-null (audit 7.7). `new_string` can
+/// fail (allocation, a pending exception); the getters used to fall back to a NULL jstring,
+/// which Kotlin then dereferences. An empty string is the next answer — every caller already
+/// treats "" as "no answer" — and null is left only for when even that cannot be allocated.
+#[cfg(target_os = "android")]
+pub(crate) fn jni_string_or_empty(env: &mut jni::JNIEnv, text: &str) -> jni::sys::jstring {
+    match env.new_string(text) {
+        Ok(s) => s.into_raw(),
+        Err(_) => env
+            .new_string("")
+            .map(|s| s.into_raw())
+            .unwrap_or(std::ptr::null_mut()),
+    }
+}
+
 /// The app handle for the Android JNI entry points that need managed state.
 ///
 /// Kotlin -> Rust is the only usable direction on Android (Rust cannot up-call into
@@ -338,11 +353,43 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
     }
 }
 
+// Test-only: `install_adblock` threads still running. They are DETACHED, so without this a
+// test's teardown deleted its temp dir while one was still about to re-create
+// `<tmp>/content-filters` in it (audit 7.8). `with_tmp_app` waits for zero before cleanup.
+#[cfg(all(test, target_os = "linux"))]
+static ADBLOCK_INSTALLS_IN_FLIGHT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+#[cfg(all(test, target_os = "linux"))]
+struct InstallInFlight;
+#[cfg(all(test, target_os = "linux"))]
+impl Drop for InstallInFlight {
+    fn drop(&mut self) {
+        ADBLOCK_INSTALLS_IN_FLIGHT.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Block until no `install_adblock` thread is running (bounded, so a wedged thread fails a
+/// test loudly elsewhere instead of hanging the suite).
+#[cfg(all(test, target_os = "linux"))]
+pub(crate) fn wait_for_adblock_installs() {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while ADBLOCK_INSTALLS_IN_FLIGHT.load(std::sync::atomic::Ordering::SeqCst) > 0
+        && std::time::Instant::now() < deadline
+    {
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// Convert EasyList to content-blocker JSON on a background thread and load it as
 /// WebKit content filters (cached after the first compile). Called at boot and
 /// whenever ad-blocking is re-enabled.
 #[cfg(target_os = "linux")]
 pub fn install_adblock<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
+    /// Serialises installs. Two in flight (boot + a toggle, or two quick allowlist edits) raced
+    /// on the one store dir and the one armed ready-marker, so the LOSER's chunks could land
+    /// after the winner's and stay installed (audit 4.2).
+    static INSTALL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let store_dir = app
         .path()
         .app_cache_dir()
@@ -357,7 +404,13 @@ pub fn install_adblock<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     // store (not the in-memory cache) so this is correct even if the two are briefly out of
     // step, and so the hash matches what `adblock::dispatch` re-applies through.
     let allowlist = adblock::load_allowlist_hosts(&app);
+    #[cfg(test)]
+    ADBLOCK_INSTALLS_IN_FLIGHT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
     std::thread::spawn(move || {
+        // Decrements on every exit path, a panic included.
+        #[cfg(test)]
+        let _in_flight = InstallInFlight;
+        let _serial = INSTALL_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         use std::hash::{Hash, Hasher};
         // Convert EVERY bundled list (ads + trackers + Peter Lowe's), not just EasyList,
         // so the WebKit content filters match the same set as the engine/inject tiers.
@@ -372,7 +425,7 @@ pub fn install_adblock<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         subs_text.hash(&mut hasher);
         allowlist.hash(&mut hasher);
         let marker = store_dir.join(format!("v{:x}.ready", hasher.finish()));
-        let cached = marker.exists();
+        let cached = adblock_webkit::prepare_store(&store_dir, &marker);
         let sources: Vec<&str> = bundled
             .iter()
             .copied()
