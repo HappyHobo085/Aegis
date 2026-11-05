@@ -9,6 +9,10 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Security
 
+- **Downloaded file names can no longer disguise their type** with invisible Unicode
+  direction-override characters (a file that displays as `invoice.pdf` but is an `.exe`).
+- **Sync server: refused registrations no longer use up the server's anti-replay memory,** so
+  a stream of bogus sign-ups cannot lock out real devices for five minutes.
 - **Release pipeline hardening.**
   - The third-party Rust toolchain action is pinned to a commit.
   - Release checkouts no longer keep the job token.

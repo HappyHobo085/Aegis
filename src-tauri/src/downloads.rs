@@ -210,6 +210,17 @@ fn sanitize_filename(raw: &str) -> String {
         .map(|c| match c {
             '<' | '>' | ':' | '"' | '|' | '?' | '*' => '_',
             c if c.is_control() => '_',
+            // Unicode FORMAT characters: bidi overrides/isolates/marks (a right-to-left override
+            // makes `a\u{202E}fdp.exe` DISPLAY as `aexe.pdf`), zero-width and invisible joiners,
+            // and the BOM. None belongs in a file name; all can disguise one.
+            '\u{00AD}'
+            | '\u{061C}'
+            | '\u{180E}'
+            | '\u{200B}'..='\u{200F}'
+            | '\u{202A}'..='\u{202E}'
+            | '\u{2060}'..='\u{2064}'
+            | '\u{2066}'..='\u{206F}'
+            | '\u{FEFF}' => '_',
             c => c,
         })
         .collect();
@@ -791,6 +802,23 @@ mod tests {
     }
 
     // ---- Audit 7.6: the saved file's NAME ----
+
+    /// Security review of the audit push: Unicode FORMAT characters passed through, so a
+    /// right-to-left override made `a\u{202E}fdp.exe` DISPLAY as `aexe.pdf` in the downloads
+    /// list and the file manager — an executable dressed as a document.
+    #[test]
+    fn bidi_and_invisible_format_characters_are_replaced() {
+        assert_eq!(sanitize_filename("a\u{202E}fdp.exe"), "a_fdp.exe");
+        for c in [
+            '\u{200B}', '\u{200E}', '\u{200F}', '\u{202A}', '\u{202D}', '\u{2066}', '\u{2069}',
+            '\u{061C}', '\u{FEFF}', '\u{2060}',
+        ] {
+            let got = sanitize_filename(&format!("x{c}y.txt"));
+            assert_eq!(got, "x_y.txt", "U+{:04X}", c as u32);
+        }
+        // Ordinary non-ASCII names are untouched.
+        assert_eq!(sanitize_filename("résumé 履歴書.pdf"), "résumé 履歴書.pdf");
+    }
 
     #[test]
     fn a_filename_is_sanitised_for_every_desktop_filesystem() {

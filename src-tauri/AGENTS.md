@@ -479,8 +479,10 @@ success)` → `on_finished`. **The destination must be PASSED IN, not derived**:
     `on_requested` (the desktop wry path) picks the name — preferring the ENGINE's
     suggestion that wry pre-fills into `destination` (WebKit `suggested_filename` /
     WebView2 `ResultFilePath`, i.e. Content-Disposition), else the URL's last segment
-    minus `?`/`#` — then `sanitize_filename` (last component only, Windows-reserved and
-    control characters → `_`, trailing dots/spaces trimmed, `CON`/`LPT9`… prefixed,
+    minus `?`/`#` — then `sanitize_filename` (last component only, Windows-reserved,
+    control and Unicode FORMAT characters → `_` — bidi overrides/isolates, zero-width and
+    invisible characters, BOM, so `a\u{202E}fdp.exe` cannot display as `aexe.pdf` —
+    trailing dots/spaces trimmed, `CON`/`LPT9`… prefixed,
     `MAX_FILENAME_BYTES` cap keeping the extension) and `unique_in` (`name (n).ext`, never
     overwrite) — audit 7.6. Android goes through the SAME two functions via
     `NativeDownloads.safeName(dir, name)` → `android_safe_name`. And it OVERWRITES the
