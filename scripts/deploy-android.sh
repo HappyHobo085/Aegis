@@ -41,6 +41,10 @@ echo ">> JAVA_HOME=$JAVA_HOME"
 echo ">> building Android APK (${TARGET_ARGS[*]:-universal}) — this takes a few minutes…"
 
 # ── Build ──────────────────────────────────────────────────────────────────────
+# This script's whole purpose is a debug-key sideload onto your own device, so it opts in to
+# the debug-signed release that build.gradle.kts otherwise refuses (audit 6.4 / D6). With a
+# keystore.properties present the opt-in is irrelevant and the real key is used.
+export AEGIS_ALLOW_DEBUG_SIGNED_RELEASE="${AEGIS_ALLOW_DEBUG_SIGNED_RELEASE:-1}"
 npx tauri android build --apk "${TARGET_ARGS[@]}"
 
 # ── Locate the freshest signed release APK ─────────────────────────────────────

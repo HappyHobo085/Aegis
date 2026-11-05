@@ -36,8 +36,17 @@ APP="${1:-}"
 [ -f "$APP" ] || { echo "ERROR: no such file: $APP" >&2; exit 1; }
 
 CACHE="${AEGIS_APPIMAGETOOL_CACHE:-$HOME/.cache/aegis-tools}"
-TOOL="$CACHE/appimagetool"
-TOOL_URL="https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage"
+# Pinned, checksum-verified downloads (audit 6.7). The old URL was AppImageKit's mutable
+# `continuous` build, run unchecked. appimagetool 1.9.1 would otherwise fetch the LATEST
+# type2 runtime at run time (its README says so), so the runtime is pinned and handed over
+# with --runtime-file too. Hashes match GitHub's published asset digests (checked 2026-11-04).
+# Bump: change version + hash together; a mismatch aborts, it is never "re-downloaded".
+TOOL="$CACHE/appimagetool-1.9.1-x86_64.AppImage"
+TOOL_URL="https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage"
+TOOL_SHA256="ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0"
+RUNTIME="$CACHE/type2-runtime-20251108-x86_64"
+RUNTIME_URL="https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-x86_64"
+RUNTIME_SHA256="2fca8b443c92510f1483a883f60061ad09b46b978b2631c807cd873a47ec260d"
 
 # The host plugin dir must be HOST-ARCH, or we would just be re-baking the same bug.
 # /usr/lib64 is 64-bit on Fedora/RHEL; /usr/lib/gstreamer-1.0 is the i686 dir there.
@@ -60,12 +69,24 @@ fi
 echo ">> host plugins:  $PLUGIN_SRC"
 echo ">> host scanner:  $SCANNER_SRC"
 
-if [ ! -x "$TOOL" ]; then
-  echo ">> fetching appimagetool into $CACHE…"
-  mkdir -p "$CACHE"
-  curl -fsSL -o "$TOOL" "$TOOL_URL"
-  chmod +x "$TOOL"
-fi
+# Download (if absent) and verify EVERY run, so a tampered or truncated cache entry is
+# caught too, not only a fresh download.
+fetch_verified() { # <dest> <url> <sha256>
+  if [ ! -f "$1" ]; then
+    echo ">> fetching $(basename "$1") into $CACHE…"
+    mkdir -p "$CACHE"
+    curl -fsSL -o "$1.part" "$2"
+    mv "$1.part" "$1"
+  fi
+  if ! printf '%s  %s\n' "$3" "$1" | sha256sum -c --quiet -; then
+    echo "ERROR: checksum mismatch for $1 — refusing to run it. Delete it to re-fetch;" >&2
+    echo "       if it mismatches again, the upstream asset changed: verify, then bump the pin." >&2
+    exit 1
+  fi
+}
+fetch_verified "$TOOL" "$TOOL_URL" "$TOOL_SHA256"
+fetch_verified "$RUNTIME" "$RUNTIME_URL" "$RUNTIME_SHA256"
+chmod +x "$TOOL"
 
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
@@ -95,7 +116,7 @@ HOOK
 # ARCH is required: the AppDir still carries 32-bit leftovers, so appimagetool refuses to
 # guess ("More than one architectures were found").
 echo ">> repacking…"
-( cd "$WORK" && ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" squashfs-root "$OUT" >/dev/null 2>&1 )
+( cd "$WORK" && ARCH=x86_64 APPIMAGE_EXTRACT_AND_RUN=1 "$TOOL" --runtime-file "$RUNTIME" squashfs-root "$OUT" >/dev/null 2>&1 )
 [ -f "$OUT" ] || { echo "ERROR: repack produced nothing" >&2; exit 1; }
 
 # Fail loudly rather than shipping a bundle that still has i686 plugins.

@@ -100,7 +100,7 @@ jobs:
       # `toolchain:` makes this action read that file), replacing the floating
       # `dtolnay/rust-toolchain@stable`. `cache: 'false'` — the explicit actions/cache
       # step below owns caching.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           cache: 'false'
 
@@ -174,7 +174,7 @@ jobs:
       # are added on top. ci.yml's `cross-target` job now compile-checks
       # aarch64-linux-android on every PR, so this job is about the APK, not the
       # cfg(windows/android) surface.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           target: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
           cache: 'false'
@@ -199,6 +199,10 @@ jobs:
       # update channel; see the loud note in tauri-release.yml.
       # The Android SDK + NDK are preinstalled on the runner; point Tauri at the latest NDK.
       - name: Build release APK
+        # A build CHECK, not a release: opt in to the debug key build.gradle.kts otherwise
+        # refuses for a release variant (audit 6.4 / D6).
+        env:
+          AEGIS_ALLOW_DEBUG_SIGNED_RELEASE: '1'
         run: |
           export NDK_HOME="$ANDROID_NDK_LATEST_HOME"
           echo "Using NDK at $NDK_HOME"

@@ -66,7 +66,9 @@ GitHub Actions workflows in `.github/workflows/`:
     bundled-webkit AppImage crashed (blank/frozen pages) on newer distros like Fedora.
   - plus an `android` job → **release** APK (minified; debug-key-signed so it still
     installs — each CI run uses its own debug key, so it's a one-off-install artifact,
-    not an update channel). Rust cross-compiled to the 4 Android ABIs.
+    not an update channel). It sets `AEGIS_ALLOW_DEBUG_SIGNED_RELEASE: "1"`, because
+    `build.gradle.kts` otherwise refuses a debug-signed release (audit 6.4 / D6). Rust
+    cross-compiled to the 4 Android ABIs.
     Artifacts retained 14 days; the real signed/update channel is `tauri-release.yml`.
 
 - **`tauri-release.yml`** (Tauri Release) — the auto-update feed. Triggers on a
@@ -75,6 +77,25 @@ GitHub Actions workflows in `.github/workflows/`:
   Release. Needs repo secrets `TAURI_SIGNING_PRIVATE_KEY`
   (+`_PASSWORD`); without them it still builds but emits no update signature.
   Dormant until the Tauri app is on the default branch and a `v*` tag is pushed.
+  Audit phase 6 hardening (pinned by `scripts/cliGates.test.mjs`, "release + build
+  wiring"):
+  - `bundle.createUpdaterArtifacts: true` lives in `src-tauri/tauri.updater.conf.json`, merged
+    in (`--config`, prepended to `args`) only when `TAURI_SIGNING_PRIVATE_KEY` is set. Without
+    it no `latest.json` was ever produced; in `tauri.conf.json` it made every keyless build —
+    local `build-appimage.sh` included — fail after bundling. With the key, `attest` **fails**
+    when the release lacks `latest.json`; without it, `latest.json` is not expected.
+  - The preflight also refuses a tag that is not `v<tauri.conf.json version>`.
+  - Every `args` ends in `-- --locked`; every checkout sets `persist-credentials: false`.
+  - **Windows is unsigned** — no Authenticode signing is implemented; the old
+    `WINDOWS_CERTIFICATE` env was read by nothing and is gone.
+  - **Android**: with `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` /
+    `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` secrets the APK is signed with that
+    stable key AND added to `latest.json` as `platforms.android` (empty `signature`),
+    which is what lets `update.rs`'s Android check fire at all. Without them the job opts
+    in to a debug key and the loud "one-off install" note fires.
+  - `android` and `attest` run when ONE desktop leg is red
+    (`!cancelled() && needs.preflight.result == 'success'`), so a flaky leg no longer
+    leaves the draft without an APK or SHA256SUMS; the workflow is still red.
 
 ## Dependabot
 
@@ -192,7 +213,15 @@ available — SKIPPING…` line and exits 0 before touching the build files, so
   `expectOn` this host that matches nothing is a hard failure; a file for another
   platform is reported as inert. `rustCoverageCheck.test.mjs` covers it, including
   a check that every listed file really exists on disk (a typo would make the
-  exclusion a silent no-op).
+  exclusion a silent no-op). An entry matches only `src-tauri/src/<file>`, not any file
+  with that basename (audit 6.9).
+- **New exclusions are gated (audit 6.9).** A file added AND excluded in one commit never
+  appears in the report or the baseline, so "dropped out of the report" cannot see it.
+  Both ratchets therefore read the exclusion list at the base ref (`git show`:
+  `vitest.config.ts`'s `coverage.exclude` via `extractCoverageExcludes`, and
+  `rustCoverageCheck.mjs`'s `EXCLUSIONS` via `extractExclusionFiles`) and fail on any
+  entry added since (`detectNewExclusions`), behind the same
+  `COVERAGE_ALLOW_BASELINE_LOWER=1` escape hatch as a lowering.
 - **`coverage-ratchet.mjs`** / **`coverage-baseline.mjs`** / **`rust-coverage-ratchet.mjs`** /
   **`rust-coverage-baseline.mjs`** — the four CLIs. The two ratchets are the CI
   gates; both are three-failure-mode gates (below baseline / baseline lowered vs
@@ -312,7 +341,7 @@ cargo install cargo-llvm-cov --locked
 **"0% in a coverage report" is not the same claim as "untested".** The v8 provider
 instruments only the test worker's own V8 runtime, so a **spawned subprocess earns
 zero coverage credit** — `cliGates.test.mjs` really does cover three of the
-zero-percent CLI scripts with 30 passing tests and the report still says 0%. The
+zero-percent CLI scripts (64 tests in that file) and the report still says 0%. The
 same is true in reverse for Rust: `main.rs` and the Kotlin surface are not
 `--lib` targets, so they are absent from the report rather than excluded from it.
 The Rust ratchet prints every excluded file with its real numbers on each run for
@@ -349,7 +378,10 @@ Convenience wrappers around the release builds (each resolves the repo root via
   `$CARGO_TARGET_DIR/release/bundle/appimage/*.AppImage` (default
   `src-tauri/target/…`; the env var is honoured because cargo bundles there, so a
   hardcoded `src-tauri/target` path misses the artifact entirely when it is set).
-- **`repack-appimage-gstreamer.sh`** — **a fallback for a machine with no host-arch GStreamer
+- **`repack-appimage-gstreamer.sh`** — (its `appimagetool` 1.9.1 and the type2 runtime
+  20251108 it embeds are pinned URLs verified with `sha256sum -c` on every run, and the
+  runtime is passed via `--runtime-file` — audit 6.7; it used to run AppImageKit's mutable
+  `continuous` build unchecked) **a fallback for a machine with no host-arch GStreamer
   plugins, not the fix for dead media**; run by `build-appimage.sh` after `tauri build`. Aegis
   resolves its own plugins at startup (`choose_gst_plugin_dirs` +
   `repoint_gst_plugin_scanner` in `lib.rs`), so a **plain** `tauri build` now ships working
@@ -374,10 +406,14 @@ Convenience wrappers around the release builds (each resolves the repo root via
   destination→source map with **no glob support**, so ~263 host plugins can't be listed.
 - **`build-windows-portable.ps1`** — **run on a Windows host** (MSVC + NASM + CMake). Mirrors
   the CI `aegis-windows-portable` job: `tauri build --no-bundle` then copy
-  `src-tauri/target/release/app.exe` → `Aegis_x64_portable.exe`. The canonical
-  (shipping-equivalent) portable exe.
+  `$CARGO_TARGET_DIR/release/app.exe` (default `src-tauri/target`) →
+  `Aegis_x64_portable.exe`. The canonical (shipping-equivalent) portable exe.
 - **`build-windows-portable-cross.sh`** — best-effort **GNU cross-compile from Linux**
-  (`cargo build --release --target x86_64-pc-windows-gnu` after `npm run build:renderer`).
+  (`cargo build --release --features tauri/custom-protocol --target x86_64-pc-windows-gnu`
+  after `npm run build:renderer`). The feature is load-bearing (audit 6.8): without it
+  tauri's `build.rs` sets `cfg(dev)`, so the exe loaded `devUrl` (`localhost:5174`) and
+  skipped the CSP — a blank window anywhere without a Vite server. `tauri build` adds it
+  itself; plain `cargo build` does not.
   NOT the MSVC build that ships — validate on real Windows; use the `.ps1`/CI for the
   canonical artifact. Needs `mingw64-gcc` + the `x86_64-pc-windows-gnu` rust target.
 

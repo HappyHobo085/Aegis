@@ -17,7 +17,7 @@ GitHub Actions workflows and Dependabot config for Aegis.
     `eslint . --max-warnings=0`, so a `'warn'` rule gates exactly like an `'error'` —
     there is NO warning tier in this repo's ESLint setup, contrary to what this line
     used to say; see `eslint.config.mjs`'s own header for the same note) → `npm run format:check` (Prettier) → `npm run test:coverage`
-    (vitest, node project and jsdom, 1825 tests, **with** the v8 report) →
+    (vitest, node project and jsdom, 2094 tests, **with** the v8 report) →
     `npm run coverage:ratchet` → `npm run build:renderer` → `npm run sizecheck` →
     `node scripts/check-npm-audit.mjs` → `node scripts/check-android-versioncode.mjs`.
     The `--coverage` flag rides on the _test_ step rather than buying a second
@@ -155,7 +155,8 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
 
   The Rust jobs get `-D warnings` from **two** places, and neither of them is a
   variable in `ci.yml`. The `rust` job spells it out on its own clippy invocation.
-  The other jobs reach it through `actions-rust-lang/setup-rust-toolchain@v1`,
+  The other jobs reach it through `actions-rust-lang/setup-rust-toolchain` (pinned to
+  commit `166cdcfd…` = v1.17.0 everywhere since audit 6.2 — it is third-party),
   whose `rustflags` input **defaults to `"-D warnings"`** (its `action.yml:72-75`)
   and whose setup step writes that value into `$GITHUB_ENV` whenever `RUSTFLAGS` is
   not already set (`action.yml:141-142`). `ci.yml` passes no `rustflags:` to that
@@ -201,7 +202,9 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
     bundled-webkit AppImage crashed (blank/frozen pages) on newer distros like Fedora.
   - plus an `android` job → **release** APK (minified; debug-key-signed so it still
     installs — each CI run uses its own debug key, so it's a one-off-install artifact,
-    not an update channel). Rust cross-compiled to the 4 Android ABIs.
+    not an update channel). It sets `AEGIS_ALLOW_DEBUG_SIGNED_RELEASE: "1"`, because
+    `build.gradle.kts` otherwise refuses a debug-signed release (audit 6.4 / D6). Rust
+    cross-compiled to the 4 Android ABIs.
     Artifacts retained 14 days; the real signed/update channel is `tauri-release.yml`.
 - **`tauri-release.yml`** (Tauri Release) — the auto-update feed. Triggers on a
   `v*` tag. Builds signed bundles + `latest.json` for Linux/Windows/macOS (Intel +
@@ -209,6 +212,25 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
   Release. Needs repo secrets `TAURI_SIGNING_PRIVATE_KEY`
   (+`_PASSWORD`); without them it still builds but emits no update signature.
   Dormant until the Tauri app is on the default branch and a `v*` tag is pushed.
+  Audit phase 6 hardening (pinned by `scripts/cliGates.test.mjs`, "release + build
+  wiring"):
+  - `bundle.createUpdaterArtifacts: true` lives in `src-tauri/tauri.updater.conf.json`, merged
+    in (`--config`, prepended to `args`) only when `TAURI_SIGNING_PRIVATE_KEY` is set. Without
+    it no `latest.json` was ever produced; in `tauri.conf.json` it made every keyless build —
+    local `build-appimage.sh` included — fail after bundling. With the key, `attest` **fails**
+    when the release lacks `latest.json`; without it, `latest.json` is not expected.
+  - The preflight also refuses a tag that is not `v<tauri.conf.json version>`.
+  - Every `args` ends in `-- --locked`; every checkout sets `persist-credentials: false`.
+  - **Windows is unsigned** — no Authenticode signing is implemented; the old
+    `WINDOWS_CERTIFICATE` env was read by nothing and is gone.
+  - **Android**: with `ANDROID_KEYSTORE_BASE64` / `ANDROID_KEYSTORE_PASSWORD` /
+    `ANDROID_KEY_ALIAS` / `ANDROID_KEY_PASSWORD` secrets the APK is signed with that
+    stable key AND added to `latest.json` as `platforms.android` (empty `signature`),
+    which is what lets `update.rs`'s Android check fire at all. Without them the job opts
+    in to a debug key and the loud "one-off install" note fires.
+  - `android` and `attest` run when ONE desktop leg is red
+    (`!cancelled() && needs.preflight.result == 'success'`), so a flaky leg no longer
+    leaves the draft without an APK or SHA256SUMS; the workflow is still red.
 
 ## `dependabot.yml`
 

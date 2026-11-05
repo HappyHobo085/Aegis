@@ -24,6 +24,7 @@ import {
   compareToBaseline,
   detectBaselineLowering,
   METRICS,
+  exclusionGate,
   resolveBaselineBaseRef,
 } from './coverageCheck.mjs';
 import {
@@ -34,6 +35,7 @@ import {
   llvmToSummary,
   formatDeltas,
   perFileDeltas,
+  extractExclusionFiles,
 } from './rustCoverageCheck.mjs';
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -211,6 +213,17 @@ if (lowered.length) {
     ]);
   }
 }
+
+// Audit 6.9: an exclusion ADDED in this commit hides a file that is new in the same commit.
+const excludedNow = exclusionGate({
+  ref: base.ref,
+  root: ROOT,
+  rel: 'scripts/rustCoverageCheck.mjs',
+  label: 'rustCoverageCheck.mjs EXCLUSIONS',
+  extract: extractExclusionFiles,
+  env: process.env,
+});
+if (excludedNow.length) fail(excludedNow);
 
 const parts = METRICS.filter((m) => baseline.total[m].total > 0).map(
   (m) => `${m} ${baseline.total[m].pct}%`,

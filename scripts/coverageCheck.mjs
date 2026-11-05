@@ -1,16 +1,22 @@
-// Pure logic for the coverage ratchet. No I/O, no process.exit — see
-// `coverage-ratchet.mjs` for the CLI wrapper. Same split as `auditCheck.mjs` /
-// `check-npm-audit.mjs`, so this is unit-testable without spawning anything.
+// Logic for the coverage ratchet, no process.exit — see `coverage-ratchet.mjs` for the
+// CLI wrapper. Same split as `auditCheck.mjs` / `check-npm-audit.mjs`, so this is
+// unit-testable without spawning anything. Pure except for two tiny, null-on-failure
+// readers at the bottom (`gitShowText`, `readTextOrNull`): they live here rather than in the
+// CLIs because the CLIs are spawned by their tests, so v8 scores every line there 0%.
 //
 // The gate is a RATCHET, not a threshold. It enforces three things:
 //   1. current >= baseline          (coverage may not fall)
 //   2. baseline not lowered vs the commit being tested (you may not relax the
 //      bar to hide a fall)
 //   3. no metric file silently added/excluded (the file list is itself compared)
+//      — and no `coverage.exclude` / Rust `EXCLUSIONS` entry added since the base
+//      ref (`newExclusionFailure`, audit 6.9)
 //
 // (3) matters as much as (1): a one-line `coverage.exclude` addition would
 // otherwise raise every percentage and sail through the gate.
 
+import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 /** The four metrics we gate on.
  *
  * `branchesTrue` is deliberately absent: it is a v8-provider artefact with
@@ -229,4 +235,102 @@ export function baselineLoweringSkipMessage({ script, base, baselineRel }) {
     '  the baseline, or the ref is not in this clone — a checkout with\n' +
     '  fetch-depth: 0 is required for the base commit to be present. Not a pass.\n'
   );
+}
+
+/**
+ * The string entries of the `coverage: { … exclude: [ … ] }` array in a vitest config's
+ * TEXT (audit 6.9). Text, not an import, because the base-ref copy only exists as
+ * `git show` output. Only the array inside the `coverage` block is read — a project-level
+ * `test.exclude` is about which SPECS run, not what is measured. Returns null when the
+ * block is not found, so a reshaped config is reported rather than read as "no excludes".
+ */
+export function extractCoverageExcludes(configText) {
+  const cov = String(configText).indexOf('coverage:');
+  if (cov < 0) return null;
+  // Line comments go first: an apostrophe in one ("Vitest's defaults") would otherwise be
+  // read as the start of a string. A `//` only starts a comment at line start or after
+  // whitespace/a comma, so a glob such as '**/x' is never cut.
+  const text = String(configText)
+    .slice(cov)
+    .split('\n')
+    .map((line) => line.replace(/(^|[\s,])\/\/.*$/, '$1'))
+    .join('\n');
+  const m = /exclude:\s*\[([\s\S]*?)\]/.exec(text);
+  if (!m) return null;
+  return [...m[1].matchAll(/'([^']*)'|"([^"]*)"/g)].map((x) => x[1] ?? x[2]);
+}
+
+/**
+ * Exclusion entries present now but not at the base ref (audit 6.9). A file added AND
+ * excluded in one commit never enters the report or the baseline, so the "file dropped
+ * out of the report" check cannot see it — this one can. `base` null (no base ref, or the
+ * file did not exist there) means there is nothing to compare: returns [].
+ */
+export function detectNewExclusions(base, current) {
+  if (!base || !current) return [];
+  const had = new Set(base);
+  return current.filter((e) => !had.has(e));
+}
+
+/** `git show <ref>:<rel>` as text, or null when the ref or the file is unavailable there.
+ *  `run` is injectable so the null path is testable without a broken repo. */
+export function gitShowText(ref, rel, cwd, run = execFileSync) {
+  try {
+    return run('git', ['show', `${ref}:${rel}`], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** A file's text, or null when it does not exist (a fixture repo has no vitest.config.ts). */
+export function readTextOrNull(path) {
+  try {
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The ratchet's failure lines for exclusions added since `ref` (audit 6.9), or [] when there
+ * is no base to compare against, nothing was added, or COVERAGE_ALLOW_BASELINE_LOWER=1 (the
+ * same escape hatch as a lowering). Lives here, not in the ratchet CLIs, because those are
+ * spawned by their tests and v8 scores spawned code 0% — every line there dilutes the ratio.
+ */
+export function newExclusionFailure({ ref, label, baseText, currentText, extract, env = {} }) {
+  if (!ref) return [];
+  // A missing or empty text extracts to null, which `detectNewExclusions` reads as "nothing
+  // to compare" — so absence on either side can never fail the gate by itself.
+  const added = detectNewExclusions(
+    baseText ? extract(baseText) : null,
+    currentText ? extract(currentText) : null,
+  );
+  if (!added.length || env.COVERAGE_ALLOW_BASELINE_LOWER === '1') return [];
+  return [
+    `coverage exclusion(s) ADDED in this commit (${label}):`,
+    ...added.map((e) => `  ${e}`),
+    '',
+    'An exclusion removes code from the gate. If it is genuinely unmeasurable, re-run',
+    'with COVERAGE_ALLOW_BASELINE_LOWER=1 and say why in the PR.',
+  ];
+}
+
+/**
+ * The whole exclusion gate for one list: read `rel` at the base ref and in the working
+ * tree under `root`, and return `newExclusionFailure`'s lines. One call per ratchet CLI, so
+ * almost nothing of it lives in the unmeasurable (spawned) scripts.
+ */
+export function exclusionGate({ ref, root, rel, label, extract, env = {}, run = execFileSync }) {
+  return newExclusionFailure({
+    ref,
+    label,
+    baseText: ref ? gitShowText(ref, rel, root, run) : null,
+    currentText: readTextOrNull(`${root}/${rel}`),
+    extract,
+    env,
+  });
 }

@@ -272,9 +272,11 @@ npm run android:build -- --target aarch64  # arm64-only (smaller; for a phone)
 | Universal release APK       | `src-tauri/gen/android/app/build/outputs/apk/universal/release/app-universal-release.apk` |
 | (debug, from `android:dev`) | `src-tauri/gen/android/app/build/outputs/apk/universal/debug/app-universal-debug.apk`     |
 
-**Signing:** by default the release APK is signed with the **debug key** (installs fine,
-but is not a Play-Store upload key and is not an update channel). For a real release key,
-drop a gitignored **`keystore.properties`** at the repo root:
+**Signing:** a release build **fails** without a release key, because a debug-signed APK can
+never update (or be updated by) another build. For a one-off sideload, opt in with
+`AEGIS_ALLOW_DEBUG_SIGNED_RELEASE=1 npm run android:build` (`scripts/deploy-android.sh` does
+this for you). For a real release key, drop a gitignored **`keystore.properties`** at the
+Android project root (`src-tauri/gen/android/`):
 
 ```properties
 storeFile=/absolute/path/to/release.keystore

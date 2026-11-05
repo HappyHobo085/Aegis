@@ -24,10 +24,10 @@ android {
         versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
         versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
     }
-    // Optional real release signing: drop a `keystore.properties` (gitignored) at the
-    // android project root with storeFile/storePassword/keyAlias/keyPassword. Without it,
-    // the release build falls back to the debug key (sideload-installable). Lets a Play
-    // Store / stable-update build use a proper key without code changes.
+    // Real release signing: drop a `keystore.properties` (gitignored) at the android project
+    // root with storeFile/storePassword/keyAlias/keyPassword. Without it a release build
+    // FAILS unless AEGIS_ALLOW_DEBUG_SIGNED_RELEASE=1 (then: debug key, sideload-only) —
+    // see the packaging-task check at the bottom of this file (audit 6.4 / D6).
     val keystorePropsFile = rootProject.file("keystore.properties")
     if (keystorePropsFile.exists()) {
         val props = Properties().apply { keystorePropsFile.inputStream().use { load(it) } }
@@ -58,12 +58,13 @@ android {
                     .plus(getDefaultProguardFile("proguard-android-optimize.txt"))
                     .toList().toTypedArray()
             )
-            // Sign the release APK so it's installable. Use a real release keystore when
-            // keystore.properties exists (storeFile/storePassword/keyAlias/keyPassword —
-            // see .gitignore); else fall back to the debug key so `tauri android build
-            // --apk` still yields a sideloadable APK (fine for personal installs; a Play
-            // Store upload needs a real keystore). signingConfigs are declared up in the
-            // android{} block; this just selects one.
+            // Sign the release APK with the real release keystore when keystore.properties
+            // exists (storeFile/storePassword/keyAlias/keyPassword — see .gitignore). Without
+            // it the debug key is selected here, but packaging a release REFUSES to run on it
+            // unless AEGIS_ALLOW_DEBUG_SIGNED_RELEASE=1 (audit 6.4, owner decision D6): a
+            // debug-signed "release" can never update, or be updated by, any other build, and
+            // it used to be produced silently. The check is in the packaging task (below), not
+            // here, so configuring or building a DEBUG variant never trips it.
             signingConfig = signingConfigs.findByName("release") ?: signingConfigs.getByName("debug")
         }
     }
@@ -77,6 +78,27 @@ android {
 
 rust {
     rootDirRel = "../../../"
+}
+
+// D6 / audit 6.4: refuse to PACKAGE a release APK/AAB on the debug key unless explicitly
+// opted out. Lazy (doFirst on the release packaging tasks) so debug builds, IDE sync and
+// `tauri android dev` are unaffected; only `package*Release` / `bundle*Release` run it.
+val releaseSignedWithRealKey = rootProject.file("keystore.properties").exists()
+tasks.configureEach {
+    val isReleasePackaging = name.endsWith("Release") &&
+        (name.startsWith("package") || name.startsWith("bundle"))
+    if (isReleasePackaging) {
+        doFirst {
+            if (!releaseSignedWithRealKey && System.getenv("AEGIS_ALLOW_DEBUG_SIGNED_RELEASE") != "1") {
+                throw GradleException(
+                    "Release build has no keystore.properties, so it would be signed with the " +
+                        "DEBUG key (it could never update or be updated by another build). Add " +
+                        "keystore.properties, or set AEGIS_ALLOW_DEBUG_SIGNED_RELEASE=1 for a " +
+                        "one-off sideload build."
+                )
+            }
+        }
+    }
 }
 
 dependencies {

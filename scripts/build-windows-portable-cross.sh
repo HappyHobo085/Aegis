@@ -35,7 +35,12 @@ echo ">> cross-compiling release exe (cargo, x86_64-pc-windows-gnu / GNU)…"
 # --locked so the build uses the committed Cargo.lock verbatim; without it cargo
 # silently re-resolves whenever the manifest and the lock disagree, which is how a
 # local "it builds" can differ from what CI built.
-cargo build --locked --release --target x86_64-pc-windows-gnu --manifest-path src-tauri/Cargo.toml
+#
+# `--features tauri/custom-protocol` is what makes this a PRODUCTION build (audit 6.8). Without
+# it tauri's build.rs sets cfg(dev), and `get_app_url` then loads `devUrl`
+# (http://localhost:5174) and the CSP is skipped — a blank window on any machine with no Vite
+# dev server. `tauri build` (the .ps1 and CI path) passes this feature itself; plain cargo does not.
+cargo build --locked --release --features tauri/custom-protocol --target x86_64-pc-windows-gnu --manifest-path src-tauri/Cargo.toml
 
 SRC=src-tauri/target/x86_64-pc-windows-gnu/release/app.exe
 DST=src-tauri/target/x86_64-pc-windows-gnu/release/Aegis_x64_portable.exe

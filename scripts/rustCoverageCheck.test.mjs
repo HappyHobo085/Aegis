@@ -9,10 +9,11 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { compareToBaseline, coversLess } from './coverageCheck.mjs';
+import { compareToBaseline, coversLess, detectNewExclusions } from './coverageCheck.mjs';
 import {
   EXCLUSIONS,
   METRIC_SOURCES,
+  extractExclusionFiles,
   applyExclusions,
   assertExclusionsJustified,
   basename,
@@ -159,12 +160,43 @@ describe('the exclusion list', () => {
     expect(msg).toMatch(/not a Rust source file/);
   });
 
-  it('matches on the basename, so an absolute or Windows path both work', () => {
+  it('matches the crate-root PATH, so an absolute or Windows path both work', () => {
     expect(basename('/a/b/c.rs')).toBe('c.rs');
     expect(basename('C:\\src\\c.rs')).toBe('c.rs');
     expect(isExcluded('/x/src-tauri/src/linux_layout.rs')?.file).toBe('linux_layout.rs');
-    expect(isExcluded('C:\\a\\zoom_win.rs')?.file).toBe('zoom_win.rs');
+    expect(isExcluded('C:\\a\\src-tauri\\src\\zoom_win.rs')?.file).toBe('zoom_win.rs');
+    expect(isExcluded('src-tauri/src/linux_layout.rs')?.file).toBe('linux_layout.rs');
     expect(isExcluded('src-tauri/src/adblock.rs')).toBeNull();
+  });
+
+  it('does NOT exclude a same-named file somewhere else (audit 6.9)', () => {
+    // Basename matching excluded ANY `linux_layout.rs`, so a new `src/x/linux_layout.rs`
+    // full of testable code would have been silently dropped from the gate.
+    expect(isExcluded('/x/src-tauri/src/sub/linux_layout.rs')).toBeNull();
+    expect(isExcluded('C:\\a\\zoom_win.rs')).toBeNull();
+    const s = llvmToSummary(
+      exportWith([
+        fileRec('sub/linux_layout.rs', { lines: [10, 0], regions: [10, 0], functions: [1, 0] }),
+      ]),
+      { repoRoot: '/repo/' },
+    );
+    const r = applyExclusions(s, EXCLUSIONS, 'linux');
+    expect(r.excluded).toEqual([]);
+  });
+
+  it('flags an exclusion ADDED since the base ref, compared by file name (audit 6.9)', () => {
+    const base = "export const EXCLUSIONS = [\n  { file: 'a.rs', expectOn: 'linux' },\n];";
+    const cur =
+      "export const EXCLUSIONS = [\n  { file: 'a.rs', expectOn: 'linux' },\n" +
+      "  { file: 'b.rs', expectOn: 'linux' },\n];";
+    expect(extractExclusionFiles(cur)).toEqual(['a.rs', 'b.rs']);
+    expect(detectNewExclusions(extractExclusionFiles(base), extractExclusionFiles(cur))).toEqual([
+      'b.rs',
+    ]);
+    expect(extractExclusionFiles('// no list here')).toBeNull();
+    // The live list parses to exactly what the module exports.
+    const live = readFileSync(resolve(ROOT, 'scripts/rustCoverageCheck.mjs'), 'utf8');
+    expect(extractExclusionFiles(live)).toEqual(EXCLUSIONS.map((e) => e.file));
   });
 
   it('excludes exactly the ONE file that is compiled on Linux', () => {

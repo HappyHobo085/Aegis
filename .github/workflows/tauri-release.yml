@@ -61,6 +61,29 @@ jobs:
           fi
           echo "OK: releasing from tag '$REF_NAME'."
 
+      # The tag must name the version the build will CLAIM (audit 6.3). tauri.conf.json's
+      # `version` is what goes into latest.json and the bundles; a tag that disagrees
+      # publishes a release whose update feed advertises a different version than its
+      # name — clients then compare against the wrong number.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          sparse-checkout: src-tauri/tauri.conf.json
+          sparse-checkout-cone-mode: false
+      - name: Tag must match tauri.conf.json version
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          set -eu
+          CONF_VERSION=$(jq -r .version src-tauri/tauri.conf.json)
+          if [ "v$CONF_VERSION" != "$REF_NAME" ]; then
+            echo "::error::Tag '$REF_NAME' does not match tauri.conf.json version" \
+              "'$CONF_VERSION' (expected tag 'v$CONF_VERSION'). Bump the version (and" \
+              "src-tauri/Cargo.toml) or re-tag."
+            exit 1
+          fi
+          echo "OK: tag matches tauri.conf.json version $CONF_VERSION."
+
   release:
     needs: preflight
     timeout-minutes: 60
@@ -68,25 +91,32 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # Every `args` ends in `-- --locked` (audit 6.9): what follows `--` goes to cargo,
+          # so the release builds the committed Cargo.lock verbatim instead of silently
+          # re-resolving when manifest and lock disagree.
           - platform: macos-15 # Apple Silicon
             label: macos-arm64
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            args: '--target aarch64-apple-darwin --bundles app,dmg'
+            args: '--target aarch64-apple-darwin --bundles app,dmg -- --locked'
           - platform: macos-15 # Intel
             label: macos-x64
             rust_targets: aarch64-apple-darwin,x86_64-apple-darwin
-            args: '--target x86_64-apple-darwin --bundles app,dmg'
+            args: '--target x86_64-apple-darwin --bundles app,dmg -- --locked'
           - platform: ubuntu-24.04
             label: linux
             rust_targets: ''
-            args: '--bundles appimage,deb,rpm --config src-tauri/tauri.appimage-mediaframework.conf.json'
+            args: '--bundles appimage,deb,rpm --config src-tauri/tauri.appimage-mediaframework.conf.json -- --locked'
           - platform: windows-latest
             label: windows
             rust_targets: ''
-            args: '--bundles nsis'
+            args: '--bundles nsis -- --locked'
     runs-on: ${{ matrix.platform }}
     steps:
+      # No job token in .git/config (audit 6.2): nothing here pushes with git; the release
+      # API calls use GITHUB_TOKEN/GH_TOKEN explicitly.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       # Tauri's Linux build links webkit2gtk; the GStreamer packages are needed
       # so bundleMediaFramework can include codecs/sinks in the AppImage.
@@ -114,7 +144,7 @@ jobs:
       # Base toolchain from rust-toolchain.toml (omitting `toolchain:` makes this action
       # read that file rather than a channel that floats); the per-OS release targets are
       # added on top. `cache: 'false'` — the explicit actions/cache step below owns it.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           target: ${{ matrix.rust_targets }}
           cache: 'false'
@@ -140,7 +170,6 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
         run: |
           if [ -z "$TAURI_SIGNING_PRIVATE_KEY" ]; then
             echo "::warning title=Unsigned updater::TAURI_SIGNING_PRIVATE_KEY is not set —" \
@@ -159,23 +188,35 @@ jobs:
           else
             echo "APPLE_SIGNING_IDENTITY present."
           fi
-          if [ -z "$WINDOWS_CERTIFICATE" ]; then
-            echo "::warning title=Unsigned Windows installer::WINDOWS_CERTIFICATE is not set —" \
-              "the NSIS installer ships unsigned, so SmartScreen shows an 'unknown publisher'" \
-              "warning. Add a code-signing cert (.pfx) as the WINDOWS_CERTIFICATE secret," \
-              "with WINDOWS_CERTIFICATE_PASSWORD if it has one."
-          else
-            echo "WINDOWS_CERTIFICATE present."
+          # Windows Authenticode signing is NOT implemented (audit 6.5): tauri-action does not
+          # read a certificate from env, it needs `bundle.windows.signCommand` or a
+          # certificate thumbprint in tauri.conf.json. The env vars that used to sit here
+          # were consumed by nothing, so a "present" line was a false claim.
+          echo "::warning title=Unsigned Windows installer::The NSIS installer ships" \
+            "unsigned (no Authenticode signing is wired up), so SmartScreen shows an" \
+            "'unknown publisher' warning."
+
+      # Updater artifacts (signed bundles + `latest.json`) need TAURI_SIGNING_PRIVATE_KEY, and
+      # with `createUpdaterArtifacts` on and no key the build FAILS after bundling. So the flag
+      # lives in `tauri.updater.conf.json` and is merged in only when the key exists: a release
+      # without it still ships, unsigned, exactly as the preflight above warns.
+      - name: Updater artifacts only with a signing key
+        id: updater
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        shell: bash
+        run: |
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo "args=--config src-tauri/tauri.updater.conf.json" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build + publish (signed updater artifacts)
         id: publish
-        # Pinned to a COMMIT, not the mutable `@v0` major tag every other action here used
-        # to follow. This is the one third-party action in the repo, and it is the one that
-        # runs in the job holding `contents: write` and the signing keys below — so a moved
-        # `v0` would execute someone else's code with the ability to publish a release and
-        # read those secrets. Every other `uses:` here is a first-party action; this is the
-        # third-party exception, and pinning is the reason it no longer needs to be.
+        # Pinned to a COMMIT, not the mutable `@v0` major tag. It runs in the job holding
+        # `contents: write` and the signing keys below — so a moved `v0` would execute
+        # someone else's code with the ability to publish a release and read those
+        # secrets. The other third-party action, `actions-rust-lang/setup-rust-toolchain`,
+        # is commit-pinned for the same reason (audit 6.2); `actions/*` are first-party.
         # `84b9d35b5fc46c1e45415bdb6144030364f7ebc5` is what `refs/tags/v0` resolved to
         # (tag object `fce9c610…`), and it is the commit released as `v0.6.2`.
         # Bump with: git ls-remote https://github.com/tauri-apps/tauri-action refs/tags/v0^{}
@@ -190,11 +231,6 @@ jobs:
           # succeeds but produces no signature; the preflight step above shouts about it.
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-          # Windows code signing. Tauri wants a certificate FILE, so the secret has to be
-          # materialised on disk and the path handed over. With no secret this step is
-          # skipped entirely and the installer ships unsigned (loudly, per preflight).
-          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
-          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Aegis ${{ github.ref_name }}'
@@ -211,7 +247,8 @@ jobs:
             in this release, including the Android APK.
           releaseDraft: true
           prerelease: false
-          args: ${{ matrix.args }}
+          # Prepended, so it lands before the `-- --locked` that hands the rest to cargo.
+          args: ${{ steps.updater.outputs.args }} ${{ matrix.args }}
 
       # This leg's slice of SHA256SUMS, in `shasum -a 256` format so the attest job can
       # concatenate fragments without rewriting a line. Keyed on the BASENAME, because
@@ -273,10 +310,18 @@ jobs:
     # cold tag -- exactly what the comment on that step used to (and wrongly) claim could not
     # happen. Serialising here is the fix; the comment on the step states the new invariant.
     needs: [preflight, release]
+    # Runs even when ONE desktop leg is red (audit 6.9): `needs` alone skipped this job, so a
+    # flaky macOS leg left the draft without an APK. The draft exists as soon as any leg
+    # published; the tag preflight must still have passed.
+    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # No job token in .git/config (audit 6.2): nothing here pushes with git; the release
+      # API calls use GITHUB_TOKEN/GH_TOKEN explicitly.
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@v6
         with:
@@ -288,7 +333,7 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
 
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
         with:
           target: aarch64-linux-android,armv7-linux-androideabi,i686-linux-android,x86_64-linux-android
           cache: 'false'
@@ -303,6 +348,37 @@ jobs:
           key: android-release-${{ hashFiles('src-tauri/Cargo.lock') }}
 
       - run: npm ci
+
+      # Real release key when the four secrets exist (audit 6.4 / D6): materialise the
+      # keystore + keystore.properties so build.gradle.kts signs with it, and mark the run so
+      # the APK is published in latest.json below. Without them, opt in to the debug key
+      # EXPLICITLY (build.gradle.kts refuses a debug-signed release otherwise) and the loud
+      # note at the end of this job applies.
+      - name: Release signing key
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -eu
+          if [ -n "$ANDROID_KEYSTORE_BASE64" ]; then
+            KS="$RUNNER_TEMP/aegis-release.keystore"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 -d > "$KS"
+            {
+              printf 'storeFile=%s\n' "$KS"
+              printf 'storePassword=%s\n' "$ANDROID_KEYSTORE_PASSWORD"
+              printf 'keyAlias=%s\n' "$ANDROID_KEY_ALIAS"
+              printf 'keyPassword=%s\n' "$ANDROID_KEY_PASSWORD"
+            } > src-tauri/gen/android/keystore.properties
+            echo "AEGIS_REAL_ANDROID_KEY=1" >> "$GITHUB_ENV"
+            echo "Release keystore materialised; the APK is signed with the stable key."
+          else
+            echo "AEGIS_ALLOW_DEBUG_SIGNED_RELEASE=1" >> "$GITHUB_ENV"
+            echo "::warning title=Debug-signed APK::ANDROID_KEYSTORE_BASE64 is not set — the" \
+              "APK is signed with a throwaway debug key (see the note at the end of this job)."
+          fi
 
       # Build a RELEASE APK (minified, not debuggable), identical to the
       # tauri-build-check.yml android job. The Android SDK + NDK are preinstalled.
@@ -350,6 +426,33 @@ jobs:
           # this job could not have run before it did. --clobber makes a re-run idempotent.
           gh release upload '${{ github.ref_name }}' dist-apk/*.apk --clobber
 
+      # The in-app Android update check (`update.rs` `newer_android_version`) fires only when
+      # latest.json has a `platforms` key starting with "android" — which no step ever wrote,
+      # so it could never fire (audit 6.4). It is only honest to advertise an update when the
+      # APK is signed with the STABLE key (a debug-signed APK cannot install over anything).
+      # `signature` is empty: the Android path does not verify a minisign signature, and the
+      # desktop updater only reads its own platform's entry.
+      - name: Publish the APK in latest.json (stable key only)
+        if: env.AEGIS_REAL_ANDROID_KEY == '1'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        shell: bash
+        run: |
+          set -eu
+          if [ "$HAS_UPDATER_KEY" != 'true' ]; then
+            echo "No TAURI_SIGNING_PRIVATE_KEY, so no latest.json to publish the APK in."
+            exit 0
+          fi
+          APK=$(basename "$(ls dist-apk/*.apk | head -n1)")
+          URL="https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$APK"
+          gh release download '${{ github.ref_name }}' -p latest.json -D manifest --clobber
+          jq --arg url "$URL" '.platforms.android = {url: $url, signature: ""}' \
+            manifest/latest.json > manifest/latest.new.json
+          mv manifest/latest.new.json manifest/latest.json
+          gh release upload '${{ github.ref_name }}' manifest/latest.json --clobber
+          echo "latest.json now advertises $APK for Android."
+
       - name: Upload checksum fragment
         uses: actions/upload-artifact@v7
         with:
@@ -362,6 +465,7 @@ jobs:
       # "stable channel comes from tauri-release.yml on a tag" for Android, which was
       # never true and is still not: see the body of this step.
       - name: 'Loud note: this APK is a one-off install, NOT an update channel'
+        if: env.AEGIS_REAL_ANDROID_KEY != '1'
         run: |
           echo "::warning title=APK is a one-off install, not an update channel::This APK" \
             "is signed with the throwaway debug key Gradle generates when no" \
@@ -369,13 +473,17 @@ jobs:
             "release APKs can update one another, and none of them matches the key an" \
             "already-installed app was signed with. It is published so a downloader can" \
             "grab the build; updating an existing install means uninstalling first" \
-            "(which clears app data). For a real Android update channel, add a" \
-            "keystore.properties secret (storeFile/storePassword/keyAlias/keyPassword)" \
-            "and delete this step in the same commit."
+            "(which clears app data). For a real Android update channel, add the" \
+            "ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS /" \
+            "ANDROID_KEY_PASSWORD secrets; this note then stops firing."
 
   attest:
     name: Checksums + provenance
     needs: [preflight, release, android]
+    # Same reasoning as `android`: checksum + attest whatever WAS published, rather than
+    # leaving a partially-built draft with no SHA256SUMS at all (audit 6.9). A red leg still
+    # turns the workflow red, and the draft is never auto-published.
+    if: ${{ !cancelled() && needs.preflight.result == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - name: Collect every leg's checksum fragment
@@ -404,10 +512,38 @@ jobs:
             exit 1
           fi
 
+      # `bundle.createUpdaterArtifacts` (merged from tauri.updater.conf.json when the key exists)
+      # makes tauri-action build the signed updater bundles
+      # and upload `latest.json` — the feed every installed client polls. A release without
+      # it builds and publishes "fine" and silently stops auto-update for everyone, which is
+      # exactly what happened before that flag was set (audit 6.1). So its absence fails.
+      - name: Require latest.json on the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HAS_UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        shell: bash
+        run: |
+          set -eu
+          # No key = no updater artifacts by design (the preflight already warned loudly).
+          if [ "$HAS_UPDATER_KEY" != 'true' ]; then
+            echo "Unsigned release: latest.json is not expected."
+            exit 0
+          fi
+          ASSETS=$(gh release view '${{ github.ref_name }}' --repo '${{ github.repository }}' \
+            --json assets --jq '.assets[].name')
+          if ! printf '%s\n' "$ASSETS" | grep -qx 'latest.json'; then
+            echo "::error::latest.json is missing from release ${{ github.ref_name }}." \
+              "Auto-update would be dead for this version. Check that" \
+              "src-tauri/tauri.updater.conf.json still sets bundle.createUpdaterArtifacts."
+            exit 1
+          fi
+          echo "OK: latest.json is attached."
+
       - name: Upload SHA256SUMS to the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload '${{ github.ref_name }}' SHA256SUMS --clobber
+        # `--repo`: this job has no checkout, so gh has no git remote to infer the repo from.
+        run: gh release upload '${{ github.ref_name }}' SHA256SUMS --clobber --repo '${{ github.repository }}'
 
       - name: Upload SHA256SUMS as a workflow artifact
         uses: actions/upload-artifact@v7

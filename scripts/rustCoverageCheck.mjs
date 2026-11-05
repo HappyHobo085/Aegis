@@ -129,11 +129,32 @@ export function basename(p) {
   return String(p).split(/[\\/]/).pop();
 }
 
-/** Is this file on the exclusion list? Matching is on the basename, because the
- *  llvm export's paths are absolute and machine-specific. */
-export function isExcluded(pathOrName, exclusions = EXCLUSIONS) {
-  const name = basename(pathOrName);
-  return exclusions.find((e) => e.file === name) ?? null;
+/** Every exclusion names a file at the crate root, `src-tauri/src/<file>`. */
+const EXCLUSION_DIR = 'src-tauri/src/';
+
+/** Does an (absolute, relative, or Windows) path name exactly `src-tauri/src/<file>`?
+ *  It used to match on the BASENAME alone, so any same-named file anywhere in the crate
+ *  was silently excluded too (audit 6.9). The llvm export's paths are absolute and
+ *  machine-specific, hence a suffix match on the normalised path. */
+function pathIsExclusion(path, file) {
+  const norm = String(path).replace(/\\/g, '/');
+  const want = EXCLUSION_DIR + file;
+  return norm === want || norm.endsWith('/' + want);
+}
+
+/** Is this file on the exclusion list? (See `pathIsExclusion`.) */
+export function isExcluded(path, exclusions = EXCLUSIONS) {
+  return exclusions.find((e) => pathIsExclusion(path, e.file)) ?? null;
+}
+
+/** The `file:` names in the EXCLUSIONS list of this module's SOURCE TEXT — what the ratchet
+ *  reads from `git show <base>:scripts/rustCoverageCheck.mjs` to spot an exclusion added in
+ *  the same commit (audit 6.9). */
+export function extractExclusionFiles(sourceText) {
+  const start = String(sourceText).indexOf('export const EXCLUSIONS = [');
+  if (start < 0) return null;
+  const body = String(sourceText).slice(start, String(sourceText).indexOf('\n];', start));
+  return [...body.matchAll(/file:\s*'([^']+)'/g)].map((m) => m[1]);
 }
 
 /**
@@ -193,7 +214,7 @@ export function applyExclusions(summary, exclusions = EXCLUSIONS, platform = pro
   const notCompiledHere = [];
 
   for (const [path, rec] of Object.entries(summary.files)) {
-    const hit = exclusions.find((e) => e.file === basename(path));
+    const hit = exclusions.find((e) => pathIsExclusion(path, e.file));
     if (hit) {
       excluded.push({ file: hit.file, path, reason: hit.reason, summary: rec });
     } else {

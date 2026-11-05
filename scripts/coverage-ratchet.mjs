@@ -23,6 +23,8 @@ import {
   compareToBaseline,
   baselineLoweringSkipMessage,
   detectBaselineLowering,
+  extractCoverageExcludes,
+  exclusionGate,
   resolveBaselineBaseRef,
 } from './coverageCheck.mjs';
 
@@ -120,6 +122,18 @@ if (lowered.length) {
     ]);
   }
 }
+
+// Audit 6.9: an exclusion ADDED in this commit hides a file that is new in the same commit —
+// it is in neither the report nor the baseline, so nothing above can see it.
+const excluded = exclusionGate({
+  ref: base.ref,
+  root: ROOT,
+  rel: 'vitest.config.ts',
+  label: 'vitest.config.ts coverage.exclude',
+  extract: extractCoverageExcludes,
+  env: process.env,
+});
+if (excluded.length) fail(excluded);
 
 const parts = METRICS.map((m) => `${m} ${baseline.total[m].pct}%`);
 console.log(

@@ -21,8 +21,11 @@ Write-Host '>> building release Windows binary (npm run tauri -- build --no-bund
 npm run tauri -- build --no-bundle
 if ($LASTEXITCODE -ne 0) { throw "tauri build failed (exit $LASTEXITCODE)" }
 
-$src = 'src-tauri/target/release/app.exe'
-$dst = 'src-tauri/target/release/Aegis_x64_portable.exe'
+# Honour CARGO_TARGET_DIR (audit 6.9): with it set, cargo writes the exe THERE, and the
+# hard-coded src-tauri/target path reported "binary not found" after a successful build.
+$targetDir = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'src-tauri/target' }
+$src = Join-Path $targetDir 'release/app.exe'
+$dst = Join-Path $targetDir 'release/Aegis_x64_portable.exe'
 if (-not (Test-Path $src)) { throw "expected binary not found: $src" }
 
 Copy-Item $src -Destination $dst -Force

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 import {
   METRICS,
@@ -8,6 +9,12 @@ import {
   detectBaselineLowering,
   pctOf,
   resolveBaselineBaseRef,
+  detectNewExclusions,
+  extractCoverageExcludes,
+  exclusionGate,
+  gitShowText,
+  newExclusionFailure,
+  readTextOrNull,
 } from './coverageCheck.mjs';
 
 // A metric record in the shape istanbul writes into coverage-summary.json.
@@ -284,5 +291,112 @@ describe('baselineLoweringSkipMessage', () => {
   it('survives a missing base argument instead of printing "undefined"', () => {
     // A caller that forgets to resolve the ref must still get a usable message.
     expect(baselineLoweringSkipMessage({ script: 'x', baselineRel: 'y' })).toContain('no-base-ref');
+  });
+});
+
+// Audit 6.9: a file that is added AND excluded in the same commit never appears in the
+// report or the baseline, so "file dropped out of the report" cannot see it. The ratchet
+// therefore compares the `coverage.exclude` list itself against the base ref.
+describe('new coverage.exclude entries', () => {
+  const cfg = (extra) =>
+    `export default { test: { coverage: { include: ['src/**'], exclude: [\n` +
+    `  '**/*.test.{ts,tsx,mjs}', // specs\n  'src/main.tsx',${extra}\n] }, projects: [{ test: { exclude: ['node_modules/**'] } }] } };`;
+
+  it('reads only the coverage.exclude array (not a project-level exclude)', () => {
+    expect(extractCoverageExcludes(cfg(''))).toEqual(['**/*.test.{ts,tsx,mjs}', 'src/main.tsx']);
+  });
+
+  it('reports an entry added since the base, and nothing for a removal or reorder', () => {
+    const base = extractCoverageExcludes(cfg(''));
+    expect(detectNewExclusions(base, extractCoverageExcludes(cfg("\n  'src/hidden.ts',")))).toEqual(
+      ['src/hidden.ts'],
+    );
+    expect(detectNewExclusions(base, ['src/main.tsx'])).toEqual([]);
+    expect(detectNewExclusions(null, base)).toEqual([]); // no base: nothing to compare
+  });
+
+  it('parses the live vitest.config.ts', () => {
+    const live = readFileSync(new URL('../vitest.config.ts', import.meta.url), 'utf8');
+    const ex = extractCoverageExcludes(live);
+    expect(ex).toContain('src/main.tsx');
+    expect(ex).toContain('src/testFixtures/**');
+    expect(ex).not.toContain('node_modules/**'); // the projects[].test.exclude entry
+  });
+});
+
+describe('the exclusion gate helpers (audit 6.9)', () => {
+  const extract = extractCoverageExcludes;
+  const cfg = (list) => `coverage: { exclude: [${list.map((e) => `'${e}'`).join(', ')}] }`;
+
+  it('returns null for a config with no coverage block, or no exclude array', () => {
+    expect(extractCoverageExcludes('export default {}')).toBeNull();
+    expect(extractCoverageExcludes('coverage: { provider: "v8" }')).toBeNull();
+  });
+
+  it('fails with the added entry named, and only then', () => {
+    const args = { ref: 'base', label: 'L', extract, env: {} };
+    const lines = newExclusionFailure({
+      ...args,
+      baseText: cfg(['a']),
+      currentText: cfg(['a', 'b']),
+    });
+    expect(lines[0]).toContain('ADDED in this commit (L)');
+    expect(lines).toContain('  b');
+    expect(newExclusionFailure({ ...args, baseText: cfg(['a']), currentText: cfg(['a']) })).toEqual(
+      [],
+    );
+  });
+
+  it('passes with no base ref, no base text, or the documented escape hatch', () => {
+    const grown = { label: 'L', extract, baseText: cfg(['a']), currentText: cfg(['a', 'b']) };
+    expect(newExclusionFailure({ ...grown, ref: null })).toEqual([]);
+    expect(newExclusionFailure({ ...grown, ref: 'base', baseText: null })).toEqual([]);
+    expect(
+      newExclusionFailure({ ...grown, ref: 'base', env: { COVERAGE_ALLOW_BASELINE_LOWER: '1' } }),
+    ).toEqual([]);
+  });
+
+  it('gitShowText answers the file, or null when git cannot', () => {
+    const calls = [];
+    const ok = (cmd, args) => {
+      calls.push([cmd, ...args]);
+      return 'TEXT';
+    };
+    expect(gitShowText('abc', 'x.ts', '/r', ok)).toBe('TEXT');
+    expect(calls).toEqual([['git', 'show', 'abc:x.ts']]);
+    const boom = () => {
+      throw new Error('bad ref');
+    };
+    expect(gitShowText('abc', 'x.ts', '/r', boom)).toBeNull();
+  });
+
+  it('readTextOrNull reads a file, and answers null for a missing one', () => {
+    expect(readTextOrNull(new URL('../vitest.config.ts', import.meta.url))).toContain('coverage');
+    expect(readTextOrNull('/definitely/not/here.ts')).toBeNull();
+  });
+
+  it('exclusionGate reads both sides and fails on an added entry', () => {
+    const root = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+    // The base "has" a shorter list than the live config → the live extra entries fail.
+    const run = () => "coverage: { exclude: ['src/main.tsx'] }";
+    const lines = exclusionGate({
+      ref: 'base',
+      root,
+      rel: 'vitest.config.ts',
+      label: 'L',
+      extract: extractCoverageExcludes,
+      run,
+    });
+    expect(lines).toContain('  src/testFixtures/**');
+    // No ref: nothing to compare, no git call at all.
+    expect(
+      exclusionGate({
+        ref: null,
+        root,
+        rel: 'vitest.config.ts',
+        label: 'L',
+        extract: extractCoverageExcludes,
+      }),
+    ).toEqual([]);
   });
 });

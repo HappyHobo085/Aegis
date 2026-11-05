@@ -825,7 +825,156 @@ describe('ci.yml (the wiring the comparison gates depend on)', () => {
   });
 
   it('the msrv job uses the same installer as the other Rust jobs', () => {
-    expect(job('msrv')).toContain('uses: actions-rust-lang/setup-rust-toolchain@v1');
+    expect(job('msrv')).toContain(
+      'uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659',
+    );
     expect(job('msrv')).not.toMatch(/uses: dtolnay\//);
+  });
+});
+
+// ------------------------------------------------- release / build wiring (audit 6.x)
+
+// Same idea as the ci.yml block above: a workflow or build file has no seam, so each
+// assertion is a fact whose absence silently re-arms one audited release bug.
+describe('release + build wiring (audit phase 6)', () => {
+  const WORKFLOWS = join(REPO_ROOT, '.github', 'workflows');
+  const wf = (f) => readFileSync(join(WORKFLOWS, f), 'utf8');
+  const repo = (p) => readFileSync(join(REPO_ROOT, p), 'utf8');
+  const release = wf('tauri-release.yml');
+  const ALL = ['ci.yml', 'tauri-build-check.yml', 'tauri-release.yml'];
+  const RUST_TOOLCHAIN_SHA = '166cdcfd11aee3cb47222f9ddb555ce30ddb9659';
+
+  /** One job's text in a workflow, from `  <name>:` to the next job. */
+  const job = (text, name) => {
+    const starts = [...text.matchAll(/^ {2}([a-z][\w-]*):$/gm)].map((m) => [m[1], m.index]);
+    const i = starts.findIndex(([n]) => n === name);
+    expect(i, `job "${name}" missing`).toBeGreaterThan(-1);
+    return text.slice(starts[i][1], starts[i + 1] ? starts[i + 1][1] : text.length);
+  };
+
+  it('6.1 a signed release produces updater artifacts and fails without latest.json', () => {
+    // Not in tauri.conf.json: there it made EVERY build — `scripts/build-appimage.sh`, `npm run
+    // tauri:build`, a release without the secret — fail after bundling for want of
+    // TAURI_SIGNING_PRIVATE_KEY. It is merged in only when the release holds the key.
+    const conf = JSON.parse(repo('src-tauri/tauri.conf.json'));
+    expect(conf.bundle.createUpdaterArtifacts).toBeUndefined();
+    const updater = JSON.parse(repo('src-tauri/tauri.updater.conf.json'));
+    expect(updater).toEqual({ bundle: { createUpdaterArtifacts: true } });
+    const rel = job(release, 'release');
+    expect(rel).toMatch(
+      /if \[ -n "\$TAURI_SIGNING_PRIVATE_KEY" \]; then\s+echo "args=--config src-tauri\/tauri\.updater\.conf\.json" >> "\$GITHUB_OUTPUT"/,
+    );
+    // Prepended, so it lands before the `-- --locked` that hands the rest to cargo.
+    expect(rel).toContain('args: ${{ steps.updater.outputs.args }} ${{ matrix.args }}');
+    const attest = job(release, 'attest');
+    expect(attest).toContain('::error::latest.json');
+    // With no key there is no latest.json by design; the preflight already warned.
+    const req = attest.slice(attest.indexOf('Require latest.json'));
+    expect(req.indexOf('HAS_UPDATER_KEY')).toBeGreaterThan(-1);
+    expect(req.indexOf('HAS_UPDATER_KEY')).toBeLessThan(req.indexOf('::error::latest.json'));
+    const android = job(release, 'android');
+    const pub = android.slice(android.indexOf('Publish the APK in latest.json'));
+    expect(pub.indexOf('HAS_UPDATER_KEY')).toBeLessThan(pub.indexOf('gh release download'));
+  });
+
+  it('6.2 the third-party Rust installer is pinned to a commit everywhere', () => {
+    for (const f of ALL) {
+      const uses = [...wf(f).matchAll(/uses: (actions-rust-lang\/setup-rust-toolchain@\S+)/g)].map(
+        (m) => m[1],
+      );
+      expect(uses.length, f).toBeGreaterThan(0);
+      for (const u of uses)
+        expect(u, f).toBe(`actions-rust-lang/setup-rust-toolchain@${RUST_TOOLCHAIN_SHA}`);
+    }
+    // The comment claiming tauri-action is "the one third-party action" is false.
+    expect(release).not.toContain('This is the one third-party action in the repo');
+  });
+
+  it('6.2 every checkout in the release workflow drops the job token from .git/config', () => {
+    const checkouts = release.split('uses: actions/checkout@').slice(1);
+    expect(checkouts.length).toBeGreaterThan(0);
+    for (const c of checkouts) {
+      expect(c.split(/\n {6}- /)[0]).toContain('persist-credentials: false');
+    }
+  });
+
+  it('6.3 the preflight refuses a tag that disagrees with tauri.conf.json', () => {
+    const pre = job(release, 'preflight');
+    expect(pre).toContain('src-tauri/tauri.conf.json');
+    expect(pre).toContain('::error::Tag');
+    expect(pre).toMatch(/does not match/);
+  });
+
+  it('6.4 a release APK refuses the debug key unless explicitly opted out', () => {
+    const gradle = repo('src-tauri/gen/android/app/build.gradle.kts');
+    expect(gradle).toContain('AEGIS_ALLOW_DEBUG_SIGNED_RELEASE');
+    expect(gradle).toContain('throw GradleException(');
+    // The CI check build opts out explicitly (it is a build check, not a release).
+    expect(job(wf('tauri-build-check.yml'), 'android')).toMatch(
+      /AEGIS_ALLOW_DEBUG_SIGNED_RELEASE: ['"]1['"]/,
+    );
+    // The release job uses a real key when the secrets exist, and only otherwise opts out.
+    const android = job(release, 'android');
+    expect(android).toContain('ANDROID_KEYSTORE_BASE64');
+    expect(android).toContain('keystore.properties');
+    expect(android).toContain('AEGIS_ALLOW_DEBUG_SIGNED_RELEASE=1');
+    // With a real key, the APK is published in latest.json so the in-app check can fire.
+    expect(android).toMatch(/platforms\.android/);
+  });
+
+  it('6.5 no Windows signing env that nothing consumes', () => {
+    expect(release).not.toContain('WINDOWS_CERTIFICATE');
+  });
+
+  it('6.6 the Gradle wrapper download is checksum-verified', () => {
+    expect(repo('src-tauri/gen/android/gradle/wrapper/gradle-wrapper.properties')).toContain(
+      'distributionSha256Sum=bd71102213493060956ec229d946beee57158dbd89d0e62b91bca0fa2c5f3531',
+    );
+  });
+
+  it('6.8 the Linux→Windows cross build is a PRODUCTION build, not a dev one', () => {
+    // Without `custom-protocol`, tauri's build.rs sets cfg(dev): the exe loads devUrl
+    // (localhost:5174) and skips the CSP — a blank window on any machine without Vite.
+    expect(repo('scripts/build-windows-portable-cross.sh')).toMatch(
+      /cargo build --locked --release --features tauri\/custom-protocol --target x86_64-pc-windows-gnu/,
+    );
+  });
+
+  it('6.9 every tauri-action build resolves dependencies from Cargo.lock', () => {
+    const args = [...release.matchAll(/^ {12}args: '(.*)'$/gm)].map((m) => m[1]);
+    expect(args.length).toBe(4);
+    for (const a of args) expect(a).toMatch(/ -- --locked$/);
+  });
+
+  it('6.9 every `cargo install` pins a version', () => {
+    for (const f of ALL) {
+      for (const m of wf(f).matchAll(/cargo install ([^\n]*)/g)) {
+        expect(m[1], `${f}: cargo install ${m[1]}`).toMatch(/--version \S+/);
+      }
+    }
+  });
+
+  it('6.9 the Windows build script honours CARGO_TARGET_DIR', () => {
+    expect(repo('scripts/build-windows-portable.ps1')).toContain('$env:CARGO_TARGET_DIR');
+  });
+
+  it('6.9 attest + android run even when one desktop leg is red, and gh knows its repo', () => {
+    // A red macOS leg used to SKIP both jobs (`needs: release`), so the Linux/Windows assets
+    // already on the draft got no SHA256SUMS, no attestation and no APK. They still require
+    // the tag preflight to have passed.
+    const gate = "if: ${{ !cancelled() && needs.preflight.result == 'success' }}";
+    expect(job(release, 'android')).toContain(gate);
+    const attest = job(release, 'attest');
+    expect(attest).toContain(gate);
+    // No checkout in this job, so `gh` has no git remote to infer the repo from.
+    for (const line of attest.split('\n').filter((l) => /gh release (upload|view)/.test(l))) {
+      expect(line).toContain("--repo '${{ github.repository }}'");
+    }
+  });
+
+  it('6.7 appimagetool is a pinned release verified by sha256', () => {
+    const sh = repo('scripts/repack-appimage-gstreamer.sh');
+    expect(sh).not.toContain('/continuous/');
+    expect(sh).toMatch(/sha256sum -c/);
   });
 });
