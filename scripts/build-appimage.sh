@@ -19,7 +19,7 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 export NO_STRIP=1
 
 echo ">> building release AppImage (full Rust release build — takes several minutes)…"
-npm run tauri -- build --bundles appimage \
+npx tauri build --bundles appimage \
   --config src-tauri/tauri.appimage-mediaframework.conf.json
 
 # Honour CARGO_TARGET_DIR: cargo writes the bundle under it, not src-tauri/target, so the
