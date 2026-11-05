@@ -47,14 +47,21 @@ TIMEOUT="${AEGIS_SYNC_WAIT_TIMEOUT:-120}"
 # startup latency to the safe default. `localhost` is a name, not an address, so
 # it is satisfiable by definition too.
 case "$ADDR" in
-  0.0.0.0 | :: | '[::]' | localhost | 127.* | ::1) exit 0 ;;
+  0.0.0.0 | :: | '[::]' | localhost | 127.* | ::1 | '[::1]') exit 0 ;;
 esac
 
-# `inet <addr>/<prefix>` is how `ip addr show` renders a configured address, so
-# matching on that prefix cannot be satisfied by a route, a neighbour entry, or a
-# substring of a longer address (100.103.103.10 does not match 100.103.103.1).
+# compose needs an IPv6 bind BRACKETED in `ports:` (`[fd7a::1]:8787:8787`), while `ip`
+# prints it bare, so compare without the brackets.
+BARE="${ADDR#[}"
+BARE="${BARE%]}"
+
+# `inet <addr>/<prefix>` (IPv4) or `inet6 <addr>/<prefix>` (IPv6) is how `ip addr show`
+# renders a configured address, so matching on that prefix cannot be satisfied by a
+# route, a neighbour entry, or a substring of a longer address (100.103.103.10 does not
+# match 100.103.103.1). Matching only `inet ` made every IPv6 bind time out. `-F` because
+# an address is a literal, not a regex (`.` in an IPv4 address matches any character).
 has_addr() {
-  ip -o addr show 2>/dev/null | grep -q "inet ${ADDR}/"
+  ip -o addr show 2>/dev/null | grep -qF -e "inet ${BARE}/" -e "inet6 ${BARE}/"
 }
 
 if has_addr; then

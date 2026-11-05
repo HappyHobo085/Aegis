@@ -108,7 +108,10 @@ ExecStart=docker compose up -d --force-recreate
 # a failed start are `is-active` — which lies — and the container healthcheck, which
 # takes up to 90s to turn red. This polls the PUBLISHED address instead of loopback,
 # because a loopback probe is green for a container with no network at all, and it is
-# the same address the phone and the desktop actually connect to.
+# the same address the phone and the desktop actually connect to. The PORT is compose's
+# `${AEGIS_SYNC_PORT:-8787}` for the same reason: a literal 8787 failed every healthy start on
+# a non-default port. Brackets are stripped because compose needs an IPv6 bind written as
+# `[addr]` while bash's /dev/tcp wants the bare address. (`%%` in the line below is systemd's escape for a literal `%`.)
 #
 # It polls rather than connects once because the listener is up before the first accept
 # in any meaningful sense; a short bounded poll is not a sleep-for-a-fixed-time, it exits
@@ -119,7 +122,7 @@ ExecStart=docker compose up -d --force-recreate
 # reports "not installed" (busybox provides it), so a wget-based probe would make this
 # unit fail on any host without busybox. `bash` is already a hard requirement here
 # because the ExecStartPre script is bash, and /dev/tcp costs nothing extra.
-ExecStartPost=/bin/bash -c 'i=0; while [ $$i -lt 30 ]; do (exec 3<>/dev/tcp/$${AEGIS_SYNC_BIND:-127.0.0.1}/8787) 2>/dev/null && exit 0; i=$$((i+1)); sleep 1; done; echo "aegis-sync-server: NOT reachable on $${AEGIS_SYNC_BIND:-127.0.0.1}:8787 after 30s" >&2; exit 1'
+ExecStartPost=/bin/bash -c 'h=$${AEGIS_SYNC_BIND:-127.0.0.1}; h=$${h#[}; h=$${h%%]}; i=0; while [ $$i -lt 30 ]; do (exec 3<>/dev/tcp/$$h/$${AEGIS_SYNC_PORT:-8787}) 2>/dev/null && exit 0; i=$$((i+1)); sleep 1; done; echo "aegis-sync-server: NOT reachable on $${AEGIS_SYNC_BIND:-127.0.0.1}:$${AEGIS_SYNC_PORT:-8787} after 30s" >&2; exit 1'
 
 # Stop without removing, so `systemctl stop` is not destructive to the named
 # volume and a later `start` is cheap.

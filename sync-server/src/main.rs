@@ -60,6 +60,11 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
         .collect()
 }
 
+/// Lower-case hex only — the one spelling of an id this server will store or compare.
+fn is_canonical_hex(s: &str) -> bool {
+    !s.is_empty() && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -89,10 +94,24 @@ const MAX_SEEN_NONCES: usize = 250_000;
 /// req/s, far above any real client, and 2_000 x 125 devices still fits under the global cap.
 const MAX_SEEN_NONCES_PER_DEVICE: usize = 2_000;
 
+/// Longest wire nonce accepted. A real client sends 16 random bytes as 32 hex chars
+/// (`src-tauri/src/sync_auth.rs` `mint`); the nonce is stored for the token's whole lifetime, so
+/// an unbounded caller-chosen string was memory the caller chose how much of to spend.
+const MAX_NONCE_HEX_LEN: usize = 64;
+
 /// Verify the `Authorization: AegisSig {accountId}.{tokenHex}.{sigHex}` header. Returns the
-/// authenticated (accountId, deviceId). Does NOT check registration — the caller decides
-/// whether to require it (data endpoints do; device registration is self-bootstrapping).
-fn verify_auth(headers: &HeaderMap, state: &AppState) -> Result<(String, String), StatusCode> {
+/// authenticated (accountId, deviceId).
+///
+/// `admit` is the caller's authorization decision (registered device for the data endpoints,
+/// account-root proof for registration) and it runs AFTER the signature verifies but BEFORE the
+/// nonce is recorded. That order is the point: anyone can mint a device key and sign a token
+/// with it, so a nonce recorded for a caller who is about to be refused let a stranger fill the
+/// replay map (2 000 slots per throwaway key, unlimited keys) and 429 every real device.
+fn verify_auth(
+    headers: &HeaderMap,
+    state: &AppState,
+    admit: impl FnOnce(&str, &str) -> Result<(), StatusCode>,
+) -> Result<(String, String), StatusCode> {
     let raw = headers
         .get("authorization")
         .and_then(|v| v.to_str().ok())
@@ -109,6 +128,20 @@ fn verify_auth(headers: &HeaderMap, state: &AppState) -> Result<(String, String)
         .and_then(|b| serde_json::from_slice(&b).ok())
         .ok_or(StatusCode::UNAUTHORIZED)?;
     if token.account_id != account {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    // CANONICAL IDS ONLY. `unhex` accepts upper-case digits, so `ABCD…` and `abcd…` decode to the
+    // same key while being different strings — and every map this server keys on a device or
+    // account (`devices`, `revoked`, `owner`, `pending`) compares STRINGS. A revoked device could
+    // re-register under an upper-cased spelling of its own id. Clients emit lower-case hex
+    // (`crypto::hex`), so refusing anything else costs an honest client nothing.
+    if !is_canonical_hex(&token.account_id) || !is_canonical_hex(&token.device_id) {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    if token.nonce.is_empty()
+        || token.nonce.len() > MAX_NONCE_HEX_LEN
+        || !token.nonce.bytes().all(|b| b.is_ascii_hexdigit())
+    {
         return Err(StatusCode::UNAUTHORIZED);
     }
     let now = now_ms();
@@ -139,8 +172,10 @@ fn verify_auth(headers: &HeaderMap, state: &AppState) -> Result<(String, String)
     let sig = Signature::from_bytes(&sig_bytes);
     vk.verify_strict(&canonical(&token), &sig)
         .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    admit(&token.account_id, &token.device_id)?;
     // Replay defense: a (device, nonce) pair is single-use. Recorded only AFTER the signature
-    // verifies (so unauthenticated tokens can't bloat the set), and bounded by the TTL —
+    // verifies AND the caller's `admit` decision passes — a valid signature alone proves nothing,
+    // since any caller can generate a device key — and bounded by the TTL —
     // expired entries are swept (their tokens already fail the `now > expires_ms` check above).
     // The client mints a FRESH nonce per request (sync.rs `sync_ns`), so a legitimate request is
     // never rejected. Honest residual: the set is in-memory, so a server RESTART forgets spent
@@ -372,6 +407,11 @@ struct Device {
     label: String,
     #[serde(rename = "lastSeenMs", default)]
     last_seen_ms: i64,
+    /// When the device was first registered (or first asked to be). Decides who inherits the
+    /// owner role when the owner signs itself out — the OLDEST remaining device. `0` on devices
+    /// written before this field existed; ties are broken by device id so the choice is total.
+    #[serde(rename = "registeredMs", default)]
+    registered_ms: i64,
 }
 
 #[derive(Default)]
@@ -404,6 +444,11 @@ struct Store {
     // account's entry from `owner` in `aegis-sync.json` and restarts. That is a deliberate trust
     // anchor: for a self-hosted server, the operator IS the root of trust.
     owner: HashMap<String, String>,
+    // account -> deviceId -> device, for devices that asked to join an EXISTING account and are
+    // waiting for the owner to approve them. A pending device is not in `devices`, so every data
+    // endpoint refuses it (`require_registered`). Holding the recovery phrase is no longer enough
+    // to join an account on its own: the owner device has to say yes.
+    pending: HashMap<String, HashMap<String, Device>>,
 }
 
 // On-disk shape. The live Store is keyed by tuples (which JSON can't use as map keys),
@@ -474,6 +519,10 @@ struct Snapshot {
     /// Persisted for the same reason: the owner is an authorization fact, not a cache.
     #[serde(default)]
     owners: Vec<SnapOwner>,
+    /// Devices awaiting the owner's approval. Persisted so a restart does not silently drop a
+    /// request the owner has not seen yet.
+    #[serde(default)]
+    pending: Vec<SnapDevice>,
 }
 
 /// Tombstones retained per (account, namespace) when compacting the on-disk snapshot. A
@@ -642,6 +691,7 @@ impl Snapshot {
             devices: Self::devices_from(store),
             revoked: Self::revoked_from(store),
             owners: Self::owners_from(store),
+            pending: Self::pending_from(store),
         }
     }
 
@@ -675,7 +725,23 @@ impl Snapshot {
             devices: Self::devices_from(store),
             revoked: Self::revoked_from(store),
             owners: Self::owners_from(store),
+            pending: Self::pending_from(store),
         }
+    }
+
+    fn pending_from(store: &Store) -> Vec<SnapDevice> {
+        let mut v: Vec<SnapDevice> = store
+            .pending
+            .iter()
+            .flat_map(|(account, set)| {
+                set.values().map(move |d| SnapDevice {
+                    account: account.clone(),
+                    device: d.clone(),
+                })
+            })
+            .collect();
+        v.sort_by(|a, b| (&a.account, &a.device.device_id).cmp(&(&b.account, &b.device.device_id)));
+        v
     }
 
     fn devices_from(store: &Store) -> Vec<SnapDevice> {
@@ -739,6 +805,14 @@ impl Snapshot {
         for o in self.owners {
             store.owner.insert(o.account, o.device_id);
         }
+        for sd in self.pending {
+            let device_id = sd.device.device_id.clone();
+            store
+                .pending
+                .entry(sd.account)
+                .or_default()
+                .insert(device_id, sd.device);
+        }
         store
     }
 }
@@ -747,6 +821,11 @@ impl Snapshot {
 /// rename over the target (atomic on the same filesystem). Callers must serialize concurrent
 /// writes externally (Task 3 wires this via the writer mutex); a fixed `.tmp` name is then
 /// safe because only one write can be in flight at a time.
+/// Test-only count of directory fsyncs `save_snapshot` performed (the one observable of a
+/// durability step a unit test cannot crash-test).
+#[cfg(test)]
+static DIR_SYNCS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 fn save_snapshot(path: &Path, snap: &Snapshot) -> std::io::Result<()> {
     let json = serde_json::to_vec_pretty(snap)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
@@ -758,7 +837,19 @@ fn save_snapshot(path: &Path, snap: &Snapshot) -> std::io::Result<()> {
         f.write_all(&json)?;
         f.sync_all()?;
     }
-    std::fs::rename(&tmp, path)
+    std::fs::rename(&tmp, path)?;
+    // The rename is only durable once the DIRECTORY entry is on disk: without this, a power loss
+    // right after a handler answered `ok` can leave the previous file (or none) in place. Same
+    // pattern as `src-tauri/src/jsonstore.rs` `write_atomic`. Opening a directory as a `File`
+    // fails on Windows, which is why a failure here is swallowed rather than returned.
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+        if let Ok(d) = std::fs::File::open(dir) {
+            let _ = d.sync_all();
+            #[cfg(test)]
+            DIR_SYNCS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+    }
+    Ok(())
 }
 
 /// Load a store from `path`. A missing file is a fresh start (empty store); an unparseable
@@ -880,6 +971,41 @@ struct AppState {
     // O(expired) sweep. Bounded by the token TTL. In-memory only — a restart forgets them
     // (documented residual, bounded by the ≤5-min TTL).
     seen_nonces: Arc<Mutex<SeenNonces>>,
+    /// `AEGIS_SYNC_REGISTRATION_SECRET`: when set, creating a NEW account requires the caller to
+    /// present it in the `x-aegis-registration-secret` header. Joining an existing account does
+    /// not use it — that needs the owner's approval instead.
+    registration_secret: Option<Arc<String>>,
+    /// Server-wide quotas. A field rather than constants only so a test can lower them.
+    caps: Caps,
+    /// Set when a persist FAILED and cleared when one succeeds: the in-memory store is ahead of
+    /// the file. A mutation applies to memory before it is persisted, so a failed persist leaves
+    /// the change in memory — and the client's identical retry is then a no-op to LWW
+    /// (`changed == false`), which used to skip the persist and answer `ok` for data that never
+    /// reached disk. `persist_if` persists whenever this is set, whatever the request changed.
+    dirty: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Server-wide resource caps, on top of the per-account / per-request quotas.
+///
+/// The per-account caps bound one account, but registration was open: any caller could mint an
+/// account key, create an account and fill it, then do it again. These bound the whole process.
+#[derive(Clone, Copy)]
+struct Caps {
+    max_accounts: usize,
+    max_total_records: usize,
+    max_total_ct_bytes: usize,
+    max_pending_per_account: usize,
+}
+
+impl Default for Caps {
+    fn default() -> Caps {
+        Caps {
+            max_accounts: MAX_ACCOUNTS,
+            max_total_records: MAX_TOTAL_RECORDS,
+            max_total_ct_bytes: MAX_TOTAL_CT_BYTES,
+            max_pending_per_account: MAX_PENDING_PER_ACCOUNT,
+        }
+    }
 }
 
 impl AppState {
@@ -889,7 +1015,16 @@ impl AppState {
             data_path: data_path.map(Arc::new),
             writer: Arc::new(Mutex::new(())),
             seen_nonces: Arc::new(Mutex::new(SeenNonces::default())),
+            registration_secret: None,
+            caps: Caps::default(),
+            dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
+    }
+
+    /// Require `secret` to create a new account. An empty string is treated as unset.
+    fn with_registration_secret(mut self, secret: Option<String>) -> AppState {
+        self.registration_secret = secret.filter(|s| !s.is_empty()).map(Arc::new);
+        self
     }
 
     /// Atomically write the current store to disk, holding the writer lock for the whole
@@ -925,11 +1060,26 @@ impl AppState {
             // currently serving, so this only ever shrinks the file, never what a client sees.
             Snapshot::from_store_compacting(&g)
         };
+        use std::sync::atomic::Ordering;
+        // Marked dirty BEFORE the write and cleared only after it succeeded, under the writer
+        // lock, so a failure can never be followed by a clear that a concurrent success raced in.
+        self.dirty.store(true, Ordering::SeqCst);
         save_snapshot(&path, &snap).map_err(|e| {
             let msg = format!("failed to persist snapshot to {}: {e}", path.display());
             eprintln!("[aegis-sync-server] WARN {msg}");
             msg
-        })
+        })?;
+        self.dirty.store(false, Ordering::SeqCst);
+        Ok(())
+    }
+
+    /// Persist if this request `changed` the store OR an earlier persist failed (see `dirty`).
+    async fn persist_if(&self, changed: bool) -> Result<(), String> {
+        if changed || self.dirty.load(std::sync::atomic::Ordering::SeqCst) {
+            self.persist().await
+        } else {
+            Ok(())
+        }
     }
 
     /// Async wrapper around [`Self::persist_blocking`]. The whole write (serialize + fsync +
@@ -1225,6 +1375,12 @@ const MAX_FIELD_LEN: usize = 1024; // ns / uuid / nonce (short ids / hex)
 const MAX_CT_LEN: usize = 64 * 1024; // ciphertext bytes per record (very generous for one item)
 const MAX_LABEL_LEN: usize = 256; // device label
 const MAX_BODY_BYTES: usize = 8 * 1024 * 1024; // coarse request-body backstop (axum layer)
+const MAX_ACCOUNTS: usize = 10_000; // accounts on the whole server
+const MAX_TOTAL_RECORDS: usize = 2_000_000; // records across every account
+const MAX_TOTAL_CT_BYTES: usize = 4 * 1024 * 1024 * 1024; // ciphertext bytes across every account
+const MAX_PENDING_PER_ACCOUNT: usize = 16; // devices waiting for the owner's approval
+/// Header carrying `AEGIS_SYNC_REGISTRATION_SECRET` on a new-account registration.
+const REGISTRATION_SECRET_HEADER: &str = "x-aegis-registration-secret";
 /// Concurrent requests allowed to be buffering/parsing at once. Bounds worst-case resident
 /// memory at roughly this x MAX_BODY_BYTES. See [`guard`].
 const MAX_INFLIGHT_REQUESTS: usize = 64;
@@ -1271,6 +1427,39 @@ struct Page {
 /// by this pass. That is transient, not a loss: the merge is LWW and idempotent, and the record
 /// is still there for the next sync. Holding the whole `db` lock across a 50 000-key sort is
 /// acceptable at that bound and is why the client, not the server, bounds the page count.
+/// Bytes one record contributes to a `GET /v1/records` response: its strings plus the
+/// SERIALIZED `hlc` and `ord` (not a flat allowance — a record stored before `hlc` was bounded
+/// can carry a large one), plus a fixed slack for field names and punctuation.
+fn wire_bytes(r: &WireRecord) -> usize {
+    let json_len = |v: &Value| serde_json::to_vec(v).map_or(0, |b| b.len());
+    r.ct.len()
+        + r.uuid.len()
+        + r.nonce.len()
+        + json_len(&r.hlc)
+        + r.ord.as_ref().map_or(0, json_len)
+        + 64
+}
+
+/// Longest `hlc.node` accepted. A client's node id is a short hex string.
+const MAX_HLC_NODE_LEN: usize = 64;
+
+/// Is `hlc` the shape a client sends — `{wall_ms: i64, counter: u64, node: string<=64}` — with
+/// no other keys? A MISSING field is accepted (LWW reads it as 0, i.e. the past, which is
+/// harmless — see `reject_client_poisoning_stamps`); a WRONG one is not. `hlc` is cleartext the
+/// server stores and serves to every peer, so before this it was an unbounded caller-chosen
+/// `Value`, outside every field quota.
+fn hlc_well_formed(hlc: &Value) -> bool {
+    let Some(obj) = hlc.as_object() else {
+        return false;
+    };
+    obj.iter().all(|(k, v)| match k.as_str() {
+        "wall_ms" => v.is_i64(),
+        "counter" => v.is_u64(),
+        "node" => v.as_str().is_some_and(|n| n.len() <= MAX_HLC_NODE_LEN),
+        _ => false,
+    })
+}
+
 fn page_records(
     store: &Store,
     account: &str,
@@ -1304,7 +1493,7 @@ fn page_records(
         // The byte budget is the real bound — a record count alone does not account for
         // ciphertext size. The FIRST record is always served regardless of budget: refusing it
         // would hand back a cursor that makes no progress, and the client loop would spin.
-        bytes += r.ct.len() + r.uuid.len() + r.nonce.len() + 128; // + field names / HLC slack
+        bytes += wire_bytes(r);
         if records.is_empty() && bytes > MAX_RESPONSE_BYTES {
             records.push((*r).clone());
             next = Some(r.uuid.clone());
@@ -1324,9 +1513,12 @@ async fn get_records(
     headers: HeaderMap,
     Query(q): Query<RecordsQuery>,
 ) -> Result<Json<Value>, StatusCode> {
-    let (account, device) = verify_auth(&headers, &state)?;
-    require_registered(&state.db, &account, &device)?;
-    if q.ns.len() > MAX_FIELD_LEN || q.ns.is_empty() {
+    let (account, _device) =
+        verify_auth(&headers, &state, |a, d| require_registered(&state.db, a, d))?;
+    if q.ns.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
+    if q.ns.len() > MAX_FIELD_LEN {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
     if let Some(c) = q.cursor.as_deref() {
@@ -1363,9 +1555,7 @@ async fn get_records(
     };
     // Persisting a prune that happened on the READ path is deliberate: a reap that only lived in
     // memory would come straight back on the next restart, loaded from the snapshot.
-    if pruned > 0 {
-        state.persist().await.map_err(persist_err)?;
-    }
+    state.persist_if(pruned > 0).await.map_err(persist_err)?;
     // `next` is additive: a client that ignores it (an older build) still gets a valid page and
     // stops, exactly as it did before pagination existed.
     Ok(Json(json!({ "records": page.records, "next": page.next })))
@@ -1382,17 +1572,28 @@ async fn post_records(
     headers: HeaderMap,
     Json(body): Json<PostRecords>,
 ) -> Result<Json<Value>, StatusCode> {
-    let (account, device) = verify_auth(&headers, &state)?;
-    require_registered(&state.db, &account, &device)?;
+    let (account, _device) =
+        verify_auth(&headers, &state, |a, d| require_registered(&state.db, a, d))?;
     // Quota: reject excessive / oversized input before touching the store.
+    if body.ns.is_empty() {
+        return Err(StatusCode::BAD_REQUEST);
+    }
     if body.records.len() > MAX_RECORDS_PER_REQUEST || body.ns.len() > MAX_FIELD_LEN {
         return Err(StatusCode::PAYLOAD_TOO_LARGE);
     }
-    for r in &body.records {
+    let mut body = body;
+    for r in &mut body.records {
         if r.uuid.len() > MAX_FIELD_LEN || r.nonce.len() > MAX_FIELD_LEN || r.ct.len() > MAX_CT_LEN
         {
             return Err(StatusCode::PAYLOAD_TOO_LARGE);
         }
+        if !hlc_well_formed(&r.hlc) {
+            return Err(StatusCode::BAD_REQUEST);
+        }
+        // `ord` is the server's own ordering stamp (`canonicalize_body` writes it on a tie). A
+        // client-sent one was stored verbatim whenever no tie occurred, letting a peer choose how
+        // every other client orders its record. It is never the client's to set.
+        r.ord = None;
     }
     let mut changed = false;
     {
@@ -1424,6 +1625,29 @@ async fn post_records(
         if current + new_keys > MAX_RECORDS_PER_ACCOUNT {
             return Err(StatusCode::INSUFFICIENT_STORAGE);
         }
+        // Server-wide caps (D1). The per-account cap bounds one account, but accounts are cheap
+        // to create, so the whole process needs its own ceiling. Records: only NEW keys grow the
+        // count. Bytes: only the growth of each record counts, so an update that shrinks or keeps
+        // its size always passes — a full server must still let users edit and delete.
+        if g.records.len() + new_keys > state.caps.max_total_records {
+            return Err(StatusCode::INSUFFICIENT_STORAGE);
+        }
+        let growth: usize = incoming
+            .iter()
+            .map(|(uuid, r)| {
+                let old = g
+                    .records
+                    .get(&(account.clone(), body.ns.clone(), uuid.clone()))
+                    .map_or(0, |e| e.ct.len());
+                r.ct.len().saturating_sub(old)
+            })
+            .sum();
+        if growth > 0 {
+            let total: usize = g.records.values().map(|r| r.ct.len()).sum();
+            if total + growth > state.caps.max_total_ct_bytes {
+                return Err(StatusCode::INSUFFICIENT_STORAGE);
+            }
+        }
         for (uuid, mut rec) in incoming {
             let key = (account.clone(), body.ns.clone(), uuid);
             // HLC last-writer-wins: keep the incoming record only if it strictly dominates the
@@ -1453,9 +1677,7 @@ async fn post_records(
             changed = true;
         }
     }
-    if changed {
-        state.persist().await.map_err(persist_err)?;
-    }
+    state.persist_if(changed).await.map_err(persist_err)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1469,6 +1691,13 @@ struct RegisterDevice {
     /// Account-root signature over `aegis-register-v1\n{accountId}\n{deviceId}`.
     #[serde(rename = "accountSig")]
     account_sig: String,
+}
+
+/// Compare two byte strings without an early exit on the first differing byte, so the time a
+/// wrong registration secret takes to refuse does not reveal how much of it was right. (The
+/// length is not hidden; it is not the secret.)
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
 
 /// Verify that `account_sig` is a valid signature over the registration message by the
@@ -1495,22 +1724,31 @@ async fn post_device(
     headers: HeaderMap,
     Json(body): Json<RegisterDevice>,
 ) -> Result<Json<Value>, StatusCode> {
-    // The device token proves possession of the DEVICE key; it must name the same account +
-    // device as the body.
-    let (account, device) = verify_auth(&headers, &state)?;
-    if account != body.account_id || device != body.device_id {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    if body.label.len() > MAX_LABEL_LEN {
-        return Err(StatusCode::PAYLOAD_TOO_LARGE);
-    }
-    // PROOF-OF-ROOT: registration must be signed by the account key (whose public half IS
-    // the account id). Without this, anyone who learned the public account id could
-    // self-register a rogue device into the victim's account.
-    if !verify_account_root(&body.account_id, &body.device_id, &body.account_sig) {
-        return Err(StatusCode::FORBIDDEN);
-    }
-    {
+    // The device token proves possession of the DEVICE key; the body must name the same account
+    // + device, and carry the PROOF-OF-ROOT: registration must be signed by the account key (whose
+    // public half IS the account id). Without it, anyone who learned the public account id could
+    // self-register a rogue device into the victim's account. All of this runs inside
+    // `verify_auth`'s `admit`, so a refused registration never spends a replay-nonce slot.
+    let (account, device) = verify_auth(&headers, &state, |a, d| {
+        if a != body.account_id || d != body.device_id {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        if body.label.len() > MAX_LABEL_LEN {
+            return Err(StatusCode::PAYLOAD_TOO_LARGE);
+        }
+        if !verify_account_root(&body.account_id, &body.device_id, &body.account_sig) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        Ok(())
+    })?;
+    let secret_ok = match &state.registration_secret {
+        None => true,
+        Some(secret) => headers
+            .get(REGISTRATION_SECRET_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|given| constant_time_eq(given.as_bytes(), secret.as_bytes())),
+    };
+    let pending = {
         let mut g = state.db.lock().unwrap_or_else(|e| e.into_inner());
         // REVOCATION. The account key is shared by every device on the account (both derive it
         // from the recovery phrase), so `verify_account_root` above cannot tell a device that was
@@ -1521,35 +1759,94 @@ async fn post_device(
         if g.revoked.contains(&(account.clone(), device.clone())) {
             return Err(StatusCode::FORBIDDEN);
         }
-        g.devices.entry(account.clone()).or_default().insert(
-            device.clone(),
-            Device {
-                device_id: device.clone(),
-                label: body.label,
-                last_seen_ms: now_ms(),
-            },
-        );
-        // First device to register owns the account; see `Store::owner` for why that is the only
-        // way removal can be an authorization decision rather than a free-for-all.
-        g.owner.entry(account).or_insert_with(|| device.clone());
-    }
+        let now = now_ms();
+        let account_exists = g.devices.get(&account).is_some_and(|set| !set.is_empty());
+        let owner = g.owner.get(&account).cloned();
+        if let Some(existing) = g
+            .devices
+            .get_mut(&account)
+            .and_then(|set| set.get_mut(&device))
+        {
+            // Already a member: a re-registration only refreshes the label and last-seen time.
+            existing.label = body.label;
+            existing.last_seen_ms = now;
+            false
+        } else if account_exists && owner.as_deref().is_some_and(|o| o != device) {
+            // JOINING AN EXISTING ACCOUNT needs the owner's approval (D2). Holding the recovery
+            // phrase proves the caller can derive the account key — which every device on the
+            // account, including one that was stolen or removed, can also do — so it cannot be the
+            // whole decision. The request waits in `pending` until the owner approves or rejects it.
+            let cap = state.caps.max_pending_per_account;
+            let set = g.pending.entry(account.clone()).or_default();
+            if !set.contains_key(&device) && set.len() >= cap {
+                return Err(StatusCode::TOO_MANY_REQUESTS);
+            }
+            let registered_ms = set.get(&device).map_or(now, |d| d.registered_ms);
+            set.insert(
+                device.clone(),
+                Device {
+                    device_id: device.clone(),
+                    label: body.label,
+                    last_seen_ms: now,
+                    registered_ms,
+                },
+            );
+            true
+        } else {
+            // A NEW account (or one whose owner entry the operator deleted to recover a lost owner
+            // device — see `Store::owner`). Creating an account is what the registration secret
+            // and the global account cap gate (D1); the operator-recovery path re-uses an existing
+            // account, so neither applies to it.
+            if !account_exists {
+                if !secret_ok {
+                    return Err(StatusCode::FORBIDDEN);
+                }
+                let accounts = g.devices.values().filter(|set| !set.is_empty()).count();
+                if accounts >= state.caps.max_accounts {
+                    return Err(StatusCode::INSUFFICIENT_STORAGE);
+                }
+            }
+            g.devices.entry(account.clone()).or_default().insert(
+                device.clone(),
+                Device {
+                    device_id: device.clone(),
+                    label: body.label,
+                    last_seen_ms: now,
+                    registered_ms: now,
+                },
+            );
+            // First device to register owns the account; see `Store::owner` for why that is the
+            // only way removal can be an authorization decision rather than a free-for-all.
+            g.owner.entry(account).or_insert_with(|| device.clone());
+            false
+        }
+    };
     state.persist().await.map_err(persist_err)?;
-    Ok(Json(json!({ "ok": true })))
+    Ok(Json(json!({ "ok": true, "pending": pending })))
 }
 
 async fn get_devices(
     State(state): State<AppState>,
     headers: HeaderMap,
 ) -> Result<Json<Value>, StatusCode> {
-    let (account, device) = verify_auth(&headers, &state)?;
-    require_registered(&state.db, &account, &device)?;
+    let (account, _device) =
+        verify_auth(&headers, &state, |a, d| require_registered(&state.db, a, d))?;
     let g = state.db.lock().unwrap_or_else(|e| e.into_inner());
     let devices: Vec<Device> = g
         .devices
         .get(&account)
         .map(|m| m.values().cloned().collect())
         .unwrap_or_default();
-    Ok(Json(json!({ "devices": devices })))
+    // Join requests waiting for the owner (D2). Additive: an older client reads only `devices`.
+    let pending: Vec<Device> = g
+        .pending
+        .get(&account)
+        .map(|m| m.values().cloned().collect())
+        .unwrap_or_default();
+    let owner = g.owner.get(&account).cloned();
+    Ok(Json(
+        json!({ "devices": devices, "pending": pending, "ownerDeviceId": owner }),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -1563,8 +1860,8 @@ async fn remove_device(
     headers: HeaderMap,
     Json(body): Json<RemoveDevice>,
 ) -> Result<Json<Value>, StatusCode> {
-    let (account, device) = verify_auth(&headers, &state)?;
-    require_registered(&state.db, &account, &device)?;
+    let (account, device) =
+        verify_auth(&headers, &state, |a, d| require_registered(&state.db, a, d))?;
     // AUTHORIZATION. Previously this was `require_registered` and then an unconditional
     // `set.remove(&body.device_id)` — so ANY paired device could evict ANY other, including the
     // owner's, and the account had no way to tell who was in charge. Two rules now:
@@ -1585,28 +1882,99 @@ async fn remove_device(
     let mut removed = false;
     {
         let mut g = state.db.lock().unwrap_or_else(|e| e.into_inner());
-        // LAST-DEVICE GUARD. Revocation is permanent by design, so removing the only registered
-        // device would lock the account out of its own server with no in-band recovery: the
-        // removed device cannot re-register, and no other device exists to remove anything. Refuse
-        // instead — the operator can still revoke from the data file, but that is a deliberate act.
-        let remaining = g.devices.get(&account).map_or(0, HashMap::len);
-        if remaining <= 1
-            && g.devices
-                .get(&account)
-                .is_some_and(|s| s.contains_key(&body.device_id))
-        {
-            return Err(StatusCode::CONFLICT);
-        }
-        if let Some(set) = g.devices.get_mut(&account) {
-            removed = set.remove(&body.device_id).is_some();
-            if removed {
-                g.revoked.insert((account.clone(), body.device_id.clone()));
+        // REJECTING A JOIN REQUEST. Only the owner reaches here for another device's id (checked
+        // above), and a rejection is a revocation like any other removal, so the same device
+        // cannot simply ask again.
+        let rejected = g
+            .pending
+            .get_mut(&account)
+            .is_some_and(|set| set.remove(&body.device_id).is_some());
+        if rejected {
+            if g.pending.get(&account).is_some_and(HashMap::is_empty) {
+                g.pending.remove(&account);
+            }
+            g.revoked.insert((account.clone(), body.device_id.clone()));
+            removed = true;
+        } else {
+            // LAST-DEVICE GUARD. Revocation is permanent by design, so removing the only registered
+            // device would lock the account out of its own server with no in-band recovery: the
+            // removed device cannot re-register, and no other device exists to remove anything. Refuse
+            // instead — the operator can still revoke from the data file, but that is a deliberate act.
+            let remaining = g.devices.get(&account).map_or(0, HashMap::len);
+            if remaining <= 1
+                && g.devices
+                    .get(&account)
+                    .is_some_and(|s| s.contains_key(&body.device_id))
+            {
+                return Err(StatusCode::CONFLICT);
+            }
+            if let Some(set) = g.devices.get_mut(&account) {
+                removed = set.remove(&body.device_id).is_some();
+                if removed {
+                    g.revoked.insert((account.clone(), body.device_id.clone()));
+                }
+            }
+            // OWNER SIGN-OUT (D5). The owner removing itself while other devices remain used to leave
+            // `owner` pointing at a revoked device — nobody could remove anyone else, and with owner
+            // approval for new devices (D2) nobody could ever join again. The role passes to the
+            // OLDEST remaining device (earliest `registered_ms`, device id as the tie-break so the
+            // choice is total). The last device cannot be removed (above), so someone always remains.
+            if removed && g.owner.get(&account) == Some(&body.device_id) {
+                let heir = g.devices.get(&account).and_then(|set| {
+                    set.values()
+                        .min_by(|a, b| {
+                            (a.registered_ms, &a.device_id).cmp(&(b.registered_ms, &b.device_id))
+                        })
+                        .map(|d| d.device_id.clone())
+                });
+                if let Some(heir) = heir {
+                    g.owner.insert(account.clone(), heir);
+                }
             }
         }
     }
-    if removed {
-        state.persist().await.map_err(persist_err)?;
+    state.persist_if(removed).await.map_err(persist_err)?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct ApproveDevice {
+    #[serde(rename = "deviceId")]
+    device_id: String,
+}
+
+/// The owner admits a device that asked to join its account (D2). Only the owner may approve;
+/// anything not pending is a 404 rather than a silent `ok`, so a stale UI cannot believe it
+/// admitted a device that was never waiting.
+async fn approve_device(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<ApproveDevice>,
+) -> Result<Json<Value>, StatusCode> {
+    let (account, device) =
+        verify_auth(&headers, &state, |a, d| require_registered(&state.db, a, d))?;
+    {
+        let mut g = state.db.lock().unwrap_or_else(|e| e.into_inner());
+        if g.owner.get(&account).map(String::as_str) != Some(device.as_str()) {
+            return Err(StatusCode::FORBIDDEN);
+        }
+        let Some(mut admitted) = g
+            .pending
+            .get_mut(&account)
+            .and_then(|set| set.remove(&body.device_id))
+        else {
+            return Err(StatusCode::NOT_FOUND);
+        };
+        if g.pending.get(&account).is_some_and(HashMap::is_empty) {
+            g.pending.remove(&account);
+        }
+        admitted.last_seen_ms = now_ms();
+        g.devices
+            .entry(account)
+            .or_default()
+            .insert(body.device_id.clone(), admitted);
     }
+    state.persist().await.map_err(persist_err)?;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -1620,6 +1988,7 @@ fn app(state: AppState) -> Router {
         .route("/v1/records", get(get_records).post(post_records))
         .route("/v1/devices", get(get_devices).post(post_device))
         .route("/v1/devices/remove", post(remove_device))
+        .route("/v1/devices/approve", post(approve_device))
         .route("/healthz", get(healthz))
         // Coarse pre-deserialization backstop on the request body (axum default is 2 MiB); the
         // per-field / per-request quotas above do the fine-grained bounding.
@@ -1718,7 +2087,15 @@ async fn main() {
             .unwrap_or_else(|e| panic!("[aegis-sync-server] failed to load {}: {e}", p.display())),
         None => Store::default(),
     };
-    let state = AppState::new(store, data_path.clone());
+    let secret = std::env::var("AEGIS_SYNC_REGISTRATION_SECRET").ok();
+    if secret.as_deref().is_none_or(str::is_empty) {
+        eprintln!(
+            "[aegis-sync-server] WARNING: AEGIS_SYNC_REGISTRATION_SECRET is not set — ANYONE who \
+             can reach this server can create an account on it (bounded only by the global caps). \
+             Set it to require a shared secret for new accounts."
+        );
+    }
+    let state = AppState::new(store, data_path.clone()).with_registration_secret(secret);
     let listener = tokio::net::TcpListener::bind(&addr).await.expect("bind");
     let storage = data_path
         .as_ref()
@@ -1940,8 +2317,15 @@ mod tests {
         b.iter().map(|x| format!("{x:02x}")).collect()
     }
 
-    /// Build an `Authorization: AegisSig …` header for a device key, with the given nonce.
+    /// Build an `Authorization: AegisSig …` header for a device key. `nonce` is a readable label;
+    /// it is hex-encoded so the wire nonce has the shape a real client mints (`sync_auth::mint`
+    /// sends 16 random bytes as 32 hex chars) and distinct labels stay distinct nonces.
     fn signed(key: &SigningKey, account: &str, nonce: &str, expires_ms: i64) -> HeaderMap {
+        signed_raw(key, account, &hex_bytes(nonce.as_bytes()), expires_ms)
+    }
+
+    /// [`signed`] with the wire nonce passed through VERBATIM, for tests about the nonce itself.
+    fn signed_raw(key: &SigningKey, account: &str, nonce: &str, expires_ms: i64) -> HeaderMap {
         let device_id = hex_bytes(&key.verifying_key().to_bytes());
         let token = AuthToken {
             account_id: account.into(),
@@ -1965,7 +2349,8 @@ mod tests {
     /// A fresh AppState with one device registered under `account`, returning the device key.
     fn registered(seed: u8) -> (AppState, SigningKey, String) {
         let key = SigningKey::from_bytes(&[seed; 32]);
-        let account = format!("acct-{seed}");
+        // Hex, because `verify_auth` accepts only canonical lower-case hex ids.
+        let account = hex_bytes(format!("acct-{seed}").as_bytes());
         let device_id = hex_bytes(&key.verifying_key().to_bytes());
         let state = AppState::new(Store::default(), None);
         state
@@ -1981,6 +2366,7 @@ mod tests {
                     device_id,
                     label: "L".into(),
                     last_seen_ms: 0,
+                    registered_ms: 0,
                 },
             );
         (state, key, account)
@@ -2036,6 +2422,113 @@ mod tests {
         )
         .await
         .is_ok());
+    }
+
+    /// Audit 1.1: an UNREGISTERED caller must not be able to spend replay-nonce slots. Anyone can
+    /// mint a device key and sign a token with it, so recording the nonce before the
+    /// registration check let a stranger fill `MAX_SEEN_NONCES` (2 000 per throwaway device key,
+    /// unlimited keys) and 429 every legitimate device on the server.
+    #[tokio::test]
+    async fn an_unregistered_caller_spends_no_replay_nonce() {
+        let (state, _key, account) = registered(21);
+        let stranger = SigningKey::from_bytes(&[77u8; 32]);
+        let stranger_id = hex_bytes(&stranger.verifying_key().to_bytes());
+        let ttl = now_ms() + 300_000;
+        let r = get_records(
+            State(state.clone()),
+            signed(&stranger, &account, "g", ttl),
+            Query(RecordsQuery {
+                ns: "bm".into(),
+                cursor: None,
+                limit: None,
+            }),
+        )
+        .await;
+        assert_eq!(r.unwrap_err(), StatusCode::FORBIDDEN);
+        let r = post_records(
+            State(state.clone()),
+            signed(&stranger, &account, "p", ttl),
+            Json(PostRecords {
+                ns: "bm".into(),
+                records: vec![],
+            }),
+        )
+        .await;
+        assert_eq!(r.unwrap_err(), StatusCode::FORBIDDEN);
+        let r = get_devices(State(state.clone()), signed(&stranger, &account, "d", ttl)).await;
+        assert_eq!(r.unwrap_err(), StatusCode::FORBIDDEN);
+        let r = remove_device(
+            State(state.clone()),
+            signed(&stranger, &account, "r", ttl),
+            Json(RemoveDevice {
+                device_id: stranger_id,
+            }),
+        )
+        .await;
+        assert_eq!(r.unwrap_err(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            state.seen_nonces.lock().unwrap().len(),
+            0,
+            "a refused, unregistered caller must leave the nonce map untouched"
+        );
+    }
+
+    /// The registration endpoint is the one route an unregistered device may call, so it gates
+    /// on the account-root signature instead — and that check, too, must run before the nonce
+    /// is spent.
+    #[tokio::test]
+    async fn a_registration_without_a_valid_root_signature_spends_no_replay_nonce() {
+        let state = AppState::new(Store::default(), None);
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let wrong_root = SigningKey::from_bytes(&[88u8; 32]);
+        let dev = SigningKey::from_bytes(&[89u8; 32]);
+        let r = post_device(
+            State(state.clone()),
+            signed(&dev, &account, "reg", now_ms() + 300_000),
+            Json(register_body(&wrong_root, &account, &dev, "x")),
+        )
+        .await;
+        assert_eq!(r.unwrap_err(), StatusCode::FORBIDDEN);
+        assert_eq!(state.seen_nonces.lock().unwrap().len(), 0);
+    }
+
+    /// The nonce is a caller-chosen string that is stored for the token's lifetime, so its size
+    /// is bounded: a real client sends 32 hex chars; anything over 64 or not hex is refused.
+    #[tokio::test]
+    async fn an_oversized_or_non_hex_nonce_is_refused() {
+        let (state, key, account) = registered(22);
+        let ttl = now_ms() + 300_000;
+        let push = |h: HeaderMap| {
+            post_records(
+                State(state.clone()),
+                h,
+                Json(PostRecords {
+                    ns: "bm".into(),
+                    records: vec![],
+                }),
+            )
+        };
+        assert_eq!(
+            push(signed_raw(&key, &account, &"a".repeat(65), ttl))
+                .await
+                .unwrap_err(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            push(signed_raw(&key, &account, "not-hex!", ttl))
+                .await
+                .unwrap_err(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            push(signed_raw(&key, &account, "", ttl)).await.unwrap_err(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert!(push(signed_raw(&key, &account, &"a".repeat(64), ttl))
+            .await
+            .is_ok());
+        assert_eq!(state.seen_nonces.lock().unwrap().len(), 1);
     }
 
     /// A namespace holding MORE records than one response can carry must still be fully
@@ -2308,7 +2801,7 @@ mod tests {
 
     /// Register `devices` against one fresh account, in order, and return that `AppState`. The
     /// FIRST device registered becomes the owner (`Store::owner`), so callers pass the intended
-    /// owner first.
+    /// owner first; every later device asks to join and is approved BY that owner (D2).
     async fn account_with(
         acct_key: &SigningKey,
         account: &str,
@@ -2323,8 +2816,618 @@ mod tests {
             )
             .await;
             assert!(r.is_ok(), "device {i} must register: {:?}", r.err());
+            if i > 0 {
+                let r = approve_device(
+                    State(state.clone()),
+                    signed(
+                        &devices[0],
+                        account,
+                        &format!("approve-{i}"),
+                        now_ms() + 300_000,
+                    ),
+                    Json(ApproveDevice {
+                        device_id: hex_bytes(&d.verifying_key().to_bytes()),
+                    }),
+                )
+                .await;
+                assert!(r.is_ok(), "owner must approve device {i}: {:?}", r.err());
+            }
         }
         state
+    }
+
+    fn id_of(k: &SigningKey) -> String {
+        hex_bytes(&k.verifying_key().to_bytes())
+    }
+
+    fn is_registered(state: &AppState, account: &str, device: &SigningKey) -> bool {
+        state
+            .db
+            .lock()
+            .unwrap()
+            .devices
+            .get(account)
+            .is_some_and(|s| s.contains_key(&id_of(device)))
+    }
+
+    async fn register(
+        state: &AppState,
+        ak: &SigningKey,
+        account: &str,
+        dev: &SigningKey,
+        nonce: &str,
+        secret: Option<&str>,
+    ) -> Result<Json<Value>, StatusCode> {
+        let mut h = signed(dev, account, nonce, now_ms() + 300_000);
+        if let Some(sec) = secret {
+            h.insert(REGISTRATION_SECRET_HEADER, sec.parse().unwrap());
+        }
+        post_device(
+            State(state.clone()),
+            h,
+            Json(register_body(ak, account, dev, "d")),
+        )
+        .await
+    }
+
+    // ------------------------------------------------- audit 1.3: hlc / ord / ns bounds
+
+    async fn push_as(
+        state: &AppState,
+        key: &SigningKey,
+        account: &str,
+        nonce: &str,
+        ns: &str,
+        records: Vec<WireRecord>,
+    ) -> Result<Json<Value>, StatusCode> {
+        post_records(
+            State(state.clone()),
+            signed(key, account, nonce, now_ms() + 300_000),
+            Json(PostRecords {
+                ns: ns.into(),
+                records,
+            }),
+        )
+        .await
+    }
+
+    /// `ord` is the SERVER's ordering stamp. A client-sent one used to be stored verbatim whenever
+    /// no tie forced the server to write its own, so a peer could pick how every other client
+    /// orders its record — and attach any JSON it liked, stored and served forever.
+    #[tokio::test]
+    async fn a_client_sent_ord_is_discarded() {
+        let (state, key, account) = registered(70);
+        let mut r = rec("u1", 1, "aa");
+        r.ord = Some(json!({ "wall_ms": i64::MAX, "counter": 0, "node": "x".repeat(5000) }));
+        assert!(push_as(&state, &key, &account, "a", "bm", vec![r])
+            .await
+            .is_ok());
+        let g = state.db.lock().unwrap();
+        let stored = g
+            .records
+            .get(&(account.clone(), "bm".into(), "u1".into()))
+            .unwrap();
+        assert!(stored.ord.is_none(), "the client must not choose `ord`");
+    }
+
+    /// `hlc` is cleartext the server stores and serves to every peer, and it was an unbounded
+    /// `Value`. Its shape is now pinned: an object with only `wall_ms` / `counter` / `node`,
+    /// integers where integers belong, and a `node` of at most 64 chars. A MISSING field is still
+    /// fine (see `a_record_without_a_parseable_wall_is_kept`) — only a wrong one is refused.
+    #[tokio::test]
+    async fn a_malformed_hlc_is_refused_with_400() {
+        let (state, key, account) = registered(71);
+        let bad = [
+            json!("a string"),
+            json!({ "wall_ms": 1, "counter": 0, "node": "n", "extra": "x".repeat(10_000) }),
+            json!({ "wall_ms": 1, "counter": 0, "node": "n".repeat(65) }),
+            json!({ "wall_ms": "1", "counter": 0, "node": "n" }),
+            json!({ "wall_ms": 1, "counter": -1, "node": "n" }),
+            json!({ "wall_ms": 1, "counter": 0, "node": 5 }),
+        ];
+        for (i, h) in bad.into_iter().enumerate() {
+            let mut r = rec("u", 1, "aa");
+            r.hlc = h;
+            assert_eq!(
+                push_as(&state, &key, &account, &format!("b{i}"), "bm", vec![r])
+                    .await
+                    .unwrap_err(),
+                StatusCode::BAD_REQUEST,
+                "bad hlc #{i}"
+            );
+        }
+        assert!(state.db.lock().unwrap().records.is_empty());
+        let mut ok = rec("u", 1, "aa");
+        ok.hlc = json!({ "counter": 0, "node": "n".repeat(64) });
+        assert!(push_as(&state, &key, &account, "ok", "bm", vec![ok])
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn an_empty_namespace_is_a_400_on_push_and_pull() {
+        let (state, key, account) = registered(72);
+        assert_eq!(
+            push_as(&state, &key, &account, "p", "", vec![])
+                .await
+                .unwrap_err(),
+            StatusCode::BAD_REQUEST
+        );
+        let pulled = get_records(
+            State(state.clone()),
+            signed(&key, &account, "g", now_ms() + 300_000),
+            Query(RecordsQuery {
+                ns: String::new(),
+                cursor: None,
+                limit: None,
+            }),
+        )
+        .await;
+        assert_eq!(pulled.unwrap_err(), StatusCode::BAD_REQUEST);
+    }
+
+    /// The response byte budget must count what is actually serialized. It used to add a flat
+    /// 128-byte allowance for `hlc` + `ord` + field names, so a record whose stamps were large (one
+    /// stored before `hlc` was bounded) was under-counted by however large they were.
+    #[test]
+    fn the_response_budget_counts_the_serialized_stamps() {
+        let mut r = rec("u", 1, "aa");
+        r.hlc = json!({ "wall_ms": 1, "counter": 0, "node": "n".repeat(10_000) });
+        r.ord = Some(json!({ "wall_ms": 1, "counter": 0, "node": "o".repeat(10_000) }));
+        assert!(wire_bytes(&r) >= 20_000, "got {}", wire_bytes(&r));
+    }
+
+    /// Audit 1.6: a push whose persist FAILED leaves the records in memory. The client retries
+    /// the identical push; HLC LWW sees an equal stamp, `changed` stays false, nothing is
+    /// persisted — and the retry answered `ok` for data that never reached disk.
+    #[tokio::test]
+    async fn a_retried_push_after_a_failed_persist_is_made_durable() {
+        let dir = std::env::temp_dir().join(format!("aegis-sync-dirty-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // The parent does not exist yet, so the first persist fails.
+        let path = dir.join("missing").join("data.json");
+        let (base, key, account) = registered(73);
+        let store = std::mem::take(&mut *base.db.lock().unwrap());
+        let state = AppState::new(store, Some(path.clone()));
+
+        let first = push_as(&state, &key, &account, "a", "bm", vec![rec("u1", 5, "aa")]).await;
+        assert_eq!(first.unwrap_err(), StatusCode::INTERNAL_SERVER_ERROR);
+
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let retry = push_as(&state, &key, &account, "b", "bm", vec![rec("u1", 5, "aa")]).await;
+        assert!(retry.is_ok());
+        let on_disk = load_store(&path).unwrap();
+        assert!(
+            on_disk
+                .records
+                .contains_key(&(account.clone(), "bm".into(), "u1".into())),
+            "an `ok` must mean the record is on disk"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Audit 1.7: `rename` is only durable once the DIRECTORY entry is flushed. Without a dir
+    /// fsync a power loss right after an `ok` can leave the old file (or none) in place. A crash is
+    /// not reproducible in a unit test, so the observable is that the save performs the flush.
+    #[test]
+    fn save_snapshot_flushes_the_directory_after_the_rename() {
+        let dir = std::env::temp_dir().join(format!("aegis-sync-dirsync-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let before = DIR_SYNCS.load(std::sync::atomic::Ordering::SeqCst);
+        save_snapshot(&dir.join("data.json"), &Snapshot::default()).unwrap();
+        assert!(DIR_SYNCS.load(std::sync::atomic::Ordering::SeqCst) > before);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    // ------------------------------------------------- D1: registration secret + global caps
+
+    #[tokio::test]
+    async fn a_new_account_needs_the_registration_secret_when_one_is_configured() {
+        let state =
+            AppState::new(Store::default(), None).with_registration_secret(Some("s3cret".into()));
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let dev = SigningKey::from_bytes(&[30u8; 32]);
+        assert_eq!(
+            register(&state, &ak, &account, &dev, "a", None)
+                .await
+                .unwrap_err(),
+            StatusCode::FORBIDDEN,
+            "no secret"
+        );
+        assert_eq!(
+            register(&state, &ak, &account, &dev, "b", Some("wrong"))
+                .await
+                .unwrap_err(),
+            StatusCode::FORBIDDEN,
+            "wrong secret"
+        );
+        assert!(!is_registered(&state, &account, &dev));
+        assert!(register(&state, &ak, &account, &dev, "c", Some("s3cret"))
+            .await
+            .is_ok());
+        assert!(is_registered(&state, &account, &dev));
+    }
+
+    #[tokio::test]
+    async fn without_a_configured_secret_a_new_account_registers_as_before() {
+        let state = AppState::new(Store::default(), None).with_registration_secret(Some("".into()));
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let dev = SigningKey::from_bytes(&[31u8; 32]);
+        assert!(register(&state, &ak, &account, &dev, "a", None)
+            .await
+            .is_ok());
+        assert!(is_registered(&state, &account, &dev));
+    }
+
+    #[tokio::test]
+    async fn the_global_account_cap_refuses_a_new_account_with_507() {
+        let mut state = AppState::new(Store::default(), None);
+        state.caps.max_accounts = 1;
+        let ak1 = account_key();
+        let a1 = account_id_for(&ak1);
+        let ak2 = SigningKey::from_bytes(&[32u8; 32]);
+        let a2 = account_id_for(&ak2);
+        let d1 = SigningKey::from_bytes(&[33u8; 32]);
+        let d2 = SigningKey::from_bytes(&[34u8; 32]);
+        assert!(register(&state, &ak1, &a1, &d1, "a", None).await.is_ok());
+        assert_eq!(
+            register(&state, &ak2, &a2, &d2, "b", None)
+                .await
+                .unwrap_err(),
+            StatusCode::INSUFFICIENT_STORAGE
+        );
+        // The existing account's own device can still re-register.
+        assert!(register(&state, &ak1, &a1, &d1, "c", None).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn the_global_record_and_byte_caps_refuse_growth_with_507() {
+        let (mut state, key, account) = registered(35);
+        state.caps.max_total_records = 2;
+        let push = |state: AppState, n: &'static str, recs: Vec<WireRecord>| {
+            let key = key.clone();
+            let account = account.clone();
+            async move {
+                post_records(
+                    State(state),
+                    signed(&key, &account, n, now_ms() + 300_000),
+                    Json(PostRecords {
+                        ns: "bm".into(),
+                        records: recs,
+                    }),
+                )
+                .await
+            }
+        };
+        assert!(push(
+            state.clone(),
+            "a",
+            vec![rec("u1", 1, "aa"), rec("u2", 1, "bb")]
+        )
+        .await
+        .is_ok());
+        assert_eq!(
+            push(state.clone(), "b", vec![rec("u3", 1, "cc")])
+                .await
+                .unwrap_err(),
+            StatusCode::INSUFFICIENT_STORAGE
+        );
+        // An update to an existing record does not grow the record count.
+        assert!(push(state.clone(), "c", vec![rec("u1", 2, "dd")])
+            .await
+            .is_ok());
+
+        state.caps.max_total_records = 100;
+        state.caps.max_total_ct_bytes = 10;
+        assert_eq!(
+            push(state.clone(), "d", vec![rec("u4", 1, &"x".repeat(16))])
+                .await
+                .unwrap_err(),
+            StatusCode::INSUFFICIENT_STORAGE
+        );
+        assert!(push(state.clone(), "e", vec![rec("u5", 1, "ee")])
+            .await
+            .is_ok());
+    }
+
+    // ------------------------------------------------------ D2: owner approval to join
+
+    #[tokio::test]
+    async fn a_new_device_on_an_existing_account_waits_for_the_owner() {
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let owner = SigningKey::from_bytes(&[40u8; 32]);
+        let newcomer = SigningKey::from_bytes(&[41u8; 32]);
+        let state = account_with(&ak, &account, std::slice::from_ref(&owner)).await;
+
+        // Even with a registration secret configured, joining an existing account does not need
+        // it — the owner's approval is the gate.
+        let r = register(&state, &ak, &account, &newcomer, "join", None)
+            .await
+            .expect("a join request is accepted for review");
+        assert_eq!(r.0["pending"], json!(true));
+        assert!(!is_registered(&state, &account, &newcomer));
+
+        // While pending, every data endpoint refuses it.
+        let pull = get_records(
+            State(state.clone()),
+            signed(&newcomer, &account, "pull", now_ms() + 300_000),
+            Query(RecordsQuery {
+                ns: "bm".into(),
+                cursor: None,
+                limit: None,
+            }),
+        )
+        .await;
+        assert_eq!(pull.unwrap_err(), StatusCode::FORBIDDEN);
+
+        // The owner sees the request…
+        let listed = get_devices(
+            State(state.clone()),
+            signed(&owner, &account, "list", now_ms() + 300_000),
+        )
+        .await
+        .unwrap();
+        let pending = listed.0["pending"].as_array().cloned().unwrap_or_default();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0]["deviceId"], json!(id_of(&newcomer)));
+
+        // …and approves it.
+        let _ = approve_device(
+            State(state.clone()),
+            signed(&owner, &account, "ok", now_ms() + 300_000),
+            Json(ApproveDevice {
+                device_id: id_of(&newcomer),
+            }),
+        )
+        .await
+        .expect("owner approves");
+        assert!(is_registered(&state, &account, &newcomer));
+        let pull = get_records(
+            State(state.clone()),
+            signed(&newcomer, &account, "pull2", now_ms() + 300_000),
+            Query(RecordsQuery {
+                ns: "bm".into(),
+                cursor: None,
+                limit: None,
+            }),
+        )
+        .await;
+        assert!(pull.is_ok());
+    }
+
+    #[tokio::test]
+    async fn only_the_owner_can_approve_a_pending_device() {
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let owner = SigningKey::from_bytes(&[42u8; 32]);
+        let member = SigningKey::from_bytes(&[43u8; 32]);
+        let newcomer = SigningKey::from_bytes(&[44u8; 32]);
+        let state = account_with(&ak, &account, &[owner.clone(), member.clone()]).await;
+        let _ = register(&state, &ak, &account, &newcomer, "join", None)
+            .await
+            .unwrap();
+        let by_member = approve_device(
+            State(state.clone()),
+            signed(&member, &account, "m", now_ms() + 300_000),
+            Json(ApproveDevice {
+                device_id: id_of(&newcomer),
+            }),
+        )
+        .await;
+        assert_eq!(by_member.unwrap_err(), StatusCode::FORBIDDEN);
+        let by_self = approve_device(
+            State(state.clone()),
+            signed(&newcomer, &account, "s", now_ms() + 300_000),
+            Json(ApproveDevice {
+                device_id: id_of(&newcomer),
+            }),
+        )
+        .await;
+        assert_eq!(by_self.unwrap_err(), StatusCode::FORBIDDEN);
+        assert!(!is_registered(&state, &account, &newcomer));
+        // Approving something that is not pending is a 404, not a silent ok.
+        let none = approve_device(
+            State(state.clone()),
+            signed(&owner, &account, "o", now_ms() + 300_000),
+            Json(ApproveDevice {
+                device_id: "ab".repeat(32),
+            }),
+        )
+        .await;
+        assert_eq!(none.unwrap_err(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn the_owner_can_reject_a_pending_device_and_it_stays_out() {
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let owner = SigningKey::from_bytes(&[45u8; 32]);
+        let intruder = SigningKey::from_bytes(&[46u8; 32]);
+        let state = account_with(&ak, &account, std::slice::from_ref(&owner)).await;
+        let _ = register(&state, &ak, &account, &intruder, "join", None)
+            .await
+            .unwrap();
+        let _ = remove_device(
+            State(state.clone()),
+            signed(&owner, &account, "rm", now_ms() + 300_000),
+            Json(RemoveDevice {
+                device_id: id_of(&intruder),
+            }),
+        )
+        .await
+        .expect("owner rejects the request");
+        assert!(state
+            .db
+            .lock()
+            .unwrap()
+            .pending
+            .get(&account)
+            .is_none_or(|p| p.is_empty()));
+        assert_eq!(
+            register(&state, &ak, &account, &intruder, "again", None)
+                .await
+                .unwrap_err(),
+            StatusCode::FORBIDDEN,
+            "a rejected device is revoked, so it cannot ask again"
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_requests_per_account_are_capped() {
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let owner = SigningKey::from_bytes(&[47u8; 32]);
+        let mut state = account_with(&ak, &account, std::slice::from_ref(&owner)).await;
+        state.caps.max_pending_per_account = 2;
+        for i in 0..2u8 {
+            let d = SigningKey::from_bytes(&[100 + i; 32]);
+            let _ = register(&state, &ak, &account, &d, "j", None)
+                .await
+                .unwrap();
+        }
+        let d = SigningKey::from_bytes(&[120u8; 32]);
+        assert_eq!(
+            register(&state, &ak, &account, &d, "j", None)
+                .await
+                .unwrap_err(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+
+    #[test]
+    fn pending_devices_survive_a_snapshot_round_trip() {
+        let mut store = Store::default();
+        store.pending.entry("acct".into()).or_default().insert(
+            "dev-p".into(),
+            Device {
+                device_id: "dev-p".into(),
+                label: "P".into(),
+                last_seen_ms: 0,
+                registered_ms: 7,
+            },
+        );
+        let back = Snapshot::from_store(&store).into_store();
+        assert_eq!(
+            back.pending
+                .get("acct")
+                .and_then(|p| p.get("dev-p"))
+                .map(|d| d.registered_ms),
+            Some(7)
+        );
+    }
+
+    /// Audit 1.4: `unhex` accepts upper-case hex, so `ABCD…` and `abcd…` decode to the SAME key
+    /// while being DIFFERENT strings in `revoked`. A revoked device could re-register by
+    /// upper-casing its own id (it holds the root, so it can sign the new spelling).
+    #[tokio::test]
+    async fn a_revoked_device_cannot_return_under_an_upper_case_spelling_of_its_id() {
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let owner = SigningKey::from_bytes(&[60u8; 32]);
+        let kicked = SigningKey::from_bytes(&[61u8; 32]);
+        let state = account_with(&ak, &account, &[owner.clone(), kicked.clone()]).await;
+        let _ = remove_device(
+            State(state.clone()),
+            signed(&owner, &account, "kick", now_ms() + 300_000),
+            Json(RemoveDevice {
+                device_id: id_of(&kicked),
+            }),
+        )
+        .await
+        .unwrap();
+        let upper = id_of(&kicked).to_uppercase();
+        let token = AuthToken {
+            account_id: account.clone(),
+            device_id: upper.clone(),
+            issued_ms: now_ms(),
+            expires_ms: now_ms() + 300_000,
+            nonce: "abcd".into(),
+        };
+        let token_hex = hex_bytes(&serde_json::to_vec(&token).unwrap());
+        let sig_hex = hex_bytes(&kicked.sign(&canonical(&token)).to_bytes());
+        let mut h = HeaderMap::new();
+        h.insert(
+            "authorization",
+            format!("AegisSig {account}.{token_hex}.{sig_hex}")
+                .parse()
+                .unwrap(),
+        );
+        let msg = format!("aegis-register-v1\n{account}\n{upper}");
+        let r = post_device(
+            State(state.clone()),
+            h,
+            Json(RegisterDevice {
+                account_id: account.clone(),
+                device_id: upper.clone(),
+                label: "back".into(),
+                account_sig: hex_bytes(&ak.sign(msg.as_bytes()).to_bytes()),
+            }),
+        )
+        .await;
+        assert!(r.is_err(), "a non-canonical id must be refused");
+        let g = state.db.lock().unwrap();
+        let back_in = g
+            .devices
+            .get(&account)
+            .is_some_and(|s| s.keys().any(|k| k.eq_ignore_ascii_case(&upper)))
+            || g.pending
+                .get(&account)
+                .is_some_and(|s| s.keys().any(|k| k.eq_ignore_ascii_case(&upper)));
+        assert!(
+            !back_in,
+            "the revoked key must not be back under any spelling"
+        );
+    }
+
+    // ------------------------------------------------------ D5: owner self-removal
+
+    #[tokio::test]
+    async fn an_owner_signing_out_hands_ownership_to_the_oldest_remaining_device() {
+        let ak = account_key();
+        let account = account_id_for(&ak);
+        let owner = SigningKey::from_bytes(&[50u8; 32]);
+        let older = SigningKey::from_bytes(&[51u8; 32]);
+        let newer = SigningKey::from_bytes(&[52u8; 32]);
+        let state = account_with(
+            &ak,
+            &account,
+            &[owner.clone(), older.clone(), newer.clone()],
+        )
+        .await;
+        {
+            // Make the registration order unambiguous regardless of clock resolution.
+            let mut g = state.db.lock().unwrap();
+            let set = g.devices.get_mut(&account).unwrap();
+            set.get_mut(&id_of(&older)).unwrap().registered_ms = 1_000;
+            set.get_mut(&id_of(&newer)).unwrap().registered_ms = 2_000;
+        }
+        let _ = remove_device(
+            State(state.clone()),
+            signed(&owner, &account, "bye", now_ms() + 300_000),
+            Json(RemoveDevice {
+                device_id: id_of(&owner),
+            }),
+        )
+        .await
+        .expect("the owner may sign itself out while others remain");
+        assert_eq!(
+            state.db.lock().unwrap().owner.get(&account).cloned(),
+            Some(id_of(&older))
+        );
+        // The new owner can now act as owner.
+        let r = remove_device(
+            State(state.clone()),
+            signed(&older, &account, "kick", now_ms() + 300_000),
+            Json(RemoveDevice {
+                device_id: id_of(&newer),
+            }),
+        )
+        .await;
+        assert!(r.is_ok(), "the inherited owner can remove another device");
     }
 
     #[tokio::test]
@@ -2456,6 +3559,7 @@ mod tests {
                 device_id: "dev-a".into(),
                 label: "A".into(),
                 last_seen_ms: 0,
+                registered_ms: 0,
             },
         );
         store.revoked.insert(("acct".into(), "dev-b".into()));
@@ -2540,6 +3644,7 @@ mod tests {
                 device_id: "dev1".into(),
                 label: "L".into(),
                 last_seen_ms: 7,
+                registered_ms: 0,
             },
         );
         // Also exercise a record through the disk path (devices alone wouldn't catch a
@@ -3315,6 +4420,7 @@ mod tests {
                     device_id: "dev1".into(),
                     label: "laptop".into(),
                     last_seen_ms: 99,
+                    registered_ms: 0,
                 },
             );
         state.persist().await.unwrap();
@@ -3357,7 +4463,7 @@ mod tests {
         let path = dir.join("data.json");
 
         let key = SigningKey::from_bytes(&[77; 32]);
-        let account = "acct-reap".to_string();
+        let account = hex_bytes(b"acct-reap");
         let device_id = hex_bytes(&key.verifying_key().to_bytes());
 
         let mut store = Store::default();
@@ -3367,6 +4473,7 @@ mod tests {
                 device_id,
                 label: "L".into(),
                 last_seen_ms: 0,
+                registered_ms: 0,
             },
         );
         let seeded = TOMBSTONE_RETENTION_PER_NS + 100;
@@ -3607,6 +4714,7 @@ mod tests {
                 device_id: "dev1".into(),
                 label: "phone".into(),
                 last_seen_ms: 42,
+                registered_ms: 0,
             },
         );
 

@@ -47,6 +47,18 @@ AEGIS_SYNC_BIND=0.0.0.0
 `AEGIS_SYNC_BIND=0.0.0.0` publishes 8787 to every interface the host has. Do that only
 behind TLS and a firewall rule, never as a shortcut to "make it work".
 
+**Set `AEGIS_SYNC_REGISTRATION_SECRET` on any server other people can reach.** Without
+it, anyone who can reach the server can create an account on it (the server warns at boot
+and bounds it only with server-wide caps). With it, creating a NEW account needs that code,
+typed into Aegis's **Settings → Sync → Server registration code**. Adding a device to an
+account you already have never needs it: the account's first (owner) device approves the
+new one under **Settings → Sync → Devices**.
+
+```bash
+# .env
+AEGIS_SYNC_REGISTRATION_SECRET=<a long random string>
+```
+
 ## Starting it automatically
 
 **Read this before changing `AEGIS_SYNC_BIND` to anything but loopback.**

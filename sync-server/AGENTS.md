@@ -11,7 +11,34 @@ Implements the sync HTTP contract (see `README.md` for the table): HLC last-writ
 record upsert (`/v1/records`), device registration/listing/removal (`/v1/devices*`), and an
 unauthenticated liveness probe (`/healthz`). Auth is the per-device Ed25519 `AegisSig` token;
 device registration additionally requires an account-root signature, so only a holder of the
-recovery phrase can register a device.
+recovery phrase can ask to register a device — and on an account that already exists, that
+request then waits for the **owner device's approval** (`POST /v1/devices/approve`).
+
+## Registration (audit 2026-11-02, owner decisions D1/D2/D5)
+
+- **New accounts can be gated (D1).** `AEGIS_SYNC_REGISTRATION_SECRET`, when set, must arrive
+  in the `x-aegis-registration-secret` header (constant-time compare) to create a NEW account;
+  unset = open registration with a loud boot WARNING. Server-wide `Caps` (`MAX_ACCOUNTS`,
+  `MAX_TOTAL_RECORDS`, `MAX_TOTAL_CT_BYTES` → `507`; `MAX_PENDING_PER_ACCOUNT` → `429`) bound
+  the process whatever the secret says, because accounts are otherwise free to create. Byte
+  growth counts only each record's GROWTH, so a full server still accepts edits and deletes.
+- **Joining an existing account needs the owner (D2).** A root-signed registration for an
+  account that already has an owner lands in `Store.pending` (persisted as `Snapshot.pending`)
+  and answers `{ ok: true, pending: true }`; every data endpoint refuses it until the owner
+  approves. The owner rejects with `/v1/devices/remove`, which revokes. The client shows
+  "waiting for approval" from `pendingApproval` in its sync state and Approve/Reject on the
+  owner's device list. **Honest limit: true revocation = rotate the root.** Every device
+  derives the same account key from the recovery phrase, so a removed or stolen device that
+  still holds the phrase can always *ask* to join again under a new device key (the owner will
+  see the request); only moving to a new recovery phrase (a new account) makes the old phrase
+  worthless.
+- **Owner sign-out transfers ownership (D5).** The owner removing ITSELF while others remain
+  hands the role to the oldest remaining device (`Device.registered_ms`, device id as the
+  tie-break). It used to leave `owner` pointing at a revoked device — nobody could remove
+  anyone, and with D2 nobody could ever join again. The client turns sync off after removing
+  itself (audit 1.9), since every later pass could only be refused.
+- **Ids are canonical lower-case hex.** `unhex` accepts upper case, so `ABCD…`/`abcd…` were one
+  key but two strings in `revoked`; `verify_auth` now refuses anything but lower-case hex.
 
 ## Device ownership + revocation
 
@@ -24,10 +51,11 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
 - **The missing state is held server-side** (the one place a removed device cannot write):
   `Store.revoked: HashSet<(account, deviceId)>` is a permanent deny-list consulted by
   `post_device` (`403` on a hit), and `Store.owner: HashMap<account, deviceId>` records the
-  **first** device to register, set with `or_insert_with` and deliberately **never cleared by
-  `remove_device`** (clearing it would hand the role to whoever acted next). Removing *another*
-  device requires being the owner; removing *yourself* is always allowed — that is sign-out, and
-  it correctly ends in revocation.
+  **first** device to register, set with `or_insert_with`. It is never cleared or handed to
+  "whoever acts next": the ONLY change is the owner signing itself out, which passes the role
+  to the oldest remaining device (D5 above). Removing *another* device requires being the
+  owner; removing *yourself* is always allowed — that is sign-out, and it correctly ends in
+  revocation.
 - **The last device cannot be removed** (`409`). Revocation is permanent by design, so allowing it
   would lock the account out of its own server with no in-band recovery.
 - Both maps are **persisted** (`Snapshot.revoked` / `.owners`, all `#[serde(default)]`, written
@@ -40,8 +68,10 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
 
 ## Hardening (replay + quotas)
 
-- **Replay defense:** `verify_auth` records each spent `(device, nonce)` pair (after the
-  signature verifies) and rejects a repeat — a captured `Authorization` header can't be
+- **Replay defense:** `verify_auth` records each spent `(device, nonce)` pair — only AFTER the
+  signature verifies AND the caller's `admit` closure (registered device, or for registration
+  the account-root proof) passes, because anyone can mint a device key: recording first let a
+  stranger fill the map with throwaway keys and 429 every real device — and rejects a repeat — a captured `Authorization` header can't be
   replayed. The set is bounded by the token TTL (expired entries are swept) and is in-memory
   (a restart forgets it → a token captured pre-restart could replay within its ≤5-min TTL).
   **Client compat:** the client mints a FRESH nonce per HTTP request (`sync::sync_ns` no longer
@@ -49,9 +79,16 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
   request rejected — update client + server together.
 - **Quotas** (constants near the handlers): per-request record count (`MAX_RECORDS_PER_REQUEST`),
   per-field lengths (`MAX_FIELD_LEN` for ns/uuid/nonce, `MAX_CT_LEN` for ciphertext, `MAX_LABEL_LEN`)
-  → `413`; per-account total records (`MAX_RECORDS_PER_ACCOUNT`) → `507`; plus a coarse
-  `DefaultBodyLimit` (`MAX_BODY_BYTES`). A registered-but-malicious paired device can't OOM the
-  process or fill disk. Updates to existing records bypass the per-account cap (no growth).
+  → `413`; token nonce ≤ `MAX_NONCE_HEX_LEN` (64) hex chars → `401`; `hlc` must be the
+  `{wall_ms, counter, node≤64}` shape (`hlc_well_formed`; missing fields allowed, unknown or
+  mistyped ones → `400`) and a client-sent `ord` is dropped, since `ord` is the server's own
+  ordering stamp; empty `ns` → `400`; the response byte budget (`wire_bytes`) counts the
+  serialized `hlc`/`ord`; per-account total records (`MAX_RECORDS_PER_ACCOUNT`) → `507`; plus a coarse
+  `DefaultBodyLimit` (`MAX_BODY_BYTES`). The per-account cap bounds what ONE account can
+  store; the server-wide `Caps` (`MAX_ACCOUNTS`, `MAX_TOTAL_RECORDS`, `MAX_TOTAL_CT_BYTES` →
+  `507`, D1) bound the total across ALL accounts — before those existed, "can't fill disk" held
+  per account only, and open registration meant unlimited accounts. Updates to existing
+  records bypass the per-account cap (no growth).
 - **A synthesized record id costs ONE pass over that record, and that is a security
   property.** A push that arrives without a `uuid` gets one derived from its content by
   `unique_uuid`, and the taken-set is client-controlled: `post_records` stores a client
@@ -167,7 +204,13 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
 
 - In-memory `Store` behind an `Arc<Mutex<…>>`, served from `AppState`.
 - Set **`AEGIS_SYNC_DATA=<path>`** to persist: the store is mirrored to a single JSON file
-  (`Snapshot`), atomic-written (temp → fsync → rename) on each change and loaded on boot.
+  (`Snapshot`), atomic-written (temp → fsync → rename → **directory fsync**) on each change and
+  loaded on boot. The whole store is rewritten per mutation; per-account files are a known
+  follow-up, not done.
+- **`AppState.dirty`**: set when a persist FAILS, cleared when one succeeds, and `persist_if`
+  persists whenever it is set. A mutation lands in memory before its persist, so after a failed
+  persist the client's identical retry was a no-op to LWW and used to answer `ok` for data that
+  never reached disk.
   Unset → pure in-memory (resets on restart). A corrupt data file fails loud at boot.
 - **`persist_blocking` takes the `writer` lock BEFORE it snapshots.** Snapshotting under `db`,
   releasing it, and only then taking `writer` lets two concurrent persists interleave as
@@ -240,6 +283,11 @@ Measured: down 23 h after a reboot while `docker ps` said `healthy`.
   host`), and the discriminator is `grep -q .` finding a line, **not `ip`'s exit status**,
   which is 0 either way. Health therefore means "serving AND networked", still not
   "reachable from any given host" — curl the published address for that.
+- **The probe uses `${AEGIS_SYNC_PORT:-8787}` and handles IPv6.** The `ExecStartPost` used a
+  literal 8787 (a non-default port failed every healthy start), and the wait script matched only
+  `inet <addr>/`, so an IPv6 bind (`inet6`, written bracketed in compose) always timed out. Both
+  strip the brackets; `platformContract.drift.test.ts` runs the wait script for real against a
+  stub `ip`.
 - `src/lib/platformContract.drift.test.ts` pins all of the above, with a mutation recipe
   per claim. Its two traps, both hit while writing it: pin **anchored directives**
   (`^ExecStartPre=`), because the unit's comment block names `wait-for-bind-address` and
@@ -250,4 +298,6 @@ Measured: down 23 h after a reboot while `docker ps` said `healthy`.
 
 `cargo test` (run from this folder, or `cargo test --manifest-path sync-server/Cargo.toml`
 from the repo root). Covers HLC ordering, auth canonical shape, account-root registration,
-and the snapshot save/load round-trip.
+owner approval / ownership transfer / registration secret / global caps, the request bounds,
+and the snapshot save/load round-trip (81 tests). Handlers are driven by calling them directly
+(no `tower` in the tree); test account ids must be lower-case hex (`registered()` hex-encodes).

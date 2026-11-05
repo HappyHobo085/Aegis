@@ -20,6 +20,10 @@ services:
       # mapping is wide. The two are independent — this one is not the exposure.
       - AEGIS_SYNC_ADDR=0.0.0.0:8787
       - AEGIS_SYNC_DATA=/data/aegis-sync.json
+      # Required to create a NEW account when set (sent by the app's "Server registration
+      # code" field). Unset = open registration, bounded only by the global caps; the
+      # server logs a WARNING at boot. Set it in `.env`, never here.
+      - AEGIS_SYNC_REGISTRATION_SECRET=${AEGIS_SYNC_REGISTRATION_SECRET:-}
     volumes:
       - aegis-sync-data:/data
     # The `ip` clause is load-bearing, not decoration. The bare `/healthz` probe
