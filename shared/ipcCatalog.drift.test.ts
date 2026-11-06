@@ -235,7 +235,11 @@ function readRendererSources(): { file: string; src: string }[] {
       const p = join(dir, entry.name);
       if (entry.isDirectory()) walk(p);
       else if (/\.tsx?$/.test(entry.name) && !/\.test\.tsx?$/.test(entry.name)) {
-        out.push({ file: p.slice(RENDERER_DIR.length + 1), src: readFileSync(p, 'utf8') });
+        // Normalise to `/` so the relative names match on Windows too (join() uses `\`).
+        out.push({
+          file: p.slice(RENDERER_DIR.length + 1).replaceAll('\\', '/'),
+          src: readFileSync(p, 'utf8'),
+        });
       }
     }
   };

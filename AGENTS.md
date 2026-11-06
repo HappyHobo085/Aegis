@@ -107,8 +107,8 @@ committed `coverage-baseline.json` (**recompute these, do not carry them forward
 
 | Metric     | Measured               | Gap |
 | ---------- | ---------------------- | --- |
-| lines      | 5015/5604 = **89.48%** | 589 |
-| statements | 6634/7585 = **87.46%** | 951 |
+| lines      | 5016/5605 = **89.49%** | 589 |
+| statements | 6635/7586 = **87.46%** | 951 |
 | functions  | 1341/1525 = **87.93%** | 184 |
 | branches   | 4186/5126 = **81.66%** | 940 |
 
@@ -277,7 +277,7 @@ in true global scope via indirect eval to catch this). Per-spawn: level/allowlis
 to newly created/reloaded tabs only. Honest limits: a same-world JS shim is detectable
 (default-off for this reason); per-frame-origin seeding (not Brave's per-top-eTLD+1).
 `vitest src/lib/farbleShim.test.ts` is authoritative for shim runtime behavior and passes
-(31 tests; the tree has 2094 tests in 134 files in total, verified on vitest
+(31 tests; the tree has 2095 tests in 134 files in total, verified on vitest
 4.1.11 — run `npm test` for the full count). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
 are **PENDING** user. **Content-webview Proxy** (`proxy.rs`; sub-project M): routes
 browsed pages through a user-configured HTTP or SOCKS5 proxy. **This is a Proxy, not a

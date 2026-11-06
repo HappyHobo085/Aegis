@@ -191,10 +191,19 @@ available — SKIPPING…` line and exits 0 before touching the build files, so
     script into a temp dir re-roots it and makes the fixture `dist/`, `.git` and
     `.audit-allowlist.json` ordinary sandbox files. Nothing in the real working
     tree is touched — which matters, because there is a **real `dist/`** here.
-  - `npm audit` is reached through `execFileSync('npm', …)`, so the sandbox puts a
-    fixture-printing `npm` shim first on the spawned `PATH`; the shim's own exit
-    code is a variable, because `npm audit` exits non-zero whenever it finds
-    anything (the _normal_ path for a report with findings).
+  - `npm audit` is reached through `execSync('npm audit --json')` (a shell, because
+    on Windows npm is `npm.cmd` and Node will not launch a `.cmd` without one), so the
+    sandbox puts a fixture-printing `npm` shim — plus an `npm.cmd` twin for Windows —
+    first on the spawned `PATH` (under the host's own spelling of the key: Windows
+    calls it `Path`); the shim's own exit code is a variable, because `npm audit` exits
+    non-zero whenever it finds anything (the _normal_ path for a report with findings).
+- **The whole suite runs on Windows too** (`tauri-build-check.yml` runs `npm test` on
+  `windows-latest`). Four habits keep it there: resolve a file URL with
+  `fileURLToPath`, never `.pathname` (`/D:/…` resolves to `D:\D:\…`); normalise a
+  relative path to `/` before comparing it to a literal; build a Rust-coverage fixture
+  from `EXCLUSIONS` filtered by `hostPlatform()`, since each host expects its own
+  platform files present; and run a `.sh` under an explicit POSIX bash (Git for
+  Windows' on win32 — a bare `bash` there can be the WSL launcher).
 - **`coverageCheck.mjs`** — pure logic, no I/O, shared by **both** coverage gates
   (TypeScript and Rust). Exports `METRICS`, `coversLess` (exact integer
   cross-multiplication, so an unchanged tree can never fail on float noise),

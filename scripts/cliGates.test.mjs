@@ -11,13 +11,22 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { randomBytes } from 'node:crypto';
-import { dirname, join } from 'node:path';
+import { delimiter, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildBaseline } from './coverageCheck.mjs';
-import { applyExclusions, buildRustBaseline, llvmToSummary } from './rustCoverageCheck.mjs';
+import {
+  EXCLUSIONS,
+  applyExclusions,
+  buildRustBaseline,
+  hostPlatform,
+  llvmToSummary,
+} from './rustCoverageCheck.mjs';
 
 const SCRIPTS_DIR = dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = join(SCRIPTS_DIR, '..');
+// Windows spells it `Path`; overriding `PATH` alongside it leaves two entries and the
+// child may read the wrong one.
+const PATH_KEY = Object.keys(process.env).find((k) => k.toUpperCase() === 'PATH') ?? 'PATH';
 
 // WHY SUBPROCESSES. All three gates under test are top-level CLIs: they read
 // their inputs at module load and call `process.exit()`. Importing one would run
@@ -183,7 +192,7 @@ describe('check-bundle-size.mjs (the size gate)', () => {
 
 describe('check-npm-audit.mjs (the advisory gate)', () => {
   // A stand-in `npm` that prints a fixture report and exits with a chosen code.
-  // The gate recovers its stdout from execFileSync's throw, so the exit code of
+  // The gate recovers its stdout from execSync's throw, so the exit code of
   // the shim is itself a variable under test.
   const withNpm = (json, { exit = 0, allowlist } = {}) => {
     const root = sandbox('check-npm-audit.mjs', 'auditCheck.mjs');
@@ -191,10 +200,15 @@ describe('check-npm-audit.mjs (the advisory gate)', () => {
     write(fixture, json);
     write(join(root, 'bin', 'npm'), `#!/bin/sh\ncat "$AEGIS_AUDIT_FIXTURE"\nexit ${exit}\n`);
     chmodSync(join(root, 'bin', 'npm'), 0o755);
+    // Windows resolves `npm` through cmd.exe + PATHEXT, so it needs a `.cmd` twin.
+    write(join(root, 'bin', 'npm.cmd'), `@type "%AEGIS_AUDIT_FIXTURE%"\r\n@exit /b ${exit}\r\n`);
     if (allowlist !== undefined) write(join(root, '.audit-allowlist.json'), allowlist);
     return {
       root,
-      env: { PATH: `${join(root, 'bin')}:${process.env.PATH}`, AEGIS_AUDIT_FIXTURE: fixture },
+      env: {
+        [PATH_KEY]: `${join(root, 'bin')}${delimiter}${process.env[PATH_KEY]}`,
+        AEGIS_AUDIT_FIXTURE: fixture,
+      },
     };
   };
 
@@ -283,8 +297,8 @@ describe('check-npm-audit.mjs (the advisory gate)', () => {
   it('FAILS when npm cannot be run at all', () => {
     const { root, env } = withNpm(CLEAN, { allowlist: '{"allow":[]}' });
     // An empty PATH: process.execPath is absolute, so the gate still starts and
-    // then fails at execFileSync('npm') with no stdout to recover.
-    const { status, out } = run(root, 'check-npm-audit.mjs', { env: { ...env, PATH: root } });
+    // then fails at execSync('npm audit --json') with no stdout to recover.
+    const { status, out } = run(root, 'check-npm-audit.mjs', { env: { ...env, [PATH_KEY]: root } });
     expect(out).toContain('could not run/parse `npm audit --json`');
     expect(status).toBe(1);
   });
@@ -643,9 +657,12 @@ describe('coverage-ratchet.mjs (the "baseline was lowered" check)', () => {
 });
 
 describe('rust-coverage-ratchet.mjs (the same check, Rust side)', () => {
-  // The smallest llvm export the real reader accepts. `linux_layout.rs` MUST be
-  // present even though it is EXCLUDED, or the linux exclusion reads as stale
-  // ("matched NO file on this platform") and the gate fails for another reason.
+  // The smallest llvm export the real reader accepts. Every exclusion this HOST is
+  // expected to compile (`linux_layout.rs` on Linux, the `*_win.rs` files on Windows)
+  // MUST be present even though it is EXCLUDED, or it reads as stale ("matched NO file
+  // on this platform") and the gate fails for another reason. Derived, not hard-coded,
+  // so the fixture holds on every OS the suite runs on.
+  const hostExcluded = EXCLUSIONS.filter((e) => e.expectOn === hostPlatform()).map((e) => e.file);
   const llvm = (covered) => {
     const s = (c) => ({
       lines: { count: 100, covered: c, percent: c },
@@ -658,7 +675,7 @@ describe('rust-coverage-ratchet.mjs (the same check, Rust side)', () => {
         {
           files: [
             { filename: 'src-tauri/src/zoom.rs', summary: s(covered) },
-            { filename: 'src-tauri/src/linux_layout.rs', summary: s(0) },
+            ...hostExcluded.map((f) => ({ filename: `src-tauri/src/${f}`, summary: s(0) })),
           ],
         },
       ],

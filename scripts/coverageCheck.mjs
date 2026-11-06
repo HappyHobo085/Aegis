@@ -72,7 +72,14 @@ export function buildBaseline(summary, { repoRoot = '', vitestVersion = null } =
   for (const [key, rec] of Object.entries(summary)) {
     if (key === 'total' || !rec) continue;
     let rel = key;
-    if (repoRoot && rel.startsWith(repoRoot)) rel = rel.slice(repoRoot.length).replace(/^\//, '');
+    // Windows reports `D:\repo\src\x.ts`: strip either separator and key by `/`, so a
+    // baseline written on one OS is read correctly on another.
+    if (repoRoot && rel.startsWith(repoRoot)) {
+      rel = rel
+        .slice(repoRoot.length)
+        .replace(/^[\\/]/, '')
+        .replaceAll('\\', '/');
+    }
     files[rel] = {
       lines: pick(rec.lines),
       statements: pick(rec.statements),

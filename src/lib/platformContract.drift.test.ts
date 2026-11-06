@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const COMPONENTS = join(ROOT, 'src', 'components');
@@ -587,7 +587,24 @@ describe('the sync server must start unattended, and must be able to report that
   // needs it BRACKETED in `ports:`) never matched and every boot timed out. Driven for real:
   // the script runs under bash with a stub `ip` first on PATH printing what `ip -o addr show`
   // prints for a tailnet IPv6 address.
-  describe('wait-for-bind-address.sh, run for real against a stub `ip`', () => {
+  // On Windows, use Git for Windows' bash (MSYS: ships grep/sleep, runs `#!` stubs, and
+  // converts a `;`-separated Windows PATH itself). A bare `bash` there may be the WSL
+  // launcher in System32, which would not see this PATH at all.
+  const gitBash = (): string | null => {
+    for (const root of [process.env.ProgramFiles, process.env['ProgramFiles(x86)']]) {
+      const p = root && join(root, 'Git', 'bin', 'bash.exe');
+      if (p && existsSync(p)) return p;
+    }
+    return null;
+  };
+  const isWin = process.platform === 'win32';
+  const BASH = isWin ? gitBash() : 'bash';
+  const posixPath = (dir: string): string =>
+    isWin ? `${dir};${join(dirname(dirname(BASH!)), 'usr', 'bin')}` : `${dir}:/usr/bin:/bin`;
+
+  const describeBash = describe.skipIf(BASH === null);
+
+  describeBash('wait-for-bind-address.sh, run for real against a stub `ip`', () => {
     const run = (bind: string): number => {
       const dir = mkdtempSync(join(tmpdir(), 'aegis-wait-'));
       try {
@@ -599,9 +616,9 @@ describe('the sync server must start unattended, and must be able to report that
             "echo '3: tailscale0    inet6 fd7a:115c:a1e0::1/128 scope global'\n",
           { mode: 0o755 },
         );
-        const r = spawnSync('bash', [join(SYNC, 'systemd', 'wait-for-bind-address.sh')], {
+        const r = spawnSync(BASH!, [join(SYNC, 'systemd', 'wait-for-bind-address.sh')], {
           env: {
-            PATH: `${dir}:/usr/bin:/bin`,
+            PATH: posixPath(dir),
             AEGIS_SYNC_BIND: bind,
             AEGIS_SYNC_WAIT_TIMEOUT: '1',
           },

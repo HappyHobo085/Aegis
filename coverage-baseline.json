@@ -3,13 +3,13 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 5604,
-      "covered": 5015,
-      "pct": 89.48
+      "total": 5605,
+      "covered": 5016,
+      "pct": 89.49
     },
     "statements": {
-      "total": 7585,
-      "covered": 6634,
+      "total": 7586,
+      "covered": 6635,
       "pct": 87.46
     },
     "functions": {
@@ -157,9 +157,9 @@
     },
     "scripts/coverageCheck.mjs": {
       "lines": {
-        "total": 83,
-        "covered": 81,
-        "pct": 97.59
+        "total": 84,
+        "covered": 82,
+        "pct": 97.61
       },
       "statements": {
         "total": 107,
@@ -1282,9 +1282,9 @@
         "pct": 83.33
       },
       "statements": {
-        "total": 23,
-        "covered": 21,
-        "pct": 91.3
+        "total": 24,
+        "covered": 22,
+        "pct": 91.66
       },
       "functions": {
         "total": 6,

@@ -25,6 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, renderHook } from '@testing-library/react';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { useAdblock } from './useAdblock';
 import { useAutofillSave } from './useAutofillSave';
 import { useCustomFilters } from './useCustomFilters';
@@ -67,7 +68,8 @@ let queue: Queued[] = [];
 const backend = new Map<string, Set<BackendListener>>();
 
 /** The hook directory the derived guard reads to rebuild its own list. */
-const HOOKS_DIR = path.dirname(new URL(import.meta.url).pathname);
+// fileURLToPath, not `.pathname`: on Windows `.pathname` is `/D:/…`, which resolves to `D:\D:\…`.
+const HOOKS_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 /**
  * The mocked `aegis`. Event names are the logical (dotted) names from `shared/types.ts`;

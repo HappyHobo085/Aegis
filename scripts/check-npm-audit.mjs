@@ -2,7 +2,7 @@
 // scripts/check-npm-audit.mjs
 // CI gate: fail when `npm audit` reports a high/critical advisory that is not in
 // `.audit-allowlist.json`. Pure partition logic lives in ./auditCheck.mjs.
-import { execFileSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -18,10 +18,12 @@ const ALLOWLIST_PATH = join(__dirname, '..', '.audit-allowlist.json');
 
 function runAuditJson() {
   // `npm audit` exits non-zero when vulnerabilities exist; the JSON report is
-  // still written to stdout. execFileSync throws in that case — recover stdout
-  // from the thrown error.
+  // still written to stdout. execSync throws in that case — recover stdout
+  // from the thrown error. A fixed command string through the shell, because on
+  // Windows npm is `npm.cmd`, which Node will not launch without one (and an args
+  // array plus `shell: true` is deprecated, DEP0190).
   try {
-    return execFileSync('npm', ['audit', '--json'], { encoding: 'utf8' });
+    return execSync('npm audit --json', { encoding: 'utf8' });
   } catch (err) {
     if (err && typeof err.stdout === 'string' && err.stdout.length) return err.stdout;
     throw err;

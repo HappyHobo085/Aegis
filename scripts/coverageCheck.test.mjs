@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect } from 'vitest';
 import {
   METRICS,
@@ -106,6 +107,21 @@ describe('buildBaseline', () => {
       }),
       { repoRoot: '/repo' },
     );
+    expect(Object.keys(b.files)).toEqual(['src/lib/url.ts']);
+  });
+
+  it('keys a Windows report by the same repo-relative `/` path as a POSIX one', () => {
+    // v8 on Windows reports `D:\repo\src\lib\url.ts`; the committed baseline says
+    // `src/lib/url.ts`. Without normalising, every file reads as "dropped out of the report".
+    const all = {
+      lines: rec(1, 1),
+      statements: rec(1, 1),
+      functions: rec(1, 1),
+      branches: rec(1, 1),
+    };
+    const b = buildBaseline(summaryFor({ 'D:\\repo\\src\\lib\\url.ts': all }), {
+      repoRoot: 'D:\\repo',
+    });
     expect(Object.keys(b.files)).toEqual(['src/lib/url.ts']);
   });
 
@@ -376,7 +392,7 @@ describe('the exclusion gate helpers (audit 6.9)', () => {
   });
 
   it('exclusionGate reads both sides and fails on an added entry', () => {
-    const root = new URL('..', import.meta.url).pathname.replace(/\/$/, '');
+    const root = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '');
     // The base "has" a shorter list than the live config → the live extra entries fail.
     const run = () => "coverage: { exclude: ['src/main.tsx'] }";
     const lines = exclusionGate({
