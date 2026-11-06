@@ -193,21 +193,21 @@ checkout. Fix the "one third-party action" comment (~173).
 6.4 ✅ **R Android release signing silently debug** — `build.gradle.kts` ~67. Per D6. Also
 **R** Android update check can never fire (`update.rs` ~61) — needs a stable key + an
 `android` entry in `latest.json`; do after D6.
-6.5 ✅ **R Windows signing env is a no-op** — `tauri-release.yml` ~193. Either implement (pfx import
-   + `signCommand`/thumbprint) or remove the env and the "present" claim. Ask owner which.
+6.5 ✅ **R Windows signing env is a no-op** — `tauri-release.yml` ~193. Either implement (pfx import +
+`signCommand`/thumbprint) or remove the env and the "present" claim. Ask owner which.
 6.6 ✅ **✔ Gradle wrapper has no `distributionSha256Sum`** — add the official checksum for 8.14.3
-   (fetch from gradle.org's published `.sha256`; do not guess).
+(fetch from gradle.org's published `.sha256`; do not guess).
 6.7 ✅ **R `repack-appimage-gstreamer.sh` runs unchecked download** — pin a versioned appimagetool
-   URL + `sha256sum -c`.
+URL + `sha256sum -c`.
 6.8 ✅ **✔(partial) Cross-compile exe may be a dev build** — `scripts/build-windows-portable-cross.sh`
-   ~38 uses plain `cargo build` with no `custom-protocol` feature. FIRST verify (build, then check
-   whether the exe loads `devUrl`); if confirmed, add `--features tauri/custom-protocol` (or a
-   crate feature) and document.
+~38 uses plain `cargo build` with no `custom-protocol` feature. FIRST verify (build, then check
+whether the exe loads `devUrl`); if confirmed, add `--features tauri/custom-protocol` (or a
+crate feature) and document.
 6.9 ✅ **R Smaller**: `-- --locked` on tauri-action args; pin `cargo install … --version`; coverage
-   ratchet: fail when a file is newly added to `coverage.exclude`/Rust `EXCLUSIONS` in the same
-   commit (`coverageCheck.mjs` ~127-161); Rust exclusions match full path not basename
-   (`rustCoverageCheck.mjs` ~196); `build-windows-portable.ps1` honour `CARGO_TARGET_DIR`;
-   attest/Android jobs and a red desktop leg (document or `if: !cancelled()`).
+ratchet: fail when a file is newly added to `coverage.exclude`/Rust `EXCLUSIONS` in the same
+commit (`coverageCheck.mjs` ~127-161); Rust exclusions match full path not basename
+(`rustCoverageCheck.mjs` ~196); `build-windows-portable.ps1` honour `CARGO_TARGET_DIR`;
+attest/Android jobs and a red desktop leg (document or `if: !cancelled()`).
 
 ## Phase 7 — Remaining correctness (lower priority)
 
