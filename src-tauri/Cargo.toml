@@ -47,7 +47,18 @@ log = "0.4"
 tauri = { version = "2.11.2", features = ["unstable"] }
 tauri-plugin-log = "2"
 adblock = { version = "0.12.5", features = ["content-blocking"] }
-tauri-plugin-updater = "2.10.1"
+# default-features = false drops the updater's `zip` feature (zip/tar/flate2). That feature
+# unpacks the Tauri-v1 update formats
+# (`*.nsis.zip` on Windows, `*.AppImage.tar.gz` on Linux); Aegis publishes the v2 format
+# (`createUpdaterArtifacts: true` in tauri.updater.conf.json -> a signed `setup.exe` and a
+# raw `.AppImage`), which the updater installs without it. macOS's `.app.tar.gz` path
+# depends on tar/flate2 unconditionally, so it is unaffected. Dropping it removes zip 4.x
+# and RUSTSEC-2026-0367/0368/0369/0429 from the tree; the only in-range fix is updater
+# 2.14.1 (zip ^9), which needs tauri ^2.12 and Rust 1.90 — a framework + MSRV bump.
+# `rustls-tls` MUST stay: reqwest below gets its TLS from it. `system-proxy` is deliberately
+# NOT enabled: 2.10.1 has no such feature and never turned on reqwest's OS-proxy lookup, and
+# via feature unification it would change the filter-list fetches too.
+tauri-plugin-updater = { version = "2.10.1", default-features = false, features = ["rustls-tls"] }
 # Sync data-layer (F2a): stable per-record ids for the syncable stores. Already resolved
 # transitively (Cargo.lock unchanged but for adding `uuid` to this package's dep list).
 uuid = { version = "1", features = ["v4", "serde"] }

@@ -1983,7 +1983,11 @@ path through the same boundary.
 ## Key dependencies (`Cargo.toml`)
 
 `tauri` (feature `unstable` for multi-webview), `adblock` (feature
-`content-blocking`), `tauri-plugin-updater`,
+`content-blocking`), `tauri-plugin-updater` (`default-features = false`, `rustls-tls` only —
+its `zip` feature unpacks the Tauri-v1 `*.nsis.zip` / `*.AppImage.tar.gz` update formats this
+app does not publish, and its `zip` 4.x carried four RUSTSEC advisories; the Cargo.toml
+comment has the full reasoning. Re-enable it only if `createUpdaterArtifacts` ever goes back
+to `"v1Compatible"`),
 There is deliberately **no `tauri-plugin-dialog`**. It was registered with no `dialog:*` grant, no JS package and no caller, so nothing could reach it — and the native save dialog it would have provided is separately rejected in `data.rs` for rendering in the OS light theme against a dark UI (a backup is written to a fixed location, and `DataTab` imports through the webview's own `<input type="file">`). `tests::no_dialog_plugin_is_registered_or_declared` fails if the dependency or the registration comes back.
 `tauri-plugin-log`, `reqwest` (blocking), `rustls`. Platform-gated blocks:
 Linux → `gtk`/`webkit2gtk`/`glib`/`gio`; Android → `jni`; Windows →
