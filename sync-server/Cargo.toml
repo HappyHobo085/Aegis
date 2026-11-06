@@ -9,10 +9,10 @@ edition = "2021"
 # simply wrong about the crate it claimed to mirror, and no job pinned either value.
 # 1.80.0 was then wrong too, and so was the 1.85.0 that replaced it: the msrv job had
 # never actually compiled the declared floor (see src-tauri/Cargo.toml for why).
-# 1.88.0 is the shared value, which is ABOVE this crate's own dependency floor of
-# 1.85.0 — deliberately, because the job enforces equality and the two crates ship and
+# 1.90.0 is the shared value (raised from 1.88.0 by src-tauri's Tauri 2.12 upgrade),
+# which is ABOVE this crate's own dependency floor of 1.85.0 — deliberately, because the job enforces equality and the two crates ship and
 # are gated together. A lower number here would just be a number the job rejects.
-rust-version = "1.88.0"
+rust-version = "1.90.0"
 description = "Reference self-hosted sync server for Aegis — stores opaque ciphertext only."
 license = "AGPL-3.0-only"
 publish = false

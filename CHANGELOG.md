@@ -9,6 +9,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Security
 
+- **Dependency security fixes.** The TLS stack (`rustls`, `rustls-webpki`, root certificates)
+  is patched, and the auto-updater no longer compiles an unused zip extractor that carried
+  four advisories. Build tooling (Vite, jsdom, ESLint helpers) is patched too.
 - **Downloaded file names can no longer disguise their type** with invisible Unicode
   direction-override characters (a file that displays as `invoice.pdf` but is an `.exe`).
 - **Sync server: refused registrations no longer use up the server's anti-replay memory,** so
@@ -162,6 +165,9 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Tauri 2.12.** The app framework moves from 2.11 to 2.12 (wry 0.57, tao 0.37), with the
+  updater, log plugin and `@tauri-apps/api` to match. Building from source now needs
+  **Rust 1.90** or newer (was 1.88).
 - **Hook dependency lint is enforced** (`react-hooks/exhaustive-deps` as an error). The 14
   existing sites were fixed without behaviour change; one deliberate exception is documented
   inline.

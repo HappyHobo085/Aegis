@@ -43,7 +43,7 @@
     "check:android-version": "node scripts/check-android-versioncode.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.1",
+    "@tauri-apps/api": "^2.12.4",
     "lucide-react": "^1.21.0"
   },
   "devDependencies": {

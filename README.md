@@ -125,7 +125,7 @@ behaviour, including known gotchas. Read the one for the area you are changing.
 
 ```bash
 node -v          # Node 22.x (CI uses 22)
-rustc --version  # Rust toolchain pinned by rust-toolchain.toml (MSRV 1.88)
+rustc --version  # Rust toolchain pinned by rust-toolchain.toml (MSRV 1.90)
 npm install      # JS deps (Rust deps resolve on first build)
 ```
 

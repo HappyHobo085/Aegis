@@ -18,13 +18,15 @@ edition = "2021"
 # and `cargo metadata` puts its max at 1.88.0 — darling 0.23, plist 1.9, time 0.3.47,
 # time-core, time-macros and serde_with(-macros) all need 1.88, and the icu_* 2.2 /
 # idna_adapter 1.2.2 chain needs 1.86. Pinning those older instead is not worth it.
+# Raised to 1.90.0 with the Tauri 2.12 upgrade: tauri 2.12.5, tauri-build 2.7.4 and
+# muda 0.20 all declare rust-version 1.90 (`cargo +1.88.0 check` refuses them by name).
 # Re-derive with: cargo metadata --format-version 1 | jq '[.packages[].rust_version
 # |select(startswith("1."))] | max_by(split(".")|map(tonumber))'  — if a bump pushes
 # that max up, this number and the README's "MSRV" line are what must move.
 # If the msrv job goes red for any other reason, this number is the suspect, not the job.
 # Note: the macOS-only objc2 stack has a higher floor than the Linux/Windows one, so
 # the msrv job runs on Linux only. See rust-toolchain.toml for the CI toolchain pin.
-rust-version = "1.88.0"
+rust-version = "1.90.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -33,7 +35,7 @@ name = "app_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "2.6.2", features = [] }
+tauri-build = { version = "2.7.4", features = [] }
 
 [dependencies]
 serde_json = "1.0"
@@ -44,21 +46,23 @@ log = "0.4"
 # is how the browser shell composes a chrome webview + a content webview. The
 # feature is API-unstable (not semver-frozen) but production-used; acceptable for
 # a personal browser. See tauri PR #8280.
-tauri = { version = "2.11.2", features = ["unstable"] }
-tauri-plugin-log = "2"
+# 2.12 is a floor, not a preference: the Windows pins below (webview2-com 0.39 / windows
+# 0.62) must equal what tauri's PlatformWebview hands us, and those are 2.12's versions.
+tauri = { version = "2.12.5", features = ["unstable"] }
+tauri-plugin-log = "2.10.1"
 adblock = { version = "0.12.5", features = ["content-blocking"] }
 # default-features = false drops the updater's `zip` feature (zip/tar/flate2). That feature
 # unpacks the Tauri-v1 update formats
 # (`*.nsis.zip` on Windows, `*.AppImage.tar.gz` on Linux); Aegis publishes the v2 format
 # (`createUpdaterArtifacts: true` in tauri.updater.conf.json -> a signed `setup.exe` and a
 # raw `.AppImage`), which the updater installs without it. macOS's `.app.tar.gz` path
-# depends on tar/flate2 unconditionally, so it is unaffected. Dropping it removes zip 4.x
-# and RUSTSEC-2026-0367/0368/0369/0429 from the tree; the only in-range fix is updater
-# 2.14.1 (zip ^9), which needs tauri ^2.12 and Rust 1.90 — a framework + MSRV bump.
+# depends on tar/flate2 unconditionally, so it is unaffected. It was first dropped to shed
+# zip 4.x (RUSTSEC-2026-0367/0368/0369/0429); 2.14.1 moved to zip ^9, but compiling an
+# archive extractor for a format we never ship is still pure attack surface, so it stays off.
 # `rustls-tls` MUST stay: reqwest below gets its TLS from it. `system-proxy` is deliberately
-# NOT enabled: 2.10.1 has no such feature and never turned on reqwest's OS-proxy lookup, and
-# via feature unification it would change the filter-list fetches too.
-tauri-plugin-updater = { version = "2.10.1", default-features = false, features = ["rustls-tls"] }
+# NOT enabled: until 2.12 the updater never turned on reqwest's OS-proxy lookup, and via
+# feature unification enabling it would change the filter-list fetches too.
+tauri-plugin-updater = { version = "2.14.1", default-features = false, features = ["rustls-tls"] }
 # Sync data-layer (F2a): stable per-record ids for the syncable stores. Already resolved
 # transitively (Cargo.lock unchanged but for adding `uuid` to this package's dep list).
 uuid = { version = "1", features = ["v4", "serde"] }
@@ -112,8 +116,8 @@ jni = "0.21"
 # wry only intercepts custom-protocol requests. webview2-com pinned to match tauri's
 # PlatformWebview types; windows for PWSTR/HSTRING/EventRegistrationToken.
 [target.'cfg(target_os = "windows")'.dependencies]
-webview2-com = "=0.38.2"
-windows = { version = "0.61", features = ["Win32_Foundation", "Win32_System_WinRT"] }
+webview2-com = "=0.39.1"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_WinRT"] }
 
 # macOS: observe the WKWebView's `URL` via KVO (nav_url_mac.rs) so the address bar
 # tracks same-document History-API/hash navigations that wry's WKNavigationDelegate
@@ -139,7 +143,7 @@ keyring = { version = "3", features = ["linux-native-sync-persistent", "windows-
 # Enables tauri::test::mock_app / mock_builder / mock_context (the crate's `test`
 # feature) so AppHandle-backed dispatchers can be unit-tested. Dev-only: release
 # builds never pull the test runtime. Version must match the normal `tauri` dep.
-tauri = { version = "2.11.2", features = ["test"] }
+tauri = { version = "2.12.5", features = ["test"] }
 
 # Release binary: whole-program optimization (lto) + single codegen unit + symbol
 # stripping. Cuts size and improves startup vs. the cargo defaults (no lto,

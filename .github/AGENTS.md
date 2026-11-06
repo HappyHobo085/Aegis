@@ -143,7 +143,9 @@ GitHub Actions workflows and Dependabot config for Aegis.
     works: 1.80.0 when the job was written, then 1.85.0 the first time it really
     compiled (run 36282117889: `rustc 1.85.0 is not supported by the following
 packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
-    `icu*\*`2.2 chain needs 1.86). The floor is **1.88.0** and is owned by the
+    `icu*\*`2.2 chain needs 1.86). The floor is now **1.90.0** (moved by the Tauri 2.12
+    upgrade: tauri, tauri-build, the tauri-plugin family and muda 0.20 all declare 1.90 —
+    a deliberate move, not a red job silenced), and it is owned by the
     dependency graph, not by this repo's own code. Re-derive it with
     `cargo metadata --format-version 1 --locked | jq '[.packages[].rust_version] | max'` after any dependency bump, and move`rust-version`in **both** manifests (the job
     fails on drift) plus the README's MSRV line. If`msrv` goes red, fix the manifests

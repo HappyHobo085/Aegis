@@ -255,7 +255,8 @@ dotted event name.
   test source set, so the Kotlin half is a source-text pin).
 
   discarded it. **wry 0.55.1, tauri 2.11.3 and tauri-runtime-wry 2.11.3 expose no `stop()`
-  and no `is_loading()` at all** (grepped all three), so the stop is
+  and no `is_loading()` at all** (grepped all three; re-grepped and still absent in wry
+  0.57.1 / tauri 2.12.5 / tauri-runtime-wry 2.12.3), so the stop is
   `navigate(about:blank)`, which cancels an in-flight load on all three engines and is
   already the app's blank-page target. `reload_or_stop<R: Runtime>` is generic over the
   runtime so a test can reach the branch with no content webview, and the **state half runs
@@ -1981,6 +1982,15 @@ path through the same boundary.
 > claim that any gate catches it today. Each is marked with what covers it now.
 
 ## Key dependencies (`Cargo.toml`)
+
+**Tauri 2.12.5** (wry 0.57.1, tao 0.37.2; upgraded from 2.11.3 on 2026-11-06, which raised
+the MSRV to 1.90.0 and moved the Windows pins to `webview2-com =0.39.1` / `windows 0.62` —
+those two MUST equal what tauri's `PlatformWebview` hands `with_webview`, or every `*_win.rs`
+file fails to type-check; the `*_win.rs` code itself needed no change). This file cites
+`tauri-2.11.3/…` source lines in several places; the claims they support were re-checked
+against 2.12.5 and still hold — capability `windows` vs `webviews` matching in
+`ipc/authority.rs` (logic unchanged), `core:event` has no scope support, no `stop()` /
+`is_loading()`, no `Webview::title()` — but the line numbers are 2.11.3's.
 
 `tauri` (feature `unstable` for multi-webview), `adblock` (feature
 `content-blocking`), `tauri-plugin-updater` (`default-features = false`, `rustls-tls` only —

@@ -50,8 +50,8 @@ GitHub Actions workflows in `.github/workflows/`:
     **both** manifests. It is the one job that deliberately ignores the repo-root
     `rust-toolchain.toml`, because a directory override outranks a rustup default —
     without the `+` form this job would compile whatever the default is and never test
-    the floor it exists to test. Six crate families sit at exactly the declared
-    1.88.0, so the job has **zero headroom**: one dependency bump makes it red, and
+    the floor it exists to test. The Tauri family (tauri, tauri-build, the plugins) and
+    muda sit at exactly the declared 1.90.0, so the job has **zero headroom**: one dependency bump makes it red, and
     that is the gate working, not a reason to weaken it.
 
 - **`tauri-build-check.yml`** (Tauri Build Check) — proves the app compiles, links,
