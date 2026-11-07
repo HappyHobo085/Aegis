@@ -82,7 +82,7 @@ parking_lot = "0.12"
 # the infallible SigningKey::from_bytes, so no rand_core is needed.
 chacha20poly1305 = "0.10"
 hkdf = "0.12"
-sha2 = "0.10"
+sha2 = "0.11"
 ed25519-dalek = { version = "2", features = ["zeroize"] }
 rand = "0.8"
 bip39 = "2"
