@@ -50,7 +50,7 @@ log = "0.4"
 # 0.62) must equal what tauri's PlatformWebview hands us, and those are 2.12's versions.
 tauri = { version = "2.12.5", features = ["unstable"] }
 tauri-plugin-log = "2.10.1"
-adblock = { version = "0.12.5", features = ["content-blocking"] }
+adblock = { version = "0.13.5", features = ["content-blocking"] }
 # default-features = false drops the updater's `zip` feature (zip/tar/flate2). That feature
 # unpacks the Tauri-v1 update formats
 # (`*.nsis.zip` on Windows, `*.AppImage.tar.gz` on Linux); Aegis publishes the v2 format
