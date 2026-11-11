@@ -19,6 +19,13 @@ use crate::wire::{hlc_key, WireRecord, MAX_HLC_NODE_LEN};
 /// only ever compared against another `node`, and byte order on UTF-8 is `str` order.
 ///
 /// Missing or mistyped fields read as `hlc_key` reads them (`0`, `0`, `""`).
+///
+/// **Compare encoded values WHOLE.** The encoding is not prefix-free: the `node` bytes run to the
+/// end with no length or terminator, so one value is a byte prefix of another whenever the first
+/// two parts match and one `node` is a prefix of the other (`"a"` and `"ab"`). That is still the
+/// correct order (`"a" < "ab"`), but only for a comparison of the complete byte strings. Do not
+/// append anything after it inside one key and expect the order to survive, and do not use a
+/// prefix scan over it as an equality test on `hlc`.
 pub fn order_bytes(hlc: &Value) -> Vec<u8> {
     let (wall, counter, node) = hlc_key(hlc);
     let mut out = Vec::with_capacity(16 + node.len());

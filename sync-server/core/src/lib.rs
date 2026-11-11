@@ -13,4 +13,7 @@ pub mod devices;
 pub mod env;
 pub mod order;
 pub mod page;
+// Contract test vectors: test-only, behind the non-default `vectors` feature.
+#[cfg(feature = "vectors")]
+pub mod vector;
 pub mod wire;

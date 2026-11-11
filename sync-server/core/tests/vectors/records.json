@@ -1,0 +1,314 @@
+[
+  {
+    "name": "records_push_then_get",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [
+          { "uuid": "u2", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2" },
+          { "uuid": "u1", "hlc": { "wall_ms": 1001, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" }
+        ]
+      }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body": {
+            "records": [
+              { "uuid": "u1", "hlc": { "wall_ms": 1001, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" },
+              { "uuid": "u2", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2" }
+            ],
+            "next": null
+          }
+        }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=other",
+          "headers": [["authorization", "{{auth:A:D1:03}}"]]
+        },
+        "expect": { "status": 200, "body": { "records": [], "next": null } }
+      }
+    ]
+  },
+  {
+    "name": "records_stale_push_loses",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]],
+      "records": [["{{acct:A}}", "bm", { "uuid": "u1", "hlc": { "wall_ms": 2000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "new" }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [{ "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 5, "node": "n9" }, "deleted": false, "nonce": "a1", "ct": "old" }]
+      }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body": {
+            "records": [{ "uuid": "u1", "hlc": { "wall_ms": 2000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "new" }],
+            "next": null
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "records_tombstone_wins_by_hlc",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]],
+      "records": [
+        ["{{acct:A}}", "bm", { "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" }],
+        ["{{acct:A}}", "bm", { "uuid": "u2", "hlc": { "wall_ms": 3000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2" }]
+      ]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [
+          { "uuid": "u1", "hlc": { "wall_ms": 2000, "counter": 0, "node": "n2" }, "deleted": true, "nonce": "", "ct": "" },
+          { "uuid": "u2", "hlc": { "wall_ms": 2000, "counter": 0, "node": "n3" }, "deleted": true, "nonce": "", "ct": "" }
+        ]
+      }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body": {
+            "records": [
+              { "uuid": "u1", "hlc": { "wall_ms": 2000, "counter": 0, "node": "n2" }, "deleted": true, "nonce": "", "ct": "" },
+              { "uuid": "u2", "hlc": { "wall_ms": 3000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2" }
+            ],
+            "next": null
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "records_poisoned_stamp_dropped",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [
+          { "uuid": "future", "hlc": { "wall_ms": 1800000060001, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" },
+          { "uuid": "wide", "hlc": { "wall_ms": 1000, "counter": 4294967296, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2" },
+          { "uuid": "edge", "hlc": { "wall_ms": 1800000060000, "counter": 4294967295, "node": "n1" }, "deleted": false, "nonce": "a3", "ct": "c3" }
+        ]
+      }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body": {
+            "records": [{ "uuid": "edge", "hlc": { "wall_ms": 1800000060000, "counter": 4294967295, "node": "n1" }, "deleted": false, "nonce": "a3", "ct": "c3" }],
+            "next": null
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "records_client_ord_ignored",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [
+          { "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1", "ord": { "wall_ms": 9000000000000, "counter": 0, "node": "zz" } }
+        ]
+      }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body": {
+            "records": [{ "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" }],
+            "next": null
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "records_paging_cursor",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]],
+      "records": [
+        ["{{acct:A}}", "bm", { "uuid": "u3", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a3", "ct": "c3" }],
+        ["{{acct:A}}", "bm", { "uuid": "u1", "hlc": { "wall_ms": 1001, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" }],
+        ["{{acct:A}}", "bm", { "uuid": "u2", "hlc": { "wall_ms": 1002, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2" }],
+        ["{{acct:B}}", "bm", { "uuid": "u0", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "b0", "ct": "other account" }]
+      ]
+    },
+    "request": {
+      "method": "GET",
+      "path": "/v1/records?ns=bm&limit=2",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]]
+    },
+    "expect": {
+      "status": 200,
+      "body": {
+        "records": [
+          { "uuid": "u1", "hlc": { "wall_ms": 1001, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" },
+          { "uuid": "u2", "hlc": { "wall_ms": 1002, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2" }
+        ],
+        "next": "u2"
+      }
+    },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm&limit=2&cursor=u2",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body": {
+            "records": [{ "uuid": "u3", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a3", "ct": "c3" }],
+            "next": null
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "records_cross_uuid_tie_counter_bump",
+    "native_only": "The native server breaks a cross-uuid HLC tie by reserving the next free counter in `ord` (canon::canonicalize_body step 3), which needs the whole stored namespace at once. A replica cannot see that, so the mesh uses order::tie_ord instead; see records_cross_uuid_tie_tie_ord.",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [
+          { "uuid": "u2", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2" },
+          { "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" }
+        ]
+      }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body": {
+            "records": [
+              { "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" },
+              { "uuid": "u2", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2", "ord": { "wall_ms": 1000, "counter": 1, "node": "n1" } }
+            ],
+            "next": null
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "records_cross_uuid_tie_tie_ord",
+    "mesh_only": "The mesh breaks a cross-uuid HLC tie with order::tie_ord (a function of hlc and uuid alone, so every replica agrees without coordinating), served where the native server serves its counter-bump `ord`: on each tied record but the lowest uuid. Native counterpart: records_cross_uuid_tie_counter_bump.",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [
+          { "uuid": "u2", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2" },
+          { "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" }
+        ]
+      }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body": {
+            "records": [
+              { "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a1", "ct": "c1" },
+              { "uuid": "u2", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "a2", "ct": "c2", "ord": { "wall_ms": 1000, "counter": 0, "node": "n1~08c47d07" } }
+            ],
+            "next": null
+          }
+        }
+      }
+    ]
+  }
+]

@@ -391,9 +391,25 @@ jobs:
       - name: cargo clippy (-D warnings)
         if: ${{ !cancelled() }}
         run: cargo clippy --locked --manifest-path sync-server/Cargo.toml --workspace --all-targets -- -D warnings
-      - name: cargo test
+      # Both members. This includes the contract vectors (`sync-server/core/tests/vectors/*.json`):
+      # the core's runner (`core/tests/vectors.rs`, a pure model built from the core) and the
+      # native harness (`src/vectors_native.rs`, the real axum router). Their test-only `vectors`
+      # feature is switched on by dev-dependencies, so no `--features` flag is needed here.
+      - name: cargo test (incl. contract vectors)
         if: ${{ !cancelled() }}
         run: cargo test --locked --manifest-path sync-server/Cargo.toml --workspace
+      # The core is also built as a WASM service (Meshnode vendors it), so it must keep compiling
+      # for wasm32-wasip2 WITHOUT the test-only features, and its docs must stay link-clean.
+      - name: aegis-sync-core for wasm32-wasip2
+        if: ${{ !cancelled() }}
+        run: |
+          rustup target add wasm32-wasip2
+          cargo check --locked --manifest-path sync-server/Cargo.toml -p aegis-sync-core --target wasm32-wasip2
+      - name: aegis-sync-core docs (-D warnings)
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --manifest-path sync-server/Cargo.toml -p aegis-sync-core --no-deps --all-features
       - name: cargo audit
         if: ${{ !cancelled() }}
         # No `.cargo/audit.toml` in this crate yet, so no accepted advisories; the

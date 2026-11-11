@@ -45,18 +45,35 @@ bookmarks, saved items, or the allowlist.
     truncated to keep the result within `MAX_HLC_NODE_LEN`. It is a function of `(hlc, uuid)`
     alone, so every replica agrees without coordinating, and it is shaped to pass the client's
     `ord_is_adoptable`. **The native server does NOT use it** — it keeps its own counter-bump rule
-    in `canonicalize_body`, which needs to see the whole stored namespace at once.
+    in `canonicalize_body`, which needs to see the whole stored namespace at once. `order_bytes`
+    values must be compared WHOLE: the encoding is not prefix-free (`node` runs to the end).
   - `devices.rs` (new, for the mesh service) — `DeviceFacts`, `AccountFacts` (grow-only
-    `devices`, `pending`, `approved`, `revoked`), `owner` (the earliest-registered member — not
-    revoked, not still pending — device id as the tie-break: "first device is owner", and D5's
-    hand-off when it signs out), `is_pending`, `may_remove` (`DeviceRefusal::NotOwner` = 403,
-    `LastDevice` = 409). **The native server does NOT use it**: it keeps its stored owner map.
+    `devices`, `pending`, `approved`, `revoked`; both serde, which is the vectors' `given`
+    shape), `is_member` (registered, not revoked, not pending), `is_pending`, `owner` and
+    `may_remove`. **`owner` ranks the members: never had to ask to join first, then earliest
+    `registered_ms`, then lowest id.** That is "first device is owner", and D5's hand-off when it
+    signs out. The never-pending rank comes first because `registered_ms` is a node's wall clock,
+    and clock skew between mesh nodes could give an approved joiner an earlier one than the
+    account's creator. `may_remove` refuses an actor that is not a member
+    (`DeviceRefusal::NotOwner` = 403, as the native `require_registered`), then a non-owner
+    removing someone else (403), then the last member (`LastDevice` = 409). **The native server
+    does NOT use it**: it keeps its stored owner map.
   - `env.rs` — the traits `Clock { fn now_ms(&self) -> i64 }` and `Entropy { fn fill(&mut self,
     buf: &mut [u8]) }`, and nothing else. Anything in the core that needs the time takes the
     instant (or a `Clock`) from its caller; the host supplies the implementation.
+  - `vector.rs` — **test-only, behind the non-default `vectors` feature**: the contract-vector
+    types (`Vector`, `Given`, `Req`, `Expect`, `Step`), `load_all(dir)` (reads, expands the
+    `{{…}}` templates with the fixed test keys, validates), `check` / `subset` (the shared
+    response comparison), `NOW_MS` and the key helpers. Only test code enables the feature: the
+    core's own `[dev-dependencies]` self-entry (for `tests/vectors.rs`) and the server's
+    `[dev-dependencies]`. `cargo tree -e features -i aegis-sync-core -e normal` must keep showing
+    only `default`, and the wasm32-wasip2 check runs without it.
 - **`src/main.rs`** is the native host: axum routes, `Store` + snapshot, the stored owner map, the
   replay-nonce set, the admission guard, `SystemClock` (the OS clock; `now_ms()` delegates to it)
-  and `OsEntropy` (`getrandom`). Its `canonicalize_body(records, ns, account, store)` and
+  and `OsEntropy` (`getrandom`). **`AppState.clock`** (`Arc<dyn Clock + Send + Sync>`, `SystemClock`
+  by default, `with_clock` under `cfg(test)`) is the time every handler reads: token lifetimes in
+  `verify_auth`, the future-stamp bound on a push, and `registeredMs`/`lastSeenMs`. Tombstone
+  retention still reads `now_ms()`, since it is store maintenance and not a request rule. Its `canonicalize_body(records, ns, account, store)` and
   `page_records(store, …)` are thin adapters from the `Store` onto the core functions. `verify_auth` is
   now parse header → `check_token` → `admit` → record nonce. **The nonce is still recorded only
   after `admit`** (see Hardening) — that ordering is the host's, so it stays here, not in the core.
@@ -362,17 +379,38 @@ Measured: down 23 h after a reboot while `docker ps` said `healthy`.
 
 `cargo test --workspace` (run from this folder, or `cargo test --workspace --manifest-path
 sync-server/Cargo.toml` from the repo root; without `--workspace` only the server's tests run).
-The server's tests (in `src/main.rs`; the core moves changed only their imports and the `&mut OsEntropy` argument of three `unique_uuid` calls) cover HLC ordering, auth canonical shape, account-root registration,
-owner approval / ownership transfer / registration secret / global caps, the request bounds,
-and the snapshot save/load round-trip (82 tests); the core's own unit tests (16) pin
-`canonical`, every `check_token` refusal at its exact boundary, `hlc_well_formed`, `wire_bytes`
-and the HLC keys against a fixed clock; since the canon/paging move (36 in all) they also pin
-`order_bytes` against `hlc_key` (a deterministic property test, negative walls included), the
-`tie_ord` rule (keeps wall+counter, deterministic, distinct per uuid, node within 64 bytes,
-well-formed for the client), the device-facts rules, `page_sorted`'s cursor/next/byte budget, and
-`unique_uuid`/`canonicalize_body` under injected entropy. The core must also pass `cargo check -p
-aegis-sync-core --target wasm32-wasip2` and `cargo doc -p aegis-sync-core --no-deps` cleanly. On
-Windows,
-`save_snapshot_flushes_the_directory_after_the_rename` fails (a directory cannot be opened as a
-`File` there, which `save_snapshot` deliberately tolerates); CI is Linux. Handlers are driven by calling them directly
-(no `tower` in the tree); test account ids must be lower-case hex (`registered()` hex-encodes).
+
+- **Server** (`src/main.rs`, 83 tests): the original 82 cover HLC ordering, auth canonical shape,
+  account-root registration, owner approval / ownership transfer / registration secret / global
+  caps, the request bounds, and the snapshot save/load round-trip. The core moves changed only
+  their imports and the `&mut OsEntropy` argument of three `unique_uuid` calls. The 83rd is the
+  contract-vector harness (`src/vectors_native.rs`, below).
+- **Core unit tests** (39): `canonical`, every `check_token` refusal at its exact boundary,
+  `hlc_well_formed`, `wire_bytes` and the HLC keys against a fixed clock; `order_bytes` against
+  `hlc_key` (a deterministic property test, negative walls included); the `tie_ord` rule (keeps
+  wall+counter, deterministic, distinct per uuid, node within 64 bytes, well-formed for the
+  client); the device-facts rules (owner ranking incl. never-pending-first, `is_member`,
+  `may_remove` refusing non-members); `page_sorted`'s cursor/next/byte budget; and
+  `unique_uuid`/`canonicalize_body` under injected entropy.
+- **Contract vectors** (`core/tests/vectors/*.json`; format, fixed keys and fixed clock in that
+  directory's `README.md`). They run twice here, and Meshnode runs the identical files against its
+  WASM service:
+  - `core/tests/vectors.rs` (4 tests): the set is complete, host marks are at most two, the
+    templates sign correctly, `subset` semantics, and every mesh-runnable vector through a pure
+    in-memory model built only from core functions (facts, computed owner, `tie_ord`).
+  - `src/vectors_native.rs`: every native-runnable vector through the REAL router,
+    `app(state).oneshot(request)` (`tower` is a dev-dependency; it was already in `Cargo.lock`
+    via axum). The state is seeded from the vector's facts (stored owner = `devices::owner`) and
+    runs on a fixed `AppState.clock`.
+  - A vector may be `native_only` / `mesh_only` with a reason. Today only the cross-uuid tie pair
+    is marked (native counter bump vs mesh `tie_ord`). Prefer `body_subset` over a mark when the
+    hosts differ only in body detail. **A behaviour change to the contract means changing a
+    vector**, and Meshnode then has to re-vendor the core.
+- The core must also pass `cargo check -p aegis-sync-core --target wasm32-wasip2` (without the
+  test-only features) and `RUSTDOCFLAGS="-D warnings" cargo doc -p aegis-sync-core --no-deps`
+  cleanly. CI runs both in the `sync-server` job.
+- On Windows, `save_snapshot_flushes_the_directory_after_the_rename` fails (a directory cannot be
+  opened as a `File` there, which `save_snapshot` deliberately tolerates); CI is Linux.
+- The `main.rs` unit tests drive handlers by calling them directly with constructed extractors;
+  only the vector harness goes through the router. Test account ids must be lower-case hex
+  (`registered()` hex-encodes).

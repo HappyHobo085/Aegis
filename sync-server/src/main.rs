@@ -98,7 +98,7 @@ fn verify_auth(
     if token.account_id != account {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let now = SystemClock.now_ms();
+    let now = state.clock.now_ms();
     check_token(&token, now, sig_hex).map_err(|_| StatusCode::UNAUTHORIZED)?;
     admit(&token.account_id, &token.device_id)?;
     // Replay defense: a (device, nonce) pair is single-use. Recorded only AFTER the signature
@@ -754,6 +754,11 @@ struct AppState {
     /// (`changed == false`), which used to skip the persist and answer `ok` for data that never
     /// reached disk. `persist_if` persists whenever this is set, whatever the request changed.
     dirty: Arc<std::sync::atomic::AtomicBool>,
+    /// The time every handler reads: auth lifetimes, the future-stamp bound on a push, and
+    /// `registeredMs`/`lastSeenMs`. [`SystemClock`] in production; a field so the contract-vector
+    /// harness can run the real router at the vectors' fixed instant. (Tombstone retention still
+    /// reads [`now_ms`] directly: it is store maintenance, not a request rule.)
+    clock: Arc<dyn Clock + Send + Sync>,
 }
 
 /// Server-wide resource caps, on top of the per-account / per-request quotas.
@@ -789,7 +794,15 @@ impl AppState {
             registration_secret: None,
             caps: Caps::default(),
             dirty: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            clock: Arc::new(SystemClock),
         }
+    }
+
+    /// Run on `clock` instead of the OS clock (the contract-vector harness's fixed instant).
+    #[cfg(test)]
+    fn with_clock(mut self, clock: Arc<dyn Clock + Send + Sync>) -> AppState {
+        self.clock = clock;
+        self
     }
 
     /// Require `secret` to create a new account. An empty string is treated as unset.
@@ -934,10 +947,12 @@ struct RecordsQuery {
 /// Serve one page of `(account, ns)` as `GET /v1/records` does, in uuid order, resuming after
 /// `cursor`.
 ///
-/// Split out of the handler so the pagination is unit-testable: the route itself cannot be
-/// driven from a test (there is no `tower` in the dependency tree, so no
-/// `ServiceExt::oneshot`), which is the same seam-extraction reason `admit` exists for the
-/// request-budget middleware.
+/// Split out of the handler so the pagination is unit-testable without building requests. (It was
+/// split out when no test could drive the route at all: `tower` was not a dependency, so there
+/// was no `ServiceExt::oneshot`. It now is, as a dev-dependency, and the contract vectors in
+/// `vectors_native` drive the real router; the seam stays because these tests need a store far
+/// bigger than a vector should carry.) `admit` was extracted from the request-budget middleware
+/// for the same original reason.
 ///
 /// Ordering is by uuid, which is what makes a cursor meaningful. The records live in a
 /// `HashMap`, so the previous version served them in a **non-deterministic order** — a
@@ -1069,7 +1084,7 @@ async fn post_records(
         // records always pass — they don't add a key). Counts the new keys this request adds.
         let current = g.records.keys().filter(|(a, _, _)| a == &account).count();
         let incoming = canonicalize_body(
-            reject_client_poisoning_stamps(body.records, now_ms()),
+            reject_client_poisoning_stamps(body.records, state.clock.now_ms()),
             &body.ns,
             &account,
             &g,
@@ -1247,7 +1262,7 @@ async fn post_device(
         if let Some(code) = registration_refusal(&g, &state.caps, &account, &device, secret_ok) {
             return Err(code);
         }
-        let now = now_ms();
+        let now = state.clock.now_ms();
         let account_exists = g.devices.get(&account).is_some_and(|set| !set.is_empty());
         let owner = g.owner.get(&account).cloned();
         if let Some(existing) = g
@@ -1443,7 +1458,7 @@ async fn approve_device(
         if g.pending.get(&account).is_some_and(HashMap::is_empty) {
             g.pending.remove(&account);
         }
-        admitted.last_seen_ms = now_ms();
+        admitted.last_seen_ms = state.clock.now_ms();
         g.devices
             .entry(account)
             .or_default()
@@ -1581,6 +1596,9 @@ async fn main() {
     );
     axum::serve(listener, app(state)).await.expect("serve");
 }
+
+#[cfg(test)]
+mod vectors_native;
 
 #[cfg(test)]
 mod tests {
@@ -2017,8 +2035,8 @@ mod tests {
     /// dead-end: the data was still stored, and still pushed, but never read back down.
     ///
     /// Driven through [`page_records`] rather than the route: the extracted seam is what the
-    /// handler calls, and the route itself cannot be driven from a test (no `tower` in the dep
-    /// tree, so no `ServiceExt::oneshot`).
+    /// handler calls, and it takes a store this size directly. (The route itself is driven by
+    /// the contract vectors, `vectors_native`, through `tower::ServiceExt::oneshot`.)
     #[test]
     fn a_namespace_larger_than_one_page_is_fully_pullable() {
         let total = MAX_RESPONSE_RECORDS + 250;

@@ -6,17 +6,28 @@
 //! and when, who asked to join, who was approved, who was revoked) and derives the rest here.
 //! The rules reproduce the native behaviour:
 //!
-//! - **Owner** = the earliest-registered device that is a member (not revoked, not still
-//!   pending), with the device id as the tie-break. That is "the first device is the owner",
-//!   and when the owner signs out (is revoked) the oldest remaining member inherits, exactly as
-//!   D5 hands it on.
+//! - **Owner** = among the members (not revoked, not still pending), a device that never had to
+//!   ask to join comes first; then the earliest `registered_ms`; then the lowest device id. That
+//!   is "the first device is the owner", and when the owner signs out (is revoked) the oldest
+//!   remaining member inherits, exactly as D5 hands it on. The never-asked rank comes FIRST
+//!   because `registered_ms` is a node's wall clock: on a mesh, clock skew between nodes can give
+//!   an approved joiner an earlier `registered_ms` than the device that created the account, and
+//!   a joiner must never outrank the creator that approved it.
+//! - **Member** = registered, not revoked, not still pending ([`is_member`]).
 //! - **Pending** = asked to join, and neither approved nor revoked (rejection is revocation).
-//! - **May remove**: removing yourself is always allowed (sign-out); removing anyone else needs
-//!   the owner (`403`); the last member cannot be removed (`409`), since revocation is permanent.
+//! - **May remove**: only a member may act at all (`403`, as the native `require_registered`);
+//!   removing yourself is then always allowed (sign-out); removing anyone else needs the owner
+//!   (`403`); the last member cannot be removed (`409`), since revocation is permanent.
 use std::collections::BTreeSet;
 
+use serde::{Deserialize, Serialize};
+
 /// One registration, as recorded when it happened. Grow-only: never edited, never deleted.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// Serde field names are the Rust ones (`device_id`, `label`, `registered_ms`); every field
+/// defaults. The contract vectors (`tests/vectors/`) write their `given` state in this shape.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct DeviceFacts {
     pub device_id: String,
     pub label: String,
@@ -25,7 +36,8 @@ pub struct DeviceFacts {
 }
 
 /// Everything known about one account's devices. Each set is grow-only.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct AccountFacts {
     /// Every device that registered or asked to join.
     pub devices: Vec<DeviceFacts>,
@@ -68,18 +80,39 @@ fn members(f: &AccountFacts) -> impl Iterator<Item = &DeviceFacts> {
         .filter(|d| !f.revoked.contains(&d.device_id) && !is_pending(f, &d.device_id))
 }
 
-/// The owner: the earliest-registered member, device id as the tie-break. `None` when the
-/// account has no member.
+/// Is `id` a member: registered, not revoked, not still pending? Only a member may use the data
+/// endpoints or act on devices (the native `require_registered`, a `403`).
+pub fn is_member(f: &AccountFacts, id: &str) -> bool {
+    f.devices.iter().any(|d| d.device_id == id) && !f.revoked.contains(id) && !is_pending(f, id)
+}
+
+/// The owner, ranked over the members by: never had to ask to join (never in `pending`) first,
+/// then earliest `registered_ms`, then lowest device id. `None` when the account has no member.
+///
+/// The first rank is what keeps clock skew from handing the account to a joiner: an approved
+/// joiner registered on a node whose clock runs behind can carry an earlier `registered_ms` than
+/// the account's creator. Once the creator is revoked every remaining member was a joiner, so
+/// the hand-off falls through to the oldest one, as D5 does natively.
 pub fn owner(f: &AccountFacts) -> Option<&str> {
     members(f)
-        .min_by(|a, b| (a.registered_ms, &a.device_id).cmp(&(b.registered_ms, &b.device_id)))
+        .min_by_key(|d| {
+            (
+                f.pending.contains(&d.device_id),
+                d.registered_ms,
+                d.device_id.as_str(),
+            )
+        })
         .map(|d| d.device_id.as_str())
 }
 
 /// May `actor` remove (or, for a pending device, reject) `target`? Mirrors the native
-/// `remove_device`: the owner check first, then the last-member guard. Removing an unknown or
+/// `remove_device`: an actor that is not a member is refused (`NotOwner`, the native `403` from
+/// `require_registered`), then the owner check, then the last-member guard. Removing an unknown or
 /// already-removed id is allowed (the native server answers `ok` and changes nothing).
 pub fn may_remove(f: &AccountFacts, actor: &str, target: &str) -> Result<(), DeviceRefusal> {
+    if !is_member(f, actor) {
+        return Err(DeviceRefusal::NotOwner);
+    }
     if target != actor && owner(f) != Some(actor) {
         return Err(DeviceRefusal::NotOwner);
     }
@@ -207,5 +240,62 @@ mod tests {
             Ok(()),
             "signing yourself out is allowed"
         );
+    }
+
+    /// Clock skew between mesh nodes can give an approved joiner an EARLIER `registered_ms` than
+    /// the device that created the account. A joiner must still never outrank the creator.
+    #[test]
+    fn owner_ranks_a_never_pending_device_before_an_earlier_joiner() {
+        let mut f = facts(vec![dev("creator", 2_000), dev("joiner", 1_000)]);
+        f.pending = set(&["joiner"]);
+        f.approved = set(&["joiner"]);
+        assert_eq!(owner(&f), Some("creator"));
+        // Among joiners (the creator signed out) the earliest registration still wins, then id.
+        f.devices.push(dev("later", 3_000));
+        f.devices.push(dev("same", 1_000));
+        f.pending = set(&["joiner", "later", "same"]);
+        f.approved = set(&["joiner", "later", "same"]);
+        f.revoked = set(&["creator"]);
+        assert_eq!(owner(&f), Some("joiner"), "1_000 ties; `joiner` < `same`");
+    }
+
+    #[test]
+    fn is_member_needs_registered_not_revoked_not_pending() {
+        let mut f = facts(vec![dev("m", 1), dev("p", 2), dev("a", 3), dev("r", 4)]);
+        f.pending = set(&["p", "a"]);
+        f.approved = set(&["a"]);
+        f.revoked = set(&["r"]);
+        assert!(is_member(&f, "m"));
+        assert!(is_member(&f, "a"), "approved joiner");
+        assert!(!is_member(&f, "p"), "still pending");
+        assert!(!is_member(&f, "r"), "revoked");
+        assert!(!is_member(&f, "stranger"), "never registered");
+    }
+
+    /// Natively a non-member never reaches the removal rules: `require_registered` answers `403`
+    /// first. That includes a pending device trying to "sign itself out".
+    #[test]
+    fn may_remove_refuses_an_actor_that_is_not_a_member() {
+        let mut f = facts(vec![
+            dev("owner", 1),
+            dev("other", 2),
+            dev("asking", 3),
+            dev("gone", 4),
+        ]);
+        f.pending = set(&["asking"]);
+        f.revoked = set(&["gone"]);
+        for actor in ["asking", "gone", "stranger"] {
+            assert_eq!(
+                may_remove(&f, actor, actor),
+                Err(DeviceRefusal::NotOwner),
+                "{actor} removing itself"
+            );
+            assert_eq!(
+                may_remove(&f, actor, "other"),
+                Err(DeviceRefusal::NotOwner),
+                "{actor} removing another"
+            );
+        }
+        assert_eq!(may_remove(&f, "other", "other"), Ok(()));
     }
 }

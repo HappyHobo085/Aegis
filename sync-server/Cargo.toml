@@ -49,10 +49,18 @@ ed25519-dalek = "2"
 getrandom = "0.2"
 
 [dev-dependencies]
-# The same crate with its test-only `CONTENT_PASSES` instrument switched on, so the tests in
-# src/main.rs can pin that a synthesized id reads a record's content exactly once. A
-# dev-dependency feature never reaches the release binary (resolver 2).
-aegis-sync-core = { path = "core", features = ["test-instrument"] }
+# The same crate with its test-only features switched on. `test-instrument` is the
+# `CONTENT_PASSES` instrument, so the tests in src/main.rs can pin that a synthesized id reads a
+# record's content exactly once. A dev-dependency feature never reaches the release binary
+# (resolver 2).
+#
+# `vectors` adds the contract-vector types and loader (`core/src/vector.rs`) for the native
+# harness in `src/vectors_native.rs`; test-only like the instrument.
+aegis-sync-core = { path = "core", features = ["test-instrument", "vectors"] }
+# `tower::ServiceExt::oneshot` drives the real `app(state)` router in the vector harness. tower 0.5
+# is already in Cargo.lock (axum depends on it, with `util`), so this adds a dependency edge and NO
+# new package.
+tower = { version = "0.5", features = ["util"] }
 
 # Release profile: strip symbols + LTO so the deployed/Docker binary is lean (the plain
 # `cargo build --release` was shipping an unstripped ~2.3 MB binary). panic=unwind is kept

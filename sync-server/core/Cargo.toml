@@ -25,3 +25,14 @@ ed25519-dalek = "2"
 # content, so the SERVER's tests can pin that a synthesized id reads the ciphertext once. Enabled
 # only by the server's `[dev-dependencies]` entry; never part of a release build.
 test-instrument = []
+# Test-only: the contract-vector types and `vector::load_all` (`src/vector.rs`), plus the signing
+# helpers that expand the vectors' templates. Enabled only by test code: this crate's own
+# `[dev-dependencies]` self-entry below (for `tests/vectors.rs`) and the server's
+# `[dev-dependencies]`. Release and WASM builds never contain it.
+vectors = []
+
+[dev-dependencies]
+# This crate with its `vectors` feature, so `cargo test -p aegis-sync-core` builds
+# `tests/vectors.rs` without anyone having to remember `--features vectors`. A dev-dependency
+# never reaches a normal build (resolver 2).
+aegis-sync-core = { path = ".", features = ["vectors"] }
