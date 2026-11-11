@@ -21,17 +21,48 @@ bookmarks, saved items, or the allowlist.
   - `wire.rs` — `WireRecord` (pub fields), `hlc_key`, `ord_key`, `hlc_well_formed`,
     `wire_bytes`, `MAX_HLC_NODE_LEN` and every request/response bound (`MAX_RECORDS_PER_*`,
     `MAX_FIELD_LEN`, `MAX_CT_LEN`, `MAX_LABEL_LEN`, `MAX_BODY_BYTES`, the server-wide `MAX_*`
-    caps, `MAX_RESPONSE_*`).
+    caps, `MAX_RESPONSE_*`). **The byte caps `MAX_TOTAL_CT_BYTES` and `MAX_RESPONSE_BYTES` are
+    `u64`**, and so is every counter compared against them (`Caps.max_total_ct_bytes`, the push
+    path's `growth`/`total`, the page's `bytes`): 4 GiB does not fit wasm32's 32-bit `usize`, so
+    as `usize` the core did not compile for the WASM service. On 64-bit native nothing changes.
+  - `canon.rs` — `content_digest`, `content_pass`, `unique_uuid`, `canonicalize_body`,
+    `reject_client_poisoning_stamps` (bodies and comments moved unchanged). Two seams changed:
+    `unique_uuid(rec, ns, taken, entropy: &mut dyn Entropy)` draws its collision separator from
+    the host, and `canonicalize_body(records, ns, existing, entropy)` takes the `(uuid, record)`
+    pairs already stored in the `(account, ns)` instead of the native `Store`. The test-only
+    `CONTENT_PASSES` instrument moved with `content_pass`; the server's tests reach it through the
+    core's `test-instrument` feature, which only the server's `[dev-dependencies]` entry enables,
+    so a release binary never carries it (`cargo tree -e features` shows only `default`).
+  - `page.rs` — `page_sorted(sorted, cursor, limit) -> Page { records, next }`: the paging core of
+    `GET /v1/records` over an iterator already in uuid order. It enforces BOTH response caps
+    (`MAX_RESPONSE_RECORDS` via the `limit` clamp, `MAX_RESPONSE_BYTES` with the always-serve-the-
+    first-record rule) exactly as `page_records` did; `page_records` now only selects + sorts the
+    namespace and calls it.
+  - `order.rs` (new, for the mesh service) — `order_bytes(hlc)`: `wall_ms` big-endian with the
+    sign bit flipped, `counter` big-endian `u64`, then the `node` bytes, so byte order equals
+    `hlc_key` order (a property test pins it). `tie_ord(rec)`: the mesh's cross-uuid tie-break,
+    `{wall_ms, counter, node + "~" + first 8 hex of content_digest([uuid])}` with `node`
+    truncated to keep the result within `MAX_HLC_NODE_LEN`. It is a function of `(hlc, uuid)`
+    alone, so every replica agrees without coordinating, and it is shaped to pass the client's
+    `ord_is_adoptable`. **The native server does NOT use it** — it keeps its own counter-bump rule
+    in `canonicalize_body`, which needs to see the whole stored namespace at once.
+  - `devices.rs` (new, for the mesh service) — `DeviceFacts`, `AccountFacts` (grow-only
+    `devices`, `pending`, `approved`, `revoked`), `owner` (the earliest-registered member — not
+    revoked, not still pending — device id as the tie-break: "first device is owner", and D5's
+    hand-off when it signs out), `is_pending`, `may_remove` (`DeviceRefusal::NotOwner` = 403,
+    `LastDevice` = 409). **The native server does NOT use it**: it keeps its stored owner map.
   - `env.rs` — the traits `Clock { fn now_ms(&self) -> i64 }` and `Entropy { fn fill(&mut self,
     buf: &mut [u8]) }`, and nothing else. Anything in the core that needs the time takes the
     instant (or a `Clock`) from its caller; the host supplies the implementation.
-- **`src/main.rs`** is the native host: axum routes, `Store` + snapshot, the replay-nonce set, the
-  admission guard, and `SystemClock` (the OS clock; `now_ms()` delegates to it). `verify_auth` is
+- **`src/main.rs`** is the native host: axum routes, `Store` + snapshot, the stored owner map, the
+  replay-nonce set, the admission guard, `SystemClock` (the OS clock; `now_ms()` delegates to it)
+  and `OsEntropy` (`getrandom`). Its `canonicalize_body(records, ns, account, store)` and
+  `page_records(store, …)` are thin adapters from the `Store` onto the core functions. `verify_auth` is
   now parse header → `check_token` → `admit` → record nonce. **The nonce is still recorded only
   after `admit`** (see Hardening) — that ordering is the host's, so it stays here, not in the core.
-  `getrandom` stays a server-only dependency; `OsEntropy` will join `SystemClock` when the code
-  that needs entropy (`unique_uuid`) moves into the core.
-- The core moved code with its bodies and comments unchanged; only `pub` was added. Its own
+  `getrandom` stays a server-only dependency, reached only through `OsEntropy`.
+- The core moved code with its bodies and comments unchanged; only `pub` was added, plus the
+  seams listed above. Its own
   `Cargo.toml` must keep `rust-version` equal to this one (the CI `msrv` job reads all three
   manifests) and may only use packages already in `Cargo.lock`. `core/LICENSE` is the AGPL text.
 - Because the root is a package, a bare `cargo test`/`clippy` here covers the SERVER ONLY; use
@@ -331,11 +362,17 @@ Measured: down 23 h after a reboot while `docker ps` said `healthy`.
 
 `cargo test --workspace` (run from this folder, or `cargo test --workspace --manifest-path
 sync-server/Cargo.toml` from the repo root; without `--workspace` only the server's tests run).
-The server's tests (in `src/main.rs`, unchanged by the core extraction) cover HLC ordering, auth canonical shape, account-root registration,
+The server's tests (in `src/main.rs`; the core moves changed only their imports and the `&mut OsEntropy` argument of three `unique_uuid` calls) cover HLC ordering, auth canonical shape, account-root registration,
 owner approval / ownership transfer / registration secret / global caps, the request bounds,
 and the snapshot save/load round-trip (82 tests); the core's own unit tests (16) pin
 `canonical`, every `check_token` refusal at its exact boundary, `hlc_well_formed`, `wire_bytes`
-and the HLC keys against a fixed clock. On Windows,
+and the HLC keys against a fixed clock; since the canon/paging move (36 in all) they also pin
+`order_bytes` against `hlc_key` (a deterministic property test, negative walls included), the
+`tie_ord` rule (keeps wall+counter, deterministic, distinct per uuid, node within 64 bytes,
+well-formed for the client), the device-facts rules, `page_sorted`'s cursor/next/byte budget, and
+`unique_uuid`/`canonicalize_body` under injected entropy. The core must also pass `cargo check -p
+aegis-sync-core --target wasm32-wasip2` and `cargo doc -p aegis-sync-core --no-deps` cleanly. On
+Windows,
 `save_snapshot_flushes_the_directory_after_the_rename` fails (a directory cannot be opened as a
 `File` there, which `save_snapshot` deliberately tolerates); CI is Linux. Handlers are driven by calling them directly
 (no `tower` in the tree); test account ids must be lower-case hex (`registered()` hex-encodes).

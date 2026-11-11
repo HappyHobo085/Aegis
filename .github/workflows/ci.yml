@@ -360,7 +360,7 @@ jobs:
   # reach the deploy host), so it gets the same fmt/clippy/test treatment as the
   # desktop app plus its own dependency audit — previously it had no CI at all,
   # which is how 9 poisonable `.lock().unwrap()` calls on its request hot path
-  # survived. It is a separate non-workspace crate, so it needs no webkit2gtk.
+  # survived. It is not a member of the Tauri app's workspace, so it needs no webkit2gtk.
   # It is the root of its OWN two-member workspace (the axum server + `core/`, the
   # pure `aegis-sync-core`), so every step below passes `--workspace`/`--all`: a
   # bare `--manifest-path sync-server/Cargo.toml` would gate the server package only.
@@ -539,9 +539,9 @@ jobs:
           --manifest-path src-tauri/Cargo.toml
           --target ${{ matrix.target }}
 
-  # MSRV gate: prove the `rust-version` in both manifests is a real lower bound rather
+  # MSRV gate: prove the `rust-version` in all three manifests is a real lower bound rather
   # than an aspiration. The version is read OUT OF THE MANIFESTS, so this job cannot
-  # disagree with them, and the two manifests are checked against each other so they
+  # disagree with them, and the three manifests are checked against each other so they
   # cannot drift apart.
   #
   # It has now caught two wrong numbers, which is the whole point of it. 1.80.0 was
@@ -591,7 +591,7 @@ jobs:
       # The one place a toolchain is NOT taken from rust-toolchain.toml: this job
       # deliberately installs the MSRV, not the CI pin. Reading it from the manifest
       # keeps the tested value and the declared value the same number by construction.
-      # NOTE: keep `rust-version` three-component (1.88.0, not 1.88). Both manifests
+      # NOTE: keep `rust-version` three-component (1.88.0, not 1.88). All three manifests
       # declare it that way and it is passed verbatim to `cargo +<version>`, so the
       # argument to cargo and the declared floor are the same string by construction.
       # A bare `1.NN` would be a different string from the one the manifests say.

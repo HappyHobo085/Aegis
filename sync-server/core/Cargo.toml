@@ -19,3 +19,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Verification only — the server never signs.
 ed25519-dalek = "2"
+
+[features]
+# Test-only: exposes `canon::CONTENT_PASSES`, the per-thread count of full passes over a record's
+# content, so the SERVER's tests can pin that a synthesized id reads the ciphertext once. Enabled
+# only by the server's `[dev-dependencies]` entry; never part of a release build.
+test-instrument = []

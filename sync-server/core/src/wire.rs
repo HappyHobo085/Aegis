@@ -45,6 +45,8 @@ pub struct WireRecord {
 /// Borrows `node` instead of cloning it. This runs inside the per-record comparison loops in
 /// [`canonicalize_body`], where the old `String` return allocated once per comparison — tens of
 /// millions of allocations on an ordinary full-namespace push.
+///
+/// [`canonicalize_body`]: crate::canon::canonicalize_body
 pub fn hlc_key(hlc: &Value) -> (i64, u64, &str) {
     (
         hlc.get("wall_ms").and_then(Value::as_i64).unwrap_or(0),
@@ -72,7 +74,10 @@ pub const MAX_LABEL_LEN: usize = 256; // device label
 pub const MAX_BODY_BYTES: usize = 8 * 1024 * 1024; // coarse request-body backstop (axum layer)
 pub const MAX_ACCOUNTS: usize = 10_000; // accounts on the whole server
 pub const MAX_TOTAL_RECORDS: usize = 2_000_000; // records across every account
-pub const MAX_TOTAL_CT_BYTES: usize = 4 * 1024 * 1024 * 1024; // ciphertext bytes across every account
+/// Ciphertext bytes across every account. `u64`, not `usize`: 4 GiB does not fit a 32-bit
+/// `usize`, so on wasm32 the constant would not even compile. The byte caps and every counter
+/// compared against them are `u64` on every target, which on 64-bit native changes nothing.
+pub const MAX_TOTAL_CT_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 pub const MAX_PENDING_PER_ACCOUNT: usize = 16; // devices waiting for the owner's approval
 /// Response-side quotas for `GET /v1/records`. The write path is capped by
 /// `MAX_RECORDS_PER_REQUEST` and `MAX_RECORDS_PER_ACCOUNT`; without a matching READ cap a single
@@ -80,7 +85,7 @@ pub const MAX_PENDING_PER_ACCOUNT: usize = 16; // devices waiting for the owner'
 /// (50_000 × 64 KiB ≈ 3.2 GiB) into one buffer. The byte budget is the real bound — a record
 /// count alone doesn't account for ciphertext size.
 pub const MAX_RESPONSE_RECORDS: usize = 5_000;
-pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+pub const MAX_RESPONSE_BYTES: u64 = 32 * 1024 * 1024; // `u64` like `MAX_TOTAL_CT_BYTES`
 
 /// Bytes one record contributes to a `GET /v1/records` response: its strings plus the
 /// SERIALIZED `hlc` and `ord` (not a flat allowance — a record stored before `hlc` was bounded

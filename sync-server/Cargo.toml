@@ -48,6 +48,12 @@ ed25519-dalek = "2"
 # same 0.2 line `src-tauri` uses for its own CSPRNG, deliberately (0.4 is a different API).
 getrandom = "0.2"
 
+[dev-dependencies]
+# The same crate with its test-only `CONTENT_PASSES` instrument switched on, so the tests in
+# src/main.rs can pin that a synthesized id reads a record's content exactly once. A
+# dev-dependency feature never reaches the release binary (resolver 2).
+aegis-sync-core = { path = "core", features = ["test-instrument"] }
+
 # Release profile: strip symbols + LTO so the deployed/Docker binary is lean (the plain
 # `cargo build --release` was shipping an unstripped ~2.3 MB binary). panic=unwind is kept
 # deliberately — this is a server with no JNI/catch_unwind contract, and a panicking request

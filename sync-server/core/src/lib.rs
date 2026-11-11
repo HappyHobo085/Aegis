@@ -8,5 +8,9 @@
 //! The auth `canonical()` + token shape in [`auth`] MUST match `src-tauri/src/sync_auth.rs`
 //! byte-for-byte (kept in sync by hand; covered by the round-trip test in the server).
 pub mod auth;
+pub mod canon;
+pub mod devices;
 pub mod env;
+pub mod order;
+pub mod page;
 pub mod wire;
