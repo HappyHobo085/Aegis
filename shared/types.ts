@@ -135,6 +135,10 @@ export const IPC = {
   // A rejected forgery, not a sync failure — reported separately so it can never fail the
   // other namespaces or surface as a scary sync error. See `src-tauri/AGENTS.md`.
   evtSyncVaultQuarantined: 'sync.vaultQuarantined',
+  // local Meshnode detection (main <- chrome): drives the Sync tab's OFFERED server URL.
+  // Detection only — the core never connects to Meshnode, and the URL is never applied
+  // without the user pressing the button.
+  meshnodeDetected: 'meshnode.detected',
   // form detection (main <- chrome)
   formDetectLoginForm: 'form.detectLoginForm',
   evtFormDetectResult: 'form.detectionResult',
@@ -736,6 +740,15 @@ export interface SyncVaultQuarantined {
   uuids: string[];
 }
 
+/** `meshnode.detected` — whether a Meshnode is present on THIS device, plus the local sync URL
+ * the Sync tab may offer. Desktop checks that Meshnode's admin endpoint (the default data
+ * dir's named pipe / `admin.sock`) exists without connecting to it; Android checks that the
+ * `net.meshnode.app` package is installed. `url` is always `http://127.0.0.1:7801`. */
+export interface MeshnodeDetection {
+  detected: boolean;
+  url: string;
+}
+
 /** Live match state pushed by the Rust/Kotlin back-end during a find-in-page session.
  * `activeMatchIndex` is 1-based; 0 means unknown (WebKitGTK / macOS don't report it). */
 export interface FindState {
@@ -973,6 +986,10 @@ export interface AegisApi {
     onState(cb: (s: SyncState) => void): () => void;
     onChanged(cb: (c: SyncChanged) => void): () => void;
     onVaultQuarantined(cb: (q: SyncVaultQuarantined) => void): () => void;
+  };
+  meshnode: {
+    /** Is a local Meshnode present? Read-only; never connects, never changes settings. */
+    detected(): Promise<MeshnodeDetection>;
   };
   find: {
     /** Begin (or refine) a search for `query` on the view. */

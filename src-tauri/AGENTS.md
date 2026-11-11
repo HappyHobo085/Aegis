@@ -1586,6 +1586,32 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
   `AdblockShield.tsx` consumes it, so a host whose WebRTC protection is off reports off
   instead of claiming "public-only". An earlier revision of this file listed it as a
   second control-that-lies instance; no follow-up is outstanding.
+- **`meshnode.rs`** — `meshnode.detected` → `{ detected, url: "http://127.0.0.1:7801" }`, so
+  the Sync tab can OFFER Meshnode's local sync gateway. **Detection only: it never connects
+  to Meshnode, never sends it anything, never writes a setting.** The decision is
+  `detect_meshnode(os, android_installed, endpoint_exists)`, a pure function over an injected
+  probe; `admin_endpoint(os)` names the DEFAULT data dir's endpoint:
+  - **Windows** `\\.\pipe\meshnode-admin`, probed with `WaitNamedPipeW(name, 1 ms)`. That
+    call asks the pipe filesystem whether an instance exists and does NOT open one;
+    `std::fs::metadata` / `GetFileAttributesW` go through `CreateFile`, which CONNECTS and
+    takes an instance from the server. 1 ms, not 0: 0 is `NMPWAIT_USE_DEFAULT_WAIT` (the
+    server's own default wait). `ERROR_SEM_TIMEOUT` (all instances busy) still means
+    "exists". Verified by a Windows-only test that creates a ONE-instance pipe, probes it
+    twice, then opens it as a client — which would fail with `ERROR_PIPE_BUSY` had the probe
+    connected. **v1 detects only the default pipe**: a user-mode daemon under
+    `%LOCALAPPDATA%\Meshnode` names its pipe `meshnode-admin-<8 hex>` and is not found.
+  - **Linux** `/var/lib/meshnode/admin.sock`, **macOS**
+    `/Library/Application Support/Meshnode/admin.sock`: a `symlink_metadata` that must report
+    a socket (a regular file of that name is not Meshnode). A data dir the user cannot
+    traverse reads as "not detected".
+  - **Android**: no endpoint is probed. `MainActivity.noteMeshnodeInstalled()` asks
+    `PackageManager.getPackageInfo("net.meshnode.app")` on every `onResume` and pushes the
+    answer through the JNI export `NativeMeshnode.noteInstalled` into
+    `meshnode::ANDROID_INSTALLED`. See the Android section for the manifest `<queries>` entry
+    and the cleartext config.
+  Tests: the `detect_meshnode_*` set (injected probe, per-OS endpoint, the real Windows pipe /
+  Unix socket probes) plus four Android pins (network security config, manifest, debug
+  override, the Kotlin `onResume` push).
 - **`aegis_layout.rs` + `aegis_container.rs`** — the Linux webview container. The pure half
   (`aegis_layout.rs`: `Role`, `rect_for`, `PARK_X/Y`) holds every sizing rule and is unit-tested
   headlessly; the GTK half (`aegis_container.rs`) is a **`GtkFixed` subclass** that applies them
@@ -2417,6 +2443,30 @@ Rust).
 `AndroidManifest.xml` grants `INTERNET` plus `CAMERA`, `RECORD_AUDIO` and
 `ACCESS_FINE_LOCATION` — the last three ONLY because a granted web permission
 request cannot capture anything without them (see the `permissions.rs` bullet).
+`NativeMeshnode.kt` (added 2026-11-11) is the push half of `meshnode.detected`: see the
+`meshnode.rs` bullet.
+
+**Cleartext is governed by `res/xml/network_security_config.xml` (added 2026-11-11).** The
+release config keeps `<base-config cleartextTrafficPermitted="false">` and permits plain HTTP
+to exactly one host, `127.0.0.1` with `includeSubdomains="false"` — Meshnode's local sync
+gateway `http://127.0.0.1:7801`. Before it, release cleartext was simply off via the
+`usesCleartextTraffic` manifest placeholder. **Two non-obvious consequences:**
+- On API 24+ (= minSdk) Android IGNORES `usesCleartextTraffic` once `networkSecurityConfig`
+  is set. The debug build relied on that placeholder (`"true"`) for the `tauri android dev`
+  server, so it now gets `src/debug/res/xml/network_security_config.xml` (same resource name,
+  debug source set, base config cleartext ON) — the same permission it had before. The
+  placeholder is left in place as the pre-config fallback; it decides nothing on any
+  supported API level.
+- The config binds the Java/Kotlin network stack and WebView only. **The Rust sync engine
+  (`reqwest` in `libapp_lib.so`) opens its own sockets and never reads it**; its plaintext
+  rule is `sync::validated_base` (loopback, or the explicit `syncAllowInsecure` waiver).
+The manifest also declares `<queries><package android:name="net.meshnode.app" /></queries>`:
+without it, API 30+ package visibility makes `getPackageInfo` throw `NameNotFoundException`
+even when Meshnode is installed. All of this is pinned from `cargo test` by
+`meshnode::tests` (the config's exact element list, the manifest attribute + query, the
+debug-only override, the Kotlin `onResume` push), because there is no XML or Kotlin test
+source set; Gradle compiles and links the resources, and on-device behaviour is
+**PENDING** hardware.
 
 **Backup is opted out of by TWO mechanisms, because no single one covers both
 transports.** `android:allowBackup="false"` covers the pre-31 CLOUD path. It is

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  DEBUG-ONLY override of src/main/res/xml/network_security_config.xml (the debug source set
+  replaces a main resource of the same name; release never sees this file).
+
+  The debug build loads the chrome from the `tauri android dev` server over plain HTTP on the
+  host's LAN address. It used to get cleartext from the manifest placeholder
+  usesCleartextTraffic="true" (app/build.gradle.kts), but Android ignores that flag on API 24+
+  once networkSecurityConfig is set, so the permission has to live here. This matches what the
+  debug build allowed before: cleartext everywhere.
+
+  Pinned by meshnode::tests::android_debug_override_is_debug_only.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

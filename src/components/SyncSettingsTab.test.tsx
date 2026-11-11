@@ -15,10 +15,19 @@ import { confirm, toast } from '../lib/toast';
 // The panel reads `aegis.vault.getState()` to report what the CORE thinks is
 // syncing, rather than echoing the checkbox back at the user. Mocked through
 // `vi.hoisted` because `vi.mock` factories are hoisted above module bodies.
-const { vaultGetState } = vi.hoisted(() => ({ vaultGetState: vi.fn() }));
-vi.mock('../lib/ipcClient', () => ({
-  aegis: { vault: { getState: vaultGetState } },
+const { vaultGetState, meshnodeDetected } = vi.hoisted(() => ({
+  vaultGetState: vi.fn(),
+  meshnodeDetected: vi.fn(),
 }));
+vi.mock('../lib/ipcClient', () => ({
+  aegis: { vault: { getState: vaultGetState }, meshnode: { detected: meshnodeDetected } },
+}));
+
+// The setup view asks the core once, on mount, whether a local Meshnode is present. Seeded at
+// module scope for the same reason as `vaultGetState` below; the default is "not detected" so
+// every pre-existing test renders the panel exactly as it did before the suggestion existed.
+const MESHNODE_URL = 'http://127.0.0.1:7801';
+meshnodeDetected.mockResolvedValue({ detected: false, url: MESHNODE_URL });
 
 // Seeded at module scope, not in a `beforeEach`: EVERY render in this file runs
 // the panel's mount-time `aegis.vault.getState()`, so an unseeded spy returns
@@ -742,5 +751,80 @@ describe('SyncSettingsTab - the password-vault opt-in', () => {
       // THIS alert rather than the absence of every alert (the panel has another one by design).
       expect(screen.queryByText(/nothing was changed/i)).toBeNull();
     });
+  });
+});
+
+describe('SyncSettingsTab - local Meshnode suggestion', () => {
+  // Restored after each case so a `detected: true` here cannot leak into another describe.
+  beforeEach(() => {
+    meshnodeDetected.mockResolvedValue({ detected: false, url: MESHNODE_URL });
+  });
+
+  function renderSetup(onSetServerUrl = vi.fn(), sync = fakeSync()) {
+    render(
+      <SyncSettingsTab
+        sync={sync}
+        onSetServerUrl={onSetServerUrl}
+        settings={settings}
+        update={update}
+      />,
+    );
+    return onSetServerUrl;
+  }
+
+  it('sync_settings_shows_meshnode_suggestion_when_detected: offers the local URL and applies it on click', async () => {
+    meshnodeDetected.mockResolvedValue({ detected: true, url: MESHNODE_URL });
+    const onSetServerUrl = renderSetup();
+    const hint = await screen.findByRole('region', { name: /meshnode/i });
+    expect(hint).toHaveTextContent(/Meshnode was found on this device/i);
+    expect(hint).toHaveTextContent(MESHNODE_URL);
+    await userEvent.click(screen.getByRole('button', { name: /use meshnode on this device/i }));
+    expect(screen.getByLabelText(/sync server url/i)).toHaveValue(MESHNODE_URL);
+    expect(onSetServerUrl).toHaveBeenCalledWith(MESHNODE_URL);
+    // Once the field holds the suggestion there is nothing left to suggest.
+    expect(screen.queryByRole('region', { name: /meshnode/i })).toBeNull();
+  });
+
+  it('suggestion_not_applied_automatically: detection alone never touches the URL', async () => {
+    meshnodeDetected.mockResolvedValue({ detected: true, url: MESHNODE_URL });
+    const onSetServerUrl = renderSetup();
+    await screen.findByRole('region', { name: /meshnode/i });
+    expect(meshnodeDetected).toHaveBeenCalledTimes(1);
+    expect(screen.getByLabelText(/sync server url/i)).toHaveValue('');
+    expect(onSetServerUrl).not.toHaveBeenCalled();
+  });
+
+  it('suggestion_not_applied_automatically: a URL the user already chose is left alone', async () => {
+    meshnodeDetected.mockResolvedValue({ detected: true, url: MESHNODE_URL });
+    const onSetServerUrl = renderSetup(
+      vi.fn(),
+      fakeSync({ state: { ...disabled, serverUrl: 'https://mine.example' } }),
+    );
+    await screen.findByRole('region', { name: /meshnode/i });
+    expect(screen.getByLabelText(/sync server url/i)).toHaveValue('https://mine.example');
+    expect(onSetServerUrl).not.toHaveBeenCalled();
+  });
+
+  it('hidden_when_not_detected: no suggestion when the core finds no Meshnode', async () => {
+    renderSetup();
+    await waitFor(() => expect(meshnodeDetected).toHaveBeenCalledTimes(1));
+    // Let the resolved detection settle before asserting the absence.
+    await screen.findByLabelText(/sync server url/i);
+    expect(screen.queryByRole('region', { name: /meshnode/i })).toBeNull();
+    expect(screen.queryByRole('button', { name: /use meshnode on this device/i })).toBeNull();
+  });
+
+  it('hidden_when_not_detected: a failed detection is treated as not detected', async () => {
+    meshnodeDetected.mockRejectedValue(new Error('no core'));
+    renderSetup();
+    await waitFor(() => expect(meshnodeDetected).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('region', { name: /meshnode/i })).toBeNull();
+  });
+
+  it('hidden_when_not_detected: not offered once the field already holds the local URL', async () => {
+    meshnodeDetected.mockResolvedValue({ detected: true, url: MESHNODE_URL });
+    renderSetup(vi.fn(), fakeSync({ state: { ...disabled, serverUrl: MESHNODE_URL } }));
+    await waitFor(() => expect(meshnodeDetected).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('region', { name: /meshnode/i })).toBeNull();
   });
 });

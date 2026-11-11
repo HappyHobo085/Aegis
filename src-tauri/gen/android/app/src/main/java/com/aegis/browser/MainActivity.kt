@@ -253,6 +253,30 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     for (wv in tabWebViews.values) wv.onResume()
     for (wv in popupTemps) wv.onResume()
     chromeWebView?.resumeTimers()
+    noteMeshnodeInstalled()
+  }
+
+  /** Report to Rust whether Meshnode is installed, for the Sync tab's `meshnode.detected`.
+   *  Re-asked on every resume because the user can install or remove Meshnode while Aegis is
+   *  in the background. Needs the manifest's `<queries>` entry: without it API 30+ hides the
+   *  package and this always says "not installed". */
+  private fun noteMeshnodeInstalled() {
+    val installed =
+      try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+          packageManager.getPackageInfo(NativeMeshnode.PACKAGE, PackageManager.PackageInfoFlags.of(0))
+        } else {
+          @Suppress("DEPRECATION") packageManager.getPackageInfo(NativeMeshnode.PACKAGE, 0)
+        }
+        true
+      } catch (_: PackageManager.NameNotFoundException) {
+        false
+      }
+    try {
+      NativeMeshnode.noteInstalled(installed)
+    } catch (t: Throwable) {
+      Log.w("AegisMeshnode", "could not report the Meshnode package check to native", t)
+    }
   }
 
   override fun onDestroy() {
