@@ -12,7 +12,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use aegis_sync_core::auth::{check_token, unhex, verify_account_root, AuthToken};
 use aegis_sync_core::canon::{canonicalize_body, reject_client_poisoning_stamps};
 use aegis_sync_core::devices::{
-    is_member, is_pending, may_remove, owner, AccountFacts, DeviceFacts,
+    is_member, is_pending, label, may_remove, owner, AccountFacts, DeviceFacts, LabelFact,
 };
 use aegis_sync_core::env::Entropy;
 use aegis_sync_core::order::tie_ord;
@@ -358,7 +358,7 @@ impl Model {
         let shape = |d: &DeviceFacts| {
             json!({
                 "deviceId": d.device_id,
-                "label": d.label,
+                "label": label(&f, &d.device_id),
                 "lastSeenMs": d.registered_ms,
                 "registeredMs": d.registered_ms,
             })
@@ -417,6 +417,12 @@ impl Model {
         })?;
         let f = self.accounts.entry(acct).or_default();
         if is_member(f, &dev) {
+            // Already a member: a re-registration refreshes the label, as natively.
+            f.labels.push(LabelFact {
+                device_id: dev,
+                label,
+                at_ms: NOW_MS,
+            });
             return Ok(json!({ "ok": true, "pending": false }));
         }
         let has_members = f.devices.iter().any(|x| is_member(f, &x.device_id));

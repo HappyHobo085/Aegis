@@ -47,6 +47,35 @@ pub struct AccountFacts {
     pub approved: BTreeSet<String>,
     /// Removed or rejected devices; permanent.
     pub revoked: BTreeSet<String>,
+    /// Label changes after registration: a member re-registering refreshes its label (the native
+    /// `post_device` overwrites it). Grow-only like the rest; [`label`] reads the newest.
+    pub labels: Vec<LabelFact>,
+}
+
+/// A device's label as set at `at_ms` (a re-registration). Grow-only.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LabelFact {
+    pub device_id: String,
+    pub label: String,
+    pub at_ms: i64,
+}
+
+/// The label `id` shows now: the newest [`LabelFact`] for it (latest `at_ms`, then the greatest
+/// label, so every replica picks the same one from the same set), else the label it registered
+/// with. `None` for an id that never registered.
+pub fn label<'a>(f: &'a AccountFacts, id: &str) -> Option<&'a str> {
+    f.labels
+        .iter()
+        .filter(|l| l.device_id == id)
+        .max_by_key(|l| (l.at_ms, l.label.as_str()))
+        .map(|l| l.label.as_str())
+        .or_else(|| {
+            f.devices
+                .iter()
+                .find(|d| d.device_id == id)
+                .map(|d| d.label.as_str())
+        })
 }
 
 /// Why [`may_remove`] refused.
@@ -297,5 +326,29 @@ mod tests {
             );
         }
         assert_eq!(may_remove(&f, "other", "other"), Ok(()));
+    }
+
+    #[test]
+    fn label_is_the_newest_label_fact_else_the_registration_label() {
+        let mut f = facts(vec![dev("a", 1)]);
+        assert_eq!(label(&f, "a"), Some("label a"));
+        assert_eq!(label(&f, "stranger"), None);
+        let lf = |l: &str, at| LabelFact {
+            device_id: "a".into(),
+            label: l.into(),
+            at_ms: at,
+        };
+        f.labels = vec![lf("new", 20), lf("old", 10)];
+        assert_eq!(
+            label(&f, "a"),
+            Some("new"),
+            "latest at_ms, whatever the order"
+        );
+        f.labels.push(lf("zz", 20));
+        assert_eq!(
+            label(&f, "a"),
+            Some("zz"),
+            "an at_ms tie picks the greatest label"
+        );
     }
 }

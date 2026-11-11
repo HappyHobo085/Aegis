@@ -29,7 +29,9 @@ fn store_from(v: &Vector) -> Store {
         for d in &f.devices {
             let dev = Device {
                 device_id: d.device_id.clone(),
-                label: d.label.clone(),
+                label: devices::label(f, &d.device_id)
+                    .unwrap_or_default()
+                    .to_string(),
                 last_seen_ms: d.registered_ms,
                 registered_ms: d.registered_ms,
             };

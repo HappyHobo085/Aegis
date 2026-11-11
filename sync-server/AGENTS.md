@@ -48,8 +48,10 @@ bookmarks, saved items, or the allowlist.
     in `canonicalize_body`, which needs to see the whole stored namespace at once. `order_bytes`
     values must be compared WHOLE: the encoding is not prefix-free (`node` runs to the end).
   - `devices.rs` (new, for the mesh service) — `DeviceFacts`, `AccountFacts` (grow-only
-    `devices`, `pending`, `approved`, `revoked`; both serde, which is the vectors' `given`
-    shape), `is_member` (registered, not revoked, not pending), `is_pending`, `owner` and
+    `devices`, `pending`, `approved`, `revoked`, and `labels`: `LabelFact`s recording that a
+    member's re-registration refreshed its label, as the native `post_device` does; all serde,
+    which is the vectors' `given` shape), `label` (the newest label fact, else the registration
+    label), `is_member` (registered, not revoked, not pending), `is_pending`, `owner` and
     `may_remove`. **`owner` ranks the members: never had to ask to join first, then earliest
     `registered_ms`, then lowest id.** That is "first device is owner", and D5's hand-off when it
     signs out. The never-pending rank comes first because `registered_ms` is a node's wall clock,
@@ -385,11 +387,11 @@ sync-server/Cargo.toml` from the repo root; without `--workspace` only the serve
   caps, the request bounds, and the snapshot save/load round-trip. The core moves changed only
   their imports and the `&mut OsEntropy` argument of three `unique_uuid` calls. The 83rd is the
   contract-vector harness (`src/vectors_native.rs`, below).
-- **Core unit tests** (39): `canonical`, every `check_token` refusal at its exact boundary,
+- **Core unit tests** (40): `canonical`, every `check_token` refusal at its exact boundary,
   `hlc_well_formed`, `wire_bytes` and the HLC keys against a fixed clock; `order_bytes` against
   `hlc_key` (a deterministic property test, negative walls included); the `tie_ord` rule (keeps
   wall+counter, deterministic, distinct per uuid, node within 64 bytes, well-formed for the
-  client); the device-facts rules (owner ranking incl. never-pending-first, `is_member`,
+  client); the device-facts rules (owner ranking incl. never-pending-first, `is_member`, `label`,
   `may_remove` refusing non-members); `page_sorted`'s cursor/next/byte budget; and
   `unique_uuid`/`canonicalize_body` under injected entropy.
 - **Contract vectors** (`core/tests/vectors/*.json`; format, fixed keys and fixed clock in that
