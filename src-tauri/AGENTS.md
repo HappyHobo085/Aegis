@@ -1608,10 +1608,10 @@ percent)` → `MainActivity.setZoom()` → `WebSettings.textZoom = percent`
     `PackageManager.getPackageInfo("net.meshnode.app")` on every `onResume` and pushes the
     answer through the JNI export `NativeMeshnode.noteInstalled` into
     `meshnode::ANDROID_INSTALLED`. See the Android section for the manifest `<queries>` entry
-    and the cleartext config.
+    and why no cleartext waiver exists.
   Tests: the `detect_meshnode_*` set (injected probe, per-OS endpoint, the real Windows pipe /
-  Unix socket probes) plus four Android pins (network security config, manifest, debug
-  override, the Kotlin `onResume` push).
+  Unix socket probes) plus two Android pins (the manifest `<queries>` entry and the Kotlin
+  `onResume` push).
 - **`aegis_layout.rs` + `aegis_container.rs`** — the Linux webview container. The pure half
   (`aegis_layout.rs`: `Role`, `rect_for`, `PARK_X/Y`) holds every sizing rule and is unit-tested
   headlessly; the GTK half (`aegis_container.rs`) is a **`GtkFixed` subclass** that applies them
@@ -2446,27 +2446,19 @@ request cannot capture anything without them (see the `permissions.rs` bullet).
 `NativeMeshnode.kt` (added 2026-11-11) is the push half of `meshnode.detected`: see the
 `meshnode.rs` bullet.
 
-**Cleartext is governed by `res/xml/network_security_config.xml` (added 2026-11-11).** The
-release config keeps `<base-config cleartextTrafficPermitted="false">` and permits plain HTTP
-to exactly one host, `127.0.0.1` with `includeSubdomains="false"` — Meshnode's local sync
-gateway `http://127.0.0.1:7801`. Before it, release cleartext was simply off via the
-`usesCleartextTraffic` manifest placeholder. **Two non-obvious consequences:**
-- On API 24+ (= minSdk) Android IGNORES `usesCleartextTraffic` once `networkSecurityConfig`
-  is set. The debug build relied on that placeholder (`"true"`) for the `tauri android dev`
-  server, so it now gets `src/debug/res/xml/network_security_config.xml` (same resource name,
-  debug source set, base config cleartext ON) — the same permission it had before. The
-  placeholder is left in place as the pre-config fallback; it decides nothing on any
-  supported API level.
-- The config binds the Java/Kotlin network stack and WebView only. **The Rust sync engine
-  (`reqwest` in `libapp_lib.so`) opens its own sockets and never reads it**; its plaintext
-  rule is `sync::validated_base` (loopback, or the explicit `syncAllowInsecure` waiver).
-The manifest also declares `<queries><package android:name="net.meshnode.app" /></queries>`:
+**No cleartext waiver for Meshnode's `http://127.0.0.1:7801`, deliberately.** Release keeps
+`usesCleartextTraffic="false"` and there is no `network_security_config.xml`. None is needed:
+Aegis sync runs in Rust (`reqwest` in `libapp_lib.so`), which opens its own sockets and never
+reads Android's cleartext policy, and `sync::validated_base` already permits loopback `http://`.
+A loopback waiver would have done nothing for sync; its only effect would have been to let the
+content WebView and the Java stack reach `http://127.0.0.1:<any port>` (a policy cannot
+restrict by port) — a new loopback-probing surface for web content. It was added and removed
+on 2026-11-11 for exactly that reason; do not re-add it for sync.
+The manifest declares `<queries><package android:name="net.meshnode.app" /></queries>`:
 without it, API 30+ package visibility makes `getPackageInfo` throw `NameNotFoundException`
-even when Meshnode is installed. All of this is pinned from `cargo test` by
-`meshnode::tests` (the config's exact element list, the manifest attribute + query, the
-debug-only override, the Kotlin `onResume` push), because there is no XML or Kotlin test
-source set; Gradle compiles and links the resources, and on-device behaviour is
-**PENDING** hardware.
+even when Meshnode is installed. That entry and the Kotlin `onResume` push are pinned from
+`cargo test` by `meshnode::tests`, because there is no XML or Kotlin test source set;
+on-device behaviour is **PENDING** hardware.
 
 **Backup is opted out of by TWO mechanisms, because no single one covers both
 transports.** `android:allowBackup="false"` covers the pre-31 CLOUD path. It is

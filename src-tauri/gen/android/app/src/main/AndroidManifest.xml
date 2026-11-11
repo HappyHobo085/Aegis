@@ -23,7 +23,11 @@
     <!-- Package visibility (API 30+): without this entry PackageManager reports
          net.meshnode.app as NOT installed even when it is. MainActivity.noteMeshnodeInstalled()
          asks only whether it is installed, so the Sync tab can offer Meshnode's local sync
-         URL (http://127.0.0.1:7801); it never launches or binds to it. -->
+         URL (http://127.0.0.1:7801); it never launches or binds to it.
+         No cleartext waiver is needed for that URL: Aegis sync runs in Rust (reqwest in
+         libapp_lib.so), which never reads Android's cleartext policy, and
+         sync::validated_base already permits loopback http. usesCleartextTraffic below
+         therefore stays "false" in release. -->
     <queries>
         <package android:name="net.meshnode.app" />
     </queries>
@@ -56,21 +60,13 @@
          There is deliberately no android:fullBackupContent: that older format is what
          Android 11 and lower read, where allowBackup="false" already covers it, and it has no
          effect on D2D transfers on API 31+ — a file that looks protective while governing
-         nothing would be worse than none.
-
-         Cleartext: android:networkSecurityConfig is the policy. It allows plain HTTP to
-         127.0.0.1 only (Meshnode's local sync gateway) and nothing else; the debug build
-         swaps in src/debug/res/xml/network_security_config.xml, which allows it everywhere
-         for the dev server. On API 24+ (= minSdk) Android IGNORES usesCleartextTraffic once
-         a networkSecurityConfig is set, so that placeholder is kept only as the fallback a
-         device would read without the config. -->
+         nothing would be worse than none. -->
     <application
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:theme="@style/Theme.app"
         android:allowBackup="false"
         android:dataExtractionRules="@xml/data_extraction_rules"
-        android:networkSecurityConfig="@xml/network_security_config"
         android:usesCleartextTraffic="${usesCleartextTraffic}">
         <!-- configChanges also covers fontScale / density / layoutDirection / colorMode:
              the platform default RECREATES the Activity on those, and every tab WebView

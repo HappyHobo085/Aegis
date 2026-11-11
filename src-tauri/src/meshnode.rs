@@ -323,9 +323,10 @@ mod tests {
     }
 
     // ---- the Android half -------------------------------------------------------------
-
-    const NSC: &str = "gen/android/app/src/main/res/xml/network_security_config.xml";
-    const NSC_DEBUG: &str = "gen/android/app/src/debug/res/xml/network_security_config.xml";
+    //
+    // There is deliberately NO cleartext waiver to pin: Aegis sync runs in Rust, which never
+    // reads Android's cleartext policy, and `sync::validated_base` already allows loopback
+    // `http://`. Release keeps `usesCleartextTraffic="false"` with no network security config.
 
     fn android_file(rel: &str) -> String {
         let path = format!("{}/{rel}", env!("CARGO_MANIFEST_DIR"));
@@ -348,107 +349,17 @@ mod tests {
         out
     }
 
-    /// Every start tag `<name …>` (or `<name …/>`) in `xml`, as (name, attribute text).
-    fn start_tags(xml: &str) -> Vec<(String, String)> {
-        let mut tags = Vec::new();
-        let mut rest = xml;
-        while let Some(i) = rest.find('<') {
-            rest = &rest[i + 1..];
-            if rest.starts_with('/') || rest.starts_with('?') || rest.starts_with('!') {
-                continue;
-            }
-            let end = rest.find('>').expect("unterminated tag");
-            let body = rest[..end].trim_end_matches('/').trim();
-            let (name, attrs) = body.split_once(char::is_whitespace).unwrap_or((body, ""));
-            tags.push((
-                name.to_string(),
-                attrs.split_whitespace().collect::<Vec<_>>().join(" "),
-            ));
-            rest = &rest[end + 1..];
-        }
-        tags
-    }
-
-    fn text_of(xml: &str, tag: &str) -> Vec<String> {
-        let mut out = Vec::new();
-        let mut rest = xml;
-        let open = format!("<{tag}");
-        while let Some(i) = rest.find(&open) {
-            rest = &rest[i..];
-            // `<domain` is also the prefix of `<domain-config`: only an exact name counts.
-            let after = rest[open.len()..].chars().next();
-            if !matches!(after, Some(c) if c.is_whitespace() || c == '>') {
-                rest = &rest[open.len()..];
-                continue;
-            }
-            let open_end = rest.find('>').unwrap();
-            let close = rest.find(&format!("</{tag}>")).unwrap();
-            out.push(rest[open_end + 1..close].trim().to_string());
-            rest = &rest[close..];
-        }
-        out
-    }
-
-    /// The release config: cleartext OFF for everything, ON for exactly one host —
-    /// `127.0.0.1`, without subdomains — and nothing else configured.
+    /// The manifest declares the Meshnode package query: without it, API 30+ package
+    /// visibility hides the package and detection is always false.
     #[test]
-    fn android_cleartext_is_permitted_only_for_127_0_0_1() {
-        let xml = strip_xml_comments(&android_file(NSC));
-        let tags = start_tags(&xml);
-        let names: Vec<&str> = tags.iter().map(|(n, _)| n.as_str()).collect();
-        assert_eq!(
-            names,
-            [
-                "network-security-config",
-                "base-config",
-                "domain-config",
-                "domain"
-            ],
-            "the config must be exactly one base-config and one single-domain domain-config"
-        );
-        assert_eq!(tags[1].1, r#"cleartextTrafficPermitted="false""#);
-        assert_eq!(tags[2].1, r#"cleartextTrafficPermitted="true""#);
-        assert_eq!(tags[3].1, r#"includeSubdomains="false""#);
-        assert_eq!(text_of(&xml, "domain"), ["127.0.0.1"]);
-    }
-
-    /// The manifest wires the config in and declares the Meshnode package query (without
-    /// it, API 30+ package visibility hides the package and detection is always false).
-    #[test]
-    fn android_manifest_uses_the_config_and_queries_the_meshnode_package() {
+    fn android_manifest_queries_the_meshnode_package() {
         let manifest = strip_xml_comments(&android_file(
             "gen/android/app/src/main/AndroidManifest.xml",
         ));
-        let tags = start_tags(&manifest);
-        let app = tags
-            .iter()
-            .find(|(n, _)| n == "application")
-            .expect("<application>");
-        assert!(
-            app.1
-                .contains(r#"android:networkSecurityConfig="@xml/network_security_config""#),
-            "{}",
-            app.1
-        );
         let q = manifest.find("<queries>").expect("a <queries> block");
         let q_end = manifest.find("</queries>").expect("</queries>");
         assert!(manifest[q..q_end].contains(r#"<package android:name="net.meshnode.app" />"#));
         assert_eq!(ANDROID_PACKAGE, "net.meshnode.app");
-    }
-
-    /// `networkSecurityConfig` makes Android IGNORE `usesCleartextTraffic` (API 24+, which is
-    /// minSdk), so the debug build's `tauri android dev` server would lose cleartext. The
-    /// debug-only override restores it, and lives ONLY in the debug source set.
-    #[test]
-    fn android_debug_override_is_debug_only() {
-        let xml = strip_xml_comments(&android_file(NSC_DEBUG));
-        let tags = start_tags(&xml);
-        let base = tags
-            .iter()
-            .find(|(n, _)| n == "base-config")
-            .expect("<base-config>");
-        assert_eq!(base.1, r#"cleartextTrafficPermitted="true""#);
-        assert!(!android_file(NSC).contains(r#"<base-config cleartextTrafficPermitted="true""#));
     }
 
     /// The Kotlin half: `MainActivity` re-checks the package on every resume (the user can
