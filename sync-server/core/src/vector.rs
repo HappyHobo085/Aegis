@@ -26,9 +26,10 @@
 //! | `{{auth:A:D1:NONCE:MOD}}` | the same, tampered: `expired`, `bad_sig` or `upper_device` |
 //! | `{{repeat:S:N}}` | the string `S` repeated `N` times |
 //!
-//! and an object `{"$repeat": N, "item": X}` becomes an array of `N` copies of `X`. Signing is
-//! deterministic (Ed25519), so the same template always expands to the same bytes: repeating an
-//! `auth` template with the same nonce is a replay.
+//! Object keys are expanded too (`AccountFacts::approved` is keyed by device id), and an object
+//! `{"$repeat": N, "item": X}` becomes an array of `N` copies of `X`. Signing is deterministic
+//! (Ed25519), so the same template always expands to the same bytes: repeating an `auth`
+//! template with the same nonce is a replay.
 use std::collections::BTreeSet;
 use std::path::Path;
 
@@ -272,7 +273,7 @@ pub fn load_all(dir: impl AsRef<Path>) -> Vec<Vector> {
     out
 }
 
-/// Expand templates in every string of `v`, and `{"$repeat": N, "item": X}` objects (see the
+/// Expand templates in every string of `v` (object keys included), and `{"$repeat": N, "item": X}` objects (see the
 /// module docs).
 pub fn expand(v: Value) -> Value {
     match v {
@@ -287,9 +288,10 @@ pub fn expand(v: Value) -> Value {
             let item = expand(m["item"].clone());
             Value::Array(vec![item; n])
         }
+        // Keys too: `AccountFacts::approved` is an object keyed by device id.
         Value::Object(m) => Value::Object(
             m.into_iter()
-                .map(|(k, v)| (k, expand(v)))
+                .map(|(k, v)| (expand_str(&k), expand(v)))
                 .collect::<Map<_, _>>(),
         ),
         other => other,

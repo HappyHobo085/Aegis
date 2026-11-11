@@ -48,15 +48,21 @@ bookmarks, saved items, or the allowlist.
     in `canonicalize_body`, which needs to see the whole stored namespace at once. `order_bytes`
     values must be compared WHOLE: the encoding is not prefix-free (`node` runs to the end).
   - `devices.rs` (new, for the mesh service) — `DeviceFacts`, `AccountFacts` (grow-only
-    `devices`, `pending`, `approved`, `revoked`, and `labels`: `LabelFact`s recording that a
-    member's re-registration refreshed its label, as the native `post_device` does; all serde,
-    which is the vectors' `given` shape), `label` (the newest label fact, else the registration
-    label), `is_member` (registered, not revoked, not pending), `is_pending`, `owner` and
-    `may_remove`. **`owner` ranks the members: never had to ask to join first, then earliest
-    `registered_ms`, then lowest id.** That is "first device is owner", and D5's hand-off when it
-    signs out. The never-pending rank comes first because `registered_ms` is a node's wall clock,
-    and clock skew between mesh nodes could give an approved joiner an earlier one than the
-    account's creator. `may_remove` refuses an actor that is not a member
+    `devices`, `pending`, `approved` (device id → `approved_ms`, the earliest approval; a
+    replicated host stores `ApprovedFact`s and folds them with `AccountFacts::approve`),
+    `revoked`, and `labels`: `LabelFact`s recording that a member's re-registration refreshed
+    its label, as the native `post_device` does; all serde, which is the vectors' `given`
+    shape), `label` (the newest label fact, else the registration label), `is_member`
+    (registered, not revoked, not pending), `is_pending`, `owner` and `may_remove`. **`owner`
+    ranks the members: devices that never had to ask to join first, by (`registered_ms`, id);
+    then approved joiners, by (`approved_ms`, id); revoked devices never.** That is "first device
+    is owner", and D5's hand-off when it signs out. The never-pending rank comes first because
+    `registered_ms` is a node's wall clock, and clock skew between mesh nodes could give an
+    approved joiner an earlier one than the account's creator. Joiners rank by APPROVAL time so
+    that approving a device that asked earlier never moves the role off the approving owner
+    (native keeps a stored owner that only moves on sign-out; vector
+    `devices_owner_stays_after_later_approval`). Natively the D5 heir is the earliest-REGISTERED
+    remaining device; the two agree when joiners were approved in the order they asked. `may_remove` refuses an actor that is not a member
     (`DeviceRefusal::NotOwner` = 403, as the native `require_registered`), then a non-owner
     removing someone else (403), then the last member (`LastDevice` = 409). **The native server
     does NOT use it**: it keeps its stored owner map.

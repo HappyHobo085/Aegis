@@ -121,7 +121,7 @@
           { "device_id": "{{dev:D3}}", "label": "tablet", "registered_ms": 3000 }
         ],
         "pending": ["{{dev:D2}}", "{{dev:D3}}"],
-        "approved": ["{{dev:D2}}"]
+        "approved": { "{{dev:D2}}": 2500 }
       }]]
     },
     "request": {
@@ -280,7 +280,7 @@
           { "device_id": "{{dev:D3}}", "label": "tablet", "registered_ms": 2000 }
         ],
         "pending": ["{{dev:D2}}", "{{dev:D3}}"],
-        "approved": ["{{dev:D2}}", "{{dev:D3}}"]
+        "approved": { "{{dev:D2}}": 3500, "{{dev:D3}}": 2500 }
       }]]
     },
     "request": {
@@ -334,7 +334,7 @@
           { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 1000 }
         ],
         "pending": ["{{dev:D2}}"],
-        "approved": ["{{dev:D2}}"]
+        "approved": { "{{dev:D2}}": 1500 }
       }]]
     },
     "request": {
@@ -359,6 +359,63 @@
           "body": { "deviceId": "{{dev:D1}}" }
         },
         "expect": { "status": 403 }
+      }
+    ]
+  },
+  {
+    "name": "devices_owner_stays_after_later_approval",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 },
+          { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 2000 },
+          { "device_id": "{{dev:D3}}", "label": "tablet", "registered_ms": 3000 }
+        ],
+        "pending": ["{{dev:D2}}", "{{dev:D3}}"],
+        "approved": { "{{dev:D3}}": 4000 },
+        "revoked": ["{{dev:D1}}"]
+      }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices/approve",
+      "headers": [["authorization", "{{auth:A:D3:01}}"]],
+      "body": { "deviceId": "{{dev:D2}}" }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D2:01}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body_subset": {
+            "devices": [{ "deviceId": "{{dev:D2}}" }, { "deviceId": "{{dev:D3}}" }],
+            "pending": [],
+            "ownerDeviceId": "{{dev:D3}}"
+          }
+        }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "path": "/v1/devices/remove",
+          "headers": [["authorization", "{{auth:A:D2:02}}"]],
+          "body": { "deviceId": "{{dev:D3}}" }
+        },
+        "expect": { "status": 403 }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "path": "/v1/devices/remove",
+          "headers": [["authorization", "{{auth:A:D3:02}}"]],
+          "body": { "deviceId": "{{dev:D2}}" }
+        },
+        "expect": { "status": 200, "body": { "ok": true } }
       }
     ]
   },

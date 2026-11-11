@@ -27,8 +27,11 @@ The types, the loader (`vector::load_all`) and the response check (`vector::chec
 ```
 
 - `given.accounts` are `devices::AccountFacts` (`devices: [{device_id, label, registered_ms}]`,
-  `pending`, `approved`, `revoked`, and `labels: [{device_id, label, at_ms}]` for labels a member
-  refreshed by re-registering; `devices::label` reads the newest). A native harness stores the owner as `devices::owner` of
+  `pending` and `revoked` (arrays of ids), `approved` (an object `{ device_id: approved_ms }`:
+  when the owner admitted each joiner, which ranks joiners for `devices::owner`), and
+  `labels: [{device_id, label, at_ms}]` for labels a member refreshed by re-registering;
+  `devices::label` reads the newest). Templates expand in object keys too, so `approved` is
+  written `{ "{{dev:D2}}": 2500 }`. A native harness stores the owner as `devices::owner` of
   the facts; the mesh computes it from the same facts.
 - `body` is an exact JSON match. `body_subset` matches when every key it names is present and
   matches recursively, with arrays matched as same-length and in any order, since hosts list

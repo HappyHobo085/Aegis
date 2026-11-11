@@ -7,18 +7,27 @@
 //! The rules reproduce the native behaviour:
 //!
 //! - **Owner** = among the members (not revoked, not still pending), a device that never had to
-//!   ask to join comes first; then the earliest `registered_ms`; then the lowest device id. That
-//!   is "the first device is the owner", and when the owner signs out (is revoked) the oldest
-//!   remaining member inherits, exactly as D5 hands it on. The never-asked rank comes FIRST
-//!   because `registered_ms` is a node's wall clock: on a mesh, clock skew between nodes can give
-//!   an approved joiner an earlier `registered_ms` than the device that created the account, and
-//!   a joiner must never outrank the creator that approved it.
+//!   ask to join comes first, by earliest `registered_ms` then lowest id; then the approved
+//!   joiners, by earliest APPROVAL (`approved_ms`) then lowest id. That is "the first device is
+//!   the owner", and when the owner signs out (is revoked) the longest-standing member inherits,
+//!   as D5 hands it on. Two properties make it a stable role rather than a re-ranking:
+//!   - A joiner never outranks a device that never had to ask: `registered_ms` is a node's wall
+//!     clock, and clock skew between nodes can give an approved joiner an earlier one than the
+//!     device that created the account.
+//!   - Joiners rank by when they were ADMITTED, not when they asked. Approving a device that
+//!     asked earlier therefore never takes the role from the owner that approved it (natively
+//!     the owner is a stored slot that only moves on sign-out). Ranking joiners by
+//!     `registered_ms` let a later approval hand the account to the device just approved.
+//!
+//!   Natively the D5 heir is the remaining device with the earliest `registered_ms`; here it is
+//!   the earliest-approved one. The two agree whenever joiners were approved in the order they
+//!   asked; a host that needs native's exact heir otherwise has no stored owner to give it.
 //! - **Member** = registered, not revoked, not still pending ([`is_member`]).
 //! - **Pending** = asked to join, and neither approved nor revoked (rejection is revocation).
 //! - **May remove**: only a member may act at all (`403`, as the native `require_registered`);
 //!   removing yourself is then always allowed (sign-out); removing anyone else needs the owner
 //!   (`403`); the last member cannot be removed (`409`), since revocation is permanent.
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -43,13 +52,38 @@ pub struct AccountFacts {
     pub devices: Vec<DeviceFacts>,
     /// Devices that asked to join an existing account (they need the owner's approval).
     pub pending: BTreeSet<String>,
-    /// Pending devices the owner approved.
-    pub approved: BTreeSet<String>,
+    /// Pending devices the owner approved, each with WHEN it was approved (`approved_ms`, the
+    /// approving node's wall clock): the earliest approval of that device (see
+    /// [`AccountFacts::approve`]). The approval time ranks joiners for [`owner`]. Serialized as a
+    /// JSON object `{ device_id: approved_ms }`.
+    pub approved: BTreeMap<String, i64>,
     /// Removed or rejected devices; permanent.
     pub revoked: BTreeSet<String>,
     /// Label changes after registration: a member re-registering refreshes its label (the native
     /// `post_device` overwrites it). Grow-only like the rest; [`label`] reads the newest.
     pub labels: Vec<LabelFact>,
+}
+
+/// One approval: the owner admitted `device_id` at `approved_ms`. A replicated host stores these
+/// as grow-only facts (one device may be approved on two nodes) and folds them into
+/// [`AccountFacts::approved`] with [`AccountFacts::approve`].
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ApprovedFact {
+    pub device_id: String,
+    pub approved_ms: i64,
+}
+
+impl AccountFacts {
+    /// Folds one approval into [`Self::approved`], keeping the EARLIEST `approved_ms` per
+    /// device, so every replica derives the same value from the same set of facts in any order.
+    pub fn approve(&mut self, fact: ApprovedFact) {
+        let at = self
+            .approved
+            .entry(fact.device_id)
+            .or_insert(fact.approved_ms);
+        *at = (*at).min(fact.approved_ms);
+    }
 }
 
 /// A device's label as set at `at_ms` (a re-registration). Grow-only.
@@ -99,7 +133,7 @@ impl DeviceRefusal {
 
 /// Is `id` waiting for the owner's approval?
 pub fn is_pending(f: &AccountFacts, id: &str) -> bool {
-    f.pending.contains(id) && !f.approved.contains(id) && !f.revoked.contains(id)
+    f.pending.contains(id) && !f.approved.contains_key(id) && !f.revoked.contains(id)
 }
 
 /// The account's members: registered, not revoked, not still pending.
@@ -115,21 +149,29 @@ pub fn is_member(f: &AccountFacts, id: &str) -> bool {
     f.devices.iter().any(|d| d.device_id == id) && !f.revoked.contains(id) && !is_pending(f, id)
 }
 
-/// The owner, ranked over the members by: never had to ask to join (never in `pending`) first,
-/// then earliest `registered_ms`, then lowest device id. `None` when the account has no member.
+/// The owner, ranked over the members: devices that never had to ask to join (never in
+/// `pending`) first, by earliest `registered_ms`; then approved joiners, by earliest
+/// `approved_ms`; the lowest device id breaks a tie in either rank. `None` when the account has
+/// no member.
 ///
-/// The first rank is what keeps clock skew from handing the account to a joiner: an approved
-/// joiner registered on a node whose clock runs behind can carry an earlier `registered_ms` than
-/// the account's creator. Once the creator is revoked every remaining member was a joiner, so
-/// the hand-off falls through to the oldest one, as D5 does natively.
+/// The first rank keeps clock skew from handing the account to a joiner: an approved joiner
+/// registered on a node whose clock runs behind can carry an earlier `registered_ms` than the
+/// account's creator. Ranking joiners by approval keeps the role where it is when the owner
+/// approves a device that asked earlier. Once every never-asked device is revoked, the hand-off
+/// falls through to the earliest-approved joiner (native D5 picks the earliest-registered one;
+/// see the module docs).
 pub fn owner(f: &AccountFacts) -> Option<&str> {
     members(f)
         .min_by_key(|d| {
-            (
-                f.pending.contains(&d.device_id),
-                d.registered_ms,
-                d.device_id.as_str(),
-            )
+            let id = d.device_id.as_str();
+            // A member in `pending` is approved (else it would not be a member); `MAX` only
+            // guards the impossible case, ranking it last.
+            let since = if f.pending.contains(id) {
+                f.approved.get(id).copied().unwrap_or(i64::MAX)
+            } else {
+                d.registered_ms
+            };
+            (f.pending.contains(id), since, id)
         })
         .map(|d| d.device_id.as_str())
 }
@@ -171,6 +213,10 @@ mod tests {
     fn set(ids: &[&str]) -> BTreeSet<String> {
         ids.iter().map(|s| s.to_string()).collect()
     }
+    /// `approved` with each id approved at its `ms`.
+    fn approved(ids: &[(&str, i64)]) -> BTreeMap<String, i64> {
+        ids.iter().map(|(id, ms)| (id.to_string(), *ms)).collect()
+    }
     fn facts(devices: Vec<DeviceFacts>) -> AccountFacts {
         AccountFacts {
             devices,
@@ -206,7 +252,7 @@ mod tests {
     fn owner_handoff_after_self_removal() {
         let mut f = facts(vec![dev("owner", 1), dev("waiting", 2), dev("member", 3)]);
         f.pending = set(&["waiting", "member"]);
-        f.approved = set(&["member"]);
+        f.approved = approved(&[("member", 4)]);
         assert_eq!(owner(&f), Some("owner"));
         assert_eq!(may_remove(&f, "owner", "owner"), Ok(()));
         f.revoked.insert("owner".into());
@@ -224,7 +270,7 @@ mod tests {
         assert!(is_pending(&f, "new"));
         assert!(!is_pending(&f, "owner"));
         assert!(!is_pending(&f, "stranger"));
-        f.approved = set(&["new"]);
+        f.approved = approved(&[("new", 3)]);
         assert!(!is_pending(&f, "new"), "approval ends pending");
         f.approved.clear();
         f.revoked = set(&["new"]);
@@ -255,7 +301,7 @@ mod tests {
     #[test]
     fn may_remove_other_requires_owner() {
         let mut f = facts(vec![dev("owner", 1), dev("other", 2), dev("third", 3)]);
-        f.approved = set(&["other", "third"]);
+        f.approved = approved(&[("other", 4), ("third", 5)]);
         let err = may_remove(&f, "other", "third").unwrap_err();
         assert_eq!(err, DeviceRefusal::NotOwner);
         assert_eq!(err.status(), 403);
@@ -277,22 +323,71 @@ mod tests {
     fn owner_ranks_a_never_pending_device_before_an_earlier_joiner() {
         let mut f = facts(vec![dev("creator", 2_000), dev("joiner", 1_000)]);
         f.pending = set(&["joiner"]);
-        f.approved = set(&["joiner"]);
+        f.approved = approved(&[("joiner", 1_500)]);
         assert_eq!(owner(&f), Some("creator"));
-        // Among joiners (the creator signed out) the earliest registration still wins, then id.
+        // Among joiners (the creator signed out) the earliest APPROVAL wins, then id; when they
+        // asked does not matter.
         f.devices.push(dev("later", 3_000));
         f.devices.push(dev("same", 1_000));
         f.pending = set(&["joiner", "later", "same"]);
-        f.approved = set(&["joiner", "later", "same"]);
+        f.approved = approved(&[("joiner", 5_000), ("later", 4_000), ("same", 4_000)]);
         f.revoked = set(&["creator"]);
-        assert_eq!(owner(&f), Some("joiner"), "1_000 ties; `joiner` < `same`");
+        assert_eq!(owner(&f), Some("later"), "4_000 ties; `later` < `same`");
+    }
+
+    /// The review reproduction: D1 creates the account, D2 asks at 10, D3 at 20; D1 approves
+    /// only D3 and signs out, so D3 owns the account. D3 then approves D2, which asked EARLIER.
+    /// The role must stay with D3 (natively the owner is a stored slot that only moves on
+    /// sign-out); ranking joiners by `registered_ms` handed it to D2.
+    #[test]
+    fn owner_stays_put_after_a_later_approval() {
+        let mut f = facts(vec![dev("d1", 1), dev("d2", 10), dev("d3", 20)]);
+        f.pending = set(&["d2", "d3"]);
+        f.approve(ApprovedFact {
+            device_id: "d3".into(),
+            approved_ms: 30,
+        });
+        f.revoked = set(&["d1"]);
+        assert_eq!(owner(&f), Some("d3"));
+        f.approve(ApprovedFact {
+            device_id: "d2".into(),
+            approved_ms: 40,
+        });
+        assert!(is_member(&f, "d2"));
+        assert_eq!(
+            owner(&f),
+            Some("d3"),
+            "a later approval does not move the role"
+        );
+        assert_eq!(may_remove(&f, "d2", "d3"), Err(DeviceRefusal::NotOwner));
+        assert_eq!(may_remove(&f, "d3", "d2"), Ok(()));
+    }
+
+    /// A device approved on two nodes keeps its earliest approval, whatever order the facts
+    /// arrive in.
+    #[test]
+    fn approve_keeps_the_earliest_approval() {
+        let fact = |ms| ApprovedFact {
+            device_id: "j".into(),
+            approved_ms: ms,
+        };
+        let mut a = AccountFacts::default();
+        a.approve(fact(50));
+        a.approve(fact(20));
+        a.approve(fact(70));
+        let mut b = AccountFacts::default();
+        b.approve(fact(70));
+        b.approve(fact(20));
+        b.approve(fact(50));
+        assert_eq!(a.approved, approved(&[("j", 20)]));
+        assert_eq!(a, b);
     }
 
     #[test]
     fn is_member_needs_registered_not_revoked_not_pending() {
         let mut f = facts(vec![dev("m", 1), dev("p", 2), dev("a", 3), dev("r", 4)]);
         f.pending = set(&["p", "a"]);
-        f.approved = set(&["a"]);
+        f.approved = approved(&[("a", 5)]);
         f.revoked = set(&["r"]);
         assert!(is_member(&f, "m"));
         assert!(is_member(&f, "a"), "approved joiner");

@@ -12,7 +12,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use aegis_sync_core::auth::{check_token, unhex, verify_account_root, AuthToken};
 use aegis_sync_core::canon::{canonicalize_body, reject_client_poisoning_stamps};
 use aegis_sync_core::devices::{
-    is_member, is_pending, label, may_remove, owner, AccountFacts, DeviceFacts, LabelFact,
+    is_member, is_pending, label, may_remove, owner, AccountFacts, ApprovedFact, DeviceFacts,
+    LabelFact,
 };
 use aegis_sync_core::env::Entropy;
 use aegis_sync_core::order::tie_ord;
@@ -42,6 +43,7 @@ const REQUIRED: &[&str] = &[
     "devices_remove_last_409",
     "devices_revoked_reregister_403",
     "devices_owner_self_remove_handoff",
+    "devices_owner_stays_after_later_approval",
     "records_push_then_get",
     "records_stale_push_loses",
     "records_tombstone_wins_by_hlc",
@@ -467,7 +469,10 @@ impl Model {
         if !is_pending(f, &target) {
             return Err(404);
         }
-        f.approved.insert(target);
+        f.approve(ApprovedFact {
+            device_id: target,
+            approved_ms: NOW_MS,
+        });
         Ok(json!({ "ok": true }))
     }
 }
