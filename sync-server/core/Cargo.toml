@@ -1,0 +1,21 @@
+[package]
+name = "aegis-sync-core"
+version = "0.1.0"
+edition = "2021"
+# MUST equal `sync-server/Cargo.toml` (and therefore `src-tauri/Cargo.toml`): the `msrv` job in
+# .github/workflows/ci.yml reads all three manifests and fails if they disagree.
+rust-version = "1.90.0"
+description = "Pure protocol core of the Aegis sync server: auth, wire shapes and bounds, no I/O."
+license = "AGPL-3.0-only"
+publish = false
+
+# PURE: no axum, no tokio, no OS clock or randomness. Anything that needs the time or entropy takes
+# the `env::Clock` / `env::Entropy` traits, so the same code runs natively (the axum server in the
+# parent directory) and as a WASM service. Every dependency here must already be in
+# `sync-server/Cargo.lock` — this crate adds dependency edges, never packages.
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Verification only — the server never signs.
+ed25519-dalek = "2"

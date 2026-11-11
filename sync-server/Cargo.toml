@@ -17,9 +17,15 @@ description = "Reference self-hosted sync server for Aegis — stores opaque cip
 license = "AGPL-3.0-only"
 publish = false
 
-# Standalone (NOT a workspace member of the Tauri app) so it builds/deploys independently.
+# Standalone (NOT a workspace member of the Tauri app) so it builds/deploys independently. It IS
+# the root of its own two-member workspace: `core/` is `aegis-sync-core`, the pure protocol code
+# (auth, wire shapes, bounds) that this axum server and the WASM service both build on. One shared
+# Cargo.lock, so `--locked` covers both members.
+[workspace]
+members = [".", "core"]
 
 [dependencies]
+aegis-sync-core = { path = "core" }
 axum = "0.8"
 # `sync` + `time` are for the pre-extractor admission guard (`Limits`): tokio::sync::Semaphore
 # bounds how many request bodies can be buffered at once and tokio::time::timeout bounds how long

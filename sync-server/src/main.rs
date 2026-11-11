@@ -11,20 +11,33 @@
 //!   AEGIS_SYNC_ADDR=0.0.0.0:8787 cargo run
 //! then set Aegis's Settings → Sync server URL to http://<host>:8787
 //!
-//! The auth `canonical()` + token shape below MUST match src-tauri/src/sync_auth.rs
-//! byte-for-byte (kept in sync by hand; covered by the round-trip test).
+//! The protocol itself — the auth `canonical()` + token shape (which MUST match
+//! src-tauri/src/sync_auth.rs byte-for-byte; covered by the round-trip test), the wire record,
+//! its HLC keys and every request/response bound — lives in the pure `aegis-sync-core` crate
+//! (`core/`). This file is the native host: axum routes, the in-memory store and its snapshot,
+//! the replay-nonce set, and the OS clock.
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use aegis_sync_core::auth::{
+    check_token, constant_time_eq, unhex, verify_account_root, AuthToken, MAX_FUTURE_SKEW_MS,
+    MAX_SEEN_NONCES, MAX_SEEN_NONCES_PER_DEVICE,
+};
+use aegis_sync_core::env::Clock;
+use aegis_sync_core::wire::{
+    hlc_key, hlc_well_formed, ord_key, wire_bytes, WireRecord, MAX_ACCOUNTS, MAX_BODY_BYTES,
+    MAX_CT_LEN, MAX_FIELD_LEN, MAX_LABEL_LEN, MAX_PENDING_PER_ACCOUNT, MAX_RECORDS_PER_ACCOUNT,
+    MAX_RECORDS_PER_REQUEST, MAX_RESPONSE_BYTES, MAX_RESPONSE_RECORDS, MAX_TOTAL_CT_BYTES,
+    MAX_TOTAL_RECORDS,
+};
 use axum::extract::{DefaultBodyLimit, Query, Request, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use ed25519_dalek::{Signature, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -32,72 +45,21 @@ use tokio::time::{timeout, Duration};
 
 // ----------------------------------------------------------------------------- auth
 
-#[derive(Serialize, Deserialize)]
-struct AuthToken {
-    account_id: String,
-    device_id: String,
-    issued_ms: i64,
-    expires_ms: i64,
-    nonce: String,
-}
+/// The native host's [`Clock`]: the OS wall clock.
+struct SystemClock;
 
-/// MUST match src-tauri/src/sync_auth.rs `canonical` byte-for-byte.
-fn canonical(t: &AuthToken) -> Vec<u8> {
-    format!(
-        "aegis-auth-v1\n{}\n{}\n{}\n{}\n{}",
-        t.account_id, t.device_id, t.issued_ms, t.expires_ms, t.nonce
-    )
-    .into_bytes()
-}
-
-fn unhex(s: &str) -> Option<Vec<u8>> {
-    if !s.len().is_multiple_of(2) {
-        return None;
+impl Clock for SystemClock {
+    fn now_ms(&self) -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system clock is before UNIX epoch")
+            .as_millis() as i64
     }
-    (0..s.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(s.get(i..i + 2)?, 16).ok())
-        .collect()
-}
-
-/// Lower-case hex only — the one spelling of an id this server will store or compare.
-fn is_canonical_hex(s: &str) -> bool {
-    !s.is_empty() && s.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
 fn now_ms() -> i64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .expect("system clock is before UNIX epoch")
-        .as_millis() as i64
+    SystemClock.now_ms()
 }
-
-/// Maximum token validity span. MUST be >= the client's `DEFAULT_TTL_MS`
-/// (`src-tauri/src/sync_auth.rs`) so honest clients are never rejected; the server enforces it
-/// because `expires_ms` is inside the signed-but-self-chosen token body.
-const MAX_TTL_MS: i64 = 5 * 60_000;
-/// Tolerance for a client whose clock runs slightly ahead of the server's.
-const MAX_FUTURE_SKEW_MS: i64 = 60_000;
-/// Tolerance for a client whose clock runs behind, and the bound on replaying a token that was
-/// captured long ago (its own `expires_ms` may still be in the future if the attacker minted it).
-const MAX_PAST_SKEW_MS: i64 = 5 * 60_000;
-/// Hard cap on the replay-nonce map so a long-lived process can't grow it without bound. Each
-/// authenticated request inserts one entry and the sweep only removes EXPIRED ones, so a
-/// high-rate client needs a real ceiling. At the 5-minute TTL this holds ~1 hour of 12k req/s.
-const MAX_SEEN_NONCES: usize = 250_000;
-
-/// Per-device ceiling on live nonces. The global `MAX_SEEN_NONCES` alone made backpressure
-/// *shared*: one high-rate (or hostile) paired device filled the map and every other device on
-/// the server got a `429` for up to the 5-minute TTL. Capping per device turns that into "the
-/// abusive device is refused on its own while everyone else keeps syncing"; the global cap stays
-/// as the memory backstop. 2_000 entries at the 5-minute TTL is ~10 minutes at a sustained 3.3
-/// req/s, far above any real client, and 2_000 x 125 devices still fits under the global cap.
-const MAX_SEEN_NONCES_PER_DEVICE: usize = 2_000;
-
-/// Longest wire nonce accepted. A real client sends 16 random bytes as 32 hex chars
-/// (`src-tauri/src/sync_auth.rs` `mint`); the nonce is stored for the token's whole lifetime, so
-/// an unbounded caller-chosen string was memory the caller chose how much of to spend.
-const MAX_NONCE_HEX_LEN: usize = 64;
 
 /// Verify the `Authorization: AegisSig {accountId}.{tokenHex}.{sigHex}` header. Returns the
 /// authenticated (accountId, deviceId).
@@ -107,6 +69,10 @@ const MAX_NONCE_HEX_LEN: usize = 64;
 /// nonce is recorded. That order is the point: anyone can mint a device key and sign a token
 /// with it, so a nonce recorded for a caller who is about to be refused let a stranger fill the
 /// replay map (2 000 slots per throwaway key, unlimited keys) and 429 every real device.
+///
+/// The stateless checks (canonical ids, nonce shape, lifetime bounds, signature) are
+/// `aegis_sync_core::auth::check_token`; this wrapper owns the header parsing and the replay
+/// state, which is why it reads the clock and hands the instant in.
 fn verify_auth(
     headers: &HeaderMap,
     state: &AppState,
@@ -130,48 +96,8 @@ fn verify_auth(
     if token.account_id != account {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    // CANONICAL IDS ONLY. `unhex` accepts upper-case digits, so `ABCD…` and `abcd…` decode to the
-    // same key while being different strings — and every map this server keys on a device or
-    // account (`devices`, `revoked`, `owner`, `pending`) compares STRINGS. A revoked device could
-    // re-register under an upper-cased spelling of its own id. Clients emit lower-case hex
-    // (`crypto::hex`), so refusing anything else costs an honest client nothing.
-    if !is_canonical_hex(&token.account_id) || !is_canonical_hex(&token.device_id) {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    if token.nonce.is_empty()
-        || token.nonce.len() > MAX_NONCE_HEX_LEN
-        || !token.nonce.bytes().all(|b| b.is_ascii_hexdigit())
-    {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    let now = now_ms();
-    // LIFETIME BOUNDS. `expires_ms` is attacker-controlled (anyone holding one device key can
-    // sign their own token), so both the forward window and the *span* must be clamped:
-    //   - already expired                      -> reject
-    //   - issued in the future                 -> reject (clock-skew allowance only)
-    //   - issued implausibly long ago          -> reject (a stale replayed token)
-    //   - validity span longer than MAX_TTL_MS -> reject (would be valid FOREVER)
-    // Without the span clamp a captured `Authorization` header can be replayed indefinitely,
-    // and because `seen` stores the token's OWN expires_ms the replay set never gets swept.
-    if now > token.expires_ms || token.issued_ms > now + MAX_FUTURE_SKEW_MS {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    if token.issued_ms < now - MAX_PAST_SKEW_MS {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    if token.expires_ms.saturating_sub(token.issued_ms) > MAX_TTL_MS {
-        return Err(StatusCode::UNAUTHORIZED);
-    }
-    let vk_bytes: [u8; 32] = unhex(&token.device_id)
-        .and_then(|b| b.try_into().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    let vk = VerifyingKey::from_bytes(&vk_bytes).map_err(|_| StatusCode::UNAUTHORIZED)?;
-    let sig_bytes: [u8; 64] = unhex(sig_hex)
-        .and_then(|b| b.try_into().ok())
-        .ok_or(StatusCode::UNAUTHORIZED)?;
-    let sig = Signature::from_bytes(&sig_bytes);
-    vk.verify_strict(&canonical(&token), &sig)
-        .map_err(|_| StatusCode::UNAUTHORIZED)?;
+    let now = SystemClock.now_ms();
+    check_token(&token, now, sig_hex).map_err(|_| StatusCode::UNAUTHORIZED)?;
     admit(&token.account_id, &token.device_id)?;
     // Replay defense: a (device, nonce) pair is single-use. Recorded only AFTER the signature
     // verifies AND the caller's `admit` decision passes — a valid signature alone proves nothing,
@@ -224,44 +150,6 @@ type RecordKey = (String, String, String);
 
 /// Tombstone keys grouped by `(account, ns)`, newest-first by HLC.
 type TombstonesByNs<'a> = HashMap<(&'a str, &'a str), Vec<&'a RecordKey>>;
-
-/// A stored record.
-///
-/// `hlc` is the CLIENT-AUTHENTICATED version stamp. It is bound into the record's AEAD
-/// associated data (`aad_for(ns, uuid, hlc_bytes)` in the client), and `crypto.rs` says in as
-/// many words that "the reference server must reproduce this byte-for-byte". So the server must
-/// hand `hlc` back exactly as it arrived.
-///
-/// It used not to. Breaking a cross-uuid HLC tie overwrote `hlc` in place without re-sealing
-/// `ct`, which made the record permanently undecryptable: the client's `open_wire` authenticates
-/// against the value the server returned, so the tag no longer verified, and the client's retry
-/// was then rejected by the per-uuid LWW gate as stale. A silent, permanent brick — the worst
-/// failure this server has, and the reason tie-breaking now writes `ord` instead.
-///
-/// `ord` is the server's own ORDERING stamp for the record, used only to make last-writer-wins a
-/// total order across *different* uuids. It is in no AAD, so the server may move it freely, and
-/// clients adopt it so their merge agrees with the server's ordering. Absent on every record a
-/// well-behaved client pushes (cross-uuid ties are structurally impossible for a correct client)
-/// and absent on every record written before this field existed.
-///
-/// Every field defaults so that ADDING one can never make an operator's existing
-/// `aegis-sync.json` fail to deserialize — that used to panic the server at boot with the
-/// operator's data on disk.
-#[derive(Clone, Default, Serialize, Deserialize)]
-struct WireRecord {
-    #[serde(default)]
-    uuid: String,
-    #[serde(default)]
-    hlc: Value,
-    #[serde(default)]
-    deleted: bool,
-    #[serde(default)]
-    nonce: String,
-    #[serde(default)]
-    ct: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    ord: Option<Value>,
-}
 
 /// Deterministic 128-bit content digest (FNV-1a run at two independent offsets/seeds).
 ///
@@ -377,26 +265,6 @@ fn entropy_hex() -> String {
 #[cfg(test)]
 thread_local! {
     static CONTENT_PASSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-/// Total order on the cleartext HLC (wall_ms, counter, node) — matches the client's Hlc Ord.
-///
-/// Borrows `node` instead of cloning it. This runs inside the per-record comparison loops in
-/// [`canonicalize_body`], where the old `String` return allocated once per comparison — tens of
-/// millions of allocations on an ordinary full-namespace push.
-fn hlc_key(hlc: &Value) -> (i64, u64, &str) {
-    (
-        hlc.get("wall_ms").and_then(Value::as_i64).unwrap_or(0),
-        hlc.get("counter").and_then(Value::as_u64).unwrap_or(0),
-        hlc.get("node").and_then(Value::as_str).unwrap_or(""),
-    )
-}
-
-/// The stamp a record is ORDERED by: the server's `ord` when it has one, else the
-/// client-supplied `hlc`. For ORDERING COMPARISONS ONLY — this value is never part of an AAD,
-/// which is exactly what makes it safe for the server to adjust.
-fn ord_key(rec: &WireRecord) -> (i64, u64, &str) {
-    hlc_key(rec.ord.as_ref().unwrap_or(&rec.hlc))
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -1366,19 +1234,8 @@ fn require_registered(db: &Db, account: &str, device: &str) -> Result<(), Status
 }
 
 // ----------------------------------------------------------------------------- quotas
-// Bound authenticated resource use: a registered-but-malicious paired device (any holder of
-// the recovery phrase, or a compromised device) must not be able to OOM the process or fill
-// disk. Generous for a personal deployment; tighten via these constants if needed.
-const MAX_RECORDS_PER_REQUEST: usize = 1000; // records in one POST /v1/records body
-const MAX_RECORDS_PER_ACCOUNT: usize = 50_000; // total live records an account may hold
-const MAX_FIELD_LEN: usize = 1024; // ns / uuid / nonce (short ids / hex)
-const MAX_CT_LEN: usize = 64 * 1024; // ciphertext bytes per record (very generous for one item)
-const MAX_LABEL_LEN: usize = 256; // device label
-const MAX_BODY_BYTES: usize = 8 * 1024 * 1024; // coarse request-body backstop (axum layer)
-const MAX_ACCOUNTS: usize = 10_000; // accounts on the whole server
-const MAX_TOTAL_RECORDS: usize = 2_000_000; // records across every account
-const MAX_TOTAL_CT_BYTES: usize = 4 * 1024 * 1024 * 1024; // ciphertext bytes across every account
-const MAX_PENDING_PER_ACCOUNT: usize = 16; // devices waiting for the owner's approval
+// The protocol bounds (`MAX_RECORDS_PER_REQUEST`, `MAX_CT_LEN`, `MAX_RESPONSE_*`, …) live in
+// `aegis_sync_core::wire` with their rationale. What stays here is native-host plumbing.
 /// Header carrying `AEGIS_SYNC_REGISTRATION_SECRET` on a new-account registration.
 const REGISTRATION_SECRET_HEADER: &str = "x-aegis-registration-secret";
 /// Concurrent requests allowed to be buffering/parsing at once. Bounds worst-case resident
@@ -1386,13 +1243,6 @@ const REGISTRATION_SECRET_HEADER: &str = "x-aegis-registration-secret";
 const MAX_INFLIGHT_REQUESTS: usize = 64;
 /// Wall-clock ceiling for one request. See [`guard`].
 const REQUEST_TIMEOUT_SECS: u64 = 30;
-/// Response-side quotas for `GET /v1/records`. The write path is capped by
-/// `MAX_RECORDS_PER_REQUEST` and `MAX_RECORDS_PER_ACCOUNT`; without a matching READ cap a single
-/// authenticated GET could ask the server to clone + re-serialize the whole account
-/// (50_000 × 64 KiB ≈ 3.2 GiB) into one buffer. The byte budget is the real bound — a record
-/// count alone doesn't account for ciphertext size.
-const MAX_RESPONSE_RECORDS: usize = 5_000;
-const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
 
 // ----------------------------------------------------------------------------- handlers
 
@@ -1427,39 +1277,6 @@ struct Page {
 /// by this pass. That is transient, not a loss: the merge is LWW and idempotent, and the record
 /// is still there for the next sync. Holding the whole `db` lock across a 50 000-key sort is
 /// acceptable at that bound and is why the client, not the server, bounds the page count.
-/// Bytes one record contributes to a `GET /v1/records` response: its strings plus the
-/// SERIALIZED `hlc` and `ord` (not a flat allowance — a record stored before `hlc` was bounded
-/// can carry a large one), plus a fixed slack for field names and punctuation.
-fn wire_bytes(r: &WireRecord) -> usize {
-    let json_len = |v: &Value| serde_json::to_vec(v).map_or(0, |b| b.len());
-    r.ct.len()
-        + r.uuid.len()
-        + r.nonce.len()
-        + json_len(&r.hlc)
-        + r.ord.as_ref().map_or(0, json_len)
-        + 64
-}
-
-/// Longest `hlc.node` accepted. A client's node id is a short hex string.
-const MAX_HLC_NODE_LEN: usize = 64;
-
-/// Is `hlc` the shape a client sends — `{wall_ms: i64, counter: u64, node: string<=64}` — with
-/// no other keys? A MISSING field is accepted (LWW reads it as 0, i.e. the past, which is
-/// harmless — see `reject_client_poisoning_stamps`); a WRONG one is not. `hlc` is cleartext the
-/// server stores and serves to every peer, so before this it was an unbounded caller-chosen
-/// `Value`, outside every field quota.
-fn hlc_well_formed(hlc: &Value) -> bool {
-    let Some(obj) = hlc.as_object() else {
-        return false;
-    };
-    obj.iter().all(|(k, v)| match k.as_str() {
-        "wall_ms" => v.is_i64(),
-        "counter" => v.is_u64(),
-        "node" => v.as_str().is_some_and(|n| n.len() <= MAX_HLC_NODE_LEN),
-        _ => false,
-    })
-}
-
 fn page_records(
     store: &Store,
     account: &str,
@@ -1691,32 +1508,6 @@ struct RegisterDevice {
     /// Account-root signature over `aegis-register-v1\n{accountId}\n{deviceId}`.
     #[serde(rename = "accountSig")]
     account_sig: String,
-}
-
-/// Compare two byte strings without an early exit on the first differing byte, so the time a
-/// wrong registration secret takes to refuse does not reveal how much of it was right. (The
-/// length is not hidden; it is not the secret.)
-fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
-    a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
-}
-
-/// Verify that `account_sig` is a valid signature over the registration message by the
-/// account key — and the account id IS that key's public half. So only a holder of the
-/// account root (which derives the account signing key) can register a device; knowing the
-/// public account id is not enough.
-fn verify_account_root(account_id: &str, device_id: &str, account_sig: &str) -> bool {
-    let Some(vk_bytes) = unhex(account_id).and_then(|b| <[u8; 32]>::try_from(b).ok()) else {
-        return false;
-    };
-    let Ok(vk) = VerifyingKey::from_bytes(&vk_bytes) else {
-        return false;
-    };
-    let Some(sig_bytes) = unhex(account_sig).and_then(|b| <[u8; 64]>::try_from(b).ok()) else {
-        return false;
-    };
-    let sig = Signature::from_bytes(&sig_bytes);
-    let msg = format!("aegis-register-v1\n{account_id}\n{device_id}");
-    vk.verify_strict(msg.as_bytes(), &sig).is_ok()
 }
 
 /// Why a root-signed registration must be refused, or `None` to admit it.
@@ -2148,6 +1939,7 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aegis_sync_core::auth::{canonical, MAX_TTL_MS};
 
     // ----------------------------------------------------------------- replay-nonce index
 

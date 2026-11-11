@@ -45,5 +45,5 @@ empty `ns` is `400`. Server-wide caps (`MAX_ACCOUNTS`, `MAX_TOTAL_RECORDS`,
 record. The server applies HLC last-writer-wins using the cleartext `hlc` (so a stale push
 can't roll it back) — it never decrypts `ct`.
 
-> The auth `canonical()` serialization in `src/main.rs` MUST match
+> The auth `canonical()` serialization in `core/src/auth.rs` (the pure `aegis-sync-core` crate) MUST match
 > `src-tauri/src/sync_auth.rs` byte-for-byte (a round-trip test guards the shape).

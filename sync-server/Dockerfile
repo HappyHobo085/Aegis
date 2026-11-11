@@ -4,16 +4,22 @@
 FROM rust:alpine3.20 AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /build
-# Dependency-cache layer: compile deps against a stub main so editing src/ doesn't rebuild them.
-# This RUN stays CACHED across source edits (only Cargo.toml/Cargo.lock changes invalidate it).
+# Dependency-cache layer: compile deps against stubs so editing src/ or core/src doesn't rebuild
+# them. This RUN stays CACHED across source edits (only the manifests/Cargo.lock invalidate it).
+# `core/` (`aegis-sync-core`) is a workspace member, so its manifest is needed to resolve the
+# workspace at all; it gets an empty stub lib for the same reason main.rs gets a stub main.
 COPY Cargo.toml Cargo.lock ./
-RUN mkdir src \
+COPY core/Cargo.toml ./core/
+RUN mkdir src core/src \
     && echo 'fn main() {}' > src/main.rs \
+    && touch core/src/lib.rs \
     && cargo build --release --locked \
-    && rm -rf src
-# Real sources; `touch` forces cargo to rebuild the bin crate while reusing the cached deps.
+    && rm -rf src core/src
+# Real sources; `touch` forces cargo to rebuild BOTH workspace crates while reusing the cached
+# deps (a COPY can carry an mtime older than the stub build, which cargo would read as fresh).
+COPY core/src ./core/src
 COPY src ./src
-RUN touch src/main.rs && cargo build --release --locked
+RUN touch src/main.rs core/src/lib.rs && cargo build --release --locked
 
 # ---- runtime stage: minimal, non-root ----
 FROM alpine:3.20

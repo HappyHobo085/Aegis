@@ -5,6 +5,38 @@ deploys independently) implementing Aegis's self-hosted, end-to-end-encrypted sy
 It stores **opaque ciphertext only**: it never holds encryption keys and cannot decrypt
 bookmarks, saved items, or the allowlist.
 
+## Layout: a two-member workspace (`.` server + `core/`)
+
+`Cargo.toml` here is BOTH the server package and the root of its own workspace
+(`[workspace] members = [".", "core"]`, one shared `Cargo.lock`):
+
+- **`core/` = `aegis-sync-core`**, the PURE protocol crate: no axum, no tokio, no files, no OS
+  clock or randomness. It exists so the same protocol code can run natively (this server) and as
+  a WASM service (Meshnode vendors it). So far it holds:
+  - `auth.rs` — `AuthToken`, `canonical`, `unhex`, `is_canonical_hex`, the TTL/skew/nonce
+    constants, `verify_account_root`, `constant_time_eq`, and **`check_token(token, now_ms,
+    sig_hex) -> Result<Verified, AuthError>`**: every stateless check `verify_auth` used to make
+    inline (canonical ids, nonce shape, lifetime bounds, signature), in the same order, with a
+    typed reason per refusal (all of them are still a plain `401` on the wire).
+  - `wire.rs` — `WireRecord` (pub fields), `hlc_key`, `ord_key`, `hlc_well_formed`,
+    `wire_bytes`, `MAX_HLC_NODE_LEN` and every request/response bound (`MAX_RECORDS_PER_*`,
+    `MAX_FIELD_LEN`, `MAX_CT_LEN`, `MAX_LABEL_LEN`, `MAX_BODY_BYTES`, the server-wide `MAX_*`
+    caps, `MAX_RESPONSE_*`).
+  - `env.rs` — the traits `Clock { fn now_ms(&self) -> i64 }` and `Entropy { fn fill(&mut self,
+    buf: &mut [u8]) }`, and nothing else. Anything in the core that needs the time takes the
+    instant (or a `Clock`) from its caller; the host supplies the implementation.
+- **`src/main.rs`** is the native host: axum routes, `Store` + snapshot, the replay-nonce set, the
+  admission guard, and `SystemClock` (the OS clock; `now_ms()` delegates to it). `verify_auth` is
+  now parse header → `check_token` → `admit` → record nonce. **The nonce is still recorded only
+  after `admit`** (see Hardening) — that ordering is the host's, so it stays here, not in the core.
+  `getrandom` stays a server-only dependency; `OsEntropy` will join `SystemClock` when the code
+  that needs entropy (`unique_uuid`) moves into the core.
+- The core moved code with its bodies and comments unchanged; only `pub` was added. Its own
+  `Cargo.toml` must keep `rust-version` equal to this one (the CI `msrv` job reads all three
+  manifests) and may only use packages already in `Cargo.lock`. `core/LICENSE` is the AGPL text.
+- Because the root is a package, a bare `cargo test`/`clippy` here covers the SERVER ONLY; use
+  `--workspace` (fmt: `--all`), as CI does. The `Dockerfile` copies `core/` too.
+
 ## What it does
 
 Implements the sync HTTP contract (see `README.md` for the table): HLC last-writer-wins
@@ -227,7 +259,7 @@ Removal is **real** revocation, not a registry edit. The two facts that make it 
 
 ## Hard rule
 
-The auth `canonical()` serialization and the token shape in `src/main.rs` MUST stay
+The auth `canonical()` serialization and the token shape in `core/src/auth.rs` MUST stay
 **byte-for-byte identical** to `src-tauri/src/sync_auth.rs` (a round-trip test guards the
 shape). Change one, change the other in the same commit.
 
@@ -297,8 +329,13 @@ Measured: down 23 h after a reboot while `docker ps` said `healthy`.
 
 ## Test
 
-`cargo test` (run from this folder, or `cargo test --manifest-path sync-server/Cargo.toml`
-from the repo root). Covers HLC ordering, auth canonical shape, account-root registration,
+`cargo test --workspace` (run from this folder, or `cargo test --workspace --manifest-path
+sync-server/Cargo.toml` from the repo root; without `--workspace` only the server's tests run).
+The server's tests (in `src/main.rs`, unchanged by the core extraction) cover HLC ordering, auth canonical shape, account-root registration,
 owner approval / ownership transfer / registration secret / global caps, the request bounds,
-and the snapshot save/load round-trip (82 tests). Handlers are driven by calling them directly
+and the snapshot save/load round-trip (82 tests); the core's own unit tests (16) pin
+`canonical`, every `check_token` refusal at its exact boundary, `hlc_well_formed`, `wire_bytes`
+and the HLC keys against a fixed clock. On Windows,
+`save_snapshot_flushes_the_directory_after_the_rename` fails (a directory cannot be opened as a
+`File` there, which `save_snapshot` deliberately tolerates); CI is Linux. Handlers are driven by calling them directly
 (no `tower` in the tree); test account ids must be lower-case hex (`registered()` hex-encodes).
