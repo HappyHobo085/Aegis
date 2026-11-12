@@ -1,0 +1,99 @@
+[
+  {
+    "name": "bounds_too_many_records_413",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": { "$repeat": 1001, "item": { "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "aa", "ct": "c1" } }
+      }
+    },
+    "expect": { "status": 413 }
+  },
+  {
+    "name": "bounds_ct_too_large_413",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [{ "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "aa", "ct": "{{repeat:a:65537}}" }]
+      }
+    },
+    "expect": { "status": 413 }
+  },
+  {
+    "name": "bounds_ct_at_the_limit_200",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [{ "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1" }, "deleted": false, "nonce": "aa", "ct": "{{repeat:a:65536}}" }]
+      }
+    },
+    "expect": { "status": 200, "body": { "ok": true } }
+  },
+  {
+    "name": "bounds_bad_hlc_400",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": {
+        "ns": "bm",
+        "records": [{ "uuid": "u1", "hlc": { "wall_ms": 1000, "counter": 0, "node": "n1", "extra": 1 }, "deleted": false, "nonce": "aa", "ct": "c1" }]
+      }
+    },
+    "expect": { "status": 400 },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": { "status": 200, "body": { "records": [], "next": null } }
+      }
+    ]
+  },
+  {
+    "name": "bounds_empty_ns_400",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/records",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": { "ns": "", "records": [] }
+    },
+    "expect": { "status": 400 }
+  },
+  {
+    "name": "bounds_label_too_long_413",
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": { "accountId": "{{acct:A}}", "deviceId": "{{dev:D1}}", "label": "{{repeat:x:257}}", "accountSig": "{{regsig:A:D1}}" }
+    },
+    "expect": { "status": 413 }
+  }
+]

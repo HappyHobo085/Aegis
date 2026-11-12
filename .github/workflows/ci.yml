@@ -360,7 +360,10 @@ jobs:
   # reach the deploy host), so it gets the same fmt/clippy/test treatment as the
   # desktop app plus its own dependency audit — previously it had no CI at all,
   # which is how 9 poisonable `.lock().unwrap()` calls on its request hot path
-  # survived. It is a separate non-workspace crate, so it needs no webkit2gtk.
+  # survived. It is not a member of the Tauri app's workspace, so it needs no webkit2gtk.
+  # It is the root of its OWN two-member workspace (the axum server + `core/`, the
+  # pure `aegis-sync-core`), so every step below passes `--workspace`/`--all`: a
+  # bare `--manifest-path sync-server/Cargo.toml` would gate the server package only.
   sync-server:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -384,13 +387,29 @@ jobs:
             sync-server/target
           key: ci-sync-${{ hashFiles('sync-server/Cargo.lock') }}
       - name: cargo fmt --check
-        run: cargo fmt --check --manifest-path sync-server/Cargo.toml
+        run: cargo fmt --check --manifest-path sync-server/Cargo.toml --all
       - name: cargo clippy (-D warnings)
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path sync-server/Cargo.toml --all-targets -- -D warnings
-      - name: cargo test
+        run: cargo clippy --locked --manifest-path sync-server/Cargo.toml --workspace --all-targets -- -D warnings
+      # Both members. This includes the contract vectors (`sync-server/core/tests/vectors/*.json`):
+      # the core's runner (`core/tests/vectors.rs`, a pure model built from the core) and the
+      # native harness (`src/vectors_native.rs`, the real axum router). Their test-only `vectors`
+      # feature is switched on by dev-dependencies, so no `--features` flag is needed here.
+      - name: cargo test (incl. contract vectors)
         if: ${{ !cancelled() }}
-        run: cargo test --locked --manifest-path sync-server/Cargo.toml
+        run: cargo test --locked --manifest-path sync-server/Cargo.toml --workspace
+      # The core is also built as a WASM service (Meshnode vendors it), so it must keep compiling
+      # for wasm32-wasip2 WITHOUT the test-only features, and its docs must stay link-clean.
+      - name: aegis-sync-core for wasm32-wasip2
+        if: ${{ !cancelled() }}
+        run: |
+          rustup target add wasm32-wasip2
+          cargo check --locked --manifest-path sync-server/Cargo.toml -p aegis-sync-core --target wasm32-wasip2
+      - name: aegis-sync-core docs (-D warnings)
+        if: ${{ !cancelled() }}
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --manifest-path sync-server/Cargo.toml -p aegis-sync-core --no-deps --all-features
       - name: cargo audit
         if: ${{ !cancelled() }}
         # No `.cargo/audit.toml` in this crate yet, so no accepted advisories; the
@@ -536,9 +555,9 @@ jobs:
           --manifest-path src-tauri/Cargo.toml
           --target ${{ matrix.target }}
 
-  # MSRV gate: prove the `rust-version` in both manifests is a real lower bound rather
+  # MSRV gate: prove the `rust-version` in all three manifests is a real lower bound rather
   # than an aspiration. The version is read OUT OF THE MANIFESTS, so this job cannot
-  # disagree with them, and the two manifests are checked against each other so they
+  # disagree with them, and the three manifests are checked against each other so they
   # cannot drift apart.
   #
   # It has now caught two wrong numbers, which is the whole point of it. 1.80.0 was
@@ -574,20 +593,21 @@ jobs:
         run: |
           APP=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml)
           SYNC=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' sync-server/Cargo.toml)
-          if [ -z "$APP" ] || [ -z "$SYNC" ]; then
-            echo "::error::A manifest has no rust-version: src-tauri='$APP' sync-server='$SYNC'"
+          CORE=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' sync-server/core/Cargo.toml)
+          if [ -z "$APP" ] || [ -z "$SYNC" ] || [ -z "$CORE" ]; then
+            echo "::error::A manifest has no rust-version: src-tauri='$APP' sync-server='$SYNC' sync-server/core='$CORE'"
             exit 1
           fi
-          if [ "$APP" != "$SYNC" ]; then
-            echo "::error::MSRV drift: src-tauri=$APP but sync-server=$SYNC. Keep them equal."
+          if [ "$APP" != "$SYNC" ] || [ "$APP" != "$CORE" ]; then
+            echo "::error::MSRV drift: src-tauri=$APP, sync-server=$SYNC, sync-server/core=$CORE. Keep them equal."
             exit 1
           fi
-          echo "MSRV declared by both manifests: $APP"
+          echo "MSRV declared by all three manifests: $APP"
           echo "version=$APP" >> "$GITHUB_OUTPUT"
       # The one place a toolchain is NOT taken from rust-toolchain.toml: this job
       # deliberately installs the MSRV, not the CI pin. Reading it from the manifest
       # keeps the tested value and the declared value the same number by construction.
-      # NOTE: keep `rust-version` three-component (1.88.0, not 1.88). Both manifests
+      # NOTE: keep `rust-version` three-component (1.88.0, not 1.88). All three manifests
       # declare it that way and it is passed verbatim to `cargo +<version>`, so the
       # argument to cargo and the declared floor are the same string by construction.
       # A bare `1.NN` would be a different string from the one the manifests say.
@@ -638,4 +658,4 @@ jobs:
       - name: cargo check (sync-server)
         run: |
           cargo +${{ steps.msrv.outputs.version }} --version
-          cargo +${{ steps.msrv.outputs.version }} check --locked --manifest-path sync-server/Cargo.toml
+          cargo +${{ steps.msrv.outputs.version }} check --locked --manifest-path sync-server/Cargo.toml --workspace

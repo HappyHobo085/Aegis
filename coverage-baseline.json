@@ -3,24 +3,24 @@
   "vitestVersion": "4.1.11",
   "total": {
     "lines": {
-      "total": 5605,
-      "covered": 5016,
-      "pct": 89.49
+      "total": 5618,
+      "covered": 5029,
+      "pct": 89.51
     },
     "statements": {
-      "total": 7586,
-      "covered": 6635,
-      "pct": 87.46
+      "total": 7601,
+      "covered": 6650,
+      "pct": 87.48
     },
     "functions": {
-      "total": 1525,
-      "covered": 1341,
-      "pct": 87.93
+      "total": 1531,
+      "covered": 1347,
+      "pct": 87.98
     },
     "branches": {
-      "total": 5126,
-      "covered": 4186,
-      "pct": 81.66
+      "total": 5136,
+      "covered": 4195,
+      "pct": 81.67
     }
   },
   "files": {
@@ -1167,24 +1167,24 @@
     },
     "src/components/SyncSettingsTab.tsx": {
       "lines": {
-        "total": 163,
-        "covered": 156,
-        "pct": 95.7
+        "total": 175,
+        "covered": 168,
+        "pct": 96
       },
       "statements": {
-        "total": 201,
-        "covered": 189,
-        "pct": 94.02
+        "total": 215,
+        "covered": 203,
+        "pct": 94.41
       },
       "functions": {
-        "total": 61,
-        "covered": 56,
-        "pct": 91.8
+        "total": 66,
+        "covered": 61,
+        "pct": 92.42
       },
       "branches": {
-        "total": 147,
-        "covered": 134,
-        "pct": 91.15
+        "total": 157,
+        "covered": 143,
+        "pct": 91.08
       }
     },
     "src/components/TabStrip.tsx": {
@@ -2443,19 +2443,19 @@
     },
     "src/lib/ipcClient.ts": {
       "lines": {
-        "total": 332,
-        "covered": 307,
-        "pct": 92.46
+        "total": 333,
+        "covered": 308,
+        "pct": 92.49
       },
       "statements": {
-        "total": 350,
-        "covered": 322,
-        "pct": 92
+        "total": 351,
+        "covered": 323,
+        "pct": 92.02
       },
       "functions": {
-        "total": 193,
-        "covered": 186,
-        "pct": 96.37
+        "total": 194,
+        "covered": 187,
+        "pct": 96.39
       },
       "branches": {
         "total": 110,

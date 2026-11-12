@@ -20,6 +20,18 @@
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
+    <!-- Package visibility (API 30+): without this entry PackageManager reports
+         net.meshnode.app as NOT installed even when it is. MainActivity.noteMeshnodeInstalled()
+         asks only whether it is installed, so the Sync tab can offer Meshnode's local sync
+         URL (http://127.0.0.1:7801); it never launches or binds to it.
+         No cleartext waiver is needed for that URL: Aegis sync runs in Rust (reqwest in
+         libapp_lib.so), which never reads Android's cleartext policy, and
+         sync::validated_base already permits loopback http. usesCleartextTraffic below
+         therefore stays "false" in release. -->
+    <queries>
+        <package android:name="net.meshnode.app" />
+    </queries>
+
     <!-- Backup is a PRIVACY requirement, not a default, and it is enforced by TWO
          mechanisms because no single one covers both transports.
 

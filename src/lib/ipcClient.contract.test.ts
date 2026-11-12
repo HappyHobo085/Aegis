@@ -633,6 +633,13 @@ const REQUESTS: ContractRow[] = [
     channel: IPC.syncApproveDevice,
     payload: { deviceId: 'dev-2' },
   },
+  // Local Meshnode detection: a read-only query with no payload (`meshnode.rs` `dispatch`).
+  {
+    name: 'meshnode.detected',
+    run: () => aegis.meshnode.detected(),
+    channel: IPC.meshnodeDetected,
+    payload: {},
+  },
   // The server registration code rides the setup call as `registrationCode` (the Rust arm's
   // `registration_code` reads exactly that key).
   {

@@ -107,10 +107,10 @@ committed `coverage-baseline.json` (**recompute these, do not carry them forward
 
 | Metric     | Measured               | Gap |
 | ---------- | ---------------------- | --- |
-| lines      | 5016/5605 = **89.49%** | 589 |
-| statements | 6635/7586 = **87.46%** | 951 |
-| functions  | 1341/1525 = **87.93%** | 184 |
-| branches   | 4186/5126 = **81.66%** | 940 |
+| lines      | 5029/5618 = **89.51%** | 589 |
+| statements | 6650/7601 = **87.48%** | 951 |
+| functions  | 1347/1531 = **87.98%** | 184 |
+| branches   | 4195/5136 = **81.67%** | 941 |
 
 52 of the 133 measured files are at 100% statements. The 951 uncovered statements decompose
 as:
@@ -165,7 +165,7 @@ the 4 files the settings work added**, so the settings change accounts for 36% o
 appeared to create. Itemise it with `Object.keys(pre.files)` vs `Object.keys(post.files)`
 rather than attributing the whole delta.
 
-**Branches (81.66%, 940 uncovered) is the weakest metric and where the next effort belongs.**
+**Branches (81.67%, 941 uncovered) is the weakest metric and where the next effort belongs.**
 The Rust side has its own measured numbers and its own structural ceiling — see the
 coverage section of `src-tauri/AGENTS.md`.
 
@@ -277,7 +277,7 @@ in true global scope via indirect eval to catch this). Per-spawn: level/allowlis
 to newly created/reloaded tabs only. Honest limits: a same-world JS shim is detectable
 (default-off for this reason); per-frame-origin seeding (not Brave's per-top-eTLD+1).
 `vitest src/lib/farbleShim.test.ts` is authoritative for shim runtime behavior and passes
-(31 tests; the tree has 2095 tests in 134 files in total, verified on vitest
+(31 tests; the tree has 2102 tests in 134 files in total, verified on vitest
 4.1.11 — run `npm test` for the full count). Live farble-a-real-page verify + Android device verify + Win/macOS GUI verify
 are **PENDING** user. **Content-webview Proxy** (`proxy.rs`; sub-project M): routes
 browsed pages through a user-configured HTTP or SOCKS5 proxy. **This is a Proxy, not a

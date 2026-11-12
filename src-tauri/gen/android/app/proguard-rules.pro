@@ -14,11 +14,11 @@
 }
 
 # The Rust JNI exports — every `external fun` under src/main/java/com/aegis/browser/, now
-# EIGHTEEN of them (this line used to say "nine" and name nine, so half the surface R8 could
+# TWENTY of them (this line used to say "nine" and name nine, so half the surface R8 could
 # break was undocumented):
-#   NativeAdblock.enabled / shouldBlock, NativeDownloads.recordStart / recordFinish,
+#   NativeAdblock.enabled / shouldBlock, NativeDownloads.recordStart / recordFinish / safeName,
 #   NativeFarble.farbleScript, NativeFormDetect.formDetectionScript,
-#   NativeHistory.recordVisit, NativeInject.documentStartScript,
+#   NativeHistory.recordVisit, NativeInject.documentStartScript, NativeMeshnode.noteInstalled,
 #   NativePermissions.decision / normalizeOrigin / remember, NativeProxy.proxyConfig,
 #   NativeRedirectGuard.openBlockedRedirect / shouldBlock, NativeSafety.isMalwareHost,
 #   NativeSettings.httpsOnly, NativeSyncKeystore.provideClass, NativeWebrtc.shimScript.
@@ -27,7 +27,7 @@
 # binding (UnsatisfiedLinkError / NoSuchMethodError at CALL time, i.e. ad-block injection,
 # the WebRTC shim and malware blocking silently dying in the release build only).
 # The COUNT matters less than the list does: the keep rule below is a wildcard, so it was
-# always correct for all eighteen — but a reader auditing "did we keep everything?" against
+# always correct for all twenty — but a reader auditing "did we keep everything?" against
 # prose would have checked nine and concluded the other nine were deliberately dropped.
 # Re-derive with: grep -rn "external fun" src/main/java/com/aegis/browser/*.kt | wc -l
 # This keep used to be an IMPLICIT dependency on two files this repo does not own:

@@ -45,5 +45,16 @@ empty `ns` is `400`. Server-wide caps (`MAX_ACCOUNTS`, `MAX_TOTAL_RECORDS`,
 record. The server applies HLC last-writer-wins using the cleartext `hlc` (so a stale push
 can't roll it back) — it never decrypts `ct`.
 
-> The auth `canonical()` serialization in `src/main.rs` MUST match
+> The auth `canonical()` serialization in `core/src/auth.rs` (the pure `aegis-sync-core` crate) MUST match
 > `src-tauri/src/sync_auth.rs` byte-for-byte (a round-trip test guards the shape).
+
+## Contract vectors
+
+`core/tests/vectors/*.json` pins this contract as request/response cases: auth refusals,
+device registration, approval, removal and owner hand-off, record LWW, tombstones, poisoned
+stamps, paging, and the request bounds. `cargo test --workspace` runs them twice: against this
+server's real router (`src/vectors_native.rs`) and against a pure model built from the
+`aegis-sync-core` crate (`core/tests/vectors.rs`). Meshnode's WASM port of this server runs the
+same files. Signed tokens use fixed public test keys and a fixed clock; see
+[`core/tests/vectors/README.md`](core/tests/vectors/README.md) for the format, the keys and the
+two host-specific cases (the cross-uuid HLC tie rule).

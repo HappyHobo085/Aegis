@@ -3,15 +3,27 @@
 version = 4
 
 [[package]]
+name = "aegis-sync-core"
+version = "0.1.0"
+dependencies = [
+ "aegis-sync-core",
+ "ed25519-dalek",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aegis-sync-server"
 version = "0.1.0"
 dependencies = [
+ "aegis-sync-core",
  "axum",
  "ed25519-dalek",
  "getrandom",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
 ]
 
 [[package]]

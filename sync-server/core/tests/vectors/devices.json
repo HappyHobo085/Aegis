@@ -1,0 +1,506 @@
+[
+  {
+    "name": "devices_first_registration_owner",
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": { "accountId": "{{acct:A}}", "deviceId": "{{dev:D1}}", "label": "phone", "accountSig": "{{regsig:A:D1}}" }
+    },
+    "expect": { "status": 200, "body": { "ok": true, "pending": false } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body_subset": {
+            "devices": [{ "deviceId": "{{dev:D1}}", "label": "phone", "registeredMs": 1800000000000 }],
+            "pending": [],
+            "ownerDeviceId": "{{dev:D1}}"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "devices_second_pending",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices",
+      "headers": [["authorization", "{{auth:A:D2:01}}"]],
+      "body": { "accountId": "{{acct:A}}", "deviceId": "{{dev:D2}}", "label": "laptop", "accountSig": "{{regsig:A:D2}}" }
+    },
+    "expect": { "status": 200, "body": { "ok": true, "pending": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D2:02}}"]]
+        },
+        "expect": { "status": 403 }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D1:01}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body_subset": {
+            "devices": [{ "deviceId": "{{dev:D1}}", "label": "phone", "registeredMs": 1000 }],
+            "pending": [{ "deviceId": "{{dev:D2}}", "label": "laptop", "registeredMs": 1800000000000 }],
+            "ownerDeviceId": "{{dev:D1}}"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "devices_approve_by_owner",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 },
+          { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 2000 }
+        ],
+        "pending": ["{{dev:D2}}"]
+      }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices/approve",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": { "deviceId": "{{dev:D2}}" }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D2:01}}"]]
+        },
+        "expect": { "status": 200, "body": { "records": [], "next": null } }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body_subset": {
+            "devices": [
+              { "deviceId": "{{dev:D1}}", "registeredMs": 1000 },
+              { "deviceId": "{{dev:D2}}", "label": "laptop", "registeredMs": 2000 }
+            ],
+            "pending": [],
+            "ownerDeviceId": "{{dev:D1}}"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "devices_approve_by_non_owner_403",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 },
+          { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 2000 },
+          { "device_id": "{{dev:D3}}", "label": "tablet", "registered_ms": 3000 }
+        ],
+        "pending": ["{{dev:D2}}", "{{dev:D3}}"],
+        "approved": { "{{dev:D2}}": 2500 }
+      }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices/approve",
+      "headers": [["authorization", "{{auth:A:D2:01}}"]],
+      "body": { "deviceId": "{{dev:D3}}" }
+    },
+    "expect": { "status": 403 },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D3:01}}"]]
+        },
+        "expect": { "status": 403 }
+      }
+    ]
+  },
+  {
+    "name": "devices_approve_not_pending_404",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices/approve",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": { "deviceId": "{{dev:D4}}" }
+    },
+    "expect": { "status": 404 }
+  },
+  {
+    "name": "devices_remove_last_409",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices/remove",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": { "deviceId": "{{dev:D1}}" }
+    },
+    "expect": { "status": 409 },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": { "status": 200 }
+      }
+    ]
+  },
+  {
+    "name": "devices_revoked_reregister_403",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 },
+          { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 2000 }
+        ],
+        "revoked": ["{{dev:D2}}"]
+      }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices",
+      "headers": [["authorization", "{{auth:A:D2:01}}"]],
+      "body": { "accountId": "{{acct:A}}", "deviceId": "{{dev:D2}}", "label": "laptop", "accountSig": "{{regsig:A:D2}}" }
+    },
+    "expect": { "status": 403 },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D1:01}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body_subset": { "devices": [{ "deviceId": "{{dev:D1}}" }], "pending": [], "ownerDeviceId": "{{dev:D1}}" }
+        }
+      }
+    ]
+  },
+  {
+    "name": "devices_owner_rejects_pending",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 },
+          { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 2000 }
+        ],
+        "pending": ["{{dev:D2}}"]
+      }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices/remove",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": { "deviceId": "{{dev:D2}}" }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "POST",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D2:01}}"]],
+          "body": { "accountId": "{{acct:A}}", "deviceId": "{{dev:D2}}", "label": "laptop", "accountSig": "{{regsig:A:D2}}" }
+        },
+        "expect": { "status": 403 }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body_subset": { "devices": [{ "deviceId": "{{dev:D1}}" }], "pending": [], "ownerDeviceId": "{{dev:D1}}" }
+        }
+      }
+    ]
+  },
+  {
+    "name": "devices_pending_self_remove_403",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 },
+          { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 2000 }
+        ],
+        "pending": ["{{dev:D2}}"]
+      }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices/remove",
+      "headers": [["authorization", "{{auth:A:D2:01}}"]],
+      "body": { "deviceId": "{{dev:D2}}" }
+    },
+    "expect": { "status": 403 }
+  },
+  {
+    "name": "devices_owner_self_remove_handoff",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 },
+          { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 3000 },
+          { "device_id": "{{dev:D3}}", "label": "tablet", "registered_ms": 2000 }
+        ],
+        "pending": ["{{dev:D2}}", "{{dev:D3}}"],
+        "approved": { "{{dev:D2}}": 3500, "{{dev:D3}}": 2500 }
+      }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices/remove",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": { "deviceId": "{{dev:D1}}" }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D3:01}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body_subset": {
+            "devices": [{ "deviceId": "{{dev:D2}}" }, { "deviceId": "{{dev:D3}}" }],
+            "pending": [],
+            "ownerDeviceId": "{{dev:D3}}"
+          }
+        }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "path": "/v1/devices/remove",
+          "headers": [["authorization", "{{auth:A:D3:02}}"]],
+          "body": { "deviceId": "{{dev:D2}}" }
+        },
+        "expect": { "status": 200, "body": { "ok": true } }
+      },
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/records?ns=bm",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": { "status": 403 }
+      }
+    ]
+  },
+  {
+    "name": "devices_owner_never_pending_ranks_first",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 2000 },
+          { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 1000 }
+        ],
+        "pending": ["{{dev:D2}}"],
+        "approved": { "{{dev:D2}}": 1500 }
+      }]]
+    },
+    "request": {
+      "method": "GET",
+      "path": "/v1/devices",
+      "headers": [["authorization", "{{auth:A:D2:01}}"]]
+    },
+    "expect": {
+      "status": 200,
+      "body_subset": {
+        "devices": [{ "deviceId": "{{dev:D1}}" }, { "deviceId": "{{dev:D2}}" }],
+        "pending": [],
+        "ownerDeviceId": "{{dev:D1}}"
+      }
+    },
+    "then": [
+      {
+        "request": {
+          "method": "POST",
+          "path": "/v1/devices/remove",
+          "headers": [["authorization", "{{auth:A:D2:02}}"]],
+          "body": { "deviceId": "{{dev:D1}}" }
+        },
+        "expect": { "status": 403 }
+      }
+    ]
+  },
+  {
+    "name": "devices_owner_stays_after_later_approval",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 },
+          { "device_id": "{{dev:D2}}", "label": "laptop", "registered_ms": 2000 },
+          { "device_id": "{{dev:D3}}", "label": "tablet", "registered_ms": 3000 }
+        ],
+        "pending": ["{{dev:D2}}", "{{dev:D3}}"],
+        "approved": { "{{dev:D3}}": 4000 },
+        "revoked": ["{{dev:D1}}"]
+      }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices/approve",
+      "headers": [["authorization", "{{auth:A:D3:01}}"]],
+      "body": { "deviceId": "{{dev:D2}}" }
+    },
+    "expect": { "status": 200, "body": { "ok": true } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D2:01}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body_subset": {
+            "devices": [{ "deviceId": "{{dev:D2}}" }, { "deviceId": "{{dev:D3}}" }],
+            "pending": [],
+            "ownerDeviceId": "{{dev:D3}}"
+          }
+        }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "path": "/v1/devices/remove",
+          "headers": [["authorization", "{{auth:A:D2:02}}"]],
+          "body": { "deviceId": "{{dev:D3}}" }
+        },
+        "expect": { "status": 403 }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "path": "/v1/devices/remove",
+          "headers": [["authorization", "{{auth:A:D3:02}}"]],
+          "body": { "deviceId": "{{dev:D2}}" }
+        },
+        "expect": { "status": 200, "body": { "ok": true } }
+      }
+    ]
+  },
+  {
+    "name": "devices_reregister_member_refreshes_label",
+    "given": {
+      "accounts": [["{{acct:A}}", { "devices": [{ "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 }] }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices",
+      "headers": [["authorization", "{{auth:A:D1:01}}"]],
+      "body": { "accountId": "{{acct:A}}", "deviceId": "{{dev:D1}}", "label": "work phone", "accountSig": "{{regsig:A:D1}}" }
+    },
+    "expect": { "status": 200, "body": { "ok": true, "pending": false } },
+    "then": [
+      {
+        "request": {
+          "method": "GET",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D1:02}}"]]
+        },
+        "expect": {
+          "status": 200,
+          "body_subset": {
+            "devices": [{ "deviceId": "{{dev:D1}}", "label": "work phone", "registeredMs": 1000 }],
+            "pending": [],
+            "ownerDeviceId": "{{dev:D1}}"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "name": "devices_pending_cap_429",
+    "given": {
+      "accounts": [["{{acct:A}}", {
+        "devices": [
+          { "device_id": "{{dev:D1}}", "label": "phone", "registered_ms": 1000 },
+          { "device_id": "f001", "label": "waiting f001", "registered_ms": 2000 },
+          { "device_id": "f002", "label": "waiting f002", "registered_ms": 2001 },
+          { "device_id": "f003", "label": "waiting f003", "registered_ms": 2002 },
+          { "device_id": "f004", "label": "waiting f004", "registered_ms": 2003 },
+          { "device_id": "f005", "label": "waiting f005", "registered_ms": 2004 },
+          { "device_id": "f006", "label": "waiting f006", "registered_ms": 2005 },
+          { "device_id": "f007", "label": "waiting f007", "registered_ms": 2006 },
+          { "device_id": "f008", "label": "waiting f008", "registered_ms": 2007 },
+          { "device_id": "f009", "label": "waiting f009", "registered_ms": 2008 },
+          { "device_id": "f010", "label": "waiting f010", "registered_ms": 2009 },
+          { "device_id": "f011", "label": "waiting f011", "registered_ms": 2010 },
+          { "device_id": "f012", "label": "waiting f012", "registered_ms": 2011 },
+          { "device_id": "f013", "label": "waiting f013", "registered_ms": 2012 },
+          { "device_id": "f014", "label": "waiting f014", "registered_ms": 2013 },
+          { "device_id": "f015", "label": "waiting f015", "registered_ms": 2014 },
+          { "device_id": "f016", "label": "waiting f016", "registered_ms": 2015 }
+        ],
+        "pending": ["f001", "f002", "f003", "f004", "f005", "f006", "f007", "f008", "f009", "f010", "f011", "f012", "f013", "f014", "f015", "f016"]
+      }]]
+    },
+    "request": {
+      "method": "POST",
+      "path": "/v1/devices",
+      "headers": [["authorization", "{{auth:A:D2:01}}"]],
+      "body": { "accountId": "{{acct:A}}", "deviceId": "{{dev:D2}}", "label": "laptop", "accountSig": "{{regsig:A:D2}}" }
+    },
+    "expect": { "status": 429 },
+    "then": [
+      {
+        "request": {
+          "method": "POST",
+          "path": "/v1/devices/remove",
+          "headers": [["authorization", "{{auth:A:D1:01}}"]],
+          "body": { "deviceId": "f001" }
+        },
+        "expect": { "status": 200, "body": { "ok": true } }
+      },
+      {
+        "request": {
+          "method": "POST",
+          "path": "/v1/devices",
+          "headers": [["authorization", "{{auth:A:D2:02}}"]],
+          "body": { "accountId": "{{acct:A}}", "deviceId": "{{dev:D2}}", "label": "laptop", "accountSig": "{{regsig:A:D2}}" }
+        },
+        "expect": { "status": 200, "body": { "ok": true, "pending": true } }
+      }
+    ]
+  }
+]
