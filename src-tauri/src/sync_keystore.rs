@@ -473,31 +473,56 @@ fn keyring_set(user: &str, bytes: Zeroizing<Vec<u8>>) -> Result<(), String> {
 fn keyring_get(user: &str) -> Option<Zeroizing<Vec<u8>>> {
     let user = user.to_string();
     std::thread::spawn(move || {
-        // Both the keychain's String (the hex-encoded root) and the decoded bytes are wrapped in
-        // `Zeroizing`, so neither copy of the root survives in freed memory (audit 2.8e) — the
-        // callers already wipe the bytes they get, but the String was never wiped at all.
+        // Both the keychain's stored blob (the encoded root) and the decoded bytes are wrapped
+        // in `Zeroizing`, so neither copy of the root survives in freed memory (audit 2.8e).
+        //
+        // `get_secret`, not `get_password`: the RAW blob, decoded here by its exact length.
+        // `get_password` cannot read a legacy raw-byte entry on Windows, where Credential
+        // Manager decodes the blob as UTF-16 — 32 raw bytes came back as 16 unrelated
+        // characters, the root was rejected, and a pre-hex user's sync seed was lost on upgrade.
         keyring::Entry::new(KEYRING_SERVICE, &user)
             .ok()
-            .and_then(|e| e.get_password().ok())
+            .and_then(|e| e.get_secret().ok())
             .map(Zeroizing::new)
-            .and_then(|stored| decode_keyring_value(&stored))
+            .and_then(|blob| decode_keyring_blob(&blob))
     })
     .join()
     .ok()
     .flatten()
 }
 
-/// Turn a keychain string back into the 32-byte root. Normally that is the hex we wrote;
-/// a pre-hex build may have stored the raw bytes, so a value that is already 32 bytes
-/// long is accepted as-is. Anything else (truncated, or a foreign entry) is rejected
-/// rather than guessed at — a wrong root here would sync as the wrong account.
+/// Turn a keychain blob (`Entry::get_secret`) back into the 32-byte root.
+///
+/// What we write is the root as hex through `set_password`, and each backend stores that
+/// string in its own encoding: UTF-8 on Secret Service and the macOS Keychain (64 bytes),
+/// UTF-16LE on Windows Credential Manager (128 bytes). A pre-hex build stored the raw root
+/// through `set_secret`, which is the 32 bytes themselves on every backend. The three
+/// lengths are distinct, so the form is decided by the length, never guessed at. Anything
+/// else (truncated, or a foreign entry) is rejected — a wrong root here would sync as the
+/// wrong account.
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-fn decode_keyring_value(stored: &str) -> Option<Zeroizing<Vec<u8>>> {
-    if let Some(hexed) = unhex(stored).map(Zeroizing::new).filter(|b| b.len() == 32) {
-        return Some(hexed);
-    }
-    let raw = Zeroizing::new(stored.as_bytes().to_vec());
-    (raw.len() == 32).then_some(raw)
+fn decode_keyring_blob(blob: &[u8]) -> Option<Zeroizing<Vec<u8>>> {
+    let hex_text: Option<Zeroizing<String>> = match blob.len() {
+        64 => std::str::from_utf8(blob)
+            .ok()
+            .map(|s| Zeroizing::new(s.to_string())),
+        128 => {
+            let units: Zeroizing<Vec<u16>> = Zeroizing::new(
+                blob.as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|&c| u16::from_le_bytes(c))
+                    .collect(),
+            );
+            String::from_utf16(&units).ok().map(Zeroizing::new)
+        }
+        32 => return Some(Zeroizing::new(blob.to_vec())),
+        _ => None,
+    };
+    hex_text
+        .and_then(|t| unhex(&t))
+        .map(Zeroizing::new)
+        .filter(|b| b.len() == 32)
 }
 
 #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
@@ -923,7 +948,7 @@ mod tests {
     /// keyring slots instead — the production helpers, with the entry `user` swapped.
     #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     mod keyring_slots {
-        use super::{decode_keyring_value, hex, KEYRING_SERVICE};
+        use super::{hex, keyring_get, KEYRING_SERVICE};
         use zeroize::Zeroize;
 
         fn entry(user: &str) -> keyring::Entry {
@@ -943,9 +968,9 @@ mod tests {
             entry(user).set_secret(&bytes).expect("raw keychain write");
         }
 
+        /// The PRODUCTION read path, so these tests prove what boot actually does.
         pub fn get(user: &str) -> Option<Vec<u8>> {
-            decode_keyring_value(&zeroize::Zeroizing::new(entry(user).get_password().ok()?))
-                .map(|b| b.to_vec())
+            keyring_get(user).map(|b| b.to_vec())
         }
 
         pub fn clear(user: &str) {
@@ -993,6 +1018,55 @@ mod tests {
         k::set(U, b.0.to_vec()).expect("second store must overwrite");
         assert_eq!(k::get(U), Some(b.0.to_vec()));
         k::clear(U);
+    }
+
+    /// The blob decoder, on every backend's encoding, with NO keychain — so a host without a
+    /// secure-storage daemon (the Linux CI runner) still proves the Windows UTF-16 form. The
+    /// UTF-16 and raw cases are the regression: `get_password` read a Windows raw-byte entry
+    /// as UTF-16 text and rejected the root.
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
+    fn keyring_blob_decodes_every_backend_encoding_by_length() {
+        let root: Vec<u8> = (0u8..32).map(|i| i.wrapping_mul(37) ^ 0x80).collect();
+        let hexed = hex(&root);
+        // Secret Service / Keychain: the hex as UTF-8.
+        assert_eq!(
+            decode_keyring_blob(hexed.as_bytes()).map(|b| b.to_vec()),
+            Some(root.clone())
+        );
+        // Credential Manager: the hex as UTF-16LE.
+        let utf16: Vec<u8> = hexed.encode_utf16().flat_map(u16::to_le_bytes).collect();
+        assert_eq!(utf16.len(), 128);
+        assert_eq!(
+            decode_keyring_blob(&utf16).map(|b| b.to_vec()),
+            Some(root.clone())
+        );
+        // A pre-hex raw root — including one that is ALSO valid ASCII hex (16 bytes decoded),
+        // which must not be mistaken for the hex form.
+        assert_eq!(
+            decode_keyring_blob(&root).map(|b| b.to_vec()),
+            Some(root.clone())
+        );
+        let ascii = vec![0x41u8; 32];
+        assert_eq!(
+            decode_keyring_blob(&ascii).map(|b| b.to_vec()),
+            Some(ascii.clone())
+        );
+        // Anything else is refused, never guessed at.
+        assert!(decode_keyring_blob(b"").is_none());
+        assert!(decode_keyring_blob(&root[..31]).is_none());
+        assert!(
+            decode_keyring_blob(&[b'z'; 64]).is_none(),
+            "64 bytes of non-hex"
+        );
+        let short_hex: Vec<u8> = hex(&root[..16])
+            .encode_utf16()
+            .flat_map(u16::to_le_bytes)
+            .collect();
+        assert!(
+            decode_keyring_blob(&short_hex).is_none(),
+            "64 bytes of UTF-16 hex is 16 bytes"
+        );
     }
 
     /// A legacy entry stored as raw 32 bytes (pre-hex builds) must still load, so an

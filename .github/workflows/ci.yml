@@ -420,6 +420,56 @@ jobs:
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit
 
+  # The test suites on a real Windows host. Every other test job is Linux, and the suites
+  # had drifted Linux-only without anything noticing: the Rust test harness could not even
+  # START on Windows (0xc0000139 — see `src-tauri/build.rs`), `with_tmp_app` isolated store
+  # paths through XDG variables that only Linux reads (so tests wrote into the runner's real
+  # `%APPDATA%`), the source-scanning drift guards broke on CRLF checkouts (`.gitattributes`
+  # now forces LF), and a Windows-only keychain decode bug sat behind a test that only ran on
+  # Linux. This job is what keeps those from coming back.
+  #
+  # Tests only — fmt/clippy/audit/coverage are host-independent and stay on the Linux jobs.
+  # `--lib` for src-tauri: the bin has no tests, and `main.rs` only calls `run()`. No keyring
+  # setup is needed: Windows Credential Manager is always available, so the four keychain
+  # round-trips in `sync_keystore` really run here (on the headless Linux runner they need
+  # `gnome-keyring-daemon`).
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22.23.3'
+          cache: 'npm'
+      - run: npm ci
+      - name: Unit tests (node + jsdom)
+        run: npm test
+      # Same rust-toolchain.toml-driven install as the `rust` job (see the note there).
+      - name: Install the pinned toolchain
+        if: ${{ !cancelled() }}
+        run: rustup toolchain install
+      - uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1.17.0
+        if: ${{ !cancelled() }}
+        with:
+          cache: 'false'
+      - name: Cache cargo
+        if: ${{ !cancelled() }}
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+            sync-server/target
+          key: ci-windows-${{ hashFiles('src-tauri/Cargo.lock', 'sync-server/Cargo.lock') }}
+      - name: cargo test (src-tauri)
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
+      - name: cargo test (sync-server)
+        if: ${{ !cancelled() }}
+        run: cargo test --locked --manifest-path sync-server/Cargo.toml --workspace
+
   # Compile-only cross-target gate. Every `#[cfg(target_os = ...)]` surface in the
   # core — adblock_win.rs, find_win.rs, nav_url_win.rs, zoom_win.rs, find_mac.rs,
   # nav_url_mac.rs, zoom_mac.rs, and the whole JNI / sync_keystore / ffi_guard block —
@@ -493,6 +543,11 @@ jobs:
           - target: x86_64-pc-windows-gnu
             os: ubuntu-latest
             apt: 'gcc-mingw-w64-x86-64-posix'
+            # `--all-targets` type-checks the unit tests' cfg surface too: on Android it is
+            # the only CI step that compiles the Android-gated test code at all (a device
+            # cannot run most of it — Tauri's MockRuntime is `todo!()` there). Not on the
+            # macOS leg yet: the test code has never been compiled for macOS.
+            targets: '--all-targets'
           # Android: the JNI/sync_keystore/ffi_guard block. NO apt packages — the NDK
           # clang is already on the runner at ANDROID_NDK_LATEST_HOME (the step below
           # points the build scripts at it), and a from-cold check of this leg also
@@ -501,6 +556,7 @@ jobs:
           - target: aarch64-linux-android
             os: ubuntu-latest
             apt: ''
+            targets: '--all-targets'
           # macOS: MUST be a macOS runner. objc2's build script needs a macOS C
           # toolchain, so this cannot be cross-compiled from Linux at all
           # (src-tauri/AGENTS.md gotcha 13). x86_64-apple-darwin specifically, because
@@ -508,6 +564,7 @@ jobs:
           - target: x86_64-apple-darwin
             os: macos-15
             apt: ''
+            targets: ''
     steps:
       - uses: actions/checkout@v7
       - name: Install Linux dependencies
@@ -554,6 +611,7 @@ jobs:
           cargo check --locked
           --manifest-path src-tauri/Cargo.toml
           --target ${{ matrix.target }}
+          ${{ matrix.targets }}
 
   # MSRV gate: prove the `rust-version` in all three manifests is a real lower bound rather
   # than an aspiration. The version is read OUT OF THE MANIFESTS, so this job cannot

@@ -630,10 +630,24 @@ mod tests {
             "an ad-block-exempt page with no shims must get the gesture layer and nothing \
              else: no blank lines, no empty joins"
         );
+        // The ad-block layer is per-platform: Linux blocks at the network tier and injects
+        // the guard alone; every other platform adds the injected blocker after it.
+        let adblock = super::adblock_layer(true);
+        #[cfg(target_os = "linux")]
+        assert_eq!(adblock, super::POPUP_GUARD);
+        #[cfg(not(target_os = "linux"))]
+        assert_eq!(
+            adblock,
+            format!(
+                "{}\n{}",
+                super::POPUP_GUARD,
+                super::BUILT.get_or_init(super::build)
+            )
+        );
         assert_eq!(
             super::compose("", "", true),
-            format!("{gestures}\n{}", super::POPUP_GUARD),
-            "with only the ad-block layer present the script is the gesture layer + the guard"
+            format!("{gestures}\n{adblock}"),
+            "with only the ad-block layer present the script is the gesture layer + that layer"
         );
         // The gesture layer is composed FIRST, so the guard follows it — this is the whole
         // reason the layer is unconditional and leading.

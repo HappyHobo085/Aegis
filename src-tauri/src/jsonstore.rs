@@ -185,7 +185,7 @@ fn write_atomic_inner(path: &Path, bytes: &[u8], backup: bool) -> std::io::Resul
     f.write_all(bytes)?;
     f.sync_all()?;
     drop(f);
-    fs::rename(&tmp, path)?;
+    rename_over(&tmp, path)?;
     guard.armed = false;
     // Best-effort dir fsync so the rename is durable. Opening a directory as a File
     // fails on Windows — swallow the error there.
@@ -195,6 +195,34 @@ fn write_atomic_inner(path: &Path, bytes: &[u8], backup: bool) -> std::io::Resul
         }
     }
     Ok(())
+}
+
+/// `fs::rename(from, to)`, retried briefly on Windows while `to` is momentarily held open.
+///
+/// POSIX lets a rename replace a file another process has open. Windows refuses with
+/// `ERROR_ACCESS_DENIED` while any handle on the target lacks `FILE_SHARE_DELETE` — and two
+/// such handles are routine: a concurrent writer's `.bak` refresh (`fs::copy` is
+/// `CopyFileExW`, which opens the source without delete sharing), and an antivirus scanner
+/// or the search indexer reading a freshly written file. Each is held for milliseconds, so
+/// failing the write outright dropped it for a transient reason (measured: 8 threads × 200
+/// writes to one store lost writes on every Windows run). A bounded backoff, ~0.3 s in all,
+/// rides that out. A DIRECTORY at `to` is a permanent refusal (see
+/// `test_support::block_store_file`) and is not retried.
+fn rename_over(from: &Path, to: &Path) -> std::io::Result<()> {
+    #[cfg(windows)]
+    {
+        let mut delay_ms = 1;
+        for _ in 0..10 {
+            match fs::rename(from, to) {
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied && !to.is_dir() => {
+                    std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+                    delay_ms = (delay_ms * 2).min(50);
+                }
+                r => return r,
+            }
+        }
+    }
+    fs::rename(from, to)
 }
 
 /// Durable write that keeps the prior good copy at `<name>.bak` for recovery.

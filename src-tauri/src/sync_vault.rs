@@ -1278,7 +1278,16 @@ mod tests {
             ("syncServerUrl", json!("https://sync.example.com")),
             ("syncServerUrl", json!("")),                      // clears
             ("syncServerUrl", json!("http://127.0.0.1:8787")), // loopback is legal
-            ("downloadDir", json!("/home/u/Downloads")),
+            // "Absolute" is the HOST's rule (`Path::is_absolute`), and `/home/u` has no drive
+            // so it is not absolute on Windows — the fixture has to be native to the host.
+            (
+                "downloadDir",
+                json!(if cfg!(windows) {
+                    r"C:\Users\u\Downloads"
+                } else {
+                    "/home/u/Downloads"
+                }),
+            ),
             ("downloadDir", json!("")), // "use the default"
             ("webrtcPolicy", json!("public-only")),
             ("antiFingerprint", json!("strict")),

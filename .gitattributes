@@ -1,0 +1,28 @@
+# Check every text file out with LF line endings on EVERY OS.
+#
+# Git for Windows defaults to `core.autocrlf=true`, which turns LF into CRLF on checkout.
+# That is not cosmetic here: a large part of the test suite reads SOURCE files and parses
+# them — the IPC catalog drift guard (`shared/ipcCatalog.drift.test.ts`), the platform
+# contract pins, and the Rust source-text pins over the Kotlin bridge (`test_support.rs`'s
+# `kotlin_fn_body` / `rust_production_source`, which cut at `"\n#[cfg(test)]\nmod tests {"`).
+# Under CRLF those patterns stop matching and the tests fail on Windows only, for a reason
+# that has nothing to do with the code. Prettier's `endOfLine` is also LF, so a CRLF
+# checkout fails `npm run format:check` on every file. This attribute overrides autocrlf.
+* text=auto eol=lf
+
+# Windows batch files must stay CRLF or cmd.exe misparses labels and GOTOs.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Bundled filter lists are data, consumed byte-for-byte; never rewrite them.
+src-tauri/resources/** -text
+
+# Binary assets.
+*.png binary
+*.ico binary
+*.icns binary
+*.jpg binary
+*.webp binary
+*.jar binary
+*.keystore binary
+*.jks binary

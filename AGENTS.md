@@ -62,6 +62,13 @@ Native build deps: a Rust toolchain; on Linux, webkit2gtk/gtk dev packages.
 npm test    # vitest: node project (shared/ + scripts/) + jsdom (src/)
 ```
 
+Every suite must pass on **Linux and Windows** hosts — CI runs them on both (`rust`/`web`/
+`sync-server` on Ubuntu, `windows` on Windows), and type-checks the Rust test code for
+Android. Two repo-level settings make that hold: `.gitattributes` forces LF checkouts (the
+drift guards parse source text), and `test_support::with_tmp_app` redirects store paths via
+Tauri's `appDirectoriesOverride`, not XDG variables. A test that hard-codes a POSIX path, an
+XDG variable or a Linux-only behaviour needs a per-OS expectation, not a skip.
+
 Tests are **co-located** `*.test.ts` / `*.test.tsx` files, and they mock the IPC surface
 (`src/testFixtures/aegisMock.ts`) rather than driving a real browser or a real webview.
 A mutating user flow must be driven somewhere that **actually executes**: a component

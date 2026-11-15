@@ -141,9 +141,25 @@ fn dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
             return p;
         }
     }
-    app.path()
-        .download_dir()
-        .unwrap_or_else(|_| PathBuf::from("/tmp"))
+    os_download_dir(app).unwrap_or_else(|_| PathBuf::from("/tmp"))
+}
+
+/// The OS Downloads folder (`app.path().download_dir()`), except in a unit test.
+///
+/// Tauri's `appDirectoriesOverride` covers the `app_*_dir` family only, and `download_dir()`
+/// is not one of them. On Linux a test still never reaches the real folder, because
+/// `with_tmp_app` points `$XDG_CONFIG_HOME` at an empty dir and `download_dir()` resolves to
+/// nothing; on Windows and macOS it is a known-folder lookup that no env var redirects, so a
+/// test would read and write the developer's REAL Downloads folder (and an export test that
+/// asserts "no export exists yet" would fail on any machine that has made one). Under
+/// `cfg(test)` it resolves to the app data dir instead, which `with_tmp_app` HAS redirected —
+/// the same directory the production fallbacks land in when there is no Downloads folder.
+pub(crate) fn os_download_dir<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<PathBuf> {
+    if cfg!(test) {
+        app.path().app_data_dir()
+    } else {
+        app.path().download_dir()
+    }
 }
 
 /// Returns `true` when a download should be written to the downloads store.

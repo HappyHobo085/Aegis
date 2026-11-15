@@ -2506,6 +2506,11 @@ mod tests {
     /// Audit 1.7: `rename` is only durable once the DIRECTORY entry is flushed. Without a dir
     /// fsync a power loss right after an `ok` can leave the old file (or none) in place. A crash is
     /// not reproducible in a unit test, so the observable is that the save performs the flush.
+    ///
+    /// Unix only: a directory cannot be opened as a `File` on Windows, so `save_snapshot`
+    /// skips the flush there by design (see its comment) and the counter never moves. NTFS
+    /// journals the rename's metadata itself; the production deployment is Linux anyway.
+    #[cfg(unix)]
     #[test]
     fn save_snapshot_flushes_the_directory_after_the_rename() {
         let dir = std::env::temp_dir().join(format!("aegis-sync-dirsync-{}", std::process::id()));

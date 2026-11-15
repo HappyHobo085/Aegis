@@ -2050,11 +2050,33 @@ only into test binaries (never into the release artifact). It solves two problem
 that the AppHandle-backed modules share:
 
 **Problem 1 — path isolation.** Every data store resolves its path from
-`app.path().app_data_dir()`, which on Linux reads `$XDG_DATA_HOME` (and similarly
-`$XDG_CACHE_HOME` / `$XDG_CONFIG_HOME`). A `tauri::test::mock_app()` has an empty
-bundle identifier, so `app_data_dir()` resolves directly to `$XDG_DATA_HOME`. The
-harness redirects all three env vars to a fresh per-test temp dir before the mock
-app is built, and removes the dir on exit — so test IO never touches real user data.
+`app.path().app_data_dir()`. A `tauri::test::mock_app()` has an empty bundle
+identifier, so on its own that is the ROOT of the real user data dir
+(`~/.local/share`, `%APPDATA%`, `~/Library/Application Support`). The harness points
+every `app_*_dir()` (config, data, local data, cache → the temp dir itself; log →
+`<tmp>/logs`) at a fresh per-test temp dir through Tauri's own
+`app > appDirectoriesOverride` config (`test_support::test_dirs_override`), and removes
+the dir on exit — so test IO never touches real user data **on any OS**. It used to do
+this with `$XDG_DATA_HOME` / `$XDG_CACHE_HOME` / `$XDG_CONFIG_HOME` alone, which only
+Linux reads: on Windows every store test wrote into the developer's real `%APPDATA%` root
+and ~115 failed there with "Access is denied". The XDG variables are still set, for
+`download_dir()` on Linux (it reads `user-dirs.dirs` under `$XDG_CONFIG_HOME`), and
+`downloads::os_download_dir` resolves the Downloads folder to the (redirected) app data
+dir under `cfg(test)`, because `download_dir()` is a known-folder lookup that no env var
+redirects on Windows/macOS. `every_app_dir_is_under_the_temp_dir_on_every_os` pins all of
+it. **A test that does store IO must use `with_tmp_app`**, never a bare `mock_app()`.
+
+**Running the suite on Windows.** `cargo test --lib` works on a Windows MSVC host (865/865
+on Windows 11, 2026-11-15) and CI's `windows` job runs it. Two things made that possible:
+`build.rs` has the linker embed the Common-Controls v6 manifest dependency into every
+artifact (without it the test harness died before `main` with 0xc0000139), and the
+repo-root `.gitattributes` forces LF checkouts (the source-text pins below cut at
+`"\n#[cfg(test)]\nmod tests {"`, which a CRLF checkout never matches). **On an Android
+device** the binary builds and runs (`cargo test --no-run --target aarch64-linux-android`,
+`adb push` to `/data/local/tmp`), but only the ~470 pure tests can pass: building any mock
+app panics in Tauri's `MockRuntime::run_on_android_context` (`todo!()`), and the
+source-text pins read host paths. CI therefore only type-checks the test code for Android
+(`cross-target`, `--all-targets`).
 The removal is a drop-guard (`TmpCleanup`), so it also runs when the test body PANICS, and it
 first waits for `install_adblock`'s detached threads (`wait_for_adblock_installs`, a
 `#[cfg(test)]` in-flight count): one finishing after the delete used to re-create

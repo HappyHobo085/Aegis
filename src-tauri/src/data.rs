@@ -345,7 +345,10 @@ enum Publish {
 /// Galaxy S23 / Android 17, three "successful" exports, none in `/sdcard/Download/`. So a
 /// publish failure is a FAILED export, never a quiet success: a backup the user cannot get
 /// off the device is not a backup.
-fn finish_export(path: &std::path::Path, publish: impl FnOnce(&std::path::Path) -> Publish) -> Value {
+fn finish_export(
+    path: &std::path::Path,
+    publish: impl FnOnce(&std::path::Path) -> Publish,
+) -> Value {
     match publish(path) {
         Publish::Shown(p) => json!({ "ok": true, "path": p }),
         Publish::Failed(why) => json!({
@@ -365,7 +368,11 @@ fn parse_publish_reply(reply: Option<&str>) -> Publish {
     if let Some(p) = r.strip_prefix("ok:").filter(|p| !p.trim().is_empty()) {
         return Publish::Shown(p.to_string());
     }
-    match r.strip_prefix("err:").map(str::trim).filter(|e| !e.is_empty()) {
+    match r
+        .strip_prefix("err:")
+        .map(str::trim)
+        .filter(|e| !e.is_empty())
+    {
         Some(e) => Publish::Failed(e.to_string()),
         // An empty `ok:`, an empty `err:` or anything else is not a success.
         None => Publish::Failed("unexpected reply from the Downloads bridge".into()),
@@ -644,7 +651,9 @@ mod tests {
     #[test]
     fn a_published_export_reports_the_path_the_user_can_find() {
         let private = std::path::Path::new("/data/private/aegis-export-1.json");
-        let out = finish_export(private, |_| Publish::Shown("Download/aegis-export-1.json".into()));
+        let out = finish_export(private, |_| {
+            Publish::Shown("Download/aegis-export-1.json".into())
+        });
         assert_eq!(out["ok"], json!(true));
         assert_eq!(out["path"], json!("Download/aegis-export-1.json"));
     }
@@ -657,9 +666,15 @@ mod tests {
         let private = std::path::Path::new("/data/private/aegis-export-1.json");
         let out = finish_export(private, |_| Publish::Failed("disk full".into()));
         assert_eq!(out["ok"], json!(false));
-        assert!(out.get("path").is_none(), "a failure must not name a path: {out}");
+        assert!(
+            out.get("path").is_none(),
+            "a failure must not name a path: {out}"
+        );
         let err = out["error"].as_str().unwrap();
-        assert!(err.contains("Downloads") && err.contains("disk full"), "{err}");
+        assert!(
+            err.contains("Downloads") && err.contains("disk full"),
+            "{err}"
+        );
     }
 
     #[test]
@@ -673,7 +688,14 @@ mod tests {
             Publish::Failed("allow storage access, then export again".into())
         );
         // The up-call itself failing, and every malformed reply, is a failure — never Shown.
-        for bad in [None, Some(""), Some("ok:"), Some("ok:  "), Some("err:"), Some("Download/x.json")] {
+        for bad in [
+            None,
+            Some(""),
+            Some("ok:"),
+            Some("ok:  "),
+            Some("err:"),
+            Some("Download/x.json"),
+        ] {
             assert!(
                 matches!(parse_publish_reply(bad), Publish::Failed(_)),
                 "{bad:?} must not count as published"
@@ -688,7 +710,10 @@ mod tests {
             let out = export_now(app);
             assert_eq!(out["ok"], json!(true), "{out}");
             let p = out["path"].as_str().unwrap();
-            assert!(std::path::Path::new(p).is_file(), "reported path must exist: {p}");
+            assert!(
+                std::path::Path::new(p).is_file(),
+                "reported path must exist: {p}"
+            );
         });
     }
 

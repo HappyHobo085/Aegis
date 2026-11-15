@@ -214,8 +214,8 @@ mod tests {
     #[test]
     fn detect_meshnode_dispatch_answers_the_channel_and_ignores_others() {
         // A bare mock app, not `with_tmp_app`: this module owns no store and needs no managed
-        // state, and `with_tmp_app`'s XDG redirection isolates nothing on Windows, where its
-        // store setup would write into the real `%APPDATA%`.
+        // state. (A bare mock app resolves `app_data_dir()` to the REAL data-dir root, so a
+        // test that does store IO must use `with_tmp_app`, which redirects it on every OS.)
         let app = tauri::test::mock_app();
         let app = app.handle();
         let v = dispatch(app, "meshnode.detected", &serde_json::Value::Null)

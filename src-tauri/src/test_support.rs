@@ -1,11 +1,13 @@
-// src-tauri/src/testament.rs
+// src-tauri/src/test_support.rs
 //! Crate-wide test harness for AppHandle-backed unit tests.
 //!
-//! The data stores resolve their paths from `app.path().app_data_dir()`, which on
-//! Linux comes from `$XDG_DATA_HOME` (and the cache dir from `$XDG_CACHE_HOME`).
-//! A `tauri::test::mock_app()` has an EMPTY bundle identifier, so `app_data_dir()`
-//! resolves directly to `$XDG_DATA_HOME`. The heaps point those env
-//! vars at a fresh temp dir per test so store IO never touches real user data.
+//! The data stores resolve their paths from `app.path().app_data_dir()`. A bare
+//! `tauri::test::mock_app()` has an EMPTY bundle identifier, so on its own that resolves to
+//! the ROOT of the user's real data dir (`~/.local/share`, `%APPDATA%`, `~/Library/Application
+//! Support`). `with_tmp_app` points every app directory at a fresh temp dir per test through
+//! Tauri's `appDirectoriesOverride` config — which works on every OS, unlike the XDG variables
+//! — so store IO never touches real user data. A test that builds its own mock app and does
+//! store IO must use `with_tmp_app` instead.
 //!
 //! Env vars are process-global and cargo runs tests on many threads, so EVERY
 //! AppHandle test must hold `LOCK` for its whole body — `with_tmp_app` does this.
@@ -130,6 +132,23 @@ fn fresh_tmp() -> PathBuf {
     d
 }
 
+/// Every `app_*_dir()` pointed at `tmp`, through Tauri's own `app > appDirectoriesOverride`
+/// config, so the redirection holds on EVERY OS rather than only where XDG is read.
+///
+/// Config, data, local data and cache are all `tmp` itself (not `Root(tmp)`, which would move
+/// the cache to `tmp/caches`): that is the exact layout the XDG redirection produced on Linux,
+/// so a test written against it reads the same paths on every host.
+pub fn test_dirs_override(tmp: &std::path::Path) -> tauri::utils::config::AppDirectoriesOverride {
+    use tauri::utils::config::{AppDirectoriesOverride, AppDirectoryOverrides};
+    AppDirectoriesOverride::Directories(AppDirectoryOverrides {
+        config: Some(tmp.to_path_buf()),
+        data: Some(tmp.to_path_buf()),
+        local_data: Some(tmp.to_path_buf()),
+        cache: Some(tmp.to_path_buf()),
+        log: Some(tmp.join("logs")),
+    })
+}
+
 /// Run `f` with a mock `AppHandle` whose data/cache/config dirs are a fresh temp dir
 /// and whose managed state matches what the dispatchers expect. Serialized + cleaned.
 ///
@@ -165,11 +184,18 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
     // Clear process-global jsonstore caches so each test starts clean.
     // (CACHE and NEXT_ID_CACHE are statics that survive across with_tmp_app calls.)
     crate::jsonstore::clear_caches();
-    // Must be set BEFORE the app is built — app_data_dir() reads them on each call,
-    // but setting up front keeps every store under `tmp` for the whole test.
+    // The XDG variables are honoured on Linux ONLY. `app_data_dir()` on Windows resolves
+    // through `SHGetKnownFolderPath` and on macOS through `~/Library`, neither of which reads
+    // an env var — so on those hosts the redirection used to isolate nothing and every store
+    // landed in the developer's real `%APPDATA%` root (the mock app has an empty identifier).
+    // The variables stay for what else reads them on Linux (`download_dir()` looks for
+    // `user-dirs.dirs` under `$XDG_CONFIG_HOME`, so pointing it at an empty dir keeps a test
+    // from resolving the real Downloads folder there).
     std::env::set_var("XDG_DATA_HOME", &tmp);
     std::env::set_var("XDG_CACHE_HOME", &tmp);
     std::env::set_var("XDG_CONFIG_HOME", &tmp);
+    let mut context = mock_context(noop_assets());
+    context.config_mut().app.app_directories_override = Some(test_dirs_override(&tmp));
 
     // Build the mock app with all managed state that lib.rs registers (builder + setup).
     let app = mock_builder()
@@ -198,7 +224,7 @@ pub fn with_tmp_app<T>(f: impl FnOnce(&AppHandle<MockRuntime>) -> T) -> T {
         .manage(crate::tabs::Tabs::from_registry(
             crate::tab_registry::Registry::new("about:blank".to_string()),
         ))
-        .build(mock_context(noop_assets()))
+        .build(context)
         .expect("mock app builds");
 
     // The OS keychain has no per-app namespace — one entry (service "com.aegis.browser",
@@ -493,15 +519,29 @@ mod tests {
         rust_production_source("fn emit() {}\n");
     }
 
+    /// Every directory a store or a download can resolve must be under the OS temp dir, on
+    /// EVERY host. This held on Linux alone while the isolation was XDG env vars: on Windows
+    /// `app_data_dir()` was the real `%APPDATA%` root and ~115 store tests failed there with
+    /// "Access is denied" after littering it.
     #[test]
-    fn tmp_app_data_dir_is_under_the_temp_dir() {
+    fn every_app_dir_is_under_the_temp_dir_on_every_os() {
         with_tmp_app(|app| {
-            let dir = app.path().app_data_dir().expect("data dir resolves");
-            // The redirected XDG_DATA_HOME root (empty identifier => no subfolder).
-            assert!(
-                dir.starts_with(std::env::temp_dir()),
-                "data dir {dir:?} must be under the OS temp dir, not real user data"
-            );
+            let p = app.path();
+            let dirs = [
+                ("data", p.app_data_dir()),
+                ("local data", p.app_local_data_dir()),
+                ("config", p.app_config_dir()),
+                ("cache", p.app_cache_dir()),
+                ("log", p.app_log_dir()),
+                ("downloads", crate::downloads::os_download_dir(app)),
+            ];
+            for (what, dir) in dirs {
+                let dir = dir.unwrap_or_else(|e| panic!("{what} dir must resolve: {e}"));
+                assert!(
+                    dir.starts_with(std::env::temp_dir()),
+                    "{what} dir {dir:?} must be under the OS temp dir, not real user data"
+                );
+            }
         });
     }
 

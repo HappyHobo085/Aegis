@@ -6,7 +6,7 @@ GitHub Actions workflows and Dependabot config for Aegis.
 
 - **`ci.yml`** (CI) — the always-on gate. Runs on every PR, on every push to `main`
   (so a direct push is gated too, not just PRs), weekly (Mon 06:17 UTC), and on
-  demand. Five job groups, all on `ubuntu-latest` except the macOS cross-check:
+  demand. Six job groups, all on `ubuntu-latest` except the macOS cross-check and `windows`:
   - **`web`**: `npm ci` → `npm run typecheck` (scoped `tsc --noEmit` via
     `tsconfig.build.json`, which covers `src`, `shared` and the three config files,
     **including every `*.test.ts(x)` and `src/testFixtures`**, because a test-only
@@ -90,8 +90,22 @@ GitHub Actions workflows and Dependabot config for Aegis.
     **no** `sync-server/.cargo/audit.toml` — the step runs from `sync-server/` precisely
     so that adding one later is picked up without editing CI, and today it accepts
     nothing.
-  - **`cross-target`** (matrix, `cargo check --locked` only — no link, no test, no
-    bundle): `x86_64-pc-windows-gnu` + `aarch64-linux-android` on ubuntu (a mingw-w64
+  - **`windows`** (`windows-latest`): the TEST suites on a real Windows host — `npm test`,
+    `cargo test --locked --lib` for `src-tauri`, and `cargo test --workspace` for
+    `sync-server`. Tests only; fmt/clippy/audit/coverage are host-independent and stay on
+    Linux. It exists because the suites had silently gone Linux-only: the Rust harness
+    could not start on Windows (0xc0000139, fixed in `src-tauri/build.rs`), `with_tmp_app`
+    isolated paths through XDG variables only Linux reads (fixed with Tauri's
+    `appDirectoriesOverride`), CRLF checkouts broke every source-scanning drift guard
+    (fixed by the root `.gitattributes`), and a Windows-only keychain decode bug in
+    `sync_keystore` hid behind a test that only ran on Linux. Credential Manager is always
+    present, so the keychain round-trips really run here without any daemon setup.
+  - **`cross-target`** (matrix, `cargo check --locked` only — no link, no test run, no
+    bundle; the windows-gnu and Android legs add `--all-targets`, so the unit tests'
+    cfg surface is type-checked for those targets too — it is the only CI step that
+    compiles the Android-gated test code, since Tauri's `MockRuntime` cannot run on a
+    device; the macOS leg does not, because that test code has never been compiled for
+    macOS): `x86_64-pc-windows-gnu` + `aarch64-linux-android` on ubuntu (a mingw-w64
     cross toolchain / the Android NDK supply it) and `x86_64-apple-darwin` on a
     **macOS-15** runner, because objc2's build script needs a macOS C toolchain and
     cannot be cross-compiled from Linux. Its `apt:` lists are deliberately minimal —
