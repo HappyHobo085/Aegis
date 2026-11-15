@@ -177,7 +177,7 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
   and whose setup step writes that value into `$GITHUB_ENV` whenever `RUSTFLAGS` is
   not already set (`action.yml:141-142`). `ci.yml` passes no `rustflags:` to that
   action and sets no `RUSTFLAGS` of its own — `grep -n RUSTFLAGS
-  .github/workflows/*.yml` returns nothing — so the default is what applies.
+.github/workflows/*.yml` returns nothing — so the default is what applies.
   `cross-target` therefore gets `RUSTFLAGS="-D warnings"` on all three legs, but
   that answers only half of "is it gated?". The other half is **which linter the
   step runs**: `cross-target`'s step is `cargo check --locked` (ci.yml:421, :535),
@@ -191,10 +191,10 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
   `clippy::empty_line_after_doc_comments` on the Android-only
   `Java_com_aegis_browser_NativeHistory_recordVisit` export — a doc block orphaned
   from its item by a blank line — and `cargo check --locked --target
-  aarch64-linux-android` passed it while `cargo clippy --locked --target
-  aarch64-linux-android -- -D warnings` failed on it. Fixed, but the hole is
+aarch64-linux-android` passed it while `cargo clippy --locked --target
+aarch64-linux-android -- -D warnings` failed on it. Fixed, but the hole is
   structural: verify a `#[cfg]`-gated change with `cargo clippy --locked --target
-  <triple> -- -D warnings` locally, because CI will not.
+<triple> -- -D warnings` locally, because CI will not.
   This paragraph has now been wrong three times, and each correction came from
   checking one axis and assuming the other. It claimed `ci.yml` passes
   `RUSTFLAGS="-D warnings"` as a per-step `env:` — a variable that appears in no

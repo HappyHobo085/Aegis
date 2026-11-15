@@ -348,7 +348,7 @@ width })` so the page insets from the right and stays visible. There is no
   form / a dead button.
   **The mobile favourites bar's `+` used to be listed here as a consumer of its own; it no
   longer is.** It now opens `FavoritesManager` instead of calling `favorites.add` inline
-  (see the mobile shell section), so the refused-add case is reached *inside* the modal and
+  (see the mobile shell section), so the refused-add case is reached _inside_ the modal and
   reported by the modal's own `role="alert"` — the desktop behaviour, and one consumer
   instead of two that could disagree.
   **The success wording must not print when a sibling call was REFUSED.\*\* Clearing

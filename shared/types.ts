@@ -240,11 +240,7 @@ export interface PopoverSurfacePayload {
 /** Which popover is showing. One surface serves all of them, so the id is what tells the
  *  surface (and Rust's pick validation) which popover a pick refers to. */
 export type PopoverId =
-  | 'address-omnibox'
-  | 'address-site'
-  | 'adblock-shield'
-  | 'zoom-indicator'
-  | 'test';
+  'address-omnibox' | 'address-site' | 'adblock-shield' | 'zoom-indicator' | 'test';
 
 export type PopoverKind = PopoverId;
 
@@ -590,13 +586,7 @@ export interface ListUpdateResult {
 
 export interface UpdateState {
   status:
-    | 'idle'
-    | 'checking'
-    | 'available'
-    | 'not-available'
-    | 'downloading'
-    | 'downloaded'
-    | 'error';
+    'idle' | 'checking' | 'available' | 'not-available' | 'downloading' | 'downloaded' | 'error';
   version: string | null; // available/downloaded version, else null
   percent: number; // download progress 0..100
   error: string | null; // last error message, else null
