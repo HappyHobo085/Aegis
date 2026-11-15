@@ -929,16 +929,19 @@ describe('the toast stacks above the sheets that raise it', () => {
     expect(usesVar('.settings-modal', 'overlay'), '.settings-modal must use var(--z-overlay)').toBe(
       true,
     );
-    expect(usesVar('.interstitial', 'interstitial'), '.interstitial must use var(--z-interstitial)').toBe(
-      true,
-    );
+    expect(
+      usesVar('.interstitial', 'interstitial'),
+      '.interstitial must use var(--z-interstitial)',
+    ).toBe(true);
   });
 
   it('orders sheets < toast < interstitial < blocking dialogs', () => {
     for (const sheet of ['overlay', 'favorites-manager', 'onboarding']) {
       expect(z('toast'), `--z-toast must be above --z-${sheet}`).toBeGreaterThan(z(sheet));
     }
-    expect(z('interstitial'), '--z-interstitial must be above --z-toast').toBeGreaterThan(z('toast'));
+    expect(z('interstitial'), '--z-interstitial must be above --z-toast').toBeGreaterThan(
+      z('toast'),
+    );
     for (const dialog of ['prompt', 'palette', 'confirm', 'error']) {
       expect(z(dialog), `--z-${dialog} must be above --z-interstitial`).toBeGreaterThan(
         z('interstitial'),
