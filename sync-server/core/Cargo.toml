@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 # MUST equal `sync-server/Cargo.toml` (and therefore `src-tauri/Cargo.toml`): the `msrv` job in
 # .github/workflows/ci.yml reads all three manifests and fails if they disagree.
-rust-version = "1.90.0"
+rust-version = "1.95.0"
 description = "Pure protocol core of the Aegis sync server: auth, wire shapes and bounds, no I/O."
 license = "AGPL-3.0-only"
 publish = false

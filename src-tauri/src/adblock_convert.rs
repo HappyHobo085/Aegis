@@ -39,7 +39,7 @@ pub fn to_content_blocker_chunks(
     // `into_content_blocking` requires debug mode (it reads each rule's raw text).
     let mut set = FilterSet::new(true);
     for list in filter_lists {
-        set.add_filters(list.lines(), ParseOptions::default());
+        set.add_filter_list(list.to_string(), ParseOptions::default());
     }
     let (rules, _used) = set
         .into_content_blocking()

@@ -38,9 +38,7 @@ pub fn init_session_salt() {
             Ok(()) => {}
             Err(e) => {
                 eprintln!("[farble] Warning: getrandom failed with {e}, using fallback randomness");
-                use rand::RngCore;
-                let mut rng = rand::thread_rng();
-                rng.fill_bytes(&mut b);
+                rand::fill(&mut b); // the thread-local CSPRNG
             }
         }
         b
@@ -56,9 +54,7 @@ fn salt() -> [u8; 32] {
             Ok(()) => {}
             Err(e) => {
                 eprintln!("[farble] Warning: getrandom failed with {e}, using fallback randomness");
-                use rand::RngCore;
-                let mut rng = rand::thread_rng();
-                rng.fill_bytes(&mut b);
+                rand::fill(&mut b); // the thread-local CSPRNG
             }
         }
         b

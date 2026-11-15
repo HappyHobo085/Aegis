@@ -157,9 +157,10 @@ GitHub Actions workflows and Dependabot config for Aegis.
     works: 1.80.0 when the job was written, then 1.85.0 the first time it really
     compiled (run 36282117889: `rustc 1.85.0 is not supported by the following
 packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
-    `icu*\*`2.2 chain needs 1.86). The floor is now **1.90.0** (moved by the Tauri 2.12
-    upgrade: tauri, tauri-build, the tauri-plugin family and muda 0.20 all declare 1.90 —
-    a deliberate move, not a red job silenced), and it is owned by the
+    `icu*\*`2.2 chain needs 1.86). The floor is now **1.95.0** (moved to 1.90 by the Tauri 2.12
+    upgrade — tauri, tauri-build, the tauri-plugin family and muda 0.20 all declare 1.90 —
+    then to 1.95 by parking_lot 0.13, lock_api 0.5 and parking_lot_core 0.10, which
+    turned Dependabot #78's `msrv` red; deliberate moves, not red jobs silenced), and it is owned by the
     dependency graph, not by this repo's own code. Re-derive it with
     `cargo metadata --format-version 1 --locked | jq '[.packages[].rust_version] | max'` after any dependency bump, and move`rust-version`in **both** manifests (the job
     fails on drift) plus the README's MSRV line. If`msrv` goes red, fix the manifests
@@ -178,7 +179,7 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
   to `$GITHUB_ENV` as `CARGO_BUILD_WARNINGS=deny` whenever that variable is not already
   set — cargo's `build.warnings` config (cargo 1.97+), which fails the build on any rustc
   warning. `ci.yml` sets neither variable, so the default applies. Two consequences: the
-  pinned 1.98 toolchain honours it, but the `msrv` job's `cargo +1.90` predates the
+  pinned 1.98 toolchain honours it, but the `msrv` job's `cargo +1.95` predates the
   config and ignores it, so `msrv` is NOT warning-gated (its claim is "compiles", not
   "lint-free"); and a `.cargo/config.toml` `rustflags` no longer gets overridden.
   `cross-target` therefore denies warnings on all three legs, but

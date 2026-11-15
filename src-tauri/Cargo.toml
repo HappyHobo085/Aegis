@@ -20,13 +20,15 @@ edition = "2021"
 # idna_adapter 1.2.2 chain needs 1.86. Pinning those older instead is not worth it.
 # Raised to 1.90.0 with the Tauri 2.12 upgrade: tauri 2.12.5, tauri-build 2.7.4 and
 # muda 0.20 all declare rust-version 1.90 (`cargo +1.88.0 check` refuses them by name).
+# Raised to 1.95.0 with parking_lot 0.13: it, parking_lot_core 0.10 and lock_api 0.5 all
+# declare rust-version 1.95 (Dependabot #78 went red on exactly this job).
 # Re-derive with: cargo metadata --format-version 1 | jq '[.packages[].rust_version
 # |select(startswith("1."))] | max_by(split(".")|map(tonumber))'  — if a bump pushes
 # that max up, this number and the README's "MSRV" line are what must move.
 # If the msrv job goes red for any other reason, this number is the suspect, not the job.
 # Note: the macOS-only objc2 stack has a higher floor than the Linux/Windows one, so
 # the msrv job runs on Linux only. See rust-toolchain.toml for the CI toolchain pin.
-rust-version = "1.90.0"
+rust-version = "1.95.0"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -50,7 +52,7 @@ log = "0.4"
 # 0.62) must equal what tauri's PlatformWebview hands us, and those are 2.12's versions.
 tauri = { version = "2.12.5", features = ["unstable"] }
 tauri-plugin-log = "2.10.1"
-adblock = { version = "0.12.5", features = ["content-blocking"] }
+adblock = { version = "0.13.5", features = ["content-blocking"] }
 # default-features = false drops the updater's `zip` feature (zip/tar/flate2). That feature
 # unpacks the Tauri-v1 update formats
 # (`*.nsis.zip` on Windows, `*.AppImage.tar.gz` on Linux); Aegis publishes the v2 format
@@ -75,16 +77,16 @@ uuid = { version = "1", features = ["v4", "serde"] }
 # at startup (see run()), pulling rustls directly for aws-lc-rs::default_provider().
 reqwest = { version = "0.13", default-features = false, features = ["blocking"] }
 rustls = "0.23"
-parking_lot = "0.12"
+parking_lot = "0.13"
 
 # Sync engine (F2b) crypto. getrandom 0.2 (NOT the 0.4 uuid pulls) for raw OS randomness;
 # everything else derives from the BIP39 seed via HKDF. ed25519 keys come from HKDF bytes via
 # the infallible SigningKey::from_bytes, so no rand_core is needed.
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-sha2 = "0.10"
+chacha20poly1305 = "0.11"
+hkdf = "0.13"
+sha2 = "0.11"
 ed25519-dalek = { version = "2", features = ["zeroize"] }
-rand = "0.8"
+rand = "0.10"
 bip39 = "2"
 argon2 = "0.5"
 getrandom = "0.2"

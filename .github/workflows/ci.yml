@@ -624,7 +624,8 @@ jobs:
   # override (see the `+<msrv>` note below) — once that was fixed the job failed with
   # "rustc 1.85.0 is not supported by the following packages" and the floor moved to
   # 1.88.0, which is what the resolved dependency graph actually required — and to
-  # 1.90.0 with the Tauri 2.12 upgrade, whose crates declare 1.90. A gate that
+  # 1.90.0 with the Tauri 2.12 upgrade, whose crates declare 1.90, and to 1.95.0 with
+  # parking_lot 0.13 (and its lock_api 0.5 / parking_lot_core 0.10). A gate that
   # has never gone red has not been tested; do not "fix" a red msrv by loosening this
   # job — re-derive the floor from `cargo metadata` and correct the manifests.
   #

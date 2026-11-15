@@ -173,6 +173,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **Dependency upgrades.** The ad-block engine moves to `adblock` 0.13 (same blocking
+  behaviour; rules restricted by HTTP method are not applied, because the engine is never
+  told the method). The sync encryption crates move to the current RustCrypto generation
+  (`sha2` 0.11, `hkdf` 0.13, `chacha20poly1305` 0.11) with byte-identical output, so existing
+  synced data and vaults open unchanged. `rand` 0.10, `parking_lot` 0.13, and the npm
+  minor/patch group are updated too. Building from source now needs **Rust 1.95** or newer
+  (was 1.90).
+
 - **Tauri 2.12.** The app framework moves from 2.11 to 2.12 (wry 0.57, tao 0.37), with the
   updater, log plugin and `@tauri-apps/api` to match. Building from source now needs
   **Rust 1.90** or newer (was 1.88).

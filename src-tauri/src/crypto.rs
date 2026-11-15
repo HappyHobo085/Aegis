@@ -197,7 +197,7 @@ fn aad_for(ns: &str, uuid: &str, hlc_bytes: &[u8]) -> Vec<u8> {
 }
 
 fn cipher_for(data_key: &[u8; 32]) -> XChaCha20Poly1305 {
-    XChaCha20Poly1305::new(ChachaKey::from_slice(data_key))
+    XChaCha20Poly1305::new(&ChachaKey::from(*data_key))
 }
 
 /// Seal `plaintext` for namespace `ns`/record `uuid`/version `hlc_bytes`. Returns
@@ -214,7 +214,7 @@ pub fn seal(
     let aad = aad_for(ns, uuid, hlc_bytes);
     let ct = cipher_for(data_key)
         .encrypt(
-            XNonce::from_slice(&nonce),
+            &XNonce::from(nonce),
             Payload {
                 msg: plaintext,
                 aad: &aad,
@@ -240,7 +240,7 @@ pub fn open(
     let aad = aad_for(ns, uuid, hlc_bytes);
     cipher_for(data_key)
         .decrypt(
-            XNonce::from_slice(nonce),
+            &XNonce::try_from(nonce).map_err(|_| "nonce must be 24 bytes".to_string())?,
             Payload {
                 msg: ciphertext,
                 aad: &aad,

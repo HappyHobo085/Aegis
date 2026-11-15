@@ -121,12 +121,12 @@ const QUERY_TIMEOUT: Duration = Duration::from_secs(5);
 fn build_engine(extra: &[String]) -> Engine {
     let mut set = FilterSet::new(false); // false = matching engine (not convert)
     for list in crate::adblock_lists::ALL {
-        set.add_filters(list.lines(), ParseOptions::default());
+        set.add_filter_list(list.to_string(), ParseOptions::default());
     }
     for text in extra {
-        set.add_filters(text.lines(), ParseOptions::default());
+        set.add_filter_list(text.clone(), ParseOptions::default());
     }
-    Engine::from_filter_set(set, true)
+    Engine::new_with_filter_set(set) // optimised, as `from_filter_set(set, true)` was
 }
 
 /// How many verdicts to memoise before dropping the lot.
@@ -270,11 +270,15 @@ fn serve(engine: Engine, rx: std::sync::mpsc::Receiver<Msg>) {
                     let blocked = match cache.get(&key) {
                         Some(known) => known,
                         None => {
-                            let b = match Request::new(&q.url, &q.source, &q.rtype) {
+                            // adblock 0.13 takes the HTTP method; no tier passes it here, and
+                            // an EMPTY one is "unknown": plain filters match as they did in
+                            // 0.12, while a `$method=`-restricted filter (new in 0.13) never
+                            // fires on a request whose method we cannot vouch for.
+                            let b = match Request::new(&q.url, &q.source, &q.rtype, "") {
                                 Ok(req) => {
                                     #[cfg(test)]
                                     record_match(&q.url);
-                                    engine.check_network_request(&req).matched
+                                    engine.check_network_request(&req).should_block()
                                 }
                                 // Fail open: an unparseable URL is allowed, and is
                                 // memoised as such because re-parsing it would
