@@ -21,10 +21,15 @@
      (11100). Only the PALETTE's number moved (11200 -> 11150): nothing else in this file
      occupies the values between, and the confirm dialog keeps the value it always had.
 
-     The list is ascending EXCEPT `--z-interstitial` (10100) sitting above `--z-toast`
-     (10020). That inversion is pre-existing and deliberate — the safety interstitial is a
-     hard block that must not be buried under a toast — so it is preserved rather than
-     "tidied". Do not renumber these to sort: every value is another rule's z-index.
+     TOAST + INTERSTITIAL: a toast paints ABOVE the routine full-window sheets
+     (`--z-overlay` = Settings/Downloads, favorites manager, onboarding), because it is
+     raised FROM them. It used to be 10020, under `--z-overlay`, and on a phone the
+     settings sheet is `inset: 0` — so every toast fired inside Settings (e.g. "Exported
+     to …") was invisible, and Export looked like it did nothing. The safety interstitial
+     stays above the toast (a hard block nothing routine may paint over), which lifts it
+     above the sheets too; both stay below the blocking dialogs (prompt/palette/confirm/
+     error). Guarded by `platformContract.drift.test.ts` ("the toast stacks above…").
+     Do not renumber these to sort: every value is another rule's z-index.
 
      NOT in this scale: anchored popovers (5000 / 5100), the toolbar's own stacking
      (100 / `--z-toolbar-menu`), the mobile shell (10 / 50) and the in-container locals
@@ -35,10 +40,10 @@
   --z-workspace-menu: 9999;
   --z-toolbar-menu: 10010;
   --z-onboarding: 10050;
-  --z-interstitial: 10100;
-  --z-toast: 10020;
   --z-favorites-manager: 10900;
   --z-overlay: 11000;
+  --z-toast: 11040;
+  --z-interstitial: 11060;
   --z-prompt: 11100;
   --z-palette: 11150;
   --z-confirm: 11200;
@@ -5520,8 +5525,8 @@ a:focus-visible {
 .interstitial {
   position: fixed;
   inset: 0;
-  /* Above the toast/notification layer (10020) so nothing routine paints over a
-     security warning. */
+  /* Above the toast layer (--z-toast) so nothing routine paints over a security
+     warning. */
   z-index: var(--z-interstitial);
   display: flex;
   align-items: center;

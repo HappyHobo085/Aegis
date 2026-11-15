@@ -65,6 +65,14 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **Android: Export now saves your backup to the real Downloads folder.** It used to report
+  success while writing the file into the app's private storage, where no file manager or other
+  app could reach it (and uninstalling deleted it). If the copy to Downloads fails, Export now
+  says so instead of claiming a backup exists. On Android 7–9 the first export asks for storage
+  access.
+- **Messages raised from Settings or Downloads are visible again.** They were drawn behind
+  those screens, so on a phone, where Settings fills the screen, actions like Export showed no
+  confirmation or error at all. Security warning pages still appear above them.
 - **Android: the ad-block shield's panel opens on screen and is readable.** It opened upward
   from the top bar, so only its last row showed; it now drops down across the screen, opaque and
   scrollable. Its text no longer takes on your accent colour (unreadable with a dark accent),

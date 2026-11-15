@@ -14,9 +14,10 @@
 }
 
 # The Rust JNI exports — every `external fun` under src/main/java/com/aegis/browser/, now
-# TWENTY of them (this line used to say "nine" and name nine, so half the surface R8 could
+# TWENTY-ONE of them (this line used to say "nine" and name nine, so half the surface R8 could
 # break was undocumented):
-#   NativeAdblock.enabled / shouldBlock, NativeDownloads.recordStart / recordFinish / safeName,
+#   NativeAdblock.enabled / shouldBlock, NativeDataExport.provideClass,
+#   NativeDownloads.recordStart / recordFinish / safeName,
 #   NativeFarble.farbleScript, NativeFormDetect.formDetectionScript,
 #   NativeHistory.recordVisit, NativeInject.documentStartScript, NativeMeshnode.noteInstalled,
 #   NativePermissions.decision / normalizeOrigin / remember, NativeProxy.proxyConfig,
@@ -50,6 +51,12 @@
 -keep class com.aegis.browser.AegisKeystore {
     public static java.lang.String wrap(byte[]);
     public static byte[] unwrap(java.lang.String);
+}
+
+# AegisPublicDownloads.publish is the same kind of JNI up-call (src-tauri/src/data.rs,
+# `android_publish`), so it needs the same explicit keep or a release build loses it.
+-keep class com.aegis.browser.AegisPublicDownloads {
+    public static java.lang.String publish(java.lang.String, java.lang.String);
 }
 
 # Uncomment this to preserve the line number information for

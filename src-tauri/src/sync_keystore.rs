@@ -275,6 +275,9 @@ fn keystore_vault_path<R: Runtime>(app: &AppHandle<R>) -> Option<std::path::Path
 }
 
 #[cfg(target_os = "android")]
+pub(crate) use android_keystore::java_vm;
+
+#[cfg(target_os = "android")]
 mod android_keystore {
     use jni::objects::{GlobalRef, JByteArray, JClass, JObject, JString, JValue};
     use jni::JavaVM;
@@ -288,6 +291,12 @@ mod android_keystore {
     // the canonical way instead: `JNI_OnLoad`, which the runtime calls exactly once when
     // libapp_lib.so loads, before any other JNI entry point.
     static JAVA_VM: OnceLock<JavaVM> = OnceLock::new();
+
+    /// The VM captured by `JNI_OnLoad`, for OTHER modules' Rust→Java up-calls (`data.rs`'s
+    /// Downloads publish). There is exactly one `JNI_OnLoad` per library, so it lives here.
+    pub(crate) fn java_vm() -> Option<&'static JavaVM> {
+        JAVA_VM.get()
+    }
 
     // The `AegisKeystore` Class, as a JNI *global* ref, handed to us from Java (see
     // `provideClass`). It has to come from Java: this up-call runs on a native thread that we

@@ -329,6 +329,20 @@ already_fullscreen, slot_empty)` is the whole policy, as a pure predicate so it 
   at all (it only talks to the webview), and its test asserts exactly that — it answers
   `Ok` and disturbs nothing.
 - **`data.rs`** — `data.export` / `data.import` (bundles all stores + settings).
+  **On Android an export is only done once it is PUBLISHED to the real Downloads folder.**
+  Tauri's `download_dir()` there is `getExternalFilesDir(DIRECTORY_DOWNLOADS)` — app-private,
+  hidden from file managers on Android 11+, unreadable even to `adb shell`, deleted on
+  uninstall — so exports used to "succeed" into a folder the user could never open (verified on
+  a Galaxy S23 / Android 17). `export_blocking` still writes that private copy (the empty-paste
+  import fallback reads it), then `finish_export` runs `publish_to_downloads`: identity on
+  desktop, and on Android a JNI **up-call** into `AegisPublicDownloads.publish` (MediaStore on
+  API 29+, the public dir + `WRITE_EXTERNAL_STORAGE maxSdkVersion=28` below). It reuses
+  `sync_keystore`'s `JNI_OnLoad` VM (`sync_keystore::java_vm`) and the same pinned-class trick
+  (`NativeDataExport.provideClass` in `MainActivity.onCreate`); `publish` is kept by name in
+  `proguard-rules.pro`. A publish failure is `ok: false` with the reason — never a quiet
+  success. The reply contract (`ok:<path>` / `err:<reason>`) is parsed by the host-tested
+  `parse_publish_reply`. Device-verified 2026-11-15 on Android 17 (MediaStore path); the
+  API 24–28 path is **not** device-verified.
   **BOTH channels run on a DETACHED thread and answer in two hops.** They flush every
   store, walk `STORES` through `load_synced` (which can migrate rows), serialize the
   bundle with `to_string_pretty` and fsync — unbounded work, none of it bounded in

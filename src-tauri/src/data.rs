@@ -67,8 +67,7 @@ const EXPORT_STEM: &str = "aegis-export-";
 /// is the wrong home for a bundle that may contain vault-adjacent metadata, and a per-app dir
 /// keeps concurrent test runs from colliding.
 fn export_dir<R: Runtime>(app: &AppHandle<R>) -> PathBuf {
-    app.path()
-        .download_dir()
+    crate::downloads::os_download_dir(app)
         .or_else(|_| app.path().app_data_dir())
         .unwrap_or_else(|_| std::env::temp_dir())
 }
@@ -322,8 +321,127 @@ fn export_blocking<R: Runtime>(app: &AppHandle<R>) -> Value {
     let txt = serde_json::to_string_pretty(&Value::Object(bundle)).unwrap_or_default();
     // Durable write, but no `.bak` sidecar next to the user's export file.
     match jsonstore::write_atomic_no_backup(&path, txt.as_bytes()) {
-        Ok(()) => json!({ "ok": true, "path": path.to_string_lossy() }),
+        Ok(()) => finish_export(&path, publish_to_downloads),
         Err(e) => json!({ "ok": false, "error": e.to_string() }),
+    }
+}
+
+/// Where a written export ended up from the USER's point of view.
+#[derive(Debug, PartialEq)]
+enum Publish {
+    /// A path the user can find — reported in the success toast.
+    Shown(String),
+    /// The bundle is on disk but NOT somewhere the user can reach; the reason.
+    Failed(String),
+}
+
+/// Turn a written export into the `data.export` reply.
+///
+/// `publish` decides what the user can actually reach. On desktop [`export_dir`] already IS
+/// the user's Downloads folder, so it is the identity. On Android it is NOT: Tauri's
+/// `download_dir()` there is `getExternalFilesDir(DIRECTORY_DOWNLOADS)`, an app-private
+/// directory Android 11+ hides from every file manager (and `adb shell` cannot read the 0600
+/// file either). Exports used to report `ok: true` with that path — verified on a real
+/// Galaxy S23 / Android 17, three "successful" exports, none in `/sdcard/Download/`. So a
+/// publish failure is a FAILED export, never a quiet success: a backup the user cannot get
+/// off the device is not a backup.
+fn finish_export(path: &std::path::Path, publish: impl FnOnce(&std::path::Path) -> Publish) -> Value {
+    match publish(path) {
+        Publish::Shown(p) => json!({ "ok": true, "path": p }),
+        Publish::Failed(why) => json!({
+            "ok": false,
+            "error": format!("the backup could not be copied to Downloads ({why})"),
+        }),
+    }
+}
+
+/// Parse `AegisPublicDownloads.publish`'s reply: `ok:<path>` or `err:<reason>`. `None` means
+/// the up-call itself failed (class not pinned, JNI error). Pure, so it is tested on the host.
+#[cfg_attr(not(any(target_os = "android", test)), allow(dead_code))]
+fn parse_publish_reply(reply: Option<&str>) -> Publish {
+    let Some(r) = reply else {
+        return Publish::Failed("the Android Downloads bridge is unavailable".into());
+    };
+    if let Some(p) = r.strip_prefix("ok:").filter(|p| !p.trim().is_empty()) {
+        return Publish::Shown(p.to_string());
+    }
+    match r.strip_prefix("err:").map(str::trim).filter(|e| !e.is_empty()) {
+        Some(e) => Publish::Failed(e.to_string()),
+        // An empty `ok:`, an empty `err:` or anything else is not a success.
+        None => Publish::Failed("unexpected reply from the Downloads bridge".into()),
+    }
+}
+
+#[cfg(not(target_os = "android"))]
+fn publish_to_downloads(path: &std::path::Path) -> Publish {
+    Publish::Shown(path.to_string_lossy().into_owned())
+}
+
+#[cfg(target_os = "android")]
+fn publish_to_downloads(path: &std::path::Path) -> Publish {
+    let name = path
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("{EXPORT_STEM}{}.json", jsonstore::now_ms()));
+    parse_publish_reply(android_publish::publish(&path.to_string_lossy(), &name).as_deref())
+}
+
+/// The Rust→Kotlin up-call into `AegisPublicDownloads.publish`. Same shape as
+/// `sync_keystore::android_keystore`: the VM comes from its `JNI_OnLoad`, the class is pinned
+/// by Kotlin (a native thread's `FindClass` cannot see app classes), and every failure is a
+/// `None` — never a panic, which would abort under a JNI frame.
+#[cfg(target_os = "android")]
+mod android_publish {
+    use jni::objects::{GlobalRef, JClass, JObject, JString, JValue};
+    use std::sync::OnceLock;
+
+    static CLASS: OnceLock<GlobalRef> = OnceLock::new();
+
+    #[allow(unsafe_code)] // `#[no_mangle]` — inherent to a JNI entry point; see sync_keystore.
+    #[no_mangle]
+    pub extern "system" fn Java_com_aegis_browser_NativeDataExport_provideClass(
+        env: jni::JNIEnv,
+        _class: JClass<'_>,
+        class: JObject<'_>,
+    ) {
+        match crate::ffi_guard(|| env.new_global_ref(&class)) {
+            Some(Ok(g)) => {
+                let _ = CLASS.set(g);
+            }
+            Some(Err(e)) => eprintln!("[aegis] could not pin AegisPublicDownloads: {e}"),
+            None => eprintln!("[aegis] NativeDataExport.provideClass panicked"),
+        }
+    }
+
+    pub fn publish(src: &str, name: &str) -> Option<String> {
+        let vm = crate::sync_keystore::java_vm()?;
+        let class = CLASS.get()?;
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut env = vm.attach_current_thread().ok()?;
+            let jsrc = env.new_string(src).ok()?;
+            let jname = env.new_string(name).ok()?;
+            let res = env.call_static_method(
+                class,
+                "publish",
+                "(Ljava/lang/String;Ljava/lang/String;)Ljava/lang/String;",
+                &[JValue::Object(&jsrc), JValue::Object(&jname)],
+            );
+            let obj = match res {
+                Ok(v) => v.l().ok()?,
+                Err(e) => {
+                    eprintln!("[aegis] AegisPublicDownloads.publish failed: {e}");
+                    let _ = env.exception_clear();
+                    return None;
+                }
+            };
+            if obj.is_null() {
+                return None;
+            }
+            let s: String = env.get_string(&JString::from(obj)).ok()?.into();
+            Some(s)
+        }))
+        .ok()
+        .flatten()
     }
 }
 
@@ -519,6 +637,59 @@ mod tests {
     /// [`export_now`] for the import half — same reasoning, same production body.
     fn import_now(app: &AppHandle<MockRuntime>, payload: &Value) -> Value {
         import_blocking(app, payload)
+    }
+
+    /// A publish the user can see → `ok: true` with THAT path (the Downloads one on Android),
+    /// not the private path the bundle was first written to.
+    #[test]
+    fn a_published_export_reports_the_path_the_user_can_find() {
+        let private = std::path::Path::new("/data/private/aegis-export-1.json");
+        let out = finish_export(private, |_| Publish::Shown("Download/aegis-export-1.json".into()));
+        assert_eq!(out["ok"], json!(true));
+        assert_eq!(out["path"], json!("Download/aegis-export-1.json"));
+    }
+
+    /// The Android bug: the bundle was written, but only somewhere the user cannot reach.
+    /// That must be a FAILED export with the reason — reporting `ok: true` here is exactly
+    /// what left a phone with three "successful" exports and no backup.
+    #[test]
+    fn an_export_that_cannot_reach_downloads_is_a_failure_not_a_success() {
+        let private = std::path::Path::new("/data/private/aegis-export-1.json");
+        let out = finish_export(private, |_| Publish::Failed("disk full".into()));
+        assert_eq!(out["ok"], json!(false));
+        assert!(out.get("path").is_none(), "a failure must not name a path: {out}");
+        let err = out["error"].as_str().unwrap();
+        assert!(err.contains("Downloads") && err.contains("disk full"), "{err}");
+    }
+
+    #[test]
+    fn the_android_publish_reply_is_parsed_strictly() {
+        assert_eq!(
+            parse_publish_reply(Some("ok:Download/aegis-export-1 (1).json")),
+            Publish::Shown("Download/aegis-export-1 (1).json".into())
+        );
+        assert_eq!(
+            parse_publish_reply(Some("err:allow storage access, then export again")),
+            Publish::Failed("allow storage access, then export again".into())
+        );
+        // The up-call itself failing, and every malformed reply, is a failure — never Shown.
+        for bad in [None, Some(""), Some("ok:"), Some("ok:  "), Some("err:"), Some("Download/x.json")] {
+            assert!(
+                matches!(parse_publish_reply(bad), Publish::Failed(_)),
+                "{bad:?} must not count as published"
+            );
+        }
+    }
+
+    /// On desktop the export dir already IS Downloads, so the reply keeps the real path.
+    #[test]
+    fn desktop_publish_is_the_written_path() {
+        with_tmp_app(|app| {
+            let out = export_now(app);
+            assert_eq!(out["ok"], json!(true), "{out}");
+            let p = out["path"].as_str().unwrap();
+            assert!(std::path::Path::new(p).is_file(), "reported path must exist: {p}");
+        });
     }
 
     /// The collision suffix is parsed as a NUMBER, and must order NEWEST-last even when the

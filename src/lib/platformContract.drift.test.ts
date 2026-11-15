@@ -896,3 +896,53 @@ describe('every modal the mobile shell renders goes full-screen and pads for the
     ).toEqual([]);
   });
 });
+
+/**
+ * A toast must paint ABOVE every routine full-window sheet it can be fired from.
+ *
+ * `--z-toast` was 10020 and the Settings/Downloads sheets are `--z-overlay` (11000). On
+ * desktop the settings card is centred so a toast only went dim behind the scrim, but on a
+ * phone `.aegis-mobile .settings-modal` is `inset: 0` — so EVERY toast raised from inside
+ * Settings was fully hidden. Tapping Export on Android looked like nothing happened
+ * (verified on a Galaxy S23, 2026-11-15). The safety interstitial must still sit above the
+ * toast (nothing routine paints over a security warning), and the blocking dialogs
+ * (prompt, palette, confirm, error) stay above both.
+ *
+ * **Mutation recipe:** set `--z-toast` back to 10020, or drop `--z-interstitial` below it —
+ * the guard must go red and name the pair.
+ */
+describe('the toast stacks above the sheets that raise it', () => {
+  const css = readFileSync(INDEX_CSS, 'utf8');
+  const z = (name: string): number => {
+    const m = css.match(new RegExp(String.raw`--z-${name}:\s*(\d+);`));
+    expect(m, `--z-${name} is not defined in index.css`).toBeTruthy();
+    return Number(m![1]);
+  };
+  const usesVar = (selector: string, name: string): boolean =>
+    new RegExp(
+      String.raw`^${selector.replace(/\./g, '\\.')} \{[^}]*z-index:\s*var\(--z-${name}\)`,
+      'm',
+    ).test(css);
+
+  it('the toaster, settings sheet and interstitial take their z-index from the scale', () => {
+    expect(usesVar('.toaster', 'toast'), '.toaster must use var(--z-toast)').toBe(true);
+    expect(usesVar('.settings-modal', 'overlay'), '.settings-modal must use var(--z-overlay)').toBe(
+      true,
+    );
+    expect(usesVar('.interstitial', 'interstitial'), '.interstitial must use var(--z-interstitial)').toBe(
+      true,
+    );
+  });
+
+  it('orders sheets < toast < interstitial < blocking dialogs', () => {
+    for (const sheet of ['overlay', 'favorites-manager', 'onboarding']) {
+      expect(z('toast'), `--z-toast must be above --z-${sheet}`).toBeGreaterThan(z(sheet));
+    }
+    expect(z('interstitial'), '--z-interstitial must be above --z-toast').toBeGreaterThan(z('toast'));
+    for (const dialog of ['prompt', 'palette', 'confirm', 'error']) {
+      expect(z(dialog), `--z-${dialog} must be above --z-interstitial`).toBeGreaterThan(
+        z('interstitial'),
+      );
+    }
+  });
+});

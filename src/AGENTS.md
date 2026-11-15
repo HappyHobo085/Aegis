@@ -899,8 +899,10 @@ data-theme="dark">` in `index.html` plus a bare-`:root` dark seed prevent any
   `11200`, so their paint order was decided by DOM position in `App.tsx` (later wins), which
   nothing documented. `--z-confirm` (11200) is deliberately **above** `--z-palette` (11150),
   which is above `--z-prompt` (11100): a blocking modal raised by a palette action must not
-  be occluded by the launcher. The scale is ascending except `--z-interstitial` (10100) over
-  `--z-toast` (10020) — pre-existing and deliberate, preserved. Do not renumber to sort: each
+  be occluded by the launcher. `--z-toast` (11040) sits ABOVE `--z-overlay` (11000) because toasts
+  are raised from Settings/Downloads — at its old 10020 every toast fired inside the full-screen
+  mobile Settings sheet was invisible — and `--z-interstitial` (11060) stays above the toast;
+  both stay below the blocking dialogs (`platformContract.drift.test.ts` guards the order). Do not renumber to sort: each
   value is another rule's z-index. Adding a full-window surface means adding a band, not
   another magic number. NOT in the scale, on purpose: anchored popovers (5000/5100), the
   toolbar's own stacking (100/`--z-toolbar-menu`), the mobile shell (10/50) and in-container

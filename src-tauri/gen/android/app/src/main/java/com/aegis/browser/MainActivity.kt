@@ -206,6 +206,14 @@ class MainActivity : TauriActivity(), GestureContainer.GestureHost {
     } catch (t: Throwable) {
       Log.w("AegisSync", "could not provide the Keystore class to native", t)
     }
+    // Same up-call pattern for `data.export`: Rust copies the finished backup into the user's
+    // real Downloads folder through AegisPublicDownloads (see that file for why).
+    AegisPublicDownloads.attach(this)
+    try {
+      NativeDataExport.provideClass(AegisPublicDownloads::class.java)
+    } catch (t: Throwable) {
+      Log.w("AegisExport", "could not provide the export class to native", t)
+    }
     super.onCreate(savedInstanceState)
     // Draw into the display cutout on every edge so notches / punch-holes / curved
     // edges are reported as insets (which we push to the chrome) instead of letterboxed.
