@@ -843,7 +843,7 @@ describe('ci.yml (the wiring the comparison gates depend on)', () => {
 
   it('the msrv job uses the same installer as the other Rust jobs', () => {
     expect(job('msrv')).toContain(
-      'uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659',
+      'uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30',
     );
     expect(job('msrv')).not.toMatch(/uses: dtolnay\//);
   });
@@ -859,7 +859,7 @@ describe('release + build wiring (audit phase 6)', () => {
   const repo = (p) => readFileSync(join(REPO_ROOT, p), 'utf8');
   const release = wf('tauri-release.yml');
   const ALL = ['ci.yml', 'tauri-build-check.yml', 'tauri-release.yml'];
-  const RUST_TOOLCHAIN_SHA = '166cdcfd11aee3cb47222f9ddb555ce30ddb9659';
+  const RUST_TOOLCHAIN_SHA = 'a188e68d0fd2bd36ad51dccb2b07ba6e75105f30';
 
   /** One job's text in a workflow, from `  <name>:` to the next job. */
   const job = (text, name) => {

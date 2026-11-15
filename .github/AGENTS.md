@@ -172,13 +172,16 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
   The Rust jobs get `-D warnings` from **two** places, and neither of them is a
   variable in `ci.yml`. The `rust` job spells it out on its own clippy invocation.
   The other jobs reach it through `actions-rust-lang/setup-rust-toolchain` (pinned to
-  commit `166cdcfd…` = v1.17.0 everywhere since audit 6.2 — it is third-party),
-  whose `rustflags` input **defaults to `"-D warnings"`** (its `action.yml:72-75`)
-  and whose setup step writes that value into `$GITHUB_ENV` whenever `RUSTFLAGS` is
-  not already set (`action.yml:141-142`). `ci.yml` passes no `rustflags:` to that
-  action and sets no `RUSTFLAGS` of its own — `grep -n RUSTFLAGS
-.github/workflows/*.yml` returns nothing — so the default is what applies.
-  `cross-target` therefore gets `RUSTFLAGS="-D warnings"` on all three legs, but
+  commit `a188e68d…` = v2.0.1 everywhere; third-party, so pinned since audit 6.2). Since
+  v2.0.0 the action no longer sets `RUSTFLAGS="-D warnings"` (its `rustflags` input now
+  defaults to `""`); its `build-warnings` input **defaults to `"deny"`** and is written
+  to `$GITHUB_ENV` as `CARGO_BUILD_WARNINGS=deny` whenever that variable is not already
+  set — cargo's `build.warnings` config (cargo 1.97+), which fails the build on any rustc
+  warning. `ci.yml` sets neither variable, so the default applies. Two consequences: the
+  pinned 1.98 toolchain honours it, but the `msrv` job's `cargo +1.90` predates the
+  config and ignores it, so `msrv` is NOT warning-gated (its claim is "compiles", not
+  "lint-free"); and a `.cargo/config.toml` `rustflags` no longer gets overridden.
+  `cross-target` therefore denies warnings on all three legs, but
   that answers only half of "is it gated?". The other half is **which linter the
   step runs**: `cross-target`'s step is `cargo check --locked` (ci.yml:421, :535),
   not `cargo clippy`. `cargo check` runs rustc's lints and no clippy lints at all,
