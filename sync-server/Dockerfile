@@ -1,7 +1,9 @@
 # ---- build stage: static-ish musl binary ----
-# Builder Alpine pinned to 3.20 to match the runtime base below, so the binary links against
+# Builder Alpine pinned to 3.22 to match the runtime base below, so the binary links against
 # the same musl it runs against (no skew if the floating `rust:alpine` tag bumps its Alpine).
-FROM rust:alpine3.20 AS builder
+# The Rust version is pinned to the crates' `rust-version` (Cargo.toml): `rust:alpine3.20` froze
+# at 1.94.1, which `--locked` refuses once the MSRV moved to 1.95.
+FROM rust:1.95-alpine3.22 AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /build
 # Dependency-cache layer: compile deps against stubs so editing src/ or core/src doesn't rebuild
@@ -22,7 +24,7 @@ COPY src ./src
 RUN touch src/main.rs core/src/lib.rs && cargo build --release --locked
 
 # ---- runtime stage: minimal, non-root ----
-FROM alpine:3.20
+FROM alpine:3.22
 RUN addgroup -S aegis \
     && adduser -S -G aegis aegis \
     && mkdir -p /data \
