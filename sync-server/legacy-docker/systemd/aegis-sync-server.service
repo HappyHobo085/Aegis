@@ -3,7 +3,7 @@
 #
 # INSTALL (this is a SYSTEM unit, and must be one):
 #   sudo sed "s|@SYNC_SERVER_DIR@|$PWD|g" \
-#     sync-server/systemd/aegis-sync-server.service \
+#     sync-server/legacy-docker/systemd/aegis-sync-server.service \
 #     | sudo tee /etc/systemd/system/aegis-sync-server.service >/dev/null
 #   sudo chmod 644 /etc/systemd/system/aegis-sync-server.service
 #   sudo systemctl daemon-reload

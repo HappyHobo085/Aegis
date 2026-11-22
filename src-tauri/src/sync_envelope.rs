@@ -109,7 +109,7 @@ fn next_tick(prev: (i64, u32), now_ms: i64) -> (i64, u32) {
 /// Clamping is what makes it *self-healing*: the clock is only pushed to `now + 60s`, real
 /// time then passes that mark on its own, and the next tick moves past it. The same bound
 /// the auth path already applies to token timestamps (`MAX_FUTURE_SKEW_MS` in
-/// `sync-server/src/main.rs`) — a device more than a minute ahead is already broken, and its
+/// `sync-server/legacy-docker/src/main.rs`) — a device more than a minute ahead is already broken, and its
 /// own records would be rejected by a strict peer regardless.
 pub(crate) const MAX_REMOTE_SKEW_MS: i64 = 60_000;
 

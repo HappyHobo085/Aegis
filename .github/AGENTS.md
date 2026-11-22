@@ -85,14 +85,17 @@ GitHub Actions workflows and Dependabot config for Aegis.
       what makes `src-tauri/.cargo/audit.toml` authoritative. There is no
       `continue-on-error` and no `|| true` — a new advisory fails the job.
   - **`sync-server`**: the same fmt/clippy/test treatment plus its own **blocking**
-    `cargo audit` for the standalone crate (the one internet-facing service in the
-    project). It is a separate non-workspace crate, so it needs no webkit2gtk. It has
-    **no** `sync-server/.cargo/audit.toml` — the step runs from `sync-server/` precisely
-    so that adding one later is picked up without editing CI, and today it accepts
-    nothing.
+    `cargo audit` for `sync-server/core` (the pure protocol crate + contract vectors) and
+    `sync-server/wasm` (the ACTIVE sync server, a Meshnode WASM service: clippy with and
+    without `test-caps` and a release build for wasm32-wasip2; its behavioural tests run
+    in the Meshnode repo). Both are separate non-workspace crates, so no webkit2gtk. Neither
+    has a `.cargo/audit.toml` — each audit runs from its crate's folder so that adding one
+    later is picked up without editing CI, and today they accept nothing. The deprecated
+    `sync-server/legacy-docker` axum server is deliberately **not** gated (owner decision,
+    2026-11-21: unmaintained, so a frozen-lockfile advisory must not turn CI red).
   - **`windows`** (`windows-latest`): the TEST suites on a real Windows host — `npm test`,
-    `cargo test --locked --lib` for `src-tauri`, and `cargo test --workspace` for
-    `sync-server`. Tests only; fmt/clippy/audit/coverage are host-independent and stay on
+    `cargo test --locked --lib` for `src-tauri`, and `cargo test` for
+    `sync-server/core`. Tests only; fmt/clippy/audit/coverage are host-independent and stay on
     Linux. It exists because the suites had silently gone Linux-only: the Rust harness
     could not start on Windows (0xc0000139, fixed in `src-tauri/build.rs`), `with_tmp_app`
     isolated paths through XDG variables only Linux reads (fixed with Tauri's
@@ -141,8 +144,9 @@ GitHub Actions workflows and Dependabot config for Aegis.
     `find_linux.rs`; the authoritative list is the `mod` declarations in
     `src-tauri/src/lib.rs`, not this paragraph. `fail-fast` is off so all three
     surfaces report at once.
-  - **`msrv`**: `cargo check --locked` for BOTH manifests against the `rust-version`
-    declared in each `Cargo.toml`, on a toolchain resolved from that manifest (the one
+  - **`msrv`**: `cargo check --locked` for `src-tauri`, `sync-server/core` and
+    `sync-server/wasm` (the last for wasm32-wasip2) against the `rust-version` declared in
+    each `Cargo.toml` (all three must be equal), on a toolchain resolved from that manifest (the one
     job that deliberately does NOT use `rust-toolchain.toml`, so a new stable release
     cannot silently break the declared floor).
     The commands are `cargo +<msrv> check …`, and the `+<msrv>` is **load-bearing**.
@@ -162,7 +166,7 @@ packages` — darling 0.23, plist 1.9, time 0.3.47, serde*with need 1.88, the
     then to 1.95 by parking_lot 0.13, lock_api 0.5 and parking_lot_core 0.10, which
     turned Dependabot #78's `msrv` red; deliberate moves, not red jobs silenced), and it is owned by the
     dependency graph, not by this repo's own code. Re-derive it with
-    `cargo metadata --format-version 1 --locked | jq '[.packages[].rust_version] | max'` after any dependency bump, and move`rust-version`in **both** manifests (the job
+    `cargo metadata --format-version 1 --locked | jq '[.packages[].rust_version] | max'` after any dependency bump, and move`rust-version`in **all three** manifests (the job
     fails on drift) plus the README's MSRV line. If`msrv` goes red, fix the manifests
     — do not weaken the job.
 
@@ -256,13 +260,14 @@ aarch64-linux-android -- -D warnings` failed on it. Fixed, but the hole is
 
 Weekly npm + github-actions + **cargo** updates. Minor/patch bumps are grouped into a
 single PR per ecosystem to reduce noise; major bumps arrive individually. Cargo is
-tracked for **both** Rust manifests — `/src-tauri` (the Tauri core) and `/sync-server`
-(the standalone self-hosted sync server) — so `Cargo.lock` no longer drifts unmanaged.
+tracked for `/src-tauri` (the Tauri core), `/sync-server/core` and `/sync-server/wasm` (the
+sync protocol core and the active WASM sync service) — so no maintained `Cargo.lock` drifts
+unmanaged. The deprecated `/sync-server/legacy-docker` is deliberately not tracked.
 The CI `rust` and `sync-server` jobs both run a **blocking** `cargo audit`, so a
 Dependabot bump that lands a vulnerable version goes red rather than waiting for the
 weekly schedule; the accept-lists that keep known-and-accepted advisories out of that
-path is `src-tauri/.cargo/audit.toml` (the only accept-list in the tree; `sync-server`
-has none), each entry carrying the one-line reason it is accepted.
+path is `src-tauri/.cargo/audit.toml` (the only accept-list in the tree; the `sync-server`
+crates have none), each entry carrying the one-line reason it is accepted.
 
 ## Notes
 

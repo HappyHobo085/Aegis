@@ -1,0 +1,34 @@
+package meshnode:service;
+
+/// A Meshnode service: a `wasi:http` handler that stores its data in `meshnode:kv`
+/// (`store`, replicated; `local`, this node only).
+/// No filesystem, no sockets, no environment variables, no arguments, no preopened
+/// directories. `wasi:io` and `wasi:http/types` come in as dependencies of the imports.
+world service {
+  import wasi:clocks/monotonic-clock@0.2.12;
+  import wasi:clocks/wall-clock@0.2.12;
+  import wasi:random/random@0.2.12;
+  import wasi:random/insecure@0.2.12;
+  import wasi:random/insecure-seed@0.2.12;
+
+  // Stdio. stdout and stderr go to the node log; stdin is closed; nothing is a terminal.
+  import wasi:cli/stdin@0.2.12;
+  import wasi:cli/stdout@0.2.12;
+  import wasi:cli/stderr@0.2.12;
+  import wasi:cli/terminal-input@0.2.12;
+  import wasi:cli/terminal-output@0.2.12;
+  import wasi:cli/terminal-stdin@0.2.12;
+  import wasi:cli/terminal-stdout@0.2.12;
+  import wasi:cli/terminal-stderr@0.2.12;
+  // Imported by every Rust `std` guest. The environment is always empty.
+  import wasi:cli/environment@0.2.12;
+  import wasi:cli/exit@0.2.12;
+
+  // Every destination outside the service's `outbound` allowlist is refused.
+  import wasi:http/outgoing-handler@0.2.12;
+  import meshnode:kv/store;
+  // Node-local, non-replicated entries with a TTL.
+  import meshnode:kv/local;
+
+  export wasi:http/incoming-handler@0.2.12;
+}

@@ -1,1 +1,2 @@
-/target
+# Each crate (core/, legacy-docker/, wasm/) is its own workspace with its own target dir.
+target/

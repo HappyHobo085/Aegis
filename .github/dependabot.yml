@@ -42,8 +42,23 @@ updates:
         patterns:
           - '*'
 
+  # sync-server/legacy-docker is deprecated and unmaintained: deliberately not tracked.
   - package-ecosystem: 'cargo'
-    directory: '/sync-server'
+    directory: '/sync-server/core'
+    schedule:
+      interval: 'weekly'
+    open-pull-requests-limit: 10
+    groups:
+      cargo-minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - 'minor'
+          - 'patch'
+        patterns:
+          - '*'
+
+  - package-ecosystem: 'cargo'
+    directory: '/sync-server/wasm'
     schedule:
       interval: 'weekly'
     open-pull-requests-limit: 10

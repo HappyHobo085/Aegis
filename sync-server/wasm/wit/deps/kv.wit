@@ -1,0 +1,24 @@
+package meshnode:kv;
+
+interface store {
+  get: func(key: string) -> option<list<u8>>;
+  set: func(key: string, value: list<u8>);
+  // Ordered write: wins only over entries whose (order, hlc, origin) is lower. Do not mix with `set` on one key.
+  set-ordered: func(key: string, order: list<u8>, value: option<list<u8>>);
+  delete: func(key: string);
+  list-keys: func(prefix: string, start-after: option<string>, limit: u32) -> list<string>;
+  set-add: func(set: string, member: list<u8>);   // grow-only
+  set-contains: func(set: string, member: list<u8>) -> bool;
+  set-members: func(set: string, start-after: option<list<u8>>, limit: u32) -> list<list<u8>>;
+  node-id: func() -> list<u8>;                    // for per-node bookkeeping (e.g. soft caps)
+}
+
+/// Node-local entries: never replicated, never seen by other nodes. For per-node
+/// bookkeeping such as replay nonces. Expired entries are invisible and swept later.
+interface local {
+  get: func(key: string) -> option<list<u8>>;
+  // `ttl-ms` = 0: no expiry. `err` on a cap breach (value over 64 KiB, key over 512 bytes,
+  // or a new key when 100 000 live keys exist); nothing is written then.
+  set: func(key: string, value: list<u8>, ttl-ms: u64) -> result<_, string>;
+  delete: func(key: string);
+}

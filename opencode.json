@@ -8,6 +8,8 @@
     "shared/AGENTS.md",
     "scripts/AGENTS.md",
     "sync-server/AGENTS.md",
+    "sync-server/core/AGENTS.md",
+    "sync-server/wasm/AGENTS.md",
     ".github/AGENTS.md"
   ],
 

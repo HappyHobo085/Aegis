@@ -7,7 +7,7 @@ name: CI
 #
 # Five jobs: `web` (typecheck/lint/format/tests/size/npm-audit/version),
 # `rust` (src-tauri fmt/clippy/test/audit), `sync-server` (same for the
-# standalone service), `cross-target` (compile-only for the Windows/Android/macOS
+# sync protocol core + the WASM sync service), `cross-target` (compile-only for the Windows/Android/macOS
 # cfg surfaces that no other job can see), and `msrv` (proves the declared
 # rust-version is a real lower bound).
 on:
@@ -355,15 +355,16 @@ jobs:
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit
 
-  # Rust gate for the standalone sync-server crate. This is the ONE
-  # internet-facing service in the project (axum, reachable by anyone who can
-  # reach the deploy host), so it gets the same fmt/clippy/test treatment as the
-  # desktop app plus its own dependency audit — previously it had no CI at all,
-  # which is how 9 poisonable `.lock().unwrap()` calls on its request hot path
-  # survived. It is not a member of the Tauri app's workspace, so it needs no webkit2gtk.
-  # It is the root of its OWN two-member workspace (the axum server + `core/`, the
-  # pure `aegis-sync-core`), so every step below passes `--workspace`/`--all`: a
-  # bare `--manifest-path sync-server/Cargo.toml` would gate the server package only.
+  # Rust gate for the sync server. `sync-server/` holds three crates, each its OWN workspace:
+  #   - `core/`  = `aegis-sync-core`, the pure protocol code (auth, wire shapes, bounds) and the
+  #                contract vectors (`core/tests/vectors/*.json`);
+  #   - `wasm/`  = the ACTIVE server, a Meshnode WASM service (`wasi:http` over `meshnode:kv`),
+  #                built for wasm32-wasip2 only. Its behavioural tests need the Meshnode runtime and
+  #                run in the Meshnode repo, which copies this source (see sync-server/AGENTS.md);
+  #   - `legacy-docker/` = the DEPRECATED axum/Docker server. Unmaintained and deliberately NOT
+  #                gated here, so an advisory against its frozen lockfile cannot turn CI red.
+  # This is the internet-facing code in the project, so the core and the WASM service get the same
+  # fmt/clippy/test/audit treatment as the desktop app.
   sync-server:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -377,6 +378,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           components: rustfmt, clippy
+          target: wasm32-wasip2
           cache: 'false'
       - name: Cache cargo
         uses: actions/cache@v6
@@ -384,41 +386,49 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            sync-server/target
-          key: ci-sync-${{ hashFiles('sync-server/Cargo.lock') }}
-      - name: cargo fmt --check
-        run: cargo fmt --check --manifest-path sync-server/Cargo.toml --all
-      - name: cargo clippy (-D warnings)
+            sync-server/core/target
+            sync-server/wasm/target
+          key: ci-sync-${{ hashFiles('sync-server/core/Cargo.lock', 'sync-server/wasm/Cargo.lock') }}
+      - name: cargo fmt --check (core, wasm)
+        run: |
+          cargo fmt --check --manifest-path sync-server/core/Cargo.toml --all
+          cargo fmt --check --manifest-path sync-server/wasm/Cargo.toml --all
+      - name: cargo clippy core (-D warnings)
         if: ${{ !cancelled() }}
-        run: cargo clippy --locked --manifest-path sync-server/Cargo.toml --workspace --all-targets -- -D warnings
-      # Both members. This includes the contract vectors (`sync-server/core/tests/vectors/*.json`):
-      # the core's runner (`core/tests/vectors.rs`, a pure model built from the core) and the
-      # native harness (`src/vectors_native.rs`, the real axum router). Their test-only `vectors`
-      # feature is switched on by dev-dependencies, so no `--features` flag is needed here.
-      - name: cargo test (incl. contract vectors)
+        run: cargo clippy --locked --manifest-path sync-server/core/Cargo.toml --all-targets -- -D warnings
+      # Includes the contract vectors: `core/tests/vectors.rs` runs them against a pure model built
+      # from the core. Its test-only `vectors` feature comes from the core's own dev-dependency.
+      - name: cargo test core (incl. contract vectors)
         if: ${{ !cancelled() }}
-        run: cargo test --locked --manifest-path sync-server/Cargo.toml --workspace
-      # The core is also built as a WASM service (Meshnode vendors it), so it must keep compiling
-      # for wasm32-wasip2 WITHOUT the test-only features, and its docs must stay link-clean.
+        run: cargo test --locked --manifest-path sync-server/core/Cargo.toml
+      # The core must keep compiling for wasm32-wasip2 WITHOUT the test-only features (the WASM
+      # service and Meshnode's copy build it there), and its docs must stay link-clean.
       - name: aegis-sync-core for wasm32-wasip2
         if: ${{ !cancelled() }}
-        run: |
-          rustup target add wasm32-wasip2
-          cargo check --locked --manifest-path sync-server/Cargo.toml -p aegis-sync-core --target wasm32-wasip2
+        run: cargo check --locked --manifest-path sync-server/core/Cargo.toml --target wasm32-wasip2
       - name: aegis-sync-core docs (-D warnings)
         if: ${{ !cancelled() }}
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --locked --manifest-path sync-server/Cargo.toml -p aegis-sync-core --no-deps --all-features
-      - name: cargo audit
+        run: cargo doc --locked --manifest-path sync-server/core/Cargo.toml --no-deps --all-features
+      # The WASM service: clippy and a release build, with and without its test-only `test-caps`
+      # feature (Meshnode's harness builds both).
+      - name: cargo clippy wasm (-D warnings)
         if: ${{ !cancelled() }}
-        # No `.cargo/audit.toml` in this crate yet, so no accepted advisories; the
-        # command runs from sync-server/ anyway so that adding one later is picked up
-        # without touching this step.
-        working-directory: sync-server
+        run: |
+          cargo clippy --locked --manifest-path sync-server/wasm/Cargo.toml --target wasm32-wasip2 --all-targets -- -D warnings
+          cargo clippy --locked --manifest-path sync-server/wasm/Cargo.toml --target wasm32-wasip2 --all-targets --features test-caps -- -D warnings
+      - name: build aegis_sync.wasm (release)
+        if: ${{ !cancelled() }}
+        run: cargo build --locked --release --manifest-path sync-server/wasm/Cargo.toml --target wasm32-wasip2
+      - name: cargo audit (core, wasm)
+        if: ${{ !cancelled() }}
+        # No `.cargo/audit.toml` in either crate yet, so no accepted advisories; each runs from its
+        # own directory so that adding one later is picked up without touching this step.
         run: |
           cargo install cargo-audit --locked --version 0.22.2
-          cargo audit
+          (cd sync-server/core && cargo audit)
+          (cd sync-server/wasm && cargo audit)
 
   # The test suites on a real Windows host. Every other test job is Linux, and the suites
   # had drifted Linux-only without anything noticing: the Rust test harness could not even
@@ -461,14 +471,14 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-            sync-server/target
-          key: ci-windows-${{ hashFiles('src-tauri/Cargo.lock', 'sync-server/Cargo.lock') }}
+            sync-server/core/target
+          key: ci-windows-${{ hashFiles('src-tauri/Cargo.lock', 'sync-server/core/Cargo.lock') }}
       - name: cargo test (src-tauri)
         if: ${{ !cancelled() }}
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --lib
-      - name: cargo test (sync-server)
+      - name: cargo test (sync-server core)
         if: ${{ !cancelled() }}
-        run: cargo test --locked --manifest-path sync-server/Cargo.toml --workspace
+        run: cargo test --locked --manifest-path sync-server/core/Cargo.toml
 
   # Compile-only cross-target gate. Every `#[cfg(target_os = ...)]` surface in the
   # core — adblock_win.rs, find_win.rs, nav_url_win.rs, zoom_win.rs, find_mac.rs,
@@ -651,14 +661,14 @@ jobs:
         shell: bash
         run: |
           APP=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml)
-          SYNC=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' sync-server/Cargo.toml)
+          WASM=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' sync-server/wasm/Cargo.toml)
           CORE=$(sed -n 's/^rust-version *= *"\(.*\)"/\1/p' sync-server/core/Cargo.toml)
-          if [ -z "$APP" ] || [ -z "$SYNC" ] || [ -z "$CORE" ]; then
-            echo "::error::A manifest has no rust-version: src-tauri='$APP' sync-server='$SYNC' sync-server/core='$CORE'"
+          if [ -z "$APP" ] || [ -z "$WASM" ] || [ -z "$CORE" ]; then
+            echo "::error::A manifest has no rust-version: src-tauri='$APP' sync-server/wasm='$WASM' sync-server/core='$CORE'"
             exit 1
           fi
-          if [ "$APP" != "$SYNC" ] || [ "$APP" != "$CORE" ]; then
-            echo "::error::MSRV drift: src-tauri=$APP, sync-server=$SYNC, sync-server/core=$CORE. Keep them equal."
+          if [ "$APP" != "$WASM" ] || [ "$APP" != "$CORE" ]; then
+            echo "::error::MSRV drift: src-tauri=$APP, sync-server/wasm=$WASM, sync-server/core=$CORE. Keep them equal."
             exit 1
           fi
           echo "MSRV declared by all three manifests: $APP"
@@ -697,6 +707,7 @@ jobs:
       - uses: actions-rust-lang/setup-rust-toolchain@a188e68d0fd2bd36ad51dccb2b07ba6e75105f30 # v2.0.1
         with:
           toolchain: ${{ steps.msrv.outputs.version }}
+          target: wasm32-wasip2
           cache: 'false'
       - name: Cache cargo
         uses: actions/cache@v6
@@ -705,8 +716,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-            sync-server/target
-          key: ci-msrv-${{ steps.msrv.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock', 'sync-server/Cargo.lock') }}
+            sync-server/core/target
+            sync-server/wasm/target
+          key: ci-msrv-${{ steps.msrv.outputs.version }}-${{ hashFiles('src-tauri/Cargo.lock', 'sync-server/core/Cargo.lock', 'sync-server/wasm/Cargo.lock') }}
       # `+<version>` is load-bearing, not stylistic — see the note on the step above.
       # Echoing `cargo --version` makes the toolchain that actually ran visible in the
       # log, so a future regression here is a one-line read instead of a hunt.
@@ -714,7 +726,8 @@ jobs:
         run: |
           cargo +${{ steps.msrv.outputs.version }} --version
           cargo +${{ steps.msrv.outputs.version }} check --locked --manifest-path src-tauri/Cargo.toml
-      - name: cargo check (sync-server)
+      - name: cargo check (sync-server core + wasm)
         run: |
           cargo +${{ steps.msrv.outputs.version }} --version
-          cargo +${{ steps.msrv.outputs.version }} check --locked --manifest-path sync-server/Cargo.toml --workspace
+          cargo +${{ steps.msrv.outputs.version }} check --locked --manifest-path sync-server/core/Cargo.toml
+          cargo +${{ steps.msrv.outputs.version }} check --locked --manifest-path sync-server/wasm/Cargo.toml --target wasm32-wasip2

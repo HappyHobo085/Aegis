@@ -1,5 +1,10 @@
 # Running the Aegis sync server with Docker
 
+> **DEPRECATED / LEGACY.** This axum/Docker server is no longer maintained or gated by CI. The
+> active sync server is the Meshnode WASM service in [`../wasm`](../wasm). Kept for existing
+> deployments only; it moved here from `sync-server/` (see the migration note in
+> [`../AGENTS.md`](../AGENTS.md)).
+
 A durable, self-hosted deployment of the end-to-end-encrypted sync server. The container
 stores **opaque ciphertext only** — it can never read your bookmarks, saved items, or
 allowlist. Data is persisted to a named Docker volume, so it survives restarts and upgrades.
@@ -7,7 +12,7 @@ allowlist. Data is persisted to a named Docker volume, so it survives restarts a
 ## Quick start
 
 ```bash
-cd sync-server
+cd sync-server/legacy-docker
 docker compose up -d           # build + start in the background
 curl http://localhost:8787/healthz   # -> {"ok":true}
 ```
@@ -88,7 +93,7 @@ bind failed). The wait has to be on the *address*.
 ### The unit
 
 ```bash
-cd sync-server
+cd sync-server/legacy-docker
 sudo sed "s|@SYNC_SERVER_DIR@|$PWD|g" \
   systemd/aegis-sync-server.service \
   | sudo tee /etc/systemd/system/aegis-sync-server.service >/dev/null

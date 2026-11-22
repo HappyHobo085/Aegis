@@ -1,0 +1,41 @@
+# The Aegis sync server as a Meshnode WASM service: a `wasi:http` handler over `meshnode:kv`.
+# THE ACTIVE sync server (the axum one in `../legacy-docker` is deprecated). Aegis owns this source;
+# Meshnode copies it into its `services/aegis-sync` and builds/tests it there (its
+# `scripts/build-services.sh` and `mesh_runtime::test_fixtures::aegis_sync_wasm`). See AGENTS.md.
+# Its own workspace; builds for wasm32-wasip2 only.
+[workspace]
+resolver = "3"
+
+[package]
+name = "aegis-sync"
+version = "0.1.0"
+edition = "2024"
+# MUST equal `src-tauri/Cargo.toml` and `../core/Cargo.toml` (checked by the CI `msrv` job).
+rust-version = "1.95.0"
+license = "AGPL-3.0-only"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+# The protocol core, WITHOUT its test-only `vectors` feature.
+aegis-sync-core = { path = "../core" }
+wstd = "0.6"
+wit-bindgen = "0.57.1"
+# The WASI wall clock and randomness (already a dependency of wstd).
+wasip2 = "1"
+futures-lite = "1.13"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# TEST ONLY: lowers the server-wide caps (`src/caps.rs`) so the Meshnode harness can reach them
+# with a handful of requests. Built only by `mesh_runtime::test_fixtures::aegis_sync_wasm_test_caps`;
+# `scripts/build-services.sh` and every deploy build without it.
+test-caps = []
+
+[profile.release]
+opt-level = "s"
+debug = false
+strip = true

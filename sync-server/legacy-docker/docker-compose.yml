@@ -1,6 +1,15 @@
+# Pinned project name: Compose otherwise derives it from the directory, and this file moved from
+# `sync-server/` to `sync-server/legacy-docker/`. Without the pin an existing deploy would come up
+# on a NEW, empty volume (`legacy-docker_aegis-sync-data`) instead of its data in
+# `sync-server_aegis-sync-data`. Do not change it.
+name: sync-server
+
 services:
   sync:
-    build: .
+    # Context is the parent `sync-server/`: the server path-depends on `../core`.
+    build:
+      context: ..
+      dockerfile: legacy-docker/Dockerfile
     image: aegis-sync-server
     restart: unless-stopped
     ports:

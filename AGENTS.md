@@ -28,16 +28,16 @@ Android (iOS is a future, macOS/Xcode-gated tier).
 
 ## Folder map
 
-| Folder          | What it is                                          | Has its own AGENTS.md |
-| --------------- | --------------------------------------------------- | --------------------- |
-| `src/`          | React renderer (the UI / "chrome")                  | yes                   |
-| `src-tauri/`    | Rust core + native platform code                    | yes                   |
-| `shared/`       | `types.ts` — the IPC contract                       | yes                   |
-| `scripts/`      | npm-audit CI gate (Node ESM)                        | yes                   |
-| `sync-server/`  | Self-hosted E2E sync server (Rust/axum, standalone) | yes                   |
-| `.github/`      | CI workflows + Dependabot                           | yes                   |
-| `dist/`         | Vite build output (gitignored)                      | generated, no docs    |
-| `node_modules/` | npm deps (gitignored)                               | generated, no docs    |
+| Folder          | What it is                                                                                           | Has its own AGENTS.md |
+| --------------- | ---------------------------------------------------------------------------------------------------- | --------------------- |
+| `src/`          | React renderer (the UI / "chrome")                                                                   | yes                   |
+| `src-tauri/`    | Rust core + native platform code                                                                     | yes                   |
+| `shared/`       | `types.ts` — the IPC contract                                                                        | yes                   |
+| `scripts/`      | npm-audit CI gate (Node ESM)                                                                         | yes                   |
+| `sync-server/`  | Self-hosted E2E sync server: `wasm/` (active, Meshnode WASM), `core/`, `legacy-docker/` (deprecated) | yes                   |
+| `.github/`      | CI workflows + Dependabot                                                                            | yes                   |
+| `dist/`         | Vite build output (gitignored)                                                                       | generated, no docs    |
+| `node_modules/` | npm deps (gitignored)                                                                                | generated, no docs    |
 
 > **The `AGENTS.md` files are living docs.** Every folder's `AGENTS.md` (this one
 > included) documents _current_ behavior — when a change makes one stale, update it
@@ -63,7 +63,7 @@ npm test    # vitest: node project (shared/ + scripts/) + jsdom (src/)
 ```
 
 Every suite must pass on **Linux and Windows** hosts — CI runs them on both (`rust`/`web`/
-`sync-server` on Ubuntu, `windows` on Windows), and type-checks the Rust test code for
+`sync-server` (core + WASM service) on Ubuntu, `windows` on Windows), and type-checks the Rust test code for
 Android. Two repo-level settings make that hold: `.gitattributes` forces LF checkouts (the
 drift guards parse source text), and `test_support::with_tmp_app` redirects store paths via
 Tauri's `appDirectoriesOverride`, not XDG variables. A test that hard-codes a POSIX path, an

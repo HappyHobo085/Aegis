@@ -127,7 +127,7 @@ mod tests {
     }
 
     /// The signed byte shape MUST stay byte-for-byte identical to the reference server's
-    /// `canonical()` (sync-server/src/main.rs, which has the SAME literal assertion). A
+    /// `canonical()` (sync-server/legacy-docker/src/main.rs, which has the SAME literal assertion). A
     /// drift on either side silently breaks every sync auth, so both are pinned. Keep them
     /// in lockstep — change one, change the other in the same commit.
     #[test]

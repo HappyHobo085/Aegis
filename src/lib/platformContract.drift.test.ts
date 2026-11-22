@@ -486,7 +486,7 @@ describe('the two React roots must share one stylesheet', () => {
 //      (a plain `up -d` only STARTS the stale networkless container back up).
 //   2. revert the healthcheck to a bare `/healthz` probe -> the 'healthcheck' test.
 describe('the sync server must start unattended, and must be able to report that it did not', () => {
-  const SYNC = join(ROOT, 'sync-server');
+  const SYNC = join(ROOT, 'sync-server', 'legacy-docker');
   const compose = readFileSync(join(SYNC, 'docker-compose.yml'), 'utf8');
   const unit = readFileSync(join(SYNC, 'systemd', 'aegis-sync-server.service'), 'utf8');
   const wait = readFileSync(join(SYNC, 'systemd', 'wait-for-bind-address.sh'), 'utf8');

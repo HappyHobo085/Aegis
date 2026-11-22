@@ -18,15 +18,14 @@ description = "Reference self-hosted sync server for Aegis — stores opaque cip
 license = "AGPL-3.0-only"
 publish = false
 
-# Standalone (NOT a workspace member of the Tauri app) so it builds/deploys independently. It IS
-# the root of its own two-member workspace: `core/` is `aegis-sync-core`, the pure protocol code
-# (auth, wire shapes, bounds) that this axum server and the WASM service both build on. One shared
-# Cargo.lock, so `--locked` covers both members.
+# DEPRECATED / LEGACY: superseded by the WASM service in `../wasm`; not maintained and not in CI.
+# Standalone (NOT a workspace member of the Tauri app) and its own workspace. `../core` is
+# `aegis-sync-core`, the pure protocol code (auth, wire shapes, bounds) this axum server and the WASM
+# service both build on; it is a separate workspace now, so this crate only path-depends on it.
 [workspace]
-members = [".", "core"]
 
 [dependencies]
-aegis-sync-core = { path = "core" }
+aegis-sync-core = { path = "../core" }
 axum = "0.8"
 # `sync` + `time` are for the pre-extractor admission guard (`Limits`): tokio::sync::Semaphore
 # bounds how many request bodies can be buffered at once and tokio::time::timeout bounds how long
@@ -55,9 +54,9 @@ getrandom = "0.2"
 # record's content exactly once. A dev-dependency feature never reaches the release binary
 # (resolver 2).
 #
-# `vectors` adds the contract-vector types and loader (`core/src/vector.rs`) for the native
+# `vectors` adds the contract-vector types and loader (`../core/src/vector.rs`) for the native
 # harness in `src/vectors_native.rs`; test-only like the instrument.
-aegis-sync-core = { path = "core", features = ["test-instrument", "vectors"] }
+aegis-sync-core = { path = "../core", features = ["test-instrument", "vectors"] }
 # `tower::ServiceExt::oneshot` drives the real `app(state)` router in the vector harness. tower 0.5
 # is already in Cargo.lock (axum depends on it, with `util`), so this adds a dependency edge and NO
 # new package.

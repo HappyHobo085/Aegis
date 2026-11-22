@@ -97,7 +97,10 @@ async fn run(v: &Vector) -> Result<(), String> {
 
 #[tokio::test]
 async fn every_native_vector_passes_through_the_router() {
-    let vectors = vector::load_all(concat!(env!("CARGO_MANIFEST_DIR"), "/core/tests/vectors"));
+    let vectors = vector::load_all(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../core/tests/vectors"
+    ));
     let mut ran = 0;
     let mut failures = Vec::new();
     for v in vectors.iter().filter(|v| v.runs_on(Host::Native)) {

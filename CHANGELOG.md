@@ -173,6 +173,11 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Changed
 
+- **The sync server is now the Meshnode WASM service** (`sync-server/wasm`, copied from Meshnode
+  and owned here from now on). The original axum/Docker server moved to
+  `sync-server/legacy-docker` and is **deprecated**: no longer maintained, built in CI or tracked by
+  Dependabot. Existing Docker deploys keep their data volume, but a systemd unit installed from the
+  old path must be re-installed (see `sync-server/AGENTS.md`).
 - **Dependency upgrades.** The ad-block engine moves to `adblock` 0.13 (same blocking
   behaviour; rules restricted by HTTP method are not applied, because the engine is never
   told the method). The sync encryption crates move to the current RustCrypto generation

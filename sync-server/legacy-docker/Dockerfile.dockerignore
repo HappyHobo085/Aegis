@@ -1,0 +1,8 @@
+# BuildKit reads `<Dockerfile>.dockerignore` beside the Dockerfile; patterns are relative to the
+# build CONTEXT, which is `sync-server/` (see docker-compose.yml).
+**/target/
+**/*.tmp
+**/*.json
+**/.env
+.git
+wasm/

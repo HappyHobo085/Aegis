@@ -35,10 +35,11 @@ GitHub Actions workflows in `.github/workflows/`:
     compiled), and the unmaintained/unsound GTK + `unic-*` subtree. They carry no
     expiry, and an entry is only ever added **after** probing for a fix — see that
     file's header.
-  - **`sync-server`**: the same fmt/clippy/test/audit sequence for the standalone
-    `sync-server/Cargo.toml`. It is the only internet-facing service, and it had no
-    CI at all before — a `sync-server` lockfile with a vulnerable dependency would
-    not have been caught.
+  - **`sync-server`**: the same fmt/clippy/test/audit sequence for
+    `sync-server/core/Cargo.toml` (the protocol core) and `sync-server/wasm/Cargo.toml`
+    (the active WASM sync service, wasm32-wasip2). It is the only internet-facing code,
+    and it had no CI at all before. The deprecated `sync-server/legacy-docker` server is
+    deliberately not gated.
   - **`cross-target`** (`cargo check (${{ matrix.target }})`): `cargo check --locked`
     — **check only, no link**, so no NASM/CMake (aws-lc-sys) is needed — for three
     triples: `x86_64-pc-windows-gnu` and `aarch64-linux-android` on `ubuntu-latest`,
@@ -101,8 +102,9 @@ GitHub Actions workflows in `.github/workflows/`:
 
 `dependabot.yml` — Weekly npm + github-actions + **cargo** updates. Minor/patch bumps
 are grouped into a single PR per ecosystem to reduce noise; major bumps arrive individually.
-Cargo is tracked for **both** Rust manifests — `/src-tauri` (the Tauri core) and `/sync-server`
-(the standalone self-hosted sync server) — so `Cargo.lock` no longer drifts unmanaged.
+Cargo is tracked for `/src-tauri` (the Tauri core), `/sync-server/core` and `/sync-server/wasm`
+(the sync protocol core and the active WASM sync service) — so no maintained `Cargo.lock` drifts
+unmanaged. The deprecated `/sync-server/legacy-docker` is deliberately not tracked.
 The CI `rust` job's `cargo audit` is **blocking**, so a Dependabot bump that lands a
 vulnerable version goes red immediately instead of waiting for the next weekly run;
 the Dependabot cargo PRs remain the currency mechanism for the crypto/keyring/TLS

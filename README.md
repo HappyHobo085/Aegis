@@ -37,7 +37,7 @@ destinations, so `window.open()` ad shells do not accumulate as background tabs.
   master-password KDF, stored in a `0600` file, with a per-record `updatedAt` merge.
   _Autofill is not implemented yet_ — the vault is manage-only for now (see
   [Status](#status--what-is-and-is-not-verified)).
-- **End-to-end encrypted sync** — your own server (the `sync-server/` crate), Ed25519
+- **End-to-end encrypted sync** — your own server (`sync-server/`, a Meshnode WASM service), Ed25519
   device tokens, HLC last-writer-wins merge. The server stores only opaque ciphertext.
   Credentials are sealed under _both_ the sync root and the vault key, so holding the
   recovery phrase alone is not enough to read them.
@@ -113,8 +113,10 @@ per-subsystem record, and they document what is _pending_ as well as what ships.
 - **Desktop** runs one chrome webview plus one content webview per tab; background tabs
   are hidden and idle tabs discarded. **Android** runs a single webview with a native
   Kotlin content `WebView` bridged as `window.AegisAndroid`.
-- **Sync-server** (`sync-server/`) is a standalone axum crate that stores opaque
-  ciphertext. It is a separate, non-workspace crate.
+- **Sync-server** (`sync-server/`) stores opaque ciphertext. The active server is
+  `sync-server/wasm`, a Meshnode WASM service, built on the pure protocol crate
+  `sync-server/core`. The original axum/Docker server in `sync-server/legacy-docker` is
+  **deprecated** and no longer maintained. Each is a separate, non-workspace crate.
 
 The `AGENTS.md` file in each directory is a **living document** describing current
 behaviour, including known gotchas. Read the one for the area you are changing.
@@ -157,7 +159,7 @@ Every one of these runs in CI on every PR and push to `main`:
 | `npm run format:check`                                          | Prettier (markdown included)                                              |
 | `npm test`                                                      | vitest — node project (`shared/`, `scripts/`) + jsdom project (`src/`)    |
 | `node scripts/check-npm-audit.mjs`                              | no high/critical npm advisories; **fails closed** if the audit cannot run |
-| `cargo fmt --check` / `cargo clippy -D warnings` / `cargo test` | for `src-tauri` **and** `sync-server`                                     |
+| `cargo fmt --check` / `cargo clippy -D warnings` / `cargo test` | for `src-tauri`, `sync-server/core` and `sync-server/wasm`                |
 | `cargo audit`                                                   | Rust advisories (**blocking**, despite the historical "advisory" label)   |
 
 Renderer tests are **co-located** vitest files running against the IPC mock
@@ -291,16 +293,21 @@ The Gradle config auto-detects it and signs the release build with it.
 
 ## Running your own sync server
 
+The active server is a Meshnode WASM service:
+
 ```bash
-cd sync-server
-cargo run --release
+cd sync-server/wasm
+cargo build --locked --release --target wasm32-wasip2
+meshd deploy wasm sync target/wasm32-wasip2/release/aegis_sync.wasm \
+  --memory-mb 64 --timeout-ms 30000 --max-body 8388608
 ```
 
-It listens on **HTTP :8787** by default and stores only opaque ciphertext. Put it behind
-TLS — the app requires an `https://` sync server URL unless the host is loopback, and
-refuses plain `http://` for anything else.
+It stores only opaque ciphertext. Put it behind TLS: the app requires an `https://` sync
+server URL unless the host is loopback, and refuses plain `http://` for anything else.
 
-Point Aegis at it in **Settings → Sync**. See `sync-server/AGENTS.md`.
+Point Aegis at it in **Settings → Sync**. See `sync-server/AGENTS.md`. The old axum/Docker
+server (`sync-server/legacy-docker`, `docker compose up -d`) still builds but is
+**deprecated and unmaintained**.
 
 ---
 

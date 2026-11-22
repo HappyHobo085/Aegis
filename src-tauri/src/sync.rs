@@ -380,7 +380,7 @@ pub(crate) const RATE_LIMIT_ERR_PREFIX: &str = "rate limited by the sync server"
 /// Whether an error from [`http`] is the server refusing new requests from this device.
 ///
 /// The server returns `429` from two caps in its replay-nonce map — per-device and global (see
-/// `sync-server/src/main.rs`). The cap check runs BEFORE the nonce is recorded, so a refused
+/// `sync-server/legacy-docker/src/main.rs`). The cap check runs BEFORE the nonce is recorded, so a refused
 /// request consumes nothing: retrying immediately is *safe* but pointless, because the map is
 /// only swept of entries that have EXPIRED, and a token lives [`crate::sync_auth::DEFAULT_TTL_MS`]
 /// (5 minutes). A client that cannot tell a rate-limit from a real error therefore retries every
@@ -2580,7 +2580,7 @@ mod tests {
     fn the_pull_page_bound_is_finite_and_bounded() {
         let pages = std::hint::black_box(MAX_PULL_PAGES);
         // The server's own ceiling for one account (`MAX_RECORDS_PER_ACCOUNT` in
-        // sync-server/src/main.rs): a bound below ceil(50_000 / 5_000) would make the largest
+        // sync-server/legacy-docker/src/main.rs): a bound below ceil(50_000 / 5_000) would make the largest
         // account a legitimate server will hold unpullable.
         let per_page = std::hint::black_box(5_000usize);
         let account_ceiling = std::hint::black_box(50_000usize);

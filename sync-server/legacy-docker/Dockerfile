@@ -6,22 +6,25 @@
 FROM rust:1.95-alpine3.22 AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /build
+# The build context is `sync-server/` (see docker-compose.yml), because this crate path-depends on
+# `../core` (`aegis-sync-core`), which lives beside it. Both keep their sync-server/ layout here.
 # Dependency-cache layer: compile deps against stubs so editing src/ or core/src doesn't rebuild
 # them. This RUN stays CACHED across source edits (only the manifests/Cargo.lock invalidate it).
-# `core/` (`aegis-sync-core`) is a workspace member, so its manifest is needed to resolve the
-# workspace at all; it gets an empty stub lib for the same reason main.rs gets a stub main.
-COPY Cargo.toml Cargo.lock ./
+# The core needs its manifest to resolve the path dependency at all; it gets an empty stub lib for
+# the same reason main.rs gets a stub main.
+COPY legacy-docker/Cargo.toml legacy-docker/Cargo.lock ./legacy-docker/
 COPY core/Cargo.toml ./core/
-RUN mkdir src core/src \
-    && echo 'fn main() {}' > src/main.rs \
+RUN mkdir legacy-docker/src core/src \
+    && echo 'fn main() {}' > legacy-docker/src/main.rs \
     && touch core/src/lib.rs \
-    && cargo build --release --locked \
-    && rm -rf src core/src
-# Real sources; `touch` forces cargo to rebuild BOTH workspace crates while reusing the cached
-# deps (a COPY can carry an mtime older than the stub build, which cargo would read as fresh).
+    && cargo build --release --locked --manifest-path legacy-docker/Cargo.toml \
+    && rm -rf legacy-docker/src core/src
+# Real sources; `touch` forces cargo to rebuild BOTH crates while reusing the cached deps (a COPY
+# can carry an mtime older than the stub build, which cargo would read as fresh).
 COPY core/src ./core/src
-COPY src ./src
-RUN touch src/main.rs core/src/lib.rs && cargo build --release --locked
+COPY legacy-docker/src ./legacy-docker/src
+RUN touch legacy-docker/src/main.rs core/src/lib.rs \
+    && cargo build --release --locked --manifest-path legacy-docker/Cargo.toml
 
 # ---- runtime stage: minimal, non-root ----
 FROM alpine:3.22
@@ -29,7 +32,7 @@ RUN addgroup -S aegis \
     && adduser -S -G aegis aegis \
     && mkdir -p /data \
     && chown aegis:aegis /data
-COPY --from=builder /build/target/release/aegis-sync-server /usr/local/bin/aegis-sync-server
+COPY --from=builder /build/legacy-docker/target/release/aegis-sync-server /usr/local/bin/aegis-sync-server
 USER aegis
 ENV AEGIS_SYNC_ADDR=0.0.0.0:8787 \
     AEGIS_SYNC_DATA=/data/aegis-sync.json
