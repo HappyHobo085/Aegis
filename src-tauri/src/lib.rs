@@ -164,8 +164,6 @@ mod vault;
 mod vault_inject;
 // Content-webview-scoped proxy: pure parse/validate/URI core (Tasks 1-6).
 mod proxy;
-// Local Meshnode detection for the Sync tab's suggested server URL (detect only, never connects).
-mod meshnode;
 
 use serde_json::Value;
 use tauri::{Emitter, Manager};
@@ -320,9 +318,6 @@ fn ipc(app: tauri::AppHandle, channel: String, payload: Value) -> Result<Value, 
         return result;
     }
     if let Some(result) = proxy::dispatch(&app, &channel, &payload) {
-        return result;
-    }
-    if let Some(result) = meshnode::dispatch(&app, &channel, &payload) {
         return result;
     }
     if let Some(result) = popover::dispatch(&app, &channel, &payload) {

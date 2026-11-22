@@ -1,12 +1,6 @@
 // src/components/SyncSettingsTab.tsx
 import { useCallback, useEffect, useRef, useState } from 'react';
-import type {
-  MeshnodeDetection,
-  Settings,
-  SyncDevice,
-  SyncState,
-  VaultState,
-} from '../../shared/types';
+import type { Settings, SyncDevice, SyncState, VaultState } from '../../shared/types';
 import { aegis } from '../lib/ipcClient';
 import type { UseSync } from '../hooks/useSync';
 import { confirm, toast } from '../lib/toast';
@@ -179,27 +173,6 @@ export function SyncSettingsTab({
     refreshVaultState();
   }, [refreshVaultState]);
 
-  // A local Meshnode, if the core finds one. Asked once per mount and only ever used to OFFER
-  // its sync URL: nothing here writes the field or the setting — that needs the user's click.
-  // A failed ask is "not detected", so an older core without the channel just shows nothing.
-  const [meshnode, setMeshnode] = useState<MeshnodeDetection | null>(null);
-  useEffect(() => {
-    let active = true;
-    void aegis.meshnode
-      .detected()
-      .then((d) => {
-        if (active) setMeshnode(d);
-      })
-      .catch(() => {
-        if (active) setMeshnode(null);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-  const meshnodeSuggestion =
-    meshnode?.detected && serverUrl.trim() !== meshnode.url ? meshnode.url : null;
-
   // Keep the URL field in step with the backend value (e.g. after enable/import).
   useEffect(() => {
     setServerUrl(state.serverUrl);
@@ -317,28 +290,6 @@ export function SyncSettingsTab({
               onBlur={() => void commitServerUrl()}
             />
           </label>
-          {meshnodeSuggestion && (
-            <section className="sync-tab__suggestion" aria-label="Meshnode on this device">
-              <p className="settings-hint">
-                Meshnode was found on this device. Its local gateway can be your sync server at{' '}
-                <code>{meshnodeSuggestion}</code>. Your data stays end-to-end encrypted either way.
-              </p>
-              <div className="settings-actions">
-                <button
-                  type="button"
-                  className="settings-btn"
-                  disabled={busy}
-                  onClick={() => {
-                    setServerUrl(meshnodeSuggestion);
-                    setTestStatus('');
-                    void onSetServerUrl(meshnodeSuggestion);
-                  }}
-                >
-                  Use Meshnode on this device
-                </button>
-              </div>
-            </section>
-          )}
           <div className="settings-actions">
             <button
               type="button"

@@ -287,16 +287,13 @@ width })` so the page insets from the right and stays visible. There is no
   `syncAllowInsecure` cases in `SyncSettingsTab.test.tsx`, which render the panel under a
   **stateful parent** because the vitest `aegis` mock does not feed `settings.set` back into
   React state.
-  **Local Meshnode suggestion (2026-11-11).** On mount the panel asks
-  `aegis.meshnode.detected()` once (`{ detected, url }`, `url` always
-  `http://127.0.0.1:7801`). When `detected` is true and the URL field does not already hold
-  that URL, the setup view shows a "Meshnode on this device" region with a **Use Meshnode on
-  this device** button. **It is an offer, never an action:** detection writes neither the
-  field nor the setting — only the click does (`setServerUrl` + `onSetServerUrl`). A user's
-  own URL is left alone; a rejected `detected()` (e.g. an older core) is "not detected". The
-  running view has no URL field and shows nothing. `SyncSettingsTab.test.tsx`'s "local
-  Meshnode suggestion" block pins all three: shown when detected, not applied automatically,
-  hidden when not detected.
+  **No built-in server suggestion.** The Server URL field is only ever what the user types; the
+  panel detects no local server and offers none. A "Use Meshnode on this device" offer (via a
+  `meshnode.detected` channel) existed from 2026-11-11 and was removed; a Meshnode user types its
+  local gateway URL like any other. `SyncSettingsTab.test.tsx`'s "no built-in server suggestion"
+  block pins this: no suggestion text or button and an empty field on mount, and a typed
+  `http://127.0.0.1:7801` committed as typed. Its `ipcClient` mock exposes only `vault`, so a
+  re-added call to any other namespace throws there.
 - **`hooks/useVault`** — owns vault UI state (`VaultState`) and exposes the typed vault
   API to `VaultSettingsTab`. **Security note:** decrypted records are NEVER held in React
   state — `list`, `add`, `update`, `remove`, and `search` each call the IPC directly and

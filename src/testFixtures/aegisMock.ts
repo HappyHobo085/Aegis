@@ -175,9 +175,6 @@ export function aegisMockModule() {
           onVaultQuarantined: vi.fn().mockReturnValue(() => {}),
         };
       })(),
-      meshnode: {
-        detected: vi.fn().mockResolvedValue({ detected: false, url: 'http://127.0.0.1:7801' }),
-      },
       favorites: {
         list: vi.fn().mockResolvedValue([]),
         add: vi.fn().mockResolvedValue([]),

@@ -119,10 +119,7 @@ jni = "0.21"
 # PlatformWebview types; windows for PWSTR/HSTRING/EventRegistrationToken.
 [target.'cfg(target_os = "windows")'.dependencies]
 webview2-com = "=0.39.1"
-# Win32_System_Pipes: `meshnode.rs` checks that Meshnode's admin pipe EXISTS with
-# WaitNamedPipeW, which never opens it. Storage_FileSystem + Security are what
-# CreateNamedPipeW's signature needs; only `meshnode.rs`'s test creates a pipe.
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_WinRT", "Win32_System_Pipes", "Win32_Storage_FileSystem", "Win32_Security"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_WinRT"] }
 
 # macOS: observe the WKWebView's `URL` via KVO (nav_url_mac.rs) so the address bar
 # tracks same-document History-API/hash navigations that wry's WKNavigationDelegate

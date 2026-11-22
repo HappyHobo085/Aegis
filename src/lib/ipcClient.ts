@@ -30,7 +30,6 @@ import {
   SyncDevice,
   SyncChanged,
   SyncVaultQuarantined,
-  MeshnodeDetection,
   FindState,
   ZoomState,
   VaultState,
@@ -165,7 +164,6 @@ const DEDUP_WINDOWS: Record<string, number> = {
 
   // Sync queries
   [IPC.syncGetState]: 300,
-  [IPC.meshnodeDetected]: 300,
 
   // Safety queries
   [IPC.safetyGetState]: 300,
@@ -785,9 +783,6 @@ export const aegis: AegisApi = {
     onState: (cb) => on<SyncState>(IPC.evtSyncState, cb),
     onChanged: (cb) => on<SyncChanged>(IPC.evtSyncChanged, cb),
     onVaultQuarantined: (cb) => on<SyncVaultQuarantined>(IPC.evtSyncVaultQuarantined, cb),
-  },
-  meshnode: {
-    detected: () => dedupedCall<MeshnodeDetection>(IPC.meshnodeDetected, undefined),
   },
   find: {
     start: (viewId, query, caseSensitive = false) => {

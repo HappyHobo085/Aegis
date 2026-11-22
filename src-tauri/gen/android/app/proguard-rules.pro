@@ -14,12 +14,12 @@
 }
 
 # The Rust JNI exports — every `external fun` under src/main/java/com/aegis/browser/, now
-# TWENTY-ONE of them (this line used to say "nine" and name nine, so half the surface R8 could
+# TWENTY of them (this line used to say "nine" and name nine, so half the surface R8 could
 # break was undocumented):
 #   NativeAdblock.enabled / shouldBlock, NativeDataExport.provideClass,
 #   NativeDownloads.recordStart / recordFinish / safeName,
 #   NativeFarble.farbleScript, NativeFormDetect.formDetectionScript,
-#   NativeHistory.recordVisit, NativeInject.documentStartScript, NativeMeshnode.noteInstalled,
+#   NativeHistory.recordVisit, NativeInject.documentStartScript,
 #   NativePermissions.decision / normalizeOrigin / remember, NativeProxy.proxyConfig,
 #   NativeRedirectGuard.openBlockedRedirect / shouldBlock, NativeSafety.isMalwareHost,
 #   NativeSettings.httpsOnly, NativeSyncKeystore.provideClass, NativeWebrtc.shimScript.

@@ -70,12 +70,6 @@ dispatcher in `src-tauri/src/lib.rs`, and `src/lib/ipcClient.ts`).
       appears only on the `vault.unlock` response, and only when adoption was _refused_
       (e.g. undecryptable records present) — the unlock still succeeded; it is a warning,
       not a failure.
-  - **`meshnode.detected`** → `MeshnodeDetection { detected: boolean; url: string }` — is a
-    Meshnode on THIS device? `url` is always `http://127.0.0.1:7801` (Meshnode's local sync
-    gateway). Read-only: the core never connects to Meshnode and never changes a setting; the
-    Sync tab only OFFERS the URL. Owned by `src-tauri/src/meshnode.rs` (desktop: the default
-    data dir's admin pipe/socket exists; Android: the `net.meshnode.app` package is
-    installed). Pinned in `ipcClient.contract.test.ts`.
   - **`vault.*` channels** (Phase A — manage only, NO autofill; note `vault_inject.js` IS
     injected at document start but is inert because `withGlobalTauri` is not enabled, and
     no component subscribes to `vault:autofillResult` — see `src-tauri/AGENTS.md`):
