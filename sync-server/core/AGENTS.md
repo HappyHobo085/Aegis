@@ -2,16 +2,14 @@
 
 The protocol core shared by both sync servers: the ACTIVE WASM service (`../wasm`) and the
 DEPRECATED axum server (`../legacy-docker`). It is its own workspace with its own `Cargo.lock`, and
-both servers path-depend on it. Meshnode vendors this folder byte-for-byte from
-`sync-server/core` (its `scripts/sync-aegis-core.sh` + `vendor/VENDORED.md`), so **this path is a
-cross-repo contract: do not move or rename it.**
+both servers path-depend on it. (Meshnode vendored it until 2026-11-22; it no longer does.)
 
 ## What it is
 
 `aegis-sync-core` is the PURE protocol crate: no axum, no tokio, no files, no OS
 clock or randomness. It exists so the same protocol code can run natively (the deprecated
-`../legacy-docker` server) and as the WASM service (`../wasm`, the active server; Meshnode vendors
-this crate too). So far it holds:
+`../legacy-docker` server) and as the WASM service (`../wasm`, the active
+server). So far it holds:
 - `auth.rs` — `AuthToken`, `canonical`, `unhex`, `is_canonical_hex`, the TTL/skew/nonce
   constants, `verify_account_root`, `constant_time_eq`, and **`check_token(token, now_ms,
   sig_hex) -> Result<Verified, AuthError>`**: every stateless check `verify_auth` used to make
@@ -106,13 +104,10 @@ this crate too). So far it holds:
     in-memory model built only from core functions (facts, computed owner, `tie_ord`).
   - `../legacy-docker/src/vectors_native.rs`: every native-runnable vector through the deprecated
     axum router (not in CI).
-  - Meshnode's harness (`crates/mesh-services/tests/aegis_sync.rs` in the Meshnode repo): every
-    mesh-runnable vector through the WASM service (`../wasm`) on its runtime.
   - A vector may be `native_only` / `mesh_only` with a reason. Today only the cross-uuid tie pair
     is marked (native counter bump vs mesh `tie_ord`). Prefer `body_subset` over a mark when the
     hosts differ only in body detail. **A behaviour change to the contract means changing a
-    vector**, and Meshnode then has to re-vendor the core
-    (its `scripts/sync-aegis-core.sh` reads this folder at `sync-server/core`: do not move it).
+    vector.**
 - It must also pass `cargo check --target wasm32-wasip2` (without the test-only features) and
   `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps --all-features` cleanly. CI runs fmt, clippy,
   test, both of those, and `cargo audit` in the `sync-server` job.

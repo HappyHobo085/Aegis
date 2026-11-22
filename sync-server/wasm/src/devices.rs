@@ -4,7 +4,7 @@
 //! The native server stores an owner and edits its device maps in place. The mesh cannot keep
 //! one mutable owner slot consistent across replicas, so it only ever ADDS facts (who
 //! registered and when, who asked to join, who was approved, who was revoked, label changes:
-//! the sets in [`crate::keys`]) and derives the rest with the vendored `devices` rules: the
+//! the sets in [`crate::keys`]) and derives the rest with the core's `devices` rules: the
 //! owner ([`owner`]), membership ([`is_member`]), pending ([`is_pending`]), may-remove
 //! ([`may_remove`]) and the label ([`label`]). Every decision is over this node's view.
 use std::collections::BTreeMap;

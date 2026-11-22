@@ -107,8 +107,8 @@ pub fn get(query: &str, authz: Option<&str>) -> Resp {
 /// `max_body_bytes` (8 MiB by default, spec §5.3) just as it caps the request body, so a 32 MiB
 /// page would come back as a 500 and the client could never page past it. 6 MiB of
 /// `wire_bytes` leaves room under 8 MiB for JSON that `wire_bytes`' per-record slack does not
-/// cover (string escapes). The record limit stays `MAX_RESPONSE_RECORDS`. The vendored core
-/// stays byte-identical, so the constant lives here.
+/// cover (string escapes). The record limit stays `MAX_RESPONSE_RECORDS`. The constant lives
+/// here, not in the core, because only the mesh host needs it.
 pub const MESH_MAX_RESPONSE_BYTES: u64 = 6 * 1024 * 1024;
 
 /// Bytes the pager gathers before handing a chunk to the response stream.

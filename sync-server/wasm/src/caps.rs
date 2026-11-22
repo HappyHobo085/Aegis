@@ -29,8 +29,8 @@ pub use aegis_sync_core::{
     wire::{MAX_ACCOUNTS, MAX_TOTAL_CT_BYTES, MAX_TOTAL_RECORDS},
 };
 
-// TEST ONLY (`--features test-caps`, built by the Meshnode harness and never by
-// `scripts/build-services.sh`): caps a test can reach with a handful of requests.
+// TEST ONLY (`--features test-caps`, built only for a test harness, never for a deploy): caps a
+// test can reach with a handful of requests.
 #[cfg(feature = "test-caps")]
 pub const MAX_ACCOUNTS: usize = 1;
 #[cfg(feature = "test-caps")]

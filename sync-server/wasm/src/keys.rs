@@ -1,6 +1,6 @@
-//! The service's key layout in `meshnode:kv`. Pure (std + `aegis-sync-core` only), so the
-//! Meshnode test harness compiles this same file (`#[path]`) to seed state exactly where the
-//! service reads it.
+//! The service's key layout in `meshnode:kv`. Pure (std + `aegis-sync-core` only), so a test
+//! harness can compile this same file (`#[path]`) to seed state exactly where the service reads
+//! it (Meshnode's harness did until 2026-11-22).
 //!
 //! Replicated (`meshnode:kv/store`):
 //! - `rec/<acct>/<ns>/<uuid>`: one record, written with `set-ordered(order_bytes(hlc))`; the

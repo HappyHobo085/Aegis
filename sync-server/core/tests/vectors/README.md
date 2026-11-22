@@ -2,13 +2,12 @@
 
 Each `*.json` file here is an array of cases for the sync HTTP contract, grouped by file
 (`auth`, `bounds`, `devices`, `healthz`, `records`); every case's `name` starts with its file's
-group. The same files run against three hosts:
+group. The same files run against two hosts:
 
 | Runner | Host |
 |---|---|
 | `core/tests/vectors.rs` | a pure in-memory model built only from `aegis-sync-core` functions, with the mesh's rules (facts, computed owner, `tie_ord`) |
 | `src/vectors_native.rs` | the native axum server: the real `app(state)` router via `tower::ServiceExt::oneshot` |
-| Meshnode's harness | the `services/aegis-sync` WASM service, from the vendored copy of this directory |
 
 The types, the loader (`vector::load_all`) and the response check (`vector::check`) are in
 `core/src/vector.rs`, behind the test-only `vectors` cargo feature.

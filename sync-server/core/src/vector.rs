@@ -7,9 +7,9 @@
 //!
 //! The vectors live in `tests/vectors/*.json` next to this crate's manifest, one file per group
 //! (`auth`, `bounds`, `devices`, `healthz`, `records`), and every vector's name starts with its
-//! file's group. Three runners use the same files: this crate's `tests/vectors.rs` (a pure model
-//! built from the core's functions), the native server's harness (`src/vectors_native.rs`, the
-//! real axum router), and Meshnode's harness against the WASM service.
+//! file's group. Two runners use the same files: this crate's `tests/vectors.rs` (a pure model
+//! built from the core's functions) and the native server's harness (`src/vectors_native.rs`, the
+//! real axum router). Meshnode's harness ran them against the WASM service until 2026-11-22.
 //!
 //! ## File format
 //!

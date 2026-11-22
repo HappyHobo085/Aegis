@@ -1,7 +1,6 @@
 # The Aegis sync server as a Meshnode WASM service: a `wasi:http` handler over `meshnode:kv`.
-# THE ACTIVE sync server (the axum one in `../legacy-docker` is deprecated). Aegis owns this source;
-# Meshnode copies it into its `services/aegis-sync` and builds/tests it there (its
-# `scripts/build-services.sh` and `mesh_runtime::test_fixtures::aegis_sync_wasm`). See AGENTS.md.
+# THE ACTIVE sync server (the axum one in `../legacy-docker` is deprecated). Aegis owns and
+# maintains this source; Meshnode no longer keeps a copy. See AGENTS.md.
 # Its own workspace; builds for wasm32-wasip2 only.
 [workspace]
 resolver = "3"
@@ -30,9 +29,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [features]
-# TEST ONLY: lowers the server-wide caps (`src/caps.rs`) so the Meshnode harness can reach them
-# with a handful of requests. Built only by `mesh_runtime::test_fixtures::aegis_sync_wasm_test_caps`;
-# `scripts/build-services.sh` and every deploy build without it.
+# TEST ONLY: lowers the server-wide caps (`src/caps.rs`) so a test harness can reach them with a
+# handful of requests (Meshnode's harness used it until 2026-11-22). Every deploy builds without it.
 test-caps = []
 
 [profile.release]

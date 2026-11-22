@@ -12,15 +12,15 @@ between it and the kv. Module map: `src/lib.rs`.
 - **Aegis owns this source.** It was copied from Meshnode `services/aegis-sync` at Meshnode commit
   `2888dc94498cdd9b03fe41ecf983a575ee6f2661` (last service change there: `e33b1f2`). Only the
   manifest comments, `rust-version`, the core path (`../core`, was `../../vendor/aegis-sync-core`)
-  and the WIT path changed. Edit it HERE; Meshnode copies it into its `services/aegis-sync`.
+  and the WIT path changed. Edit it HERE. Meshnode removed its copy on 2026-11-22 (Meshnode `a5d2e35`).
 - **Meshnode owns the host contract.** `wit/` is a copy of Meshnode `crates/mesh-runtime/wit` at
   the same commit (`world.wit` + `deps/`, including `meshnode:kv` in `deps/kv.wit`). Never edit it
   here; when Meshnode's runtime WIT changes, re-copy it.
-- **The behavioural tests live in Meshnode** (`crates/mesh-services/tests/aegis_sync.rs`,
-  `aegis_sync_mesh.rs`): they run the built `.wasm` inside Meshnode's runtime (`mesh_runtime`,
-  wasmtime) and cannot run from this repo. They `#[path]`-include `src/keys.rs`, so that file's
-  key layout is part of the contract with them. The shared contract vectors also run, in pure
-  form, in `../core`.
+- **No behavioural tests run against the built `.wasm` any more.** They lived in Meshnode
+  (`crates/mesh-services/tests/aegis_sync.rs`, `aegis_sync_mesh.rs`, running the service inside
+  Meshnode's runtime) and were removed with Meshnode's copy on 2026-11-22. Only the shared contract
+  vectors run, in pure form, in `../core`. `src/keys.rs` (pure, `#[path]`-includable) and the
+  `test-caps` feature were shaped for that harness and are kept for a future one.
 - Lockfile is its own (`Cargo.lock`), so `--locked` builds are reproducible.
 
 ## Build
@@ -31,8 +31,8 @@ cargo clippy --locked --target wasm32-wasip2 --all-targets -- -D warnings
 ```
 
 Needs the `wasm32-wasip2` target (`rustup target add wasm32-wasip2`). It builds for that target
-only. `--features test-caps` is TEST ONLY: it lowers the server-wide caps (`src/caps.rs`) for
-Meshnode's harness; never deploy it.
+only. `--features test-caps` is TEST ONLY: it lowers the server-wide caps (`src/caps.rs`) for a
+test harness (none exists since Meshnode's was removed); never deploy it.
 
 Deploy on a Meshnode node (the 30 s timeout is required; the daemon default is 10 s):
 

@@ -3,7 +3,7 @@
 //! A `wasi:http` handler, one fresh instance per request, storing everything in `meshnode:kv`:
 //! records and device facts in the replicated `store`, spent replay nonces in the node-local
 //! `local`. The protocol itself (token checks, bounds, id repair, LWW stamps, paging, the tie
-//! `ord`, device rules) is the vendored `aegis-sync-core`, the same crate the native server
+//! `ord`, device rules) is the shared `aegis-sync-core` (`../core`), the same crate the native server
 //! runs; this crate is the glue between it and the kv. Key layout: [`keys`].
 //!
 //! Request flow: parse → bound → `check_token` at the WASI wall clock → the route's admit rule

@@ -11,8 +11,6 @@ Three crates, each its own Cargo workspace with its own `Cargo.lock`:
 Each folder has its own `AGENTS.md`. The servers store **opaque ciphertext only**: they never hold
 encryption keys and cannot decrypt bookmarks, saved items, or the allowlist.
 
-- **`core/` stays at `sync-server/core`.** Meshnode vendors it from exactly that path, so moving it
-  breaks Meshnode's `scripts/sync-aegis-core.sh`.
 - **`legacy-docker/`** is kept only for existing deployments. Do not add features. It gets no CI, no
   Dependabot, and no security fixes, so a known advisory against its frozen lockfile will stay open.
 
