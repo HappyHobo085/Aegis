@@ -21,7 +21,7 @@ crate-type = ["cdylib"]
 # The protocol core, WITHOUT its test-only `vectors` feature.
 aegis-sync-core = { path = "../core" }
 wstd = "0.6"
-wit-bindgen = "0.57.1"
+wit-bindgen = "0.63.0"
 # The WASI wall clock and randomness (already a dependency of wstd).
 wasip2 = "1"
 futures-lite = "1.13"
