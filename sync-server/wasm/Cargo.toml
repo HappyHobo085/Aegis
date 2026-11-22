@@ -24,7 +24,7 @@ wstd = "0.6"
 wit-bindgen = "0.57.1"
 # The WASI wall clock and randomness (already a dependency of wstd).
 wasip2 = "1"
-futures-lite = "1.13"
+futures-lite = "2.6"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
